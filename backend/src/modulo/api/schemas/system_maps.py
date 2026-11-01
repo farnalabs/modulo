@@ -285,9 +285,15 @@ class SystemMapOverviewLoopConfig(BaseModel):
     outcome_metric: str
     last_admission_at: datetime | None = None
     last_admission_status: str | None = None
+    # True/False when reservation evidence exists; null only when no
+    # reservation was ever recorded for this loop.
     cooldown_active: bool | None = None
     cooldown_until: datetime | None = None
+    # Sum of reservations that genuinely hold budget (active/consumed) in the
+    # window; null when a contributing run's cost was never observed.
     budget_used_usd: Decimal | None = None
+    # Null unless the deployment records a real budget period; the metrics
+    # window is NOT reported as one.
     budget_period_start: datetime | None = None
 
 
@@ -307,7 +313,9 @@ class SystemMapOverviewResponse(BaseModel):
 
     Metrics cover the half-open UTC interval ``[window_start, window_end)``.
     ``window_end`` is the generation instant and facts without an observed
-    timestamp remain null rather than being inferred.
+    timestamp remain null rather than being inferred. Failure rates use the
+    canonical analytics definition: only non-benign ``failed``/``stalled`` runs
+    count as failures, so a deliberate cancel or reject is not a fault.
     """
 
     system_map_id: uuid.UUID

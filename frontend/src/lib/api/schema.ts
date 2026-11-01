@@ -22561,7 +22561,9 @@ export interface components {
          *
          *     Metrics cover the half-open UTC interval ``[window_start, window_end)``.
          *     ``window_end`` is the generation instant and facts without an observed
-         *     timestamp remain null rather than being inferred.
+         *     timestamp remain null rather than being inferred. Failure rates use the
+         *     canonical analytics definition: only non-benign ``failed``/``stalled`` runs
+         *     count as failures, so a deliberate cancel or reject is not a fault.
          */
         SystemMapOverviewResponse: {
             /**

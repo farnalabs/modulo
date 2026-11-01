@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval import Eval
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import SUCCESS_STATUSES, Run
+from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.system_map import (
     SystemMap,
@@ -48,6 +48,26 @@ _UPDATABLE_NODE_FIELDS = frozenset(
         "position_y",
     }
 )
+
+# Canonical terminal-failure vocabulary for the overview metrics, mirrored from
+# ``core.analytics.builder`` (FAR-102): a stalled run never completed, so it is
+# a failure for rate purposes. ``cancelled``/``rejected`` are deliberate
+# outcomes, not failures. Keep this in step with the analytics definition.
+_FAILURE_RUN_STATUSES: tuple[str, ...] = ("failed", "stalled")
+
+# A reservation holds budget until it is released or expires; ``active`` and
+# ``consumed`` both represent budget that was genuinely claimed.
+_BUDGET_CONSUMING_RESERVATION_STATUSES: tuple[str, ...] = ("active", "consumed")
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Return ``value`` with a UTC offset.
+
+    Postgres returns tz-aware ``timestamptz`` values; SQLite (used by the
+    repository's real-database unit tests) returns naive ones. Normalising here
+    keeps the window/cooldown comparisons correct on both.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class SystemMapRepository(BaseRepository):  # vulture: ignore
@@ -1443,20 +1463,30 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
     ) -> dict[uuid.UUID, dict[str, Any]]:
         """Aggregate observed run facts and current queue state per pipeline.
 
-        Facts use their source run ``created_at`` for the half-open window. A
-        null telemetry byte count is unobserved; zero is observed telemetry.
+        Facts use their source run ``created_at`` for the half-open window
+        ``[window_start, window_end)``. The failure definition is the canonical
+        analytics one (``core.analytics.builder``): only ``failed`` and
+        ``stalled`` are failures, and a ``benign`` outcome never is. Counting
+        ``cancelled``/``rejected`` as failures would report an operator's
+        deliberate stop as a system fault.
+
+        A null telemetry byte count is unobserved; zero is observed telemetry.
         Queue depth is current state, so it is intentionally not windowed.
         """
         if not pipeline_ids:
             return {}
+        # Canonical failure vocabulary, mirrored from ``core.analytics.builder``
+        # (FAR-102 stall dimensions + FAR-707 benign exclusion). Declared locally
+        # rather than imported: the analytics module sits above the repository
+        # layer, so importing it here would invert the dependency direction.
+        is_failure = RunDailyFact.status.in_(_FAILURE_RUN_STATUSES)
         not_benign = RunDailyFact.benign.is_(None) | RunDailyFact.benign.is_(False)
-        failure_status = RunDailyFact.status.not_in(SUCCESS_STATUSES)
         fact_stmt = (
             select(
                 RunDailyFact.pipeline_id,
                 func.count().label("run_count"),
                 func.sum(case((not_benign, 1), else_=0)).label("countable_count"),
-                func.sum(case((failure_status & not_benign, 1), else_=0)).label("failure_count"),
+                func.sum(case((is_failure & not_benign, 1), else_=0)).label("failure_count"),
                 func.sum(case((RunDailyFact.telemetry_bytes.is_not(None), 1), else_=0)).label("telemetry_count"),
                 func.max(RunDailyFact.completed_at).label("last_completed_at"),
             )
@@ -1486,19 +1516,19 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             Pipeline.deleted_at.is_(None),
         )
         capacity = {row.id: row.max_concurrent_runs for row in (await session.execute(pipeline_stmt)).all()}
+        window_minutes = max((window_end - window_start).total_seconds() / 60, 1)
         metrics: dict[uuid.UUID, dict[str, Any]] = {}
         for row in fact_rows:
             count = int(row.run_count or 0)
+            countable = int(row.countable_count or 0)
             telemetry_count = int(row.telemetry_count or 0)
             metrics[row.pipeline_id] = {
                 "run_count": count,
-                "failure_rate": (
-                    int(row.failure_count or 0) / int(row.countable_count or 0)
-                    if int(row.countable_count or 0)
-                    else None
-                ),
+                "failure_rate": (int(row.failure_count or 0) / countable) if countable else None,
                 "telemetry_coverage": (telemetry_count / count) if count else None,
-                "throughput_per_min": count / max((window_end - window_start).total_seconds() / 60, 1),
+                "throughput_per_min": count / window_minutes,
+                # No windowed read of the last run's id/status exists, so they
+                # stay null (unobserved) rather than being guessed.
                 "last_run_id": None,
                 "last_run_status": None,
                 "last_run_completed_at": row.last_completed_at,
@@ -1520,7 +1550,22 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         window_start: datetime,
         window_end: datetime,
     ) -> dict[uuid.UUID, dict[str, Any]]:
-        """Return only observed admission and reservation facts for each loop."""
+        """Return only observed admission and reservation facts for each loop.
+
+        The reserved budget sums the half-open window and counts only
+        reservations that genuinely hold budget (``active``/``consumed``);
+        ``released``/``expired`` reservations never consumed it. A reservation
+        whose run has no observed cost leaves the total unobserved (``None``)
+        rather than silently reading as zero.
+
+        ``cooldown_active`` is current state, not a window aggregate: it is
+        computed from every active reservation whose ``cooldown_until`` is still
+        in the future. It is ``False`` (not ``None``) whenever reservation
+        evidence exists, and only omitted when no reservation was ever recorded.
+
+        ``budget_period_start`` is never emitted: no budget-period column exists,
+        so the window is NOT reported as a period start.
+        """
         if not loop_config_ids:
             return {}
         admission_stmt = (
@@ -1536,25 +1581,37 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
                 SystemMapLoopAdmissionAttempt.created_at < window_end,
                 SystemMapLoopAdmissionAttempt.deleted_at.is_(None),
             )
-            .order_by(SystemMapLoopAdmissionAttempt.created_at.desc())
+            .order_by(
+                SystemMapLoopAdmissionAttempt.created_at.desc(),
+                SystemMapLoopAdmissionAttempt.id.desc(),
+            )
         )
         admission_rows = (await session.execute(admission_stmt)).all()
-        reservation_stmt = select(
-            SystemMapLoopReservation.loop_config_id,
-            SystemMapLoopReservation.reserved_at,
-            SystemMapLoopReservation.cooldown_until,
-            SystemMapLoopReservation.status,
-            SystemMapLoopReservation.run_id,
-        ).where(
-            SystemMapLoopReservation.organisation_id == organisation_id,
-            SystemMapLoopReservation.loop_config_id.in_(loop_config_ids),
-            SystemMapLoopReservation.reserved_at >= window_start,
-            SystemMapLoopReservation.reserved_at < window_end,
-            SystemMapLoopReservation.deleted_at.is_(None),
+        # Cooldown is current state, so the reservation evidence is deliberately
+        # NOT windowed; the budget sum below applies the window itself.
+        reservation_stmt = (
+            select(
+                SystemMapLoopReservation.loop_config_id,
+                SystemMapLoopReservation.reserved_at,
+                SystemMapLoopReservation.cooldown_until,
+                SystemMapLoopReservation.status,
+                SystemMapLoopReservation.run_id,
+            )
+            .where(
+                SystemMapLoopReservation.organisation_id == organisation_id,
+                SystemMapLoopReservation.loop_config_id.in_(loop_config_ids),
+                SystemMapLoopReservation.deleted_at.is_(None),
+            )
+            .order_by(
+                SystemMapLoopReservation.reserved_at.desc(),
+                SystemMapLoopReservation.id.desc(),
+            )
         )
         reservation_rows: Sequence[Any] = (await session.execute(reservation_stmt)).all()
-        run_ids = {row.run_id for row in reservation_rows}
-        cost_by_run: dict[uuid.UUID, Decimal] = {}
+        in_window = [row for row in reservation_rows if window_start <= _as_utc(row.reserved_at) < window_end]
+        consuming = [row for row in in_window if row.status in _BUDGET_CONSUMING_RESERVATION_STATUSES]
+        run_ids = {row.run_id for row in consuming}
+        cost_by_run: dict[uuid.UUID, Decimal | None] = {}
         if run_ids:
             cost_stmt = (
                 select(RunDailyFact.run_id, func.sum(RunDailyFact.total_cost_usd))
@@ -1564,18 +1621,37 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
                 )
                 .group_by(RunDailyFact.run_id)
             )
-            cost_by_run = {row[0]: Decimal(row[1] or 0) for row in (await session.execute(cost_stmt)).all()}
+            cost_by_run = {
+                row[0]: (None if row[1] is None else Decimal(str(row[1])))
+                for row in (await session.execute(cost_stmt)).all()
+            }
         observed: dict[uuid.UUID, dict[str, Any]] = {}
         for row in admission_rows:
-            observed.setdefault(row.loop_config_id, {}).setdefault("last_admission_at", row.created_at)
-            observed[row.loop_config_id].setdefault("last_admission_status", row.status)
+            item = observed.setdefault(row.loop_config_id, {})
+            item.setdefault("last_admission_at", row.created_at)
+            item.setdefault("last_admission_status", row.status)
+        # Reservation evidence exists for these loops, so cooldown is a known
+        # False until an active, unexpired reservation says otherwise, and the
+        # budget starts unobserved (never a silent zero) until a reservation in
+        # the window is observed to hold it.
         for row in reservation_rows:
             item = observed.setdefault(row.loop_config_id, {})
-            item["budget_used_usd"] = item.get("budget_used_usd", Decimal(0)) + cost_by_run.get(row.run_id, Decimal(0))
-            item.setdefault("budget_period_start", window_start)
-            if row.status == "active" and row.cooldown_until > window_end:
-                item["cooldown_active"] = True
+            item["cooldown_active"] = False
+            item.setdefault("budget_used_usd", None)
+        for row in reservation_rows:
+            if row.status != "active" or _as_utc(row.cooldown_until) <= window_end:
+                continue
+            item = observed[row.loop_config_id]
+            item["cooldown_active"] = True
+            current_until = item.get("cooldown_until")
+            if current_until is None or _as_utc(row.cooldown_until) > _as_utc(current_until):
                 item["cooldown_until"] = row.cooldown_until
+        for loop_id in {row.loop_config_id for row in in_window}:
+            costs = [cost_by_run.get(row.run_id) for row in consuming if row.loop_config_id == loop_id]
+            if any(cost is None for cost in costs):
+                observed[loop_id]["budget_used_usd"] = None
+            else:
+                observed[loop_id]["budget_used_usd"] = sum((cost for cost in costs if cost is not None), Decimal(0))
         return observed
 
     async def get_full_revision_graph(

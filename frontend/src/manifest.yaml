@@ -1041,6 +1041,21 @@ elements:
       - testid: dashboard-system-overview
         type: element
         dynamic_testid: false
+      - testid: system-map-overview-loading
+        type: element
+        dynamic_testid: false
+      - testid: system-map-overview-error
+        type: element
+        dynamic_testid: false
+      - testid: system-map-overview-empty
+        type: element
+        dynamic_testid: false
+      - testid: system-map-overview-metrics
+        type: element
+        dynamic_testid: false
+      - testid: system-map-node
+        type: element
+        dynamic_testid: false
       - testid: dashboard-system-discover
         type: button
         dynamic_testid: false

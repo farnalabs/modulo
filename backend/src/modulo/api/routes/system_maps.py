@@ -123,6 +123,15 @@ _EP_DELETE_ATTRIBUTION_BINDING = "system_maps.delete_attribution_binding_endpoin
 _DESC_SYSTEM_MAP_ID = "System map ID"
 _DESC_REVISION_ID = "Revision ID"
 
+# The overview window: the trailing seven UTC days, half-open on both ends
+# (``[window_start, window_end)``). Named so the response, the repository call
+# and the tests cannot drift apart.
+OVERVIEW_WINDOW_DAYS = 7
+
+# A node whose observed failure rate reaches this share of countable runs is
+# reported unhealthy; any lower non-zero rate is degraded.
+_UNHEALTHY_FAILURE_RATE_THRESHOLD = 0.5
+
 _INTERNAL_SYSTEM_MAP_PERMISSION = SYSTEM_MAPS_ACCESS_PERMISSION
 _require_system_maps_feature = require_feature("system_maps")
 
@@ -1074,11 +1083,13 @@ async def get_system_map_overview_endpoint(
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
-            # Get published revision
+            # Get published revision. The repository already filters on status,
+            # but the route re-checks it so a malformed/draft row can never be
+            # aggregated and reported as published.
             published_revision = await repository.get_published_revision(
                 session, organisation_id=principal.organisation_id, system_map_id=map_id
             )
-            if not published_revision:
+            if not published_revision or published_revision.status != "published":
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="No published revision found for this map",
@@ -1094,7 +1105,7 @@ async def get_system_map_overview_endpoint(
             nodes = graph["nodes"]
             loop_configs = graph["loop_configs"]
             window_end = datetime.now(UTC)
-            window_start = window_end - timedelta(days=7)
+            window_start = window_end - timedelta(days=OVERVIEW_WINDOW_DAYS)
             pipeline_ids = {node.pipeline_id for node in nodes if node.pipeline_id is not None}
             metrics = await repository.get_overview_pipeline_metrics(
                 session,
@@ -1116,11 +1127,13 @@ async def get_system_map_overview_endpoint(
                 item = metrics.get(node.pipeline_id, {}) if node.pipeline_id else {}
                 run_count = item.get("run_count", 0)
                 failure_rate = item.get("failure_rate")
-                if run_count == 0:
+                # A run count with no countable (non-benign) run leaves the
+                # failure rate undefined — that is unknown, never "healthy".
+                if run_count == 0 or failure_rate is None:
                     health = "unknown"
-                elif failure_rate is not None and failure_rate >= 0.5:
+                elif failure_rate >= _UNHEALTHY_FAILURE_RATE_THRESHOLD:
                     health = "unhealthy"
-                elif failure_rate is not None and failure_rate > 0:
+                elif failure_rate > 0:
                     health = "degraded"
                 else:
                     health = "healthy"
@@ -1185,7 +1198,7 @@ async def get_system_map_overview_endpoint(
                 revision_id=published_revision.id,
                 revision_number=published_revision.revision_number,
                 generated_at=window_end,
-                window_days=7,
+                window_days=OVERVIEW_WINDOW_DAYS,
                 window_start=window_start,
                 window_end=window_end,
                 nodes=node_health,
