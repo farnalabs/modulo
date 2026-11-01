@@ -5,6 +5,9 @@ import { withTimeout } from '../lib/asyncUtils'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { usePlanStore } from './planStore'
 import { SYSTEM_CONFIG_MANAGE_PERMISSION } from '../composables/useLicenceAccess'
+import type { components } from '../lib/api/schema'
+
+type SystemMapOverview = components['schemas']['SystemMapOverviewResponse']
 
 interface InternalFeatureFlagsPayload {
   flags?: Array<{ name: string; currently_active: boolean }>
@@ -22,6 +25,9 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const error = ref<string | null>(null)
   const discoveryAvailable = ref(false)
   const draft = ref<null>(null)
+  const overview = ref<SystemMapOverview | null>(null)
+  const overviewLoading = ref(false)
+  const overviewError = ref<string | null>(null)
   const accessLoaded = ref(false)
   const systemMapsEnabled = ref(false)
   let accessPromise: Promise<void> | null = null
@@ -48,6 +54,9 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     error.value = null
     discoveryAvailable.value = false
     draft.value = null
+    overview.value = null
+    overviewLoading.value = false
+    overviewError.value = null
     accessLoaded.value = false
     systemMapsEnabled.value = false
     accessPromise = null
@@ -122,6 +131,33 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     }
   }
 
+  async function fetchDefaultOverview(): Promise<void> {
+    try {
+      const response = await api.GET('/api/v1/system-maps', { params: { query: { page: 1, page_size: 20 } } })
+      if (response.error || !response.data) throw new Error('System map list request failed')
+      const map = response.data.items.find((item) => item.default_map) ?? response.data.items[0]
+      if (map) await fetchOverview(map.id)
+    } catch (err: unknown) {
+      overview.value = null
+      overviewError.value = err instanceof Error ? err.message : 'System overview request failed'
+    }
+  }
+
+  async function fetchOverview(mapId: string): Promise<void> {
+    overviewLoading.value = true
+    overviewError.value = null
+    try {
+      const response = await api.GET('/api/v1/system-maps/{map_id}/overview', { params: { path: { map_id: mapId } } })
+      if (response.error || !response.data) throw new Error('System overview request failed')
+      overview.value = response.data
+    } catch (err: unknown) {
+      overview.value = null
+      overviewError.value = err instanceof Error ? err.message : 'System overview request failed'
+    } finally {
+      overviewLoading.value = false
+    }
+  }
+
   /** No request is made until the discovery endpoint exists in schema.ts. */
   async function fetchDiscovery(): Promise<void> {
     loaded.value = true
@@ -135,11 +171,16 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     error,
     discoveryAvailable,
     draft,
+    overview,
+    overviewLoading,
+    overviewError,
     hasDraft,
     accessLoaded,
     systemMapsEnabled,
     reset,
     fetchAccess,
+    fetchOverview,
+    fetchDefaultOverview,
     fetchDiscovery,
   }
 })

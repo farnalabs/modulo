@@ -10,13 +10,15 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Select, select, update
+from sqlalchemy import Select, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval import Eval
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.run import Run
+from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.system_map import (
     SystemMap,
     SystemMapAttributionBinding,
@@ -1429,6 +1431,79 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         if not all_nodes:
             return True
         return all(not (node not in visited and not dfs(node)) for node in all_nodes)
+
+    async def get_overview_pipeline_metrics(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        pipeline_ids: set[uuid.UUID],
+        window_start: datetime,
+        window_end: datetime,
+    ) -> dict[uuid.UUID, dict[str, Any]]:
+        """Aggregate observed run facts and current queue state per pipeline.
+
+        Facts use their source run ``created_at`` for the half-open window. A
+        null telemetry byte count is unobserved; zero is observed telemetry.
+        Queue depth is current state, so it is intentionally not windowed.
+        """
+        if not pipeline_ids:
+            return {}
+        fact_stmt = (
+            select(
+                RunDailyFact.pipeline_id,
+                func.count().label("run_count"),
+                func.sum(case((RunDailyFact.status.in_(("complete",)), 1), else_=0)).label("complete_count"),
+                func.sum(case((RunDailyFact.status.not_in(("complete",)), 1), else_=0)).label("failure_count"),
+                func.sum(case((RunDailyFact.telemetry_bytes.is_not(None), 1), else_=0)).label("telemetry_count"),
+                func.max(RunDailyFact.completed_at).label("last_completed_at"),
+            )
+            .where(
+                RunDailyFact.organisation_id == organisation_id,
+                RunDailyFact.pipeline_id.in_(pipeline_ids),
+                RunDailyFact.created_at >= window_start,
+                RunDailyFact.created_at < window_end,
+            )
+            .group_by(RunDailyFact.pipeline_id)
+        )
+        fact_rows = (await session.execute(fact_stmt)).all()
+        queue_stmt = (
+            select(Run.pipeline_id, func.count().label("queue_depth"))
+            .where(
+                Run.organisation_id == organisation_id,
+                Run.pipeline_id.in_(pipeline_ids),
+                Run.status == "pending",
+                Run.cancellation_requested.is_(False),
+            )
+            .group_by(Run.pipeline_id)
+        )
+        queue_rows = (await session.execute(queue_stmt)).all()
+        pipeline_stmt = select(Pipeline.id, Pipeline.max_concurrent_runs).where(
+            Pipeline.organisation_id == organisation_id,
+            Pipeline.id.in_(pipeline_ids),
+            Pipeline.deleted_at.is_(None),
+        )
+        capacity = {row.id: row.max_concurrent_runs for row in (await session.execute(pipeline_stmt)).all()}
+        metrics: dict[uuid.UUID, dict[str, Any]] = {}
+        for row in fact_rows:
+            count = int(row.run_count or 0)
+            telemetry_count = int(row.telemetry_count or 0)
+            metrics[row.pipeline_id] = {
+                "run_count": count,
+                "failure_rate": (int(row.failure_count or 0) / count) if count else None,
+                "telemetry_coverage": (telemetry_count / count) if count else None,
+                "throughput_per_min": count / max((window_end - window_start).total_seconds() / 60, 1),
+                "last_run_id": None,
+                "last_run_status": "observed" if row.run_count else None,
+                "last_run_completed_at": row.last_completed_at,
+            }
+        for row in queue_rows:
+            item = metrics.setdefault(row.pipeline_id, {})
+            depth = int(row.queue_depth or 0)
+            item["queue_depth"] = depth
+            limit = capacity.get(row.pipeline_id)
+            item["capacity_pressure"] = (depth / limit) if limit else None
+        return metrics
 
     async def get_full_revision_graph(
         self,
