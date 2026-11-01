@@ -44,3 +44,20 @@ def test_posix_locale_and_binary_name_remain_unchanged(monkeypatch: pytest.Monke
     assert platform_module.binary_name("postgres") == "postgres"
     assert platform_module.initdb_locale() == "C.UTF-8"
     assert platform_module.supports_posix_process_groups() is True
+    assert platform_module.supports_posix_file_locking() is True
+
+
+def test_posix_security_bits_require_both_a_posix_os_and_a_non_windows_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The chmod seam is only meaningful on a POSIX OS that is not Windows.
+
+    Both operands are driven through the seam (never the host) so the pair is
+    covered on Linux CI and on a Windows developer host alike.
+    """
+    monkeypatch.setattr(platform_module.os, "name", "posix")
+    monkeypatch.setattr(platform_module.sys, "platform", "linux")
+    assert platform_module.supports_posix_security_bits() is True
+
+    monkeypatch.setattr(platform_module.sys, "platform", "win32")
+    assert platform_module.supports_posix_security_bits() is False

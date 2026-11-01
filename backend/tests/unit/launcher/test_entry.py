@@ -937,6 +937,26 @@ def test_default_data_dir_is_posix_root(monkeypatch: pytest.MonkeyPatch) -> None
     assert default_data_dir() == expected
 
 
+def test_default_data_dir_translates_a_platform_refusal_into_boot_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The platform seam owns the native policy; entry only reports it as BootError.
+
+    Driven through the platform module's own seam so the translation executes on
+    every host (the Windows PROGRAMDATA refusal is a Windows-only state).
+    """
+    from modulo.launcher import platform as platform_module
+
+    def _refuse() -> Path:
+        raise platform_module.LauncherPlatformError("PROGRAMDATA is required for the Windows native launcher")
+
+    monkeypatch.setattr(platform_module, "default_data_dir", _refuse)
+
+    with pytest.raises(BootError, match="PROGRAMDATA is required") as excinfo:
+        default_data_dir()
+    assert isinstance(excinfo.value.__cause__, platform_module.LauncherPlatformError)
+
+
 def test_resolve_bin_dir_param_env_and_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv(entry_module.BUNDLED_BIN_DIR_ENV, raising=False)
     explicit = tmp_path / "bin"

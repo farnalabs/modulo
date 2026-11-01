@@ -365,10 +365,29 @@ def test_pause_gate_resume_completes_the_bootstrap(tmp_path: Path) -> None:
             proc.stderr.close()
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="the refusal seam is Windows-specific")
 def test_bootstrap_refuses_windows_today(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The autouse fixture bypasses the platform guard for logic tests; this
-    # test re-installs the REAL guard to prove the refusal itself.
+    # test re-installs the REAL guard and drives it through the platform seam,
+    # so the refusal body executes on every host (CI runs Linux) instead of
+    # being skipped there.
     monkeypatch.setattr(initdb_module, "assert_supported_platform", assert_supported_platform)
+    monkeypatch.setattr(initdb_module, "is_windows", lambda: True)
     with pytest.raises(InitdbError, match=r"requires validation with the shipped Windows binary"):
         bootstrap_pgdata(tmp_path / "pgdata", password="pw")
+
+
+def test_assert_supported_platform_refuses_windows_until_installer_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Call the REAL guard imported at module import: the autouse fixture
+    # replaces the module attribute with a no-op on Windows hosts.
+    monkeypatch.setattr(initdb_module, "is_windows", lambda: True)
+
+    with pytest.raises(InitdbError, match="requires validation with the shipped Windows binary"):
+        assert_supported_platform()
+
+
+def test_assert_supported_platform_accepts_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(initdb_module, "is_windows", lambda: False)
+
+    assert assert_supported_platform() is None
