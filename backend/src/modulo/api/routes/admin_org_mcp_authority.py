@@ -1,7 +1,9 @@
 """Org-admin control for the human-linked MCP HITL authority kill switch (FAR-1972).
 
-ADR 063 step 1 (FAR-1957) lets a consent-derived, human-linked OAuth credential
-decide ``human_only`` HITL gates over MCP, with an org-wide kill switch persisted
+ADR 063 step 1 (FAR-1957) and FAR-2281 let a verified, human-linked credential
+    decide ``human_only`` HITL gates over MCP by persona when explicitly enabled,
+    with an org-wide flag persisted
+
 at ``organisations.settings_json.feature_overrides["mcp_human_linked_hitl_authority"]``.
 The gate enforcement and the flag registration ship with FAR-1957; this module is
 the org-admin reachability half — it lets an org admin read and set THEIR OWN
@@ -11,9 +13,10 @@ endpoint, keep working unchanged).
 
 The write targets the same durable truth the feature-flags page writes (the org
 ``feature_overrides`` map), so both surfaces agree; the reader is the existing
-``FeatureFlagRegistry.resolve_flag`` org-override layer. Until FAR-1957
-registers the flag, ``resolve_flag`` has no default to consult, so the read
-falls back to the documented default (ON) rather than reporting OFF.
+``FeatureFlagRegistry.resolve_flag`` org-override layer. The flag is default-OFF:
+only an explicit org override enables this authority, so a missing or failed flag
+read never widens the decision boundary.
+
 
 Authz: ``org.mcp.human_linked_hitl_authority.manage`` (``admin``) via
 ``require_permission``, so the registry is the single source of the role.
@@ -66,10 +69,10 @@ _MSG_NOT_AVAILABLE = "This setting is not available. Run database migrations to 
 
 
 class McpAuthorityResponse(BaseModel):
-    """The org's human-linked MCP HITL authority setting.
+    """The org's human-linked MCP HITL persona-authority setting.
 
     ``enabled`` is the effective intent: the org override when one is set, else
-    the flag's documented default. ``overridden`` reports whether the org has an
+    the flag's documented default (OFF). ``overridden`` reports whether the org has an
     explicit override (so the UI can distinguish "on by default" from "on
     because someone set it").
     """
@@ -85,11 +88,9 @@ class McpAuthorityUpdateRequest(BaseModel):
 def _default_enabled() -> bool:
     """The flag's default, read from the registry when it is registered.
 
-    FAR-1957 registers ``mcp_human_linked_hitl_authority`` (default ON). Before
-    that registration lands the registry has no entry, and ``resolve_flag``
-    would report OFF for an org with no override — the inverse of the documented
-    default. Fall back to the documented default (ON) rather than misreport it;
-    once registered, the registry is authoritative.
+    FAR-1957 registers ``mcp_human_linked_hitl_authority`` as default-OFF. The
+    registry is authoritative; an absent flag is also treated as OFF so the
+    admin surface cannot accidentally report or grant permissive authority.
     """
     flag = get_registry().get_flag(MCP_HUMAN_LINKED_HITL_AUTHORITY_FLAG)
     if flag is None:

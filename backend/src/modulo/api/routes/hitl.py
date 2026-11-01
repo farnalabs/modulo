@@ -63,13 +63,14 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.human_linkage import (
     AUTH_TYPE_API_KEY,
     AUTH_TYPE_JWT,
-    LINKAGE_OAUTH_CONSENT,
+    LINKAGE_USER_SCOPED_KEY,
     required_permission_for_action,
     resolve_human_linkage,
 )
 from modulo.auth.jwt import CLIENT_KIND_BROWSER, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.feature_flags import resolve_mcp_human_linked_hitl_authority
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
@@ -454,14 +455,17 @@ async def _enforce_human_only_gate(
         required_permission=required_permission_for_action(action),
         key_scope=principal.key_scope,
     )
-    # FAR-2281 slice 1: a user-scoped mk_ key resolves as human-linked
-    # (persona), but REST decision authority is unchanged in this slice — REST
-    # never presents a consent-derived OAuth credential, so only that class
-    # could ever pass, and it does not appear here. The persona flag that lets
-    # a human-linked user key decide is slice 2.
+    # REST's browser JWT path has already returned above. A verified
+    # user-scoped human-linked key may be authorised by the same org flag as
+    # MCP; the flag is read only after linkage verification and fails closed.
+    human_linked_authority = linkage.linked and await resolve_mcp_human_linked_hitl_authority(
+        org_id=principal.organisation_id,
+        flag_name="mcp_human_linked_hitl_authority",
+    )
+    allow_via_linkage = human_linked_authority and linkage.linkage == LINKAGE_USER_SCOPED_KEY
     verdict = human_only_denial(
         config,
-        non_browser_credential=not (linkage.linked and linkage.linkage == LINKAGE_OAUTH_CONSENT),
+        non_browser_credential=not allow_via_linkage,
         gate_fired=gate_fired,
     )
     if verdict is not None:

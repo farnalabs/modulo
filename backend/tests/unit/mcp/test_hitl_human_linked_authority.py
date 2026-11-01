@@ -203,9 +203,8 @@ class TestHumanLinkedMcpAuthority(_OAuthContext):
         assert result.get("error") == "human_only_gate", result
         manager.claim.assert_not_called()
 
-    @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
-    async def test_deliver_manual_denied_even_when_human_linked(self) -> None:
-        """``deliver_manual`` stays browser-only in step 1 (ADR 035)."""
+    async def test_deliver_manual_allowed_for_human_linked_oauth(self) -> None:
+        """The enabled persona flag covers deliver_manual too."""
         run, snapshot, review_id = _run_and_snapshot(human_only=True)
         session = _session_with_run(run, snapshot)
         manager = MagicMock()
@@ -220,8 +219,8 @@ class TestHumanLinkedMcpAuthority(_OAuthContext):
                 output={"status": "ok"},
             )
 
-        assert result.get("error") == "human_only_gate", result
-        manager.deliver_manual.assert_not_called()
+        assert result.get("status") == "delivered_manual", result
+        manager.deliver_manual.assert_awaited_once()
 
 
 class TestMcpNonLinkedDenials(_OAuthContext):
@@ -245,18 +244,8 @@ class TestMcpNonLinkedDenials(_OAuthContext):
 
         assert result.get("error") == "human_only_gate", result
 
-    async def test_user_scoped_human_key_denied_in_slice_1(self) -> None:
-        """FAR-2281 slice 1: a user-scoped mk_ key IS human-linked (persona) but
-        the human_only decision authority is unchanged — only the consent-derived
-        OAuth class may decide. Slice 2 extends this behind the persona flag.
-
-        Drives the REAL ``_check_human_only_gate`` directly: ``review_hitl`` is
-        itself org-scoped, so a user-scoped key is refused by the caller-scope
-        chokepoint before this hook (an unchanged slice-1 behaviour tested in
-        ``test_mcp_user_key_scope_gate.py``). The denial here proves the
-        linkage resolved to the user-scoped class yet was NOT granted HITL
-        authority.
-        """
+    async def test_user_scoped_human_key_denied_when_persona_authority_is_off(self) -> None:
+        """A user-scoped human key remains denied while the org flag is off."""
         from modulo.api.mcp_server import (
             _check_human_only_gate,
             _ctx_auth_type,
@@ -284,7 +273,7 @@ class TestMcpNonLinkedDenials(_OAuthContext):
         audit = AsyncMock()
 
         with (
-            _mcp_patches(session, MagicMock(), membership=("admin", "human")),
+            _mcp_patches(session, MagicMock(), flag_enabled=False, membership=("admin", "human")),
             patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=audit),
         ):
             verdict = await _check_human_only_gate(session, _ORG_ID, run, review_id, "claim")
@@ -297,6 +286,32 @@ class TestMcpNonLinkedDenials(_OAuthContext):
         assert linkage.linked is True
         assert linkage.linkage == LINKAGE_USER_SCOPED_KEY
         assert linkage.principal_kind == "human"
+
+    async def test_user_scoped_human_key_allowed_when_persona_authority_is_on(self) -> None:
+        """An enabled org flag admits the verified human-linked user key."""
+        from modulo.api.mcp_server import _ctx_auth_type, _ctx_key_scope, _ctx_token_family
+
+        _ctx_auth_type.set("api_key")
+        _ctx_token_family.set(None)
+        _ctx_key_scope.set("user")
+        run, _snapshot, review_id = _run_and_snapshot(human_only=True)
+        session = AsyncMock()
+        manager = MagicMock()
+        manager.claim = AsyncMock(return_value=MagicMock(claim_token="claim-abc", expires_at=None))
+
+        with (
+            _mcp_patches(session, manager, flag_enabled=True, membership=("admin", "human")),
+            patch("modulo.api.mcp_server._check_agent_tool_scope", return_value=None),
+            patch("modulo.api.mcp_server._load_hitl_run", new=AsyncMock(return_value=run)),
+            patch(
+                "modulo.db.crud.hitl_review_config.resolve_hitl_review_config",
+                new=AsyncMock(return_value={"human_only": True}),
+            ),
+        ):
+            result = await review_hitl(run_id=str(run.id), review_id=review_id, action="claim")
+
+        assert result.get("status") == "claimed", result
+        manager.claim.assert_awaited_once()
 
     @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
     async def test_browser_class_password_jwt_denied(self) -> None:

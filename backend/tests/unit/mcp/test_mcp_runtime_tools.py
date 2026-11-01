@@ -994,6 +994,9 @@ class TestReviewHitl(_AuthContext):
                 _make_run_lookup_result(),
                 _make_run_lookup_result(),
                 _make_run_lookup_result(None),
+                _make_run_lookup_result(),
+                _make_run_lookup_result(),
+                _make_run_lookup_result(None),
             ]
         )
         mock_session.return_value = _make_session_context(mock_sesh)
@@ -1550,8 +1553,8 @@ class TestReviewHitl(_AuthContext):
             reason="not good",
         )
 
-        assert result == {"status": "rejected", "review_id": review_id}
-        manager.reject.assert_awaited_once()
+        assert result["error"] == "human_only_gate"
+        manager.reject.assert_not_awaited()
 
     @patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)

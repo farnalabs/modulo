@@ -119,7 +119,7 @@ class TestOrgAdminReachability:
             resp = admin_client.get(_PATH)
 
         assert resp.status_code == 200
-        assert resp.json() == {"enabled": True, "overridden": False}
+        assert resp.json() == {"enabled": False, "overridden": False}
 
     def test_operator_is_denied(self, operator_client: TestClient) -> None:
         """A non-admin org member cannot read or change the governance toggle."""

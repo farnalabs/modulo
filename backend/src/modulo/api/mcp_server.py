@@ -116,6 +116,7 @@ from modulo.auth.api_key import (
 from modulo.auth.dependencies import resolve_role_from_membership
 from modulo.auth.human_linkage import (
     LINKAGE_OAUTH_CONSENT,
+    LINKAGE_USER_SCOPED_KEY,
     HumanLinkage,
     required_permission_for_action,
     resolve_human_linkage,
@@ -6960,22 +6961,21 @@ async def _check_human_only_gate(
         required_permission=required_permission_for_action(action),
         key_scope=_ctx_key_scope.get(None),
     )
-    # FAR-2281 slice 1: a user-scoped mk_ key now resolves as human-linked
-    # (persona), but the human_only decision authority is unchanged in this
-    # slice — only the consent-derived OAuth class may decide such a gate. The
-    # persona flag that extends this to user-scoped keys is slice 2.
-    linkage_has_hitl_authority = linkage.linkage == LINKAGE_OAUTH_CONSENT
-    # The org-wide escape hatch (default ON). Read only when the credential IS
-    # human-linked: for a not-linked credential the verdict is already deny and
-    # the flag is irrelevant.
+    # FAR-2281: the org-wide persona authority flag is consulted only after
+    # server-side linkage verification. It is default-OFF and resolves
+    # fail-closed, so neither an unlinked credential nor a flag read failure can
+    # widen this boundary.
     human_linked_authority = linkage.linked and await resolve_mcp_human_linked_hitl_authority(
         org_id=org_id,
         flag_name="mcp_human_linked_hitl_authority",
     )
-    # deliver_manual injects the run's output directly (ADR 035) and stays
-    # browser-only in step 1 — never honoured over MCP, even for a human-linked
-    # credential.
-    allow_via_linkage = human_linked_authority and linkage_has_hitl_authority and action != "deliver_manual"
+    # A verified human-linked credential may act on all four HITL actions when
+    # the org explicitly enables persona authority. Possession remains out of
+    # scope; the flag controls only this persona-based authority.
+    allow_via_linkage = human_linked_authority and linkage.linkage in {
+        LINKAGE_OAUTH_CONSENT,
+        LINKAGE_USER_SCOPED_KEY,
+    }
     non_browser_credential = not allow_via_linkage
     verdict = human_only_denial(config, non_browser_credential=non_browser_credential, gate_fired=gate_fired)
     if verdict is not None:
@@ -7343,7 +7343,7 @@ async def _review_hitl_impl(
         if run is None:
             return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
 
-        if action in ("claim", "approve", "deliver_manual"):
+        if action in ("claim", "approve", "reject", "deliver_manual"):
             # FAR-610: deliver_manual is a decision exactly like approve — a
             # human_only gate must not be decided by an API-key/MCP client.
             # FAR-609: claim is human_only too — non-browser principals can

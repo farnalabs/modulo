@@ -245,17 +245,16 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     # ── Community tier — human-linked MCP authority for human_only HITL gates
-    # (ADR 063 step 1, FAR-1957; default ON). NOT a plan-tier feature: it is
-    # on for every org and an admin may disable it per-org to restore the
-    # pre-ADR-063 blanket MCP denial. The restrictive state is "OFF", so the
-    # resolver fails CLOSED to OFF (deny) on any read error.
+    # (ADR 063 step 1, FAR-1957; FAR-2281; default OFF). NOT a plan-tier
+    # feature: an admin may enable it per-org. The restrictive state is "OFF",
+    # so the resolver fails CLOSED to OFF (deny) on any read error.
     FeatureFlag(
         name="mcp_human_linked_hitl_authority",
         description=(
-            "Allow a consent-derived, human-linked OAuth credential to claim, "
-            "approve or reject human_only HITL gates over MCP (ADR 063 step 1). "
-            "When disabled, every MCP caller is denied on human_only gates — the "
-            "pre-ADR-063 behaviour. deliver_manual stays browser-only either way."
+            "Allow a verified human-linked credential to claim, approve or reject "
+            "human_only HITL gates over MCP based on persona (ADR 063 step 1, "
+            "FAR-2281). When disabled, every MCP caller is denied on human_only "
+            "gates. deliver_manual remains browser-only."
         ),
         tier="community",
     ),
@@ -299,6 +298,7 @@ DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
         "sso_unrestricted_provisioning",
         "api_key_grants",
         "autonomy_gating",
+        "mcp_human_linked_hitl_authority",
         "system_maps",
     }
 )
@@ -1020,11 +1020,11 @@ async def resolve_mcp_human_linked_hitl_authority(*, org_id: uuid.UUID | None, f
     inside this registry module — the architecture reference-integrity guard
     treats a reference in a registry file as no reference at all (FAR-1957).
 
-    This flag is NOT a plan-tier feature: it is **default ON** on every tier (a
-    community-tier flag with no ``DEFAULT_OFF_FLAGS`` entry), so a consent-
-    derived human-linked OAuth credential may decide ``human_only`` HITL gates
-    over MCP. An org admin may set ``org.settings_json.feature_overrides[
-    flag_name] = false`` to restore the pre-ADR-063 blanket MCP denial.
+    This flag is NOT a plan-tier feature: it is **default OFF** on every tier
+    (``DEFAULT_OFF_FLAGS``). An org admin may explicitly enable it through
+    ``org.settings_json.feature_overrides[flag_name]``. When enabled, a verified
+    human-linked credential may decide ``human_only`` HITL gates over MCP based
+    on persona; possession remains out of scope.
 
     SECURITY: fails CLOSED to OFF (deny). The permissive state is ON, so a
     failed org-override read must NOT fall through to the permissive tier
