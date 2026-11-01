@@ -17,6 +17,8 @@ interface InternalFeatureFlagsPayload {
 
 /** The overview aggregate is a read model; a stalled request must not hang it. */
 const OVERVIEW_REQUEST_TIMEOUT_MS = 15000
+const SYSTEM_MAP_PAGE_SIZE = 20
+const MAX_SYSTEM_MAP_PAGES = 1000
 
 /** Prefer the detail the API returned over a generic message. */
 function apiErrorMessage(error: unknown, fallback: string): string {
@@ -94,17 +96,17 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     return generation === accessGeneration && token === getAccessToken() && token === accessTokenKey
   }
 
-  /** Start an overview request and return the generation it belongs to. */
-  function beginOverviewRequest(): number {
+  /** Start an overview request and capture the principal that owns its result. */
+  function beginOverviewRequest(): { generation: number; token: string | null } {
     overviewGeneration += 1
     overviewLoading.value = true
     overviewError.value = null
     overviewEmpty.value = false
-    return overviewGeneration
+    return { generation: overviewGeneration, token: getAccessToken() }
   }
 
-  function isCurrentOverviewRequest(generation: number): boolean {
-    return generation === overviewGeneration
+  function isCurrentOverviewRequest(generation: number, token: string | null): boolean {
+    return generation === overviewGeneration && token === getAccessToken()
   }
 
   /**
@@ -179,23 +181,36 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
    * map settles to the empty state; a failed request is an error.
    */
   async function fetchDefaultOverview(): Promise<void> {
-    const generation = beginOverviewRequest()
+    const request = beginOverviewRequest()
     try {
-      const response = await withRequestDeadline(
-        (signal) =>
-          api.GET('/api/v1/system-maps', {
-            params: { query: { page: 1, page_size: 20 } },
-            signal,
-          }),
-        OVERVIEW_REQUEST_TIMEOUT_MS,
-      )
-      if (!isCurrentOverviewRequest(generation)) return
-      if (response.error || !response.data) {
-        throw new Error(apiErrorMessage(response.error, 'System map list request failed'))
+      const publishedItems: SystemMapList['items'] = []
+      let page = 1
+      let total = Number.POSITIVE_INFINITY
+
+      while (publishedItems.length < total && page <= MAX_SYSTEM_MAP_PAGES) {
+        const response = await withRequestDeadline(
+          (signal) =>
+            api.GET('/api/v1/system-maps', {
+              params: { query: { page, page_size: SYSTEM_MAP_PAGE_SIZE } },
+              signal,
+            }),
+          OVERVIEW_REQUEST_TIMEOUT_MS,
+        )
+        if (!isCurrentOverviewRequest(request.generation, request.token)) return
+        if (response.error || !response.data) {
+          throw new Error(apiErrorMessage(response.error, 'System map list request failed'))
+        }
+
+        const pageData = response.data as SystemMapList
+        publishedItems.push(...pageData.items.filter((item) => item.published_revision_id != null))
+        total = pageData.total
+        if (pageData.items.length === 0 || pageData.items.length < pageData.page_size) break
+        page += 1
       }
-      const publishedItems = (response.data as SystemMapList).items.filter(
-        (item) => item.published_revision_id != null,
-      )
+
+      if (page > MAX_SYSTEM_MAP_PAGES) {
+        throw new Error('System map list pagination exceeded its safety limit')
+      }
       const map = publishedItems.find((item) => item.default_map) ?? publishedItems[0]
       if (!map) {
         overview.value = null
@@ -204,18 +219,18 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
       }
       await fetchOverview(map.id)
     } catch (err: unknown) {
-      if (!isCurrentOverviewRequest(generation)) return
+      if (!isCurrentOverviewRequest(request.generation, request.token)) return
       overview.value = null
       overviewEmpty.value = false
       overviewError.value = thrownMessage(err, 'System map list request failed')
     } finally {
-      if (isCurrentOverviewRequest(generation)) overviewLoading.value = false
+      if (isCurrentOverviewRequest(request.generation, request.token)) overviewLoading.value = false
     }
   }
 
   /** Load the overview aggregate for one published map. */
   async function fetchOverview(mapId: string): Promise<void> {
-    const generation = beginOverviewRequest()
+    const request = beginOverviewRequest()
     try {
       const response = await withRequestDeadline(
         (signal) =>
@@ -225,7 +240,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
           }),
         OVERVIEW_REQUEST_TIMEOUT_MS,
       )
-      if (!isCurrentOverviewRequest(generation)) return
+      if (!isCurrentOverviewRequest(request.generation, request.token)) return
       if (response.error || !response.data) {
         throw new Error(apiErrorMessage(response.error, 'System overview request failed'))
       }
@@ -233,12 +248,12 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
       overviewEmpty.value = false
       overviewError.value = null
     } catch (err: unknown) {
-      if (!isCurrentOverviewRequest(generation)) return
+      if (!isCurrentOverviewRequest(request.generation, request.token)) return
       overview.value = null
       overviewEmpty.value = false
       overviewError.value = thrownMessage(err, 'System overview request failed')
     } finally {
-      if (isCurrentOverviewRequest(generation)) overviewLoading.value = false
+      if (isCurrentOverviewRequest(request.generation, request.token)) overviewLoading.value = false
     }
   }
 
