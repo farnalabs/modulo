@@ -77,19 +77,19 @@
           <p id="settings-notifications-level-help" class="text-sm text-muted-foreground">
             {{ $t('views.SettingsNotificationsView.dashboard_level_help') }}
           </p>
-          <select
+          <AppSelect
             id="settings-notifications-level"
-            :value="dashboardLevel"
+            :model-value="dashboardLevel"
+            :options="dashboardLevelOptions"
+            option-label="label"
+            option-value="value"
+            :label="$t('views.SettingsNotificationsView.dashboard_level_label')"
             :disabled="busy"
             aria-describedby="settings-notifications-level-help"
             data-testid="settings-notifications-level"
-            class="w-full max-w-xs rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-            @change="onLevelChange"
-          >
-            <option v-for="level in dashboardLevels" :key="level" :value="level">
-              {{ $t(`views.SettingsNotificationsView.levels.${level}`) }}
-            </option>
-          </select>
+            class="w-full max-w-xs"
+            @update:model-value="onLevelChange"
+          />
         </div>
       </DataCard>
 
@@ -122,6 +122,7 @@ import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
@@ -263,9 +264,8 @@ async function applyLevel(level: DashboardLevel): Promise<void> {
   }
 }
 
-async function onLevelChange(event: Event): Promise<void> {
-  const value = (event.target as HTMLSelectElement).value
-  if (!isDashboardLevel(value)) return
+async function onLevelChange(value: unknown): Promise<void> {
+  if (typeof value !== 'string' || !isDashboardLevel(value)) return
   if (busy.value) return
   savingLevel.value = true
   try {
@@ -296,6 +296,10 @@ async function retryFailedSave(): Promise<void> {
 }
 
 const dashboardLevels = DASHBOARD_LEVELS
+const dashboardLevelOptions = computed(() => dashboardLevels.map((level) => ({
+  value: level,
+  label: t(`views.SettingsNotificationsView.levels.${level}`),
+})))
 
 onMounted(loadPreferences)
 </script>

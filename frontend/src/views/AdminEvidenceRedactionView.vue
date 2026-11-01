@@ -84,17 +84,17 @@
             <label for="evidence-redaction-role" class="mb-1 block text-sm font-medium">
               {{ $t('views.AdminEvidenceRedaction.role') }}
             </label>
-            <select
+            <AppSelect
               id="evidence-redaction-role"
               v-model="form.role"
+              :options="formRoleOptions.map((roleOption) => ({ value: roleOption, label: roleLabel(roleOption) }))"
+              option-label="label"
+              option-value="value"
+              :label="$t('views.AdminEvidenceRedaction.role')"
               :disabled="editingRule !== null"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-60"
+              class="w-full"
               data-testid="admin-evidence-redaction-role"
-            >
-              <option v-for="roleOption in formRoleOptions" :key="roleOption" :value="roleOption">
-                {{ roleLabel(roleOption) }}
-              </option>
-            </select>
+            />
             <p
               v-if="!roleIsKnown"
               class="mt-1 text-xs text-destructive-text"
@@ -265,6 +265,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import PageHeader from '../components/shared/PageHeader.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'

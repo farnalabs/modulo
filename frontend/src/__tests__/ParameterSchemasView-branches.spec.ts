@@ -24,6 +24,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import ParameterSchemasView from '../views/ParameterSchemasView.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 import { api } from '../lib/api/client'
 
 async function flush() {
@@ -173,9 +174,13 @@ describe('ParameterSchemasView branches — default value types', () => {
     vm.schemaForm.parameters[0].default_value = true
     await flush()
 
-    const defaultSelect = wrapper.find('#paramschema-param-default-0')
-    expect(defaultSelect.exists()).toBe(true)
-    expect(defaultSelect.element.tagName).toBe('SELECT')
+    const defaultSelect = wrapper.findAllComponents(AppSelect).at(-1)
+    expect(defaultSelect).toBeDefined()
+    expect(defaultSelect!.props('options')).toEqual([
+      { value: undefined, label: '' },
+      { value: true, label: 'true' },
+      { value: false, label: 'false' },
+    ])
     wrapper.unmount()
   })
 
@@ -189,9 +194,14 @@ describe('ParameterSchemasView branches — default value types', () => {
     vm.schemaForm.parameters[0].default_value = 'a'
     await flush()
 
-    const defaultSelect = wrapper.find('#paramschema-param-default-0')
-    expect(defaultSelect.exists()).toBe(true)
-    expect(defaultSelect.element.tagName).toBe('SELECT')
+    const defaultSelect = wrapper.findAllComponents(AppSelect).at(-1)
+    expect(defaultSelect).toBeDefined()
+    expect(defaultSelect!.props('options')).toEqual([
+      { value: undefined, label: '' },
+      { value: 'a', label: 'a' },
+      { value: 'b', label: 'b' },
+      { value: 'c', label: 'c' },
+    ])
     wrapper.unmount()
   })
 
