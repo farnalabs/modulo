@@ -360,6 +360,7 @@ class TestCreateModelBackendSuccess(AuthContext):
         mb.provider = "openai"
         mb.model_id = "gpt-4o"
         mb.visibility = "org"
+        mb.status = "pending_setup"
         mock_create.return_value = mb
         mock_handoff.return_value = {
             "setup_url": "https://app.modulo.run/setup/model-backend/abc#token=xyz",
