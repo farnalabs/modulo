@@ -228,6 +228,110 @@ jobs:
           fi
 
       # -----------------------------------------------------------------------
+      # Validate the complete cut identity before establishing a new hold. A
+      # failed query is not evidence of absence, so every lookup fails closed.
+      # -----------------------------------------------------------------------
+      - name: Validate prior release cut state (cut only)
+        id: validate-cut-state
+        if: inputs.mode == 'cut'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BRANCH="release/version-${VERSION}"
+          RELEASES_FILE="$(mktemp)"
+
+          # Search every PR, not only the canonical branch. The exact title is
+          # the release identity; substring matching would confuse 0.3.32 with
+          # 0.3.324 and would miss a recovery PR that used a different branch.
+          PR_PAGES_FILE="$(mktemp)"
+          cleanup() {
+            rm -f "$PR_PAGES_FILE" "$RELEASES_FILE" /tmp/release-ref-error
+          }
+          trap cleanup EXIT
+          if ! gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/pulls?state=all&per_page=100" > "$PR_PAGES_FILE"; then
+            echo "::error::Could not query release PR history; refusing to cut."
+            exit 1
+          fi
+          MATCHING_PRS="$(jq -c --arg title "chore(release): bump version to ${VERSION}" \
+            'add | [.[] | select(.base.ref == "main" and .title == $title) | {number, state, merged_at, head_ref: .head.ref}]' "$PR_PAGES_FILE")"
+          OPEN_MATCHES="$(jq -r '[.[] | select(.state == "open") | ("#" + (.number | tostring))] | join(", ")' <<<"$MATCHING_PRS")"
+          if [ -n "$OPEN_MATCHES" ]; then
+            echo "::error::Release version ${VERSION} has open PR(s) ${OPEN_MATCHES}; refusing a duplicate cut."
+            exit 1
+          fi
+          MERGED_PRS="$(jq -r '[.[] | select(.merged_at != null)] | map("#" + (.number | tostring)) | join(", ")' <<<"$MATCHING_PRS")"
+          if [ -n "$MERGED_PRS" ]; then
+            echo "::error::Release version ${VERSION} has merged PR(s) ${MERGED_PRS}; refusing to cut again."
+            exit 1
+          fi
+
+          # git ls-remote returns 2 for an absent ref. Any other failure is a
+          # query error and must not be interpreted as safe absence.
+          require_remote_ref_absent() {
+            local ref="$1"
+            local rc
+            REMOTE_REF_STATUS=""
+            if git ls-remote --exit-code origin "$ref" >/dev/null 2>/tmp/release-ref-error; then
+              REMOTE_REF_STATUS="active"
+              echo "::error::Remote ref ${ref} exists; refusing to cut."
+              return 1
+            else
+              rc=$?
+            fi
+            if [ "$rc" -ne 2 ]; then
+              REMOTE_REF_STATUS="error"
+              echo "::error::Could not query remote ref ${ref}; refusing to treat it as absent."
+              cat /tmp/release-ref-error
+              return 1
+            fi
+            REMOTE_REF_STATUS="absent"
+          }
+          while IFS= read -r pr; do
+            pr_number="$(jq -r '.number' <<<"$pr")"
+            pr_head="$(jq -r '.head_ref' <<<"$pr")"
+            if ! require_remote_ref_absent "refs/heads/${pr_head}"; then
+              if [ "$REMOTE_REF_STATUS" = "active" ]; then
+                echo "::error::Matching closed release PR #${pr_number} still has branch ${pr_head}; refusing retry."
+              fi
+              exit 1
+            fi
+          done < <(jq -c '.[] | select(.state == "closed" and .merged_at == null)' <<<"$MATCHING_PRS")
+
+          if ! require_remote_ref_absent "refs/tags/release-publication-hold"; then
+            if [ "$REMOTE_REF_STATUS" = "active" ]; then
+              echo "::error::release-publication-hold is active; refusing a second cut."
+            fi
+            exit 1
+          fi
+          require_remote_ref_absent "refs/heads/${BRANCH}"
+          require_remote_ref_absent "refs/tags/v${VERSION}"
+          require_remote_ref_absent "refs/tags/bundle-v${VERSION}"
+          require_remote_ref_absent "refs/tags/v${VERSION}-rc*"
+
+          if ! gh release list --repo "${GITHUB_REPOSITORY}" --limit 1000 --json tagName > "$RELEASES_FILE"; then
+            echo "::error::Could not query GitHub releases; refusing to cut."
+            exit 1
+          fi
+          if jq -e --arg version "$VERSION" \
+              'any(.[]; (.tagName == ("v" + $version) or .tagName == ("bundle-v" + $version) or (.tagName | test("^v" + $version + "-rc[0-9]+$"))))' \
+              "$RELEASES_FILE" >/dev/null; then
+            echo "::error::A GitHub release already exists for version ${VERSION}; refusing to cut."
+            exit 1
+          fi
+
+          CLOSED_PRS="$(jq -r '[.[] | select(.state == "closed" and .merged_at == null) | ("#" + (.number | tostring))] | join(", ")' <<<"$MATCHING_PRS")"
+          if [ -n "$CLOSED_PRS" ]; then
+            echo "Safe retry: prior closed unmerged release PR(s) ${CLOSED_PRS}; exact release identity, branches, publication hold, release tags, and GitHub release are all clear."
+          else
+            echo "No prior exact release PR exists for ${VERSION}; cut is safe to start."
+          fi
+          echo "retry_safe=true" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
       # Version bump (cut only). The publication hold is established first so
       # publish-images cannot publish stable latest during the main push below.
       # The later release-freeze tag remains the authoritative release boundary.
@@ -240,10 +344,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
-            echo "::error::release-publication-hold already exists; refusing to start a second cut over an unresolved hold."
-            exit 1
-          fi
+          hold_lookup_rc=0
+          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          case "$hold_lookup_rc" in
+            0)
+              echo "::error::release-publication-hold already exists; refusing to start a second cut over an unresolved hold."
+              exit 1
+              ;;
+            2)
+              ;;
+            *)
+              echo "::error::Could not query release-publication-hold; refusing to treat it as absent."
+              cat /tmp/release-publication-hold-error
+              exit 1
+              ;;
+          esac
           git tag -a release-publication-hold -m "Suppress stable publication while cut establishes release-freeze"
           git push origin release-publication-hold
           echo "established=true" >> "$GITHUB_OUTPUT"
@@ -279,11 +394,10 @@ jobs:
               git fetch origin "$BRANCH"
               git checkout --detach "origin/$BRANCH"
             else
-              CLOSED_PR="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state closed --json number --jq '.[0].number // empty')"
-              if [ -n "$CLOSED_PR" ]; then
-                echo "::error::Release branch ${BRANCH} has a closed PR (#${CLOSED_PR}); refusing to create a duplicate cut."
-                exit 1
-              fi
+              # validate-cut-state has already proved that any historical PRs
+              # were closed without merge and that all release identity refs are
+              # absent. A retry creates a fresh branch; it never reuses a closed
+              # PR or overwrites a live ref.
               git checkout -B "$BRANCH" origin/main
               python3 scripts/bump-version.py --set "$VERSION"
               git add backend/pyproject.toml frontend/package.json deploy/helm/modulo/Chart.yaml
@@ -413,15 +527,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
-            if ! git push origin --delete release-publication-hold; then
-              echo "::error::Could not remove release-publication-hold after a failed cut preparation."
+          hold_lookup_rc=0
+          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          case "$hold_lookup_rc" in
+            0)
+              if ! git push origin --delete release-publication-hold; then
+                echo "::error::Could not remove release-publication-hold after a failed cut preparation."
+                exit 1
+              fi
+              echo "Removed release-publication-hold after failed cut preparation."
+              ;;
+            2)
+              echo "No release-publication-hold remains; cleanup is idempotently complete."
+              ;;
+            *)
+              echo "::error::Could not query release-publication-hold during failed cut preparation cleanup; preserving unknown hold state."
+              cat /tmp/release-publication-hold-error
               exit 1
-            fi
-            echo "Removed release-publication-hold after failed cut preparation."
-          else
-            echo "No release-publication-hold remains; no cleanup required."
-          fi
+              ;;
+          esac
 
       # -----------------------------------------------------------------------
       # CUT: new RC + freeze
@@ -473,15 +597,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
-            if ! git push origin --delete release-publication-hold; then
-              echo "::error::Could not remove release-publication-hold after a failed release cut."
+          hold_lookup_rc=0
+          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          case "$hold_lookup_rc" in
+            0)
+              if ! git push origin --delete release-publication-hold; then
+                echo "::error::Could not remove release-publication-hold after a failed release cut."
+                exit 1
+              fi
+              echo "Removed release-publication-hold after failed release cut."
+              ;;
+            2)
+              echo "No release-publication-hold remains; cleanup is idempotently complete."
+              ;;
+            *)
+              echo "::error::Could not query release-publication-hold during failed release cut cleanup; preserving unknown hold state."
+              cat /tmp/release-publication-hold-error
               exit 1
-            fi
-            echo "Removed release-publication-hold after failed release cut."
-          else
-            echo "No release-publication-hold remains; no cleanup required."
-          fi
+              ;;
+          esac
 
       # -----------------------------------------------------------------------
       # RECUT: tag current main as the next RC (no version bump)
@@ -599,10 +733,21 @@ jobs:
           # Keep the remote branch as the auditable release record; reuse one
           # open PR and refuse a closed duplicate rather than racing a second
           # promotion.
-          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
-            echo "::error::release-publication-hold already exists; refusing to promote over an unresolved hold."
-            exit 1
-          fi
+          hold_lookup_rc=0
+          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          case "$hold_lookup_rc" in
+            0)
+              echo "::error::release-publication-hold already exists; refusing to promote over an unresolved hold."
+              exit 1
+              ;;
+            2)
+              ;;
+            *)
+              echo "::error::Could not query release-publication-hold; refusing to treat it as absent."
+              cat /tmp/release-publication-hold-error
+              exit 1
+              ;;
+          esac
           git tag -a release-publication-hold -m "Suppress stable publication while the promote PR merges"
           git push origin release-publication-hold
           git push origin --delete release-freeze
@@ -1177,13 +1322,25 @@ jobs:
           fi
           # A failed promotion must not leave the temporary suppression marker
           # behind once the authoritative freeze is active again.
-          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
-            if ! git push origin --delete release-publication-hold; then
-              echo "::error::Could not remove release-publication-hold after a failed GA promotion."
+          hold_lookup_rc=0
+          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          case "$hold_lookup_rc" in
+            0)
+              if ! git push origin --delete release-publication-hold; then
+                echo "::error::Could not remove release-publication-hold after a failed GA promotion."
+                exit 1
+              fi
+              echo "Removed release-publication-hold after failed GA promotion."
+              ;;
+            2)
+              echo "No release-publication-hold remains; failed-promotion cleanup is idempotently complete."
+              ;;
+            *)
+              echo "::error::Could not query release-publication-hold after failed GA promotion; preserving unknown hold state."
+              cat /tmp/release-publication-hold-error
               exit 1
-            fi
-            echo "Removed release-publication-hold after failed GA promotion."
-          fi
+              ;;
+          esac
 
 
       - name: Lift release freeze after successful GA publication
