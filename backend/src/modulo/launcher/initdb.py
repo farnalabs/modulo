@@ -166,11 +166,12 @@ def postgres_server_argv(pgdata: Path, host: str, port: int, bin_dir: Path) -> l
     """
     return [
         _binary(bin_dir, "postgres"),
-        # PostgreSQL's long-form GUC parser requires a value-bearing option to
-        # use the --name=value spelling. The separate ``--pgdata``, path pair
-        # is accepted by initdb but is parsed by postgres as a valueless GUC,
-        # producing ``FATAL: --pgdata requires a value``.
-        f"--pgdata={pgdata}",
+        # PostgreSQL server (postgres) accepts -D /path or --pgdata /path (with space)
+        # for the data directory. Using --pgdata=/path with = is parsed as a GUC
+        # and produces "unrecognized configuration parameter". The -D short option
+        # is unambiguous and universally accepted.
+        "-D",
+        str(pgdata),
         "--host",
         host,
         "--port",
