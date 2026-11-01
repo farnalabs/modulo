@@ -538,12 +538,16 @@ def test_release_deploy_dispatch_runs_from_main_for_serialisation() -> None:
 
 def test_release_cut_state_gate_checks_all_retry_safety_conditions() -> None:
     script = _cut_state_script()
-    assert "gh pr list" in script
-    assert "--state open" in script
-    assert "--state closed" in script
-    assert "mergedAt != null" in script
+    assert "gh api --paginate --slurp" in script
+    assert "pulls?state=all&per_page=100" in script
+    assert ".title == $title" in script
+    assert "--state open" not in script
+    assert "--state closed" not in script
+    assert "merged_at != null" in script
     assert 'require_remote_ref_absent "refs/heads/${BRANCH}"' in script
     assert 'require_remote_ref_absent "refs/tags/release-publication-hold"' in script
+    assert 'REMOTE_REF_STATUS="active"' in script
+    assert 'REMOTE_REF_STATUS="error"' in script
     assert 'require_remote_ref_absent "refs/tags/v${VERSION}"' in script
     assert 'require_remote_ref_absent "refs/tags/bundle-v${VERSION}"' in script
     assert 'require_remote_ref_absent "refs/tags/v${VERSION}-rc*"' in script
@@ -556,6 +560,13 @@ def test_release_cut_state_gate_fails_closed_on_ref_query_errors() -> None:
     script = _cut_state_script()
     assert 'if [ "$rc" -ne 2 ]; then' in script
     assert "refusing to treat it as absent" in script
+
+
+def test_cut_state_gate_rejects_remote_ref_query_error(tmp_path: Path) -> None:
+    result = _run_cut_state_gate(tmp_path, git_failure=True)
+    assert result.returncode != 0
+    assert "Could not query remote ref" in result.stdout
+    assert "remote query failed" in result.stdout + result.stderr
 
 
 def test_release_cut_uses_protected_main_pr_and_exact_merge_ref() -> None:
@@ -828,6 +839,7 @@ def _run_cut_state_gate(
     open_prs: list[dict[str, Any]] | None = None,
     existing_refs: set[str] | None = None,
     gh_failure: str | None = None,
+    git_failure: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "cut-state-bin"
     bin_dir.mkdir()
@@ -846,11 +858,30 @@ def _run_cut_state_gate(
     release_response = (
         "echo query-error >&2; exit 1" if gh_failure == "releases" else "echo " + shlex.quote(json.dumps(release_rows))
     )
+    all_prs = [
+        {
+            **pr,
+            "state": pr.get("state", "open" if pr in (open_prs or []) else "closed"),
+            "merged_at": pr.get("merged_at", pr.get("mergedAt")),
+            "head": {"ref": pr.get("headRefName", "release/version-0.2.0")},
+            "base": {"ref": pr.get("baseRefName", "main")},
+            "title": pr.get("title", "chore(release): bump version to 0.2.0"),
+        }
+        for pr in [*(open_prs or []), *(closed_prs or [])]
+    ]
+    api_response = (
+        "echo query-error >&2; exit 1"
+        if gh_failure == "pr_history"
+        else "printf '%s\\n' " + shlex.quote(json.dumps([all_prs]))
+    )
     gh_script = textwrap.dedent(
         f"""\
         #!/usr/bin/env bash
         set -euo pipefail
         case "$*" in
+          *'api --paginate --slurp'*'pulls?state=all&per_page=100'*)
+            {api_response}
+            ;;
           *'pr list'*'--state open'*)
             {open_response}
             ;;
@@ -898,6 +929,7 @@ exit 2
             "GITHUB_REPOSITORY": "example/repo",
             "VERSION": "0.2.0",
             "GITHUB_OUTPUT": str(tmp_path / "output"),
+            "CUT_STATE_GIT_FAILURE": "1" if git_failure else "0",
         }
     )
     return _run_bash(_cut_state_script(), cwd=tmp_path, env=env)
@@ -910,6 +942,31 @@ def test_cut_state_gate_allows_closed_unmerged_pr_when_all_release_identity_is_a
     )
     assert result.returncode == 0, result.stderr + result.stdout
     assert "Safe retry: prior closed unmerged release PR(s) #2649" in result.stdout
+
+
+def test_cut_state_gate_matches_exact_version_identity_across_branches(tmp_path: Path) -> None:
+    result = _run_cut_state_gate(
+        tmp_path,
+        closed_prs=[
+            {
+                "number": 2649,
+                "headRefName": "recovery/release-0.2.0",
+                "baseRefName": "main",
+                "title": "chore(release): bump version to 0.2.0",
+                "mergedAt": None,
+            },
+            {
+                "number": 2650,
+                "headRefName": "release/version-0.2.00",
+                "baseRefName": "main",
+                "title": "chore(release): bump version to 0.2.00",
+                "mergedAt": None,
+            },
+        ],
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "Safe retry: prior closed unmerged release PR(s) #2649" in result.stdout
+    assert "#2650" not in result.stdout
 
 
 def test_cut_state_gate_rejects_closed_unmerged_pr_when_branch_exists(tmp_path: Path) -> None:
@@ -957,7 +1014,7 @@ def test_cut_state_gate_rejects_existing_github_release(tmp_path: Path) -> None:
 
 
 def test_cut_state_gate_rejects_github_query_error(tmp_path: Path) -> None:
-    result = _run_cut_state_gate(tmp_path, gh_failure="closed_prs")
+    result = _run_cut_state_gate(tmp_path, gh_failure="pr_history")
     assert result.returncode != 0
     assert result.stderr or result.stdout
 

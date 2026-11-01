@@ -241,36 +241,31 @@ jobs:
         run: |
           set -euo pipefail
           BRANCH="release/version-${VERSION}"
-          CLOSED_PRS_FILE="$(mktemp)"
           RELEASES_FILE="$(mktemp)"
+
+          # Search every PR, not only the canonical branch. The exact title is
+          # the release identity; substring matching would confuse 0.3.32 with
+          # 0.3.324 and would miss a recovery PR that used a different branch.
+          PR_PAGES_FILE="$(mktemp)"
           cleanup() {
-            rm -f "$CLOSED_PRS_FILE" "$RELEASES_FILE" /tmp/release-ref-error
+            rm -f "$PR_PAGES_FILE" "$RELEASES_FILE" /tmp/release-ref-error
           }
           trap cleanup EXIT
-
-          if ! OPEN_PRS="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main \
-            --state open --limit 1000 --json number,headRefName,baseRefName)"; then
-            echo "::error::Could not query open release PRs for ${BRANCH}; refusing to cut."
+          if ! gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/pulls?state=all&per_page=100" > "$PR_PAGES_FILE"; then
+            echo "::error::Could not query release PR history; refusing to cut."
             exit 1
           fi
-          OPEN_MATCHES="$(jq -r --arg branch "$BRANCH" \
-            '[.[] | select(.headRefName == $branch and .baseRefName == "main") | ("#" + (.number | tostring))] | join(", ")' \
-            <<<"$OPEN_PRS")"
+          MATCHING_PRS="$(jq -c --arg title "chore(release): bump version to ${VERSION}" \
+            'add | [.[] | select(.base.ref == "main" and .title == $title) | {number, state, merged_at, head_ref: .head.ref}]' "$PR_PAGES_FILE")"
+          OPEN_MATCHES="$(jq -r '[.[] | select(.state == "open") | ("#" + (.number | tostring))] | join(", ")' <<<"$MATCHING_PRS")"
           if [ -n "$OPEN_MATCHES" ]; then
-            echo "::error::Release branch ${BRANCH} has open PR(s) ${OPEN_MATCHES}; refusing a duplicate cut."
+            echo "::error::Release version ${VERSION} has open PR(s) ${OPEN_MATCHES}; refusing a duplicate cut."
             exit 1
           fi
-
-          gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main \
-            --state closed --limit 1000 --json number,headRefName,baseRefName,mergedAt > "$CLOSED_PRS_FILE"
-          CLOSED_PRS="$(jq -r --arg branch "$BRANCH" \
-            '[.[] | select(.headRefName == $branch and .baseRefName == "main") | ("#" + (.number | tostring))] | join(", ")' \
-            "$CLOSED_PRS_FILE")"
-          MERGED_PRS="$(jq -r --arg branch "$BRANCH" \
-            '[.[] | select(.headRefName == $branch and .baseRefName == "main" and .mergedAt != null) | ("#" + (.number | tostring))] | join(", ")' \
-            "$CLOSED_PRS_FILE")"
+          MERGED_PRS="$(jq -r '[.[] | select(.merged_at != null)] | map("#" + (.number | tostring)) | join(", ")' <<<"$MATCHING_PRS")"
           if [ -n "$MERGED_PRS" ]; then
-            echo "::error::Release branch ${BRANCH} has merged PR(s) ${MERGED_PRS}; refusing to cut again."
+            echo "::error::Release version ${VERSION} has merged PR(s) ${MERGED_PRS}; refusing to cut again."
             exit 1
           fi
 
@@ -279,30 +274,48 @@ jobs:
           require_remote_ref_absent() {
             local ref="$1"
             local rc
+            REMOTE_REF_STATUS=""
             if git ls-remote --exit-code origin "$ref" >/dev/null 2>/tmp/release-ref-error; then
+              REMOTE_REF_STATUS="active"
               echo "::error::Remote ref ${ref} exists; refusing to cut."
               return 1
             else
               rc=$?
             fi
             if [ "$rc" -ne 2 ]; then
+              REMOTE_REF_STATUS="error"
               echo "::error::Could not query remote ref ${ref}; refusing to treat it as absent."
               cat /tmp/release-ref-error
               return 1
             fi
+            REMOTE_REF_STATUS="absent"
           }
-          require_remote_ref_absent "refs/heads/${BRANCH}"
+          while IFS= read -r pr; do
+            pr_number="$(jq -r '.number' <<<"$pr")"
+            pr_head="$(jq -r '.head_ref' <<<"$pr")"
+            if ! require_remote_ref_absent "refs/heads/${pr_head}"; then
+              if [ "$REMOTE_REF_STATUS" = "active" ]; then
+                echo "::error::Matching closed release PR #${pr_number} still has branch ${pr_head}; refusing retry."
+              fi
+              exit 1
+            fi
+          done < <(jq -c '.[] | select(.state == "closed" and .merged_at == null)' <<<"$MATCHING_PRS")
+
           if ! require_remote_ref_absent "refs/tags/release-publication-hold"; then
-            if git ls-remote --exit-code origin "refs/tags/release-publication-hold" >/dev/null 2>/tmp/release-ref-error; then
+            if [ "$REMOTE_REF_STATUS" = "active" ]; then
               echo "::error::release-publication-hold is active; refusing a second cut."
             fi
             exit 1
           fi
+          require_remote_ref_absent "refs/heads/${BRANCH}"
           require_remote_ref_absent "refs/tags/v${VERSION}"
           require_remote_ref_absent "refs/tags/bundle-v${VERSION}"
           require_remote_ref_absent "refs/tags/v${VERSION}-rc*"
 
-          gh release list --repo "${GITHUB_REPOSITORY}" --limit 1000 --json tagName > "$RELEASES_FILE"
+          if ! gh release list --repo "${GITHUB_REPOSITORY}" --limit 1000 --json tagName > "$RELEASES_FILE"; then
+            echo "::error::Could not query GitHub releases; refusing to cut."
+            exit 1
+          fi
           if jq -e --arg version "$VERSION" \
               'any(.[]; (.tagName == ("v" + $version) or .tagName == ("bundle-v" + $version) or (.tagName | test("^v" + $version + "-rc[0-9]+$"))))' \
               "$RELEASES_FILE" >/dev/null; then
@@ -310,10 +323,11 @@ jobs:
             exit 1
           fi
 
+          CLOSED_PRS="$(jq -r '[.[] | select(.state == "closed" and .merged_at == null) | ("#" + (.number | tostring))] | join(", ")' <<<"$MATCHING_PRS")"
           if [ -n "$CLOSED_PRS" ]; then
-            echo "Safe retry: prior closed unmerged release PR(s) ${CLOSED_PRS} for ${BRANCH}; the branch, publication hold, release tags, and GitHub release are all absent."
+            echo "Safe retry: prior closed unmerged release PR(s) ${CLOSED_PRS}; exact release identity, branches, publication hold, release tags, and GitHub release are all clear."
           else
-            echo "No prior release PR exists for ${BRANCH}; cut is safe to start."
+            echo "No prior exact release PR exists for ${VERSION}; cut is safe to start."
           fi
           echo "retry_safe=true" >> "$GITHUB_OUTPUT"
 
