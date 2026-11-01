@@ -106,6 +106,24 @@ describe('AppLayout', () => {
     shellMain.remove()
   })
 
+  it('gives the shell main the programmatic-focus fallback the router focuses', async () => {
+    // `focusRouteContent` falls back to `[data-main-landmark]` on a route with
+    // no page heading (e.g. a bare /assistant). The landmark must be
+    // programmatically focusable but never tab-reachable.
+    const wrapper = mount(AppLayout, {
+      global: {
+        plugins: [createPinia(), router],
+        stubs: { LogoMark: true },
+      },
+    })
+    await nextTick()
+    await nextTick()
+    const main = wrapper.find('main')
+    expect(main.attributes('data-main-landmark')).toBeDefined()
+    expect(main.attributes('tabindex')).toBe('-1')
+    wrapper.unmount()
+  })
+
   it('renders plan badge by default', async () => {
     const wrapper = mount(AppLayout, {
       global: {

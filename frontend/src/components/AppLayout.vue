@@ -48,7 +48,7 @@
       </div>
       <Breadcrumb class="px-6 pt-4 pb-3" />
       <router-view v-slot="{ Component, route }">
-        <transition name="page" mode="out-in" @after-enter="onRouteEnter">
+        <transition name="page" mode="out-in" @after-enter="focusRouteContent">
           <component :is="Component" :key="route.fullPath" />
         </transition>
       </router-view>
@@ -243,10 +243,6 @@ provide(LICENCE_STATUS_INJECTION_KEY, {
 
 const route = useRoute();
 const router = useRouter();
-
-function onRouteEnter() {
-  focusRouteContent()
-}
 
 /**
  * Send the administrator to the licence key input from anywhere in the app.

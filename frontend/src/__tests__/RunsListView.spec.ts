@@ -1082,6 +1082,20 @@ describe('RunsListView load failure recovery', () => {
       getMock.mockImplementation(healthyGet)
     }
   })
+
+  it('carries no recovery message while the list has loaded cleanly', async () => {
+    // The recovery hint is bound only to the error state; on a healthy load
+    // the message must be empty rather than a stray "Unknown error ..." hint.
+    mockResponses['/api/v1/runs'] = listWith([baseRun])
+    const wrapper = mountViewWithRealErrorAlert()
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { loadErrorMessage: string }
+    expect(vm.loadErrorMessage).toBe('')
+    expect(wrapper.text()).not.toContain(t('views.RunsListView.load_error_recovery'))
+    wrapper.unmount()
+  })
 })
 
 describe('RunsListView pipeline-version link (FAR-1813)', () => {
