@@ -439,7 +439,8 @@ export default {
       "pipeline_name_placeholder": "Pipeline name",
       "delete_confirm": "Are you sure? This permanently deletes the pipeline and all its runs.",
       "failed_to_load_folders": "Failed to load folders: {error}",
-      "invalid_folder_list_response": "The server returned an invalid folder list."
+      "invalid_folder_list_response": "The server returned an invalid folder list.",
+      "table_scroll_instructions": "Swipe horizontally to view all pipeline columns."
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",
@@ -4488,8 +4489,11 @@ export default {
       "telemetry_unavailable": "unavailable"
     }
   },
-  "components": {
-    "LicenceRenewalNotice": {
+    "components": {
+      "DataTable": {
+        "scroll_instructions": "Swipe horizontally to view all table columns."
+      },
+      "LicenceRenewalNotice": {
       "renewal_due_auto_title": "Your Team license renews on {date}",
       "renewal_due_auto_body": "Team capability — single sign-on, team roles and the audit log — continues after {date}. A replacement key is sent to your billing contact when the renewal is charged. If it does not arrive, install it on this page.",
       "renewal_due_manual_title": "Your Team license expires on {date}",

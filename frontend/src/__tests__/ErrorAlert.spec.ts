@@ -18,6 +18,8 @@ describe('ErrorAlert', () => {
     // Unresolved-key leak guard: vue-i18n returns the key itself when the
     // message is missing, so the raw dotted key must never appear.
     expect(retry.text()).not.toContain('components.ErrorAlert')
+    expect(wrapper.attributes('role')).toBe('alert')
+    expect(wrapper.attributes('aria-live')).toBe('assertive')
   })
 
   it('invokes onRetry when the retry button is clicked', async () => {

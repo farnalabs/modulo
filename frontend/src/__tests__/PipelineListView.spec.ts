@@ -95,7 +95,7 @@ describe('PipelineListView', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
-  it('opens a pipeline via keyboard (Enter and Space) for a11y', async () => {
+  it('renders the pipeline name as a keyboard-accessible native link', async () => {
     await router.push('/pipelines')
     await router.isReady()
     mockResponses['/api/v1/pipelines?page_size=100'] = {
@@ -115,14 +115,10 @@ describe('PipelineListView', () => {
 
     const row = wrapper.find('[data-testid="pipeline-tree-row-pipe-1"]')
     expect(row.exists()).toBe(true)
-
-    await row.trigger('keydown', { key: 'Enter' })
-    await flushPromises()
-    expect(router.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'pipeline-editor' }))
-
-    await row.trigger('keydown', { key: ' ' })
-    await flushPromises()
-    expect(vi.mocked(router.push).mock.calls.length).toBeGreaterThanOrEqual(2)
+    const link = row.find('a')
+    expect(link.exists()).toBe(true)
+    expect(link.text()).toContain('Demo Pipeline')
+    expect(link.attributes('href')).toBe('/pipelines/pipe-1/editor')
   })
 
   it('sizes the page to the viewport minus the AppLayout chrome (sibling calc convention, never bare h-screen)', async () => {
@@ -654,7 +650,7 @@ describe('PipelineListView', () => {
     expect(wrapper.text()).toContain('No pipelines match your search')
   })
 
-  it('navigates to the editor when a pipeline row is clicked', async () => {
+  it('keeps the row action menu separate from the pipeline navigation link', async () => {
     const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Click Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
     mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
     await router.push('/pipelines')
@@ -664,8 +660,10 @@ describe('PipelineListView', () => {
     })
     await flushPromises()
     await nextTick()
-    await wrapper.find('[data-testid="pipeline-tree-row-p1"]').trigger('click')
-    expect(router.push).toHaveBeenCalledWith({ name: 'pipeline-editor', params: { id: 'p1' } })
+    const row = wrapper.find('[data-testid="pipeline-tree-row-p1"]')
+    expect(row.find('a').attributes('href')).toBe('/pipelines/p1/editor')
+    expect(row.find('[data-testid="pipeline-list-action-menu"]').exists()).toBe(true)
+    expect(row.attributes('tabindex')).toBeUndefined()
   })
 
   it('drops a pipeline onto a folder row in the table to move it', async () => {
@@ -1026,7 +1024,7 @@ describe('PipelineListView', () => {
     expect(folderButtons.map(b => b.text())).toEqual(['alpha', 'Beta', 'Zeta'])
   })
 
-  it('opens the pipeline editor via keyboard (Enter / Space) for a11y (FAR-821)', async () => {
+  it('exposes the pipeline editor link without making the whole row a control (FAR-821)', async () => {
     const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Keyboard Pipeline', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
     mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
     await router.push('/pipelines')
@@ -1037,21 +1035,12 @@ describe('PipelineListView', () => {
     await flushPromises()
     await nextTick()
 
-    // Prevent real navigation so the row (and its handlers) stay mounted for
-    // both key dispatches.
-    const pushSpy = vi.spyOn(router, 'push').mockImplementation(() => Promise.resolve() as never)
     const row = wrapper.find('[data-testid="pipeline-tree-row-p1"]')
     expect(row.exists()).toBe(true)
-
-    await row.trigger('keydown', { key: 'Enter' })
-    await nextTick()
-    expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({ name: 'pipeline-editor', params: { id: 'p1' } }))
-
-    pushSpy.mockClear()
-    await row.trigger('keydown', { key: ' ', code: 'Space' })
-    await nextTick()
-    expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({ name: 'pipeline-editor', params: { id: 'p1' } }))
-    pushSpy.mockRestore()
+    const link = row.find('a')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('/pipelines/p1/editor')
+    expect(row.attributes('tabindex')).toBeUndefined()
   })
 
   it('remounts the row-action Menu on every open so its item-click handler is fresh (staging @regression)', async () => {

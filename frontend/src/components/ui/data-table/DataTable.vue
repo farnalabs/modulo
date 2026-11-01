@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { cn } from '@/lib/utils'
 
 export interface Column {
@@ -14,6 +15,9 @@ export interface Column {
 export interface DataTableRow {
   [key: string]: unknown
 }
+
+const { t } = useI18n()
+let nextDataTableId = 0
 
 const props = withDefaults(defineProps<{
   columns: Column[]
@@ -39,6 +43,7 @@ const emit = defineEmits<{
   'row-click': [row: DataTableRow]
 }>()
 
+const scrollInstructionsId = `data-table-scroll-instructions-${nextDataTableId++}`
 const sortColumn = ref<string | null>(props.initialSortColumn)
 const sortDirection = ref<'asc' | 'desc'>(props.initialSortDirection)
 
@@ -94,8 +99,20 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
 </script>
 
 <template>
-  <div class="overflow-x-auto">
-    <table class="w-full">
+  <div class="relative">
+    <div
+      class="pointer-events-none absolute right-0 top-0 z-10 h-full w-8 bg-gradient-to-l from-background to-transparent sm:hidden"
+      aria-hidden="true"
+    />
+    <p :id="scrollInstructionsId" class="sr-only">
+      {{ t('components.DataTable.scroll_instructions') }}
+    </p>
+    <div
+      class="overflow-x-auto overscroll-x-contain focus-within:ring-2 focus-within:ring-ring focus-within:ring-inset"
+      tabindex="0"
+      :aria-describedby="scrollInstructionsId"
+    >
+      <table class="w-full min-w-max">
       <thead>
         <tr>
           <th
@@ -170,5 +187,6 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
         </tr>
       </tbody>
     </table>
+    </div>
   </div>
 </template>

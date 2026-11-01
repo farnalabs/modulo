@@ -47,7 +47,7 @@
              `shrink-0`: when the content column is shorter than the wrapped
              toolbar, the toolbar must keep its min-content height (scroll the
              column to reach it) rather than being squeezed. -->
-        <div class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b bg-card px-3 py-2" data-testid="pipeline-editor-toolbar">
+        <div class="flex shrink-0 flex-wrap items-start gap-x-2 gap-y-2 border-b bg-card px-3 py-2 md:items-center" data-testid="pipeline-editor-toolbar">
           <!-- Group: identity -->
           <div class="flex min-w-0 items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-identity">
             <h2 class="truncate text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
@@ -151,7 +151,7 @@
           <template v-if="!isViewing">
           <span :class="groupDividerClass" />
           <!-- Group: pipeline settings -->
-          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-settings">
+          <div class="flex w-full flex-wrap items-center gap-1.5 md:w-auto" data-testid="pipeline-editor-toolbar-group-settings">
             <button v-if="!pipeline?.archived_at" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
             <!-- FAR-1530: per-pipeline Paused execution state. Paused is a
@@ -5381,6 +5381,24 @@ const { loading, load: reloadPage } = useDataFetch<null>(
 </script>
 
 <style scoped>
+@media (max-width: 767px) {
+  /* Keep form controls at the browser's no-zoom touch target size while
+     retaining the compact desktop editor density. */
+  input,
+  textarea,
+  select {
+    font-size: 1rem;
+  }
+
+  .toolbar-select {
+    height: 2.5rem;
+  }
+
+  .toolbar-select :deep(.p-select-label) {
+    font-size: 1rem;
+  }
+}
+
 /* The docked toolbar row is h-7 (1.75rem); PrimeVue's Select keeps its default
    ~2.5rem height inside it, breaking the row's uniform look. Size the toolbar
    Selects (node-type picker in the canvas-tools group + the empty-state

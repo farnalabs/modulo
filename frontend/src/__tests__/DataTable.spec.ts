@@ -23,6 +23,15 @@ function headerCells(wrapper: ReturnType<typeof mountTable>) {
 }
 
 describe('DataTable keyboard accessibility', () => {
+  it('exposes a discoverable horizontal scroll region', () => {
+    const wrapper = mountTable()
+    const region = wrapper.find('[aria-describedby^="data-table-scroll-instructions-"]')
+    expect(region.attributes('tabindex')).toBe('0')
+    expect(region.attributes('aria-describedby')).toMatch(/^data-table-scroll-instructions-/)
+    expect(wrapper.find(`#${region.attributes('aria-describedby')}`).text()).toContain('Swipe horizontally')
+    expect(wrapper.find('table').classes()).toContain('min-w-max')
+  })
+
   it('marks sortable headers as focusable with an aria-sort state', () => {
     const wrapper = mountTable()
     const sortable = headerCells(wrapper)[0]
