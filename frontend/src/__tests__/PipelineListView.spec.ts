@@ -115,7 +115,7 @@ describe('PipelineListView', () => {
 
     const row = wrapper.find('[data-testid="pipeline-tree-row-pipe-1"]')
     expect(row.exists()).toBe(true)
-    const link = row.find('a')
+    const link = row.find('[data-testid="pipeline-tree-link"]')
     expect(link.exists()).toBe(true)
     expect(link.text()).toContain('Demo Pipeline')
     expect(link.attributes('href')).toBe('/pipelines/pipe-1/editor')

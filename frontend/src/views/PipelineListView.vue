@@ -216,6 +216,7 @@
                         <router-link
                           :to="`/pipelines/${(row.data as PipelineItem).id}/editor`"
                           class="min-w-0 truncate font-medium text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          data-testid="pipeline-tree-link"
                         >{{ (row.data as PipelineItem).name }}</router-link>
                         <!-- FAR-1530: Paused is a first-class visible state (unlike archived,
                              which hides the row) — badge it so a paused pipeline is never
