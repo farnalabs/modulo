@@ -187,6 +187,21 @@ describe('PipelineEditorView - progressive autonomy panel popover', () => {
     wrapper.unmount()
   })
 
+  it('traps Tab inside the open panel and keeps it open', async () => {
+    const wrapper = await mountEditor()
+    await wrapper.find(TOGGLE).trigger('click')
+    await nextTick()
+    expect(wrapper.find(DIALOG).exists()).toBe(true)
+
+    const event = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true })
+    document.dispatchEvent(event)
+
+    // Tab cycles within the popover; only Escape closes it.
+    expect(event.defaultPrevented).toBe(true)
+    expect(wrapper.find(DIALOG).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('ignores an Escape key while the panel is already closed', async () => {
     const wrapper = await mountEditor()
     const vm = wrapper.vm as unknown as {

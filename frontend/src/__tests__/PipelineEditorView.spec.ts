@@ -1275,6 +1275,28 @@ describe('PipelineEditorView — run dialog', () => {
     wrapper.unmount()
   })
 
+  it('traps Tab inside the open run dialog (FAR-821 a11y)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Agent Node', description: '' } }]
+    await nextTick()
+
+    await wrapper.find('[data-testid="pipeline-editor-run"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-run-prompt"]').exists()).toBe(true)
+
+    const event = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true })
+    document.dispatchEvent(event)
+
+    // Tab cycles within the modal instead of walking focus behind it, and the
+    // dialog stays open (only Escape closes it).
+    expect(event.defaultPrevented).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-run-prompt"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('exposes keyboard handlers on the version-timeline toolbar without side effects (FAR-821 a11y)', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
@@ -2740,6 +2762,26 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await nextTick()
     expect(wrapper.find('[data-testid="pipeline-editor-retry-policy-panel"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('traps Tab inside the open retry policy panel', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-retry-policy-panel"]').exists()).toBe(true)
+
+    const event = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true })
+    document.dispatchEvent(event)
+
+    // The Tab is caught by the panel's focus trap, not left to escape the
+    // popover, and it never closes the panel (only Escape does).
+    expect(event.defaultPrevented).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-retry-policy-panel"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

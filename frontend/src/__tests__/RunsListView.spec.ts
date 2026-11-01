@@ -290,6 +290,49 @@ describe('RunsListView', () => {
     }
   })
 
+  it('renders the failure alert with recovery guidance when the runs load fails', async () => {
+    const getMock = api.GET as any
+    const original = getMock.getMockImplementation()
+    getMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/runs') return Promise.resolve({ data: null, error: { detail: 'runs_unavailable' } })
+      return original
+        ? original(url)
+        : Promise.resolve({ data: mockResponses.default, error: undefined })
+    })
+    try {
+      const wrapper = mount(RunsListView, {
+        global: {
+          stubs: {
+            ErrorAlert: {
+              props: ['message'],
+              template: '<div data-testid="runs-list-load-error">{{ message }}</div>',
+            },
+          },
+        },
+      })
+      await flushPromises()
+      await nextTick()
+
+      const alert = wrapper.find('[data-testid="runs-list-load-error"]')
+      expect(alert.exists()).toBe(true)
+      // The alert pairs the API failure with an explicit next step — never a
+      // bare error string the user cannot act on.
+      expect(alert.text()).toContain('runs_unavailable')
+      expect(alert.text()).toContain('Try again or adjust your filters.')
+      wrapper.unmount()
+    } finally {
+      getMock.mockImplementation(original)
+    }
+  })
+
+  it('carries no load-error copy while the list is healthy', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect((wrapper.vm as unknown as { loadErrorMessage: string }).loadErrorMessage).toBe('')
+    wrapper.unmount()
+  })
+
   it('shows Start, End and Duration columns instead of Created / Last Run', async () => {
     mockResponses['/api/v1/runs'] = listWith([baseRun])
     const wrapper = mountView()

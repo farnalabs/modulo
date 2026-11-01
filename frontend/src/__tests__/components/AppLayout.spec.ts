@@ -91,6 +91,67 @@ describe('AppLayout', () => {
     enteredHeading.remove()
   })
 
+  it('is a no-op when the route renders no page heading', () => {
+    const strayHeading = document.createElement('h1')
+    document.body.append(strayHeading)
+
+    focusRouteContent()
+
+    // Nothing carries [data-page-heading], so focus stays where it was.
+    expect(document.activeElement).not.toBe(strayHeading)
+    strayHeading.remove()
+  })
+
+  it('focuses the entered route heading when the page transition finishes', async () => {
+    // The suite's global router-view stub renders an empty div; supply a route
+    // component that renders the page heading so the shell's after-enter hook
+    // has a real target. The real Transition component (not the VTU stub) is
+    // kept so its after-enter handler is the one wired in AppLayout.
+    const RouteView = {
+      template: '<h1 tabindex="-1" data-page-heading>Dashboard</h1>',
+    }
+    // A pass-through transition stub that declares the after-enter hook, so the
+    // shell's handler can be fired deterministically (the real Transition's
+    // enter callbacks are timing-dependent).
+    const TransitionStub = {
+      emits: ['after-enter'],
+      template: '<div><slot /></div>',
+    }
+    const wrapper = mount(AppLayout, {
+      attachTo: document.body,
+      global: {
+        plugins: [createPinia(), router],
+        stubs: {
+          LogoMark: true,
+          transition: TransitionStub,
+          'router-view': {
+            template: '<div><slot :route="route" :Component="Component" /></div>',
+            data() {
+              return {
+                route: { fullPath: '/', path: '/', params: {}, query: {}, hash: '', matched: [], name: 'dashboard', redirectedFrom: undefined, meta: {} },
+                Component: RouteView,
+              }
+            },
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    const heading = wrapper.find('[data-page-heading]')
+    expect(heading.exists()).toBe(true)
+
+    const pageTransition = wrapper
+      .findAllComponents(TransitionStub)
+      .find((stub) => stub.find('[data-page-heading]').exists())
+    expect(pageTransition, 'the page transition must wrap the route view').toBeTruthy()
+    pageTransition!.vm.$emit('after-enter')
+    await nextTick()
+
+    expect(document.activeElement).toBe(heading.element)
+    wrapper.unmount()
+  })
+
   it('renders plan badge by default', async () => {
     const wrapper = mount(AppLayout, {
       global: {
