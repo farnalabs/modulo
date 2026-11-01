@@ -104,8 +104,8 @@ printf '%s\n' '../../../../backend/src' > "${RUNTIME_SITE_PACKAGES}/modulo-bundl
 env -u PYTHONPATH -u PYTHONHOME "${BUNDLE_ROOT}/runtime/bin/python3" -c 'import modulo.launcher.supervisor'
 
 # Assert the installed bundle's actual launcher module emits PostgreSQL's
-# value-bearing long option as one argv element. A shell command string would
-# be the wrong contract here: the supervisor passes an argv list directly.
+# server argv contract as separate elements. A shell command string would be
+# the wrong contract here: the supervisor passes an argv list directly.
 PYTHONPATH="${BUNDLE_ROOT}/backend/src:${BUNDLE_ROOT}/backend/.venv/lib/python3.12/site-packages" \
   "${BUNDLE_ROOT}/backend/.venv/bin/python" - "${BUNDLE_ROOT}" <<'PY'
 from pathlib import Path
@@ -116,8 +116,9 @@ from modulo.launcher.initdb import postgres_server_argv
 bundle = Path(sys.argv[1])
 pgdata = bundle / "runtime-contract-pgdata"
 argv = postgres_server_argv(pgdata, "127.0.0.1", 18000, bundle / "bin")
-assert argv[1] == f"--pgdata={pgdata}", argv
-assert argv[2:] == ["--host", "127.0.0.1", "--port", "18000"], argv
+assert argv[1:3] == ["-D", str(pgdata)], argv
+assert argv[3:] == ["--host", "127.0.0.1", "--port", "18000"], argv
+assert f"--pgdata={pgdata}" not in argv, argv
 print(f"bundled postgres argv contract: {argv}")
 PY
 
