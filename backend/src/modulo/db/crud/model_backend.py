@@ -36,6 +36,7 @@ async def create_model_backend(
     owner_team_id: uuid.UUID | None = None,
     fallback_backend_ids: list[str] | None = None,
     tier: str = "native",
+    status: str | None = None,
 ) -> ModelBackend:
     mb = ModelBackend(
         organisation_id=org_id,
@@ -50,6 +51,7 @@ async def create_model_backend(
         owner_team_id=owner_team_id,
         fallback_backend_ids=fallback_backend_ids,
         tier=tier,
+        **({"status": status} if status is not None else {}),
     )
     session.add(mb)
     await session.flush()
