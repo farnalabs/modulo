@@ -97,6 +97,45 @@ class TestLibraryPrimitiveRequiredOptions:
             )
 
 
+def _model_backend_kwargs(**overrides: Any) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "org_id": uuid.uuid4(),
+        "name": "backend",
+        "display_name": "Backend",
+        "provider": "openai",
+        "model_id": "gpt-4o",
+        "credentials_ciphertext": b"enc",
+        "account_id": uuid.uuid4(),
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+class TestModelBackendOptionGroup:
+    async def test_known_options_reach_the_row(self) -> None:
+        """The no-unknown-options path persists the row with its defaults."""
+        session = AsyncMock(spec=AsyncSession)
+        with patch("modulo.db.crud.model_backend.ModelBackend") as model:
+            await create_model_backend(session, **_model_backend_kwargs())
+
+        row_kwargs = model.call_args.kwargs
+        assert row_kwargs["visibility"] == "org"
+        assert row_kwargs["tier"] == "native"
+        # Absent status: the column's server default ("active") applies.
+        assert "status" not in row_kwargs
+        session.add.assert_called_once_with(model.return_value)
+        session.flush.assert_awaited_once()
+
+    async def test_explicit_status_reaches_the_row(self) -> None:
+        """FAR-2280: an explicit status (e.g. pending_setup) rides through."""
+        session = AsyncMock(spec=AsyncSession)
+        with patch("modulo.db.crud.model_backend.ModelBackend") as model:
+            await create_model_backend(session, **_model_backend_kwargs(status="pending_setup"))
+
+        assert model.call_args.kwargs["status"] == "pending_setup"
+        session.flush.assert_awaited_once()
+
+
 class TestGroupedCrudUnknownOptions:
     async def test_create_agent_rejects_unknown_option(self) -> None:
         kwargs: dict[str, Any] = {
