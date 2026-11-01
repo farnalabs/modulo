@@ -91,7 +91,7 @@ from dataclasses import dataclass, replace
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import and_, cast, exists, func, literal, or_, select, text
+from sqlalchemy import Integer, and_, case, cast, exists, func, literal, or_, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -130,38 +130,46 @@ _SQL_SET_ORG_ID = "SELECT set_config('app.organisation_id', :val, true)"
 
 
 def _engine_evidence_expr(column: Any) -> Any:
-    """Return a PostgreSQL expression for engine-owned evidence in one blob.
+    """Return a PostgreSQL expression for substantial engine-owned activity.
 
-    ``outputs_json`` and ``node_telemetry_json`` are maps of node id to an
-    envelope.  FAR-1780 stamps only agent-supplied datums in each envelope's
-    ``provenance`` map as ``reported``; every unstamped datum is engine-owned
-    (observed or derived).  A legacy envelope has no map, so its non-provenance
-    keys deliberately remain evidence.  The expression therefore avoids
-    substring or field-name heuristics and follows the persisted datum map.
+    ``node_telemetry_json`` contains both useful engine observations and routine
+    lifecycle facts.  Status, summary, exit code, wall-clock time, and provider
+    metadata are present even when a sandbox produced no useful activity, so a
+    non-null telemetry envelope is deliberately *not* evidence.  The qualifying
+    fields below are bounded signals that the runtime actually did work: output
+    stream bytes, retained tails/artifacts, or other durable engine artefacts.
+    Agent-return values remain in ``outputs_json`` and are excluded by this
+    expression, preserving their self-reported provenance.
     """
     node_entries = (
         func.jsonb_each(cast(column, JSONB)).table_valued("node_id", "node_value").render_derived(name="node_entries")
     )
     node_value = node_entries.c.node_value
-    datum_keys = func.jsonb_object_keys(node_value).table_valued("datum_keys").render_derived(name="datum_keys")
-    datum_key = datum_keys.c.datum_keys
-    provenance_value = node_value.op("->")(literal("provenance")).op("->>")(datum_key)
-    engine_datum = exists(
-        select(1)
-        .select_from(datum_keys)
-        .where(
-            datum_key != literal("provenance"),
-            provenance_value.is_distinct_from(literal("reported")),
+
+    def _positive_length(field: str) -> Any:
+        value = node_value.op("->>")(literal(field))
+        numeric_value = case(
+            (value.op("~")(literal("^[0-9]+$")), cast(value, Integer)),
+            else_=literal(0),
         )
+        return numeric_value > 0
+
+    def _nonempty_text(field: str) -> Any:
+        value = node_value.op("->>")(literal(field))
+        return and_(value.is_not(None), func.length(value) > 0)
+
+    node_has_evidence = and_(
+        func.jsonb_typeof(node_value) == literal("object"),
+        or_(
+            _positive_length("stdout_length"),
+            _positive_length("stderr_length"),
+            _nonempty_text("agent_stdout"),
+            _nonempty_text("agent_stderr"),
+            _nonempty_text("sandbox_log_tail"),
+            _nonempty_text("stderr_artifact"),
+        ),
     )
-    node_has_evidence = or_(
-        func.jsonb_typeof(node_value).is_distinct_from(literal("object")),
-        engine_datum,
-    )
-    return or_(
-        and_(column.is_not(None), func.jsonb_typeof(column).is_distinct_from(literal("object"))),
-        exists(select(1).select_from(node_entries).where(node_has_evidence)),
-    )
+    return exists(select(1).select_from(node_entries).where(node_has_evidence))
 
 
 # The handback RE-QUEUE arm. Fenced exactly like every other claim-fenced
@@ -369,6 +377,21 @@ async def _load_handback_row(
     from modulo.db.models.run import Run
     from modulo.db.models.run_node_outputs import RunNodeOutput
 
+    def _nonempty_json_expr(column: Any) -> Any:
+        """Match a retained JSON blob that contains at least one value."""
+        json_value = cast(column, JSONB)
+        json_type = func.jsonb_typeof(json_value)
+        object_entries = func.jsonb_each(json_value).table_valued("key", "value")
+        array_entries = func.jsonb_array_elements(json_value).table_valued("value")
+        return and_(
+            column.is_not(None),
+            or_(
+                and_(json_type == literal("object"), exists(select(1).select_from(object_entries))),
+                and_(json_type == literal("array"), exists(select(1).select_from(array_entries))),
+                and_(json_type.not_in(("object", "array")), json_type.is_not(None)),
+            ),
+        )
+
     observed_activity = exists(
         select(1).where(
             RunNodeOutput.run_id == Run.id,
@@ -379,9 +402,9 @@ async def _load_handback_row(
                     RunNodeOutput.node_telemetry_json.is_(None),
                     _engine_evidence_expr(RunNodeOutput.outputs_json),
                 ),
-                RunNodeOutput.raw_output_markers.is_not(None),
-                RunNodeOutput.artifacts_json.is_not(None),
-                RunNodeOutput.schema_enforcement_json.is_not(None),
+                _nonempty_json_expr(RunNodeOutput.raw_output_markers),
+                _nonempty_json_expr(RunNodeOutput.artifacts_json),
+                _nonempty_json_expr(RunNodeOutput.schema_enforcement_json),
             ),
         )
     ).label("observed_activity")

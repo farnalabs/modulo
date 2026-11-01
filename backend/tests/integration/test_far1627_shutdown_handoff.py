@@ -484,12 +484,14 @@ async def test_self_reported_only_output_requeues_but_engine_evidence_terminalis
         far1627_env,
         self_reported,
         outputs={"output_json": {"pr_url": "https://example.test/pr/1"}, "provenance": {"output_json": "reported"}},
+        telemetry={"status": "completed", "summary": "ok", "exit_code": 0, "stdout_length": 0, "stderr_length": 0},
     )
     await _seed_node_evidence(
         db_engine,
         far1627_env,
         observed,
-        outputs={"output_json": {"pr_url": "https://example.test/pr/2"}, "exit_code": 0},
+        outputs={"output_json": {"pr_url": "https://example.test/pr/2"}, "provenance": {"output_json": "reported"}},
+        telemetry={"status": "completed", "summary": "ok", "exit_code": 0, "stdout_length": 128, "stderr_length": 0},
     )
     await _register_abandoned(clean_registry, self_reported, far1627_env.org_id, "tok-reported")
     await _register_abandoned(clean_registry, observed, far1627_env.org_id, "tok-observed")
