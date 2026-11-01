@@ -121,10 +121,10 @@
 
       <div class="flex items-center justify-between">
         <button type="button"
-          :disabled="cursorStack.length === 0"
+          :disabled="!canGoPrevious"
           data-testid="settings-notification-log-previous"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
-          @click="goToPreviousPage()"
+          @click="goToPreviousPage"
         >
           {{ $t('views.AdminNotificationDeliveryLogView.previous') }}
         </button>
@@ -135,7 +135,7 @@
           :disabled="!nextCursor"
           data-testid="settings-notification-log-next"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
-          @click="goToNextPage()"
+          @click="goToNextPage"
         >
           {{ $t('views.AdminNotificationDeliveryLogView.next') }}
         </button>
@@ -150,6 +150,7 @@ import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { paths } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
+import { useCursorPageStack } from '../composables/useCursorPageStack'
 import PageHeader from '../components/shared/PageHeader.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -162,9 +163,14 @@ const { t } = useI18n()
 
 type DeliveryLogQuery = NonNullable<paths['/api/v1/admin/notifications/deliveries']['get']>['parameters']['query']
 
-const cursorStack = ref<(string | null)[]>([])
-const currentCursor = ref<string | null>(null)
-const nextCursor = ref<string | null>(null)
+const {
+  cursor: currentCursor,
+  nextCursor,
+  canGoPrevious,
+  goToNextPage,
+  goToPreviousPage,
+  reset: resetCursor,
+} = useCursorPageStack(() => loadDeliveries())
 
 // Filter refs must be declared BEFORE the useDataFetch call: vue-query
 // subscribes during setup, so the fetcher runs immediately and reads these
@@ -224,23 +230,8 @@ function statusLabel(status: string): string {
   return status
 }
 
-function goToPreviousPage() {
-  const prev = cursorStack.value.pop()
-  if (prev === undefined) return
-  currentCursor.value = prev
-  loadDeliveries()
-}
-
-function goToNextPage() {
-  if (!nextCursor.value) return
-  cursorStack.value.push(currentCursor.value)
-  currentCursor.value = nextCursor.value
-  loadDeliveries()
-}
-
 function applyFilters() {
-  currentCursor.value = null
-  cursorStack.value = []
+  resetCursor()
   loadDeliveries()
 }
 
@@ -248,8 +239,7 @@ function resetFilters() {
   filterStatus.value = '__all__'
   filterDateFrom.value = ''
   filterDateTo.value = ''
-  currentCursor.value = null
-  cursorStack.value = []
+  resetCursor()
   loadDeliveries()
 }
 </script>

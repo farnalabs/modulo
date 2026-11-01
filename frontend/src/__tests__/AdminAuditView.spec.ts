@@ -37,7 +37,7 @@ const auditEvent = (id: string, over: Record<string, unknown> = {}) => ({
 })
 
 const pagePayload = (items: unknown[], over: Record<string, unknown> = {}) => ({
-  data: { items, total: items.length, next_cursor: null, prev_cursor: null, ...over },
+  data: { items, total: items.length, next_cursor: null, ...over },
   error: undefined,
 })
 

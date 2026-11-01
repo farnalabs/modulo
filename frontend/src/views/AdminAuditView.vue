@@ -305,7 +305,7 @@
       <div class="flex items-center justify-between">
         <button
           type="button"
-          :disabled="cursorHistory.length === 0"
+          :disabled="!canGoPrevious"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
           data-testid="admin-audit-previous"
           @click="goToPreviousPage"
@@ -313,7 +313,7 @@
           {{ $t('views.AdminAuditView.previous') }}
         </button>
         <span class="text-sm text-muted-foreground">
-          {{ $t('views.AdminAuditView.page_of_total', { page: currentPage, count: events.length, total: total }) }}
+          {{ $t('views.AdminAuditView.page_of_total', { page, count: events.length, total: total }) }}
         </span>
         <button
           type="button"
@@ -562,6 +562,7 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
+import { useCursorPageStack } from '../composables/useCursorPageStack'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { formatError } from '../lib/utils'
@@ -598,7 +599,6 @@ interface AuditPage {
   items: AuditEvent[]
   total: number
   next_cursor: string | null
-  prev_cursor: string | null
 }
 
 interface SystemAuditEvent {
@@ -658,11 +658,15 @@ const systemError = ref<string | null>(null)
 const expandedSystemId = ref<string | null>(null)
 const expandedSystemEvent = ref<SystemAuditEvent | null>(null)
 
-const cursor = ref<string | null>(null)
-const currentPage = ref(1)
-// The API only returns next_cursor, so keep a back-stack of the cursor used to
-// load each earlier page (null = first page) to make Previous work (FAR-2264).
-const cursorHistory = ref<(string | null)[]>([])
+const {
+  cursor,
+  nextCursor,
+  page,
+  canGoPrevious,
+  goToNextPage,
+  goToPreviousPage,
+  reset: resetPager,
+} = useCursorPageStack(() => loadEvents())
 
 // Filter refs must be declared BEFORE the useDataFetch call: the fetcher
 // invokes buildQuery(), which reads them. Declaring them after caused a TDZ
@@ -674,14 +678,17 @@ const filterDateTo = ref('')
 const filterTargetType = ref('__all__')
 
 const { data: auditData, loading, error, load: loadEvents } = useDataFetch(
-  () => api.GET('/api/v1/admin/audit', { params: { query: buildQuery() as any } }),
-  { initialValue: { items: [] as AuditEvent[], total: 0, next_cursor: null as string | null, prev_cursor: null as string | null } }
+  async () => {
+    const res = await api.GET('/api/v1/admin/audit', { params: { query: buildQuery() as any } })
+    nextCursor.value = (res.data as unknown as AuditPage | null)?.next_cursor ?? null
+    return res
+  },
+  { initialValue: { items: [] as AuditEvent[], total: 0, next_cursor: null as string | null } }
 )
 
 const auditPage = computed(() => auditData.value as unknown as AuditPage)
 const events = computed(() => auditPage.value.items ?? [])
 const total = computed(() => auditPage.value.total ?? 0)
-const nextCursor = computed(() => auditPage.value.next_cursor ?? null)
 
 const expandedId = ref<string | null>(null)
 const expandedEvent = ref<AuditEvent | null>(null)
@@ -768,26 +775,8 @@ function buildQuery() {
   return q
 }
 
-function goToNextPage() {
-  const next = nextCursor.value
-  if (!next) return
-  cursorHistory.value.push(cursor.value)
-  currentPage.value += 1
-  cursor.value = next
-  loadEvents()
-}
-
-function goToPreviousPage() {
-  if (cursorHistory.value.length === 0) return
-  cursor.value = cursorHistory.value.pop() ?? null
-  currentPage.value = Math.max(1, currentPage.value - 1)
-  loadEvents()
-}
-
 function applyAutoFilters() {
-  currentPage.value = 1
-  cursor.value = null
-  cursorHistory.value = []
+  resetPager()
   loadEvents()
 }
 
@@ -820,9 +809,7 @@ function resetFilters() {
   filterDateFrom.value = ''
   filterDateTo.value = ''
   filterTargetType.value = '__all__'
-  currentPage.value = 1
-  cursor.value = null
-  cursorHistory.value = []
+  resetPager()
   loadEvents()
 }
 
