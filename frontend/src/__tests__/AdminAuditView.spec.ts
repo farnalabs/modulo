@@ -235,21 +235,41 @@ describe('AdminAuditView — pagination', () => {
     expect(wrapper.text()).toContain('Page 2')
   })
 
-  it('goes back with the previous cursor and decrements the page counter', async () => {
-    mockAuditGet([auditEvent('evt-2')], { next_cursor: 'cur-2', prev_cursor: 'cur-0', total: 120 })
+  it('Next, Next, Previous returns to the earlier page using a cursor back-stack (FAR-2264)', async () => {
+    ;(api.GET as Mock).mockImplementation(async (url: string, opts?: { params?: { query?: Record<string, unknown> } }) => {
+      if (url !== '/api/v1/admin/audit') return { data: { license: { tier: 'team' }, flags: [], tier: 'team', tiers: [] }, error: undefined }
+      const cur = opts?.params?.query?.cursor
+      if (cur === 'cur-2') return pagePayload([auditEvent('evt-2')], { next_cursor: 'cur-3', total: 120 })
+      if (cur === 'cur-3') return pagePayload([auditEvent('evt-3')], { next_cursor: null, total: 120 })
+      return pagePayload([auditEvent('evt-1')], { next_cursor: 'cur-2', total: 120 })
+    })
     const wrapper = await mountLoaded()
-    expect(wrapper.text()).toContain('Page 1')
+    const prev = () => wrapper.find('[data-testid="admin-audit-previous"]')
+    const queryCursors = () => (api.GET as Mock).mock.calls
+      .filter((c: unknown[]) => c[0] === '/api/v1/admin/audit')
+      .map((c: any[]) => c[1].params.query.cursor)
+    expect(prev().attributes('disabled')).toBeDefined()
 
     await wrapper.find('[data-testid="admin-audit-next"]').trigger('click')
-    await nextTick()
+    await flushPromises()
     expect(wrapper.text()).toContain('Page 2')
+    expect(prev().attributes('disabled')).toBeUndefined()
 
-    mockAuditGet([auditEvent('evt-1')], { prev_cursor: null, total: 120 })
-    await wrapper.find('[data-testid="admin-audit-previous"]').trigger('click')
-    await nextTick()
-    const calls = (api.GET as Mock).mock.calls.filter((c: unknown[]) => c[0] === '/api/v1/admin/audit')
-    expect(calls[calls.length - 1][1].params.query.cursor).toBe('cur-0')
+    await wrapper.find('[data-testid="admin-audit-next"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Page 3')
+
+    await prev().trigger('click')
+    await flushPromises()
+    expect(queryCursors().at(-1)).toBe('cur-2')
+    expect(wrapper.text()).toContain('Page 2')
+    expect(prev().attributes('disabled')).toBeUndefined()
+
+    await prev().trigger('click')
+    await flushPromises()
+    expect(queryCursors().at(-1)).toBeUndefined()
     expect(wrapper.text()).toContain('Page 1')
+    expect(prev().attributes('disabled')).toBeDefined()
   })
 })
 
@@ -833,18 +853,19 @@ describe('AdminAuditView — buildQuery filter branches', () => {
   })
 })
 
-// ---- Branch coverage: goToPage with null cursor ----
-describe('AdminAuditView — goToPage null guard', () => {
+// ---- Branch coverage: goToNextPage guard ----
+describe('AdminAuditView — goToNextPage / goToPreviousPage guards', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
-  it('goToPage with null cursor is a no-op', async () => {
+  it('goToNextPage without a next cursor and goToPreviousPage on page 1 are no-ops', async () => {
     mockAuditGet([auditEvent('evt-1')])
     const wrapper = await mountLoaded()
-    const vm = wrapper.vm as unknown as { goToPage: (c: string | null) => void }
-    vm.goToPage(null)
+    const vm = wrapper.vm as unknown as { goToNextPage: () => void; goToPreviousPage: () => void }
+    vm.goToNextPage()
+    vm.goToPreviousPage()
     await nextTick()
     // No crash, page unchanged
     expect(wrapper.text()).toContain('Page 1')

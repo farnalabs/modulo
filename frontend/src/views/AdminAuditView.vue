@@ -305,10 +305,10 @@
       <div class="flex items-center justify-between">
         <button
           type="button"
-          :disabled="!prevCursor"
+          :disabled="cursorHistory.length === 0"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
           data-testid="admin-audit-previous"
-          @click="() => goToPage(prevCursor)"
+          @click="goToPreviousPage"
         >
           {{ $t('views.AdminAuditView.previous') }}
         </button>
@@ -320,7 +320,7 @@
           :disabled="!nextCursor"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
           data-testid="admin-audit-next"
-          @click="() => goToPage(nextCursor)"
+          @click="goToNextPage"
         >
           {{ $t('views.AdminAuditView.next') }}
         </button>
@@ -660,6 +660,9 @@ const expandedSystemEvent = ref<SystemAuditEvent | null>(null)
 
 const cursor = ref<string | null>(null)
 const currentPage = ref(1)
+// The API only returns next_cursor, so keep a back-stack of the cursor used to
+// load each earlier page (null = first page) to make Previous work (FAR-2264).
+const cursorHistory = ref<(string | null)[]>([])
 
 // Filter refs must be declared BEFORE the useDataFetch call: the fetcher
 // invokes buildQuery(), which reads them. Declaring them after caused a TDZ
@@ -679,7 +682,6 @@ const auditPage = computed(() => auditData.value as unknown as AuditPage)
 const events = computed(() => auditPage.value.items ?? [])
 const total = computed(() => auditPage.value.total ?? 0)
 const nextCursor = computed(() => auditPage.value.next_cursor ?? null)
-const prevCursor = computed(() => auditPage.value.prev_cursor ?? null)
 
 const expandedId = ref<string | null>(null)
 const expandedEvent = ref<AuditEvent | null>(null)
@@ -766,18 +768,26 @@ function buildQuery() {
   return q
 }
 
-function goToPage(c: string | null) {
-  if (!c) return
-  currentPage.value = prevCursor.value === c
-    ? Math.max(1, currentPage.value - 1)
-    : currentPage.value + 1
-  cursor.value = c
+function goToNextPage() {
+  const next = nextCursor.value
+  if (!next) return
+  cursorHistory.value.push(cursor.value)
+  currentPage.value += 1
+  cursor.value = next
+  loadEvents()
+}
+
+function goToPreviousPage() {
+  if (cursorHistory.value.length === 0) return
+  cursor.value = cursorHistory.value.pop() ?? null
+  currentPage.value = Math.max(1, currentPage.value - 1)
   loadEvents()
 }
 
 function applyAutoFilters() {
   currentPage.value = 1
   cursor.value = null
+  cursorHistory.value = []
   loadEvents()
 }
 
@@ -812,6 +822,7 @@ function resetFilters() {
   filterTargetType.value = '__all__'
   currentPage.value = 1
   cursor.value = null
+  cursorHistory.value = []
   loadEvents()
 }
 
