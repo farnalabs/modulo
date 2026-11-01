@@ -1,6 +1,6 @@
 # Modulo API Client Examples
 
-Standalone, copy-paste runnable code examples in **Python** (`httpx`), **curl**, and **JavaScript** (`fetch`) covering all common Modulo API operations, except the login refresh/logout flow: `auth-login/` and the login step of `full-workflow.py` predate the cookie-based auth contract and do not run against a current server (see [Known issues](#known-issues)).
+Standalone, copy-paste runnable code examples in **Python** (`httpx`), **curl**, and **JavaScript** (`fetch`) covering all common Modulo API operations, including the cookie-based login, refresh, and logout flow.
 
 ## Prerequisites
 
@@ -20,6 +20,16 @@ not a request body, and are additionally guarded by a double-submit CSRF
 check: the `XSRF-TOKEN` cookie must be echoed in an `X-CSRF-Token` header,
 or the request fails with 403 (`modulo_csrf_enabled`, default on). Every
 authenticated call carries `Authorization: Bearer <access_token>`.
+
+Login and refresh both set fresh `modulo_session`, `modulo_refresh`, and
+`XSRF-TOKEN` cookies on the response, so a client with a cookie jar needs no
+extra step beyond echoing the current `XSRF-TOKEN`. The Python examples use
+the `httpx` cookie jar; the curl examples use `-c`/`-b` with a jar file; the
+JavaScript examples use the `CookieJar` helper in
+[`_shared/client.js`](./_shared/client.js) because Node's `fetch` does not
+store cookies (a browser does this itself, sending `credentials: "include"`).
+The login body also carries `requires_bootstrap` and `must_change_password`,
+which a client should surface to the user.
 
 ## Quick Start
 
@@ -147,20 +157,3 @@ bash library/curl.sh
 | GET | `/api/v1/connectors` | `full-workflow.py` |
 | POST | `/api/v1/connectors` | `full-workflow.py` |
 | GET | `/api/v1/model-backends` | `full-workflow.py` |
-
-## Known issues
-
-- `auth-login/python.py`, `auth-login/js.js`, `auth-login/curl.sh` and the
-  login step of `full-workflow.py` still implement the
-  pre-FAR-1197 contract: they read `refresh_token` from the login response
-  body (the field no longer exists, so the Python examples raise `KeyError`
-  while parsing the login response and the JavaScript example throws on
-  `.slice`) and POST the refresh token back in the request body (ignored by
-  the server). The curl script gets further – its login succeeds and the
-  Bearer calls work – but its refresh step fails. `full-workflow.py` has no
-  refresh or logout step at all: it dies inside `login()`, because that
-  function returns `data["refresh_token"]` alongside the access token.
-  Until they are ported to the cookie + CSRF flow described under
-  [Authentication model](#authentication-model), none of these four runs
-  end-to-end. Every other example only uses the access token from the login
-  response and runs as documented.
