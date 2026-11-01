@@ -896,12 +896,16 @@ describe('AnalyticsView', () => {
     expect(wrapper.find('[data-testid="analytics-title"]').exists()).toBe(true)
   })
 
-  it('renders the chart and trend table when data loads', async () => {
+  it('puts the chart first and keeps the detail table collapsed by default', async () => {
     setupMocks()
     const wrapper = mount(AnalyticsView)
     await flushPromises()
     expect(wrapper.find('[data-testid="analytics-chart"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="analytics-table"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analytics-details"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analytics-details"]').attributes('open')).toBeUndefined()
+    const overview = wrapper.find('[data-testid="analytics-overview-chart"]').element
+    const details = wrapper.find('[data-testid="analytics-details"]').element
+    expect(overview.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(wrapper.text()).toContain('2026-08-01')
     expect(wrapper.find('[data-testid="analytics-table"]').text()).toContain('3')
     expect(wrapper.find('[data-testid="analytics-table"]').text()).toContain('5')

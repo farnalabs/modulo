@@ -1765,6 +1765,7 @@ export default {
       "data_since": "Data is available since {date}.",
       "no_chart_data": "Not enough data to display a chart yet.",
       "chart_title": "Trend",
+      "show_details": "Show details",
       "trend_table_title": "Trend table",
       "bucket_label": "Date",
       "delta": "Delta",
