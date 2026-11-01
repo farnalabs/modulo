@@ -536,6 +536,28 @@ def test_release_deploy_dispatch_runs_from_main_for_serialisation() -> None:
     assert '-f release_sha="${RC_SHA}"' in dispatch
 
 
+def test_release_cut_state_gate_checks_all_retry_safety_conditions() -> None:
+    script = _cut_state_script()
+    assert "gh pr list" in script
+    assert "--state open" in script
+    assert "--state closed" in script
+    assert "mergedAt != null" in script
+    assert 'require_remote_ref_absent "refs/heads/${BRANCH}"' in script
+    assert 'require_remote_ref_absent "refs/tags/release-publication-hold"' in script
+    assert 'require_remote_ref_absent "refs/tags/v${VERSION}"' in script
+    assert 'require_remote_ref_absent "refs/tags/bundle-v${VERSION}"' in script
+    assert 'require_remote_ref_absent "refs/tags/v${VERSION}-rc*"' in script
+    assert "gh release list" in script
+    assert "Safe retry: prior closed unmerged release PR(s)" in script
+    assert "Could not query" in script
+
+
+def test_release_cut_state_gate_fails_closed_on_ref_query_errors() -> None:
+    script = _cut_state_script()
+    assert 'if [ "$rc" -ne 2 ]; then' in script
+    assert "refusing to treat it as absent" in script
+
+
 def test_release_cut_uses_protected_main_pr_and_exact_merge_ref() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["release"]["steps"]
@@ -634,6 +656,12 @@ def _release_step(name: str) -> dict[str, Any]:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["release"]["steps"]
     return cast(dict[str, Any], steps[_step_names(steps).index(name)])
+
+
+def _cut_state_script() -> str:
+    run = _release_step("Validate prior release cut state (cut only)").get("run")
+    assert isinstance(run, str)
+    return run
 
 
 def _cut_wait_budget_seconds(script: str) -> int:
@@ -791,6 +819,147 @@ esac
         }
     )
     return repo, log, env
+
+
+def _run_cut_state_gate(
+    tmp_path: Path,
+    *,
+    closed_prs: list[dict[str, Any]] | None = None,
+    open_prs: list[dict[str, Any]] | None = None,
+    existing_refs: set[str] | None = None,
+    gh_failure: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    bin_dir = tmp_path / "cut-state-bin"
+    bin_dir.mkdir()
+    existing = existing_refs or set()
+    release_rows = [{"tagName": ref.removeprefix("release:")} for ref in sorted(existing) if ref.startswith("release:")]
+    open_response = (
+        "echo query-error >&2; exit 1"
+        if gh_failure == "open_prs"
+        else "echo " + shlex.quote(json.dumps(open_prs or []))
+    )
+    closed_response = (
+        "echo query-error >&2; exit 1"
+        if gh_failure == "closed_prs"
+        else "echo " + shlex.quote(json.dumps(closed_prs or []))
+    )
+    release_response = (
+        "echo query-error >&2; exit 1" if gh_failure == "releases" else "echo " + shlex.quote(json.dumps(release_rows))
+    )
+    gh_script = textwrap.dedent(
+        f"""\
+        #!/usr/bin/env bash
+        set -euo pipefail
+        case "$*" in
+          *'pr list'*'--state open'*)
+            {open_response}
+            ;;
+          *'pr list'*'--state closed'*)
+            {closed_response}
+            ;;
+          *'release list'*)
+            {release_response}
+            ;;
+          *)
+            echo "unexpected gh call: $*" >&2
+            exit 1
+            ;;
+        esac
+        """
+    )
+    _write_executable(bin_dir / "gh", gh_script)
+    real_git = shutil.which("git")
+    assert real_git is not None
+    refs_json = shlex.quote(json.dumps(sorted(existing)))
+    _write_executable(
+        bin_dir / "git",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+if [ "$1" != "ls-remote" ]; then
+  exec {shlex.quote(real_git)} "$@"
+fi
+ref="${{@: -1}}"
+refs={refs_json}
+if jq -e --arg ref "$ref" 'index($ref) != null' <<<"$refs" >/dev/null; then
+  printf 'deadbeef\\t%s\\n' "$ref"
+  exit 0
+fi
+if [ "${{CUT_STATE_GIT_FAILURE:-0}}" = "1" ]; then
+  echo "remote query failed" >&2
+  exit 1
+fi
+exit 2
+""",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "GITHUB_REPOSITORY": "example/repo",
+            "VERSION": "0.2.0",
+            "GITHUB_OUTPUT": str(tmp_path / "output"),
+        }
+    )
+    return _run_bash(_cut_state_script(), cwd=tmp_path, env=env)
+
+
+def test_cut_state_gate_allows_closed_unmerged_pr_when_all_release_identity_is_absent(tmp_path: Path) -> None:
+    result = _run_cut_state_gate(
+        tmp_path,
+        closed_prs=[{"number": 2649, "headRefName": "release/version-0.2.0", "baseRefName": "main", "mergedAt": None}],
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "Safe retry: prior closed unmerged release PR(s) #2649" in result.stdout
+
+
+def test_cut_state_gate_rejects_closed_unmerged_pr_when_branch_exists(tmp_path: Path) -> None:
+    result = _run_cut_state_gate(
+        tmp_path,
+        closed_prs=[{"number": 2649, "headRefName": "release/version-0.2.0", "baseRefName": "main", "mergedAt": None}],
+        existing_refs={"refs/heads/release/version-0.2.0"},
+    )
+    assert result.returncode != 0
+    assert "Remote ref refs/heads/release/version-0.2.0 exists" in result.stdout
+
+
+def test_cut_state_gate_rejects_closed_merged_pr(tmp_path: Path) -> None:
+    result = _run_cut_state_gate(
+        tmp_path,
+        closed_prs=[
+            {
+                "number": 2649,
+                "headRefName": "release/version-0.2.0",
+                "baseRefName": "main",
+                "mergedAt": "2026-01-01T00:00:00Z",
+            }
+        ],
+    )
+    assert result.returncode != 0
+    assert "merged PR(s) #2649" in result.stdout
+
+
+def test_cut_state_gate_rejects_active_publication_hold(tmp_path: Path) -> None:
+    result = _run_cut_state_gate(tmp_path, existing_refs={"refs/tags/release-publication-hold"})
+    assert result.returncode != 0
+    assert "release-publication-hold is active" in result.stdout
+
+
+def test_cut_state_gate_rejects_existing_release_tag(tmp_path: Path) -> None:
+    result = _run_cut_state_gate(tmp_path, existing_refs={"refs/tags/v0.2.0"})
+    assert result.returncode != 0
+    assert "Remote ref refs/tags/v0.2.0 exists" in result.stdout
+
+
+def test_cut_state_gate_rejects_existing_github_release(tmp_path: Path) -> None:
+    result = _run_cut_state_gate(tmp_path, existing_refs={"release:v0.2.0"})
+    assert result.returncode != 0
+    assert "A GitHub release already exists for version 0.2.0" in result.stdout
+
+
+def test_cut_state_gate_rejects_github_query_error(tmp_path: Path) -> None:
+    result = _run_cut_state_gate(tmp_path, gh_failure="closed_prs")
+    assert result.returncode != 0
+    assert result.stderr or result.stdout
 
 
 def test_protected_cut_drives_every_gh_call_with_the_trusted_bot_token(tmp_path: Path) -> None:
