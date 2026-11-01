@@ -1571,25 +1571,48 @@ class ManualNodeOutputSchemaError(Exception):
         super().__init__(f"Manual node '{node_id}' requires an output schema (output_schema_id or output_schema_pin)")
 
 
-def enforce_manual_node_output_schemas(nodes: list[dict[str, Any]]) -> None:
+def _manual_node_has_output_schema(node: dict[str, Any]) -> bool:
+    return (
+        node.get("output_schema_id") is not None
+        or node.get("output_schema_pin") is not None
+        or node.get("output_schema_json") is not None
+    )
+
+
+def enforce_manual_node_output_schemas(
+    nodes: list[dict[str, Any]],
+    *,
+    previous_nodes: list[dict[str, Any]] | None = None,
+) -> None:
     """Reject manual nodes that lack an output schema at write time.
 
     This is the write-path guard for FAR-889.  It catches the case where a
     template, library primitive, or direct graph update tries to persist a
     manual node without any of ``output_schema_id``, ``output_schema_pin``,
     or ``output_schema_json``.
+
+    FAR-2283: ``previous_nodes`` is the graph currently stored for the
+    pipeline (graph writes only). A legacy manual node that was ALREADY stored
+    without a schema may be written back unchanged, so a graph read via
+    ``get_pipeline_graph`` can be edited elsewhere. The exemption is narrow:
+    the node id must exist in the stored graph as a manual node with no
+    schema. New manual nodes, nodes whose stored schema is being removed, and
+    nodes whose stored type was not manual are still rejected.
     """
+    legacy_schemaless_ids = {
+        str(prev.get("id"))
+        for prev in (previous_nodes or [])
+        if prev.get("node_type") == "manual" and prev.get("id") is not None and not _manual_node_has_output_schema(prev)
+    }
     for node in nodes:
         if node.get("node_type") != "manual":
             continue
-        has_output = (
-            node.get("output_schema_id") is not None
-            or node.get("output_schema_pin") is not None
-            or node.get("output_schema_json") is not None
-        )
-        if not has_output:
-            raw_id = node.get("id")
-            raise ManualNodeOutputSchemaError(str(raw_id) if raw_id is not None else "unknown")
+        if _manual_node_has_output_schema(node):
+            continue
+        raw_id = node.get("id")
+        if raw_id is not None and str(raw_id) in legacy_schemaless_ids:
+            continue
+        raise ManualNodeOutputSchemaError(str(raw_id) if raw_id is not None else "unknown")
 
 
 def graph_update_audit_payload(
@@ -2386,7 +2409,8 @@ async def replace_pipeline_graph(
         )
 
     # FAR-889: reject manual nodes without output schemas at write time.
-    enforce_manual_node_output_schemas(nodes)
+    # FAR-2283: unchanged legacy schema-less manual nodes may be written back.
+    enforce_manual_node_output_schemas(nodes, previous_nodes=previous_nodes)
 
     pipeline.graph_nodes_json = nodes
     await session.execute(delete(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
