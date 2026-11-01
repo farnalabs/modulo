@@ -344,10 +344,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
-            echo "::error::release-publication-hold already exists; refusing to start a second cut over an unresolved hold."
-            exit 1
-          fi
+          hold_lookup_rc=0
+          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          case "$hold_lookup_rc" in
+            0)
+              echo "::error::release-publication-hold already exists; refusing to start a second cut over an unresolved hold."
+              exit 1
+              ;;
+            2)
+              ;;
+            *)
+              echo "::error::Could not query release-publication-hold; refusing to treat it as absent."
+              cat /tmp/release-publication-hold-error
+              exit 1
+              ;;
+          esac
           git tag -a release-publication-hold -m "Suppress stable publication while cut establishes release-freeze"
           git push origin release-publication-hold
           echo "established=true" >> "$GITHUB_OUTPUT"
@@ -516,15 +527,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
-            if ! git push origin --delete release-publication-hold; then
-              echo "::error::Could not remove release-publication-hold after a failed cut preparation."
+          hold_lookup_rc=0
+          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          case "$hold_lookup_rc" in
+            0)
+              if ! git push origin --delete release-publication-hold; then
+                echo "::error::Could not remove release-publication-hold after a failed cut preparation."
+                exit 1
+              fi
+              echo "Removed release-publication-hold after failed cut preparation."
+              ;;
+            2)
+              echo "No release-publication-hold remains; cleanup is idempotently complete."
+              ;;
+            *)
+              echo "::error::Could not query release-publication-hold during failed cut preparation cleanup; preserving unknown hold state."
+              cat /tmp/release-publication-hold-error
               exit 1
-            fi
-            echo "Removed release-publication-hold after failed cut preparation."
-          else
-            echo "No release-publication-hold remains; no cleanup required."
-          fi
+              ;;
+          esac
 
       # -----------------------------------------------------------------------
       # CUT: new RC + freeze
@@ -576,15 +597,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
-            if ! git push origin --delete release-publication-hold; then
-              echo "::error::Could not remove release-publication-hold after a failed release cut."
+          hold_lookup_rc=0
+          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          case "$hold_lookup_rc" in
+            0)
+              if ! git push origin --delete release-publication-hold; then
+                echo "::error::Could not remove release-publication-hold after a failed release cut."
+                exit 1
+              fi
+              echo "Removed release-publication-hold after failed release cut."
+              ;;
+            2)
+              echo "No release-publication-hold remains; cleanup is idempotently complete."
+              ;;
+            *)
+              echo "::error::Could not query release-publication-hold during failed release cut cleanup; preserving unknown hold state."
+              cat /tmp/release-publication-hold-error
               exit 1
-            fi
-            echo "Removed release-publication-hold after failed release cut."
-          else
-            echo "No release-publication-hold remains; no cleanup required."
-          fi
+              ;;
+          esac
 
       # -----------------------------------------------------------------------
       # RECUT: tag current main as the next RC (no version bump)
@@ -702,10 +733,21 @@ jobs:
           # Keep the remote branch as the auditable release record; reuse one
           # open PR and refuse a closed duplicate rather than racing a second
           # promotion.
-          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
-            echo "::error::release-publication-hold already exists; refusing to promote over an unresolved hold."
-            exit 1
-          fi
+          hold_lookup_rc=0
+          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          case "$hold_lookup_rc" in
+            0)
+              echo "::error::release-publication-hold already exists; refusing to promote over an unresolved hold."
+              exit 1
+              ;;
+            2)
+              ;;
+            *)
+              echo "::error::Could not query release-publication-hold; refusing to treat it as absent."
+              cat /tmp/release-publication-hold-error
+              exit 1
+              ;;
+          esac
           git tag -a release-publication-hold -m "Suppress stable publication while the promote PR merges"
           git push origin release-publication-hold
           git push origin --delete release-freeze
@@ -1280,13 +1322,25 @@ jobs:
           fi
           # A failed promotion must not leave the temporary suppression marker
           # behind once the authoritative freeze is active again.
-          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
-            if ! git push origin --delete release-publication-hold; then
-              echo "::error::Could not remove release-publication-hold after a failed GA promotion."
+          hold_lookup_rc=0
+          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          case "$hold_lookup_rc" in
+            0)
+              if ! git push origin --delete release-publication-hold; then
+                echo "::error::Could not remove release-publication-hold after a failed GA promotion."
+                exit 1
+              fi
+              echo "Removed release-publication-hold after failed GA promotion."
+              ;;
+            2)
+              echo "No release-publication-hold remains; failed-promotion cleanup is idempotently complete."
+              ;;
+            *)
+              echo "::error::Could not query release-publication-hold after failed GA promotion; preserving unknown hold state."
+              cat /tmp/release-publication-hold-error
               exit 1
-            fi
-            echo "Removed release-publication-hold after failed GA promotion."
-          fi
+              ;;
+          esac
 
 
       - name: Lift release freeze after successful GA publication

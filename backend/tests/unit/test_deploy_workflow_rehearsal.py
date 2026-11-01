@@ -1248,6 +1248,114 @@ def test_release_cut_cleanup_is_failure_safe() -> None:
         assert "git push origin --delete release-publication-hold" in step["run"]
 
 
+def _hold_step_script(name: str) -> str:
+    script = _release_step(name).get("run")
+    assert isinstance(script, str)
+    return script
+
+
+def _run_hold_lookup_script(tmp_path: Path, script: str, *, lookup_rc: int) -> subprocess.CompletedProcess[str]:
+    bin_dir = tmp_path / "hold-bin"
+    bin_dir.mkdir()
+    log = tmp_path / "hold-commands.log"
+    _write_executable(
+        bin_dir / "git",
+        f"""#!/usr/bin/env bash
+set -u
+printf 'git %s\\n' \"$*\" >> {shlex.quote(str(log))}
+if [ \"$1\" = ls-remote ]; then
+  exit \"${{HOLD_LOOKUP_RC}}\"
+fi
+exit 0
+""",
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "HOLD_LOOKUP_RC": str(lookup_rc),
+        "GITHUB_OUTPUT": str(tmp_path / "output"),
+        "VERSION": "1.2.3",
+        "GH_TOKEN": "test",
+    }
+    return _run_bash(script, cwd=tmp_path, env=env)
+
+
+def test_release_publication_hold_establishment_refuses_existing_hold(tmp_path: Path) -> None:
+    result = _run_hold_lookup_script(
+        tmp_path,
+        _hold_step_script("Establish release publication hold (cut only)"),
+        lookup_rc=0,
+    )
+    assert result.returncode != 0
+    assert "already exists" in result.stdout
+    assert "git tag" not in (tmp_path / "hold-commands.log").read_text(encoding="utf-8")
+
+
+def _hold_lookup_fragment(script: str) -> str:
+    start = script.index("hold_lookup_rc=0")
+    tag_marker = "git tag -a release-publication-hold"
+    if tag_marker in script[start:]:
+        end = script.index("\n", script.index(tag_marker, start))
+    else:
+        end = re.search(r"\n\s*esac", script[start:])
+        assert end is not None
+        end = start + end.end()
+    return script[start:end]
+
+
+@pytest.mark.parametrize(
+    "step_name",
+    [
+        "Establish release publication hold (cut only)",
+        "Promote to GA and lift freeze",
+    ],
+)
+@pytest.mark.parametrize("lookup_rc", [2, 17])
+def test_release_publication_hold_establishment_handles_absent_and_remote_error(
+    tmp_path: Path, step_name: str, lookup_rc: int
+) -> None:
+    script = _hold_lookup_fragment(_hold_step_script(step_name))
+    result = _run_hold_lookup_script(tmp_path, script, lookup_rc=lookup_rc)
+    commands = (tmp_path / "hold-commands.log").read_text(encoding="utf-8")
+    if lookup_rc == 2:
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert "git tag -a release-publication-hold" in commands
+    else:
+        assert result.returncode != 0
+        assert "refusing to treat it as absent" in result.stdout
+        assert "git tag -a release-publication-hold" not in commands
+
+
+@pytest.mark.parametrize(
+    ("step_name", "lookup_rc"),
+    [
+        ("Clean up publication hold after failed cut preparation", 0),
+        ("Clean up publication hold after failed cut preparation", 2),
+        ("Clean up publication hold after failed release cut", 0),
+        ("Clean up publication hold after failed release cut", 2),
+        ("Re-establish release freeze after failed GA publication", 0),
+        ("Re-establish release freeze after failed GA publication", 2),
+        ("Re-establish release freeze after failed GA publication", 17),
+    ],
+)
+def test_release_publication_hold_cleanup_is_explicitly_fail_closed(
+    tmp_path: Path, step_name: str, lookup_rc: int
+) -> None:
+    result = _run_hold_lookup_script(tmp_path, _hold_step_script(step_name), lookup_rc=lookup_rc)
+    commands = (tmp_path / "hold-commands.log").read_text(encoding="utf-8")
+    if lookup_rc == 0:
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert "git push origin --delete release-publication-hold" in commands
+    elif lookup_rc == 2:
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert "release-publication-hold" in result.stdout
+        assert "git push origin --delete release-publication-hold" not in commands
+    else:
+        assert result.returncode != 0
+        assert "preserving unknown hold state" in result.stdout
+        assert "git push origin --delete release-publication-hold" not in commands
+
+
 def _promote_step() -> dict[str, Any]:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["release"]["steps"]
