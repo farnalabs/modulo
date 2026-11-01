@@ -4,12 +4,8 @@ Do NOT put connector-specific fixtures here; they belong in
 ``tests/connectors/conftest.py``.
 """
 
-import gc
 import os
-import types
 import warnings
-from collections.abc import Generator
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -62,56 +58,6 @@ from pathlib import Path
 import pydantic.root_model  # noqa: F401
 
 import modulo.core.ssrf as _ssrf
-
-
-def _is_unawaited_asyncmock_coroutine(obj: object) -> bool:
-    """Return whether *obj* is an unstarted coroutine produced by ``AsyncMock``."""
-    if not isinstance(obj, types.CoroutineType):
-        return False
-    frame = obj.cr_frame
-    if frame is None or obj.cr_running or obj.cr_await is not None:
-        return False
-    if frame.f_code.co_name != "_execute_mock_call":
-        return False
-    return isinstance(frame.f_locals.get("self"), AsyncMock)
-
-
-def _reclaim_unawaited_asyncmock_coroutines() -> int:
-    """Close leaked AsyncMock coroutines before pytest's next GC sweep.
-
-    ``AsyncMock`` creates the coroutine only when its mock is called. If a
-    synchronous production method is accidentally represented by an
-    ``AsyncMock`` child (for example, ``session.add(...)``), the coroutine can
-    remain in a reference cycle until a later test triggers garbage
-    collection. Pytest then reports the warning against that unrelated test.
-
-    Reclaiming every still-live *unstarted* AsyncMock coroutine at the end of
-    each test is deliberately narrower than ignoring ``RuntimeWarning``: it
-    closes only the objects that cannot have performed any work, and leaves
-    already-running or suspended coroutines for pytest's normal warning path.
-    The sweep is bounded to one test teardown and runs before pytest's own
-    unraisable-warning collection hook.
-    """
-    reclaimed = 0
-    for obj in gc.get_objects():
-        if not _is_unawaited_asyncmock_coroutine(obj):
-            continue
-        obj.close()
-        reclaimed += 1
-    return reclaimed
-
-
-@pytest.fixture(autouse=True)
-def _reclaim_leaked_asyncmock_coroutines() -> Generator[None, None, None]:
-    """Prevent leaked AsyncMock coroutine warnings from crossing test boundaries."""
-    yield
-    with warnings.catch_warnings(record=True) as captured:
-        warnings.simplefilter("always", RuntimeWarning)
-        _reclaim_unawaited_asyncmock_coroutines()
-        gc.collect()
-    for warning in captured:
-        warnings.warn(warning.message, warning.category, stacklevel=2)
-
 
 #: The warning class the audited suites must treat as a HARD ERROR. Kept as the
 #: pytest ``-W`` spelling so every CI command that runs a gated suite can carry
