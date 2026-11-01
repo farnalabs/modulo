@@ -1224,23 +1224,48 @@ jobs:
            # parses an unquoted glob in [[ ]] as syntax, and command= + awk '{print
            # $1}' also loses spaces in an executable path. Expansion is deferred to
            # the child shell on purpose, so SC2016 does not apply here.
+           #
+           # The installed launcher (Contents/MacOS/modulo) is a Mach-O shim that
+           # execv's the bundled interpreter, so after exec the process's actual
+           # text executable is Contents/Resources/bundle/runtime/bin/python3*.
+           # Accept exactly those two, and nothing else: a host python, a temp
+           # copy or any outside-bundle binary still fails closed.
            # shellcheck disable=SC2016
            run_assertion "service_binary" bash -c '
              SERVICE_PID="$1"
              INSTALL_ROOT="$2"
-             SERVICE_BINARY="$(lsof -p "$SERVICE_PID" -a -d txt -Fn 2>/dev/null | sed -n '\''s/^n//'\'' | head -n 1)"
-             [ -n "$SERVICE_BINARY" ] || exit 1
+             SERVICE_BINARY=""
+             fail() {
+               printf "service_binary check failed: %s\n" "$1" >&2
+               printf "INSTALL_ROOT=%s\n" "${INSTALL_ROOT:-<unset>}" >&2
+               printf "SERVICE_BINARY=%s\n" "${SERVICE_BINARY:-<empty>}" >&2
+               exit 1
+             }
+             # sed needs the p flag: with -n a substitution prints nothing without
+             # it, which silently yielded an empty value and made this check fail
+             # before the path was ever inspected.
+             SERVICE_BINARY="$(lsof -p "$SERVICE_PID" -a -d txt -Fn 2>/dev/null | sed -n '\''s/^n//p'\'' | head -n 1)"
+             [ -n "$SERVICE_BINARY" ] || fail "lsof reported no text executable for pid $SERVICE_PID"
+             # Containment: the running code must live inside the installed app
+             # bundle, i.e. $INSTALL_ROOT/<app>.app/Contents/... .  case patterns
+             # keep this Bash 3.2 safe and preserve spaces in path segments.
              case "$SERVICE_BINARY" in
-               "$INSTALL_ROOT"/*/Contents/MacOS/modulo)
-                 [ -f "$SERVICE_BINARY" ] && [ -x "$SERVICE_BINARY" ] || exit 1
-                 ;;
-               *)
-                 exit 1
-                 ;;
+               "$INSTALL_ROOT"/*/Contents/*) : ;;
+               *) fail "text executable is not inside the installed app bundle" ;;
              esac
-             echo "$SERVICE_BINARY"
+             [ -f "$SERVICE_BINARY" ] || fail "text executable does not exist"
+             [ -x "$SERVICE_BINARY" ] || fail "text executable is not executable"
+             # Known-good executables only: the launcher shim itself, or the
+             # bundled interpreter that shim execs.
+             case "$SERVICE_BINARY" in
+               "$INSTALL_ROOT"/*/Contents/MacOS/modulo) : ;;
+               "$INSTALL_ROOT"/*/Contents/Resources/bundle/runtime/bin/python3*) : ;;
+               *) fail "text executable is neither the launcher nor the bundled interpreter" ;;
+             esac
+             printf "SERVICE_BINARY=%s\n" "$SERVICE_BINARY"
+             printf "INSTALL_ROOT=%s\n" "$INSTALL_ROOT"
            ' bash "$SERVICE_PID" "$INSTALL_ROOT" || exit 1
-           SERVICE_BINARY="$(lsof -p "$SERVICE_PID" -a -d txt -Fn 2>/dev/null | sed -n 's/^n//' | head -n 1)"
+           SERVICE_BINARY="$(lsof -p "$SERVICE_PID" -a -d txt -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
 
 
            run_assertion "service_binary_macho" \
