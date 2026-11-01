@@ -8,8 +8,11 @@ import { createPinia, setActivePinia } from 'pinia'
 import { nextTick, computed } from 'vue'
 
 const state = vi.hoisted(() => ({
-  pipeline: {} as Record<string, unknown>,
+  pipeline: {} as Record<string, unknown> | null,
   teams: [] as Array<{ id: string; name: string }>,
+  teamsError: null as { detail?: string } | null,
+  teamsRejects: false,
+  teamsEmptyBody: false,
 }))
 
 vi.mock('../composables/useApi', () => ({
@@ -36,13 +39,22 @@ vi.mock('../composables/useCurrentUser', () => ({
 vi.mock('../lib/api/client', () => {
   const get = (url: string) => {
     if (url === '/api/v1/teams') {
+      if (state.teamsRejects) {
+        return Promise.reject(new Error('teams endpoint down'))
+      }
+      if (state.teamsError) {
+        return Promise.resolve({ data: undefined, error: state.teamsError })
+      }
+      if (state.teamsEmptyBody) {
+        return Promise.resolve({ data: undefined, error: undefined })
+      }
       return Promise.resolve({ data: { items: state.teams, total: state.teams.length }, error: undefined })
     }
     if (url.includes('/pipelines/{pipeline_id}/graph')) {
       return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
     }
     if (url.includes('/pipelines/{pipeline_id}')) {
-      return Promise.resolve({ data: { ...state.pipeline }, error: undefined })
+      return Promise.resolve({ data: state.pipeline ? { ...state.pipeline } : null, error: undefined })
     }
     return Promise.resolve({ data: { items: [] }, error: undefined })
   }
@@ -109,6 +121,9 @@ beforeEach(async () => {
   vi.clearAllMocks()
   state.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline', owner_team_id: null }
   state.teams = TEAMS
+  state.teamsError = null
+  state.teamsRejects = false
+  state.teamsEmptyBody = false
   const { useRoute } = await import('vue-router')
   const route = (useRoute as unknown as () => { params: Record<string, string> })()
   route.params = { id: 'test-pipeline-id' }
@@ -198,6 +213,82 @@ describe('PipelineEditorView - owner team selector', () => {
     expect(error.attributes('role')).toBe('alert')
     expect(error.text()).toContain('environment_profile_binding_team_mismatch')
     expect((wrapper.find(SELECT).element as HTMLSelectElement).value).toBe('team-a')
+    wrapper.unmount()
+  })
+
+  it('shows an alert when the team list cannot be loaded', async () => {
+    state.teamsError = { detail: 'teams_unavailable' }
+    const wrapper = await mountEditor()
+
+    const error = wrapper.find(ERROR)
+    expect(error.attributes('role')).toBe('alert')
+    expect(error.text()).toContain('teams_unavailable')
+    // The failed list must not render as a silent empty menu: None remains.
+    expect(wrapper.find(SELECT).findAll('option')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('shows an alert when the team request throws', async () => {
+    state.teamsRejects = true
+    const wrapper = await mountEditor()
+
+    expect(wrapper.find(ERROR).text()).toContain('teams endpoint down')
+    wrapper.unmount()
+  })
+
+  it('renders only the None option when the team list body is empty', async () => {
+    state.teamsEmptyBody = true
+    const wrapper = await mountEditor()
+
+    expect(wrapper.find(SELECT).findAll('option')).toHaveLength(1)
+    expect(wrapper.find(ERROR).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows an alert and reverts when the write fails on the wire', async () => {
+    state.pipeline = { ...state.pipeline, owner_team_id: 'team-a' }
+    vi.mocked(api.PATCH).mockImplementationOnce(() => Promise.reject(new Error('network down')))
+    const wrapper = await mountEditor()
+
+    await wrapper.find(SELECT).setValue('team-b')
+    await flushPromises()
+
+    const error = wrapper.find(ERROR)
+    expect(error.attributes('role')).toBe('alert')
+    expect(error.text()).toContain('network down')
+    expect((wrapper.find(SELECT).element as HTMLSelectElement).value).toBe('team-a')
+    wrapper.unmount()
+  })
+
+  it('labels a chosen team absent from the loaded list by its id', async () => {
+    const wrapper = await mountEditor()
+    const select = wrapper.find(SELECT)
+    // The select can only offer listed teams, so an unlisted value cannot be
+    // produced by a user click; pin the defensive fallback with an injected
+    // option rather than rendering an empty label if it ever happens.
+    const ghost = document.createElement('option')
+    ghost.value = 'team-ghost'
+    ghost.text = 'Ghost'
+    ;(select.element as HTMLSelectElement).appendChild(ghost)
+
+    await select.setValue('team-ghost')
+    await flushPromises()
+
+    expect(ownerTeamPatchBodies()).toEqual([{ owner_team_id: 'team-ghost' }])
+    expect(wrapper.find(STATUS).text()).toBe('Owner team set to team-ghost')
+    wrapper.unmount()
+  })
+
+  it('still announces the outcome when no pipeline document is loaded', async () => {
+    state.pipeline = null
+    const wrapper = await mountEditor()
+
+    await wrapper.find(SELECT).setValue('team-a')
+    await flushPromises()
+
+    expect(ownerTeamPatchBodies()).toEqual([{ owner_team_id: 'team-a' }])
+    expect(wrapper.find(STATUS).text()).toContain('Platform')
+    expect(wrapper.find(ERROR).exists()).toBe(false)
     wrapper.unmount()
   })
 })
