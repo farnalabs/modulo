@@ -114,9 +114,9 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
 
     Expected tables are derived from information_schema (tables with an
     organisation_id column) so this test stays accurate as new tables are added.
-    The eight team-scoped tables (0124 + 0287) intentionally carry
-    ``rls_team_isolation`` (which includes the org check) instead of the
-    org-only policy — they are asserted by
+    The team-scoped tables (0124 + 0287 + later team-visibility adopters)
+    intentionally carry ``rls_team_isolation`` (which includes the org check)
+    instead of the org-only policy — they are asserted by
     ``test_team_scoped_tables_have_no_org_only_policy``.
     """
     team_scoped = {
@@ -134,6 +134,10 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
         # they too get ONLY rls_team_isolation (org check included).
         "external_agents",
         "mcp_servers",
+        # FAR-2236 (0341): system_maps carries visibility/owner_team_id, so
+        # 0341 gives it rls_team_isolation and the org-only policy to the
+        # other seven System Maps tables.
+        "system_maps",
     }
 
     async with db_engine.connect() as conn:
@@ -837,6 +841,8 @@ async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine
         # FAR-1692 (0314):
         "external_agents",
         "mcp_servers",
+        # FAR-2236 (0341): visibility/owner_team_id pair.
+        "system_maps",
     }
     # Org-only by design: these tables carry ONLY rls_org_isolation and must
     # NOT gain a team/account policy. ``lifecycle_map_stages`` is a derived
