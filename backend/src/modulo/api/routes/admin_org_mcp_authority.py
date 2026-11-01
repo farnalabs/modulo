@@ -53,7 +53,7 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/org", tags=["admin", "mcp"])
 
 # The canonical key FAR-1957 registers in ``core.feature_flags`` as a
-# community-tier flag (default ON). Kept as a module constant here so the route
+# community-tier flag (default OFF). Kept as a module constant here so the route
 # never scatters the literal; once FAR-1957 lands its public constant is the
 # single source and this can import it.
 MCP_HUMAN_LINKED_HITL_AUTHORITY_FLAG = "mcp_human_linked_hitl_authority"
@@ -73,8 +73,8 @@ class McpAuthorityResponse(BaseModel):
 
     ``enabled`` is the effective intent: the org override when one is set, else
     the flag's documented default (OFF). ``overridden`` reports whether the org has an
-    explicit override (so the UI can distinguish "on by default" from "on
-    because someone set it").
+    explicit override (so the UI can distinguish the default-OFF state from an
+    explicit enable).
     """
 
     enabled: bool
@@ -94,7 +94,7 @@ def _default_enabled() -> bool:
     """
     flag = get_registry().get_flag(MCP_HUMAN_LINKED_HITL_AUTHORITY_FLAG)
     if flag is None:
-        return True
+        return False
     return bool(flag.currently_active)
 
 
