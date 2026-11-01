@@ -150,8 +150,13 @@
           </div>
           <!-- Table / Tree view -->
           <div class="card rounded-lg border border-border overflow-hidden">
-            <div class="overflow-x-auto">
-              <table class="w-full text-left text-sm">
+            <p id="pipeline-list-table-scroll-instructions" class="sr-only">
+              {{ $t('views.PipelineListView.table_scroll_instructions') }}
+            </p>
+            <div class="relative">
+              <div class="pointer-events-none absolute right-0 top-0 z-10 h-full w-8 bg-gradient-to-l from-background to-transparent sm:hidden" aria-hidden="true" />
+              <div class="overflow-x-auto overscroll-x-contain focus-within:ring-2 focus-within:ring-ring focus-within:ring-inset" tabindex="0" aria-describedby="pipeline-list-table-scroll-instructions">
+              <table class="w-full min-w-max text-left text-sm">
               <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
                 <tr>
                   <th class="px-4 py-3">{{ $t('views.PipelineListView.name') }}</th>
@@ -199,11 +204,7 @@
 
                   <tr
                     v-else-if="row.type === 'pipeline'"
-                    class="cursor-pointer transition-colors hover:bg-muted/30"
-                    tabindex="0"
-                    @click="openPipeline(row.data as PipelineItem)"
-                    @keydown.enter="openPipeline(row.data as PipelineItem)"
-                    @keydown.space.prevent="openPipeline(row.data as PipelineItem)"
+                    class="transition-colors hover:bg-muted/30"
                     :data-testid="`pipeline-tree-row-${(row.data as PipelineItem).id}`"
                     draggable="true"
                     @dragstart="onPipelineDragStart(row.data as PipelineItem, $event)"
@@ -212,7 +213,11 @@
                   >
                     <td class="px-4 py-3" :style="{ paddingLeft: `${12 + (row.depth || 0) * 16}px` }">
                       <span class="flex min-w-0 items-center gap-1.5">
-                        <span class="font-medium text-foreground truncate">{{ (row.data as PipelineItem).name }}</span>
+                        <router-link
+                          :to="`/pipelines/${(row.data as PipelineItem).id}/editor`"
+                          class="min-w-0 truncate font-medium text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          data-testid="pipeline-tree-link"
+                        >{{ (row.data as PipelineItem).name }}</router-link>
                         <!-- FAR-1530: Paused is a first-class visible state (unlike archived,
                              which hides the row) — badge it so a paused pipeline is never
                              mistaken for a running one. Mirrors the editor's Archived badge.
@@ -260,6 +265,7 @@
                 </template>
               </tbody>
               </table>
+              </div>
             </div>
           </div>
         </div>
@@ -840,10 +846,6 @@ function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
   if (Number.isNaN(d.getTime())) return dateStr
   return formatDateShort(d)
-}
-
-function openPipeline(p: PipelineItem) {
-  router.push({ name: 'pipeline-editor', params: { id: p.id } })
 }
 
 const actionMenuRef = ref<InstanceType<typeof Menu> | null>(null)

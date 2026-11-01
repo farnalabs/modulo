@@ -1,5 +1,5 @@
 <template>
-  <div :class="rootClass">
+  <div :class="rootClass" role="alert" aria-live="assertive">
     <div class="min-w-0">
       <p v-if="isProblem">{{ problem!.title }}: {{ problem!.detail }}</p>
       <p v-else-if="message">{{ message }}</p>

@@ -4011,6 +4011,9 @@ elements:
       - testid: pipeline-tree-folder-toggle
         type: button
         dynamic_testid: false
+      - testid: pipeline-tree-link
+        type: link
+        dynamic_testid: false
       - testid: folder-tree
         type: element
         dynamic_testid: false
