@@ -28,6 +28,19 @@ def resolve_alembic_ini() -> Path:
     return Path("alembic.ini")
 
 
+def resolve_migration_script_location(alembic_ini: Path) -> Path:
+    """Return the absolute migration tree associated with an Alembic config.
+
+    The installed macOS launcher may start from its data directory rather than
+    the bundle. Deriving this path from the config's actual backend root keeps
+    source and relocated bundles working without changing the process cwd.
+    """
+    migration_path = alembic_ini.resolve().parent / "src" / "modulo" / "db" / "migrations"
+    if not migration_path.is_dir():
+        raise FileNotFoundError(f"Alembic migration tree does not exist: {migration_path}")
+    return migration_path
+
+
 async def db_is_at_migration_head(engine: Any, alembic_ini: Path | None = None) -> bool:
     """Return True when the DB's ``alembic_version`` already equals the head.
 
@@ -46,12 +59,9 @@ async def db_is_at_migration_head(engine: Any, alembic_ini: Path | None = None) 
     from sqlalchemy import text
 
     ini_path = alembic_ini if alembic_ini is not None else resolve_alembic_ini()
-    config = Config(str(ini_path))
-    config.set_main_option(
-        "script_location",
-        str(ini_path.parent / "src" / "modulo" / "db" / "migrations"),
-    )
     try:
+        config = Config(str(ini_path))
+        config.set_main_option("script_location", str(resolve_migration_script_location(ini_path)))
         head = ScriptDirectory.from_config(config).get_current_head()
     except Exception:
         return False

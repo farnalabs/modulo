@@ -36,7 +36,6 @@ cleanup() {
 trap cleanup EXIT
 hdiutil verify "$DMG" >/dev/null
 codesign --verify --verbose=2 "$DMG"
-spctl --assess --type open --context context:primary-signature "$DMG"
 hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -readonly >/dev/null
 MOUNT_ATTACHED=1
 # The mounted volume ships Modulo-<version>.app, but the DMG itself may be
@@ -52,11 +51,21 @@ done < <(for candidate in "$MOUNT"/*.app; do [[ -d "$candidate" && ! -L "$candid
 [[ "$app_count" -eq 1 ]] || { echo "ERROR: expected exactly one non-symlink .app bundle on the DMG, found ${app_count}" >&2; exit 1; }
 [[ -d "$APP" && ! -L "$APP" ]] || { echo 'ERROR: DMG does not contain the expected non-symlink .app bundle' >&2; exit 1; }
 codesign --verify --deep --strict "$APP"
+if [[ "${MODULO_MACOS_REHEARSAL_ALLOW_UNSTAPLED_TICKET:-}" == '1' && "${MODULO_MACOS_REHEARSAL_ALLOW_UNSTAPLED_TICKET_REASON:-}" == 'apple_cloudkit_ticket_unavailable' ]]; then
+  printf '%s\n' '::warning::Rehearsal-only: deferring mounted-app Gatekeeper assessment because the Apple CloudKit notarization ticket is unavailable.' >&2
+else
+  spctl --assess --type execute "$APP"
+fi
 INSTALL_ROOT="${MODULO_INSTALL_ROOT:-$HOME/Library/Application Support/Modulo}"
 mkdir -p "$INSTALL_ROOT"
 TARGET="$INSTALL_ROOT/$(basename "$APP")"
 rm -rf "$TARGET"
 cp -R "$APP" "$TARGET"
+# Verify the copied, relocatable app—not the mounted source bundle—can import
+# the supervisor with the same clean environment used by launchd children.
+env -u PYTHONPATH -u PYTHONHOME \
+  "$TARGET/Contents/Resources/bundle/runtime/bin/python3" \
+  -c 'import modulo.launcher.supervisor'
 mkdir -p "$HOME/Library/LaunchAgents"
 PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
 DATA_DIR="${MODULO_DATA_DIR:-$HOME/Library/Application Support/Modulo/data}"
