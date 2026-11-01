@@ -90,7 +90,37 @@ _MK_PREFIX = "mk_"
 # FAR-620: caller-scope axis. 'org' = org-level caller (historical default,
 # covers org-wide AND team-scoped AND per-run keys); 'user' = per-user key
 # that acts as its creator's identity. IMMUTABLE post-mint.
-KEY_SCOPES: frozenset[str] = frozenset({"org", "user"})
+KEY_SCOPE_ORG = "org"
+KEY_SCOPE_USER = "user"
+KEY_SCOPES: frozenset[str] = frozenset({KEY_SCOPE_ORG, KEY_SCOPE_USER})
+
+# FAR-2281: the role ceiling is split by credential PROVENANCE, not transport.
+# An org-scoped key is an unattributed machine identity, so it stays capped at
+# operator/runner. A user-scoped key is human-linked (its owner's live org role
+# is the ceiling), so it may carry admin. The DB CHECK
+# (``ck_org_api_keys_role``) enforces the same split.
+ORG_KEY_ROLES: frozenset[str] = frozenset({"operator", "runner"})
+USER_KEY_ROLES: frozenset[str] = ORG_KEY_ROLES | {"admin"}
+KNOWN_API_KEY_ROLES: frozenset[str] = USER_KEY_ROLES
+
+
+def api_key_role_violation(role: str, scope: str) -> str | None:
+    """Return the user-facing refusal when *role* is invalid for *scope*, else ``None``.
+
+    The ONE rule both mint surfaces (REST ``POST /api/v1/api-keys`` and the MCP
+    ``create_api_key`` tool) and the update choke point share. ``admin`` is
+    permitted only for a ``user``-scoped (human-linked) key; every other scope
+    keeps the operator/runner ceiling. An unknown role is refused for every
+    scope. Returning a message rather than raising keeps the REST (HTTP 422)
+    and MCP (error envelope) wrappers thin and their wording identical.
+    """
+    allowed = USER_KEY_ROLES if scope == KEY_SCOPE_USER else ORG_KEY_ROLES
+    if role in allowed:
+        return None
+    if role == "admin":
+        return "role 'admin' is permitted only for user-scoped API keys"
+    return "role must be 'operator', 'runner', or 'admin' (admin only for user-scoped keys)"
+
 
 # FAR-1477 / ADR 058: org-level flag gating API-key grant-sets (default OFF).
 FLAG_API_KEY_GRANTS = "api_key_grants"
@@ -230,6 +260,12 @@ async def create_api_key(
     """
     if scope not in KEY_SCOPES:
         raise ApiKeyScopeError(f"Invalid API key scope '{scope}': must be one of {sorted(KEY_SCOPES)}")
+    # FAR-2281: the role ceiling is scope-aware. Enforced here as well as at
+    # the REST/MCP validators so every future mint surface (on-behalf mints
+    # included) refuses the same way; the DB CHECK is the final backstop.
+    role_violation = api_key_role_violation(role, scope)
+    if role_violation is not None:
+        raise ApiKeyScopeError(role_violation)
     # FAR-1478 / ADR 058 tiered TTL: a key owned by a SERVICE principal may
     # live at most SERVICE_KEY_MAX_TTL_DAYS. Checked at this choke point so
     # REST, MCP, on-behalf mints and any future surface all refuse the same
@@ -697,6 +733,14 @@ async def update_api_key(
         # reads the key OWNER's kind, not the caller's, and runs BEFORE any
         # mutation so a refusal leaves the key completely untouched.
         await _enforce_service_key_ttl(session, key.account_id, expires_at)
+    if role is not None:
+        # FAR-2281: a role change is held to the same scope-aware ceiling as
+        # mint, read from the key's OWN immutable scope (never the caller's).
+        # Checked before any mutation so a refusal leaves the row untouched.
+        key_scope = getattr(key, "scope", None)
+        role_violation = api_key_role_violation(role, key_scope if isinstance(key_scope, str) else KEY_SCOPE_ORG)
+        if role_violation is not None:
+            raise ApiKeyScopeError(role_violation)
     if name is not None:
         key.name = name
     if role is not None or team_id is not _UNSET:

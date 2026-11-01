@@ -95,10 +95,12 @@ from modulo.api.routes.triggers import (
     _validate_trigger_config_keys,
 )
 from modulo.auth.api_key import (
+    KEY_SCOPE_ORG,
     ApiKeyGrantsUnavailableError,
     ApiKeyInvalidError,
     ApiKeyTtlError,
     api_key_grants_enabled,
+    api_key_role_violation,
     resolve_key_grants,
     validate_api_key,
 )
@@ -113,6 +115,7 @@ from modulo.auth.api_key import (
 )
 from modulo.auth.dependencies import resolve_role_from_membership
 from modulo.auth.human_linkage import (
+    LINKAGE_OAUTH_CONSENT,
     HumanLinkage,
     required_permission_for_action,
     resolve_human_linkage,
@@ -222,12 +225,14 @@ from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.account import AccountNotFoundError
 from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied, HitlReviewWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
+from modulo.db.crud.org_membership import resolve_live_role_and_kind
 from modulo.db.crud.pipeline import CircuitBreakerThresholdChangeDenied, get_pipeline
 from modulo.db.crud.run import WorkItemRefsRequiredError, get_run
 from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs
 from modulo.db.crud.schema import create_schema as db_create_schema
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
+from modulo.db.models.account import KIND_HUMAN
 from modulo.db.models.agent import Agent
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
@@ -491,6 +496,11 @@ _ctx_node_allowed_tools: contextvars.ContextVar[list[str] | None] = contextvars.
 # ``is_system_admin=False`` and OAuth claims do not carry it); only a regular
 # JWT whose decoded principal holds the flag sets it True.
 _ctx_is_system_admin: contextvars.ContextVar[bool] = contextvars.ContextVar("mcp_is_system_admin", default=False)
+# FAR-2281: the credential owner's ``Account.kind`` when a USER-scoped mk_ key
+# is bound to a live human (``human``) — else None. Drives the audit
+# attribution: the action is recorded against the human, never collapsed to a
+# generic api_key principal. Fail-closed default None.
+_ctx_principal_kind: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_principal_kind", default=None)
 
 
 def _bind_org_context(
@@ -1636,6 +1646,17 @@ async def _authenticate_api_key(
                 str(key.account_id),
                 str(key.organisation_id),
             )
+            owner_kind: str | None = None
+            # FAR-2281: only a user-scoped key needs the additional account-kind
+            # projection. Keep the historical role read as the clamp's sole
+            # query for org/team/run keys, preserving the existing auth path.
+            if getattr(key, "scope", None) == "user" and live_role is not None:
+                membership = await resolve_live_role_and_kind(
+                    s,
+                    str(key.account_id),
+                    str(key.organisation_id),
+                )
+                owner_kind = membership[1] if membership is not None else None
             clamped = _clamp_role(key.role, live_role)
             if not clamped:
                 _record_api_key_role_cap(
@@ -1692,6 +1713,10 @@ async def _authenticate_api_key(
         # caller-scope leg. The isinstance guard keeps test doubles (MagicMock
         # rows) on the fail-closed None; real rows always carry a string.
         _ctx_key_scope.set(key.scope if isinstance(key.scope, str) else None)
+        # FAR-2281: a USER-scoped key owned by a live human acts as that human,
+        # so the audit record attributes the action to the human rather than a
+        # generic api_key principal. Org/team/run-scoped keys stay unattributed.
+        _ctx_principal_kind.set(KIND_HUMAN if _ctx_key_scope.get() == "user" and owner_kind == KIND_HUMAN else None)
         _ctx_key_grants.set(key_grants)
         # FAR-696: an API-key principal is never a system admin — REST
         # constructs API-key tenants with ``is_system_admin=False`` and the
@@ -6933,7 +6958,13 @@ async def _check_human_only_gate(
         token_family=_ctx_token_family.get(None),
         grants=_ctx_key_grants.get(None),
         required_permission=required_permission_for_action(action),
+        key_scope=_ctx_key_scope.get(None),
     )
+    # FAR-2281 slice 1: a user-scoped mk_ key now resolves as human-linked
+    # (persona), but the human_only decision authority is unchanged in this
+    # slice — only the consent-derived OAuth class may decide such a gate. The
+    # persona flag that extends this to user-scoped keys is slice 2.
+    linkage_has_hitl_authority = linkage.linkage == LINKAGE_OAUTH_CONSENT
     # The org-wide escape hatch (default ON). Read only when the credential IS
     # human-linked: for a not-linked credential the verdict is already deny and
     # the flag is irrelevant.
@@ -6944,7 +6975,7 @@ async def _check_human_only_gate(
     # deliver_manual injects the run's output directly (ADR 035) and stays
     # browser-only in step 1 — never honoured over MCP, even for a human-linked
     # credential.
-    allow_via_linkage = human_linked_authority and action != "deliver_manual"
+    allow_via_linkage = human_linked_authority and linkage_has_hitl_authority and action != "deliver_manual"
     non_browser_credential = not allow_via_linkage
     verdict = human_only_denial(config, non_browser_credential=non_browser_credential, gate_fired=gate_fired)
     if verdict is not None:
@@ -9474,13 +9505,22 @@ async def _require_admin_for_team_key(org_id: uuid.UUID) -> None:
         raise MCPAuthorizationError("Only admin users can perform this action")
 
 
-def _validate_api_key_role_and_name(name: str, role: str) -> dict[str, Any] | None:
-    """Return a validation error dict for invalid role/name, or None."""
-    if role not in ("operator", "runner"):
+def _validate_api_key_role_and_name(name: str, role: str, scope: str = KEY_SCOPE_ORG) -> dict[str, Any] | None:
+    """Return a validation error dict for invalid role/name, or None.
+
+    FAR-2281: the role ceiling is scope-aware, using the SAME shared predicate
+    as the REST mint path (``api_key_role_violation``). The MCP mint tool pins
+    ``scope`` to ``org`` (an MCP caller mints an org-scoped machine key), so
+    ``admin`` stays prohibited there; a user-scoped key's admin ceiling is
+    reachable only through the REST surface that can mint it. The parameter
+    exists so both surfaces enforce one rule rather than two drifting copies.
+    """
+    role_violation = api_key_role_violation(role, scope)
+    if role_violation is not None:
         return {
             "error": "validation_failed",
             "field": "role",
-            "detail": "role must be 'operator' or 'runner'. admin keys are prohibited.",
+            "detail": role_violation,
         }
     if not name.strip():
         return {
@@ -9851,7 +9891,9 @@ def _api_key_created_response(key: Any, full_key: str, grants: list[str] | None)
     description=(
         "Create a new organisation API key. Returns the full mk_... key value "
         "ONLY at creation — store it immediately, it is never returned again. "
-        "Mirrors POST /api/v1/api-keys. Roles: 'operator' or 'runner'. A key "
+        "Mirrors POST /api/v1/api-keys. Roles: 'operator' or 'runner' (this "
+        "tool mints an ORG-scoped key, so 'admin' is not available here; a "
+        "user-scoped key may carry 'admin' and is minted via the REST surface). A key "
         "cannot be minted above the caller's live org role. Optional 'grants' "
         "(list of permission names, e.g. ['pipeline.list', 'pipeline.graph.read']) "
         "restricts the key to exactly those permissions instead of its full role "

@@ -245,6 +245,59 @@ class TestMcpNonLinkedDenials(_OAuthContext):
 
         assert result.get("error") == "human_only_gate", result
 
+    async def test_user_scoped_human_key_denied_in_slice_1(self) -> None:
+        """FAR-2281 slice 1: a user-scoped mk_ key IS human-linked (persona) but
+        the human_only decision authority is unchanged — only the consent-derived
+        OAuth class may decide. Slice 2 extends this behind the persona flag.
+
+        Drives the REAL ``_check_human_only_gate`` directly: ``review_hitl`` is
+        itself org-scoped, so a user-scoped key is refused by the caller-scope
+        chokepoint before this hook (an unchanged slice-1 behaviour tested in
+        ``test_mcp_user_key_scope_gate.py``). The denial here proves the
+        linkage resolved to the user-scoped class yet was NOT granted HITL
+        authority.
+        """
+        from modulo.api.mcp_server import (
+            _check_human_only_gate,
+            _ctx_auth_type,
+            _ctx_key_grants,
+            _ctx_key_scope,
+            _ctx_token_family,
+        )
+        from modulo.auth.human_linkage import LINKAGE_USER_SCOPED_KEY
+        from modulo.db.crud.hitl_review_config import MSG_HUMAN_ONLY_DENY
+
+        _ctx_auth_type.set("api_key")
+        _ctx_token_family.set(None)
+        _ctx_key_scope.set("user")
+        _ctx_key_grants.set(None)
+        run, snapshot, review_id = _run_and_snapshot(human_only=True)
+        session = AsyncMock()
+        # The direct gate call skips the run read: (1) claim-stamp lookup (no
+        # row — legacy), (2) the run's snapshot graph.
+        session.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(None),
+                _make_run_lookup_result(snapshot),
+            ]
+        )
+        audit = AsyncMock()
+
+        with (
+            _mcp_patches(session, MagicMock(), membership=("admin", "human")),
+            patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=audit),
+        ):
+            verdict = await _check_human_only_gate(session, _ORG_ID, run, review_id, "claim")
+
+        assert verdict is not None
+        assert verdict["error"] == "human_only_gate"
+        assert verdict["detail"] == MSG_HUMAN_ONLY_DENY
+        audit.assert_awaited_once()
+        linkage = audit.await_args.kwargs["linkage"]
+        assert linkage.linked is True
+        assert linkage.linkage == LINKAGE_USER_SCOPED_KEY
+        assert linkage.principal_kind == "human"
+
     @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
     async def test_browser_class_password_jwt_denied(self) -> None:
         """FAR-634's path stays closed: a non-OAuth JWT is never human-linked."""

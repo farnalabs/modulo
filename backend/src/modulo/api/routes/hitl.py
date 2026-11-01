@@ -63,6 +63,7 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.human_linkage import (
     AUTH_TYPE_API_KEY,
     AUTH_TYPE_JWT,
+    LINKAGE_OAUTH_CONSENT,
     required_permission_for_action,
     resolve_human_linkage,
 )
@@ -173,6 +174,7 @@ class HumanOnlyDenied(HTTPException):
         org_role: str,
         principal_kind: str,
         client_kind: str,
+        linked_principal_kind: str | None = None,
     ) -> None:
         super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
         self.run_id = run_id
@@ -183,6 +185,11 @@ class HumanOnlyDenied(HTTPException):
         self.org_role = org_role
         self.principal_kind = principal_kind
         self.client_kind = client_kind
+        #: ``Account.kind`` of a human-linked credential (FAR-2281), or ``None``
+        #: when the credential is not human-linked. Recorded BESIDE the
+        #: credential class so the trail shows the human, never a collapsed
+        #: generic ``api_key`` principal.
+        self.linked_principal_kind = linked_principal_kind
         self.reason = detail
 
 
@@ -445,8 +452,18 @@ async def _enforce_human_only_gate(
         token_family=None,
         grants=principal.key_grants,
         required_permission=required_permission_for_action(action),
+        key_scope=principal.key_scope,
     )
-    verdict = human_only_denial(config, non_browser_credential=not linkage.linked, gate_fired=gate_fired)
+    # FAR-2281 slice 1: a user-scoped mk_ key resolves as human-linked
+    # (persona), but REST decision authority is unchanged in this slice — REST
+    # never presents a consent-derived OAuth credential, so only that class
+    # could ever pass, and it does not appear here. The persona flag that lets
+    # a human-linked user key decide is slice 2.
+    verdict = human_only_denial(
+        config,
+        non_browser_credential=not (linkage.linked and linkage.linkage == LINKAGE_OAUTH_CONSENT),
+        gate_fired=gate_fired,
+    )
     if verdict is not None:
         raise HumanOnlyDenied(
             verdict,
@@ -458,6 +475,7 @@ async def _enforce_human_only_gate(
             org_role=principal.org_role,
             principal_kind="api_key" if principal.via_api_key else "jwt",
             client_kind=principal.client_kind,
+            linked_principal_kind=linkage.principal_kind if linkage.linked else None,
         )
 
 
@@ -493,6 +511,10 @@ async def _emit_human_only_denial_audit(exc: HumanOnlyDenied) -> None:
         "client_kind": exc.client_kind,
         "reason": exc.reason,
     }
+    # FAR-2281: a human-linked credential is attributed to the human, beside
+    # the credential class — never collapsed into the generic ``api_key``.
+    if exc.linked_principal_kind is not None:
+        payload["linked_principal_kind"] = exc.linked_principal_kind
     try:
         engine = get_or_create_engine(get_settings())
         factory = get_or_create_session_factory(engine)

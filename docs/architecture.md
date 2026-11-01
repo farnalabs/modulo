@@ -696,7 +696,7 @@ The posture for injected values (distinguish from the FAR-296 per-run minted key
 | Method | Status | Use case |
 |--------|--------|----------|
 | JWT (access + refresh) | Alpha | Browser UI sessions – 15-min access, sliding 24-h refresh (idle-logout window; configurable 1–168h via `MODULO_REFRESH_TOKEN_TTL_HOURS`) |
-| API key (bearer token) | Alpha | CI/CD, MCP clients – role-scoped (operator/runner) + caller-scoped (`org`/`user` scope axis, ADR 030) |
+| API key (bearer token) | Alpha | CI/CD, MCP clients – scope-aware role ceiling (`org` keys: operator/runner; `user` keys: the owner's live role, including admin) + caller-scoped (`org`/`user` scope axis, ADR 030) |
 | Basic Auth | Alpha | Multi-user alpha (`MODULO_USERS` env var) |
 | OAuth 2.0 (authlib) | V1 | MCP clients (PKCE, exact redirect_uri) |
 | OIDC / SAML 2.0 | V1 (team) | SSO with JIT provisioning |
@@ -712,14 +712,15 @@ The posture for injected values (distinguish from the FAR-296 per-run minted key
 
 ### API keys
 
-Format: `mk_<lookup_prefix>_<random_secret>`. Stored as SHA-256 hash. Role set: `operator` (trigger runs, approve HITL) and `runner` (trigger runs, read-only). Admin actions require human session. Keys shown once at creation. Listing API keys requires an operator or admin role because the response includes account attribution (`account_kind` and `account_display_name`) and the account email for human owners only; service-account email is always `null`. List and MCP responses never include the raw key value, hashed secret, or any other secret material.
+Format: `mk_<lookup_prefix>_<random_secret>`. Stored as SHA-256 hash. The role ceiling is split by credential **provenance**, not transport: an **org-scoped** key (org-wide, team-scoped, service-owned or per-run — an unattributed machine identity) is capped at `operator` (trigger runs, approve HITL) and `runner` (trigger runs, read-only); a **user-scoped** key is human-linked and carries its owner's **live** org role, including `admin` (ADR 047 re-reads the role on every call, so a demotion or removal degrades/revokes the key). An admin action taken with a user-scoped key is audited against the human owner, not a generic `api_key` principal. Keys shown once at creation. Listing API keys requires an operator or admin role because the response includes account attribution (`account_kind` and `account_display_name`) and the account email for human owners only; service-account email is always `null`. List and MCP responses never include the raw key value, hashed secret, or any other secret material.
 
 Every key carries a **caller scope** (`scope` column, immutable post-mint):
 `org` (org-level machine identity, the historical default; includes
 team-scoped and per-run sandbox keys) or `user` (a per-user key that acts as
 its creator's identity and is quota'd to 10 active per account). User-scoped
-minting is REST-JWT-only, gated by the org `user_scoped_mcp_keys` flag
-(ADR 030). MCP tools whose permission key ends in `.self` (e.g.
+minting is REST-JWT-only (Settings > MCP create dialog or
+`POST /api/v1/api-keys`), gated by the org `user_scoped_mcp_keys` flag
+(ADR 030); the MCP `create_api_key` tool mints org-scoped keys only. MCP tools whose permission key ends in `.self` (e.g.
 `get_hitl_email_alerts`) are caller-scoped: they target the caller's own
 account and are denied under org-wide/run-scoped keys. Key lifecycle events
 are audited (`api_key_created` / `api_key_revoked`) on both the REST and MCP

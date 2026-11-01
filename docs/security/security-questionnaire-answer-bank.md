@@ -162,12 +162,16 @@ Evidence: `backend/src/modulo/auth/permissions.py`; `docs/architecture.md`
 
 **Q: Do you support least-privilege API keys?**
 
-A: Yes. Org API keys are always role-scoped (`operator` or `runner`), which is
-the default least-privilege control. An explicit per-key permission grant set -
-narrower than the role bundle - is available but sits behind the
-`api_key_grants` feature flag, which is **default-OFF** on every tier; if the
-customer has not enabled it, answer with the role-scoped answer, not the
-grant-set one.
+A: Yes. Org-scoped API keys are always role-scoped (`operator` or `runner`),
+which is the default least-privilege control. The role ceiling is split by
+credential provenance: a user-scoped key is human-linked and carries its
+owner's live org role, including `admin` (re-read on every call, so a demotion
+or removal degrades or revokes it), while an org/team/service/run-scoped key is
+an unattributed machine identity capped at operator/runner. An explicit per-key
+permission grant set - narrower than the role bundle - is available but sits
+behind the `api_key_grants` feature flag, which is **default-OFF** on every
+tier; if the customer has not enabled it, answer with the role-scoped answer,
+not the grant-set one.
 
 Evidence: `docs/architecture.md` ("API keys"); `modulo_create_api_key` /
 `GET /api/v1/api-keys`; `backend/src/modulo/auth/permissions.py`; the
