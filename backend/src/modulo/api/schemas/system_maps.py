@@ -9,6 +9,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
+from fastapi import HTTPException, status
 from pydantic import BaseModel, Field, model_validator
 
 # ─── Centralised vocabularies (mirror ORM CHECK constraints) ───
@@ -338,6 +339,26 @@ class PublishValidationError(BaseModel):
     relationship_id: uuid.UUID | None = None
 
 
+class PublishValidationErrorHTTP(HTTPException):
+    """422 raised when a system map revision publish fails validation.
+
+    The exception carries the validation errors and the revision so the exception handler
+    can render them as a 200 PublishResponse. Raising (instead of returning)
+    ensures the audited() dependency records outcome="error".
+    """
+
+    def __init__(self, validation_errors: list[PublishValidationError], revision: Any) -> None:
+        self.validation_errors = validation_errors
+        self.revision = revision
+        # Note: status_code=422 is used here so the exception type is recognisable,
+        # but the registered exception handler converts it to a 200 PublishResponse
+        # (wire-contract preservation: clients expect 200 with errors in the body).
+        super().__init__(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"message": "Publish validation failed", "errors": [e.model_dump() for e in validation_errors]},
+        )
+
+
 class PublishResponse(BaseModel):
     revision: SystemMapRevisionResponse
     validation_errors: list[PublishValidationError] = Field(default_factory=list)
@@ -358,6 +379,7 @@ __all__ = [
     "AttributionBindingResponse",
     "PublishResponse",
     "PublishValidationError",
+    "PublishValidationErrorHTTP",
     # Requests
     "SystemMapCreate",
     "SystemMapDiscoveryReport",

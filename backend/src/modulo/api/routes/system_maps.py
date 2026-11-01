@@ -33,6 +33,7 @@ from modulo.api.schemas.system_maps import (
     AttributionBindingResponse,
     PublishResponse,
     PublishValidationError,
+    PublishValidationErrorHTTP,
     SystemMapCreate,
     SystemMapDiscoveryReport,
     SystemMapDiscoveryRequest,
@@ -72,24 +73,6 @@ from modulo.db.repositories.system_map import SystemMapRepository
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
-
-class PublishValidationErrorHTTP(HTTPException):
-    """422 raised when a system map revision publish fails validation.
-
-    The exception carries the validation errors and the revision so the exception handler
-    can render them as a 200 PublishResponse. Raising (instead of returning)
-    ensures the audited() dependency records outcome="error".
-    """
-
-    def __init__(self, validation_errors: list[PublishValidationError], revision: Any) -> None:
-        self.validation_errors = validation_errors
-        self.revision = revision
-        super().__init__(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"message": "Publish validation failed", "errors": [e.model_dump() for e in validation_errors]},
-        )
-
-
 _CODE_SYSTEM_MAPS_AUDIT_FAILED = "system_maps.audit_failed"
 _CODE_SYSTEM_MAP_LIST = "system_map.list"
 _CODE_SYSTEM_MAP_CREATE = "system_map.create"
@@ -106,6 +89,13 @@ _CODE_SYSTEM_MAP_RELATIONSHIP_CREATE = "system_map.relationship.create"
 _CODE_SYSTEM_MAP_LOOP_CONFIG_CREATE = "system_map.loop_config.create"
 _CODE_SYSTEM_MAP_BINDING_CREATE = "system_map.binding.create"
 _CODE_SYSTEM_MAP_BINDING_DELETE = "system_map.binding.delete"
+
+# PublishValidationErrorHTTP is defined in schemas/system_maps.py to avoid
+# circular imports (exception_handlers.py imports it, and routes imports
+# exception_handlers indirectly via main.py). The exception uses status_code=422
+# for internal routing clarity, but the registered exception handler converts it
+# to a 200 PublishResponse (wire-contract preservation: clients expect 200 with
+# errors in the body, not a 422 error response).
 
 _MSG_SYSTEM_MAP_NOT_FOUND = "System map not found"
 _MSG_REVISION_NOT_FOUND = "Revision not found"

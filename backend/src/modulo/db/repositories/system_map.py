@@ -326,14 +326,17 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         )
 
         # Publish the new revision
+        now = datetime.now(UTC)
         revision.status = "published"
-        revision.published_at = datetime.now(UTC)
+        revision.published_at = now
+        revision.updated_at = now  # Explicitly set updated_at since onupdate is server-side
         await session.flush()
 
         # Update the map's published_revision_id
         map_obj = await self.get_map_by_id(session, organisation_id=organisation_id, map_id=system_map_id)
         if map_obj:
             map_obj.published_revision_id = revision_id
+            map_obj.updated_at = now
             await session.flush()
 
         return revision

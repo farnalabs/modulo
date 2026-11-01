@@ -13,22 +13,48 @@ mirroring the pattern in test_api_key_audit_rls.py.
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import pytest
 import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.auth.jwt import TenantPrincipal
+from modulo.api.dependencies import get_db_session, get_plan_context
+from modulo.api.main import app
+from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core.audit_coverage import audit_session
+from modulo.core.feature_flags import PlanContext
 from modulo.core.system_map_persistence import SystemMapDiscoveryRepository
 from modulo.db.models.system_map import SystemMap, SystemMapRevision
 from modulo.db.rls import set_rls_org, set_rls_user_context
-from modulo.settings import Settings
+from modulo.settings import Settings, get_settings
 
 pytestmark = pytest.mark.integration
 
 _DISCOVERY_REPO = SystemMapDiscoveryRepository()
+
+
+class _AllFeatures:
+    """Plan-context stub that reports every feature as enabled (enterprise tier)."""
+
+    def feature_enabled(self, name: str) -> bool:
+        return True
+
+    def list_enabled_features(self) -> list[Any]:
+        return []
+
+    def list_all_features(self) -> list[Any]:
+        return []
+
+    def tier(self) -> str:
+        return "enterprise"
+
+    def has_license_key(self) -> bool:
+        return True
 
 
 def _make_settings(db_url: str) -> Settings:
@@ -75,15 +101,16 @@ async def _fetch_audit_event(
         row = result.mappings().first()
     if row is None:
         return None
-    row_dict = dict(row)
+    # row is guaranteed to be RowMapping here due to the None check above
+    row_mapping: dict[str, Any] = dict(row)
     # Extract outcome from payload_json
-    if row_dict.get("payload_json") and isinstance(row_dict["payload_json"], dict):
-        row_dict["outcome"] = row_dict["payload_json"].get("outcome")
-    return row_dict
+    if row_mapping.get("payload_json") and isinstance(row_mapping["payload_json"], dict):
+        row_mapping["outcome"] = row_mapping["payload_json"].get("outcome")
+    return row_mapping
 
 
 @pytest_asyncio.fixture
-async def rls_session(app_engine: AsyncEngine) -> AsyncSession:
+async def rls_session(app_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
     """Session whose connections run as a NOBYPASSRLS role, so RLS applies.
 
     Mirrors production where the app connects as ``modulo_app`` (NOBYPASSRLS).
@@ -148,7 +175,10 @@ async def _setup_draft_with_revision(
             text("SELECT * FROM system_map_revisions WHERE id = :rid"),
             {"rid": str(revision_id)},
         )
-        revision_row = result.mappings().first()
+        revision_row_raw = result.mappings().first()
+        if revision_row_raw is None:
+            raise RuntimeError("Revision not found after creation")
+        revision_row: dict[str, Any] = dict(revision_row_raw)
 
     # Build ORM objects
     draft_obj = SystemMap(
@@ -226,7 +256,10 @@ async def _setup_draft_with_valid_revision(
             text("SELECT * FROM system_map_revisions WHERE id = :rid"),
             {"rid": str(revision_id)},
         )
-        revision_row = result.mappings().first()
+        revision_row_raw = result.mappings().first()
+        if revision_row_raw is None:
+            raise RuntimeError("Revision not found after creation")
+        revision_row: dict[str, Any] = dict(revision_row_raw)
 
     draft_obj = SystemMap(
         id=draft.id,
@@ -254,102 +287,146 @@ async def _setup_draft_with_valid_revision(
     return draft_obj, revision_obj
 
 
-async def _append_audit_event_direct(
+@pytest_asyncio.fixture
+async def integration_client_with_audit(
+    db_url: str,
     app_engine: AsyncEngine,
-    principal: TenantPrincipal,
-    event_type: str,
-    resource_type: str,
-    resource_id: uuid.UUID | None,
-    payload: dict[str, Any],
-) -> None:
-    """Append an audit event directly using the test engine (bypassing audit_session).
-
-    This mirrors what append_audit_event_isolated does but uses the test engine
-    directly so the audit row lands in the test database.
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> AsyncGenerator[AsyncClient, None]:
+    """ASGI client with audit_session overridden to use a fresh RLS session per request,
+    and auth overridden to return the test principal.
     """
-    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from modulo.api.dependencies import _get_engine
 
-    factory = async_sessionmaker(app_engine, expire_on_commit=False, autobegin=False)
-    async with factory() as session, session.begin():
-        from modulo.db.rls import set_rls_org, set_rls_user_context
+    settings = Settings(
+        database_url=db_url,
+        secret_key="a" * 32,
+        fernet_key="a" * 32,
+        modulo_csrf_enabled=False,
+        modulo_auth_rate_limit_enabled=False,
+        redis_url="",
+        modulo_admin_password="",
+        modulo_dev_mode=True,
+    )
 
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        from modulo.core.audit_logger import append_audit_event
+    test_principal = TenantPrincipal(
+        username="integration-user",
+        organisation_id=test_org,
+        account_id=test_user,
+        org_role="admin",
+    )
 
-        await append_audit_event(
-            session,
-            org_id=principal.organisation_id,
-            event_type=event_type,
-            actor_user_id=principal.account_id,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            payload_json=payload,
+    async def override_session() -> AsyncGenerator[AsyncSession, None]:
+        factory = async_sessionmaker(app_engine, expire_on_commit=False, autobegin=False)
+        async with factory() as session:
+            yield session
+
+    async def override_audit_session() -> AsyncGenerator[AsyncSession, None]:
+        # Create a fresh session for each audit write, mirroring the real audit_session
+        factory = async_sessionmaker(app_engine, expire_on_commit=False, autobegin=False)
+        async with factory() as session:
+            yield session
+
+    async def _all_features_ctx() -> PlanContext:
+        return _AllFeatures()
+
+    async def override_auth() -> TenantPrincipal:
+        return test_principal
+
+    async def override_current_user() -> AuthenticatedPrincipal:
+        return AuthenticatedPrincipal(
+            username="integration-user",
+            organisation_id=test_org,
+            account_id=test_user,
+            org_role="admin",
+            is_system_admin=False,
+            via_api_key=False,
+            client_kind="browser",
         )
 
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[_get_engine] = lambda: app_engine
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_plan_context] = _all_features_ctx
+    app.dependency_overrides[audit_session] = override_audit_session
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = override_auth
+    app.dependency_overrides[get_current_user] = override_current_user
 
-async def test_audit_append_error_outcome_works_under_rls(
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as client:
+        yield client
+
+    app.dependency_overrides.clear()
+
+
+async def test_refused_publish_audit_outcome_error(
+    integration_client_with_audit: AsyncClient,
     rls_session: AsyncSession,
     app_engine: AsyncEngine,
     db_engine: AsyncEngine,
+    db_url: str,
     test_org: uuid.UUID,
     test_user: uuid.UUID,
 ) -> None:
-    """Verify the audit append path works under strict RLS for outcome='error'.
+    """Refused publish (invalid revision) records outcome="error" in audit_events.
 
-    This mirrors what append_audit_event_isolated does when the handler raises
-    an exception (refused publish), using the test engine directly.
+    This drives the real publish endpoint via HTTP with a revision that fails
+    validation (cycle), so the handler raises PublishValidationErrorHTTP and the
+    audited() dependency records outcome="error".
     """
-    principal = _make_principal(test_org, test_user)
+    # Set up a draft with an invalid revision (cycle)
+    draft, revision = await _setup_draft_with_revision(rls_session, db_engine, test_org, test_user)
 
-    await _append_audit_event_direct(
-        app_engine,
-        principal,
-        event_type="system_map_revision_published",
-        resource_type="system_map_revision",
-        resource_id=uuid.uuid4(),
-        payload={
-            "http_method": "POST",
-            "path": "/api/v1/system-maps/test/revisions/test/publish",
-            "outcome": "error",
-        },
+    # Call the real publish endpoint via HTTP
+    response = await integration_client_with_audit.post(
+        f"/api/v1/system-maps/{draft.id}/revisions/{revision.id}/publish",
     )
 
-    # Verify the row was actually persisted (read via superuser connection bypassing RLS)
+    # The endpoint returns 200 with validation errors in the body (wire contract)
+    assert response.status_code == 200
+    data = response.json()
+    assert "validation_errors" in data
+    assert len(data["validation_errors"]) > 0
+
+    # Verify the audit row was persisted with outcome="error"
     audit_row = await _fetch_audit_event(db_engine, test_org, "system_map_revision_published")
     assert audit_row is not None, "system_map_revision_published audit row missing for error outcome"
     assert audit_row["outcome"] == "error", f"Expected outcome='error', got '{audit_row['outcome']}'"
     assert audit_row["account_id"] == str(test_user)
 
 
-async def test_audit_append_success_outcome_works_under_rls(
+async def test_successful_publish_audit_outcome_success(
+    integration_client_with_audit: AsyncClient,
     rls_session: AsyncSession,
     app_engine: AsyncEngine,
     db_engine: AsyncEngine,
+    db_url: str,
     test_org: uuid.UUID,
     test_user: uuid.UUID,
 ) -> None:
-    """Verify the audit append path works under strict RLS for outcome='success'.
+    """Successful publish (valid revision) records outcome="success" in audit_events.
 
-    This mirrors what append_audit_event_isolated does when the handler returns
-    normally (successful publish), using the test engine directly.
+    This drives the real publish endpoint via HTTP with a valid revision, so the
+    handler returns normally and the audited() dependency records outcome="success".
     """
-    principal = _make_principal(test_org, test_user)
+    # Set up a draft with a valid revision
+    draft, revision = await _setup_draft_with_valid_revision(rls_session, db_engine, test_org, test_user)
 
-    await _append_audit_event_direct(
-        app_engine,
-        principal,
-        event_type="system_map_revision_published",
-        resource_type="system_map_revision",
-        resource_id=uuid.uuid4(),
-        payload={
-            "http_method": "POST",
-            "path": "/api/v1/system-maps/test/revisions/test/publish",
-            "outcome": "success",
-        },
+    # Call the real publish endpoint via HTTP
+    response = await integration_client_with_audit.post(
+        f"/api/v1/system-maps/{draft.id}/revisions/{revision.id}/publish",
     )
 
-    # Verify the row was actually persisted (read via superuser connection bypassing RLS)
+    # The endpoint returns 200 with the published revision
+    assert response.status_code == 200
+    data = response.json()
+    assert "validation_errors" in data
+    assert data["validation_errors"] == []
+    assert data["revision"]["id"] == str(revision.id)
+    assert data["revision"]["status"] == "published"
+
+    # Verify the audit row was persisted with outcome="success"
     audit_row = await _fetch_audit_event(db_engine, test_org, "system_map_revision_published")
     assert audit_row is not None, "system_map_revision_published audit row missing for success outcome"
     assert audit_row["outcome"] == "success", f"Expected outcome='success', got '{audit_row['outcome']}'"

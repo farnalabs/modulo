@@ -15,7 +15,7 @@ from modulo.api.models.problem import (
     problem_from_http_exception,
     problem_from_validation_error,
 )
-from modulo.api.routes.system_maps import PublishValidationErrorHTTP
+from modulo.api.schemas.system_maps import PublishValidationErrorHTTP
 from modulo.auth.sso import SsoCallbackError
 from modulo.db.capacity import StorageExhaustedError
 from modulo.settings import Settings, get_settings
@@ -195,6 +195,6 @@ def publish_validation_error_handler(_request: Request, exc: PublishValidationEr
         status_code=200,
         content={
             "revision": revision_data,
-            "validation_errors": [e.model_dump() for e in exc.validation_errors],
+            "validation_errors": [e.model_dump(mode="json") for e in exc.validation_errors],
         },
     )
