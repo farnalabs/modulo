@@ -10,6 +10,7 @@ initdb tests (the win32 refusal itself is locked in test_secrets_file_platform.p
 """
 
 import json
+import logging
 import os
 import sys
 import types
@@ -311,3 +312,126 @@ def test_launcher_secrets_dataclass_is_frozen(tmp_path: Path) -> None:
     assert isinstance(secrets, LauncherSecrets)
     with pytest.raises(AttributeError):
         secrets.postgres_password = "mutated"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# POSIX-security-bits seam (FAR-2229): every branch of the mode pin, driven
+# through the seam so the POSIX AND the non-POSIX arms both execute on any host
+# (CI is Linux; a Windows developer host must still cover the POSIX arm).
+# ---------------------------------------------------------------------------
+
+
+def _mode_of_a_0600_create(directory: Path) -> int:
+    """The mode a ``0o600`` exclusive create actually yields on this host.
+
+    POSIX applies the umask (``0o600`` under ordinary umasks); Windows ignores
+    the requested mode entirely. Deriving it means the 0600 pin can be
+    exercised as an equality on both hosts instead of only on POSIX.
+    """
+    probe = directory / "mode-probe"
+    fd = os.open(str(probe), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)
+    return probe.stat().st_mode & 0o777
+
+
+def test_load_existing_skips_the_mode_check_without_posix_security_bits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No security bits: the mode is never inspected or tightened."""
+    path = tmp_path / "secrets.json"
+    winner = load_or_create(path)
+    chmod_calls: list[int] = []
+    monkeypatch.setattr(Path, "chmod", lambda self, mode, *args, **kwargs: chmod_calls.append(mode))
+    monkeypatch.setattr(secrets_file_module, "supports_posix_security_bits", lambda: False)
+
+    assert load_or_create(path) == winner
+    assert not chmod_calls
+
+
+def test_load_existing_leaves_an_owner_only_file_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Security bits present and the mode already private: no chmod, no warning."""
+    path = tmp_path / "secrets.json"
+    winner = load_or_create(path)
+    private_mode = path.stat().st_mode & 0o777
+    chmod_calls: list[int] = []
+    monkeypatch.setattr(Path, "chmod", lambda self, mode, *args, **kwargs: chmod_calls.append(mode))
+    monkeypatch.setattr(secrets_file_module, "supports_posix_security_bits", lambda: True)
+    monkeypatch.setattr(secrets_file_module, "_PRIVATE_MODE", private_mode)
+
+    assert load_or_create(path) == winner
+    assert not chmod_calls
+
+
+def test_load_existing_tightens_and_warns_on_an_over_permissive_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Security bits present and a wider mode: chmod back to the pinned mode."""
+    path = tmp_path / "secrets.json"
+    winner = load_or_create(path)
+    actual_mode = path.stat().st_mode & 0o777
+    tightened_mode = actual_mode ^ 0o001
+    chmod_calls: list[int] = []
+    monkeypatch.setattr(Path, "chmod", lambda self, mode, *args, **kwargs: chmod_calls.append(mode))
+    monkeypatch.setattr(secrets_file_module, "supports_posix_security_bits", lambda: True)
+    monkeypatch.setattr(secrets_file_module, "_PRIVATE_MODE", tightened_mode)
+
+    with caplog.at_level(logging.WARNING, logger=secrets_file_module.__name__):
+        assert load_or_create(path) == winner
+
+    assert chmod_calls == [tightened_mode]
+    assert "launcher.secrets_file_mode_tightened" in caplog.text
+
+
+def test_create_marks_the_file_no_follow_and_pins_the_mode_when_security_bits_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POSIX arm of both create-time guards: O_NOFOLLOW plus the 0600 re-pin."""
+    path = tmp_path / "secrets.json"
+    private_mode = _mode_of_a_0600_create(tmp_path)
+    monkeypatch.setattr(secrets_file_module, "is_windows", lambda: False)
+    monkeypatch.setattr(secrets_file_module, "supports_posix_security_bits", lambda: True)
+    monkeypatch.setattr(secrets_file_module, "_PRIVATE_MODE", private_mode)
+    chmod_calls: list[int] = []
+    monkeypatch.setattr(Path, "chmod", lambda self, mode, *args, **kwargs: chmod_calls.append(mode))
+    open_flags: list[int] = []
+    real_open = os.open
+
+    def _recording_open(target: str, flags: int, mode: int = 0o777) -> int:
+        open_flags.append(flags)
+        return real_open(target, flags, mode)
+
+    monkeypatch.setattr(secrets_file_module.os, "open", _recording_open)
+
+    generated = load_or_create(path)
+
+    assert path.exists()
+    assert json.loads(path.read_text())["postgres_password"] == generated.postgres_password
+    # The POSIX arm adds the platform's O_NOFOLLOW (0 where the flag is absent).
+    assert open_flags == [os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)]
+    assert chmod_calls == [private_mode]
+
+
+def test_create_skips_no_follow_and_the_mode_pin_without_security_bits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-POSIX arm: neither the O_NOFOLLOW bit nor the chmod pin is applied."""
+    path = tmp_path / "secrets.json"
+    monkeypatch.setattr(secrets_file_module, "is_windows", lambda: False)
+    monkeypatch.setattr(secrets_file_module, "supports_posix_security_bits", lambda: False)
+    chmod_calls: list[int] = []
+    monkeypatch.setattr(Path, "chmod", lambda self, mode, *args, **kwargs: chmod_calls.append(mode))
+    open_flags: list[int] = []
+    real_open = os.open
+
+    def _recording_open(target: str, flags: int, mode: int = 0o777) -> int:
+        open_flags.append(flags)
+        return real_open(target, flags, mode)
+
+    monkeypatch.setattr(secrets_file_module.os, "open", _recording_open)
+
+    generated = load_or_create(path)
+
+    assert path.exists()
+    assert json.loads(path.read_text())["postgres_password"] == generated.postgres_password
+    assert open_flags == [os.O_WRONLY | os.O_CREAT | os.O_EXCL]
+    assert not chmod_calls
