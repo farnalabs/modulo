@@ -1,5 +1,7 @@
 ; Modulo Windows Installer — Inno Setup script
-; Native Windows packaging is fail-closed until a real Windows bundle exists.
+; The source directory is the established native bundle layout. The bundle must
+; contain the signed RELEASE_MANIFEST.json + .sig handoff; this installer never
+; consumes a Windows-only runtime manifest.
 ;
 ; Required ISPP defines:
 ;   VERSION_NUM - release version
@@ -9,10 +11,10 @@
 ;   MODULO_URL  - local URL opened by the post-install checkbox
 ;
 ; Bundle contract:
-;   BUNDLE_DIR\modulo.exe
-;   BUNDLE_DIR\modulo-runtime.json
-; The marker is part of the native launcher contract. It must be shipped by
-; the real runtime build and is deliberately required at compile time.
+;   BUNDLE_DIR\launcher
+;   BUNDLE_DIR\RELEASE_MANIFEST.json
+;   adjacent RELEASE_MANIFEST.json.sig
+; The signed release manifest is the single provenance contract.
 ;
 ; Build example:
 ;   iscc /DVERSION_NUM=0.4.0 /DBUNDLE_ARCH=amd64 /DBUNDLE_DIR=C:\bundle modulo.iss
@@ -34,13 +36,41 @@
   #error Unsupported BUNDLE_ARCH: only amd64 Windows installers are supported
 #endif
 
-#ifexist "{#BUNDLE_DIR}\modulo.exe"
+#ifexist "{#BUNDLE_DIR}\launcher"
 #else
-  #error Required native runtime executable is missing: {#BUNDLE_DIR}\modulo.exe
+  #error Required native launcher is missing: {#BUNDLE_DIR}\launcher
 #endif
-#ifexist "{#BUNDLE_DIR}\modulo-runtime.json"
+#ifexist "{#BUNDLE_DIR}\runtime"
 #else
-  #error Required native runtime marker is missing: {#BUNDLE_DIR}\modulo-runtime.json
+  #error Required CPython runtime is missing: {#BUNDLE_DIR}\runtime
+#endif
+#ifexist "{#BUNDLE_DIR}\pg"
+#else
+  #error Required PostgreSQL runtime is missing: {#BUNDLE_DIR}\pg
+#endif
+#ifexist "{#BUNDLE_DIR}\redis"
+#else
+  #error Required Redis runtime is missing: {#BUNDLE_DIR}\redis
+#endif
+#ifexist "{#BUNDLE_DIR}\bin"
+#else
+  #error Required native support binaries are missing: {#BUNDLE_DIR}\bin
+#endif
+#ifexist "{#BUNDLE_DIR}\frontend-dist"
+#else
+  #error Required frontend distribution is missing: {#BUNDLE_DIR}\frontend-dist
+#endif
+#ifexist "{#BUNDLE_DIR}\backend\.venv"
+#else
+  #error Required backend environment is missing: {#BUNDLE_DIR}\backend\.venv
+#endif
+#ifexist "{#BUNDLE_DIR}\RELEASE_MANIFEST.json"
+#else
+  #error Required signed release manifest is missing: {#BUNDLE_DIR}\RELEASE_MANIFEST.json
+#endif
+#ifexist "{#BUNDLE_DIR}\RELEASE_MANIFEST.json.sig"
+#else
+  #error Required release-manifest signature is missing: {#BUNDLE_DIR}\RELEASE_MANIFEST.json.sig
 #endif
 
 [Setup]
@@ -69,7 +99,7 @@ AppId={{7B7A9F3B-69DA-4EA0-9EB8-0D8F2D4B8A6B}}
 LicenseFile={#SourcePath}\..\..\LICENSE
 InfoBeforeFile={#SourcePath}\INSTALLER-INFO.txt
 Uninstallable=yes
-UninstallDisplayIcon={app}\modulo.exe
+UninstallDisplayIcon={app}\launcher
 UninstallDisplayName=Modulo {#VERSION_NUM}
 CloseApplications=yes
 RestartApplications=yes
@@ -81,21 +111,20 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-; The compile-time contract above is the primary guard. These explicit entries
-; keep the installer payload contract visible and prevent optional-source flags
-; from turning a missing runtime into a partial installation.
-Source: "{#BUNDLE_DIR}\modulo.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#BUNDLE_DIR}\modulo-runtime.json"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "modulo.exe,modulo-runtime.json"
+; The compile-time contract above is the primary guard. Copy the established
+; bundle layout and the signed release-manifest handoff without inventing a
+; Windows-only manifest.
+Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"
-Name: "{commondesktop}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Modulo"; Filename: "{app}\launcher"; WorkingDir: "{app}"
+Name: "{commondesktop}\Modulo"; Filename: "{app}\launcher"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-; The service contract is modulo.exe service. Runtime readiness and the local
-; HTTP listener remain the native launcher's responsibility.
-Filename: "sc.exe"; Parameters: "create Modulo binPath= \"{app}\modulo.exe service\" start= auto"; StatusMsg: "Installing Modulo service..."; Flags: runhidden waituntilterminated
+; Runtime readiness and the local HTTP listener remain the native launcher's responsibility.
+; sc.exe receives an independently quoted executable path and start argument:
+; the installed service runs {app}\launcher start, not a separate service binary.
+Filename: "sc.exe"; Parameters: "create Modulo binPath= \"\"{app}\launcher\" start\" start= auto"; StatusMsg: "Installing Modulo service..."; Flags: runhidden waituntilterminated
 Filename: "sc.exe"; Parameters: "start Modulo"; StatusMsg: "Starting Modulo service..."; Flags: runhidden waituntilterminated
 Filename: "{#MODULO_URL}"; Description: "Open Modulo in your browser"; Flags: postinstall shellexec unchecked; Check: ShouldOpenModulo
 

@@ -1,9 +1,7 @@
 name: "Windows: Build Installer (Inno Setup)"
 
-# FAR-679: native Windows packaging is deliberately fail-closed until a real
-# Windows runtime exists. A Linux bundle is never relabeled as Windows. Dry-run
-# records that packaging is unavailable; it does not compile a fake or incomplete
-# installer and does not claim to validate the runtime contract.
+# FAR-2231: build only from provisioned native inputs. No placeholder runtime,
+# launcher, manifest, signature, or installer artifact is ever manufactured.
 
 on:
   workflow_call:
@@ -24,6 +22,7 @@ on:
         description: "Build mode: dry-run, cut, recut, promote"
         type: string
         default: dry-run
+
 concurrency:
   group: windows-installer-${{ github.workflow }}-${{ inputs.version }}
   cancel-in-progress: false
@@ -36,73 +35,70 @@ permissions:
   contents: read
 
 jobs:
-  version-parity:
-    name: Assert bundle versions match
-    runs-on: windows-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref }}
-      - name: Validate shared bundle pins
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path -LiteralPath 'scripts/bundle-versions.env')) {
-            throw 'scripts/bundle-versions.env is missing'
-          }
-          Write-Host 'bundle-versions.env loaded; no native Windows pins are currently available.'
-
   build:
-    name: Validate Windows installer prerequisite
-    needs: version-parity
+    name: Build native Windows bundle and installer
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       VERSION_NUM: ${{ inputs.version }}
       MODE: ${{ inputs.mode }}
+      INPUT_ROOT: ${{ vars.WINDOWS_BUNDLE_INPUT_ROOT }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
-      - name: Install Inno Setup
-        run: |
-          $ErrorActionPreference = 'Stop'
-          choco install innosetup --version=6.2.2 --yes --no-progress
-          $isccDir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6'
-          if (-not (Test-Path -LiteralPath (Join-Path $isccDir 'ISCC.exe'))) {
-            throw "ISCC.exe was not installed under $isccDir"
-          }
-          Add-Content -Path $env:GITHUB_PATH -Value $isccDir
-      - name: Validate launcher helper contract
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & "$env:GITHUB_WORKSPACE/scripts/create-windows-launcher.ps1" -Version $env:VERSION_NUM -OutputPath (Join-Path $env:RUNNER_TEMP 'modulo.exe')
-          if (Test-Path -LiteralPath (Join-Path $env:RUNNER_TEMP 'modulo.exe')) {
-            throw 'launcher helper created a fake executable'
-          }
-      - name: Refuse packaging without native bundle
-        if: ${{ inputs.mode != 'dry-run' }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          throw 'Native Windows packaging is unavailable until the real native bundle is supplied; compile-only packaging is intentionally skipped.'
-      - name: Validate native Windows runtime prerequisite
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Write-Host 'Native Windows runtime/binaries are not yet available.'
-          Write-Host 'The current bundle artifact is Linux-only and must not be relabeled as Windows.'
-          if ($env:MODE -eq 'dry-run') {
-            Write-Host 'Dry-run contract: packaging is intentionally skipped until a real native bundle exists.'
-          } else {
-            throw 'Cannot publish Windows installer: no real Windows-native runtime/binaries exist.'
-          }
       - name: Dry-run summary
         if: ${{ inputs.mode == 'dry-run' }}
         run: |
           @'
           ## Windows installer dry-run
 
-          Native Windows artifacts are not yet available. No placeholder Linux launcher or incomplete installer was created or published.
+          Dry-run performs no build and uploads no artifact. A real run requires provisioned native launcher, Windows CPython, PostgreSQL, Redis, support binaries, frontend distribution, backend environment, and signed release-manifest inputs.
           '@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+      - name: Verify provisioned native inputs
+        if: ${{ inputs.mode != 'dry-run' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:INPUT_ROOT)) { throw 'WINDOWS_BUNDLE_INPUT_ROOT is not provisioned.' }
+          $required = @('launcher', 'runtime', 'pg', 'redis', 'bin', 'frontend-dist', 'backend\.venv', 'RELEASE_MANIFEST.json', 'RELEASE_MANIFEST.json.sig')
+          foreach ($relative in $required) {
+            $path = Join-Path $env:INPUT_ROOT $relative
+            if (-not (Test-Path -LiteralPath $path)) { throw "Missing provisioned Windows bundle input: $path" }
+          }
+      - name: Build native Windows bundle
+        if: ${{ inputs.mode != 'dry-run' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:INPUT_ROOT
+          & "$env:GITHUB_WORKSPACE/scripts/build-windows-bundle.ps1" -Version $env:VERSION_NUM `
+            -LauncherPath (Join-Path $root 'launcher') `
+            -RuntimeDirectory (Join-Path $root 'runtime') `
+            -PostgresDirectory (Join-Path $root 'pg') `
+            -RedisDirectory (Join-Path $root 'redis') `
+            -BinDirectory (Join-Path $root 'bin') `
+            -FrontendDistDirectory (Join-Path $root 'frontend-dist') `
+            -BackendVenvDirectory (Join-Path $root 'backend\.venv') `
+            -ReleaseManifestPath (Join-Path $root 'RELEASE_MANIFEST.json') `
+            -ReleaseManifestSignaturePath (Join-Path $root 'RELEASE_MANIFEST.json.sig')
+      - name: Install Inno Setup and compile final installer
+        if: ${{ inputs.mode != 'dry-run' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --version=6.2.2 --yes --no-progress
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) { throw "ISCC.exe missing: $iscc" }
+          & $iscc '/Qp' "/O$env:GITHUB_WORKSPACE/build/windows" "/Fmodulo-$env:VERSION_NUM-windows-amd64" "/DVERSION_NUM=$env:VERSION_NUM" '/DBUNDLE_ARCH=amd64' "/DBUNDLE_DIR=$env:GITHUB_WORKSPACE/build/windows-bundle" 'deploy/windows/modulo.iss'
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE." }
+          $installer = Join-Path $env:GITHUB_WORKSPACE "build/windows/modulo-$env:VERSION_NUM-windows-amd64.exe"
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "Final installer missing: $installer" }
+      - name: Upload final Windows installer artifact
+        if: ${{ inputs.mode != 'dry-run' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-${{ inputs.version }}
+          path: build/windows/modulo-${{ inputs.version }}-windows-amd64.exe
+          if-no-files-found: error
+          retention-days: 30
 
   sign:
     name: Sign Windows installer (Azure Trusted Signing)
@@ -114,22 +110,8 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Log in to Azure (OIDC)
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Sign with Azure Trusted Signing
-        uses: Azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
-        with:
-          endpoint: https://eus.codesigning.azure.net/
-          signing-account-name: farnasigning
-          certificate-profile-name: farna-public-trust
-          files-folder: ${{ runner.temp }}\\native-installer
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
+      - name: Refuse until signing credentials are provisioned
+        run: throw 'Azure Trusted Signing is not provisioned; refusing to claim a signed Windows installer.'
 
   attest:
     name: Attest Windows installer
@@ -137,15 +119,9 @@ jobs:
     if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' && needs.sign.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
     steps:
-      - name: Refuse incomplete native artifact
-        run: |
-          set -euo pipefail
-          echo "::error::Native Windows artifact publication is disabled until a real Windows build exists."
+      - run: |
+          echo '::error::Windows attestation is blocked until the real signed installer artifact is available.'
           exit 1
 
   publish:
@@ -154,11 +130,7 @@ jobs:
     if: ${{ inputs.mode == 'promote' && needs.build.result == 'success' && needs.attest.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: write
     steps:
-      - name: Refuse incomplete native artifact
-        run: |
-          set -euo pipefail
-          echo "::error::Cannot publish Windows installer: native artifact is unavailable."
+      - run: |
+          echo '::error::Windows publication is blocked until native build, signing, and attestation artifacts exist.'
           exit 1
