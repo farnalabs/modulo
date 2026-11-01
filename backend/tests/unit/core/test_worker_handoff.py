@@ -245,6 +245,7 @@ def _row(**overrides: object) -> SimpleNamespace:
         "started_at": datetime.now(UTC) - timedelta(seconds=10),
         "dispatched_at": datetime.now(UTC) - timedelta(seconds=10),
         "sandbox_dispatch_state": None,
+        "observed_activity": False,
         "retry_policy": {},
         "outputs_absent": True,
         "checkpoints_absent": True,
@@ -281,6 +282,19 @@ def test_gate_requeues_zero_node_run_even_on_non_idempotent_graph() -> None:
 
     decision = _handback_decision(_row(dispatch_phase="claimed"), {"nodes": [{"id": "n1", "idempotent": False}]})
     assert decision.may_requeue is True
+
+
+def test_gate_terminalises_node_started_run_with_observed_sandbox_activity() -> None:
+    """Observed sandbox evidence must not be discarded by a re-claim."""
+    from modulo.core.worker_handoff import _handback_decision
+
+    decision = _handback_decision(
+        _row(observed_activity=True),
+        {"nodes": [{"id": "n1"}]},
+    )
+
+    assert decision.may_requeue is False
+    assert "durable sandbox activity" in decision.reason
 
 
 def test_gate_honours_never_retry_policy_on_node_started_run() -> None:
@@ -575,12 +589,13 @@ async def test_handback_skips_run_not_visible(monkeypatch: pytest.MonkeyPatch) -
     assert result == {"handed_back": 0, "terminalised": 0, "skipped": 1}
 
 
-async def test_handback_terminalises_refused_run(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_handback_terminalises_observed_activity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Observed E2B work gets a durable terminal failure, not a silent re-claim."""
     run_id, org_id = uuid.uuid4(), uuid.uuid4()
     reg = _observed_registry(run_id, org_id)
     engine = _handback_engine()
     monkeypatch.setattr(
-        wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
+        wh, "_load_handback_row", _load_returning(_row(observed_activity=True), {"nodes": [{"id": "n1"}]})
     )
     monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
     fail = AsyncMock(return_value=True)
@@ -714,6 +729,7 @@ async def test_load_handback_row_builds_row_and_graph() -> None:
         "started_at": None,
         "dispatched_at": None,
         "sandbox_dispatch_state": None,
+        "observed_activity": 1,
         "retry_policy": {},
         "graph_json": {"nodes": []},
         "outputs_absent": 0,

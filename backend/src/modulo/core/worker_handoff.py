@@ -91,7 +91,7 @@ from dataclasses import dataclass, replace
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import exists, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
@@ -330,6 +330,21 @@ async def _load_handback_row(
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.pipeline_snapshot import PipelineSnapshot
     from modulo.db.models.run import Run
+    from modulo.db.models.run_node_outputs import RunNodeOutput
+
+    observed_activity = exists(
+        select(1).where(
+            RunNodeOutput.run_id == Run.id,
+            RunNodeOutput.organisation_id == org_id,
+            or_(
+                RunNodeOutput.outputs_json.is_not(None),
+                RunNodeOutput.node_telemetry_json.is_not(None),
+                RunNodeOutput.raw_output_markers.is_not(None),
+                RunNodeOutput.artifacts_json.is_not(None),
+                RunNodeOutput.schema_enforcement_json.is_not(None),
+            ),
+        )
+    ).label("observed_activity")
 
     stmt = (
         select(
@@ -347,6 +362,7 @@ async def _load_handback_row(
             Run.sandbox_dispatch_state,
             Pipeline.retry_policy,
             PipelineSnapshot.graph_json,
+            observed_activity,
             _final_row_absent_expr().label("outputs_absent"),
             _checkpoint_absent_expr().label("checkpoints_absent"),
         )
@@ -367,6 +383,7 @@ async def _load_handback_row(
         dispatched_at=values["dispatched_at"],
         sandbox_dispatch_state=values["sandbox_dispatch_state"],
         retry_policy=values["retry_policy"],
+        observed_activity=bool(values["observed_activity"]),
         outputs_absent=bool(values["outputs_absent"]),
         checkpoints_absent=bool(values["checkpoints_absent"]),
     )
@@ -447,6 +464,18 @@ def _handback_decision(row: Any, graph_json: Any) -> _HandbackDecision:
             may_requeue=False,
             node_start_safe=node_start_safe,
             reason="zero-node retry budget / retry policy excludes a re-dispatch",
+        )
+
+    # A node-started handoff with any durable output, telemetry, marker, or
+    # artifact is proof that the sandbox did valuable work even when the final
+    # node envelope was lost. Re-running would discard observed evidence and may
+    # repeat side effects. Refuse the reset so the fenced terminal write gives
+    # the attempt a durable, inspectable fate instead.
+    if getattr(row, "observed_activity", False):
+        return _HandbackDecision(
+            may_requeue=False,
+            node_start_safe=False,
+            reason="durable sandbox activity was observed; terminalisation is safer than re-execution",
         )
 
     if not graph_idempotent:
