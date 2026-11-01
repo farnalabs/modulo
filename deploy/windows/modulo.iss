@@ -1,5 +1,7 @@
 ; Modulo Windows Installer — Inno Setup script
-; Native Windows packaging is fail-closed until a real Windows bundle exists.
+; The source directory is the established native bundle layout. The bundle must
+; contain the signed RELEASE_MANIFEST.json + .sig handoff; this installer never
+; consumes a Windows-only runtime manifest.
 ;
 ; Required ISPP defines:
 ;   VERSION_NUM - release version
@@ -42,7 +44,7 @@ DisableReadyPage=yes
 DisableFinishedPage=yes
 WizardStyle=modern
 AppId={{7B7A9F3B-69DA-4EA0-9EB8-0D8F2D4B8A6B}}
-UninstallDisplayIcon={app}\modulo.exe
+UninstallDisplayIcon={app}\launcher
 UninstallDisplayName=Modulo {#VERSION_NUM}
 CloseApplications=yes
 RestartApplications=yes
@@ -60,8 +62,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Icons]
-Name: "{group}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"
-Name: "{commondesktop}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Modulo"; Filename: "{app}\launcher"; WorkingDir: "{app}"
+Name: "{commondesktop}\Modulo"; Filename: "{app}\launcher"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\modulo.exe"; Description: "Launch Modulo"; Flags: nowait postinstall shellexec skipifdoesntexist
