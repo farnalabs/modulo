@@ -225,8 +225,6 @@ def default_unit_path() -> Path:
 def render_launchd_plist(executable: Path, *, data_dir: Path | None = None) -> str:
     """Render the shared macOS LaunchAgent contract used by CLI and installer."""
     arguments = [str(executable), "start"]
-    if data_dir is not None:
-        arguments.extend(["--data-dir", str(data_dir)])
     payload = {
         "Label": LAUNCHD_LABEL,
         "ProgramArguments": arguments,
@@ -234,6 +232,18 @@ def render_launchd_plist(executable: Path, *, data_dir: Path | None = None) -> s
         "KeepAlive": {"SuccessfulExit": False},
         "ProcessType": "Interactive",
     }
+    if data_dir is not None:
+        arguments.extend(["--data-dir", str(data_dir)])
+        # launchd otherwise sends stdout/stderr to /dev/null.  Keep the
+        # launcher in its foreground service mode, but make pre-child-spawn
+        # failures observable and give relative-path consumers a stable cwd.
+        payload.update(
+            {
+                "WorkingDirectory": str(data_dir),
+                "StandardOutPath": str(data_dir / "launcher.log"),
+                "StandardErrorPath": str(data_dir / "launcher.log"),
+            }
+        )
     return plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=False).decode("utf-8")
 
 
