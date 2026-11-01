@@ -1,4 +1,4 @@
-"""Runtime guards on the S107 keyword-option groups (agent / env profile / library).
+"""Runtime guards on the S107 keyword-option groups (agent / env profile / library / model backend).
 
 Each grouped function takes ``**options: Unpack[TypedDict]``: mypy validates
 keyword names and types at the call site, while the body keeps a runtime
@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.agent import create_agent
 from modulo.db.crud.environment_profile import create_environment_profile
 from modulo.db.crud.library_primitive import create_library_primitive
+from modulo.db.crud.model_backend import create_model_backend
 
 
 def _library_primitive_kwargs(**overrides: Any) -> dict[str, Any]:
@@ -108,6 +109,21 @@ class TestGroupedCrudUnknownOptions:
         }
         with pytest.raises(TypeError, match="unexpected create_agent options"):
             await create_agent(**kwargs)
+
+    async def test_create_model_backend_rejects_unknown_option(self) -> None:
+        kwargs: dict[str, Any] = {
+            "session": None,
+            "org_id": uuid.uuid4(),
+            "name": "backend",
+            "display_name": "Backend",
+            "provider": "openai",
+            "model_id": "gpt-4o",
+            "credentials_ciphertext": b"enc",
+            "account_id": uuid.uuid4(),
+            "unexpected_option": True,
+        }
+        with pytest.raises(TypeError, match="unexpected create_model_backend options"):
+            await create_model_backend(**kwargs)
 
     async def test_create_environment_profile_rejects_unknown_option(self) -> None:
         kwargs: dict[str, Any] = {
