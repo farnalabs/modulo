@@ -443,6 +443,7 @@ def test_linux_start_epoch_is_none_when_uptime_is_unreadable(
     assert backend.start_epoch(1234) is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="os.sysconf is unavailable on Windows")
 def test_linux_start_epoch_is_none_when_clock_tick_rate_is_not_positive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
