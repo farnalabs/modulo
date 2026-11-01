@@ -1897,7 +1897,19 @@ export default {
       "discover_my_system": "Discover My System",
       "system_maps_coming_soon": "System discovery is not available in this build yet. No discovery request was made and nothing has been published.",
       "system_maps_review_title": "System Maps draft review",
-      "system_maps_no_publish_note": "Draft review and publishing will appear here only after the discovery API is available."
+      "system_maps_no_publish_note": "Draft review and publishing will appear here only after the discovery API is available.",
+      "system_maps_loading": "Loading observed system metrics...",
+      "system_maps_error": "Observed system metrics are unavailable.",
+      "system_maps_empty": "No published system map yet. Publish a map to see observed metrics.",
+      "system_maps_window": "Observed over the last {days} days",
+      "system_maps_throughput": "Throughput/min",
+      "system_maps_failure_rate": "Failure rate",
+      "system_maps_queue": "Queue",
+      "system_maps_telemetry": "Telemetry",
+      "system_maps_health_healthy": "Healthy",
+      "system_maps_health_degraded": "Degraded",
+      "system_maps_health_unhealthy": "Unhealthy",
+      "system_maps_health_unknown": "Unknown"
     },
     "ComplianceEvidenceIndex": {
       "title": "Compliance Evidence Index",
