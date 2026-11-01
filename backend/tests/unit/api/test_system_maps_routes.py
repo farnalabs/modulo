@@ -1148,6 +1148,7 @@ def test_get_overview_returns_aggregate(client: tuple[TestClient, _Harness]) -> 
             }
         ),
     )
+    harness.stub("get_overview_pipeline_metrics", AsyncMock(return_value={}))
 
     resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
 
@@ -1196,6 +1197,7 @@ def test_overview_detects_missing_loop_config_bottleneck(client: tuple[TestClien
             }
         ),
     )
+    harness.stub("get_overview_pipeline_metrics", AsyncMock(return_value={}))
 
     resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
 
@@ -1548,6 +1550,9 @@ def test_system_map_overview_response_includes_bottlenecks() -> None:
         revision_id=_REV_ID,
         revision_number=1,
         generated_at=datetime.now(UTC),
+        window_days=7,
+        window_start=datetime.now(UTC),
+        window_end=datetime.now(UTC),
         nodes=[
             SystemMapOverviewNodeHealth(
                 node_key="node-1",

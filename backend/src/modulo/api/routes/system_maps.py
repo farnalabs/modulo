@@ -9,7 +9,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -1062,7 +1062,7 @@ async def get_system_map_overview_endpoint(
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_OVERVIEW),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapOverviewResponse:
-    """Aggregate read model with node health, loop configs, and bottleneck detection."""
+    """Aggregate published-map metrics over the trailing seven UTC days."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1094,26 +1094,46 @@ async def get_system_map_overview_endpoint(
 
             nodes = graph["nodes"]
             loop_configs = graph["loop_configs"]
+            window_end = datetime.now(UTC)
+            window_start = window_end - timedelta(days=7)
+            pipeline_ids = {node.pipeline_id for node in nodes if node.pipeline_id is not None}
+            metrics = await repository.get_overview_pipeline_metrics(
+                session,
+                organisation_id=principal.organisation_id,
+                pipeline_ids=pipeline_ids,
+                window_start=window_start,
+                window_end=window_end,
+            )
 
-            # Build node health from runs data (simplified - would query runs in production)
             node_health: list[SystemMapOverviewNodeHealth] = []
             for node in nodes:
-                # In a real implementation, this would query run data for the node's pipeline
-                health = SystemMapOverviewNodeHealth(
-                    node_key=node.node_key,
-                    node_type=node.node_type,
-                    display_name=node.display_name,
-                    health="unknown",
-                    queue_depth=None,
-                    throughput_per_min=None,
-                    capacity_pressure=None,
-                    failure_rate=None,
-                    telemetry_coverage=None,
-                    last_run_id=None,
-                    last_run_status=None,
-                    last_run_completed_at=None,
+                item = metrics.get(node.pipeline_id, {}) if node.pipeline_id else {}
+                run_count = item.get("run_count", 0)
+                failure_rate = item.get("failure_rate")
+                if run_count == 0:
+                    health = "unknown"
+                elif failure_rate is not None and failure_rate >= 0.5:
+                    health = "unhealthy"
+                elif failure_rate is not None and failure_rate > 0:
+                    health = "degraded"
+                else:
+                    health = "healthy"
+                node_health.append(
+                    SystemMapOverviewNodeHealth(
+                        node_key=node.node_key,
+                        node_type=node.node_type,
+                        display_name=node.display_name,
+                        health=health,
+                        queue_depth=item.get("queue_depth"),
+                        throughput_per_min=item.get("throughput_per_min"),
+                        capacity_pressure=item.get("capacity_pressure"),
+                        failure_rate=failure_rate,
+                        telemetry_coverage=item.get("telemetry_coverage"),
+                        last_run_id=item.get("last_run_id"),
+                        last_run_status=item.get("last_run_status"),
+                        last_run_completed_at=item.get("last_run_completed_at"),
+                    )
                 )
-                node_health.append(health)
 
             # Build loop config overview
             loop_config_overview: list[SystemMapOverviewLoopConfig] = []
@@ -1158,7 +1178,10 @@ async def get_system_map_overview_endpoint(
                 system_map_id=map_id,
                 revision_id=published_revision.id,
                 revision_number=published_revision.revision_number,
-                generated_at=datetime.now(UTC),
+                generated_at=window_end,
+                window_days=7,
+                window_start=window_start,
+                window_end=window_end,
                 nodes=node_health,
                 loop_configs=loop_config_overview,
                 bottlenecks=bottlenecks,

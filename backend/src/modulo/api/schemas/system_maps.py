@@ -303,12 +303,20 @@ class SystemMapOverviewBottleneck(BaseModel):
 
 
 class SystemMapOverviewResponse(BaseModel):
-    """Aggregate read model for a published system map."""
+    """Aggregate read model for a published system map.
+
+    Metrics cover the half-open UTC interval ``[window_start, window_end)``.
+    ``window_end`` is the generation instant and facts without an observed
+    timestamp remain null rather than being inferred.
+    """
 
     system_map_id: uuid.UUID
     revision_id: uuid.UUID
     revision_number: int
     generated_at: datetime
+    window_days: int
+    window_start: datetime
+    window_end: datetime
     nodes: list[SystemMapOverviewNodeHealth]
     loop_configs: list[SystemMapOverviewLoopConfig]
     bottlenecks: list[SystemMapOverviewBottleneck]
