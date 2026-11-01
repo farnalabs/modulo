@@ -460,7 +460,8 @@ def test_graph_node_validator_matrix() -> None:
         assert fragment in str(excinfo.value)
 
     expect_error({**base, "node_type": "manual", "agent_id": str(uuid.uuid4())}, "cannot reference an agent")
-    expect_error({**base, "node_type": "manual"}, "require an output schema")
+    # FAR-2283: the output-schema requirement lives in the stored-graph-aware write guard, not the model.
+    expect_error({**base, "node_type": "manual"}, "require a label")
     expect_error(
         {**base, "node_type": "manual", "output_schema_id": str(uuid.uuid4())},
         "require a label",
