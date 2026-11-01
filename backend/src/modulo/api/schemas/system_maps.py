@@ -285,9 +285,9 @@ class SystemMapOverviewLoopConfig(BaseModel):
     outcome_metric: str
     last_admission_at: datetime | None = None
     last_admission_status: str | None = None
-    cooldown_active: bool = False
+    cooldown_active: bool | None = None
     cooldown_until: datetime | None = None
-    budget_used_usd: Decimal = Decimal(0)
+    budget_used_usd: Decimal | None = None
     budget_period_start: datetime | None = None
 
 

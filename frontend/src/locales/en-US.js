@@ -1904,7 +1904,11 @@ export default {
       "system_maps_throughput": "Throughput/min",
       "system_maps_failure_rate": "Failure rate",
       "system_maps_queue": "Queue",
-      "system_maps_telemetry": "Telemetry"
+      "system_maps_telemetry": "Telemetry",
+      "system_maps_health_healthy": "Healthy",
+      "system_maps_health_degraded": "Degraded",
+      "system_maps_health_unhealthy": "Unhealthy",
+      "system_maps_health_unknown": "Unknown"
     },
     "ComplianceEvidenceIndex": {
       "title": "Compliance Evidence Index",

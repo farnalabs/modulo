@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval import Eval
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import Run
+from modulo.db.models.run import SUCCESS_STATUSES, Run
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.system_map import (
     SystemMap,
@@ -1449,12 +1449,14 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         """
         if not pipeline_ids:
             return {}
+        not_benign = RunDailyFact.benign.is_(None) | RunDailyFact.benign.is_(False)
+        failure_status = RunDailyFact.status.not_in(SUCCESS_STATUSES)
         fact_stmt = (
             select(
                 RunDailyFact.pipeline_id,
                 func.count().label("run_count"),
-                func.sum(case((RunDailyFact.status.in_(("complete",)), 1), else_=0)).label("complete_count"),
-                func.sum(case((RunDailyFact.status.not_in(("complete",)), 1), else_=0)).label("failure_count"),
+                func.sum(case((not_benign, 1), else_=0)).label("countable_count"),
+                func.sum(case((failure_status & not_benign, 1), else_=0)).label("failure_count"),
                 func.sum(case((RunDailyFact.telemetry_bytes.is_not(None), 1), else_=0)).label("telemetry_count"),
                 func.max(RunDailyFact.completed_at).label("last_completed_at"),
             )
@@ -1490,11 +1492,15 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             telemetry_count = int(row.telemetry_count or 0)
             metrics[row.pipeline_id] = {
                 "run_count": count,
-                "failure_rate": (int(row.failure_count or 0) / count) if count else None,
+                "failure_rate": (
+                    int(row.failure_count or 0) / int(row.countable_count or 0)
+                    if int(row.countable_count or 0)
+                    else None
+                ),
                 "telemetry_coverage": (telemetry_count / count) if count else None,
                 "throughput_per_min": count / max((window_end - window_start).total_seconds() / 60, 1),
                 "last_run_id": None,
-                "last_run_status": "observed" if row.run_count else None,
+                "last_run_status": None,
                 "last_run_completed_at": row.last_completed_at,
             }
         for row in queue_rows:
@@ -1504,6 +1510,73 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             limit = capacity.get(row.pipeline_id)
             item["capacity_pressure"] = (depth / limit) if limit else None
         return metrics
+
+    async def get_overview_loop_metrics(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        loop_config_ids: set[uuid.UUID],
+        window_start: datetime,
+        window_end: datetime,
+    ) -> dict[uuid.UUID, dict[str, Any]]:
+        """Return only observed admission and reservation facts for each loop."""
+        if not loop_config_ids:
+            return {}
+        admission_stmt = (
+            select(
+                SystemMapLoopAdmissionAttempt.loop_config_id,
+                SystemMapLoopAdmissionAttempt.created_at,
+                SystemMapLoopAdmissionAttempt.status,
+            )
+            .where(
+                SystemMapLoopAdmissionAttempt.organisation_id == organisation_id,
+                SystemMapLoopAdmissionAttempt.loop_config_id.in_(loop_config_ids),
+                SystemMapLoopAdmissionAttempt.created_at >= window_start,
+                SystemMapLoopAdmissionAttempt.created_at < window_end,
+                SystemMapLoopAdmissionAttempt.deleted_at.is_(None),
+            )
+            .order_by(SystemMapLoopAdmissionAttempt.created_at.desc())
+        )
+        admission_rows = (await session.execute(admission_stmt)).all()
+        reservation_stmt = select(
+            SystemMapLoopReservation.loop_config_id,
+            SystemMapLoopReservation.reserved_at,
+            SystemMapLoopReservation.cooldown_until,
+            SystemMapLoopReservation.status,
+            SystemMapLoopReservation.run_id,
+        ).where(
+            SystemMapLoopReservation.organisation_id == organisation_id,
+            SystemMapLoopReservation.loop_config_id.in_(loop_config_ids),
+            SystemMapLoopReservation.reserved_at >= window_start,
+            SystemMapLoopReservation.reserved_at < window_end,
+            SystemMapLoopReservation.deleted_at.is_(None),
+        )
+        reservation_rows: Sequence[Any] = (await session.execute(reservation_stmt)).all()
+        run_ids = {row.run_id for row in reservation_rows}
+        cost_by_run: dict[uuid.UUID, Decimal] = {}
+        if run_ids:
+            cost_stmt = (
+                select(RunDailyFact.run_id, func.sum(RunDailyFact.total_cost_usd))
+                .where(
+                    RunDailyFact.organisation_id == organisation_id,
+                    RunDailyFact.run_id.in_(run_ids),
+                )
+                .group_by(RunDailyFact.run_id)
+            )
+            cost_by_run = {row[0]: Decimal(row[1] or 0) for row in (await session.execute(cost_stmt)).all()}
+        observed: dict[uuid.UUID, dict[str, Any]] = {}
+        for row in admission_rows:
+            observed.setdefault(row.loop_config_id, {}).setdefault("last_admission_at", row.created_at)
+            observed[row.loop_config_id].setdefault("last_admission_status", row.status)
+        for row in reservation_rows:
+            item = observed.setdefault(row.loop_config_id, {})
+            item["budget_used_usd"] = item.get("budget_used_usd", Decimal(0)) + cost_by_run.get(row.run_id, Decimal(0))
+            item.setdefault("budget_period_start", window_start)
+            if row.status == "active" and row.cooldown_until > window_end:
+                item["cooldown_active"] = True
+                item["cooldown_until"] = row.cooldown_until
+        return observed
 
     async def get_full_revision_graph(
         self,

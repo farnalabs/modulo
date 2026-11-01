@@ -22513,18 +22513,12 @@ export interface components {
             last_admission_at?: string | null;
             /** Last Admission Status */
             last_admission_status?: string | null;
-            /**
-             * Cooldown Active
-             * @default false
-             */
-            cooldown_active: boolean;
+            /** Cooldown Active */
+            cooldown_active?: boolean | null;
             /** Cooldown Until */
             cooldown_until?: string | null;
-            /**
-             * Budget Used Usd
-             * @default 0
-             */
-            budget_used_usd: string;
+            /** Budget Used Usd */
+            budget_used_usd?: string | null;
             /** Budget Period Start */
             budget_period_start?: string | null;
         };
