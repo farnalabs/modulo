@@ -23,6 +23,9 @@
     <div v-else-if="store.overviewError" class="text-sm text-destructive" data-testid="system-map-overview-error" aria-live="assertive">
       {{ $t('views.DashboardView.system_maps_error') }}
     </div>
+    <div v-else-if="store.overviewEmpty" class="text-sm text-muted-foreground" data-testid="system-map-overview-empty">
+      {{ $t('views.DashboardView.system_maps_empty') }}
+    </div>
     <div v-else-if="store.overview" class="space-y-3" data-testid="system-map-overview-metrics">
       <p class="text-xs text-muted-foreground">
         {{ $t('views.DashboardView.system_maps_window', { days: store.overview.window_days }) }}

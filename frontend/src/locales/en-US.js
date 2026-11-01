@@ -1900,6 +1900,7 @@ export default {
       "system_maps_no_publish_note": "Draft review and publishing will appear here only after the discovery API is available.",
       "system_maps_loading": "Loading observed system metrics...",
       "system_maps_error": "Observed system metrics are unavailable.",
+      "system_maps_empty": "No published system map yet. Publish a map to see observed metrics.",
       "system_maps_window": "Observed over the last {days} days",
       "system_maps_throughput": "Throughput/min",
       "system_maps_failure_rate": "Failure rate",
