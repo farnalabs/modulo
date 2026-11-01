@@ -9,17 +9,49 @@ import sys
 import types
 import warnings
 from collections.abc import Awaitable
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 
 def test_known_fixture_leak_is_reclaimed_by_the_concrete_fix() -> None:
-    """The shared fixture path fixes its known sync-method leak at the source."""
-    mock = AsyncMock()
-    mock.add = MagicMock()
-    mock.add("row")
-    assert mock.add.call_count == 1
-    del mock
-    gc.collect()
+    """The shared BDD session harness prevents its known sync-method leak."""
+    old_shape = subprocess.run(
+        [
+            sys.executable,
+            "-W",
+            "error::RuntimeWarning",
+            "-c",
+            (
+                "import gc; from unittest.mock import AsyncMock; "
+                "session = AsyncMock(); session.add('row'); del session; gc.collect()"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert "RuntimeWarning" in old_shape.stderr
+    assert "never awaited" in old_shape.stderr
+
+    concrete_fix = subprocess.run(
+        [
+            sys.executable,
+            "-W",
+            "error::RuntimeWarning",
+            "-c",
+            (
+                "import gc; from tests.bdd.conftest import make_mock_session; "
+                "session = make_mock_session(); session.add('row'); del session; gc.collect()"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert concrete_fix.returncode == 0
+    assert "RuntimeWarning" not in concrete_fix.stderr
+    assert "never awaited" not in concrete_fix.stderr
 
 
 def test_unmarked_asyncmock_leak_remains_observable_under_warning_as_error() -> None:
