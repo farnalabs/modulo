@@ -498,6 +498,57 @@ def test_update_api_key_admin_on_org_scoped_key_is_422(client: TestClient) -> No
     assert "admin" in resp.json()["detail"]
 
 
+def test_update_api_key_admin_with_team_is_422(client: TestClient) -> None:
+    """FAR-2281 M2: ``admin`` + ``team_id`` on a user-scoped key is a client
+    error (422), never the unhandled ``ApiKeyInvalidError`` 500 it used to be.
+    The core refusal is pinned in ``test_api_key_scope.py``; this proves the
+    route maps it to the 422 contract."""
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    with (
+        patch(
+            "modulo.api.routes.api_keys.update_api_key",
+            side_effect=ApiKeyScopeError("team-scoped API keys cannot have admin role"),
+        ),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
+    ):
+        resp = client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "k", "role": "admin", "team_id": str(_TEAM_ID)},
+        )
+    assert resp.status_code == 422
+    assert "team-scoped" in resp.json()["detail"]
+
+
+def test_create_api_key_admin_with_team_is_422(client: TestClient) -> None:
+    """FAR-2281 M2: minting a user-scoped admin key scoped to a team is a
+    client error (422), never the unhandled ``ApiKeyInvalidError`` 500.
+
+    Drives the REAL ``auth.api_key.create_api_key`` through the route (only
+    the session seams / caps are stubbed), so the shared team-aware predicate
+    is what refuses it.
+    """
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    with (
+        patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(True)),
+        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=False)),
+        patch("modulo.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()),
+        patch("modulo.api.routes.api_keys._enforce_mint_cap", new=AsyncMock()),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
+    ):
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": "k", "role": "admin", "scope": "user", "team_id": str(_TEAM_ID)},
+        )
+    assert resp.status_code == 422
+    assert "team-scoped" in resp.json()["detail"]
+
+
 def test_update_api_key_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.api_keys.update_api_key", return_value=None),

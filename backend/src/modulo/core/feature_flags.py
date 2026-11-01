@@ -253,8 +253,10 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description=(
             "Allow a verified human-linked credential to claim, approve or reject "
             "human_only HITL gates over MCP based on persona (ADR 063 step 1, "
-            "FAR-2281). When disabled, every MCP caller is denied on human_only "
-            "gates. deliver_manual remains browser-only."
+            "FAR-2281). Eligible credentials are consent-derived OAuth tokens "
+            "and user-scoped human-linked API keys. When disabled, every MCP "
+            "caller is denied on human_only gates. deliver_manual remains "
+            "browser-only."
         ),
         tier="community",
     ),

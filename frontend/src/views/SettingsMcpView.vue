@@ -593,10 +593,13 @@ const createKeyNameTouched = ref(false)
 // user-scoped key acts as its creator and may carry admin.
 const createKeyScope = ref<'org' | 'user'>('org')
 const createKeyRole = ref('operator')
-const createKeyScopeOptions = computed(() => [
-  { value: 'org', label: t('views.SettingsMcpView.scope_org_label') },
-  { value: 'user', label: t('views.SettingsMcpView.scope_user_label') },
-])
+const createKeyScopeOptions = computed(() => {
+  const options = [{ value: 'org', label: t('views.SettingsMcpView.scope_org_label') }]
+  if (planStore.featureEnabled('user_scoped_mcp_keys')) {
+    options.push({ value: 'user', label: t('views.SettingsMcpView.scope_user_label') })
+  }
+  return options
+})
 const createKeyRoleOptions = computed(() => {
   const options = [
     { value: 'operator', label: t('views.SettingsMcpView.operator') },
@@ -612,6 +615,11 @@ const createKeyRoleOptions = computed(() => {
 watch(createKeyScope, (scope) => {
   if (scope !== 'user' && createKeyRole.value === 'admin') {
     createKeyRole.value = 'operator'
+  }
+})
+watch(() => planStore.featureEnabled('user_scoped_mcp_keys'), (enabled) => {
+  if (!enabled && createKeyScope.value === 'user') {
+    createKeyScope.value = 'org'
   }
 })
 const creatingKey = ref(false)

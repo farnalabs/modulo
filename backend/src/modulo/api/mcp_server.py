@@ -98,6 +98,7 @@ from modulo.auth.api_key import (
     KEY_SCOPE_ORG,
     ApiKeyGrantsUnavailableError,
     ApiKeyInvalidError,
+    ApiKeyScopeError,
     ApiKeyTtlError,
     api_key_grants_enabled,
     api_key_role_violation,
@@ -1707,8 +1708,10 @@ async def _authenticate_api_key(
         _ctx_user_id.set(key.account_id)
         _ctx_auth_token.set(token)
         _ctx_auth_type.set("api_key")
-        # ADR 063 step 1: an API key carries no signed token family — fail
-        # closed for human-linkage (linkage is always "none" for an mk_ key).
+        # ADR 063 step 1: an API key carries no signed token family. The family
+        # is the observed OAuth half of human-linkage, so it stays None (fail
+        # closed); a user-scoped key can still be human-linked through its
+        # server-derived key_scope + live human owner (FAR-2281).
         _ctx_token_family.set(None)
         # FAR-620: the credential's caller scope drives the tool-scope
         # caller-scope leg. The isinstance guard keeps test doubles (MagicMock
@@ -6809,9 +6812,10 @@ def _hitl_human_only_denial_payload(
       and the signed token-family claim, both ``None`` when the credential
       carries no such value);
     * ``principal_kind`` — **derived** from ``Account.kind`` + live membership
-      (``None`` when not evaluated because the credential is not an OAuth
-      candidate — the only class that can be human-linked);
-    * ``linkage`` — **derived** step-1 conditions (``none``/``oauth_consent``);
+      (``None`` when the credential is not a human-linkable class, i.e. neither
+      consent-derived OAuth nor a user-scoped ``mk_`` key);
+    * ``linkage`` — **derived** step-1 conditions
+      (``none``/``oauth_consent``/``user_scoped_key``);
     * ``verdict`` — **derived** from ``human_only_denial``.
 
     The pre-ADR-063 payload named its auth-type field ``principal_kind``
@@ -6895,14 +6899,13 @@ async def _check_human_only_gate(
 ) -> dict[str, Any] | None:
     """Return an error dict when the gate is human_only, else ``None``.
 
-    Called for the ``claim``, ``approve`` and ``deliver_manual`` actions
-    (FAR-609: claim is human_only too). ``reject`` is not mechanically
-    intercepted but it is NOT an agent escape hatch: reject requires a
-    claim_token, and the claim action is denied for MCP callers on a
-    human_only (now the default) gate, so an agent can neither claim, decide,
-    NOR reject such a gate — only a principal already holding a claim (e.g.
-    claimed before the policy change) can reject. Agent-only runs on default
-    gates require browser-human intervention (intended policy).
+    Called for the ``claim``, ``approve``, ``reject`` and ``deliver_manual``
+    actions (FAR-609: claim is human_only too). ``reject`` still requires a
+    claim_token, and an unlinked MCP caller can no longer claim a default
+    human_only gate, so an unlinked agent can neither claim, decide nor reject
+    one — only a principal already holding a claim (e.g. claimed before the
+    policy change) can reject. Agent-only runs on default gates require
+    browser-human intervention (intended policy).
 
     FAR-610: the gate's config is resolved from the RUN's snapshot graph
     (falling back to the live pipeline edges, then the live HITL-node config)
@@ -6921,15 +6924,17 @@ async def _check_human_only_gate(
     over the verified credential — no longer a hard-coded ``True``. The
     ``mcp_human_linked_hitl_authority`` flag is default-OFF and must be explicitly
     enabled by an organisation admin. When enabled, an eligible consent-derived
-    OAuth credential belonging to a live human principal, or a verified
-    user-scoped human-linked API key whose grant set covers the action, is
-    human-linked and may decide the gate. Org-, team-, service- and run-scoped
-    API keys, non-OAuth JWTs (including a browser-class password JWT, FAR-634),
-    blacklisted families, inactive accounts or memberships, missing scopes, and
-    every verification failure resolve to deny. Normal possession requirements
-    still apply: claim, approve, reject and deliver-manual require the applicable
-    claim token and gate rules; ``deliver_manual`` stays browser-only in step 1
-    (ADR 035). Every denial emits a warning log + the
+    OAuth credential belonging to a live human principal (with the action's
+    consented grant), or a verified user-scoped human-linked API key (whose live
+    role supplies its authority), is human-linked and may claim, approve or
+    reject the gate. ``deliver_manual`` is excluded even then: it injects the
+    run's output directly (ADR 035) and stays browser-only over MCP. Org-,
+    team-, service- and run-scoped API keys, non-OAuth JWTs (including a
+    browser-class password JWT, FAR-634), blacklisted families, inactive
+    accounts or memberships, missing scopes, and every verification failure
+    resolve to deny. Normal possession requirements still apply: claim, approve,
+    reject and deliver-manual require the applicable claim token and gate rules.
+    Every denial emits a warning log + the
     ``hitl.human_only_denied`` audit event (FAR-634) before the error dict is
     returned.
     """
@@ -6972,13 +6977,16 @@ async def _check_human_only_gate(
         org_id=org_id,
         flag_name="mcp_human_linked_hitl_authority",
     )
-    # A verified human-linked credential may act on all four HITL actions when
-    # the org explicitly enables persona authority. Possession remains out of
+    # A verified human-linked credential may claim, approve or reject when the
+    # org explicitly enables persona authority. ``deliver_manual`` is excluded:
+    # it injects the run's output directly (ADR 035) and stays browser-only
+    # over MCP even for a human-linked credential. Possession remains out of
     # scope; the flag controls only this persona-based authority.
-    allow_via_linkage = human_linked_authority and linkage.linkage in {
-        LINKAGE_OAUTH_CONSENT,
-        LINKAGE_USER_SCOPED_KEY,
-    }
+    allow_via_linkage = (
+        human_linked_authority
+        and linkage.linkage in {LINKAGE_OAUTH_CONSENT, LINKAGE_USER_SCOPED_KEY}
+        and action != "deliver_manual"
+    )
     non_browser_credential = not allow_via_linkage
     verdict = human_only_denial(config, non_browser_credential=non_browser_credential, gate_fired=gate_fired)
     if verdict is not None:
@@ -7349,13 +7357,12 @@ async def _review_hitl_impl(
         if action in ("claim", "approve", "reject", "deliver_manual"):
             # FAR-610: deliver_manual is a decision exactly like approve — a
             # human_only gate must not be decided by an API-key/MCP client.
-            # FAR-609: claim is human_only too — non-browser principals can
-            # neither claim OR decide a human_only gate. reject is not
-            # intercepted, but it is not an agent escape hatch either: reject
-            # requires a claim_token and claim is denied for non-browser
-            # principals on default-human_only gates, so only a principal
-            # already holding a claim can reject; agent-only runs on default
-            # gates require browser-human intervention (intended policy).
+            # FAR-609: claim and reject are human_only too — an unlinked
+            # non-browser principal can neither claim, decide NOR reject a
+            # human_only gate. reject also requires a claim_token, and claim is
+            # denied on default-human_only gates, so only a principal already
+            # holding a claim can reject; agent-only runs on default gates
+            # require browser-human intervention (intended policy).
             human_only_err = await _check_human_only_gate(s, org_id, run, review_id, action)
             if human_only_err:
                 return human_only_err
@@ -7386,13 +7393,16 @@ async def _review_hitl_impl(
         "Step 1: call with action='claim' to get a claim_token. "
         "Step 2: call with action='approve', 'reject', or 'deliver_manual' + your claim_token. "
         "'deliver_manual' requires 'output' (a dict) to supply the output directly. "
-        "human_only gates return 403 on claim, approve and deliver_manual "
-        "(FAR-609: claim is human_only too) — only a browser-authenticated "
-        "human can claim or decide them. reject is NOT an agent escape hatch: "
-        "it requires a claim_token, and claim is denied on default-"
-        "human_only gates, so only a principal already holding a claim can "
-        "reject; agent-only runs on default gates require browser-human "
-        "intervention (intended policy)."
+        "human_only gates (the default) deny claim, approve, reject and "
+        "deliver_manual to every MCP caller unless the organisation enables the "
+        "default-OFF mcp_human_linked_hitl_authority flag; when enabled, a "
+        "consent-derived human-linked OAuth credential or a verified user-scoped "
+        "human-linked API key may claim, approve or reject such a gate (reject "
+        "IS intercepted). deliver_manual stays browser-only in every case. An "
+        "unlinked agent cannot claim, decide or reject a human_only gate: reject "
+        "requires a claim_token, and claim is denied, so only a principal "
+        "already holding a claim can reject; agent-only runs on default gates "
+        "require browser-human intervention (intended policy)."
     ),
 )
 @mcp_audited("hitl_review_actioned", "hitl_review", fail_closed=False)
@@ -9847,9 +9857,11 @@ async def _mint_api_key_txn(
                 expires_at=parsed_expires_at,
                 grants=grants,
             )
-        except ApiKeyTtlError as exc:
-            # FAR-1478: a >365d expiry on a service-owned key — client error,
-            # same 422 shape as the REST surface, never a silent clamp.
+        except (ApiKeyScopeError, ApiKeyTtlError) as exc:
+            # FAR-1478 / FAR-2281: a >365d expiry on a service-owned key, or a
+            # role not permitted for the key's scope (admin on a team-scoped
+            # key) — client errors with the same 422 shape as the REST surface,
+            # never a silent clamp.
             return {"error": "validation_error", "status": 422, "detail": str(exc)}
     return key, full_key
 

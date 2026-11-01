@@ -203,8 +203,10 @@ class TestHumanLinkedMcpAuthority(_OAuthContext):
         assert result.get("error") == "human_only_gate", result
         manager.claim.assert_not_called()
 
-    async def test_deliver_manual_allowed_for_human_linked_oauth(self) -> None:
-        """The enabled persona flag covers deliver_manual too."""
+    @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
+    async def test_deliver_manual_denied_even_when_human_linked(self) -> None:
+        """``deliver_manual`` remains browser-only, even when persona authority
+        is enabled for the other human-linked MCP HITL actions."""
         run, snapshot, review_id = _run_and_snapshot(human_only=True)
         session = _session_with_run(run, snapshot)
         manager = MagicMock()
@@ -219,8 +221,8 @@ class TestHumanLinkedMcpAuthority(_OAuthContext):
                 output={"status": "ok"},
             )
 
-        assert result.get("status") == "delivered_manual", result
-        manager.deliver_manual.assert_awaited_once()
+        assert result.get("error") == "human_only_gate", result
+        manager.deliver_manual.assert_not_called()
 
 
 class TestMcpNonLinkedDenials(_OAuthContext):

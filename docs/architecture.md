@@ -766,9 +766,11 @@ the grant leg only ever narrows and is not lifted by the authz kill switch.
 Minting (`POST /api/v1/api-keys` with `grants`) caps requested grants to the
 caller's LIVE capability and rejects non-delegable keys. Delegability is a
 single registry-level flag, `modulo.auth.permissions.is_delegable`, read live
-at enforcement and mint time (never-grantable: human_only HITL, `api_key.*`,
-`oauth.client.*`, `system.*`, `org.delete`, break-glass controls); OAuth
-scopes and principals must consume it rather than keep a second list. With the
+at enforcement and mint time (never-grantable: `api_key.*`, `oauth.client.*`,
+`system.*`, `org.delete`, break-glass controls; HITL decision permissions are
+registry-delegable, while the gate's `human_only` policy and the MCP
+human-linked-authority flag control whether a credential may act); OAuth scopes
+and principals must consume it rather than keep a second list. With the
 flag OFF a grant-bearing key is denied (401), never widened to its role, and
 `grants` on mint is rejected (422). With the flag ON, user-scoped keys default
 to and are capped at 90 days. Grants are immutable after mint. The MCP

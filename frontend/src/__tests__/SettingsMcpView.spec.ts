@@ -2106,18 +2106,27 @@ describe('SettingsMcpView', () => {
     ],
   }
 
-  function mockWithGrantable(grantable: unknown) {
+  function mockWithGrantable(grantable: unknown, userKeysEnabled = false) {
     getMock.mockImplementation((path: string) => {
       if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mockMcpConfig, error: undefined })
       if (path === '/api/v1/api-keys') return Promise.resolve({ data: mockApiKeys, error: undefined })
       if (path === '/api/v1/mcp/oauth/clients') return Promise.resolve({ data: mockOAuthClients, error: undefined })
       if (path === '/api/v1/api-keys/grantable-permissions') return Promise.resolve({ data: grantable, error: undefined })
+      if (path === '/api/v1/plan') {
+        return Promise.resolve({
+          data: {
+            license: { tier: 'community' },
+            flags: [{ name: 'user_scoped_mcp_keys', currently_active: userKeysEnabled }],
+          },
+          error: undefined,
+        })
+      }
       return Promise.resolve({ data: null, error: undefined })
     })
   }
 
-  async function openCreateDialogWith(grantable: unknown) {
-    mockWithGrantable(grantable)
+  async function openCreateDialogWith(grantable: unknown, userKeysEnabled = false) {
+    mockWithGrantable(grantable, userKeysEnabled)
     postMock.mockResolvedValueOnce({
       data: { id: 'k', name: 'New Key', key_value: 'mod_mk_new_secret_1234' },
       error: undefined,
@@ -2135,6 +2144,19 @@ describe('SettingsMcpView', () => {
   it('hides the grant picker when the grants flag is off', async () => {
     const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] })
     expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(false)
+  })
+
+  it('hides the personal key scope when user-scoped keys are disabled', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] }, false)
+    const options = (wrapper.vm as any).createKeyScopeOptions
+    expect(options).toEqual([{ value: 'org', label: 'Organisation (machine identity)' }])
+  })
+
+  it('offers the personal key scope when user-scoped keys are enabled', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] }, true)
+    const options = (wrapper.vm as any).createKeyScopeOptions
+    expect(options).toHaveLength(2)
+    expect(options[1].value).toBe('user')
   })
 
   it('omits grants from the create body by default (role bundle)', async () => {

@@ -6,12 +6,12 @@ belongs to a live human principal who consented to the corresponding ``hitl.*``
 scope. Step 1 claims **persona** only (attribution/accountability); presence
 (step 2, FAR-1953) and possession (step 3, FAR-1959) are deliberately later.
 
-This is the ONE resolver both surfaces call: the MCP ``review_hitl`` gate
-(``api.mcp_server._check_human_only_gate``) and the REST gate
-(``api.routes.hitl._enforce_human_only_gate``). The historical asymmetry — REST
-short-circuiting on ``client_kind == "browser"`` while MCP denied via a
-hard-coded ``non_browser_credential=True`` — was an implementation accident, not
-a designed boundary.
+This is the resolver the MCP ``review_hitl`` gate calls
+(``api.mcp_server._check_human_only_gate``). The REST gate
+(``api.routes.hitl._enforce_human_only_gate``) does NOT consult it: its
+principals are browser-login JWTs only, and a non-browser REST credential (a
+programmatic JWT, FAR-634) is always denied a ``human_only`` gate. The
+user-scoped human-linked API-key authority is therefore an MCP-only path.
 
 Conditions (ALL must hold; any failure — including any verification error —
 resolves to *not human-linked*, i.e. the deny):
@@ -39,9 +39,10 @@ resolves to *not human-linked*, i.e. the deny):
    tool/route permission chokepoint, so condition (d) does not apply to it.
 
 Step 1 distinguishes the two linked classes in ``HumanLinkage.linkage``
-(``oauth_consent`` vs ``user_scoped_key``). The ``human_only`` gates currently
-honour only the consent-derived class; slice 2 (the persona flag) extends that
-to the user-scoped class.
+(``oauth_consent`` vs ``user_scoped_key``). The MCP ``human_only`` gate honours
+both only when an organisation admin enables the default-OFF
+``mcp_human_linked_hitl_authority`` flag (FAR-2281); ``deliver_manual`` stays
+browser-only on every surface. The REST gate honours neither (see above).
 
 Structurally excluded: **org-scoped** ``mk_`` API keys, non-OAuth JWTs
 (including browser-class password JWTs), blacklisted token families (denied
