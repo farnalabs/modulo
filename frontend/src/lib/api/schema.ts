@@ -7162,6 +7162,206 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system-maps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List System Maps Endpoint
+         * @description List published maps for org (pagination, filtering by name/owner_team_id).
+         */
+        get: operations["list_system_maps_endpoint_api_v1_system_maps_get"];
+        put?: never;
+        /**
+         * Create System Map Endpoint
+         * @description Create draft map (name, description, owner_team_id, visibility).
+         */
+        post: operations["create_system_map_endpoint_api_v1_system_maps_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get System Map Endpoint
+         * @description Get map with latest published revision summary.
+         */
+        get: operations["get_system_map_endpoint_api_v1_system_maps__map_id__get"];
+        /**
+         * Update System Map Endpoint
+         * @description Update a system map.
+         */
+        put: operations["update_system_map_endpoint_api_v1_system_maps__map_id__put"];
+        post?: never;
+        /**
+         * Delete System Map Endpoint
+         * @description Soft delete map.
+         */
+        delete: operations["delete_system_map_endpoint_api_v1_system_maps__map_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/revisions/{rev_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get System Map Revision Endpoint
+         * @description Get specific revision.
+         */
+        get: operations["get_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete System Map Revision Endpoint
+         * @description Soft delete revision.
+         */
+        delete: operations["delete_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create System Map Revision Endpoint
+         * @description Create draft revision (nodes, relationships, loop configs).
+         */
+        post: operations["create_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/revisions/{rev_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish System Map Revision Endpoint
+         * @description Publish revision (validates acyclicity, loop configs, pipeline bindings).
+         */
+        post: operations["publish_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/revisions/{rev_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive System Map Revision Endpoint
+         * @description Archive revision.
+         */
+        post: operations["archive_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get System Map Overview Endpoint
+         * @description Aggregate read model with node health, loop configs, and bottleneck detection.
+         */
+        get: operations["get_system_map_overview_endpoint_api_v1_system_maps__map_id__overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/attribution-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Attribution Bindings Endpoint
+         * @description List attribution bindings for a map.
+         */
+        get: operations["list_attribution_bindings_endpoint_api_v1_system_maps__map_id__attribution_bindings_get"];
+        put?: never;
+        /**
+         * Create Attribution Binding Endpoint
+         * @description Create an attribution binding for a map node.
+         */
+        post: operations["create_attribution_binding_endpoint_api_v1_system_maps__map_id__attribution_bindings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/attribution-bindings/{binding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Attribution Binding Endpoint
+         * @description Soft delete an attribution binding.
+         */
+        delete: operations["delete_attribution_binding_endpoint_api_v1_system_maps__map_id__attribution_bindings__binding_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system-maps/discover": {
         parameters: {
             query?: never;
@@ -12193,6 +12393,63 @@ export interface components {
             created_at: string | null;
             /** Updated At */
             updated_at: string | null;
+        };
+        /** AttributionBindingCreate */
+        AttributionBindingCreate: {
+            /**
+             * Pipeline Id
+             * Format: uuid
+             */
+            pipeline_id: string;
+            /** Trigger Id */
+            trigger_id?: string | null;
+            /** Node Key */
+            node_key: string;
+            /** Binding Kind */
+            binding_kind: string;
+        };
+        /** AttributionBindingResponse */
+        AttributionBindingResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /**
+             * Pipeline Id
+             * Format: uuid
+             */
+            pipeline_id: string;
+            /** Trigger Id */
+            trigger_id: string | null;
+            /**
+             * System Map Id
+             * Format: uuid
+             */
+            system_map_id: string;
+            /** Node Key */
+            node_key: string;
+            /** Binding Kind */
+            binding_kind: string;
+            /** Deleted At */
+            deleted_at: string | null;
+            /** Deleted By */
+            deleted_by: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** AutomationSuggestion */
         AutomationSuggestion: {
@@ -19477,18 +19734,6 @@ export interface components {
              */
             public_key_pem: string;
         };
-        /** PublishResponse */
-        PublishResponse: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Version */
-            version: string;
-            /** Published */
-            published: boolean;
-        };
         /** PublishResponseV2 */
         PublishResponseV2: {
             /** Slug */
@@ -19513,6 +19758,20 @@ export interface components {
             trust_anchor_verified: boolean;
             /** Verified */
             verified: boolean;
+        };
+        /**
+         * PublishValidationError
+         * @description Error detail for publish validation failures.
+         */
+        PublishValidationError: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Node Key */
+            node_key?: string | null;
+            /** Relationship Id */
+            relationship_id?: string | null;
         };
         /** PublisherCreateRequest */
         PublisherCreateRequest: {
@@ -21955,6 +22214,26 @@ export interface components {
              */
             has_more: boolean;
         };
+        /** SystemMapCreate */
+        SystemMapCreate: {
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /**
+             * Visibility
+             * @default org
+             * @enum {string}
+             */
+            visibility: "org" | "team";
+            /**
+             * Default Map
+             * @default false
+             */
+            default_map: boolean;
+        };
         /** SystemMapDiscoveryReport */
         SystemMapDiscoveryReport: {
             /** Sources Inspected */
@@ -22018,6 +22297,484 @@ export interface components {
             identifier: string;
             /** Name */
             name: string;
+        };
+        /** SystemMapListResponse */
+        SystemMapListResponse: {
+            /** Items */
+            items: components["schemas"]["SystemMapResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** SystemMapLoopConfigCreate */
+        SystemMapLoopConfigCreate: {
+            /** Node Key */
+            node_key: string;
+            /** Target Signal */
+            target_signal: string;
+            /** Observation Window Seconds */
+            observation_window_seconds: number;
+            /**
+             * Action Pipeline Id
+             * Format: uuid
+             */
+            action_pipeline_id: string;
+            /** Budget Limit Usd */
+            budget_limit_usd: number | string;
+            /** Cooldown Seconds */
+            cooldown_seconds: number;
+            /** Outcome Metric */
+            outcome_metric: string;
+        };
+        /** SystemMapLoopConfigResponse */
+        SystemMapLoopConfigResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /**
+             * Revision Id
+             * Format: uuid
+             */
+            revision_id: string;
+            /** Node Key */
+            node_key: string;
+            /** Target Signal */
+            target_signal: string;
+            /** Observation Window Seconds */
+            observation_window_seconds: number;
+            /**
+             * Action Pipeline Id
+             * Format: uuid
+             */
+            action_pipeline_id: string;
+            /** Budget Limit Usd */
+            budget_limit_usd: string;
+            /** Cooldown Seconds */
+            cooldown_seconds: number;
+            /** Outcome Metric */
+            outcome_metric: string;
+            /** Deleted At */
+            deleted_at: string | null;
+            /** Deleted By */
+            deleted_by: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** SystemMapNodeCreate */
+        SystemMapNodeCreate: {
+            /** Node Key */
+            node_key: string;
+            /** Node Type */
+            node_type: string;
+            /** Display Name */
+            display_name: string;
+            /** Config Json */
+            config_json?: {
+                [key: string]: unknown;
+            };
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+            /** Connector Instance Id */
+            connector_instance_id?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Eval Id */
+            eval_id?: string | null;
+            /**
+             * Position X
+             * @default 0
+             */
+            position_x: number | string;
+            /**
+             * Position Y
+             * @default 0
+             */
+            position_y: number | string;
+        };
+        /** SystemMapNodeResponse */
+        SystemMapNodeResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /**
+             * Revision Id
+             * Format: uuid
+             */
+            revision_id: string;
+            /** Node Key */
+            node_key: string;
+            /** Node Type */
+            node_type: string;
+            /** Display Name */
+            display_name: string;
+            /** Config Json */
+            config_json: {
+                [key: string]: unknown;
+            };
+            /** Pipeline Id */
+            pipeline_id: string | null;
+            /** Connector Instance Id */
+            connector_instance_id: string | null;
+            /** Owner Team Id */
+            owner_team_id: string | null;
+            /** Eval Id */
+            eval_id: string | null;
+            /** Position X */
+            position_x: string;
+            /** Position Y */
+            position_y: string;
+            /** Deleted At */
+            deleted_at: string | null;
+            /** Deleted By */
+            deleted_by: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * SystemMapOverviewBottleneck
+         * @description Detected bottleneck in the system map.
+         */
+        SystemMapOverviewBottleneck: {
+            /** Node Key */
+            node_key: string;
+            /** Node Type */
+            node_type: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "starved" | "overloaded" | "failing" | "unobserved";
+            /** Detail */
+            detail: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "low" | "medium" | "high" | "critical";
+        };
+        /**
+         * SystemMapOverviewLoopConfig
+         * @description Per-loop-config status for the overview aggregate.
+         */
+        SystemMapOverviewLoopConfig: {
+            /** Node Key */
+            node_key: string;
+            /** Target Signal */
+            target_signal: string;
+            /** Observation Window Seconds */
+            observation_window_seconds: number;
+            /**
+             * Action Pipeline Id
+             * Format: uuid
+             */
+            action_pipeline_id: string;
+            /** Budget Limit Usd */
+            budget_limit_usd: string;
+            /** Cooldown Seconds */
+            cooldown_seconds: number;
+            /** Outcome Metric */
+            outcome_metric: string;
+            /** Last Admission At */
+            last_admission_at?: string | null;
+            /** Last Admission Status */
+            last_admission_status?: string | null;
+            /**
+             * Cooldown Active
+             * @default false
+             */
+            cooldown_active: boolean;
+            /** Cooldown Until */
+            cooldown_until?: string | null;
+            /**
+             * Budget Used Usd
+             * @default 0
+             */
+            budget_used_usd: string;
+            /** Budget Period Start */
+            budget_period_start?: string | null;
+        };
+        /**
+         * SystemMapOverviewNodeHealth
+         * @description Per-node health metrics for the overview aggregate.
+         */
+        SystemMapOverviewNodeHealth: {
+            /** Node Key */
+            node_key: string;
+            /** Node Type */
+            node_type: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Health
+             * @enum {string}
+             */
+            health: "healthy" | "degraded" | "unhealthy" | "unknown";
+            /** Queue Depth */
+            queue_depth?: number | null;
+            /** Throughput Per Min */
+            throughput_per_min?: number | null;
+            /** Capacity Pressure */
+            capacity_pressure?: number | null;
+            /** Failure Rate */
+            failure_rate?: number | null;
+            /** Telemetry Coverage */
+            telemetry_coverage?: number | null;
+            /** Last Run Id */
+            last_run_id?: string | null;
+            /** Last Run Status */
+            last_run_status?: string | null;
+            /** Last Run Completed At */
+            last_run_completed_at?: string | null;
+        };
+        /**
+         * SystemMapOverviewResponse
+         * @description Aggregate read model for a published system map.
+         */
+        SystemMapOverviewResponse: {
+            /**
+             * System Map Id
+             * Format: uuid
+             */
+            system_map_id: string;
+            /**
+             * Revision Id
+             * Format: uuid
+             */
+            revision_id: string;
+            /** Revision Number */
+            revision_number: number;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Nodes */
+            nodes: components["schemas"]["SystemMapOverviewNodeHealth"][];
+            /** Loop Configs */
+            loop_configs: components["schemas"]["SystemMapOverviewLoopConfig"][];
+            /** Bottlenecks */
+            bottlenecks: components["schemas"]["SystemMapOverviewBottleneck"][];
+        };
+        /** SystemMapRelationshipCreate */
+        SystemMapRelationshipCreate: {
+            /** Source Node Key */
+            source_node_key: string;
+            /** Target Node Key */
+            target_node_key: string;
+            /** Relationship Type */
+            relationship_type: string;
+            /** Config Json */
+            config_json?: {
+                [key: string]: unknown;
+            };
+        };
+        /** SystemMapRelationshipResponse */
+        SystemMapRelationshipResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /**
+             * Revision Id
+             * Format: uuid
+             */
+            revision_id: string;
+            /** Source Node Key */
+            source_node_key: string;
+            /** Target Node Key */
+            target_node_key: string;
+            /** Relationship Type */
+            relationship_type: string;
+            /** Config Json */
+            config_json: {
+                [key: string]: unknown;
+            };
+            /** Deleted At */
+            deleted_at: string | null;
+            /** Deleted By */
+            deleted_by: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** SystemMapResponse */
+        SystemMapResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Owner Team Id */
+            owner_team_id: string | null;
+            /** Visibility */
+            visibility: string;
+            /** Default Map */
+            default_map: boolean;
+            /** Published Revision Id */
+            published_revision_id: string | null;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Updated By */
+            updated_by: string | null;
+            /** Deleted At */
+            deleted_at: string | null;
+            /** Deleted By */
+            deleted_by: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * SystemMapRevisionCreate
+         * @description Create a draft revision (nodes, relationships, loop configs).
+         */
+        SystemMapRevisionCreate: {
+            /** Nodes */
+            nodes?: components["schemas"]["SystemMapNodeCreate"][];
+            /** Relationships */
+            relationships?: components["schemas"]["SystemMapRelationshipCreate"][];
+            /** Loop Configs */
+            loop_configs?: components["schemas"]["SystemMapLoopConfigCreate"][];
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+        };
+        /**
+         * SystemMapRevisionDetailResponse
+         * @description Full revision with nested nodes, relationships, and loop configs.
+         */
+        SystemMapRevisionDetailResponse: {
+            revision: components["schemas"]["SystemMapRevisionResponse"];
+            /** Nodes */
+            nodes: components["schemas"]["SystemMapNodeResponse"][];
+            /** Relationships */
+            relationships: components["schemas"]["SystemMapRelationshipResponse"][];
+            /** Loop Configs */
+            loop_configs: components["schemas"]["SystemMapLoopConfigResponse"][];
+        };
+        /** SystemMapRevisionResponse */
+        SystemMapRevisionResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /**
+             * System Map Id
+             * Format: uuid
+             */
+            system_map_id: string;
+            /** Revision Number */
+            revision_number: number;
+            /** Status */
+            status: string;
+            /** Content Json */
+            content_json: {
+                [key: string]: unknown;
+            };
+            /** Published At */
+            published_at: string | null;
+            /** Deleted At */
+            deleted_at: string | null;
+            /** Deleted By */
+            deleted_by: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** SystemMapUpdate */
+        SystemMapUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Visibility */
+            visibility?: ("org" | "team") | null;
+            /** Default Map */
+            default_map?: boolean | null;
         };
         /** TargetInjection */
         TargetInjection: {
@@ -23085,6 +23842,18 @@ export interface components {
              */
             version?: string | null;
         };
+        /** PublishResponse */
+        modulo__api__routes__composite_templates__PublishResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Version */
+            version: string;
+            /** Published */
+            published: boolean;
+        };
         /** SchemaCreate */
         modulo__api__routes__parameter_schemas__SchemaCreate: {
             /** Name */
@@ -23285,6 +24054,12 @@ export interface components {
              * @default false
              */
             must_change_password: boolean;
+        };
+        /** PublishResponse */
+        modulo__api__schemas__system_maps__PublishResponse: {
+            revision: components["schemas"]["SystemMapRevisionResponse"];
+            /** Validation Errors */
+            validation_errors?: components["schemas"]["PublishValidationError"][];
         };
         /**
          * ProblemDetail
@@ -33258,7 +34033,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PublishResponse"];
+                    "application/json": components["schemas"]["modulo__api__routes__composite_templates__PublishResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38252,6 +39027,506 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["JourneySelfReportResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_system_maps_endpoint_api_v1_system_maps_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                name?: string | null;
+                owner_team_id?: string | null;
+                visibility?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    create_system_map_endpoint_api_v1_system_maps_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SystemMapCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_system_map_endpoint_api_v1_system_maps__map_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    update_system_map_endpoint_api_v1_system_maps__map_id__put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SystemMapUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    delete_system_map_endpoint_api_v1_system_maps__map_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__get: {
+        parameters: {
+            query?: {
+                /** @description Include full graph (nodes, relationships, loop_configs) */
+                include_graph?: boolean;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+                /** @description Revision ID */
+                rev_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapRevisionResponse"] | components["schemas"]["SystemMapRevisionDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    delete_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+                /** @description Revision ID */
+                rev_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    create_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SystemMapRevisionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    publish_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__publish_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+                /** @description Revision ID */
+                rev_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["modulo__api__schemas__system_maps__PublishResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    archive_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__archive_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+                /** @description Revision ID */
+                rev_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_system_map_overview_endpoint_api_v1_system_maps__map_id__overview_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapOverviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_attribution_bindings_endpoint_api_v1_system_maps__map_id__attribution_bindings_get: {
+        parameters: {
+            query?: {
+                pipeline_id?: string | null;
+                trigger_id?: string | null;
+                binding_kind?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttributionBindingResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    create_attribution_binding_endpoint_api_v1_system_maps__map_id__attribution_bindings_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttributionBindingCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttributionBindingResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    delete_attribution_binding_endpoint_api_v1_system_maps__map_id__attribution_bindings__binding_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+                /** @description Attribution binding ID */
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

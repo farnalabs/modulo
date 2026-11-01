@@ -15,6 +15,7 @@ from modulo.api.models.problem import (
     problem_from_http_exception,
     problem_from_validation_error,
 )
+from modulo.api.schemas.system_maps import PublishValidationErrorHTTP
 from modulo.auth.sso import SsoCallbackError
 from modulo.db.capacity import StorageExhaustedError
 from modulo.settings import Settings, get_settings
@@ -178,3 +179,22 @@ def sso_callback_error_handler(_request: Request, exc: SsoCallbackError) -> Redi
     deliberately synchronous — it performs no I/O and awaits nothing.
     """
     return sso_error_redirect(get_settings(), exc.code, exc.slug)
+
+
+def publish_validation_error_handler(_request: Request, exc: PublishValidationErrorHTTP) -> JSONResponse:
+    """Render a publish validation failure as a 200 PublishResponse with errors.
+
+    The publish endpoint raises this exception (instead of returning inline) so
+    the audited() dependency records outcome="error". This handler converts it
+    to the expected wire shape: 200 with PublishResponse containing the
+    validation errors and the revision.
+    """
+
+    revision_data = exc.revision.model_dump(mode="json") if exc.revision else None
+    return JSONResponse(
+        status_code=200,
+        content={
+            "revision": revision_data,
+            "validation_errors": [e.model_dump(mode="json") for e in exc.validation_errors],
+        },
+    )
