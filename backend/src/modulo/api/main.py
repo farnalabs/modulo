@@ -131,7 +131,6 @@ from modulo.api.routes.service_accounts import router as service_accounts_router
 from modulo.api.routes.slack import router as slack_router
 from modulo.api.routes.sso import router as sso_router
 from modulo.api.routes.stripe_webhook import router as stripe_webhook_router
-from modulo.api.routes.system_maps import PublishValidationErrorHTTP
 from modulo.api.routes.system_maps import router as system_maps_router
 from modulo.api.routes.teams import router as teams_router
 from modulo.api.routes.templates import router as templates_router
@@ -142,6 +141,7 @@ from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
 from modulo.api.routes.webhooks import router as webhooks_router
+from modulo.api.schemas.system_maps import PublishValidationErrorHTTP
 from modulo.auth.sso import SsoCallbackError
 from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
