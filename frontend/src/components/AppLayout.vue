@@ -11,6 +11,12 @@
       @open-command-palette="openCommandPalette"
     />
 
+    <!-- Single main landmark for the shell. `tabindex="-1"` + the landmark
+         marker make this the fallback focus target for `focusRouteContent`
+         (router/index.ts) on a route with no `[data-page-heading]` - the
+         landmark is programmatically focusable, never tab-reachable. Do not
+         drop the tabindex without moving that fallback: an unfocusable
+         landmark would leave route focus on the outgoing view. -->
     <main
       class="flex-1 min-w-0 overflow-auto overscroll-contain bg-background relative"
       data-main-landmark

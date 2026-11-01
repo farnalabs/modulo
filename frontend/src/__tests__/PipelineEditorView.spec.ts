@@ -162,13 +162,18 @@ const router = createRouter({
   ],
 })
 
-function mountEditor() {
+// `attachTo` is only needed by the focus-trap specs: jsdom cannot move
+// `document.activeElement` to an element that is not in the document, so the
+// Tab-cycle assertions mount into `document.body` while every other spec keeps
+// the default detached mount.
+function mountEditor(attachTo?: HTMLElement) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const store = usePlanStore()
   store.currentTier = 'team'
   store.features = { pipeline_delete: true }
   return mount(PipelineEditorView, {
+    attachTo,
     global: {
       plugins: [pinia, router],
       stubs: {
@@ -1006,6 +1011,37 @@ describe('PipelineEditorView — toolbar rendering', () => {
     wrapper.unmount()
   })
 
+  it('announces the loading status without burying the live region under aria-busy', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const mod = (await import('../composables/useDataFetch')) as unknown as {
+      __loadingRef: { value: boolean }
+    }
+    mod.__loadingRef.value = true
+    await nextTick()
+
+    // The loading placeholder owns the busy state; the live region must be a
+    // SIBLING of it. A busy ancestor defers the announcement until it clears,
+    // and this region unmounts instead of clearing - so a busy ancestor would
+    // silence "Loading pipeline editor..." forever (same rule as
+    // TableSkeleton.spec.ts).
+    const spinner = wrapper.get('.animate-spin')
+    const region = spinner.element.parentElement as HTMLElement
+    const live = region.querySelector('output[aria-live="polite"]')
+    expect(live).not.toBeNull()
+    expect(live!.textContent?.trim()).toBe('Loading pipeline editor...')
+    expect((live as HTMLElement).closest('[aria-busy="true"]')).toBeNull()
+    expect(spinner.attributes('aria-busy')).toBe('true')
+    // FAR-1812: an explicit status role is never combined with aria-live.
+    expect((live as HTMLElement).getAttribute('role')).toBeNull()
+
+    mod.__loadingRef.value = false
+    await nextTick()
+    wrapper.unmount()
+  })
+
   it('renders the archived badge with an unarchive button and feature-gated actions', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
@@ -1272,6 +1308,78 @@ describe('PipelineEditorView — run dialog', () => {
     await backdrop.trigger('keydown', { key: 'Escape' })
     await nextTick()
     expect(wrapper.find('[data-testid="pipeline-editor-run-prompt"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // The focus-trap wiring for the run dialog: Tab from the last control wraps
+  // to the first, Shift+Tab from the first wraps to the last. `trapTabInElement`
+  // itself is unit-tested; these pin that the dialog handler actually routes
+  // Tab through it with the dialog as the root.
+  const FOCUSABLE_SELECTOR =
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+  function focusablesIn(root: Element): HTMLElement[] {
+    return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+  }
+
+  it('traps Tab inside the run dialog', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.showRunDialog = true
+    await nextTick()
+
+    const dialog = wrapper.get('[data-testid="pipeline-editor-run-dialog-backdrop"]').get('dialog')
+    const focusable = focusablesIn(dialog.element)
+    expect(focusable.length).toBeGreaterThan(1)
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+
+    last.focus()
+    const forward = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    last.dispatchEvent(forward)
+    await nextTick()
+    expect(forward.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(first)
+
+    first.focus()
+    const backward = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+    first.dispatchEvent(backward)
+    await nextTick()
+    expect(backward.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(last)
+    wrapper.unmount()
+  })
+
+  it('traps Tab inside the retry-policy panel', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+
+    await wrapper.get('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
+    await nextTick()
+    const panel = wrapper.get('[data-testid="pipeline-editor-retry-policy-panel"]')
+    const focusable = focusablesIn(panel.element)
+    expect(focusable.length).toBeGreaterThan(1)
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+
+    last.focus()
+    const forward = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    last.dispatchEvent(forward)
+    await nextTick()
+    expect(forward.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(first)
+
+    first.focus()
+    const backward = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+    first.dispatchEvent(backward)
+    await nextTick()
+    expect(backward.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(last)
     wrapper.unmount()
   })
 

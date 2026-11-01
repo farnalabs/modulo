@@ -91,6 +91,21 @@ describe('AppLayout', () => {
     enteredHeading.remove()
   })
 
+  it('falls back to the shell main landmark on a route with no page heading', () => {
+    // A bare route (e.g. /assistant) renders no [data-page-heading]. Without
+    // the fallback, focus would stay on the outgoing view's detached element,
+    // so the shell <main> carries tabindex="-1" for exactly this case.
+    const shellMain = document.createElement('main')
+    shellMain.dataset.mainLandmark = ''
+    shellMain.tabIndex = -1
+    document.body.append(shellMain)
+
+    focusRouteContent()
+
+    expect(document.activeElement).toBe(shellMain)
+    shellMain.remove()
+  })
+
   it('renders plan badge by default', async () => {
     const wrapper = mount(AppLayout, {
       global: {

@@ -7,15 +7,27 @@
        desktop (FAR-1851). The `h-[calc(100vh-3.5rem)]` class is only the
        pre-measurement fallback. -->
   <div ref="editorRootRef" data-testid="pipeline-editor-root" class="relative flex h-[calc(100vh-3.5rem)] overflow-hidden" :style="editorFitStyle">
+    <!-- ux-conformance STATE-3: the live region announces ONLY the loading
+         status text, and `aria-busy` sits on the placeholder spinner it
+         actually describes - never on the live region's ancestor. A busy
+         ancestor defers the announcement until it clears, and this wrapper
+         UNMOUNTS rather than clearing, so a busy ancestor would suppress the
+         announcement forever (the same rule codified by `TableSkeleton.vue`).
+         `aria-live` alone, with no explicit `role="status"`: <output> already
+         carries the status role implicitly, and FAR-1812 codifies that an
+         explicit status role is never combined with aria-live. -->
     <div
       v-if="loading || historicResolving"
-      class="flex flex-1 items-center justify-center"
-      role="status"
-      aria-live="polite"
-      aria-busy="true"
+      class="flex flex-1 flex-col items-center justify-center gap-3"
     >
-      <span>{{ $t('views.PipelineEditorView.loading_editor') }}</span>
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" aria-hidden="true" />
+      <output
+        class="text-sm text-muted-foreground"
+        aria-live="polite"
+      >{{ $t('views.PipelineEditorView.loading_editor') }}</output>
+      <div
+        class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"
+        aria-busy="true"
+      />
     </div>
     <!-- FAR-1812: graceful miss — an unknown/deleted version never renders a
          raw error or a dead page; it offers the route back to the latest

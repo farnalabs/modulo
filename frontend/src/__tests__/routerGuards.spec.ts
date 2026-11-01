@@ -25,6 +25,7 @@ vi.mock('../lib/jwt', () => ({ decodeJwtPayload }))
 vi.mock('../stores/planStore', () => ({ usePlanStore }))
 
 import router, {
+  documentTitleFor,
   enforceRoleTierVisibility,
   hydrateManifestMeta,
 } from '../router'
@@ -32,6 +33,22 @@ import { clearAccessToken, setAccessToken } from '../lib/api/auth'
 
 it('registers the risk assessment route in the real router', () => {
   expect(router.getRoutes().some((route) => route.name === 'risk-assessment' && route.path === '/risk-assessment')).toBe(true)
+})
+
+describe('document title', () => {
+  it('prefixes the manifest title with the product name', () => {
+    expect(documentTitleFor({ title: 'Pipelines' })).toBe('Pipelines | Modulo')
+  })
+
+  it('uses the manifest breadcrumb when the route carries no title', () => {
+    expect(documentTitleFor({ breadcrumb: 'Runs' })).toBe('Runs | Modulo')
+  })
+
+  it('falls back to the bare product name rather than "Modulo | Modulo"', () => {
+    // A bare route (e.g. /assistant) has neither meta.title nor a manifest
+    // breadcrumb; the old template produced "Modulo | Modulo".
+    expect(documentTitleFor({})).toBe('Modulo')
+  })
 })
 
 it('keeps organisation email settings reachable for a team org admin', async () => {
