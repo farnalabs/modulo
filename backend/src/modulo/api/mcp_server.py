@@ -6918,17 +6918,20 @@ async def _check_human_only_gate(
 
     ADR 063 step 1 (FAR-1957): ``non_browser_credential`` is COMPUTED from the
     single shared authority resolver (``auth.human_linkage.resolve_human_linkage``)
-    over the verified credential — no longer a hard-coded ``True``. A
-    consent-derived OAuth credential belonging to a live human principal whose
-    grant set covers the action is *human-linked*; when the org-wide
-    ``mcp_human_linked_hitl_authority`` flag is ON (the default), such a
-    credential is treated as a browser-class decision and may decide the gate.
-    Every other credential — ``mk_`` API key, non-OAuth JWT (including a
-    browser-class password JWT, FAR-634), service account, blacklisted family,
-    inactive account/membership, missing scope — and every verification failure
-    resolves to deny. ``deliver_manual`` stays browser-only in step 1 (ADR 035).
-    Every denial emits a warning log + the ``hitl.human_only_denied`` audit
-    event (FAR-634) before the error dict is returned.
+    over the verified credential — no longer a hard-coded ``True``. The
+    ``mcp_human_linked_hitl_authority`` flag is default-OFF and must be explicitly
+    enabled by an organisation admin. When enabled, an eligible consent-derived
+    OAuth credential belonging to a live human principal, or a verified
+    user-scoped human-linked API key whose grant set covers the action, is
+    human-linked and may decide the gate. Org-, team-, service- and run-scoped
+    API keys, non-OAuth JWTs (including a browser-class password JWT, FAR-634),
+    blacklisted families, inactive accounts or memberships, missing scopes, and
+    every verification failure resolve to deny. Normal possession requirements
+    still apply: claim, approve, reject and deliver-manual require the applicable
+    claim token and gate rules; ``deliver_manual`` stays browser-only in step 1
+    (ADR 035). Every denial emits a warning log + the
+    ``hitl.human_only_denied`` audit event (FAR-634) before the error dict is
+    returned.
     """
     from modulo.db.crud.hitl_review_config import (
         EVENT_HUMAN_ONLY_DENIED,

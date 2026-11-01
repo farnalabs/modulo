@@ -203,12 +203,15 @@ A: Pipeline changes are versioned and every run executes against an immutable
 snapshot (frozen graph, models, prompts, schemas, guardrails and policy gates)
 recorded on the run. A human-in-the-loop gate marked `human_only` - the default
 for every gate - interrupts the run until a decision is recorded, and it does so
-at **every** autonomy level: `human_only` overrides autonomy. Such a gate rejects
-API keys and programmatic tokens over REST and MCP. Two conditions must be
-stated with that answer. (1) A browser session may decide a `human_only` gate,
-and so may a consent-derived, human-linked OAuth credential over MCP only when
-an org admin has explicitly enabled the default-OFF, org-scoped
-`mcp_human_linked_hitl_authority` override; `deliver_manual` stays browser-only. (2) Autonomy only changes the
+at **every** autonomy level: `human_only` overrides autonomy. The normal
+possession and claim-token requirements remain. A browser session may decide a
+`human_only` gate; when an organisation admin explicitly enables the default-OFF,
+org-scoped `mcp_human_linked_hitl_authority` override, an eligible
+consent-derived, human-linked OAuth credential or a verified user-scoped,
+human-linked API key may also act when its grant set covers the action. Org-,
+team-, service- and run-scoped API keys and non-OAuth JWTs remain denied, and
+verification failures fail closed. `deliver_manual` stays browser-only. (2)
+Autonomy only changes the
 outcome for a gate that explicitly opts out with `human_only: false`:
 `notify_on_complete` auto-approves it at run time and `fully_autonomous` skips
 it entirely. The default gate is never skipped.

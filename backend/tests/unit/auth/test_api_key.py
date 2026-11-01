@@ -12,6 +12,7 @@ import pytest
 from modulo.auth.api_key import (
     _UNSET,
     ApiKeyInvalidError,
+    ApiKeyScopeError,
     _hash_key,
     _serialize_key,
     _serialize_key_with_account,
@@ -212,6 +213,11 @@ async def test_create_api_key_with_team_id() -> None:
 
 @pytest.mark.asyncio
 async def test_create_api_key_with_team_id_rejects_admin() -> None:
+    """FAR-2281: the role ceiling is scope-aware, so a team (org-scoped) key
+    carrying ``admin`` is refused at mint by the shared scope predicate. The
+    REST layer maps ``ApiKeyScopeError`` to 422, which is the shipped contract
+    for a scope-shape refusal (``_validate_team_key_role`` keeps its own
+    ``ApiKeyInvalidError`` for a persisted row)."""
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
@@ -219,7 +225,7 @@ async def test_create_api_key_with_team_id_rejects_admin() -> None:
     user_id = uuid.uuid4()
     team_id = uuid.uuid4()
 
-    with pytest.raises(ApiKeyInvalidError):
+    with pytest.raises(ApiKeyScopeError):
         await create_api_key(
             session,
             org_id=org_id,
