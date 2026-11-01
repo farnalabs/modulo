@@ -1220,13 +1220,26 @@ jobs:
            ' || exit 1
            SERVICE_PID="$(launchctl print "gui/$(id -u)/run.modulo.launcher" | awk '/pid =/ {print $3; exit}')"
 
-           # shellcheck disable=SC2016
+           # Resolve the process text executable without shell globbing.  Bash 3.2
+           # parses an unquoted glob in [[ ]] as syntax, and command= + awk '{print
+           # $1}' also loses spaces in an executable path.
            run_assertion "service_binary" bash -c '
-             SERVICE_BINARY="$(ps -p '"$SERVICE_PID"' -o command= | awk '\''{print $1}'\'')"
-             [[ "$SERVICE_BINARY" == '"$INSTALL_ROOT"'/*/Contents/MacOS/modulo ]] || exit 1
+             SERVICE_PID="$1"
+             INSTALL_ROOT="$2"
+             SERVICE_BINARY="$(lsof -p "$SERVICE_PID" -a -d txt -Fn 2>/dev/null | sed -n '\''s/^n//'\'' | head -n 1)"
+             [ -n "$SERVICE_BINARY" ] || exit 1
+             case "$SERVICE_BINARY" in
+               "$INSTALL_ROOT"/*/Contents/MacOS/modulo)
+                 [ -f "$SERVICE_BINARY" ] && [ -x "$SERVICE_BINARY" ] || exit 1
+                 ;;
+               *)
+                 exit 1
+                 ;;
+             esac
              echo "$SERVICE_BINARY"
-           ' || exit 1
-           SERVICE_BINARY="$(ps -p "$SERVICE_PID" -o command= | awk '{print $1}')"
+           ' bash "$SERVICE_PID" "$INSTALL_ROOT" || exit 1
+           SERVICE_BINARY="$(lsof -p "$SERVICE_PID" -a -d txt -Fn 2>/dev/null | sed -n 's/^n//' | head -n 1)"
+
 
            run_assertion "service_binary_macho" \
              file "$SERVICE_BINARY" | grep -E 'Mach-O 64-bit executable arm64' || exit 1
