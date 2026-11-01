@@ -5381,24 +5381,6 @@ const { loading, load: reloadPage } = useDataFetch<null>(
 </script>
 
 <style scoped>
-@media (max-width: 767px) {
-  /* Keep form controls at the browser's no-zoom touch target size while
-     retaining the compact desktop editor density. */
-  input,
-  textarea,
-  select {
-    font-size: 1rem;
-  }
-
-  .toolbar-select {
-    height: 2.5rem;
-  }
-
-  .toolbar-select :deep(.p-select-label) {
-    font-size: 1rem;
-  }
-}
-
 /* The docked toolbar row is h-7 (1.75rem); PrimeVue's Select keeps its default
    ~2.5rem height inside it, breaking the row's uniform look. Size the toolbar
    Selects (node-type picker in the canvas-tools group + the empty-state
@@ -5413,5 +5395,25 @@ const { loading, load: reloadPage } = useDataFetch<null>(
 .toolbar-select :deep(.p-select-label) {
   padding: 0 0.5rem;
   font-size: 0.75rem;
+}
+
+@media (max-width: 767px) {
+  /* Keep form controls at the browser's no-zoom touch target size while
+     retaining the compact desktop editor density. Placed AFTER the base
+     .toolbar-select rules so the mobile sizing actually wins the cascade
+     (a media query does not change source order). */
+  input,
+  textarea,
+  select {
+    font-size: 1rem;
+  }
+
+  .toolbar-select {
+    height: 2.5rem;
+  }
+
+  .toolbar-select :deep(.p-select-label) {
+    font-size: 1rem;
+  }
 }
 </style>
