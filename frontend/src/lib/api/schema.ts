@@ -7307,7 +7307,7 @@ export interface paths {
         };
         /**
          * Get System Map Overview Endpoint
-         * @description Aggregate read model with node health, loop configs, and bottleneck detection.
+         * @description Aggregate published-map metrics over the trailing seven UTC days.
          */
         get: operations["get_system_map_overview_endpoint_api_v1_system_maps__map_id__overview_get"];
         put?: never;
@@ -22564,6 +22564,10 @@ export interface components {
         /**
          * SystemMapOverviewResponse
          * @description Aggregate read model for a published system map.
+         *
+         *     Metrics cover the half-open UTC interval ``[window_start, window_end)``.
+         *     ``window_end`` is the generation instant and facts without an observed
+         *     timestamp remain null rather than being inferred.
          */
         SystemMapOverviewResponse: {
             /**
@@ -22583,6 +22587,18 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+            /** Window Days */
+            window_days: number;
+            /**
+             * Window Start
+             * Format: date-time
+             */
+            window_start: string;
+            /**
+             * Window End
+             * Format: date-time
+             */
+            window_end: string;
             /** Nodes */
             nodes: components["schemas"]["SystemMapOverviewNodeHealth"][];
             /** Loop Configs */
