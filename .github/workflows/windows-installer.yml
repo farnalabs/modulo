@@ -1,8 +1,7 @@
 name: "Windows: Build Installer (Inno Setup)"
 
-# FAR-679 / FAR-2231: Windows publication is fail-closed until the native
-# bundle inputs and FAR-2229 launcher contract are provisioned. No placeholder
-# executable, operator-supplied service directory, or relabeled Linux bundle.
+# FAR-2231: build only from provisioned native inputs. No placeholder runtime,
+# launcher, manifest, signature, or installer artifact is ever manufactured.
 
 on:
   workflow_call:
@@ -43,35 +42,63 @@ jobs:
     env:
       VERSION_NUM: ${{ inputs.version }}
       MODE: ${{ inputs.mode }}
+      INPUT_ROOT: ${{ vars.WINDOWS_BUNDLE_INPUT_ROOT }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
-      - name: Validate native bundle prerequisites
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & "$env:GITHUB_WORKSPACE/scripts/build-windows-bundle.ps1" -Version $env:VERSION_NUM -ValidateOnly
-      - name: Build native Windows bundle
-        if: ${{ inputs.mode != 'dry-run' }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & "$env:GITHUB_WORKSPACE/scripts/build-windows-bundle.ps1" -Version $env:VERSION_NUM
-      - name: Install Inno Setup
-        if: ${{ inputs.mode != 'dry-run' }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          choco install innosetup --version=6.2.2 --yes --no-progress
-          $isccDir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6'
-          if (-not (Test-Path -LiteralPath (Join-Path $isccDir 'ISCC.exe'))) { throw "ISCC.exe missing under $isccDir" }
-          & (Join-Path $isccDir 'ISCC.exe') "/Qp" "/DVERSION_NUM=$env:VERSION_NUM" '/DBUNDLE_ARCH=amd64' "/DBUNDLE_DIR=$env:GITHUB_WORKSPACE/build/windows-bundle" 'deploy/windows/modulo.iss'
       - name: Dry-run summary
         if: ${{ inputs.mode == 'dry-run' }}
         run: |
           @'
           ## Windows installer dry-run
 
-          The real native bundle prerequisite check was executed. Missing pinned Windows inputs, Redis provenance, or the FAR-2229 launcher seam fail this job; no placeholder artefact is manufactured.
+          Dry-run performs no build and uploads no artifact. A real run requires provisioned native launcher, Windows CPython, PostgreSQL, Redis, support binaries, frontend distribution, backend environment, and signed release-manifest inputs.
           '@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+      - name: Verify provisioned native inputs
+        if: ${{ inputs.mode != 'dry-run' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:INPUT_ROOT)) { throw 'WINDOWS_BUNDLE_INPUT_ROOT is not provisioned.' }
+          $required = @('launcher', 'runtime', 'pg', 'redis', 'bin', 'frontend-dist', 'backend\.venv', 'RELEASE_MANIFEST.json', 'RELEASE_MANIFEST.json.sig')
+          foreach ($relative in $required) {
+            $path = Join-Path $env:INPUT_ROOT $relative
+            if (-not (Test-Path -LiteralPath $path)) { throw "Missing provisioned Windows bundle input: $path" }
+          }
+      - name: Build native Windows bundle
+        if: ${{ inputs.mode != 'dry-run' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:INPUT_ROOT
+          & "$env:GITHUB_WORKSPACE/scripts/build-windows-bundle.ps1" -Version $env:VERSION_NUM `
+            -LauncherPath (Join-Path $root 'launcher') `
+            -RuntimeDirectory (Join-Path $root 'runtime') `
+            -PostgresDirectory (Join-Path $root 'pg') `
+            -RedisDirectory (Join-Path $root 'redis') `
+            -BinDirectory (Join-Path $root 'bin') `
+            -FrontendDistDirectory (Join-Path $root 'frontend-dist') `
+            -BackendVenvDirectory (Join-Path $root 'backend\.venv') `
+            -ReleaseManifestPath (Join-Path $root 'RELEASE_MANIFEST.json') `
+            -ReleaseManifestSignaturePath (Join-Path $root 'RELEASE_MANIFEST.json.sig')
+      - name: Install Inno Setup and compile final installer
+        if: ${{ inputs.mode != 'dry-run' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --version=6.2.2 --yes --no-progress
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) { throw "ISCC.exe missing: $iscc" }
+          & $iscc '/Qp' "/O$env:GITHUB_WORKSPACE/build/windows" "/Fmodulo-$env:VERSION_NUM-windows-amd64" "/DVERSION_NUM=$env:VERSION_NUM" '/DBUNDLE_ARCH=amd64' "/DBUNDLE_DIR=$env:GITHUB_WORKSPACE/build/windows-bundle" 'deploy/windows/modulo.iss'
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE." }
+          $installer = Join-Path $env:GITHUB_WORKSPACE "build/windows/modulo-$env:VERSION_NUM-windows-amd64.exe"
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "Final installer missing: $installer" }
+      - name: Upload final Windows installer artifact
+        if: ${{ inputs.mode != 'dry-run' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-${{ inputs.version }}
+          path: build/windows/modulo-${{ inputs.version }}-windows-amd64.exe
+          if-no-files-found: error
+          retention-days: 30
 
   sign:
     name: Sign Windows installer (Azure Trusted Signing)
@@ -83,8 +110,8 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Refuse until installer artefact is wired
-        run: throw 'Signing handoff is intentionally blocked until the native bundle build and artifact upload are provisioned.'
+      - name: Refuse until signing credentials are provisioned
+        run: throw 'Azure Trusted Signing is not provisioned; refusing to claim a signed Windows installer.'
 
   attest:
     name: Attest Windows installer
@@ -94,7 +121,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - run: |
-          echo '::error::Windows attestation is blocked until a real signed native installer artifact is available.'
+          echo '::error::Windows attestation is blocked until the real signed installer artifact is available.'
           exit 1
 
   publish:

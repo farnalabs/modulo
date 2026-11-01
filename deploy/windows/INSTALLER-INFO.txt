@@ -1,9 +1,9 @@
 Modulo Windows installer
 
-Modulo is a self-hosted local installation. This installer places the native Windows runtime on your machine and registers it as a Windows service. Modulo does not provide a hosted SaaS service through this installer; you operate the installed instance and its data.
+Modulo is a self-hosted local installation. This installer places the provisioned native Windows runtime on your machine and registers it as a Windows service. Modulo does not provide a hosted SaaS service through this installer; you operate the installed instance and its data.
 
-The native runtime bundle is built separately. The installer intentionally refuses to compile unless the bundle contains both modulo.exe and modulo-runtime.json. This prevents publishing or installing a partial package.
+The installer consumes the exact native bundle produced by `scripts/build-windows-bundle.ps1`: `launcher`, `runtime`, `pg`, `redis`, `bin`, `frontend-dist`, `backend/.venv`, and the signed `RELEASE_MANIFEST.json` plus `RELEASE_MANIFEST.json.sig` handoff. It refuses to compile when the launcher or either signed-manifest file is absent.
 
 After installation, you can choose to open the local Modulo URL in your browser. The URL defaults to http://127.0.0.1:8000 and can be changed at compile time with /D MODULO_URL="http://127.0.0.1:8000".
 
-For setup and operating guidance, see the project documentation at https://modulo.run/docs. The license page in the installer displays the repository's authoritative LICENSE file.
+For setup and operating guidance, see https://modulo.run/docs. The license page in the installer displays the repository's authoritative LICENSE file.

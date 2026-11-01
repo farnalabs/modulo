@@ -40,6 +40,30 @@
 #else
   #error Required native launcher is missing: {#BUNDLE_DIR}\launcher
 #endif
+#ifexist "{#BUNDLE_DIR}\runtime"
+#else
+  #error Required CPython runtime is missing: {#BUNDLE_DIR}\runtime
+#endif
+#ifexist "{#BUNDLE_DIR}\pg"
+#else
+  #error Required PostgreSQL runtime is missing: {#BUNDLE_DIR}\pg
+#endif
+#ifexist "{#BUNDLE_DIR}\redis"
+#else
+  #error Required Redis runtime is missing: {#BUNDLE_DIR}\redis
+#endif
+#ifexist "{#BUNDLE_DIR}\bin"
+#else
+  #error Required native support binaries are missing: {#BUNDLE_DIR}\bin
+#endif
+#ifexist "{#BUNDLE_DIR}\frontend-dist"
+#else
+  #error Required frontend distribution is missing: {#BUNDLE_DIR}\frontend-dist
+#endif
+#ifexist "{#BUNDLE_DIR}\backend\.venv"
+#else
+  #error Required backend environment is missing: {#BUNDLE_DIR}\backend\.venv
+#endif
 #ifexist "{#BUNDLE_DIR}\RELEASE_MANIFEST.json"
 #else
   #error Required signed release manifest is missing: {#BUNDLE_DIR}\RELEASE_MANIFEST.json
@@ -97,8 +121,7 @@ Name: "{group}\Modulo"; Filename: "{app}\launcher"; WorkingDir: "{app}"
 Name: "{commondesktop}\Modulo"; Filename: "{app}\launcher"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-; The service contract is modulo.exe service. Runtime readiness and the local
-; HTTP listener remain the native launcher's responsibility.
+; Runtime readiness and the local HTTP listener remain the native launcher's responsibility.
 Filename: "sc.exe"; Parameters: "create Modulo binPath= \"{app}\launcher start\" start= auto"; StatusMsg: "Installing Modulo service..."; Flags: runhidden waituntilterminated
 Filename: "sc.exe"; Parameters: "start Modulo"; StatusMsg: "Starting Modulo service..."; Flags: runhidden waituntilterminated
 Filename: "{#MODULO_URL}"; Description: "Open Modulo in your browser"; Flags: postinstall shellexec unchecked; Check: ShouldOpenModulo
