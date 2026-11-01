@@ -1,44 +1,102 @@
-# Windows native bundle build
+# Windows bundle build
 
-`scripts/build-windows-bundle.ps1` is the Windows counterpart to the native Linux/macOS bundle architecture. It targets one layout only:
+`scripts/build-windows-bundle.ps1` assembles a Windows **bundle directory** -
+the tree `deploy/windows/modulo.iss` expects as `BUNDLE_DIR`. It does not build
+the installer, and it does not make the bundle a supported Windows runtime.
 
-```text
-runtime/       # python-build-standalone CPython tree
-pg/            # pinned PostgreSQL runtime and client tools
-redis/         # verified Redis-compatible runtime and tools
-bin/           # launcher/service helper boundary
-frontend-dist/ # built SPA
-backend/.venv/ # frozen backend environment
-launcher       # real native launcher contract
-```
+> **Current state: fail-closed.** The launcher refuses Windows until FAR-2229
+> lands, so the manifest records `runtime_support.status = "unsupported"`. A full
+> build also fails if PyInstaller is absent from the backend environment or if the
+> packaged launcher cannot run `version`. `-ValidateOnly` is the supported validation
+> mode, but it also fails closed when required toolchain or native inputs are missing;
+> it is not expected to pass on every machine.
 
-The builder does not use PyInstaller, operator-supplied arbitrary service folders, or a Windows-only runtime manifest. Release signing owns `RELEASE_MANIFEST.json` and `RELEASE_MANIFEST.json.sig`, the same signed manifest machinery used by the other native bundles. The installer receives that bundle and does not invent another provenance contract.
+## Prerequisites
 
-## Fail-closed prerequisites
+| Input | How it is supplied |
+|---|---|
+| PostgreSQL binaries (`initdb.exe`, `postgres.exe`, `pg_isready.exe`, `psql.exe`, `pg_dump.exe`) | `-PostgresDirectory <dir>` or `MODULO_WINDOWS_POSTGRES_DIR`; each file must be under `<dir>\bin\` (for example `C:\pg\bin\initdb.exe`) |
+| Redis binaries (`redis-server.exe`, `redis-cli.exe`) | `-RedisDirectory <dir>` or `MODULO_WINDOWS_REDIS_DIR`; each file must be under `<dir>\bin\` (for example `C:\redis\bin\redis-server.exe`) |
+| `uv` | on `PATH` |
+| pnpm | on `PATH`; prefer the version in `frontend/package.json` (`packageManager`), e.g. through `corepack` |
+| backend Python + `jsonschema` | `uv sync` in `backend/` |
+| PyInstaller | `uv add --group dev pyinstaller` in `backend/` |
 
-The shared `scripts/bundle-versions.env` must provide a Windows CPython artifact name and SHA-256, plus a pinned PostgreSQL Windows URL and SHA-256. Those values are intentionally absent until they are verified and provisioned; the builder refuses to download or accept an unverified substitute.
+The required native binary inventory and both bundle-relative layouts
+(`postgres/bin`, `redis/bin`) come from `scripts/validate_windows_bundle_manifest.py`
+(`--print-inventory`). Do not duplicate that list elsewhere; change the
+validator.
 
-Redis is currently a hard blocker. No defensible Redis-compatible Windows source and licence input is provisioned. Do not use Memurai, WSL, Cygwin, an operator folder, or a fake executable. The FAR-2229 launcher seams are also POSIX-only: a real Windows launcher and Job Object/service contract must land before assembly can proceed. No placeholder PE is created.
-
-`-ValidateOnly` prints each prerequisite and fails with the missing input names. It is evidence of the contract, not a green dry-run manufactured around missing runtime inputs.
+**Tooling is not pinned and the build is not reproducible.** pnpm, Python and
+PyInstaller are whatever the machine and the backend uv environment resolve; the
+versions are *recorded* in the manifest for diagnostics only. The PostgreSQL and
+Redis binaries are supplied by the operator - the build checks presence and
+records hashes of the copied files, nothing more.
 
 ## Commands
 
 ```powershell
-pwsh scripts/build-windows-bundle.ps1 -ValidateOnly -Version 0.4.0
-pwsh scripts/build-windows-bundle.ps1 -Version 0.4.0
+# Prerequisites only: no build, no writes. Reports every check with OK/FAIL/SKIP
+# and an explicit "Checked:" / "Not checked:" summary.
+pwsh scripts/build-windows-bundle.ps1 -ValidateOnly
+
+# Validate an existing bundle's manifest against the schema and the files.
+pwsh scripts/build-windows-bundle.ps1 -ValidateOnly -ManifestPath build/windows-bundle/modulo-runtime.json
+
+# Full build (Windows only).
+pwsh scripts/build-windows-bundle.ps1 -PostgresDirectory C:\pg -RedisDirectory C:\redis
 ```
 
-The second command remains blocked until all pinned inputs and the real launcher are available. Once available, the release workflow must place the signed `RELEASE_MANIFEST.json` and `.sig` adjacent to the bundle root and validate the handoff with:
+## Output path guard
+
+Before anything is written, created or deleted the output directory
+(`-OutputDirectory`, default `build/windows-bundle`) is resolved and **refused**
+unless it is:
+
+- strictly beneath the repository root (not the repo root itself, not a sibling
+  whose name merely starts the same way);
+- not inside a `.git` directory;
+- not a filesystem root, the user profile, or an ancestor of the user profile.
+
+A target directory that already exists and contains a reparse point
+(junction/symlink) is also refused, because a recursive delete would follow it.
+
+Verify the guard without touching this repo by running the script from a
+throwaway copy:
 
 ```powershell
-uv run --project backend python scripts/validate_windows_bundle_manifest.py `
-  --bundle build/windows-bundle `
-  --manifest build/RELEASE_MANIFEST.json
+$fake = Join-Path $env:TEMP 'bundle-guard-check'
+New-Item -ItemType Directory -Force -Path "$fake/scripts", "$fake/frontend" | Out-Null
+Copy-Item scripts/build-windows-bundle.ps1, scripts/windows-bundle-manifest.schema.json,
+          scripts/validate_windows_bundle_manifest.py -Destination "$fake/scripts"
+'{"version":"9.9.9"}' | Set-Content "$fake/frontend/package.json"
+'keep me' | Set-Content "$fake/keep-me.txt"
+
+# Refuses with "... is the repository root." and deletes nothing.
+pwsh "$fake/scripts/build-windows-bundle.ps1" -OutputDirectory . -ValidateOnly
+
+# `keep-me.txt` must still exist afterwards.
+Test-Path "$fake/keep-me.txt"
 ```
 
-The validator checks the established layout, requires the signed release manifest, and rejects `modulo-runtime.json` by construction. It never creates, signs, or mutates a manifest.
+The same refusal applies to `..`, `scripts/../../..` and `.git/hooks`. The
+automated form of this check is
+`backend/tests/unit/scripts/test_windows_bundle_manifest.py`.
 
-## Safety
+## Bundle hygiene
 
-The output path must be strictly beneath the repository root, outside `.git`, and free of reparse-point ancestors. The builder performs this check before it writes or deletes anything. A failed prerequisite never creates an incomplete bundle.
+PyInstaller writes its work directory, spec file and generated entrypoint into a
+temp staging directory outside the bundle. Only `dist/modulo.exe` and the
+intended payload (`frontend-dist/`, `postgres/`, `redis/`) are copied into the
+bundle, and the emitted bundle is rejected if it still contains any of
+`pyinstaller/`, `pyinstaller-work/`, `pyinstaller-spec/` or
+`pyinstaller-entrypoint.py` (list owned by the validator, checked with
+`--check-bundle`).
+
+## Manifest
+
+`modulo-runtime.json` at the bundle root records the version, architecture, the
+launcher contract, the frontend dist path, per-binary SHA-256 and size, and the
+tool versions that produced the build. It is validated against
+`scripts/windows-bundle-manifest.schema.json` and against the emitted files
+before the build is reported as complete. Validation never mutates the manifest.
