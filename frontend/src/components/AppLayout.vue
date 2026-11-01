@@ -42,7 +42,7 @@
       </div>
       <Breadcrumb class="px-6 pt-4 pb-3" />
       <router-view v-slot="{ Component, route }">
-        <transition name="page" mode="out-in">
+        <transition name="page" mode="out-in" @after-enter="onRouteEnter">
           <component :is="Component" :key="route.fullPath" />
         </transition>
       </router-view>
@@ -56,6 +56,7 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, provide, watch } from "vue";
+import { focusRouteContent } from "../router";
 import { useRoute, useRouter } from "vue-router";
 import { api, clearAccessTokenForLogout } from "../lib/api/client";
 import { useCurrentUser } from "../composables/useCurrentUser";
@@ -236,6 +237,10 @@ provide(LICENCE_STATUS_INJECTION_KEY, {
 
 const route = useRoute();
 const router = useRouter();
+
+function onRouteEnter() {
+  focusRouteContent()
+}
 
 /**
  * Send the administrator to the licence key input from anywhere in the app.

@@ -1,7 +1,5 @@
 import { formatApiError } from '../lib/api/formatError'
 import { decodeJwtPayload } from '../lib/jwt'
-import { nextTick } from 'vue'
-
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAccessToken } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
@@ -140,6 +138,13 @@ const OAuthConsentView = () => import('../views/OAuthConsentView.vue')
 const DemoView = () => import('../views/DemoView.vue')
 const AcceptInviteView = () => import('../views/AcceptInviteView.vue')
 const AssistantOnlyView = () => import('../views/AssistantOnlyView.vue')
+
+export function focusRouteContent() {
+  const target = document.querySelector<HTMLElement>('[data-page-heading]')
+  if (target && document.activeElement !== target && !target.contains(document.activeElement)) {
+    target.focus({ preventScroll: true })
+  }
+}
 
 const router = createRouter({
   history: createWebHistory(),
@@ -1081,14 +1086,9 @@ router.beforeEach(async (to) => {
 })
 
 let _chunkRetryCount = 0
-router.afterEach(async (to) => {
+router.afterEach((to) => {
   _chunkRetryCount = 0
   document.title = `${to.meta.title ?? to.meta.breadcrumb ?? 'Modulo'} | Modulo`
-  await nextTick()
-  const target = document.querySelector<HTMLElement>('[data-page-heading], [data-main-landmark]')
-  if (target && document.activeElement !== target && !target.contains(document.activeElement)) {
-    target.focus({ preventScroll: true })
-  }
 })
 router.onError((err) => {
   console.error('[router] navigation error:', err)

@@ -49,7 +49,7 @@
       </div>
     </header>
 
-    <main class="page-wide">
+    <section class="page-wide">
       <div v-if="selectedTypes.length > 0" class="flex flex-wrap items-center gap-2 py-2">
         <span
           v-for="type in selectedTypes"
@@ -221,7 +221,7 @@
           {{ $t('views.LibraryView.next_page') }}
         </button>
       </div>
-    </main>
+    </section>
   </div>
 </template>
 

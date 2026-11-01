@@ -35,7 +35,7 @@
       </div>
     </header>
 
-    <main class="page-wide">
+    <section class="page-wide">
       <div v-if="store.isLoading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div v-for="i in 6" :key="i" class="card p-5 animate-pulse">
           <div class="h-5 w-3/4 bg-muted rounded mb-2" />
@@ -147,7 +147,7 @@
           {{ $t('views.LifecycleMapList.next') }}
         </button>
       </div>
-    </main>
+    </section>
 
     <!-- Create dialog -->
     <dialog

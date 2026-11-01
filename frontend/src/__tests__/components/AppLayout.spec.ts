@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
+import { focusRouteContent } from '../../router'
 
 vi.mock('../../lib/api/client', () => ({
   api: { GET: vi.fn().mockResolvedValue({ data: null, error: undefined }) },
@@ -56,10 +57,40 @@ import { api, getAccessToken } from '../../lib/api/client'
 
 const router = createRouter({
   history: createWebHistory(),
-  routes: [{ path: '/', name: 'dashboard', component: { template: '<div>Dashboard</div>' } }],
+  routes: [
+    { path: '/', name: 'dashboard', component: { template: '<h1 tabindex="-1" data-page-heading>Dashboard</h1>' } },
+    { path: '/next', name: 'next', component: { template: '<h1 tabindex="-1" data-page-heading>Next route</h1>' } },
+  ],
 })
 
 describe('AppLayout', () => {
+  it('focuses the newly entered route heading after out-in navigation', () => {
+    const shellMain = document.createElement('main')
+    shellMain.dataset.mainLandmark = ''
+    const outgoingHeading = document.createElement('h1')
+    outgoingHeading.tabIndex = -1
+    outgoingHeading.dataset.pageHeading = ''
+    outgoingHeading.textContent = 'Outgoing route'
+    const enteredHeading = document.createElement('h1')
+    enteredHeading.tabIndex = -1
+    enteredHeading.dataset.pageHeading = ''
+    enteredHeading.textContent = 'Entered route'
+    document.body.append(shellMain, outgoingHeading, enteredHeading)
+    outgoingHeading.focus()
+
+    outgoingHeading.remove()
+    enteredHeading.remove()
+    document.body.append(enteredHeading)
+    focusRouteContent()
+
+    expect(document.activeElement).toBe(enteredHeading)
+    expect(document.activeElement).not.toBe(shellMain)
+    expect(document.activeElement).not.toBe(outgoingHeading)
+    shellMain.remove()
+    outgoingHeading.remove()
+    enteredHeading.remove()
+  })
+
   it('renders plan badge by default', async () => {
     const wrapper = mount(AppLayout, {
       global: {

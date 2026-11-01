@@ -26,7 +26,7 @@
          real CTA button. That is the focusable child the rule wants — putting
          `tabindex` on `<main>` itself trips SonarCloud Web:S6845 (tabindex
          belongs on interactive elements). -->
-    <main class="flex-1 overflow-y-auto">
+    <section class="flex-1 overflow-y-auto">
       <div v-if="!editingSchema" class="p-6">
         <EmptyState :title="$t('views.SchemaEditorView.select_or_create')">
           <Button data-testid="schema-editor-empty-new" @click="createNewSchema">
@@ -92,8 +92,7 @@
           </div>
         </div>
       </template>
-    </main>
-    </div>
+    </section>
   </div>
 </template>
 
