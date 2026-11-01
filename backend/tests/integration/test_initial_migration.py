@@ -243,6 +243,19 @@ _AUDIT_CHAIN_FK_COLUMNS: dict[str, frozenset[str]] = {
     "scheduled_reports": frozenset({"created_by", "updated_by", "deleted_by"}),
 }
 
+# FKs created by a migration that the ORM deliberately does not declare.
+# Keyed table -> constraint names. permanent (documented repo divergence)
+_MIGRATION_OWNED_FKS: dict[str, frozenset[str]] = {
+    # FAR-2236 (0341): system_maps.published_revision_id carries an
+    # organisation-scoped FK to system_map_revisions (id, organisation_id).
+    # system_map_revisions already points back at system_maps, so declaring
+    # both directions in ORM metadata makes the pair mutually dependent:
+    # create_all cannot topologically sort the cycle and SQLAlchemy drops the
+    # cyclic FK with a warning. The migration owns the DB constraint; the ORM
+    # keeps the single-direction relationships.
+    "system_maps": frozenset({"fk_system_maps_published_revision"}),
+}
+
 
 def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
     """Classify ONE compare_metadata diff against the reasoned entries above.
@@ -298,7 +311,8 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
             {col.name for col in inner[1].columns} <= _AUDIT_CHAIN_FK_COLUMNS[inner[1].table.name]
         ):
             return True
-        # FKs the ORM deliberately leaves to the migration — per-constraint.
+        # Migration-owned FKs the ORM must not declare — per-(table, constraint).
+        # FKs the ORM deliberately leaves to the migration, per-constraint.
         return inner[1].name in _MIGRATION_OWNED_FKS.get(inner[1].table.name, frozenset())
     if kind == "add_fk":
         # DB-owned audit-chain FKs the migrations add but the ORM does not declare
