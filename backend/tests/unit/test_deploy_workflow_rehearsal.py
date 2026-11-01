@@ -1331,12 +1331,25 @@ def test_release_publication_hold_establishment_handles_absent_and_remote_error(
     [
         ("Clean up publication hold after failed cut preparation", 0),
         ("Clean up publication hold after failed cut preparation", 2),
+        ("Clean up publication hold after failed cut preparation", 17),
         ("Clean up publication hold after failed release cut", 0),
         ("Clean up publication hold after failed release cut", 2),
+        ("Clean up publication hold after failed release cut", 17),
         ("Re-establish release freeze after failed GA publication", 0),
         ("Re-establish release freeze after failed GA publication", 2),
         ("Re-establish release freeze after failed GA publication", 17),
     ],
+    ids=(
+        "cut-preparation-present",
+        "cut-preparation-absent",
+        "cut-preparation-lookup-error",
+        "release-cut-present",
+        "release-cut-absent",
+        "release-cut-lookup-error",
+        "ga-publication-present",
+        "ga-publication-absent",
+        "ga-publication-lookup-error",
+    ),
 )
 def test_release_publication_hold_cleanup_is_explicitly_fail_closed(
     tmp_path: Path, step_name: str, lookup_rc: int
