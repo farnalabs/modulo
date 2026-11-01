@@ -387,6 +387,23 @@ describe('MyProfileView HITL email alerts', () => {
     expect(selects[1].props('modelValue')).toBe('default')
   })
 
+  it('ignores a non-string override value', async () => {
+    mockPrefsGet({ default: false, pipeline_overrides: {} })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="my-profile-hitl-email-default"]').exists()).toBe(true)
+    })
+    await nextTick()
+
+    const selects = wrapper.findAllComponents(AppSelect)
+    await selects[0].vm.$emit('update:modelValue', undefined)
+    await nextTick()
+
+    // A non-string event value is ignored; the stored choice is unchanged.
+    expect(selects[0].props('modelValue')).toBe('default')
+  })
+
   it('round-trips the saved preferences, sending only explicit overrides', async () => {
     mockPrefsGet({ default: false, pipeline_overrides: { p1: true } })
     mockPut.mockResolvedValue({ data: { default: true, pipeline_overrides: { p1: true } }, error: undefined })

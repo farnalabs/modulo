@@ -39,4 +39,12 @@ describe('FormDialog', () => {
   it('disables confirmation when explicitly disabled', () => {
     expect((mountDialog({ confirmText: 'Delete', confirmDisabled: true }).findAll('button')[1].element as HTMLButtonElement).disabled).toBe(true)
   })
+
+  it('falls back to the localized confirm label when no confirm text is given', () => {
+    expect(mountDialog().findAll('button')[1].text()).toBe('Confirm')
+  })
+
+  it('falls back to the localized confirm label while loading when no texts are given', () => {
+    expect(mountDialog({ loading: true }).findAll('button')[1].text()).toBe('Confirm')
+  })
 })

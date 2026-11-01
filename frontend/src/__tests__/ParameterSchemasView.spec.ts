@@ -613,6 +613,64 @@ describe('ParameterSchemasView — parameter sets tab', () => {
     expect(optionLabels).toContain('Stub Backend')
     expect(optionLabels).toContain('Deployment Schema')
   })
+
+  it('binds every set-form picker type and falls back to short ids for nameless pickers', async () => {
+    mockGet((url) => {
+      if (url === '/api/v1/parameter-schemas/{schema_id}/sets') return { data: [setItem({ values: {} })], error: undefined }
+      if (url === '/api/v1/parameter-schemas') return listPayload()
+      // A nameless schema exercises the shortId fallback in schemaOptions.
+      if (url === '/api/v1/schemas') return { data: { items: [{ id: 'sch-2' }], total: 1, page: 1, page_size: 100 }, error: undefined }
+      // A nameless backend exercises the shortId fallback in modelBackendOptions.
+      if (url === '/api/v1/model-backends') {
+        return { data: { items: [{ id: 'mb-1', name: 'Stub Backend' }, { id: 'mb-2' }] }, error: undefined }
+      }
+      return { data: undefined, error: { detail: 'not found' } }
+    })
+    const wrapper = mount(ParameterSchemasView)
+    await flush()
+    await wrapper.find('tbody tr').trigger('click')
+    await flush()
+    await switchTab(wrapper, 'Parameter Sets')
+    await wrapper.find('[data-testid="paramschema-new-set"]').trigger('click')
+    await flush()
+    ;(wrapper.vm as unknown as { schemaForm: { parameters: unknown[] } }).schemaForm.parameters = [
+      { name: 'flag', label: 'Flag', type: 'boolean', required: false },
+      { name: 'choice', label: 'Choice', type: 'select', required: false, options: ['a', 'b'] },
+      // A select with no options covers the `param.options || []` fallback.
+      { name: 'loose', label: 'Loose', type: 'select', required: false },
+      { name: 'backend', label: 'Backend', type: 'model_backend_ref', required: false },
+      { name: 'target', label: 'Target', type: 'schema_ref', required: false },
+    ]
+    await flush()
+
+    const selectFor = (id: string) => {
+      const match = wrapper
+        .findAllComponents(AppSelect)
+        .find((select) => select.find(`[data-testid="paramschema-set-value-${id}"]`).exists())
+      expect(match, `set-form select for ${id}`).toBeDefined()
+      return match!
+    }
+
+    await selectFor('flag').vm.$emit('update:modelValue', true)
+    await selectFor('choice').vm.$emit('update:modelValue', 'b')
+    await selectFor('loose').vm.$emit('update:modelValue', 'anything')
+    await selectFor('backend').vm.$emit('update:modelValue', 'mb-2')
+    await selectFor('target').vm.$emit('update:modelValue', 'sch-2')
+    await flush()
+
+    const vm = wrapper.vm as unknown as { setForm: { values: Record<string, unknown> } }
+    expect(vm.setForm.values.flag).toBe(true)
+    expect(vm.setForm.values.choice).toBe('b')
+    expect(vm.setForm.values.loose).toBe('anything')
+    expect(vm.setForm.values.backend).toBe('mb-2')
+    expect(vm.setForm.values.target).toBe('sch-2')
+
+    const labelsFor = (id: string) =>
+      (selectFor(id).props('options') as Array<{ label: string }>).map((option) => option.label)
+    expect(labelsFor('backend')).toContain('Stub Backend')
+    expect(labelsFor('backend')).toContain('#mb-2')
+    expect(labelsFor('target')).toContain('#sch-2')
+  })
 })
 
 describe('ParameterSchemasView — references tab', () => {
@@ -757,6 +815,35 @@ describe('ParameterSchemasView — validate tab', () => {
     await flush()
     expect(wrapper.text()).toContain('Validation failed:')
     expect(wrapper.text()).toContain('validator offline')
+  })
+
+  it('binds boolean and select inputs in the validate tab', async () => {
+    const wrapper = await openEditorAtValidateTab()
+    ;(wrapper.vm as unknown as { schemaForm: { parameters: unknown[] } }).schemaForm.parameters = [
+      { name: 'flag', label: 'Flag', type: 'boolean', required: false },
+      { name: 'choice', label: 'Choice', type: 'select', required: false, options: ['a', 'b'] },
+      // A select with no options covers the `param.options || []` fallback.
+      { name: 'loose', label: 'Loose', type: 'select', required: false },
+    ]
+    await flush()
+
+    const selectFor = (id: string) => {
+      const match = wrapper
+        .findAllComponents(AppSelect)
+        .find((select) => select.find(`[data-testid="paramschema-validate-value-${id}"]`).exists())
+      expect(match, `validate-tab select for ${id}`).toBeDefined()
+      return match!
+    }
+
+    await selectFor('flag').vm.$emit('update:modelValue', true)
+    await selectFor('choice').vm.$emit('update:modelValue', 'a')
+    await selectFor('loose').vm.$emit('update:modelValue', 'anything')
+    await flush()
+
+    const vm = wrapper.vm as unknown as { validateValues: Record<string, unknown> }
+    expect(vm.validateValues.flag).toBe(true)
+    expect(vm.validateValues.choice).toBe('a')
+    expect(vm.validateValues.loose).toBe('anything')
   })
 
   it('opens the editor for a schema row via keyboard (Enter / Space) for a11y (FAR-821)', async () => {
