@@ -52,7 +52,7 @@
 
     <ErrorAlert
       v-else-if="error"
-      :message="`${error} ${$t('views.RunsListView.load_error_recovery')}`"
+      :message="error + ' ' + $t('views.RunsListView.load_error_recovery')"
       :on-retry="loadRuns"
     />
 

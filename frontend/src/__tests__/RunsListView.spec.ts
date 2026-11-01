@@ -539,7 +539,7 @@ describe('RunsListView', () => {
     const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
     await stopBtn.trigger('click')
     await nextTick()
-    expect(stopBtn.text()).toContain('Confirm')
+    expect(stopBtn.text()).toContain('Stop this run?')
 
     await stopBtn.trigger('click')
     await flushPromises()

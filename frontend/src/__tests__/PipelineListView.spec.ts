@@ -1223,7 +1223,7 @@ describe('PipelineListView', () => {
     }
   })
 
-  it('renders the folder-list failure alert inside <main>, never as a flex sibling of the sidebar', async () => {
+  it('renders the folder-list failure alert inside the content column, never as a flex sibling of the sidebar', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       mockResponses['/api/v1/pipeline-folders'] = undefined
@@ -1237,15 +1237,17 @@ describe('PipelineListView', () => {
 
       const alert = wrapper.find('[data-testid="pipeline-list-folder-error"]')
       expect(alert.exists()).toBe(true)
-      // It lives INSIDE <main> ...
-      expect(wrapper.find('main').find('[data-testid="pipeline-list-folder-error"]').exists()).toBe(true)
+      // It lives INSIDE the content column. The <main> landmark is owned by
+      // AppLayout, so a view must not render a second one.
+      expect(wrapper.find('main').exists()).toBe(false)
+      expect(wrapper.find('section').find('[data-testid="pipeline-list-folder-error"]').exists()).toBe(true)
       // ... and never as a direct flex child of the sidebar/table row. The old
       // mis-placed <p> was a sibling there, squeezing a vertical column between
       // the tree and the table instead of alerting above the content.
       expect(
         wrapper.find('div.flex.flex-1.min-h-0 > [data-testid="pipeline-list-folder-error"]').exists(),
       ).toBe(false)
-      expect(wrapper.find('main + [data-testid="pipeline-list-folder-error"]').exists()).toBe(false)
+      expect(wrapper.find('section + [data-testid="pipeline-list-folder-error"]').exists()).toBe(false)
       wrapper.unmount()
     } finally {
       delete mockResponses['/api/v1/pipeline-folders']

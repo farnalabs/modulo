@@ -36,7 +36,7 @@
         @folders-changed="loadPipelines"
         @move-pipeline="onMovePipeline"
       />
-      <div class="flex-1 page-wide min-w-0 overflow-y-auto overscroll-contain">
+      <section class="flex-1 page-wide min-w-0 overflow-y-auto overscroll-contain">
          <!-- Folder-list load failure. First child of the content column — never
               a flex sibling of the sidebar, which would squeeze it into a
               vertical column between the tree and the table. This is the <md
@@ -264,7 +264,7 @@
           </div>
         </div>
 
-      </div>
+      </section>
     </div>
 
       <!-- Move to Folder dialog -->
