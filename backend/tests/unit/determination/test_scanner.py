@@ -13,10 +13,12 @@ import pytest
 import respx
 from cryptography.fernet import Fernet
 
-from modulo.connectors.base import ConnectorQuery, ConnectorType
+from modulo.connectors.base import ConnectorType
 from modulo.core.connector_hub import ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.determination.scanner import _repo_name, run_scan
+
+from .helpers import FakeConnector
 
 _KEY = Fernet.generate_key().decode()
 
@@ -89,6 +91,21 @@ def _stub_github(
         respx.get(f"{_GITHUB_API}/repos/{repo_name}/pulls").mock(response)
 
 
+def _jira_ci() -> object:
+    """Minimal Jira connector instance pointed at the local test domain."""
+    return _fake_ci(
+        "jira",
+        creds={"email": "user@test.com", "api_token": "token"},
+        config={"instance": "test-domain.atlassian.net"},
+    )
+
+
+def _stub_jira(*, search: httpx.Response) -> None:
+    """Install the Jira endpoints every scan touches: /myself and the issue search."""
+    respx.get(f"{_JIRA_BASE}/myself").mock(httpx.Response(200, json={"displayName": "Test User"}))
+    respx.post(f"{_JIRA_BASE}/search").mock(search)
+
+
 def _stub_gitlab(*, projects: httpx.Response, mrs: httpx.Response | None = None) -> None:
     """Install the GitLab endpoints every scan touches: /user, projects, per-project MRs, token info."""
     respx.get(f"{_GITLAB_API}/user").mock(httpx.Response(200, json={"username": "testuser"}))
@@ -141,17 +158,12 @@ async def test_gitlab_scan() -> None:
 
 @respx.mock
 async def test_jira_scan() -> None:
-    ci = _fake_ci(
-        "jira",
-        creds={"email": "user@test.com", "api_token": "token"},
-        config={"instance": "test-domain.atlassian.net"},
-    )
+    ci = _jira_ci()
     async with _hub(ci) as hub:
         await hub.initialise([ci])
 
-        respx.get(f"{_JIRA_BASE}/myself").mock(httpx.Response(200, json={"displayName": "Test User"}))
-        respx.post(f"{_JIRA_BASE}/search").mock(
-            httpx.Response(
+        _stub_jira(
+            search=httpx.Response(
                 200,
                 json={"issues": [{"id": "1", "key": "PROJ-1"}], "total": 137},
             )
@@ -166,6 +178,22 @@ async def test_jira_scan() -> None:
     assert issues.sample_count == 137
     assert len(issues.records) == 1
     assert issues.records[0]["key"] == "PROJ-1"
+
+
+@respx.mock
+async def test_jira_sample_count_falls_back_to_record_count_without_total() -> None:
+    """A Jira response with no ``total`` must count the sampled records, not report zero."""
+    ci = _jira_ci()
+    async with _hub(ci) as hub:
+        await hub.initialise([ci])
+
+        _stub_jira(search=httpx.Response(200, json={"issues": [{"id": "1"}, {"id": "2"}]}))
+
+        samples = await run_scan(hub)
+    assert len(samples) == 1
+    assert samples[0].resource == "issues"
+    assert samples[0].error is None
+    assert samples[0].sample_count == 2
 
 
 @respx.mock
@@ -184,16 +212,7 @@ async def test_unsupported_connector_type_produces_no_samples() -> None:
     """A connector whose type is not sampled must be health-checked but yield no samples."""
     cid = uuid.uuid4()
 
-    class _SlackConnector:
-        connector_type = ConnectorType.SLACK
-
-        async def health_check(self) -> None:
-            return None
-
-        async def query(self, query: ConnectorQuery) -> SimpleNamespace:  # pragma: no cover - never reached
-            raise AssertionError("query should not be reached for an unsampled connector type")
-
-    hub = _bare_hub({cid: _SlackConnector()})
+    hub = _bare_hub({cid: FakeConnector(ConnectorType.SLACK)})
 
     samples = await run_scan(hub)
     assert samples == []
@@ -350,16 +369,7 @@ async def test_connector_query_cancellation_propagates() -> None:
     """A CancelledError from a connector query must propagate out of run_scan."""
     cid = uuid.uuid4()
 
-    class _CancellingConnector:
-        connector_type = ConnectorType.GITHUB
-
-        async def health_check(self) -> None:
-            return None
-
-        async def query(self, query: ConnectorQuery) -> None:  # pragma: no cover - always cancelled
-            raise asyncio.CancelledError
-
-    hub = _bare_hub({cid: _CancellingConnector()})
+    hub = _bare_hub({cid: FakeConnector(query_error=asyncio.CancelledError())})
 
     with pytest.raises(asyncio.CancelledError):
         await run_scan(hub)
@@ -369,16 +379,7 @@ async def test_connector_health_check_cancellation_propagates() -> None:
     """A CancelledError from health_check must propagate out of run_scan."""
     cid = uuid.uuid4()
 
-    class _CancellingHealthCheck:
-        connector_type = ConnectorType.GITHUB
-
-        async def health_check(self) -> None:
-            raise asyncio.CancelledError
-
-        async def query(self, query: ConnectorQuery) -> None:  # pragma: no cover - never reached
-            raise AssertionError("query should not be reached")
-
-    hub = _bare_hub({cid: _CancellingHealthCheck()})
+    hub = _bare_hub({cid: FakeConnector(health_check_error=asyncio.CancelledError())})
 
     with pytest.raises(asyncio.CancelledError):
         await run_scan(hub)
@@ -413,25 +414,12 @@ async def test_connector_whose_health_check_raises_is_skipped() -> None:
     broken_id = uuid.uuid4()
     healthy_id = uuid.uuid4()
 
-    class _ExplodingConnector:
-        connector_type = ConnectorType.GITHUB
-
-        async def health_check(self) -> None:
-            raise RuntimeError("health check exploded")
-
-        async def query(self, query: ConnectorQuery) -> None:  # pragma: no cover - never reached
-            raise AssertionError("query should not be called on a broken connector")
-
-    class _HealthyConnector:
-        connector_type = ConnectorType.GITHUB
-
-        async def health_check(self) -> None:
-            return None
-
-        async def query(self, query: ConnectorQuery) -> SimpleNamespace:
-            return SimpleNamespace(records=[])
-
-    hub = _bare_hub({broken_id: _ExplodingConnector(), healthy_id: _HealthyConnector()})
+    hub = _bare_hub(
+        {
+            broken_id: FakeConnector(health_check_error=RuntimeError("health check exploded")),
+            healthy_id: FakeConnector(query_records=[]),
+        }
+    )
 
     samples = await run_scan(hub)
     # The broken connector must not crash the scan or produce samples;
@@ -474,17 +462,7 @@ async def test_connector_query_timeout_produces_error_sample() -> None:
     """A connector whose query hangs must be cut off and surfaced as an error sample."""
     cid = uuid.uuid4()
 
-    class _SlowConnector:
-        connector_type = ConnectorType.GITHUB
-
-        async def health_check(self) -> None:
-            return None
-
-        async def query(self, query: ConnectorQuery) -> SimpleNamespace:  # pragma: no cover - never returns
-            await asyncio.sleep(60)
-            raise AssertionError("query should be interrupted by the timeout")
-
-    hub = _bare_hub({cid: _SlowConnector()})
+    hub = _bare_hub({cid: FakeConnector(query_records=[], delay_seconds=60)})
 
     with patch("modulo.determination.scanner._QUERY_TIMEOUT", 0.05):
         samples = await run_scan(hub)

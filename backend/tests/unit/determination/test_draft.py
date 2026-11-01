@@ -3,7 +3,7 @@
 from modulo.connectors.base import ConnectorType
 from modulo.determination.draft import DraftEdge, generate_draft
 
-from .helpers import draft_for, iso_days_ago, make_finding, make_sample
+from .helpers import draft_for, iso_days_ago, issues_sample, make_finding, make_sample
 
 
 def test_empty_data_returns_empty_draft() -> None:
@@ -35,11 +35,7 @@ def test_repos_create_start_end_nodes() -> None:
 
 def test_planning_and_development_creates_hitl_review() -> None:
     samples = [
-        make_sample(
-            "issues",
-            [{"fields": {"status": {"name": "Backlog"}, "summary": "T1"}}],
-            connector_type=ConnectorType.JIRA,
-        ),
+        issues_sample(["Backlog"]),
         make_sample("repos", [{"name": "repo-a"}]),
     ]
     draft = draft_for(samples)
@@ -52,11 +48,7 @@ def test_planning_and_development_creates_hitl_review() -> None:
 
 def test_full_sdlc_creates_all_stages() -> None:
     samples = [
-        make_sample(
-            "issues",
-            [{"fields": {"status": {"name": "Backlog"}, "summary": "T1"}}],
-            connector_type=ConnectorType.JIRA,
-        ),
+        issues_sample(["Backlog"]),
         make_sample("repos", [{"name": "repo-a", "description": "uses .github/workflows"}]),
         make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(2)}]),
     ]
@@ -71,11 +63,7 @@ def test_full_sdlc_creates_all_stages() -> None:
 
 def test_automation_suggestions_included() -> None:
     samples = [
-        make_sample(
-            "issues",
-            [{"fields": {"status": {"name": "Backlog"}, "summary": "T1"}}],
-            connector_type=ConnectorType.JIRA,
-        ),
+        issues_sample(["Backlog"]),
         make_sample("repos", [{"name": "repo-a"}]),
         make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(2)}]),
     ]
@@ -149,13 +137,7 @@ def test_development_node_uses_gitlab_connector() -> None:
 
 
 def test_data_without_detectable_stages_falls_back_to_start_end_edge() -> None:
-    samples = [
-        make_sample(
-            "issues",
-            [{"fields": {"status": {"name": "Done"}, "summary": "T1"}}],
-            connector_type=ConnectorType.JIRA,
-        )
-    ]
+    samples = [issues_sample(["Done"])]
     draft = draft_for(samples)
     assert {n.id for n in draft.nodes} == {"start", "end"}
     assert draft.edges == [DraftEdge(source="start", target="end")]
@@ -181,11 +163,7 @@ def test_placeholder_nodes_have_correct_types() -> None:
 def test_planning_to_ci_without_development() -> None:
     """CI/CD must wire to the preceding planning stage when no development stage exists."""
     samples = [
-        make_sample(
-            "issues",
-            [{"fields": {"status": {"name": "Backlog"}, "summary": "T1"}}],
-            connector_type=ConnectorType.JIRA,
-        ),
+        issues_sample(["Backlog"]),
         # A description-only repo record triggers CI detection without a development stage
         make_sample("repos", [{"description": "uses .github/workflows"}]),
     ]
@@ -202,11 +180,7 @@ def test_planning_to_ci_without_development() -> None:
 def test_review_sourced_from_planning_when_no_development() -> None:
     """A review stage must fall back to the last prior stage when development is absent."""
     samples = [
-        make_sample(
-            "issues",
-            [{"fields": {"status": {"name": "Backlog"}, "summary": "T1"}}],
-            connector_type=ConnectorType.JIRA,
-        ),
+        issues_sample(["Backlog"]),
         make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(2)}]),
     ]
     draft = draft_for(samples)
