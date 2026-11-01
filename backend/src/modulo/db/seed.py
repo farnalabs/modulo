@@ -73,7 +73,16 @@ SYSTEM_SCHEMAS = [
 
 
 async def seed_system_schemas(session: AsyncSession, org_id: uuid.UUID, account_id: uuid.UUID) -> None:
-    """Create system schemas for an organisation if they don't already exist."""
+    """Create system schemas for an organisation if they don't already exist.
+
+    ``schemas`` carries the ``rls_org_isolation`` policy, which compares
+    ``organisation_id`` to the ``app.organisation_id`` setting. The boot seeder
+    opens a fresh session per org with no tenant context, so under the
+    non-owner runtime role the existence check saw zero rows and the INSERT was
+    rejected (FAR-2265, ``system_schemas.seed_org_failed``). Scope the
+    transaction to *org_id* first — idempotent for callers that already did.
+    """
+    await set_rls_org(session, org_id)
     for spec in SYSTEM_SCHEMAS:
         existing = await session.execute(
             select(Schema).where(
