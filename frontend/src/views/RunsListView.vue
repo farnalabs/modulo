@@ -50,7 +50,11 @@
       data-testid="runs-list-loading"
     />
 
-    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadRuns" />
+    <ErrorAlert
+      v-else-if="error"
+      :message="`${error} ${$t('views.RunsListView.load_error_recovery')}`"
+      :on-retry="loadRuns"
+    />
 
     <template v-else>
       <!-- An emptied cursor page still renders the footer when the user can

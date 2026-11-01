@@ -1,5 +1,6 @@
 import { formatApiError } from '../lib/api/formatError'
 import { decodeJwtPayload } from '../lib/jwt'
+import { nextTick } from 'vue'
 
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAccessToken } from '../lib/api/client'
@@ -23,6 +24,7 @@ declare module 'vue-router' {
     visibility?: 'public' | 'public_preview' | 'private_preview' | 'in_dev'
     public?: boolean
     bare?: boolean
+    title?: string
   }
 }
 
@@ -1079,8 +1081,14 @@ router.beforeEach(async (to) => {
 })
 
 let _chunkRetryCount = 0
-router.afterEach(() => {
+router.afterEach(async (to) => {
   _chunkRetryCount = 0
+  document.title = `${to.meta.title ?? to.meta.breadcrumb ?? 'Modulo'} | Modulo`
+  await nextTick()
+  const target = document.querySelector<HTMLElement>('[data-page-heading], [data-main-landmark]')
+  if (target && document.activeElement !== target && !target.contains(document.activeElement)) {
+    target.focus({ preventScroll: true })
+  }
 })
 router.onError((err) => {
   console.error('[router] navigation error:', err)

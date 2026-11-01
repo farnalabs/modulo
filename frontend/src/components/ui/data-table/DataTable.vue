@@ -94,7 +94,7 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
 </script>
 
 <template>
-  <div class="overflow-x-auto">
+  <div class="overflow-x-auto overscroll-contain">
     <table class="w-full">
       <thead>
         <tr>

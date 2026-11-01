@@ -12,7 +12,9 @@
     />
 
     <main
-      class="flex-1 min-w-0 overflow-auto bg-background relative"
+      class="flex-1 min-w-0 overflow-auto overscroll-contain bg-background relative"
+      data-main-landmark
+      tabindex="-1"
       :class="mainPaddingClass"
     >
       <div class="relative z-10 space-y-2">
