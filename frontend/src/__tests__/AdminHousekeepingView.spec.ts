@@ -63,9 +63,10 @@ function mountView() {
     global: {
       stubs: {
         FeatureGate: { template: '<div><slot /></div>' },
-        Dialog: {
-          props: ['visible', 'modal'],
-          template: '<div v-if="visible" data-testid="hk-confirm-dialog"><slot name="header" /><slot /><slot name="footer" /></div>',
+        FormDialog: {
+          props: ['open', 'title', 'description', 'confirmText', 'confirmLoadingText', 'loading', 'confirmDisabled', 'cancelTestId', 'confirmTestId'],
+          emits: ['confirm', 'update:open'],
+          template: '<div v-if="open" data-testid="hk-confirm-dialog"><h2>{{ title }}</h2><p>{{ description }}</p><button data-testid="hk-cancel-cleanup" @click="$emit(\'update:open\', false)">Cancel</button><button :data-testid="confirmTestId" :disabled="confirmDisabled || loading" @click="$emit(\'confirm\')">{{ loading ? confirmLoadingText : confirmText }}</button><slot /></div>',
         },
       },
     },
@@ -354,8 +355,8 @@ describe('AdminHousekeepingView — cleanup', () => {
 
     const dialog = wrapper.find('[data-testid="hk-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
-    expect(dialog.text()).toContain('Confirm Cleanup')
-    expect(dialog.text()).toContain('cannot be undone')
+    expect(dialog.find('h2').text()).toBe('Confirm Cleanup')
+    expect(dialog.find('p').text()).toContain('cannot be undone')
     expect(dialog.text()).toContain('pipeline (2)')
     expect(dialog.text()).toContain('connector (1)')
 
@@ -397,6 +398,22 @@ describe('AdminHousekeepingView — cleanup', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="hk-confirm-dialog"]').exists()).toBe(false)
     expect(mockPost).not.toHaveBeenCalled()
+  })
+
+  it('uses the localized loading confirmation text while cleanup is in flight', async () => {
+    let resolvePost: (value: { deleted_count: number; errors: never[] }) => void = () => {}
+    mockGet.mockResolvedValue(scanPayload([category('stale_pipelines', [candidate('p-1', 'Pipe A')])]))
+    mockPost.mockReturnValue(new Promise((resolve) => { resolvePost = resolve }))
+    const wrapper = mountView()
+    await nextTick()
+    await openConfirm(wrapper)
+
+    await wrapper.find('[data-testid="hk-confirm-cleanup"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="hk-confirm-cleanup"]').text()).toContain('Cleaning up…')
+
+    resolvePost({ deleted_count: 1, errors: [] })
+    await flushPromises()
   })
 
   it('cleanup failure surfaces the error message', async () => {

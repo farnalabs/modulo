@@ -57,17 +57,16 @@
             <label for="org-hitl-review-window-unit" class="mb-1.5 block text-xs font-medium text-muted-foreground">
               {{ $t('views.AdminOrgSettingsView.hitl_review_window_unit') }}
             </label>
-            <select
+            <AppSelect
               id="org-hitl-review-window-unit"
               v-model="hitlWindowUnit"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              :options="hitlWindowUnitOptions"
+              option-label="label"
+              option-value="value"
+              :label="$t('views.AdminOrgSettingsView.hitl_review_window_unit')"
+              class="w-full"
               data-testid="org-hitl-review-window-unit"
-            >
-              <option value="seconds">{{ $t('views.AdminOrgSettingsView.unit_seconds') }}</option>
-              <option value="minutes">{{ $t('views.AdminOrgSettingsView.unit_minutes') }}</option>
-              <option value="hours">{{ $t('views.AdminOrgSettingsView.unit_hours') }}</option>
-              <option value="days">{{ $t('views.AdminOrgSettingsView.unit_days') }}</option>
-            </select>
+            />
           </div>
           <Button
             type="button"
@@ -339,6 +338,7 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
 import DataCard from '../components/ui/DataCard.vue'
 import { ref, computed, reactive } from 'vue'
@@ -506,6 +506,12 @@ const hitlWindowLoading = ref(true)
 const hitlWindowLoadError = ref<string | null>(null)
 const hitlWindowValue = ref<string | number>('')
 const hitlWindowUnit = ref<HitlWindowUnit>('minutes')
+const hitlWindowUnitOptions = computed(() => [
+  { value: 'seconds' as const, label: t('views.AdminOrgSettingsView.unit_seconds') },
+  { value: 'minutes' as const, label: t('views.AdminOrgSettingsView.unit_minutes') },
+  { value: 'hours' as const, label: t('views.AdminOrgSettingsView.unit_hours') },
+  { value: 'days' as const, label: t('views.AdminOrgSettingsView.unit_days') },
+])
 const hitlWindowCurrentSeconds = ref<number | null>(null)
 const hitlWindowIsDefault = ref(true)
 const hitlWindowSaving = ref(false)

@@ -230,31 +230,26 @@
         </div>
       </DataCard>
 
-      <Dialog v-if="showConfirm" :visible="showConfirm" :modal="true" :dismissable-mask="true" data-testid="hk-confirm-dialog" @update:visible="showConfirm = false">
-        <template #header>
-          <div>
-            <div class="text-lg font-semibold">{{ $t('views.AdminHousekeepingView.confirm_cleanup') }}</div>
-            <div class="mt-0.5 text-sm text-muted-foreground">
-              {{ $t('views.AdminHousekeepingView.delete_warning') }}
-            </div>
-          </div>
-        </template>
+      <FormDialog
+        v-model:open="showConfirm"
+        :title="$t('views.AdminHousekeepingView.confirm_cleanup')"
+        :description="$t('views.AdminHousekeepingView.delete_warning')"
+        :confirm-text="$t('views.AdminHousekeepingView.delete_items', { count: selectedCount })"
+        :confirm-loading-text="$t('views.AdminHousekeepingView.cleaning_up')"
+        confirm-severity="danger"
+        cancel-test-id="hk-cancel-cleanup"
+        confirm-test-id="hk-confirm-cleanup"
+        :confirm-disabled="cleaningUp"
+        :loading="cleaningUp"
+        data-testid="hk-confirm-dialog"
+        @confirm="doCleanup"
+      >
         <div class="max-h-48 space-y-2 overflow-y-auto">
           <div v-for="(ids, et) in groupedConfirmItems" :key="et">
             <p class="text-sm font-medium">{{ et }} ({{ ids.length }})</p>
           </div>
         </div>
-        <template #footer>
-          <div class="flex gap-2 justify-end">
-            <Button severity="secondary" outlined @click="showConfirm = false" data-testid="hk-cancel-cleanup">
-              {{ $t('views.AdminHousekeepingView.cancel') }}
-            </Button>
-            <Button severity="danger" :disabled="cleaningUp" data-testid="hk-confirm-cleanup" @click="doCleanup">
-              {{ cleaningUp ? $t('views.AdminHousekeepingView.cleaning_up') : $t('views.AdminHousekeepingView.delete_items', { count: selectedCount }) }}
-            </Button>
-          </div>
-        </template>
-      </Dialog>
+      </FormDialog>
     </div>
 </template>
 
@@ -264,7 +259,7 @@ import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
 import type { components } from '../lib/api/schema'
 import Button from 'primevue/button'
-import Dialog from 'primevue/dialog'
+import FormDialog from '../components/shared/FormDialog.vue'
 import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'

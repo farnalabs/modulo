@@ -54,15 +54,16 @@
           <label for="collection-visibility" class="block text-sm font-medium mb-1">
             {{ $t('views.LibraryView.collection_visibility') }}
           </label>
-            <select
+            <AppSelect
               id="collection-visibility"
               v-model="visibility"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              :options="visibilityOptions"
+              option-label="label"
+              option-value="value"
+              :label="$t('views.LibraryView.collection_visibility')"
+              class="w-full"
               data-testid="collection-visibility"
-            >
-            <option value="org">{{ $t('views.LibraryView.collection_visibility_org') }}</option>
-            <option value="team">{{ $t('views.LibraryView.collection_visibility_team') }}</option>
-          </select>
+            />
         </div>
         <div>
           <div class="flex items-center justify-between mb-1">
@@ -119,20 +120,27 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import PageHeader from '../components/shared/PageHeader.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 
 const router = useRouter()
+const { t } = useI18n()
 
 const name = ref('')
 const slug = ref('')
 const description = ref('')
 const visibility = ref('org')
+const visibilityOptions = computed(() => [
+  { value: 'org', label: t('views.LibraryView.collection_visibility_org') },
+  { value: 'team', label: t('views.LibraryView.collection_visibility_team') },
+])
 const pins = ref<{ slug: string; version: string }[]>([])
 const saving = ref(false)
 const error = ref<string | null>(null)

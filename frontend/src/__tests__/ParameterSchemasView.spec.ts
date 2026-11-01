@@ -14,6 +14,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import ParameterSchemasView from '../views/ParameterSchemasView.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { api } from '../lib/api/client'
 
@@ -605,11 +606,12 @@ describe('ParameterSchemasView — parameter sets tab', () => {
       { name: 'target', label: 'Target', type: 'schema_ref', required: false },
     ]
     await flush()
-    expect(wrapper.find('#paramschema-set-value-backend').exists()).toBe(true)
-    const backendOptions = wrapper.find('#paramschema-set-value-backend').findAll('option')
-    expect(backendOptions.some((o) => o.text() === 'Stub Backend')).toBe(true)
-    const targetOptions = wrapper.find('#paramschema-set-value-target').findAll('option')
-    expect(targetOptions.some((o) => o.text() === 'Deployment Schema')).toBe(true)
+    const selects = wrapper.findAllComponents(AppSelect)
+    const optionLabels = selects.flatMap((select) =>
+      (select.props('options') as Array<{ label: string }>).map((option) => option.label),
+    )
+    expect(optionLabels).toContain('Stub Backend')
+    expect(optionLabels).toContain('Deployment Schema')
   })
 })
 

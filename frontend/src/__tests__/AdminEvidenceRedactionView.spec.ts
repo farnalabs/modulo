@@ -17,6 +17,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import AdminEvidenceRedactionView from '../views/AdminEvidenceRedactionView.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 
 type RedactionRule = components['schemas']['RedactionRuleResponse']
 
@@ -75,7 +76,7 @@ async function fillRequiredFields(
   role: string,
 ): Promise<void> {
   await wrapper.find('[data-testid="admin-evidence-redaction-key-pattern"]').setValue(keyPattern)
-  await wrapper.find('[data-testid="admin-evidence-redaction-role"]').setValue(role)
+  await wrapper.findComponent(AppSelect).vm.$emit('update:modelValue', role)
 }
 
 describe('AdminEvidenceRedactionView', () => {
@@ -219,11 +220,12 @@ describe('AdminEvidenceRedactionView', () => {
     await settle()
 
     const keyInput = wrapper.find('[data-testid="admin-evidence-redaction-key-pattern"]')
-    const roleSelect = wrapper.find('[data-testid="admin-evidence-redaction-role"]')
+    const roleSelect = wrapper.findComponent(AppSelect)
     expect((keyInput.element as HTMLInputElement).value).toBe('eval.*')
     expect((keyInput.element as HTMLInputElement).disabled).toBe(true)
-    expect((roleSelect.element as HTMLSelectElement).value).toBe('operator')
-    expect((roleSelect.element as HTMLSelectElement).disabled).toBe(true)
+    expect(roleSelect).toBeDefined()
+    expect(roleSelect!.props('modelValue')).toBe('operator')
+    expect(roleSelect!.findComponent({ name: 'Select' }).props('disabled')).toBe(true)
 
     // internal_metadata is checked from the stored rule; add sensitive_output.
     const classBoxes = wrapper.findAll('[data-testid="admin-evidence-redaction-field-checkbox"]')
@@ -255,9 +257,10 @@ describe('AdminEvidenceRedactionView', () => {
     await wrapper.find('[data-testid="admin-evidence-redaction-edit"]').trigger('click')
     await settle()
 
-    const roleSelect = wrapper.find('[data-testid="admin-evidence-redaction-role"]')
-    expect((roleSelect.element as HTMLSelectElement).value).toBe('runner')
-    expect((roleSelect.element as HTMLSelectElement).disabled).toBe(true)
+    const roleSelect = wrapper.findComponent(AppSelect)
+    expect(roleSelect!.props('modelValue')).toBe('runner')
+    expect(roleSelect!.findComponent({ name: 'Select' }).props('disabled')).toBe(true)
+
     expect(
       wrapper.find('[data-testid="admin-evidence-redaction-role-unrecognised"]').exists(),
     ).toBe(true)
