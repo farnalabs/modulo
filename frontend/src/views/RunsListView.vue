@@ -52,7 +52,7 @@
 
     <ErrorAlert
       v-else-if="error"
-      :message="`${error} ${$t('views.RunsListView.load_error_recovery')}`"
+      :message="loadErrorMessage"
       :on-retry="loadRuns"
     />
 
@@ -396,6 +396,10 @@ const { data: runsData, loading, error, load: loadRuns } = useDataFetch<{ items:
   ),
   { initialValue: { items: [] as RunListItem[], total: 0, next_cursor: null, has_more: false } },
 )
+
+const loadErrorMessage = computed(() => error.value
+  ? `${formatApiError(error.value)} ${t('views.RunsListView.load_error_recovery')}`
+  : '')
 
 const runs = computed(() => runsData.value?.items ?? [])
 const total = computed(() => runsData.value?.total ?? 0)
