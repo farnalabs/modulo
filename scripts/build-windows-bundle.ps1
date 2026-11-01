@@ -99,8 +99,8 @@ $inputs = @(
     @{ Path=$ReleaseManifestPath; Label="signed release manifest"; File=$true },
     @{ Path=$ReleaseManifestSignaturePath; Label="release manifest signature"; File=$true }
 )
-$checks = foreach ($input in $inputs) {
-    Check $input.Label { if ($input.File) { Require-File $input.Path $input.Label | Out-Null } else { Require-Directory $input.Path $input.Label | Out-Null } }
+$checks = foreach ($requirement in $inputs) {
+    Check $requirement.Label { if ($requirement.File) { Require-File $requirement.Path $requirement.Label | Out-Null } else { Require-Directory $requirement.Path $requirement.Label | Out-Null } }
 }
 $checks += Check "manifest schema" { Require-File $schemaPath "manifest schema" | Out-Null }
 Write-Output "Windows native bundle prerequisite check"

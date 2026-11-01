@@ -20,21 +20,23 @@ if (-not $isccPath) { throw "Inno Setup 6 not found. Install from https://jrsoft
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("modulo-installer-contract-" + [guid]::NewGuid().ToString("N"))
 $missingLauncher = Join-Path $tempRoot "missing-launcher"
 $missingSignature = Join-Path $tempRoot "missing-signature"
-$valid = Join-Path $tempRoot "valid"
+$invalidFixture = Join-Path $tempRoot "invalid-fixture"
 $output = Join-Path $tempRoot "output"
-foreach ($bundle in @($missingLauncher, $missingSignature, $valid)) {
+foreach ($bundle in @($missingLauncher, $missingSignature, $invalidFixture)) {
     foreach ($relative in @("runtime", "pg", "redis", "bin", "frontend-dist", "backend\.venv")) { New-Item -ItemType Directory -Path (Join-Path $bundle $relative) -Force | Out-Null }
 }
 New-Item -ItemType Directory -Path $output -Force | Out-Null
-function Add-Manifest([string]$Bundle, [bool]$Signature) {
-    Set-Content -LiteralPath (Join-Path $Bundle "launcher") -Value "native input" -NoNewline
+function Add-InvalidManifestFixture([string]$Bundle, [bool]$Signature) {
+    # Deliberately invalid placeholders exercise rejection only; they are not a
+    # native launcher, signed manifest, or valid installer bundle.
+    Set-Content -LiteralPath (Join-Path $Bundle "launcher") -Value "invalid fixture: not a PE launcher" -NoNewline
     Set-Content -LiteralPath (Join-Path $Bundle "RELEASE_MANIFEST.json") -Value '{"manifest_version":1}' -NoNewline
-    if ($Signature) { Set-Content -LiteralPath (Join-Path $Bundle "RELEASE_MANIFEST.json.sig") -Value '{"key_id":"provisioned","signature":"provisioned"}' -NoNewline }
+    if ($Signature) { Set-Content -LiteralPath (Join-Path $Bundle "RELEASE_MANIFEST.json.sig") -Value '{"key_id":"invalid-fixture","signature":"not-a-signature"}' -NoNewline }
 }
-Add-Manifest $missingLauncher $true
+Add-InvalidManifestFixture $missingLauncher $true
 Remove-Item -LiteralPath (Join-Path $missingLauncher "launcher")
-Add-Manifest $missingSignature $false
-Add-Manifest $valid $true
+Add-InvalidManifestFixture $missingSignature $false
+Add-InvalidManifestFixture $invalidFixture $true
 function Invoke-Iscc([string]$Bundle, [string]$Name) {
     & $isccPath "/Qp" "/O$output" "/F$Name" "/DVERSION_NUM=$Version" "/DBUNDLE_ARCH=$Arch" "/DBUNDLE_DIR=$Bundle" "/DMODULO_URL=http://127.0.0.1:8000" $issPath 2>&1 | ForEach-Object { Write-Information $_ -InformationAction Continue }
     return [int]$LASTEXITCODE
@@ -43,7 +45,8 @@ try {
     Write-Output "=== Modulo Windows Installer Contract Test ==="
     if ((Invoke-Iscc $missingLauncher "missing-launcher") -eq 0) { throw "Installer accepted missing native launcher." }
     if ((Invoke-Iscc $missingSignature "missing-signature") -eq 0) { throw "Installer accepted missing signed manifest signature." }
+    if ((Invoke-Iscc $invalidFixture "invalid-fixture") -eq 0) { throw "Installer accepted deliberately invalid native/signature fixtures." }
     Write-Output "Presence guards reject missing native launcher and signed-manifest signature."
-    Write-Output "The valid fixture is intentionally not compiled: it has no real provisioned signature and cannot be used to manufacture an artifact."
+    Write-Output "Invalid fixture rejection is expected; this script never claims to create a valid native launcher or signature."
 }
 finally { if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force } }

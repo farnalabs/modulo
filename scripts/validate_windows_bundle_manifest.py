@@ -62,7 +62,11 @@ def validate_layout(bundle: Path) -> None:
 
 
 def validate_signed_manifest(
-    manifest_path: Path, signature_path: Path, *, version: str | None = None
+    manifest_path: Path,
+    signature_path: Path,
+    *,
+    artifacts_root: Path,
+    version: str | None = None,
 ) -> dict[str, Any]:
     if not manifest_path.is_file() or manifest_path.stat().st_size == 0:
         raise ValueError(f"signed release manifest is missing or empty: {manifest_path}")
@@ -76,8 +80,8 @@ def validate_signed_manifest(
         parsed = release_manifest.verify_release_from_files(
             manifest_path=manifest_path,
             signature_path=signature_path,
-            artifacts_root=manifest_path.parent,
-            artifact_names=[],
+            artifacts_root=artifacts_root,
+            artifact_names=None,
         )
     except (OSError, ValueError, release_manifest.ManifestSecurityError) as exc:
         raise ValueError(f"signed release manifest verification failed: {exc}") from exc
@@ -98,7 +102,12 @@ def validate(
 ) -> dict[str, Any]:
     bundle = bundle_path.resolve()
     validate_layout(bundle)
-    manifest = validate_signed_manifest(manifest_path.resolve(), signature_path.resolve(), version=version)
+    manifest = validate_signed_manifest(
+        manifest_path.resolve(),
+        signature_path.resolve(),
+        artifacts_root=bundle,
+        version=version,
+    )
     validate_schema(manifest, schema_path.resolve())
     return manifest
 

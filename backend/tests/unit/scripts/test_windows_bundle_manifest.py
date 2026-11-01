@@ -9,6 +9,10 @@ import shutil
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from modulo.launcher import manifest as release_manifest
 
 _ROOT = Path(__file__).resolve().parents[4]
 _VALIDATOR = _ROOT / "scripts" / "validate_windows_bundle_manifest.py"
@@ -78,6 +82,45 @@ def test_validator_requires_signed_manifest_and_signature(tmp_path: Path) -> Non
 def test_validator_fails_closed_on_invalid_signature(tmp_path: Path) -> None:
     bundle, manifest, signature = _bundle(tmp_path)
     with pytest.raises(ValueError, match="verification failed"):
+        _MODULE.validate(bundle, _SCHEMA, manifest, signature)
+
+
+def test_validator_rejects_tampered_referenced_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, manifest, signature = _bundle(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    private_key_hex = "101acdeda0cd35fdb51f4dae6eff9838b2d07c97641e41a09deb72a2a1a2254d"
+    public_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key_hex)).public_key()
+    monkeypatch.setattr(
+        release_manifest,
+        "_TRUST_ROWS",
+        {
+            release_manifest._KEY_ID_CURRENT: (
+                "test",
+                public_key.public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw,
+                ).hex(),
+            )
+        },
+    )
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    signature.write_text(
+        json.dumps(
+            release_manifest.sign_release_bytes(
+                manifest.read_bytes(),
+                key_id=release_manifest._KEY_ID_CURRENT,
+                private_key_hex=private_key_hex,
+            )
+        ),
+        encoding="utf-8",
+    )
+    _MODULE.validate(bundle, _SCHEMA, manifest, signature)
+
+    (bundle / "launcher").write_bytes(b"tampered launcher")
+    with pytest.raises(ValueError, match="sha256 MISMATCH"):
         _MODULE.validate(bundle, _SCHEMA, manifest, signature)
 
 
