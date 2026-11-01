@@ -297,6 +297,47 @@
                 </div>
               </dialog>
             </div>
+            <!-- FAR-2279: owner team. "None (org-wide)" clears the owner team
+                 (explicit null on the wire); choosing a team sends its id.
+                 Visibility is NOT changed by this control. The server enforces
+                 membership of the old/new team and the environment-profile
+                 binding, and a refusal is surfaced as an alert. -->
+            <div
+              class="flex items-center gap-1"
+              v-tooltip.bottom="$t('views.PipelineEditorView.owner_team_hint')"
+            >
+              <label
+                for="pipeline-owner-team"
+                class="whitespace-nowrap text-[10px] text-muted-foreground"
+                :title="$t('views.PipelineEditorView.owner_team_hint')"
+              >{{ $t('views.PipelineEditorView.owner_team_label') }}:</label>
+              <select
+                id="pipeline-owner-team"
+                :value="ownerTeamInput"
+                class="w-44 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                :title="$t('views.PipelineEditorView.owner_team_hint')"
+                aria-describedby="pipeline-owner-team-help"
+                @change="updateOwnerTeam"
+                data-testid="pipeline-editor-owner-team"
+              >
+                <option value="">{{ $t('views.PipelineEditorView.owner_team_none') }}</option>
+                <option v-for="tm in ownerTeamOptions" :key="tm.id" :value="tm.id">{{ tm.label }}</option>
+              </select>
+              <span id="pipeline-owner-team-help" class="sr-only">{{ $t('views.PipelineEditorView.owner_team_hint') }}</span>
+              <span
+                v-if="ownerTeamError"
+                role="alert"
+                class="max-w-56 truncate text-xs text-destructive"
+                :title="ownerTeamError"
+                data-testid="pipeline-editor-owner-team-error"
+              >{{ ownerTeamError }}</span>
+              <output
+                v-else-if="ownerTeamStatus"
+                class="max-w-56 truncate text-[10px] text-muted-foreground"
+                :title="ownerTeamStatus"
+                data-testid="pipeline-editor-owner-team-status"
+              >{{ ownerTeamStatus }}</output>
+            </div>
             <!-- FAR-1558: per-pipeline environment profile - the runtime provider
                  this pipeline's runs dispatch on. Gated on the
                  `environment_profiles` plan feature because the profile list
@@ -4078,6 +4119,7 @@ async function loadPipeline() {
     syncHitlReviewWindowFromPipeline()
     syncQueueTimeoutFromPipeline()
     syncEnvironmentProfileFromPipeline()
+    syncOwnerTeamFromPipeline()
     syncRetryPolicyFromPipeline()
   } catch (e) {
     pageError.value = t('views.PipelineEditorView.failed_to_load_pipeline', { error: formatApiError(e) })
@@ -4254,6 +4296,91 @@ async function updateMaxAutonomyLevel(event: Event) {
     // Timeout / network failure: same revert — never display a value the
     // server rejected.
     maxAutonomyInput.value = pipeline.value?.max_autonomy_level ?? null
+  }
+}
+
+// FAR-2279: owner team. The select is the only send site: "" sends an
+// explicit null (org-wide), a team id assigns it. The server re-validates team
+// membership and the environment-profile binding, so a refusal reverts the
+// control and shows an alert rather than failing silently.
+const ownerTeamInput = ref('')
+const ownerTeams = ref<Array<{ id: string; name: string }>>([])
+const ownerTeamLoadError = ref<string | null>(null)
+const ownerTeamUpdateError = ref<string | null>(null)
+const ownerTeamStatus = ref<string | null>(null)
+
+const ownerTeamOptions = computed(() => {
+  const rows = ownerTeams.value.map((tm) => ({ id: tm.id, label: tm.name }))
+  const current = ownerTeamInput.value
+  if (current && !rows.some((row) => row.id === current)) {
+    rows.unshift({ id: current, label: t('views.PipelineEditorView.owner_team_unavailable') })
+  }
+  return rows
+})
+
+const ownerTeamError = computed(() => {
+  if (ownerTeamUpdateError.value) return ownerTeamUpdateError.value
+  if (ownerTeamLoadError.value) {
+    return t('views.PipelineEditorView.owner_team_load_failed', { error: ownerTeamLoadError.value })
+  }
+  return null
+})
+
+function syncOwnerTeamFromPipeline() {
+  const stored = (pipeline.value as { owner_team_id?: string | null } | null)?.owner_team_id
+  ownerTeamInput.value = stored ?? ''
+}
+
+async function loadOwnerTeams() {
+  try {
+    const { data, error } = await api.GET('/api/v1/teams', { params: { query: { page_size: 100 } } })
+    if (error) {
+      ownerTeamLoadError.value = formatApiError(error)
+      return
+    }
+    ownerTeams.value = (data?.items ?? []).map((tm) => ({ id: tm.id, name: tm.name }))
+  } catch (e: unknown) {
+    ownerTeamLoadError.value = formatApiError(e)
+  }
+}
+void loadOwnerTeams()
+
+function ownerTeamLabelForId(id: string): string {
+  return ownerTeams.value.find((tm) => tm.id === id)?.name ?? id
+}
+
+async function updateOwnerTeam(event: Event) {
+  const raw = (event.target as HTMLSelectElement).value
+  const val = raw === '' ? null : raw
+  ownerTeamInput.value = raw
+  ownerTeamUpdateError.value = null
+  ownerTeamStatus.value = null
+  try {
+    const { data, error } = await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: { owner_team_id: val },
+      signal,
+    }))
+    if (error) {
+      ownerTeamUpdateError.value = t('views.PipelineEditorView.owner_team_update_failed', {
+        error: formatApiError(error),
+      })
+      syncOwnerTeamFromPipeline()
+      return
+    }
+    if (pipeline.value) (pipeline.value as { owner_team_id?: string | null }).owner_team_id = val
+    const rebind = Boolean((data as { connector_rebind_required?: boolean } | undefined)?.connector_rebind_required)
+    ownerTeamStatus.value = val
+      ? t('views.PipelineEditorView.owner_team_set', { label: ownerTeamLabelForId(val) })
+      : t('views.PipelineEditorView.owner_team_cleared')
+    if (rebind) {
+      ownerTeamStatus.value += ' ' + t('views.PipelineEditorView.owner_team_rebind_required')
+    }
+  } catch (e: unknown) {
+    ownerTeamUpdateError.value = t('views.PipelineEditorView.owner_team_update_failed', {
+      error: formatApiError(e),
+    })
+    syncOwnerTeamFromPipeline()
   }
 }
 
