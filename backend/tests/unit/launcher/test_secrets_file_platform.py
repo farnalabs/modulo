@@ -16,5 +16,5 @@ from modulo.launcher.secrets_file import SecretsFileError, load_or_create
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the refusal seam is Windows-specific")
 def test_load_or_create_refuses_windows_today(tmp_path: Path) -> None:
-    with pytest.raises(SecretsFileError, match=r"TODO\(P3\)"):
+    with pytest.raises(SecretsFileError, match=r"installer-host ACL validation"):
         load_or_create(tmp_path / "secrets.json")

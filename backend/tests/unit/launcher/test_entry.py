@@ -47,7 +47,6 @@ def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch,
         "modulo.launcher.secrets_file",
         "modulo.launcher.initdb",
-        "modulo.launcher.entry",
     )
 
 
@@ -922,7 +921,13 @@ def test_detach_refused_on_windows(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
 def test_default_data_dir_is_posix_root(monkeypatch: pytest.MonkeyPatch) -> None:
     if sys.platform == "win32":
-        with pytest.raises(BootError):
+        # Windows now resolves through the platform seam (PROGRAMDATA) and only
+        # translates a missing PROGRAMDATA into BootError; the XDG contract
+        # below is POSIX-only.
+        monkeypatch.setenv("PROGRAMDATA", str(Path.home() / "programdata-test"))
+        assert default_data_dir() == Path.home() / "programdata-test" / "Modulo" / "data"
+        monkeypatch.delenv("PROGRAMDATA", raising=False)
+        with pytest.raises(BootError, match="PROGRAMDATA is required"):
             default_data_dir()
         return
     monkeypatch.setenv("XDG_DATA_HOME", str(Path.home() / "xdg-test"))
