@@ -87,7 +87,11 @@ cp -a "${ROOT_DIR}/frontend/dist/." "${BUNDLE_ROOT}/frontend-dist/"
 
 mkdir -p "${BUNDLE_ROOT}/backend"
 cp -a "${ROOT_DIR}/backend/src" "${BUNDLE_ROOT}/backend/src"
-cp "${ROOT_DIR}/backend/pyproject.toml" "${ROOT_DIR}/backend/uv.lock" "${BUNDLE_ROOT}/backend/"
+cp "${ROOT_DIR}/backend/alembic.ini" "${ROOT_DIR}/backend/pyproject.toml" "${ROOT_DIR}/backend/uv.lock" "${BUNDLE_ROOT}/backend/"
+test -f "${BUNDLE_ROOT}/backend/alembic.ini"
+# Keep Alembic's config beside the bundled backend source. The app starts from
+# launchd's data directory, so the relative script_location in alembic.ini must
+# be resolved from this installed bundle rather than the build checkout.
 # Build the venv against the bundled interpreter with copies, rather than copying
 # the developer venv. This keeps the signed app relocatable: venv entry points
 # and interpreter links resolve inside the app instead of to build-time paths.
