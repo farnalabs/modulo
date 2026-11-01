@@ -1941,7 +1941,15 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             raise ValueError("Manual nodes cannot reference an agent")
         if self.connector_binding is not None:
             raise ValueError("Manual nodes cannot have connector bindings")
-        has_output = self.output_schema_pin is not None or self.output_schema_id is not None
+        # FAR-2278: same three forms the write-path guard
+        # (``enforce_manual_node_output_schemas``) accepts. Library/template
+        # manual gates carry only an inline ``output_schema_json``; rejecting
+        # it here made ``get_pipeline_graph`` output fail ``update_pipeline_graph``.
+        has_output = (
+            self.output_schema_pin is not None
+            or self.output_schema_id is not None
+            or self.output_schema_json is not None
+        )
         if not has_output:
             raise ValueError("Manual nodes require an output schema")
         if self.label is None:
