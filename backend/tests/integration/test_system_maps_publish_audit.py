@@ -387,7 +387,7 @@ async def test_refused_publish_audit_outcome_error(
     assert response.status_code == 200
     data = response.json()
     assert "validation_errors" in data
-    assert len(data["validation_errors"]) > 0
+    assert data["validation_errors"]
 
     # Verify the audit row was persisted with outcome="error"
     audit_row = await _fetch_audit_event(db_engine, test_org, "system_map_revision_published")
@@ -422,7 +422,7 @@ async def test_successful_publish_audit_outcome_success(
     assert response.status_code == 200
     data = response.json()
     assert "validation_errors" in data
-    assert data["validation_errors"] == []
+    assert not data["validation_errors"]
     assert data["revision"]["id"] == str(revision.id)
     assert data["revision"]["status"] == "published"
 
