@@ -10,7 +10,6 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
@@ -1104,6 +1103,13 @@ async def get_system_map_overview_endpoint(
                 window_start=window_start,
                 window_end=window_end,
             )
+            loop_metrics = await repository.get_overview_loop_metrics(
+                session,
+                organisation_id=principal.organisation_id,
+                loop_config_ids={loop.id for loop in loop_configs},
+                window_start=window_start,
+                window_end=window_end,
+            )
 
             node_health: list[SystemMapOverviewNodeHealth] = []
             for node in nodes:
@@ -1138,7 +1144,7 @@ async def get_system_map_overview_endpoint(
             # Build loop config overview
             loop_config_overview: list[SystemMapOverviewLoopConfig] = []
             for lc in loop_configs:
-                # In a real implementation, this would query admission attempts and reservations
+                loop_item = loop_metrics.get(lc.id, {})
                 loop_overview = SystemMapOverviewLoopConfig(
                     node_key=lc.node_key,
                     target_signal=lc.target_signal,
@@ -1147,12 +1153,12 @@ async def get_system_map_overview_endpoint(
                     budget_limit_usd=lc.budget_limit_usd,
                     cooldown_seconds=lc.cooldown_seconds,
                     outcome_metric=lc.outcome_metric,
-                    last_admission_at=None,
-                    last_admission_status=None,
-                    cooldown_active=False,
-                    cooldown_until=None,
-                    budget_used_usd=Decimal(0),
-                    budget_period_start=None,
+                    last_admission_at=loop_item.get("last_admission_at"),
+                    last_admission_status=loop_item.get("last_admission_status"),
+                    cooldown_active=loop_item.get("cooldown_active"),
+                    cooldown_until=loop_item.get("cooldown_until"),
+                    budget_used_usd=loop_item.get("budget_used_usd"),
+                    budget_period_start=loop_item.get("budget_period_start"),
                 )
                 loop_config_overview.append(loop_overview)
 

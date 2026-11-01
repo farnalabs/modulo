@@ -1145,6 +1145,47 @@ class TestAcyclicity:
         assert repo._is_acyclic(edges) is True
 
 
+class TestOverviewPipelineMetrics:
+    async def test_empty_pipeline_set_returns_no_metrics(self, repo: SystemMapRepository) -> None:
+        result = await repo.get_overview_pipeline_metrics(
+            _session(),
+            organisation_id=_ORG,
+            pipeline_ids=set(),
+            window_start=datetime.now(UTC),
+            window_end=datetime.now(UTC),
+        )
+        assert not result
+
+    async def test_metrics_query_uses_observed_failure_semantics(self, repo: SystemMapRepository) -> None:
+        pipeline = SimpleNamespace(
+            pipeline_id=_PIPELINE,
+            run_count=4,
+            countable_count=2,
+            failure_count=1,
+            telemetry_count=1,
+            last_completed_at=datetime.now(UTC),
+        )
+        queue = SimpleNamespace(pipeline_id=_PIPELINE, queue_depth=2)
+        capacity = SimpleNamespace(id=_PIPELINE, max_concurrent_runs=4)
+        fact_result = MagicMock()
+        fact_result.all.return_value = [pipeline]
+        queue_result = MagicMock()
+        queue_result.all.return_value = [queue]
+        capacity_result = MagicMock()
+        capacity_result.all.return_value = [capacity]
+        db = _session(fact_result, queue_result, capacity_result)
+        result = await repo.get_overview_pipeline_metrics(
+            db,
+            organisation_id=_ORG,
+            pipeline_ids={_PIPELINE},
+            window_start=datetime.now(UTC),
+            window_end=datetime.now(UTC),
+        )
+        assert result[_PIPELINE]["run_count"] == 4
+        assert result[_PIPELINE]["failure_rate"] == 0.5
+        assert result[_PIPELINE]["capacity_pressure"] == 0.5
+
+
 class TestFullRevisionGraph:
     async def test_missing_revision_returns_none(self, repo: SystemMapRepository) -> None:
         assert (

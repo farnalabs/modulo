@@ -201,6 +201,8 @@ class _Harness:
 
     def __init__(self) -> None:
         self.repository = MagicMock(spec=SystemMapRepository)
+        self.repository.get_overview_pipeline_metrics = AsyncMock(return_value={})
+        self.repository.get_overview_loop_metrics = AsyncMock(return_value={})
         self._stubs: dict[str, AsyncMock] = {}
 
     def stub(self, method: str, mock: AsyncMock) -> None:
@@ -1149,6 +1151,7 @@ def test_get_overview_returns_aggregate(client: tuple[TestClient, _Harness]) -> 
         ),
     )
     harness.stub("get_overview_pipeline_metrics", AsyncMock(return_value={}))
+    harness.stub("get_overview_loop_metrics", AsyncMock(return_value={}))
 
     resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
 
@@ -1182,6 +1185,56 @@ def test_get_overview_no_published_revision_returns_404(client: tuple[TestClient
     assert "No published revision found" in resp.json()["detail"]
 
 
+def test_overview_uses_observed_metrics_and_loop_facts(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    pipeline_id = uuid.uuid4()
+    loop = _loop_config_row(node_key="loop-1")
+    node = _node_row(node_key="node-1", node_type="pipeline")
+    node.pipeline_id = pipeline_id
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub(
+        "get_full_revision_graph",
+        AsyncMock(
+            return_value={
+                "revision": _revision_row(status="published"),
+                "nodes": [node],
+                "relationships": [],
+                "loop_configs": [loop],
+            }
+        ),
+    )
+    harness.stub(
+        "get_overview_pipeline_metrics",
+        AsyncMock(return_value={pipeline_id: {"run_count": 2, "failure_rate": 0.5, "telemetry_coverage": 1.0}}),
+    )
+    admission_at = datetime.now(UTC)
+    harness.stub(
+        "get_overview_loop_metrics",
+        AsyncMock(
+            return_value={
+                loop.id: {
+                    "last_admission_at": admission_at,
+                    "last_admission_status": "admitted",
+                    "cooldown_active": True,
+                    "cooldown_until": admission_at,
+                    "budget_used_usd": Decimal("2.50"),
+                    "budget_period_start": admission_at,
+                }
+            }
+        ),
+    )
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["nodes"][0]["health"] == "unhealthy"
+    assert body["nodes"][0]["failure_rate"] == 0.5
+    assert body["loop_configs"][0]["last_admission_status"] == "admitted"
+    assert body["loop_configs"][0]["budget_used_usd"] == "2.50"
+
+
 def test_overview_detects_missing_loop_config_bottleneck(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
@@ -1198,6 +1251,7 @@ def test_overview_detects_missing_loop_config_bottleneck(client: tuple[TestClien
         ),
     )
     harness.stub("get_overview_pipeline_metrics", AsyncMock(return_value={}))
+    harness.stub("get_overview_loop_metrics", AsyncMock(return_value={}))
 
     resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
 
@@ -1968,6 +2022,8 @@ def test_overview_with_matching_loop_config_has_no_bottleneck(
             }
         ),
     )
+    harness.stub("get_overview_pipeline_metrics", AsyncMock(return_value={}))
+    harness.stub("get_overview_loop_metrics", AsyncMock(return_value={}))
 
     resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
 
