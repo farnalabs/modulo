@@ -14,6 +14,37 @@
 #   owner: "GitHub username or team" (optional)
 
 quarantine:
+  # Full-suite-only GC attribution (2026-11-01): an unrelated earlier unit test
+  # leaks a never-awaited AsyncMock coroutine. CPython's generational GC then
+  # collects it while whichever test happens to be running, so pytest's
+  # unraisable-warning gate attributes the failure there. Every listed test
+  # passes in isolation and under gc.collect(); quarantine is a non-strict
+  # xfail while the leaking test is located and fixed (tracked separately).
+  # The 2026-11-01 merge-queue run hit the pipeline-node-conversion victim.
+  - test_id: "tests/unit/test_pipeline_node_conversion.py::TestConvertToAgent::test_programming_error_caught"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (merge queue 2026-11-01)"
+    expiry: "2026-11-15"
+    owner: "platform-team"
+  - test_id: "tests/unit/test_guardrail_loop_intercept.py::test_wrap_command_escalate_leaves_no_blocked_marker"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (merge queue 2026-11-01)"
+    expiry: "2026-11-15"
+    owner: "platform-team"
+  - test_id: "tests/unit/test_mcp_structural_coverage.py::test_account_row_lock_only_in_approved_sites"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (merge queue 2026-11-01)"
+    expiry: "2026-11-15"
+    owner: "platform-team"
+  - test_id: "tests/unit/test_guardrail_correction_e2e.py::test_e2e_resume_budget_exhausted_records_interrupted"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (merge queue 2026-11-01)"
+    expiry: "2026-11-15"
+    owner: "platform-team"
+  - test_id: "tests/unit/test_dispatch.py::TestReconcileF6aRecovery::test_awaiting_human_no_job_stale_no_decision_skips_run"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (merge queue 2026-11-01)"
+    expiry: "2026-11-15"
+    owner: "platform-team"
+  - test_id: "tests/unit/trigger_engine/test_slack_app_mention.py::test_handle_app_mention_parse_failure_logs_event"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (main 2026-11-01)"
+    expiry: "2026-11-15"
+    owner: "platform-team"
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
   #   reason: "Flaky due to GitHub API rate limit window — fails ~15% of CI runs"
