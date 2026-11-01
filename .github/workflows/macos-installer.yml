@@ -1175,14 +1175,14 @@ jobs:
                  printf "pgdata: not initialized (initdb did not complete)\n"
                fi
                diag_tail 20 "$DATA_DIR/degraded.json"
-               printf "\n=== data dir ===\n"
-               ls -la "$DATA_DIR" 2>&1 || true
-               ls -la "$DATA_DIR/logs" 2>&1 || true
                printf "\n=== launcher and child logs ===\n"
                diag_tail 40 "$DATA_DIR/launcher.log"
                diag_tail 40 "$DATA_DIR/logs/app.log"
                diag_tail 40 "$DATA_DIR/logs/postgres.log"
                diag_tail 40 "$DATA_DIR/logs/redis.log"
+               printf "\n=== data dir ===\n"
+               ls -la "$DATA_DIR" 2>&1 || true
+               ls -la "$DATA_DIR/logs" 2>&1 || true
                printf "\n=== launchctl ===\n"
                launchctl print "gui/$(id -u)/run.modulo.launcher" 2>&1 \
                  | grep -E "state =|pid =|runs =|last exit code|program =|immediate reason" \
