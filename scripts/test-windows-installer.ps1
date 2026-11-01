@@ -3,8 +3,10 @@
 Validate the native Windows Inno Setup handoff without inventing bundle inputs.
 
 The script creates only empty contract directories so Inno Setup proves its
-compile-time presence guards. It never creates a fake launcher, runtime,
-signature, or manifest.
+compile-time presence guards. It also creates intentionally invalid placeholder
+content for the positive compile probe: Inno Setup checks presence only, not
+cryptographic validity. The real bundle builder performs signed-manifest
+verification before this handoff.
 #>
 [CmdletBinding()]
 param(
@@ -45,8 +47,8 @@ try {
     Write-Output "=== Modulo Windows Installer Contract Test ==="
     if ((Invoke-Iscc $missingLauncher "missing-launcher") -eq 0) { throw "Installer accepted missing native launcher." }
     if ((Invoke-Iscc $missingSignature "missing-signature") -eq 0) { throw "Installer accepted missing signed manifest signature." }
-    if ((Invoke-Iscc $invalidFixture "invalid-fixture") -eq 0) { throw "Installer accepted deliberately invalid native/signature fixtures." }
+    if ((Invoke-Iscc $invalidFixture "invalid-fixture") -ne 0) { throw "Installer failed to compile a structurally complete bundle: Inno Setup validates presence, not cryptographic content." }
     Write-Output "Presence guards reject missing native launcher and signed-manifest signature."
-    Write-Output "Invalid fixture rejection is expected; this script never claims to create a valid native launcher or signature."
+    Write-Output "Structurally complete invalid-content fixture compiled; cryptographic validity belongs to the bundle builder, not Inno Setup."
 }
 finally { if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force } }

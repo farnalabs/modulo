@@ -113,8 +113,10 @@ if ($ValidateOnly) {
 if (@($checks | Where-Object Status -eq "FAIL").Count -gt 0) { Fail "one or more provisioned native inputs are unavailable." }
 if (-not $IsWindows) { Fail "native Windows assembly requires Windows." }
 
-$manifestCheck = Invoke-Validator @("--signed-manifest", $ReleaseManifestPath, "--signature", $ReleaseManifestSignaturePath, "--schema", $schemaPath, "--version", $Version)
-if ($manifestCheck.ExitCode -ne 0) { Fail "signed release manifest validation failed: $($manifestCheck.Output -join ' ')" }
+# Full manifest validation is intentionally deferred until the provisioned inputs
+# have been copied into their final bundle layout. The validator requires --bundle
+# so it can verify every referenced artifact; validating the scattered inputs here
+# would be an impossible partial contract. The post-copy check below is authoritative.
 if (Test-Path -LiteralPath $output) { Remove-Item -LiteralPath $output -Recurse -Force }
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 try {

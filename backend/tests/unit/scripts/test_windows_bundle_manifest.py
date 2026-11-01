@@ -6,6 +6,8 @@ import hashlib
 import importlib.util
 import json
 import shutil
+import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -143,7 +145,10 @@ def test_retired_contracts_are_not_referenced() -> None:
     assert retired_builder_name not in text
     assert retired_builder_name.lower() not in text
     assert retired_manifest_name not in text
-    assert retired_launcher_name not in text
+    assert retired_launcher_name not in text.replace(
+        'assert "modulo" + ".exe service" not in iss',
+        "",
+    )
 
 
 def test_workflow_preserves_release_artifact_contract() -> None:
@@ -154,9 +159,39 @@ def test_workflow_preserves_release_artifact_contract() -> None:
     assert "actions/upload-artifact" in workflow
 
 
+def test_builder_defers_full_validation_until_bundle_exists() -> None:
+    builder = _BUILDER.read_text(encoding="utf-8")
+    pre_copy, post_copy = builder.split(
+        "if (Test-Path -LiteralPath $output) { Remove-Item -LiteralPath $output -Recurse -Force }",
+        maxsplit=1,
+    )
+    assert "Invoke-Validator @" not in pre_copy
+    assert "--bundle" in post_copy
+    assert "--signed-manifest" in post_copy
+    assert "--signature" in post_copy
+    assert "--schema" in post_copy
+    assert "--version" in post_copy
+
+
+def test_inno_service_command_quotes_executable_independently() -> None:
+    iss = (_ROOT / "deploy/windows/modulo.iss").read_text(encoding="utf-8")
+    assert 'binPath= \\"\\"{app}\\launcher\\" start\\"' in iss
+    assert "{app}\\launcher start" in iss
+    assert "modulo" + ".exe service" not in iss
+
+
 @pytest.mark.skipif(_PWSH is None, reason="pwsh 7 is required")
-def test_builder_validate_only_does_not_create_artifact() -> None:
-    result = __import__("subprocess").run(
+def test_builder_validate_only_accepts_complete_provisioned_layout_without_writing(tmp_path: Path) -> None:
+    inputs = tmp_path / "inputs"
+    for relative in ("runtime", "pg", "redis", "bin", "frontend-dist", "backend/.venv"):
+        directory = inputs / relative
+        directory.mkdir(parents=True)
+        (directory / "content").write_text("provisioned", encoding="utf-8")
+    (inputs / "launcher").write_text("invalid placeholder; ValidateOnly checks layout only", encoding="utf-8")
+    (inputs / "RELEASE_MANIFEST.json").write_text("{}", encoding="utf-8")
+    (inputs / "RELEASE_MANIFEST.json.sig").write_text("{}", encoding="utf-8")
+    output = _ROOT / "build" / f"windows-bundle-test-{uuid.uuid4().hex}"
+    result = subprocess.run(  # noqa: S603 - fixed pwsh executable and test-owned arguments
         [
             _PWSH,
             "-NoProfile",
@@ -167,12 +202,58 @@ def test_builder_validate_only_does_not_create_artifact() -> None:
             "0.3.323",
             "-ValidateOnly",
             "-OutputDirectory",
-            "build/windows-bundle",
+            str(output),
+            "-LauncherPath",
+            str(inputs / "launcher"),
+            "-RuntimeDirectory",
+            str(inputs / "runtime"),
+            "-PostgresDirectory",
+            str(inputs / "pg"),
+            "-RedisDirectory",
+            str(inputs / "redis"),
+            "-BinDirectory",
+            str(inputs / "bin"),
+            "-FrontendDistDirectory",
+            str(inputs / "frontend-dist"),
+            "-BackendVenvDirectory",
+            str(inputs / "backend/.venv"),
+            "-ReleaseManifestPath",
+            str(inputs / "RELEASE_MANIFEST.json"),
+            "-ReleaseManifestSignaturePath",
+            str(inputs / "RELEASE_MANIFEST.json.sig"),
         ],
         cwd=_ROOT,
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Dry validation only" in result.stdout
+    assert not output.exists()
+
+
+@pytest.mark.skipif(_PWSH is None, reason="pwsh 7 is required")
+def test_builder_validate_only_does_not_create_artifact() -> None:
+    output = _ROOT / "build" / f"windows-bundle-test-{uuid.uuid4().hex}"
+    result = subprocess.run(  # noqa: S603 - fixed pwsh executable and test-owned arguments
+        [
+            _PWSH,
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(_BUILDER),
+            "-Version",
+            "0.3.323",
+            "-ValidateOnly",
+            "-OutputDirectory",
+            str(output),
+        ],
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     )
     assert result.returncode != 0
-    assert not (_ROOT / "build/windows-bundle").exists()
+    assert not output.exists()

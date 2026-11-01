@@ -122,7 +122,9 @@ Name: "{commondesktop}\Modulo"; Filename: "{app}\launcher"; WorkingDir: "{app}";
 
 [Run]
 ; Runtime readiness and the local HTTP listener remain the native launcher's responsibility.
-Filename: "sc.exe"; Parameters: "create Modulo binPath= \"{app}\launcher start\" start= auto"; StatusMsg: "Installing Modulo service..."; Flags: runhidden waituntilterminated
+; sc.exe receives an independently quoted executable path and start argument:
+; the installed service runs {app}\launcher start, not a separate service binary.
+Filename: "sc.exe"; Parameters: "create Modulo binPath= \"\"{app}\launcher\" start\" start= auto"; StatusMsg: "Installing Modulo service..."; Flags: runhidden waituntilterminated
 Filename: "sc.exe"; Parameters: "start Modulo"; StatusMsg: "Starting Modulo service..."; Flags: runhidden waituntilterminated
 Filename: "{#MODULO_URL}"; Description: "Open Modulo in your browser"; Flags: postinstall shellexec unchecked; Check: ShouldOpenModulo
 
