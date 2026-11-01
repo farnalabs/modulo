@@ -28,8 +28,19 @@ The clock starts when the advisory is published to a trusted source (GitHub Advi
 
 ## Scanning Schedule
 
-- **Automated**: `pip-audit` runs in `.github/workflows/ci.yml` on every push to `main` and on each PR to `main`, and again in the deploy workflow (`.github/workflows/deploy.yml`). There is no scheduled weekly dependency scan.
-- **Manual**: `uv run pip-audit` (from `backend/`) and `cd frontend && pnpm audit` can be run locally at any time.
+Three automated scanners run in `.github/workflows/ci.yml` on every push to `main` and every PR to `main`:
+
+- **`pip-audit`** over the backend environment, with a bounded retry on transient PyPI service errors.
+- **Trivy filesystem scan** of the whole repository at `CRITICAL,HIGH` severity with `ignore-unfixed: true`; any finding fails the check.
+- **`pnpm audit --audit-level=critical`** for the frontend. The step is skipped when no frontend file changed, and an unreachable npm registry is downgraded to a warning rather than failing the build (a real critical advisory still fails closed).
+
+`.github/workflows/deploy.yml` runs the same `pip-audit` and `pnpm audit --audit-level=critical` gates before a deployment is promoted. There is no scheduled weekly dependency scan.
+
+**Manual**: `uv run pip-audit` (from `backend/`) and `cd frontend && pnpm audit` can be run locally at any time.
+
+### How the CI gate relates to the SLAs
+
+The gates above are the ones that actually stop a change: `pip-audit` fails on any known vulnerable package in the resolved backend environment, Trivy fails on CRITICAL/HIGH findings that have a fix available, and `pnpm audit` fails on critical frontend advisories. A finding that reaches the Critical (72 hours) or High (7 days) SLA therefore normally blocks merge or deploy before the deadline. The SLAs bound how long a finding may remain open when it is unfixed upstream, exempted by the `ignore-unfixed` policy, or carried on the approved override list.
 
 ## How to Handle a False Positive
 
