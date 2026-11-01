@@ -37,13 +37,13 @@
         @move-pipeline="onMovePipeline"
       />
       <div class="flex-1 page-wide min-w-0 overflow-y-auto overscroll-contain">
-         <!-- Folder-list load failure. First child of the content column — never
-              a flex sibling of the sidebar, which would squeeze it into a
-              vertical column between the tree and the table. This is the <md
-              owner of the folder-error live region (the FolderTree sidebar owns >=md), hence
-             `gated`; the table keeps rendering underneath. The shared contract
-             — single live region, non-dismissible, retry re-fetches — lives in
-             FolderListError.vue. -->
+        <!-- Folder-list load failure. First child of the content column — never
+             a flex sibling of the sidebar, which would squeeze it into a
+             vertical column between the tree and the table. This is the <md
+             owner of the folder-error live region (the FolderTree sidebar owns
+             >=md), hence `gated`; the table keeps rendering underneath. The
+             shared contract — single live region, non-dismissible, retry
+             re-fetches — lives in FolderListError.vue. -->
         <FolderListError
           v-if="folderError"
           :message="$t('views.PipelineListView.failed_to_load_folders', { error: folderError })"

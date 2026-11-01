@@ -164,15 +164,30 @@ function listWith(items: unknown[], opts: { next_cursor?: string | null; has_mor
 
 const manyRuns = Array.from({ length: 25 }, (_, i) => ({ ...baseRun, run_id: `run${i}` }))
 
+const routerLinkStub = {
+  props: ['to'],
+  template: '<a :href="typeof to === \'string\' ? to : to.path" :data-to="typeof to === \'string\' ? to : to.path"><slot /></a>',
+}
+
 function mountView() {
   return mount(RunsListView, {
     global: {
       stubs: {
         ErrorAlert: true,
-        'router-link': {
-          props: ['to'],
-          template: '<a :href="typeof to === \'string\' ? to : to.path" :data-to="typeof to === \'string\' ? to : to.path"><slot /></a>',
-        },
+        'router-link': routerLinkStub,
+      },
+    },
+  })
+}
+
+// The REAL ErrorAlert (never the stub): the load-failure assertions below need
+// the component's own render path, because that is where the formatted message
+// and the Retry affordance actually appear.
+function mountViewWithRealErrorAlert() {
+  return mount(RunsListView, {
+    global: {
+      stubs: {
+        'router-link': routerLinkStub,
       },
     },
   })
@@ -1024,6 +1039,48 @@ describe('RunsListView', () => {
     expect(ariaLabel).toBeTruthy()
     expect(ariaLabel!.length).toBeGreaterThan(0)
     wrapper.unmount()
+  })
+})
+
+describe('RunsListView load failure recovery', () => {
+  it('renders the recovery guidance through the real error formatter and keeps Retry working', async () => {
+    const getMock = api.GET as any
+    const healthyGet = getMock.getMockImplementation()!
+    // The wire shape openapi-fetch hands back on failure: the view formats it
+    // with the real `formatApiError` and appends the recovery hint.
+    getMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/runs') {
+        return Promise.resolve({ data: undefined, error: { detail: 'backend unavailable' } })
+      }
+      return healthyGet(url)
+    })
+    try {
+      const wrapper = mountViewWithRealErrorAlert()
+      await flushPromises()
+      await nextTick()
+
+      expect(wrapper.text()).toContain(
+        t('views.RunsListView.failed_to_load_runs', { detail: 'backend unavailable' }),
+      )
+      expect(wrapper.text()).toContain(t('views.RunsListView.load_error_recovery'))
+
+      const retry = wrapper.find('[data-testid="error-alert-retry"]')
+      expect(retry.exists()).toBe(true)
+
+      // Retry re-runs the failed load; the guidance clears and rows render.
+      mockResponses['/api/v1/runs'] = listWith([baseRun])
+      getMock.mockImplementation(healthyGet)
+      await retry.trigger('click')
+      await flushPromises()
+      await nextTick()
+
+      expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain(t('views.RunsListView.load_error_recovery'))
+      expect(wrapper.text()).toContain('Test Pipeline')
+      wrapper.unmount()
+    } finally {
+      getMock.mockImplementation(healthyGet)
+    }
   })
 })
 
