@@ -21,7 +21,11 @@ os.environ.setdefault("FERNET_KEY", "a" * 32)
 import pytest
 
 import modulo.api.main as main_module
-from modulo.db.health_checks import db_is_at_migration_head, resolve_alembic_ini
+from modulo.db.health_checks import (
+    db_is_at_migration_head,
+    resolve_alembic_ini,
+    resolve_migration_script_location,
+)
 
 
 def _engine_with_rows(rows: list[tuple[str, ...]]) -> MagicMock:
@@ -48,6 +52,29 @@ def test_resolve_alembic_ini_finds_backend_config() -> None:
     path = resolve_alembic_ini()
     assert path.name == "alembic.ini"
     assert path.exists() is True
+
+
+def test_resolve_migration_script_location_is_absolute_and_exists(tmp_path: Path) -> None:
+    backend_root = tmp_path / "Installed App.app" / "Contents" / "Resources" / "bundle" / "backend"
+    migration_tree = backend_root / "src" / "modulo" / "db" / "migrations"
+    migration_tree.mkdir(parents=True)
+    ini_path = backend_root / "alembic.ini"
+    ini_path.write_text("[alembic]\n")
+
+    resolved = resolve_migration_script_location(ini_path)
+
+    assert resolved == migration_tree.resolve()
+    assert resolved.is_absolute()
+    assert resolved.is_dir()
+
+
+def test_resolve_migration_script_location_fails_when_tree_missing(tmp_path: Path) -> None:
+    ini_path = tmp_path / "backend" / "alembic.ini"
+    ini_path.parent.mkdir()
+    ini_path.write_text("[alembic]\n")
+
+    with pytest.raises(FileNotFoundError, match="Alembic migration tree does not exist"):
+        resolve_migration_script_location(ini_path)
 
 
 @pytest.mark.anyio
@@ -119,6 +146,7 @@ class _FakeConfig:
 async def test_explicit_alembic_ini_is_used(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ini = tmp_path / "alembic.ini"
     ini.write_text("[alembic]\n")
+    (tmp_path / "src" / "modulo" / "db" / "migrations").mkdir(parents=True)
     _FakeConfig.instances = []
 
     script_dir = MagicMock()
@@ -137,7 +165,9 @@ async def test_explicit_alembic_ini_is_used(monkeypatch: pytest.MonkeyPatch, tmp
     assert await db_is_at_migration_head(engine, alembic_ini=ini) is True
     config = _FakeConfig.instances[-1]
     assert config.config_file_name == str(ini)
-    assert config.get_main_option("script_location") == str(ini.parent / "src" / "modulo" / "db" / "migrations")
+    assert config.get_main_option("script_location") == str(
+        (ini.parent / "src" / "modulo" / "db" / "migrations").resolve()
+    )
 
 
 @pytest.mark.anyio

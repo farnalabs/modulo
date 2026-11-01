@@ -89,6 +89,7 @@ mkdir -p "${BUNDLE_ROOT}/backend"
 cp -a "${ROOT_DIR}/backend/src" "${BUNDLE_ROOT}/backend/src"
 cp "${ROOT_DIR}/backend/alembic.ini" "${ROOT_DIR}/backend/pyproject.toml" "${ROOT_DIR}/backend/uv.lock" "${BUNDLE_ROOT}/backend/"
 test -f "${BUNDLE_ROOT}/backend/alembic.ini"
+test -d "${BUNDLE_ROOT}/backend/src/modulo/db/migrations"
 # Keep Alembic's config beside the bundled backend source. The app starts from
 # launchd's data directory, so the relative script_location in alembic.ini must
 # be resolved from this installed bundle rather than the build checkout.
