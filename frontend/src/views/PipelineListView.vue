@@ -10,26 +10,22 @@
          When the onboarding banner or the mobile fixed header are present the
          chrome is taller than this offset and the page overflows into
          AppLayout's scroll area — accepted trade-off. -->
-    <header class="bg-card border-b border-border px-6 py-4">
-      <div class="mx-auto flex flex-wrap items-center justify-between gap-3 max-w-6xl">
-        <PageHeader :title="$t('views.PipelineListView.title')">
-          <template #right>
-            <div class="flex items-center gap-2">
-              <div class="w-full sm:w-auto">
-                <FilterBar
-                  :search="{ placeholder: $t('views.PipelineListView.search_pipelines') }"
-                  :search-value="search"
-                  @update:search="search = $event"
-                />
-              </div>
-              <Button :class="allPipelines.length > 0 && !loading ? '' : 'invisible'" as="router-link" to="/library" data-testid="pipeline-list-new-pipeline">
-                {{ $t('views.PipelineListView.new_pipeline') }}
-              </Button>
-            </div>
-          </template>
-        </PageHeader>
-      </div>
-    </header>
+    <PageHeader :title="$t('views.PipelineListView.title')" :subtitle="$t('views.PipelineListView.subtitle')" class="shrink-0 px-6 pt-6">
+      <template #right>
+        <div class="flex items-center gap-2">
+          <div class="w-full sm:w-auto">
+            <FilterBar
+              :search="{ placeholder: $t('views.PipelineListView.search_pipelines') }"
+              :search-value="search"
+              @update:search="search = $event"
+            />
+          </div>
+          <Button :class="allPipelines.length > 0 && !loading ? '' : 'invisible'" as="router-link" to="/library" data-testid="pipeline-list-new-pipeline">
+            {{ $t('views.PipelineListView.new_pipeline') }}
+          </Button>
+        </div>
+      </template>
+    </PageHeader>
 
     <div class="flex flex-1 min-h-0">
       <!-- Folder sidebar -->

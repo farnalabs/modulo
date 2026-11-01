@@ -272,6 +272,8 @@ _CI_FAILURE_COALESCE_WINDOW_SECONDS = 3600  # 1 hour
 # and would mute same-head re-failures for far too long.
 _CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS = 7 * 24 * 60 * 60  # 7 days
 _REPLAY_WINDOW_SECONDS = 300  # ±300s for X-Modulo-Timestamp
+# HMAC signature scheme prefix shared by the Modulo and GitHub header formats.
+_SIGNATURE_PREFIX = "sha256="
 
 
 # ---------------------------------------------------------------------------
@@ -327,12 +329,27 @@ def verify_hmac(raw_body: bytes, secret: str, signature_header: str | None, time
     if signature_header is None:
         return False
     payload = f"{timestamp}.".encode() + raw_body if timestamp is not None else raw_body
-    expected = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    expected = _SIGNATURE_PREFIX + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
     # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on str
     # operands containing non-ASCII characters. ``signature_header`` is
     # attacker-controlled and Starlette decodes header bytes as latin-1, so a
     # single high byte would otherwise escape as an uncaught 500 instead of a
     # clean rejection. Bytes comparison is behaviour-identical for ASCII input.
+    return hmac.compare_digest(expected.encode("utf-8"), signature_header.encode("utf-8"))
+
+
+def verify_github_signature(raw_body: bytes, secret: str, signature_header: str | None) -> bool:
+    """Return True if *signature_header* is a valid GitHub ``X-Hub-Signature-256``.
+
+    GitHub signs the exact raw request body: ``sha256=<hex hmac-sha256(secret, body)>``.
+    There is no timestamp component, so unlike :func:`verify_hmac` this scheme has
+    no replay window (replays are bounded only by payload dedup). Fails closed on
+    a missing header, a missing ``sha256=`` prefix or a non-matching digest.
+    """
+    if signature_header is None or not signature_header.startswith(_SIGNATURE_PREFIX):
+        return False
+    expected = _SIGNATURE_PREFIX + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    # Bytes comparison: attacker-controlled non-ASCII header text must not raise.
     return hmac.compare_digest(expected.encode("utf-8"), signature_header.encode("utf-8"))
 
 
@@ -850,43 +867,51 @@ class TriggerEngine:
         *,
         modulo_timestamp: str | None,
         hmac_signature: str | None,
+        github_signature_verified: bool = False,
     ) -> tuple[int, str, dict[str, Any], str, list[Any]]:
         """Run pre-dedup validation steps for webhook delivery.
 
         Returns (ts, payload_hash, post_guardrail_payload, dedup_hash, guardrail_results).
+
+        ``github_signature_verified``: the route already authenticated this
+        delivery via ``X-Hub-Signature-256`` (FAR-2241), which has no Modulo
+        timestamp/HMAC form, so the Modulo-scheme checks are skipped here.
         """
         payload_hash = sha256_hex(delivery.raw_body)
 
-        # X-Modulo-Timestamp replay window check
-        ts = await self._verify_webhook_timestamp(
-            session,
-            trigger=delivery.trigger,
-            org_id=delivery.org_id,
-            trigger_id=delivery.trigger.id,
-            modulo_timestamp=modulo_timestamp,
-            payload_hash=payload_hash,
-        )
-
-        # HMAC validation (only if secret is configured)
         cfg = delivery.trigger.config_json or {}
         _warn_unrecognised_config_keys(delivery.trigger.id, cfg)
-        hmac_secret = await self._resolve_webhook_hmac_secret(
-            session,
-            trigger_id=delivery.trigger.id,
-            org_id=delivery.org_id,
-            cfg=cfg,
-        )
-        await self._verify_hmac_or_reject(
-            session,
-            trigger=delivery.trigger,
-            org_id=delivery.org_id,
-            trigger_id=delivery.trigger.id,
-            payload_hash=payload_hash,
-            raw_body=delivery.raw_body,
-            hmac_secret=hmac_secret,
-            hmac_signature=hmac_signature,
-            ts=ts,
-        )
+        if github_signature_verified:
+            ts = int(time.time())
+        else:
+            # X-Modulo-Timestamp replay window check
+            ts = await self._verify_webhook_timestamp(
+                session,
+                trigger=delivery.trigger,
+                org_id=delivery.org_id,
+                trigger_id=delivery.trigger.id,
+                modulo_timestamp=modulo_timestamp,
+                payload_hash=payload_hash,
+            )
+
+            # HMAC validation (only if secret is configured)
+            hmac_secret = await self._resolve_webhook_hmac_secret(
+                session,
+                trigger_id=delivery.trigger.id,
+                org_id=delivery.org_id,
+                cfg=cfg,
+            )
+            await self._verify_hmac_or_reject(
+                session,
+                trigger=delivery.trigger,
+                org_id=delivery.org_id,
+                trigger_id=delivery.trigger.id,
+                payload_hash=payload_hash,
+                raw_body=delivery.raw_body,
+                hmac_secret=hmac_secret,
+                hmac_signature=hmac_signature,
+                ts=ts,
+            )
 
         # Org-wide pause kill-switch. Checked AFTER timestamp+HMAC
         # validation (an unauthenticated delivery still gets its typed
@@ -1021,8 +1046,13 @@ class TriggerEngine:
         hmac_signature: str | None,
         modulo_timestamp: str | None = None,
         snapshot_id: uuid.UUID,
+        github_signature_verified: bool = False,
     ) -> tuple[Run, TriggerEvent, dict[str, Any]]:
         """Process an incoming webhook. Returns (Run, TriggerEvent, input_payload) on success.
+
+        ``github_signature_verified`` is set by the route after it authenticated
+        the delivery with ``X-Hub-Signature-256`` (FAR-2241); the engine then
+        skips its Modulo-scheme timestamp + HMAC checks. Dedup still applies.
 
         All validation failures are raised as typed exceptions. A TriggerEvent is
         always written (pass or fail) so every delivery attempt is audited.
@@ -1054,6 +1084,7 @@ class TriggerEngine:
                 delivery,
                 modulo_timestamp=modulo_timestamp,
                 hmac_signature=hmac_signature,
+                github_signature_verified=github_signature_verified,
             )
 
             cfg = trigger.config_json or {}

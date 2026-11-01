@@ -11,6 +11,7 @@ from modulo.auth.permissions import (
     PermissionConfigurationError,
     PermissionDenied,
     assert_org_role,
+    is_delegable,
     resolve_required,
 )
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
@@ -100,6 +101,39 @@ class TestResolveRequired:
             with pytest.raises(PermissionDenied):
                 assert_org_role(low_role, "admin", "guardrail.manage")
 
+    def test_read_floors_and_mutation_floors_are_distinct(self) -> None:
+        viewer_reads = ("run.list", "trigger.list", "trigger.events.list", "hitl.list")
+        for permission in viewer_reads:
+            assert resolve_required(permission) == "viewer"
+            assert assert_org_role("viewer", resolve_required(permission), permission) is None
+
+        mutations = {
+            "run.trigger": "runner",
+            "run.cancel": "runner",
+            "trigger.create": "operator",
+            "trigger.update": "operator",
+            "trigger.delete": "operator",
+            "hitl.claim": "runner",
+            "hitl.approve": "operator",
+            "hitl.reject": "operator",
+            "hitl.deliver_manual": "operator",
+        }
+        for permission, required in mutations.items():
+            assert resolve_required(permission) == required
+            with pytest.raises(PermissionDenied):
+                assert_org_role("viewer", required, permission)
+
+    def test_system_maps_access_registered_operator_level(self) -> None:
+        """FAR-2230: ``system_maps_access`` is a registered operator-level key
+        and is delegable to API keys."""
+        assert PERMISSIONS["system_maps_access"] == "operator"
+        assert resolve_required("system_maps_access") == "operator"
+        assert is_delegable("system_maps_access") is True
+        assert assert_org_role("operator", "operator", "system_maps_access") is None
+        for low_role in ("runner", "viewer"):
+            with pytest.raises(PermissionDenied):
+                assert_org_role(low_role, "operator", "system_maps_access")
+
     def test_unknown_key_raises_configuration_error(self) -> None:
         with pytest.raises(PermissionConfigurationError):
             resolve_required("nonexistent.permission")
@@ -111,7 +145,10 @@ class TestResolveRequired:
             "connector.create": "operator",
             "connector.delete": "operator",
             "secret.manage": "operator",
-            "trigger.events.list": "runner",
+            "run.list": "viewer",
+            "trigger.list": "viewer",
+            "trigger.events.list": "viewer",
+            "hitl.list": "viewer",
             "api_key.create": "runner",
             "api_key.update": "runner",
             "api_key.list": "operator",

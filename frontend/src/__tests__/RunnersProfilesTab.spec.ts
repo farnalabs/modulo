@@ -44,6 +44,7 @@ function statusFor(overrides: Record<string, unknown> = {}) {
     aggregate_state: 'healthy' as const,
     probe_interval_seconds: 60,
     staleness_threshold_seconds: 300,
+    engine_configured: true,
     profiles: [],
     machines: [],
     concurrency: { sandbox_concurrency_limit: null, is_default: true, preflight: { state: 'unknown' as const, detail: null, engine_cpu_count: null, engine_mem_total_mb: null, needed_cpu: null, needed_mem_mb: null } },

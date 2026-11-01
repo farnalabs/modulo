@@ -17,7 +17,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,6 +83,7 @@ from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import create_run
+from modulo.db.crud.team_scope import account_team_scope_clause
 from modulo.db.crud.trigger import apply_trigger_event_cursor
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -672,11 +673,26 @@ async def list_triggers(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # The Pipeline join below is gated by ``rls_team_isolation``, whose
+            # membership/admin arms need app.user_id/app.org_role; set_rls_org
+            # alone leaves them empty and hides team-private pipelines.
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             base_filter = Trigger.organisation_id == principal.organisation_id
             trigger_filter = _trigger_type_and_pipeline_filters(base_filter, pipeline_id, trigger_type)
+            if principal.org_role == "viewer":
+                trigger_filter.append(account_team_scope_clause(Pipeline.owner_team_id, principal.account_id))
 
-            q = select(Trigger).where(*trigger_filter, Trigger.deleted_at.is_(None))
-            count_q = select(func.count()).select_from(Trigger).where(*trigger_filter, Trigger.deleted_at.is_(None))
+            q = (
+                select(Trigger)
+                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+                .where(*trigger_filter, Trigger.deleted_at.is_(None), Pipeline.deleted_at.is_(None))
+            )
+            count_q = (
+                select(func.count())
+                .select_from(Trigger)
+                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+                .where(*trigger_filter, Trigger.deleted_at.is_(None), Pipeline.deleted_at.is_(None))
+            )
             total_raw = (await session.execute(count_q)).scalar_one()
             total = int(total_raw) if total_raw is not None else 0
             offset = (page - 1) * page_size
@@ -856,12 +872,20 @@ async def preview_cron_schedule(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # The Pipeline join is gated by ``rls_team_isolation``; the
+            # membership/admin arms need the user RLS context alongside the org.
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            trigger_filter: list[Any] = [
+                Trigger.id == trigger_id,
+                Trigger.organisation_id == principal.organisation_id,
+                Trigger.deleted_at.is_(None),
+            ]
+            if principal.org_role == "viewer":
+                trigger_filter.append(account_team_scope_clause(Pipeline.owner_team_id, principal.account_id))
             result = await session.execute(
-                select(Trigger).where(
-                    Trigger.id == trigger_id,
-                    Trigger.organisation_id == principal.organisation_id,
-                    Trigger.deleted_at.is_(None),
-                )
+                select(Trigger)
+                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+                .where(*trigger_filter, Pipeline.deleted_at.is_(None))
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
@@ -1241,12 +1265,34 @@ async def test_polling_condition(
 # ---------------------------------------------------------------------------
 
 
+async def _require_unique_trigger_name(
+    session: AsyncSession, pipeline_id: uuid.UUID, name: str, *, exclude_id: uuid.UUID | None = None
+) -> None:
+    """409 when a live trigger on this pipeline already carries ``name``."""
+    stmt = select(Trigger.id).where(
+        Trigger.pipeline_id == pipeline_id,
+        Trigger.name == name,
+        Trigger.deleted_at.is_(None),
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Trigger.id != exclude_id)
+    if (await session.execute(stmt)).first() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"duplicate trigger name {name!r} for this pipeline - a live trigger "
+                "with this (pipeline, name) identity already exists"
+            ),
+        )
+
+
 class TriggerCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     trigger_type: str = Field(..., pattern=r"^(manual|webhook|cron|polling|agent_signal|ongoing|slack_app_mention)$")
-    # FAR-681 slice 2: declarative-apply identity within (pipeline, name).
-    # Optional so every existing creator (UI/MCP) stays source-compatible;
-    # name-based apply requires it.
-    name: str | None = Field(None, min_length=1, max_length=255)
+    # FAR-2227: REQUIRED. Identity within (pipeline, name) for humans, MCP and
+    # declarative apply alike. Whitespace is stripped before the 1..255 check.
+    name: str = Field(..., min_length=1, max_length=255)
     active: bool = True
     max_concurrent_runs: int = Field(default=1, ge=1)
     daily_spend_limit: Decimal | None = Field(None, ge=0, description="Daily spend ceiling in USD; None = unlimited")
@@ -1291,22 +1337,7 @@ async def create_trigger(
             # live duplicate name is a 409 CONFLICT (the 0201 partial unique
             # index enforces the same rule at the DB level; this check gives a
             # clear error before the insert instead of a raw IntegrityError).
-            if req.name is not None:
-                duplicate = await session.execute(
-                    select(Trigger.id).where(
-                        Trigger.pipeline_id == pipeline_id,
-                        Trigger.name == req.name,
-                        Trigger.deleted_at.is_(None),
-                    )
-                )
-                if duplicate.first() is not None:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=(
-                            f"duplicate trigger name {req.name!r} for this pipeline - a live trigger "
-                            "with this (pipeline, name) identity already exists"
-                        ),
-                    )
+            await _require_unique_trigger_name(session, pipeline_id, req.name)
             _validate_trigger_config_keys(req.config_json)
             # FAR-1595: a connector reference named at create time is
             # team-validated against the owning pipeline before the trigger can
@@ -1387,6 +1418,10 @@ async def create_trigger(
 
 
 class TriggerUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    # FAR-2227: rename. None leaves the name unchanged; the name can never be cleared.
+    name: str | None = Field(None, min_length=1, max_length=255)
     active: bool | None = None
     max_concurrent_runs: int | None = Field(None, ge=1)
     daily_spend_limit: Decimal | None = Field(
@@ -1395,6 +1430,13 @@ class TriggerUpdate(BaseModel):
     config_json: dict[str, Any] | None = None
     cron_expression: str | None = None
     cron_timezone: str | None = None
+
+
+async def _apply_trigger_rename(session: AsyncSession, trigger: Trigger, name: str | None) -> None:
+    """Rename the trigger when a new name was supplied, enforcing per-pipeline uniqueness."""
+    if name is not None and name != trigger.name:
+        await _require_unique_trigger_name(session, trigger.pipeline_id, name, exclude_id=trigger.id)
+        trigger.name = name
 
 
 async def _apply_trigger_update(
@@ -1423,6 +1465,7 @@ async def _apply_trigger_update(
     # Pre-mutation snapshot for the ongoing next_fire_at reset decision
     # (reset only when the pool/cadence/active actually CHANGES).
     prev_max = trigger.max_concurrent_runs
+    await _apply_trigger_rename(session, trigger, req.name)
     prev_active = await _apply_active_state(session, trigger, req.active)
     if req.max_concurrent_runs is not None:
         trigger.max_concurrent_runs = req.max_concurrent_runs
@@ -1921,20 +1964,43 @@ async def list_trigger_events(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # The join to Pipeline is gated by ``rls_team_isolation``; the
+            # membership/admin arms need app.user_id/app.org_role set too.
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             trigger_result = await session.execute(
-                select(Trigger).where(
+                select(Trigger)
+                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+                .where(
                     Trigger.id == trigger_id,
                     Trigger.organisation_id == principal.organisation_id,
                     Trigger.deleted_at.is_(None),
+                    Pipeline.deleted_at.is_(None),
+                    *(
+                        [account_team_scope_clause(Pipeline.owner_team_id, principal.account_id)]
+                        if principal.org_role == "viewer"
+                        else []
+                    ),
                 )
             )
             trigger = trigger_result.scalar_one_or_none()
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
 
-            q = select(TriggerEvent).where(
-                TriggerEvent.trigger_id == trigger_id,
-                TriggerEvent.organisation_id == principal.organisation_id,
+            q = (
+                select(TriggerEvent)
+                .join(Trigger, TriggerEvent.trigger_id == Trigger.id)
+                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+                .where(
+                    TriggerEvent.trigger_id == trigger_id,
+                    TriggerEvent.organisation_id == principal.organisation_id,
+                    Trigger.deleted_at.is_(None),
+                    Pipeline.deleted_at.is_(None),
+                    *(
+                        [account_team_scope_clause(Pipeline.owner_team_id, principal.account_id)]
+                        if principal.org_role == "viewer"
+                        else []
+                    ),
+                )
             )
             if event_status is not None:
                 q = q.where(TriggerEvent.validation_result == event_status)

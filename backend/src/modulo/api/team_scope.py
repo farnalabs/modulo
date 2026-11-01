@@ -71,6 +71,7 @@ from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.mcp_server import McpServer
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.system_map import SystemMap
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
@@ -253,6 +254,11 @@ resolve_eval_suite_team_scope = team_scope_resolver(EvalSuite, path_param="suite
 # DB-RLS-only posture as the core tables (FAR-1514).
 resolve_external_agent_team_scope = team_scope_resolver(ExternalAgent, path_param="agent_id")
 resolve_mcp_server_team_scope = team_scope_resolver(McpServer, path_param="server_id")
+# FAR-2236 System Maps: ``system_maps`` carries the visibility pair and its own
+# ``rls_team_isolation`` policy (migration 0341), so it is registered for
+# registry completeness and enforced by DB RLS alone — the same DB-RLS-only
+# posture as the core tables (FAR-1514) and the FAR-1692 registries.
+resolve_system_map_team_scope = team_scope_resolver(SystemMap, path_param="map_id")
 
 
 async def resolve_trigger_run_team_scope(
@@ -366,6 +372,7 @@ TEAM_SCOPED_RESOLVERS: dict[str, TeamScopeProvider] = {
     "eval_suites": resolve_eval_suite_team_scope,
     "external_agents": resolve_external_agent_team_scope,
     "mcp_servers": resolve_mcp_server_team_scope,
+    "system_maps": resolve_system_map_team_scope,
 }
 
 _CREATE_DENIAL_DETAIL = "Cannot assign a resource to a team you are not a member of"

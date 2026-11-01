@@ -33,7 +33,7 @@
       </div>
 
       <div v-else class="space-y-6">
-        <div v-for="fwd in forwarders" :key="fwd.forwarder_type" class="rounded-lg border bg-card shadow-sm">
+        <DataCard v-for="fwd in forwarders" :key="fwd.forwarder_type" variant="bordered" padding="none" elevation="sm">
           <div class="flex items-center justify-between p-4">
             <div class="flex items-center gap-3">
               <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
@@ -278,7 +278,7 @@
               :retryable="false"
             />
           </div>
-        </div>
+        </DataCard>
       </div>
     </FeatureGate>
   </div>
@@ -295,6 +295,7 @@ import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 

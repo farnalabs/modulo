@@ -222,19 +222,28 @@ def default_unit_path() -> Path:
     return Path.home() / ".config" / "systemd" / "user" / UNIT_FILENAME
 
 
-def render_launchd_plist(executable: Path) -> str:
-    """Render a LaunchAgent plist with argv-preserving XML serialization.
-
-    ``plistlib`` performs the XML escaping required for executable paths while
-    retaining ``ProgramArguments`` as a list, which launchd passes verbatim.
-    """
+def render_launchd_plist(executable: Path, *, data_dir: Path | None = None) -> str:
+    """Render the shared macOS LaunchAgent contract used by CLI and installer."""
+    arguments = [str(executable), "start"]
     payload = {
         "Label": LAUNCHD_LABEL,
-        "ProgramArguments": [str(executable), "start"],
+        "ProgramArguments": arguments,
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ProcessType": "Interactive",
     }
+    if data_dir is not None:
+        arguments.extend(["--data-dir", str(data_dir)])
+        # launchd otherwise sends stdout/stderr to /dev/null.  Keep the
+        # launcher in its foreground service mode, but make pre-child-spawn
+        # failures observable and give relative-path consumers a stable cwd.
+        payload.update(
+            {
+                "WorkingDirectory": str(data_dir),
+                "StandardOutPath": str(data_dir / "launcher.log"),
+                "StandardErrorPath": str(data_dir / "launcher.log"),
+            }
+        )
     return plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=False).decode("utf-8")
 
 
@@ -289,6 +298,7 @@ def install(
     runner: CommandRunner | None = None,
     unit_path: Path | None = None,
     executable: Path | None = None,
+    data_dir: Path | None = None,
     linger_argv_builder: Callable[[str], list[str]] | None = None,
 ) -> ServiceInstallResult:
     """Install, enable + start the user service (systemd or launchd); enable linger (best-effort)."""
@@ -301,7 +311,7 @@ def install(
 
     if sys.platform == "darwin":
         target = unit_path if unit_path is not None else default_launchd_plist_path()
-        return _install_launchd(runner, target, resolved_executable)
+        return _install_launchd(runner, target, resolved_executable, data_dir=data_dir)
 
     assert_systemd_available(runner)
     target = unit_path if unit_path is not None else default_unit_path()
@@ -331,10 +341,15 @@ def install(
     )
 
 
-def _install_launchd(runner: CommandRunner, target: Path, executable: Path) -> ServiceInstallResult:
-    """Write the LaunchAgent, then load it with ``launchctl load -w``."""
+def _install_launchd(
+    runner: CommandRunner,
+    target: Path,
+    executable: Path,
+    data_dir: Path | None = None,
+) -> ServiceInstallResult:
+    """Write the shared LaunchAgent, then load it with ``launchctl load -w``."""
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render_launchd_plist(executable), encoding="utf-8")
+    target.write_text(render_launchd_plist(executable, data_dir=data_dir), encoding="utf-8")
     with contextlib.suppress(OSError):
         target.chmod(0o644)
 

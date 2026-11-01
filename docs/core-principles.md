@@ -60,6 +60,7 @@ A failed output produces a new run with feedback attached; the original stays as
 
 ## 9. Self-hosted, no telemetry by default
 Your infra, your data, no cloud dependency. Runs on Docker Compose or Fly; no telemetry by default. Operators can opt in via Settings > Runtime Configuration (`MODULO_TELEMETRY_ENABLED`); when enabled, only aggregate counters and error categories are exported: no personal data, pipeline content, or API keys.
+Modulo runs without requiring a Farnalabs-operated service.
 **Why:** governance without data ownership is theatre for regulated and IP-sensitive teams.
 **Where:** deployment docs, `docs/architecture.md`.
 **Benefit:** adoption is not blocked by data-residency concerns.

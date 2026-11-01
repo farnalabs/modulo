@@ -44,6 +44,7 @@ from modulo.auth.dependencies import (
 )
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, decode_principal
 from modulo.auth.permissions import (
+    SYSTEM_MAPS_ACCESS_PERMISSION,
     PermissionConfigurationError,
     PermissionDenied,
     assert_grant,
@@ -235,6 +236,26 @@ def require_in_dev_operator(
         ) from exc
     # FAR-1477: a grant-bearing key must also hold the In-Dev permission.
     _enforce_key_grant(principal, permission)
+
+
+def _require_internal_system_maps_access(
+    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+    settings: Settings = Depends(get_settings),
+) -> TenantPrincipal:
+    """Keep the system maps API surface on the internal path only.
+
+    System Maps deliberately has its own grant, separate from the retained
+    lifecycle-map ``library.search.in_dev`` grant. Legacy JWTs and keys without
+    an explicit grant-set keep the role-based behaviour; grant-bearing keys must
+    carry the dedicated System Maps grant.
+    """
+    require_in_dev_operator(
+        principal,
+        SYSTEM_MAPS_ACCESS_PERMISSION,
+        require_dev_mode=True,
+        settings=settings,
+    )
+    return principal
 
 
 def require_permission_any_credential(permission: str) -> Any:

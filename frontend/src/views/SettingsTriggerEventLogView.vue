@@ -2,7 +2,7 @@
   <div class="page-wide">
     <PageHeader :title="$t('views.SettingsTriggerEventLogView.trigger_event_log')" :subtitle="$t('views.SettingsTriggerEventLogView.event_history_for_all_triggers_across_the_organisation')" />
 
-    <div class="rounded-lg border bg-card p-4 shadow-sm">
+    <DataCard variant="bordered" padding="md" elevation="sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <label for="settingstriggereventlogview-trigger-type" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.trigger_type') }}</label>
@@ -56,15 +56,17 @@
       <div v-if="total > 0" class="mt-3 text-sm text-muted-foreground">
         {{ $t('views.SettingsTriggerEventLogView.events_count', { count: total }, total) }}
       </div>
-    </div>
+    </DataCard>
 
     <!-- FAR-1344 — capacity outcomes at a glance. A count + trend for the
          deliveries capacity refused/coalesced in the last 24h, so an operator
          sees pressure building without drilling into an individual event. -->
-    <div
+    <DataCard
       v-if="resultCounts"
       data-testid="capacity-outcomes-summary"
-      class="rounded-lg border bg-card p-4 shadow-sm"
+      variant="bordered"
+      padding="md"
+      elevation="sm"
     >
       <div class="flex flex-wrap items-center gap-3">
         <span class="text-sm font-medium text-foreground">
@@ -100,7 +102,7 @@
       <p v-else class="mt-3 text-xs text-muted-foreground">
         {{ $t('views.SettingsTriggerEventLogView.capacity_outcome_none', { hours: capacityWindowHours }) }}
       </p>
-    </div>
+    </DataCard>
 
     <LoadingSpinner v-if="loading" />
 
@@ -114,7 +116,7 @@
     </div>
 
     <template v-else>
-      <div class="overflow-hidden rounded-lg border bg-card shadow-sm">
+      <DataCard variant="bordered" padding="none" elevation="sm" card-class="overflow-hidden">
         <table class="w-full">
           <thead>
             <tr class="border-b bg-muted/50 text-left text-xs font-medium uppercase text-muted-foreground">
@@ -160,14 +162,14 @@
             </tr>
           </tbody>
         </table>
-      </div>
+      </DataCard>
 
       <div class="flex items-center justify-between">
         <button type="button"
-          :disabled="cursorStack.length === 0"
+          :disabled="!canGoPrevious"
           data-testid="settings-trigger-event-log-previous"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
-          @click="goToPreviousPage()"
+          @click="goToPreviousPage"
         >
           {{ $t('views.SettingsTriggerEventLogView.previous') }}
         </button>
@@ -178,7 +180,7 @@
           :disabled="!nextCursor"
           data-testid="settings-trigger-event-log-next"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
-          @click="goToNextPage()"
+          @click="goToNextPage"
         >
           {{ $t('views.SettingsTriggerEventLogView.next') }}
         </button>
@@ -192,16 +194,23 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
+import { useCursorPageStack } from '../composables/useCursorPageStack'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { shortId } from '../utils/format'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 
-const cursorStack = ref<(string | null)[]>([])
-const currentCursor = ref<string | null>(null)
-const nextCursor = ref<string | null>(null)
+const {
+  cursor: currentCursor,
+  nextCursor,
+  canGoPrevious,
+  goToNextPage,
+  goToPreviousPage,
+  reset: resetCursor,
+} = useCursorPageStack(() => loadEvents())
 
 // Filter refs must be declared BEFORE the useDataFetch call: vue-query
 // subscribes during setup, so the fetcher runs immediately and reads these
@@ -313,31 +322,15 @@ function resultBadge(result: string): string {
   return 'badge badge-context-slate'
 }
 
-function goToPreviousPage() {
-  const prev = cursorStack.value.pop()
-  if (prev === undefined) return
-  currentCursor.value = prev
-  loadEvents()
-}
-
-function goToNextPage() {
-  if (!nextCursor.value) return
-  cursorStack.value.push(currentCursor.value)
-  currentCursor.value = nextCursor.value
-  loadEvents()
-}
-
 function applyFilters() {
-  currentCursor.value = null
-  cursorStack.value = []
+  resetCursor()
   loadEvents()
 }
 
 function resetFilters() {
   filterTriggerType.value = '__all__'
   filterResult.value = '__all__'
-  currentCursor.value = null
-  cursorStack.value = []
+  resetCursor()
   loadEvents()
 }
 </script>

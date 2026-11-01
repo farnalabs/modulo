@@ -2,11 +2,18 @@
   <div data-theme="agent" class="page-wide">
     <header>
       <PageHeader :title="$t('views.AdminFeatureFlagsView.feature_flags')" :subtitle="$t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status')" />
-      <output v-if="planStore.isLoading" class="mt-2 flex flex-wrap items-center gap-4 text-sm text-muted-foreground" aria-busy="true">
+      <output v-if="planInfoPending" class="mt-2 flex flex-wrap items-center gap-4 text-sm text-muted-foreground" aria-busy="true" :aria-label="$t('views.AdminFeatureFlagsView.loading_plan_info')">
         <span class="sr-only">{{ $t('views.AdminFeatureFlagsView.loading_plan_info') }}</span>
         <div aria-hidden="true" class="h-4 w-28 animate-pulse rounded bg-muted/50" />
         <div aria-hidden="true" class="h-4 w-40 animate-pulse rounded bg-muted/50" />
       </output>
+      <div v-else-if="planUnavailable" class="mt-2">
+        <ErrorAlert
+          compact
+          :message="$t('views.AdminFeatureFlagsView.plan_info_unavailable')"
+          :on-retry="planStore.fetchPlan"
+        />
+      </div>
       <div v-else class="mt-2 flex flex-wrap gap-4 text-sm text-muted-foreground">
         <span>
           {{ $t('views.AdminFeatureFlagsView.plan') }}: <strong class="text-foreground">{{ planStore.currentTier }}</strong>
@@ -22,25 +29,33 @@
     </header>
 
     <!-- Dev Mode Toggle -->
-    <div class="mb-6 rounded-lg border bg-card p-4">
-      <div class="flex items-center justify-between">
-        <div>
-          <h3 class="text-sm font-semibold">{{ $t('views.AdminFeatureFlagsView.developer_mode') }}</h3>
-          <p class="text-xs text-muted-foreground">
-            {{ $t('views.AdminFeatureFlagsView.developer_mode_description') }}
-          </p>
-        </div>
+    <DataCard
+      class="mb-6"
+      heading-level="h3"
+      :title="$t('views.AdminFeatureFlagsView.developer_mode')"
+      :description="$t('views.AdminFeatureFlagsView.developer_mode_description')"
+    >
+      <template #headerActions>
         <ToggleSwitch
           :checked="devModeEnabled"
+          :toggling="devModeSaving"
           :label="$t('views.AdminFeatureFlagsView.developer_mode')"
           data-testid="developer-mode-toggle"
           @toggle="toggleDevMode"
         />
-      </div>
-    </div>
+      </template>
+      <ErrorAlert
+        v-if="devModeError"
+        compact
+        :message="devModeError"
+        :on-retry="retryDevMode"
+      />
+    </DataCard>
 
-    <div class="card p-4">
-      <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminFeatureFlagsView.license_status') }}</h2>
+    <DataCard
+      heading-level="h2"
+      :title="$t('views.AdminFeatureFlagsView.license_status')"
+    >
       <div v-if="loading" aria-hidden="true" class="grid grid-cols-1 gap-4 sm:grid-cols-4">
         <div v-for="i in 4" :key="i">
           <div class="h-3 w-16 rounded bg-muted/50" />
@@ -78,7 +93,7 @@
           </p>
         </div>
       </div>
-    </div>
+    </DataCard>
 
     <div v-if="filteredWouldActivate.length > 0" class="card p-4 border-warning/30">
       <h2 class="mb-2 text-sm font-semibold text-warning-text">{{ $t('views.AdminFeatureFlagsView.would_activate') }}</h2>
@@ -100,7 +115,7 @@
       <FilterBar
         :search="{ placeholder: $t('views.AdminFeatureFlagsView.search_flags') }"
         :search-value="searchQuery"
-        @update:search="searchQuery = $event; currentPage = 1"
+        @update:search="searchQuery = $event"
       />
 
       <div v-if="loading" aria-hidden="true" class="card mb-6 overflow-hidden">
@@ -194,7 +209,7 @@
                         </template>
                       </span>
                     </td>
-                    <td class="table-cell text-muted-foreground">{{ flag.description }}</td>
+                    <td class="table-cell text-muted-foreground">{{ flag.description || '—' }}</td>
                     <td class="table-cell-numeric">
                       <Button severity="secondary" outlined size="small" :disabled="isFlagTierLocked(flag) && !flag.currently_active" :data-testid="'flag-override-' + flag.name" @click.stop="openOverrideDialog(flag)">
                         {{ getCurrentOverride(flag.name) === null ? $t('views.AdminFeatureFlagsView.default') : (getCurrentOverride(flag.name) ? $t('common.enabled') : $t('common.disabled')) }}
@@ -260,6 +275,7 @@ import { formatApiError } from '../lib/api/formatError'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ToggleSwitch from '../components/shared/ToggleSwitch.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import Button from 'primevue/button'
 import { Lock } from '@lucide/vue'
 import FormDialog from '../components/shared/FormDialog.vue'
@@ -270,18 +286,57 @@ const planStore = usePlanStore()
 const { t } = useI18n()
 
 const devModeEnabled = ref(planStore.devMode)
+const devModeSaving = ref(false)
+const devModeError = ref<string | null>(null)
+const devModeTarget = ref(planStore.devMode)
 
-async function toggleDevMode(enabled: boolean) {
+async function applyDevMode(enabled: boolean) {
+  devModeError.value = null
+  devModeTarget.value = enabled
+  devModeSaving.value = true
   try {
-    const { data } = await api.PUT('/api/v1/admin/dev-mode', { body: { enabled } })
+    const { data, error: err } = await api.PUT('/api/v1/admin/dev-mode', { body: { enabled } })
+    if (err) {
+      devModeError.value = `${t('views.AdminFeatureFlagsView.dev_mode_toggle_failed')} ${formatApiError(err)}`
+      return
+    }
     if (data) {
       devModeEnabled.value = data.enabled
       planStore.devMode = data.enabled
     }
-  } catch (err) {
-    console.warn('Failed to toggle dev mode', err)
+  } catch (err: unknown) {
+    devModeError.value = `${t('views.AdminFeatureFlagsView.dev_mode_toggle_failed')} ${formatApiError(err)}`
+  } finally {
+    devModeSaving.value = false
   }
 }
+
+function toggleDevMode(enabled: boolean) {
+  void applyDevMode(enabled)
+}
+
+// STATE-2: a failed toggle keeps the switch on its previous value and must
+// offer a retry for the value the operator actually asked for, not a
+// re-toggle of whatever the switch shows now.
+function retryDevMode() {
+  void applyDevMode(devModeTarget.value)
+}
+
+// Never decide "has the plan loaded" from a loaded value: the store's default
+// tier/flags are indistinguishable from a real community payload. `loaded` is
+// the explicit server-payload flag; until it flips the header renders its
+// skeleton, and a plan read that settled without a payload (a recorded error,
+// or the store's terminal 'unavailable' source) is surfaced instead of
+// fabricating a default plan. `error` also catches a failed refetch that left
+// a cache-backed source in place.
+const planUnavailable = computed(
+  () =>
+    !planStore.loaded &&
+    (planStore.flagsSource === 'unavailable' || planStore.error !== null),
+)
+const planInfoPending = computed(
+  () => !planStore.loaded && !planUnavailable.value,
+)
 
 const enabledCount = computed(() => {
   return Object.values(planStore.features).filter(Boolean).length
@@ -401,6 +456,13 @@ function canForceEnable(flag: FlagItem): boolean {
 
 watch(searchQuery, () => {
   currentPage.value = 1
+})
+
+// A refetch (e.g. after toggling a flag) can shrink the result set below the
+// current page, which would render an empty table under a "Page N of M"
+// control with no empty state. Clamp back to the last real page instead.
+watch(totalPages, (pages) => {
+  if (currentPage.value > pages) currentPage.value = pages
 })
 
 function formatDate(dateStr: string): string {

@@ -17,7 +17,7 @@ routes:
         parent:
         product_map: [feat-dashboard]
         sidebar_group: build
-        sidebar_order: 1
+        sidebar_order: 0
         type: page
         <<: *community
         deprecated: false
@@ -29,7 +29,7 @@ routes:
         parent: /
         product_map: [feat-governance-stack]
         sidebar_group: build
-        sidebar_order: 0
+        sidebar_order: 4
         type: page
         <<: *community
         deprecated: false
@@ -140,7 +140,7 @@ routes:
         parent: /
         product_map: [feat-pipelines, feat-router, feat-apply]
         sidebar_group: build
-        sidebar_order: 2
+        sidebar_order: 1
         type: list_page
         exact: true
         <<: *community
@@ -152,7 +152,7 @@ routes:
         parent: /
         product_map: [feat-library]
         sidebar_group: build
-        sidebar_order: 3
+        sidebar_order: 2
         type: list_page
         <<: *community
         deprecated: false
@@ -174,7 +174,7 @@ routes:
         parent: /
         product_map: [feat-runs]
         sidebar_group: build
-        sidebar_order: 4
+        sidebar_order: 3
         type: list_page
         query_params:
           cursor: Keyset pagination cursor
@@ -1036,6 +1036,15 @@ elements:
         type: element
         dynamic_testid: false
       - testid: dashboard-run-activity
+        type: element
+        dynamic_testid: false
+      - testid: dashboard-system-overview
+        type: element
+        dynamic_testid: false
+      - testid: dashboard-system-discover
+        type: button
+        dynamic_testid: false
+      - testid: system-map-draft-review
         type: element
         dynamic_testid: false
       - testid: dashboard-recent-runs
@@ -2414,30 +2423,6 @@ elements:
       - testid: assistant-guidance-save
         type: button
         dynamic_testid: false
-      - testid: assistant-rate-limit-max-actions
-        type: input
-        dynamic_testid: false
-      - testid: assistant-rate-limit-window
-        type: input
-        dynamic_testid: false
-      - testid: assistant-auto-execute-threshold
-        type: input
-        dynamic_testid: false
-      - testid: assistant-nogo-page-patterns
-        type: textarea
-        dynamic_testid: false
-      - testid: assistant-nogo-selector-patterns
-        type: textarea
-        dynamic_testid: false
-      - testid: assistant-allowed-selectors
-        type: textarea
-        dynamic_testid: false
-      - testid: assistant-allowed-page-patterns
-        type: textarea
-        dynamic_testid: false
-      - testid: assistant-safety-save
-        type: button
-        dynamic_testid: false
       - testid: assistant-skills-add
         type: button
         dynamic_testid: false
@@ -2468,18 +2453,6 @@ elements:
         dynamic_testid: false
       - testid: assistant-skills-form-triggers
         type: input
-        dynamic_testid: false
-      - testid: assistant-tool-permissions
-        type: element
-        dynamic_testid: false
-      - testid: assistant-tool-perm-mode
-        type: select
-        dynamic_testid: false
-      - testid: assistant-tool-perms-save
-        type: button
-        dynamic_testid: false
-      - testid: assistant-safety-limits
-        type: element
         dynamic_testid: false
       - testid: assistant-skills
         type: element
@@ -6199,6 +6172,9 @@ elements:
       - testid: settings-runtime-config-reload
         type: button
         dynamic_testid: false
+      - testid: settings-runtime-config-loading
+        type: element
+        dynamic_testid: false
       - testid: settings-runtime-config-apply
         type: button
         dynamic_testid: false
@@ -6471,6 +6447,12 @@ elements:
         dynamic_testid: false
       - testid: settings-triggers-toggle-error
         type: element
+        dynamic_testid: false
+      - testid: settings-triggers-name
+        type: element
+        dynamic_testid: false
+      - testid: settings-triggers-form-name
+        type: input
         dynamic_testid: false
       - testid: settings-triggers-form-pipeline
         type: select
@@ -6963,7 +6945,7 @@ features:
         status: covered
         behaviours:
             - "[x] The /risk-assessment route renders under the MONITOR sidebar group; RiskAssessmentView.vue fetches risk assessment data via the evidence store and renders facets, summary cards, and a sortable table with i18n-backed strings and role=status/aria-live status regions (frontend/src/views/RiskAssessmentView.vue, frontend/src/components/risk-assessment/)"
-            - "[x] Facet filters (key prefix, pipeline, time window, action) drive server-side filtering through the risk assessment store and update URL query params for deep-linking (frontend/src/components/risk-assessment/RiskAssessmentFacets.vue)"
+            - "[x] Facet filters (key prefix, pipeline, time window, action) drive server-side filtering through the risk assessment store and update URL query params for deep-linking, and deep-link hydration accepts ONLY values the facet vocabulary can express and the wire contract parses — the time window must be one of the offered RISK_WINDOW_CHOICES, the action must be in the gate-action list, and pipeline_id must be a canonical UUID (key_prefix stays free text, as the API treats it as a LIKE prefix) — so an out-of-contract value is a malformed link that degrades to the default instead of being sent, because the backend answers it 422 and the error alert's Retry re-applies the same filters, turning a stale or hand-tampered link into an error the retry can never clear; the select renders the SAME RISK_WINDOW_CHOICES the hydration accepts, so the facet and the deep-link contract cannot drift (frontend/src/lib/riskAssessment.ts, frontend/src/views/RiskAssessmentView.vue, frontend/src/components/risk-assessment/RiskAssessmentFacets.vue, frontend/src/__tests__/RiskAssessmentView.spec.ts, frontend/src/__tests__/RiskAssessmentComponents.spec.ts)"
             - "[x] Summary card displays total rows and per-action counts (block, warn, continue, escalate) with facet degradation indicator and time window note (frontend/src/components/risk-assessment/RiskAssessmentSummaryCard.vue)"
             - "[x] Sortable table renders evidence rows with timestamp, key, action badge, subject, and formatted value columns; empty state handled (frontend/src/components/risk-assessment/RiskAssessmentTable.vue)"
     feat-governance-stack:
@@ -7304,10 +7286,9 @@ features:
         status: covered
         behaviours:
             - "[x] The assistant settings page configures providers, models, and system prompts"
-            - "[x] Skills can be added, edited, and deleted with triggers and tool permissions"
-            - "[x] Safety settings include rate limits, nogo patterns, and allowed selectors"
+            - "[x] Skills can be added, edited, and deleted with triggers"
             - "[x] The /assistant page provides an AI assistant interface with analytics"
-            - "[x] Auto-execute thresholds ship end to end: the org assistant config carries auto_execute_threshold (default 0.8, AssistantConfig in core/assistant/config_service.py); in full_auto permission mode a proposed action whose reported confidence falls below the threshold is demoted to requires_approval (_default_tool_permission in api/routes/assistant.py); the /admin/assistant safety panel reads and writes the field and explains it via the auto-execute-threshold description (AdminAssistantView.vue, AdminAssistantView.spec.ts)"
+            - "[x] Browser UI driving was removed in FAR-2232, and its configuration surface removed with it: the assistant advertises only the read-only get_manifest tool, and the admin assistant config carries no tool_permissions/permission_mode/allowed_page_patterns/allowed_selectors/nogo_*/auto_execute_threshold/rate-limit fields (AssistantConfig in core/assistant/config_service.py); the /admin/assistant page renders provider/model/prompt/guidance/access/context-source/skills sections only, with no Tool Permissions or Safety & Limits panel; migration 0340 deletes the leftover assistant_ui_driving feature-flag catalog row, and the obsolete en-US i18n keys are swept"
             - "[x] Guidance tuning ships end to end: additional_guidance is a first-class field on the admin assistant config (AssistantConfig in core/assistant/config_service.py, GET/PUT /api/v1/admin/assistant/config in api/routes/admin_assistant.py) edited through the Additional Guidance textarea in the admin settings view and asserted on the PUT body in AdminAssistantView.spec.ts"
     feat-runs:
         description: Run execution, history, detail, and output diffs
@@ -7366,6 +7347,7 @@ features:
             # FAR-591 D5: Runners page + health-probe cache
             - "[x] A per-machine health-probe system cron (runner_health_probe, every 60s, retries=2, unique=True) probes the deployment's Docker engine THROUGH the socket-proxy and upserts one runner_probe_cache row per (organisation, machine): engine reachability, pinned-image presence, and the engine's /info CPU/memory for the concurrency preflight — the Runners page and node editor read ONLY this cache, never a synchronous engine probe on the request path"
             - "[x] The probe tick is three-phase (engine probe + image inspects run BEFORE any DB transaction opens; the write tx is scoped to the upserts), prunes (org, machine) rows not refreshed within a 24h retention window, and upserts per org inside a SAVEPOINT so one poisoned org rolls back only itself; a per-org infrastructure error (SQLAlchemyError) marks the org failed and re-raises at the end of the tick so SAQ's retries engage, while the wrapper persists the saq:cron:stats:runner_health_probe liveness key on success AND failure (failure records zero counts + error=probe_failed; the last_run_at refresh keeps the /healthz/ready staleness check honest; the FAR-538 per-machine cron heartbeat is refreshed per successful tick)"
+            - "[x] A deployment with no Docker engine is not an error (FAR-2239): GET /api/v1/runners/status carries engine_configured (false when neither MODULO_DOCKER_HOST/DOCKER_HOST nor a local Docker socket exists), and the Runners status strip then reads a neutral 'Docker runner not available on this deployment' and the Bundled Runner profile badge reads 'not available' instead of a red 'engine unreachable'; a configured-but-failing engine keeps the red engine-unreachable state. A profile still carrying the release placeholder digest shows neutral 'Bundled runner image not yet pinned' guidance (badge 'image not yet pinned'), while real digests that fail to resolve (image not pulled) keep their warning (frontend/src/components/runners/RunnerStatusStrip.vue, frontend/src/views/runners/RunnersProfilesTab.vue, frontend/src/__tests__/runners/RunnerStatusStrip.spec.ts, frontend/src/__tests__/runners/RunnersProfilesTab.spec.ts)"
             - "[x] Pinned-image presence aggregates over NON-placeholder refs only — a placeholder-digest org reads unknown (None), never a permanent false 'image not pulled'; a non-404 inspect failure records unknown (a transient error must not read as absent); the worst-of strip state is stale > engine_unreachable > image_not_pulled > healthy, and a stale cache can never read green — a dead probe renders 'status unknown (last checked Xs ago)'"
             - "[x] A healthy→unreachable transition emits BOTH an error-dashboard entry (signal runner_unavailable) and an in-app notification (category runner, action URL /admin/runners/concurrency) — detected against the previous cached row so a dead probe never loops alerts, the FIRST down probe also alerts (no previous row defaults to was-reachable), and re-alerting requires a recovery in between"
             - "[x] GET /api/v1/runners/status (runners.status, environment_profiles feature) returns the per-machine strip states with server-side staleness, the worst-of aggregate, per-profile health + live template drift, and the org's sandbox-concurrency contract with the engine-resource preflight; multi-machine preflight sizes against WORST-OF (min reported CPU, min reported memory) because dispatches can land on any machine; corpse rows beyond the 24h retention window are invisible to both the tick and the read; the profile read paginates instead of silently capping at 100"
@@ -7493,9 +7475,9 @@ features:
         status: covered
         behaviours:
             # Trigger types + CRUD surface
-            - "[x] A trigger is creatable on a pipeline (POST /api/v1/pipelines/{id}/triggers, 201) for each supported type — manual / webhook / cron / polling / agent_signal / ongoing / slack_app_mention — with a validated cron expression/timezone, max_concurrent_runs, a daily spend limit, and an org-scoped config_json"
+            - "[x] A trigger is creatable on a pipeline (POST /api/v1/pipelines/{id}/triggers, 201) with a REQUIRED name (trimmed, 1-255 chars, unique among the pipeline's live triggers; a duplicate is a 409, a missing/blank name a 422) for each supported type — manual / webhook / cron / polling / agent_signal / ongoing / slack_app_mention — with a validated cron expression/timezone, max_concurrent_runs, a daily spend limit, and an org-scoped config_json"
             - "[x] Per-funnel queueing is bounded ONLY by the type's own limits: a capacity-queued run waits indefinitely by default (no instance queued TTL); a cron pipeline may set the pipeline's `queue_timeout_seconds` to its period (a 1h cron to 3600) so a stale fire self-drops, while webhook (delivery coalescing folds repeats), manual and MCP pipelines leave it null; expiry ends the run as the `queue.expired` supersession, never a failure (far-1883)"
-            - "[x] Triggers are listed (GET /api/v1/triggers, paginated, created_at desc) filterable by pipeline_id and trigger_type; the response surfaces the org-wide triggers_paused state and paused_at, plus per-trigger daily_spend_limit, in_flight (ongoing), and the uniform 6-key streak_status"
+            - "[x] Triggers are listed (GET /api/v1/triggers, paginated, created_at desc) filterable by pipeline_id and trigger_type; every trigger carries its name (REST and MCP list/get/create/update responses alike; PUT and MCP update_trigger can rename it, with the same uniqueness check); the response surfaces the org-wide triggers_paused state and paused_at, plus per-trigger daily_spend_limit, in_flight (ongoing), and the uniform 6-key streak_status"
             - "[x] Trigger list/streak state is serialized INSIDE the RLS transaction so the transaction-scoped SET LOCAL org context is never lost to a post-commit read"
             - "[x] A pipeline-scoped listing exists (GET /api/v1/pipelines/{id}/triggers) with optional trigger_type filter"
             - "[x] General update (PUT /api/v1/triggers/{id}) MERGES config_json (a masked secret placeholder never clobbers the stored secret; an explicit null clears the key; a missing key leaves it intact), then re-encrypts secret fields"
@@ -7518,12 +7500,13 @@ features:
 
             # Webhook
             - "[x] Webhook delivery is HMAC-SHA256 verified via X-Modulo-Webhook-Secret with an X-Modulo-Timestamp validated within the ±300s replay window; invalid/missing signature -> 401, missing trigger -> 404, expired timestamp -> 400"
+            - "[x] When no X-Modulo-* header is sent, a webhook delivery is also accepted with GitHub's X-Hub-Signature-256 (sha256= HMAC-SHA256 of the raw body keyed by the trigger's hmac_secret); invalid/malformed -> 401, Modulo headers always win with no fallback; no timestamp so no replay window beyond payload dedup"
             - "[x] HMAC-less triggers accept unauthenticated deliveries by design, with a log warning"
             - "[x] A valid delivery returns 202 {'run_id', status: 'accepted'}; the run is dispatched in the background via fail-fast SAQ enqueue, and dispatch failures are ingested as error events without blocking the 202 (capacity-deferred runs are left to dispatcher_reconcile)"
             - "[x] Duplicate payloads are rejected 400 'Duplicate webhook payload'; concurrent-run-limit and pipeline rate-limit rejections are 429; a busy pipeline snapshot lock retries acquisition briefly, then surfaces an honest 503 'snapshot lock unavailable — retry the delivery' (never a fabricated 'queued' ack with no run behind it)"
             - "[x] Every webhook delivery outcome is recorded as a TriggerEvent row (accepted, paused, guardrail_blocked, ...), and the stored raw payload supports replay"
             - "[x] Capacity outcomes are legible in the trigger event log (FAR-1344): the /admin/trigger-events result filter offers backpressure_skipped, coalesced and spend_limit_reached alongside concurrency_limit_reached, each renders with a DISTINCT badge (backpressure rose, concurrency orange, coalesced cyan, spend purple) rather than the shared throttle colour, and GET /api/v1/admin/trigger-events returns result_counts — a grouped count of the capacity vocabulary for the last 24h against the previous 24h with an up/down/flat direction — rendered as a capacity-outcome count/trend strip above the log (tests/unit/api/test_admin_triggers.py)"
-            - "[x] Replay (POST /triggers/{id}/webhook/replay/{event_id}) re-fires a stored payload, reusing the original hash and preserving dedup + flood protection; an authenticated principal needs the 'run.trigger' runner permission, and an unauthenticated replay must present a valid HMAC over the stored payload"
+            - "[x] Replay (POST /triggers/{id}/webhook/replay/{event_id}) re-fires a stored payload, reusing the original hash and preserving dedup + flood protection; an authenticated principal needs the 'run.trigger' runner permission, and an unauthenticated replay must present a valid HMAC over the stored payload (X-Modulo-* headers, or GitHub's X-Hub-Signature-256 over the stored body when no X-Modulo-* header is sent)"
             - "[x] Guardrail-blocked webhook deliveries are ack'd with a non-success 422 (never a false 'accepted'); the run + TriggerEvent rows stay committed for visibility"
             - "[x] cleanup-expired sweeps stale dedup hashes and expired WebhookPayload rows under a Postgres advisory lock (safe to call from cron with a runner credential)"
 

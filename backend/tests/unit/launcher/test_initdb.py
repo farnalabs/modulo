@@ -114,13 +114,19 @@ def test_bootstrap_role_name_is_fixed_not_os_username() -> None:
 
 
 def test_server_argv_pins_endpoint_arguments(tmp_path: Path) -> None:
-    argv = postgres_server_argv(tmp_path / "pgdata", "127.0.0.1", 15432, tmp_path / "bin")
-    assert Path(argv[0]).stem == "postgres"
-    assert "--pgdata" in argv
-    assert "--host" in argv
-    assert "127.0.0.1" in argv
-    assert "--port" in argv
-    assert "15432" in argv
+    pgdata = tmp_path / "pgdata"
+    bin_dir = tmp_path / "bin"
+    argv = postgres_server_argv(pgdata, "127.0.0.1", 18000, bin_dir)
+
+    assert argv == [
+        str(bin_dir / "postgres"),
+        "-D",
+        str(pgdata),
+        "-h",
+        "127.0.0.1",
+        "-p",
+        "18000",
+    ]
 
 
 def test_bootstrap_happy_path_records_pinned_invocation_and_promotes(

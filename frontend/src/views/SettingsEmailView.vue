@@ -9,8 +9,8 @@
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadSettings" />
 
       <div v-else class="space-y-6">
-        <div class="rounded-lg border bg-card shadow-sm max-w-3xl">
-          <div class="p-6 space-y-4">
+        <DataCard variant="bordered" padding="lg" elevation="sm" card-class="max-w-3xl">
+          <div class="space-y-4">
             <div>
               <label for="settingsemailview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_host') }}</label>
               <input id="settingsemailview-field-5"
@@ -89,7 +89,7 @@
               </button>
             </div>
           </div>
-        </div>
+        </DataCard>
 
         <div
           v-if="successMessage"
@@ -116,6 +116,7 @@ import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import Button from 'primevue/button'
 
 interface EmailForm {

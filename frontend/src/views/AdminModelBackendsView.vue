@@ -19,8 +19,12 @@
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadBackends" />
 
       <template v-else>
-        <div v-if="formMode === 'add'" class="card p-6">
-          <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminModelBackendsView.new_model_backend') }}</h2>
+        <DataCard
+          v-if="formMode === 'add'"
+          heading-level="h2"
+          padding="lg"
+          :title="$t('views.AdminModelBackendsView.new_model_backend')"
+        >
           <ErrorAlert
             v-if="presetsError"
             compact
@@ -218,7 +222,7 @@
               </div>
             </div>
           </form>
-        </div>
+        </DataCard>
 
         <EmptyState
           v-if="nativeBackends.length === 0 && previewBackends.length === 0"
@@ -393,8 +397,12 @@
           </div>
         </details>
 
-        <div v-if="editBackendId" class="card p-6">
-          <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminModelBackendsView.edit_model_backend') }}</h2>
+        <DataCard
+          v-if="editBackendId"
+          heading-level="h2"
+          padding="lg"
+          :title="$t('views.AdminModelBackendsView.edit_model_backend')"
+        >
           <form @submit.prevent="updateBackend">
             <div class="space-y-4">
               <div>
@@ -497,7 +505,7 @@
               </div>
             </div>
           </form>
-        </div>
+        </DataCard>
 
         <div v-if="deleteConfirmBackendId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
           <p class="text-sm font-medium text-destructive-text">{{ $t('views.AdminModelBackendsView.delete_confirm', { name: deleteConfirmName }) }}</p>
@@ -532,6 +540,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import FeatureGate from '../components/FeatureGate.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { useProductAnalytics } from '../composables/useProductAnalytics'
 import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'

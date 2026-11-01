@@ -76,6 +76,7 @@ def _make_trigger(**overrides: object) -> MagicMock:
     t = MagicMock()
     t.id = overrides.get("id", _TRIGGER_ID)
     t.pipeline_id = overrides.get("pipeline_id", _PIPELINE_ID)
+    t.name = overrides.get("name", "test-trigger")
     t.organisation_id = _ORG_ID
     t.trigger_type = overrides.get("trigger_type", "cron")
     t.active = overrides.get("active", True)
@@ -99,6 +100,8 @@ def _trigger_result(triggers: list[MagicMock]) -> MagicMock:
     r.scalar_one_or_none = MagicMock(return_value=triggers[0] if triggers else None)
     r.scalar_one = MagicMock(return_value=len(triggers))
     r.one_or_none = MagicMock(return_value=None)
+    # FAR-2227: the create/rename duplicate-name probe (``.first()``) finds no clash.
+    r.first = MagicMock(return_value=None)
     r.scalar = MagicMock(return_value=len(triggers))
     return r
 
@@ -207,6 +210,24 @@ def _session_assert_error_matrix(
 def test_list_triggers_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
     _session_assert_error_matrix(http, session, method="get", url="/api/v1/triggers")
+
+
+def test_viewer_trigger_list_query_contains_account_team_scope(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+    )
+    captured: list[Any] = []
+
+    async def execute(statement: Any) -> Any:
+        captured.append(statement)
+        return _trigger_result([])
+
+    session.execute = execute
+    response = http.get("/api/v1/triggers")
+
+    assert response.status_code == 200, response.text
+    assert any("team_memberships" in str(statement) for statement in captured)
 
 
 def test_list_triggers_with_filters_returns_200(client: tuple[TestClient, AsyncMock]) -> None:
@@ -386,6 +407,46 @@ def test_preview_cron_schedule_returns_times(client: tuple[TestClient, AsyncMock
     assert len(body["next_fire_times"]) == 3
 
 
+def test_viewer_cron_preview_query_includes_membership_scope(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+    )
+    session.execute = AsyncMock(return_value=_trigger_result([_make_trigger()]))
+    ctxs = list(_happy_patches())
+    for c in ctxs:
+        c.__enter__()
+    try:
+        resp = http.get(f"/api/v1/triggers/{_TRIGGER_ID}/cron/preview")
+    finally:
+        for c in reversed(ctxs):
+            c.__exit__(None, None, None)
+
+    assert resp.status_code == 200, resp.text
+    preview_stmt = session.execute.await_args.args[0]
+    assert "team_memberships" in str(preview_stmt)
+
+
+def test_cron_preview_hides_triggers_on_soft_deleted_pipelines(client: tuple[TestClient, AsyncMock]) -> None:
+    """Preview mirrors list_triggers / list_trigger_events, which filter
+    ``Pipeline.deleted_at IS NULL``; a soft-deleted pipeline's trigger must not
+    be previewable by any role (reviewer note on PR #2552)."""
+    http, session = client
+    session.execute = AsyncMock(return_value=_trigger_result([_make_trigger()]))
+    ctxs = list(_happy_patches())
+    for c in ctxs:
+        c.__enter__()
+    try:
+        resp = http.get(f"/api/v1/triggers/{_TRIGGER_ID}/cron/preview")
+    finally:
+        for c in reversed(ctxs):
+            c.__exit__(None, None, None)
+
+    assert resp.status_code == 200, resp.text
+    preview_stmt = str(session.execute.await_args.args[0])
+    assert "pipelines.deleted_at IS NULL" in preview_stmt
+
+
 # ---------------------------------------------------------------------------
 # PATCH /triggers/{id}/polling
 # ---------------------------------------------------------------------------
@@ -536,6 +597,7 @@ def test_create_trigger_cross_team_connector_returns_409(client: tuple[TestClien
         lambda: http.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
             json={
+                "name": "t",
                 "trigger_type": "polling",
                 "config_json": {"connector_instance_id": str(connector_id)},
             },
@@ -990,6 +1052,7 @@ async def test_test_polling_condition_real_autobegin_false_session_returns_poll_
                 )
                 session.add(
                     Trigger(
+                        name="trigger-1",
                         id=_TRIGGER_ID,
                         organisation_id=_ORG_ID,
                         pipeline_id=_PIPELINE_ID,
@@ -1049,7 +1112,7 @@ def _create_flush_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> N
         try:
             resp = http.post(
                 f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
-                json={"trigger_type": "manual"},
+                json={"name": "t", "trigger_type": "manual"},
             )
         finally:
             for c in reversed(ctxs):
@@ -1070,7 +1133,7 @@ def test_create_trigger_cron_fields_on_webhook_type_returns_400(client: tuple[Te
     try:
         resp = http.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
-            json={"trigger_type": "webhook", "cron_expression": "0 * * * *"},
+            json={"name": "t", "trigger_type": "webhook", "cron_expression": "0 * * * *"},
         )
     finally:
         for c in reversed(ctxs):
@@ -1088,7 +1151,7 @@ def test_create_trigger_manual_happy_path_returns_201(client: tuple[TestClient, 
     try:
         resp = http.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
-            json={"trigger_type": "manual", "daily_spend_limit": 2},
+            json={"name": "t", "trigger_type": "manual", "daily_spend_limit": 2},
         )
     finally:
         for c in reversed(ctxs):
@@ -1460,6 +1523,30 @@ def test_list_trigger_events_unknown_returns_404(client: tuple[TestClient, Async
             c.__exit__(None, None, None)
 
     assert resp.status_code == 404, resp.text
+
+
+def test_viewer_trigger_event_query_contains_account_team_scope(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+    )
+    trigger = _make_trigger()
+    event = _event_row(0)
+    trigger_result = _trigger_result([trigger])
+    event_result = MagicMock()
+    event_result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[event])))
+    results = iter([trigger_result, trigger_result, event_result])
+    captured: list[Any] = []
+
+    async def execute(statement: Any) -> Any:
+        captured.append(statement)
+        return next(results)
+
+    session.execute = execute
+    response = http.get(f"/api/v1/triggers/{_TRIGGER_ID}/events")
+
+    assert response.status_code == 200, response.text
+    assert any("team_memberships" in str(statement) for statement in captured)
 
 
 def test_list_trigger_events_happy_path_builds_next_cursor(client: tuple[TestClient, AsyncMock]) -> None:

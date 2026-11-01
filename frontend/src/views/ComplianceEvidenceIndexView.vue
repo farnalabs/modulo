@@ -93,7 +93,7 @@
 
       <section class="space-y-3" aria-labelledby="evidence-index-coverage-heading" data-testid="compliance-evidence-index-coverage">
         <h2 id="evidence-index-coverage-heading" class="text-lg font-semibold">{{ $t('views.ComplianceEvidenceIndex.coverage_heading') }}</h2>
-        <div class="overflow-x-auto rounded-lg border bg-card shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-labelledby="evidence-index-coverage-heading" tabindex="0" data-testid="compliance-evidence-index-coverage-scroll"> <!-- NOSONAR: This named, focusable scroll region preserves keyboard access to the wide table. -->
+        <DataCard padding="none" elevation="sm" card-class="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-labelledby="evidence-index-coverage-heading" tabindex="0" data-testid="compliance-evidence-index-coverage-scroll"> <!-- NOSONAR: This named, focusable scroll region preserves keyboard access to the wide table. -->
           <table class="w-full text-left text-sm">
             <thead>
               <tr class="border-b bg-muted/50">
@@ -110,7 +110,7 @@
               </tr>
             </tbody>
           </table>
-        </div>
+        </DataCard>
       </section>
 
       <section class="space-y-3" aria-labelledby="evidence-index-artifacts-heading">
@@ -120,7 +120,7 @@
             {{ $t('views.ComplianceEvidenceIndex.artifact_count', { count: indexData.artifacts.length }) }}
           </p>
         </div>
-        <div class="overflow-x-auto rounded-lg border bg-card shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-labelledby="evidence-index-artifacts-heading" tabindex="0" data-testid="compliance-evidence-index-artifacts-scroll"> <!-- NOSONAR: This named, focusable scroll region preserves keyboard access to the wide table. -->
+        <DataCard padding="none" elevation="sm" card-class="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-labelledby="evidence-index-artifacts-heading" tabindex="0" data-testid="compliance-evidence-index-artifacts-scroll"> <!-- NOSONAR: This named, focusable scroll region preserves keyboard access to the wide table. -->
           <table class="w-full min-w-[1050px] text-left text-sm">
             <thead>
               <tr class="border-b bg-muted/50">
@@ -195,7 +195,7 @@
               </tr>
             </tbody>
           </table>
-        </div>
+        </DataCard>
       </section>
 
       <section
@@ -217,6 +217,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
 import { useDataFetch } from '../composables/useDataFetch'

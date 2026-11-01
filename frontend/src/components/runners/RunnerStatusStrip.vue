@@ -38,10 +38,16 @@ const runnerConfigured = computed(() =>
   (props.status?.profiles ?? []).some((p) => p.provider_type === 'runner_docker'),
 )
 
-const state = computed<StripState | 'loading' | 'not_enabled' | 'fetch_failed'>(() => {
+type StripView = StripState | 'loading' | 'not_enabled' | 'not_available' | 'fetch_failed'
+
+const state = computed<StripView>(() => {
   if (props.errored) return 'fetch_failed'
   if (!props.status) return 'loading'
   if (!runnerConfigured.value) return 'not_enabled'
+  // FAR-2239: no Docker engine endpoint on this deployment is a neutral
+  // "not available", not a red failure. A configured-but-failing engine
+  // (engine_configured true) still renders engine_unreachable below.
+  if (props.status.engine_configured === false) return 'not_available'
   return props.status.aggregate_state
 })
 
@@ -51,6 +57,8 @@ const stateLabel = computed(() => {
       return t('views.RunnersStatusStrip.healthy')
     case 'not_enabled':
       return t('views.RunnersStatusStrip.not_enabled')
+    case 'not_available':
+      return t('views.RunnersStatusStrip.not_available')
     case 'engine_unreachable':
       return t('views.RunnersStatusStrip.engine_unreachable')
     case 'image_not_pulled':
@@ -85,9 +93,10 @@ const showMachineCount = computed(() => machines.value.length > 1)
 
 // qa F18: ONE keyed visual map — tone (dot + text/border) per state, instead
 // of two parallel switch objects that could drift apart.
-const STATE_TONE: Record<StripState | 'loading' | 'not_enabled' | 'fetch_failed', { strip: string; dot: string }> = {
+const STATE_TONE: Record<StripView, { strip: string; dot: string }> = {
   healthy: { strip: 'border-success/40 bg-success/10 text-success-text', dot: 'bg-success' },
   not_enabled: { strip: 'border-border bg-muted/40 text-muted-foreground', dot: 'bg-muted-foreground' },
+  not_available: { strip: 'border-border bg-muted/40 text-muted-foreground', dot: 'bg-muted-foreground' },
   engine_unreachable: { strip: 'border-destructive/40 bg-destructive/10 text-destructive-text', dot: 'bg-destructive' },
   image_not_pulled: { strip: 'border-warning/40 bg-warning/10 text-warning-text', dot: 'bg-warning' },
   stale: { strip: 'border-border bg-muted/40 text-muted-foreground', dot: 'bg-muted-foreground' },

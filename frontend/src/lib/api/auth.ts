@@ -57,7 +57,7 @@ let _authListeners: Array<(token: string | null) => void> = []
 let _refreshingPromise: Promise<boolean> | null = null
 
 // Stable per-tab identifier so other tabs can tell refresh hints apart when
-// adopting rotated tokens across tabs (pattern: useUiCommandExecutor TAB_ID).
+// adopting rotated tokens across tabs.
 const TAB_ID = randomId('tab')
 
 let _authChannel: BroadcastChannel | null = null

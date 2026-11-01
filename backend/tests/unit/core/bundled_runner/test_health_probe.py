@@ -8,12 +8,14 @@ with a fake engine boundary + fake session factory.
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import InvalidRequestError, SQLAlchemyError
 
+from modulo.core.bundled_runner import runner_reconciler
 from modulo.core.bundled_runner.health_probe import (
     NOTIFICATION_ACTION_URL,
     NOTIFICATION_CATEGORY,
@@ -22,10 +24,12 @@ from modulo.core.bundled_runner.health_probe import (
     _EngineBoundary,
     aggregate_image_presence,
     aggregate_strip_state,
+    docker_engine_configured,
     run_runner_health_probe,
     scrub_url_credentials,
     strip_state_for_row,
 )
+from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
 from modulo.db.crud.runner_probe import (
     PROBE_INTERVAL_SECONDS,
     PROBE_RETENTION_SECONDS,
@@ -296,6 +300,13 @@ def _real_boundary(client: _FakeAioDockerClient) -> _EngineBoundary:
     return boundary
 
 
+@pytest.fixture(autouse=True)
+def _engine_configured() -> Any:
+    """Default to a configured engine so results do not depend on the host."""
+    with patch("modulo.core.bundled_runner.health_probe.docker_engine_configured", return_value=True):
+        yield
+
+
 class TestRunRunnerHealthProbe:
     @pytest.mark.asyncio
     async def test_reachable_engine_upserts_healthy_rows_per_org(self) -> None:
@@ -350,6 +361,42 @@ class TestRunRunnerHealthProbe:
             patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
             patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
             patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=previous)),
+            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
+            patch("modulo.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
+        ):
+            result = await run_runner_health_probe(
+                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
+            )
+        assert result["transitions"] == 1
+        emit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_engine_configured_skips_alert_but_still_records_row(self) -> None:
+        session = _make_session()
+        boundary = _fake_boundary(reachable=False)
+        with (
+            patch("modulo.core.bundled_runner.health_probe.docker_engine_configured", return_value=False),
+            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+            patch("modulo.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
+        ):
+            result = await run_runner_health_probe(
+                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
+            )
+        assert result["transitions"] == 0
+        emit.assert_not_awaited()
+        assert upsert.await_args.kwargs["engine_reachable"] is False
+
+    @pytest.mark.asyncio
+    async def test_configured_engine_failing_on_first_probe_still_alerts(self) -> None:
+        session = _make_session()
+        boundary = _fake_boundary(reachable=False)
+        with (
+            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
             patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
             patch("modulo.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
         ):
@@ -808,3 +855,67 @@ async def test_multiple_org_infra_errors_keep_the_first_and_count_each() -> None
     assert excinfo.value is first_error
     assert len(log_exceptions) == 2
     assert all("runner_probe.org_infra_failed" in message for message in log_exceptions)
+
+
+# FAR-2239 review: docker_engine_configured() must answer from the SAME
+# endpoint-resolution chain the orphan sweep uses (aiodocker parity), never a
+# weaker partial copy — otherwise a deployment whose engine is reachable via
+# DOCKER_CONTEXT or an alternative socket path is shown as "not available".
+
+
+def _clear_endpoint_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("MODULO_DOCKER_HOST", "DOCKER_HOST", "DOCKER_CONTEXT"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def _isolate_non_env_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralise context + socket detection so only the env chain decides."""
+    monkeypatch.setattr(runner_reconciler, "_context_endpoint_configured", lambda: False)
+    monkeypatch.setattr(runner_reconciler, "_default_docker_socket_present", lambda: False)
+
+
+def test_engine_configured_when_docker_host_env_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_endpoint_env(monkeypatch)
+    monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://socket-proxy:2375")
+    _isolate_non_env_endpoints(monkeypatch)
+    assert docker_engine_configured() is True
+
+
+def test_engine_configured_when_docker_context_selected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A selected Docker context is a real endpoint aiodocker resolves."""
+    _clear_endpoint_env(monkeypatch)
+    monkeypatch.setattr(runner_reconciler, "_context_endpoint_configured", lambda: True)
+    monkeypatch.setattr(runner_reconciler, "_default_docker_socket_present", lambda: False)
+    assert docker_engine_configured() is True
+
+
+def test_engine_not_configured_without_any_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_endpoint_env(monkeypatch)
+    _isolate_non_env_endpoints(monkeypatch)
+    assert docker_engine_configured() is False
+
+
+def test_engine_configured_when_local_socket_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_endpoint_env(monkeypatch)
+    monkeypatch.setattr(runner_reconciler, "_context_endpoint_configured", lambda: False)
+    monkeypatch.setattr(runner_reconciler, "_default_docker_socket_present", lambda: True)
+    assert docker_engine_configured() is True
+
+
+def test_engine_not_configured_for_regular_file_at_socket_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A stray regular file where a socket is expected is not an engine."""
+    _clear_endpoint_env(monkeypatch)
+    socket_path = tmp_path / "docker.sock"
+    socket_path.write_text("not a socket")
+    monkeypatch.setattr(runner_reconciler, "_local_docker_socket_paths", lambda: (socket_path,))
+    monkeypatch.setattr(runner_reconciler, "_docker_config_path", lambda: tmp_path / "config.json")
+    assert docker_engine_configured() is False
+
+
+def test_engine_configured_agrees_with_reconciler_skip_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both "is this deployment engineless?" answers share one source of truth."""
+    _clear_endpoint_env(monkeypatch)
+    _isolate_non_env_endpoints(monkeypatch)
+    assert docker_engine_configured() is (docker_endpoint_skip_reason() is None) is False
+    monkeypatch.setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
+    assert docker_engine_configured() is (docker_endpoint_skip_reason() is None) is True

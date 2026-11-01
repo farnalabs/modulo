@@ -88,31 +88,44 @@ jobs:
       - name: Resolve run identity
         id: run_identity
         shell: bash
+        env:
+          # GitHub context and workflow_dispatch inputs are passed through the
+          # environment, never interpolated directly into the shell script.
+          # ``${{ github.event.* }}`` is untrusted data (zizmor
+          # template-injection): a value containing shell metacharacters must
+          # never become part of the script text executed on a runner that
+          # holds the deploy credentials. The built-ins GITHUB_SHA,
+          # GITHUB_REF and GITHUB_EVENT_NAME are already exported by the
+          # runner and are used directly below.
+          INPUT_RELEASE_SHA: ${{ github.event.inputs.release_sha }}
+          INPUT_RELEASE_REF: ${{ github.event.inputs.release_ref }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_AFTER: ${{ github.event.after }}
         run: |
-          REQUESTED_SHA="${{ github.event.inputs.release_sha }}"
-          REQUESTED_REF="${{ github.event.inputs.release_ref }}"
+          REQUESTED_SHA="$INPUT_RELEASE_SHA"
+          REQUESTED_REF="$INPUT_RELEASE_REF"
           if [ -n "$REQUESTED_SHA" ]; then
             EFFECTIVE_SHA="$REQUESTED_SHA"
             EFFECTIVE_REF="$REQUESTED_REF"
           else
-            EFFECTIVE_SHA="${{ github.sha }}"
-            EFFECTIVE_REF="${{ github.ref }}"
+            EFFECTIVE_SHA="$GITHUB_SHA"
+            EFFECTIVE_REF="$GITHUB_REF"
           fi
           echo "RUN_SHA=${EFFECTIVE_SHA}"
           echo "RUN_REF=${EFFECTIVE_REF}"
-          echo "RUN_EVENT=${{ github.event_name }}"
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "PUSH_BEFORE=${{ github.event.before }}"
-            echo "PUSH_AFTER=${{ github.event.after }}"
+          echo "RUN_EVENT=$GITHUB_EVENT_NAME"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "PUSH_BEFORE=$EVENT_BEFORE"
+            echo "PUSH_AFTER=$EVENT_AFTER"
           fi
           {
             echo "run_sha=${EFFECTIVE_SHA}"
             echo "run_ref=${EFFECTIVE_REF}"
-            echo "run_event=${{ github.event_name }}"
-            echo "push_before=${{ github.event.before }}"
-            echo "push_after=${{ github.event.after }}"
-            echo "requested_ref=${{ github.event.inputs.release_ref }}"
-            echo "requested_sha=${{ github.event.inputs.release_sha }}"
+            echo "run_event=$GITHUB_EVENT_NAME"
+            echo "push_before=$EVENT_BEFORE"
+            echo "push_after=$EVENT_AFTER"
+            echo "requested_ref=$REQUESTED_REF"
+            echo "requested_sha=$REQUESTED_SHA"
           } >> "$GITHUB_OUTPUT"
 
       - name: Validate requested release identity
@@ -200,13 +213,14 @@ jobs:
           write_verdict() {
             # $1 = will this run deploy (YES.../NO...), $2 = reason,
             # $3 = next deploy expected ('' when this run is deploying)
+            local verdict="$1" reason="$2" next_deploy="$3"
             {
-              echo "## Deploy verdict: $1"
+              echo "## Deploy verdict: $verdict"
               echo ""
-              echo "**Will this run deploy?** $1"
-              echo "**Reason:** $2"
-              if [ -n "$3" ]; then
-                echo "**Next deploy expected:** $3"
+              echo "**Will this run deploy?** $verdict"
+              echo "**Reason:** $reason"
+              if [ -n "$next_deploy" ]; then
+                echo "**Next deploy expected:** $next_deploy"
               fi
               echo ""
               echo "_Throttle policy unchanged: ${INTERVAL_HOURS}h interval, in-progress batching, force_deploy and deploy/CI-fix bypasses._"
@@ -495,7 +509,7 @@ jobs:
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.8
+          version: 11.28.9
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -522,7 +536,7 @@ jobs:
               AUDIT_OK=1
               break
             fi
-            echo "pnpm audit attempt $attempt failed (likely transient registry network error); retrying in 15s..."
+            echo "pnpm audit attempt $attempt failed (likely transient registry network error); retrying in 15s..." >&2
             sleep 15
           done
           if [ -z "$AUDIT_OK" ]; then
@@ -806,21 +820,24 @@ jobs:
           echo "  security-audit:    ${{ needs.security-audit.result }}"
 
           FAILED=""
-          if [ "${{ needs.backend-lint.result }}" != "success" ]; then
+          SUCCESS_RESULT="success"
+          if [ "${{ needs.backend-lint.result }}" != "$SUCCESS_RESULT" ]; then
             FAILED="$FAILED backend-lint"
           fi
-          if [ "${{ needs.backend-unit.result }}" != "success" ]; then
+          if [ "${{ needs.backend-unit.result }}" != "$SUCCESS_RESULT" ]; then
             FAILED="$FAILED backend-unit"
+
           fi
-          if [ "${{ needs.frontend-checks.result }}" != "success" ]; then
+          if [ "${{ needs.frontend-checks.result }}" != "$SUCCESS_RESULT" ]; then
             FAILED="$FAILED frontend-checks"
           fi
-          if [ "${{ needs.integration-tests.result }}" != "success" ]; then
+          if [ "${{ needs.integration-tests.result }}" != "$SUCCESS_RESULT" ]; then
             FAILED="$FAILED integration-tests"
           fi
-          if [ "${{ needs.security-audit.result }}" != "success" ]; then
+          if [ "${{ needs.security-audit.result }}" != "$SUCCESS_RESULT" ]; then
             FAILED="$FAILED security-audit"
           fi
+
 
           if [ -n "$FAILED" ]; then
             for JOB in $FAILED; do
@@ -898,11 +915,17 @@ jobs:
           # Match both 'failure' and 'cancelled' (job-level timeout produces
           # 'cancelled', not 'failure' — GitHub Actions convention).
           FAILED_STAGES=""
-          [ "${PRE_DEPLOY_RESULT}" = "failure" ] || [ "${PRE_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} pre-deploy-gate"
-          [ "${STAGING_DEPLOY_RESULT}" = "failure" ] || [ "${STAGING_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-staging"
-          [ "${STAGING_E2E_RESULT}" = "failure" ] || [ "${STAGING_E2E_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} staging-e2e"
-          [ "${PROD_DEPLOY_RESULT}" = "failure" ] || [ "${PROD_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-production"
-          [ "${PROD_SMOKE_RESULT}" = "failure" ] || [ "${PROD_SMOKE_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} prod-smoke"
+          FAILED_RESULT="failure"
+          CANCELLED_RESULT="cancelled"
+          is_failed_stage() {
+            local result="$1"
+            [ "$result" = "$FAILED_RESULT" ] || [ "$result" = "$CANCELLED_RESULT" ]
+          }
+          is_failed_stage "$PRE_DEPLOY_RESULT" && FAILED_STAGES="${FAILED_STAGES} pre-deploy-gate"
+          is_failed_stage "$STAGING_DEPLOY_RESULT" && FAILED_STAGES="${FAILED_STAGES} deploy-staging"
+          is_failed_stage "$STAGING_E2E_RESULT" && FAILED_STAGES="${FAILED_STAGES} staging-e2e"
+          is_failed_stage "$PROD_DEPLOY_RESULT" && FAILED_STAGES="${FAILED_STAGES} deploy-production"
+          is_failed_stage "$PROD_SMOKE_RESULT" && FAILED_STAGES="${FAILED_STAGES} prod-smoke"
           FAILED_STAGES="${FAILED_STAGES# }"  # trim leading space
           # FIRST failed stage, in the same canonical order FAILED_STAGES
           # already uses (pre-deploy-gate, deploy-staging, staging-e2e,
@@ -2365,7 +2388,7 @@ jobs:
           fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.8
+          version: 11.28.9
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -3676,7 +3699,7 @@ jobs:
           fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.8
+          version: 11.28.9
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"

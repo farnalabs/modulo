@@ -1,14 +1,16 @@
 <template>
-  <div class="page-wide">
-    <PageHeader
-      :title="$t('views.SchemaListView.schemas')"
-      :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')"
-      :tabs="[
-        { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
-        { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
-        { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
-      ]"
-    />
+  <div class="h-[calc(100vh-3.5rem)] bg-background flex flex-col">
+    <div class="page-wide">
+      <PageHeader
+        :title="$t('views.SchemaListView.schemas')"
+        :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')"
+        :tabs="[
+          { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
+          { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
+          { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
+        ]"
+      />
+    </div>
 
     <div class="flex flex-1 min-h-0">
       <!-- Folder sidebar -->
@@ -24,7 +26,7 @@
         @move-pipeline="onMoveSchema"
       />
 
-      <div class="flex-1 min-w-0">
+      <main class="flex-1 page-wide min-w-0 overflow-y-auto">
         <!-- Folder-list load failure. The <md owner of the folder-error live
              region (FolderTree's sidebar owns >=md), hence `gated`. The shared
              contract — single live region, non-dismissible, retry re-fetches —
@@ -171,7 +173,7 @@
             </div>
           </template>
         </template>
-      </div>
+      </main>
     </div>
 
     <!-- Deprecation Confirmation Dialog -->

@@ -23,23 +23,35 @@
     <ErrorAlert v-else-if="loadError && !featureRequired" :message="loadError" :on-retry="loadRules" />
 
     <div v-else-if="!featureRequired" class="space-y-6">
-      <div data-testid="rate-limits-mode" class="rounded-lg border bg-card p-6 shadow-sm">
-        <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-base font-semibold">{{ $t('views.SettingsRateLimitsView.mode') }}</h2>
+      <DataCard
+        data-testid="rate-limits-mode"
+        variant="bordered"
+        padding="lg"
+        elevation="sm"
+        heading-level="h2"
+        :title="$t('views.SettingsRateLimitsView.mode')"
+      >
+        <template #headerActions>
           <span
             class="rounded-full px-3 py-1 text-xs font-medium"
             :class="mode === 'redis' ? 'badge badge-status-success' : 'badge badge-status-warning'"
           >
             {{ mode === 'redis' ? $t('views.SettingsRateLimitsView.redis') : $t('views.SettingsRateLimitsView.inmemory') }}
           </span>
-        </div>
+        </template>
         <p class="text-sm text-muted-foreground">
           {{ mode === 'redis' ? $t('views.SettingsRateLimitsView.rate_limiting_is_backed_by_redis') : $t('views.SettingsRateLimitsView.rate_limiting_uses_inmemory_token_buckets_redis_not_configur') }}
         </p>
-      </div>
+      </DataCard>
 
-      <div data-testid="rate-limits-rules" class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsRateLimitsView.rules') }}</h2>
+      <DataCard
+        data-testid="rate-limits-rules"
+        variant="bordered"
+        padding="lg"
+        elevation="sm"
+        heading-level="h2"
+        :title="$t('views.SettingsRateLimitsView.rules')"
+      >
         <EmptyState
           v-if="rules.length === 0"
           :title="$t('views.SettingsRateLimitsView.no_rate_limit_rules_configured')"
@@ -62,7 +74,7 @@
           </tbody>
         </table>
         </div>
-      </div>
+      </DataCard>
     </div>
     </FeatureGate>
   </div>
@@ -76,6 +88,7 @@ import { formatApiError } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 
 function isFeatureRequiredError(err: unknown): boolean {

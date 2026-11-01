@@ -13,9 +13,9 @@ name: "Release: Unified Pipeline"
 #
 # The bundle is built by the reusable `.github/workflows/bundle-release.yml`
 # workflow (FAR-670/FAR-675), never by a second in-repo implementation: the
-# single source of truth for the tarball, SHA256SUMS and signed manifest is that
-# workflow, and this one only orchestrates it, pushes the bundle-v* tag and
-# creates the GitHub Release from the artefacts it uploads.
+# Linux bundle construction remains in bundle-release.yml. The final cross-platform
+# SHA256SUMS and signed manifest are generated here only after the macOS DMG exists,
+# then this workflow pushes the bundle-v* tag and creates the GitHub Release.
 
 on:
   workflow_dispatch:
@@ -84,29 +84,28 @@ jobs:
           IMAGE_NAMESPACE: ${{ github.repository }}
         run: |
           set -euo pipefail
+          declare -A IMAGE_CONTEXT=(
+            [all-in-one]="."
+            [backend]="backend"
+            [frontend]="frontend"
+            [runner-opencode]="."
+          )
+          declare -A IMAGE_DOCKERFILE=(
+            [all-in-one]="deploy/docker/Dockerfile.all-in-one"
+            [backend]="backend/Dockerfile"
+            [frontend]="frontend/Dockerfile.prod"
+            [runner-opencode]="deploy/docker/runner-opencode.Dockerfile"
+          )
+          declare -A IMAGE_NAME=(
+            [all-in-one]="$IMAGE_NAMESPACE"
+            [backend]="$IMAGE_NAMESPACE/backend"
+            [frontend]="$IMAGE_NAMESPACE/frontend"
+            [runner-opencode]="$IMAGE_NAMESPACE/runner-opencode"
+          )
           for img in all-in-one backend frontend runner-opencode; do
-            case "$img" in
-              all-in-one)
-                context="."
-                dockerfile="deploy/docker/Dockerfile.all-in-one"
-                image_name="$IMAGE_NAMESPACE"
-                ;;
-              backend)
-                context="backend"
-                dockerfile="backend/Dockerfile"
-                image_name="$IMAGE_NAMESPACE/backend"
-                ;;
-              frontend)
-                context="frontend"
-                dockerfile="frontend/Dockerfile.prod"
-                image_name="$IMAGE_NAMESPACE/frontend"
-                ;;
-              runner-opencode)
-                context="."
-                dockerfile="deploy/docker/runner-opencode.Dockerfile"
-                image_name="$IMAGE_NAMESPACE/runner-opencode"
-                ;;
-            esac
+            context="${IMAGE_CONTEXT[$img]}"
+            dockerfile="${IMAGE_DOCKERFILE[$img]}"
+            image_name="${IMAGE_NAME[$img]}"
             echo "Building $img..."
             docker buildx build \
               "$context" \
@@ -185,9 +184,12 @@ jobs:
     name: Release (${{ inputs.mode }})
     if: inputs.mode != 'dry-run'
     runs-on: ubicloud-standard-2
-    timeout-minutes: 120
+    # Covers the bounded 90-minute merge-queue wait plus the bounded 45-minute
+    # schema-freshness wait and setup overhead.
+    timeout-minutes: 180
     permissions:
       contents: write
+      pull-requests: write
       actions: write
       packages: write
       id-token: write
@@ -226,82 +228,12 @@ jobs:
           fi
 
       # -----------------------------------------------------------------------
-      # Assert schema-freshness gate passed on the commit to be tagged.
-      # Runs for cut and recut (promote uses the validated RC which already passed).
-      # -----------------------------------------------------------------------
-      - name: Assert schema-freshness gate green on target commit
-        if: inputs.mode == 'cut' || inputs.mode == 'recut'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          MODE: ${{ inputs.mode }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Determine the commit that will be tagged.
-          if [ "$MODE" = "cut" ]; then
-            # For cut: the version bump was just pushed to main, so the target is origin/main
-            TARGET_SHA="$(git rev-parse origin/main)"
-            echo "Cut mode: checking schema-freshness on origin/main (${TARGET_SHA})"
-          else
-            # For recut: the target is the current origin/main (will be fetched in recut step)
-            git fetch origin main
-            TARGET_SHA="$(git rev-parse origin/main)"
-            echo "Recut mode: checking schema-freshness on origin/main (${TARGET_SHA})"
-          fi
-
-          # Query the latest workflow run for the target SHA and check schema-freshness.
-          # We look for the most recent 'ci.yml' run on this SHA.
-          echo "Checking CI run for ${TARGET_SHA}..."
-          RUN_ID=$(gh api "repos/${{ github.repository }}/actions/runs" \
-            --jq '.workflow_runs[] | select(.head_sha == "'"${TARGET_SHA}"'" and .path == ".github/workflows/ci.yml") | .id' \
-            | head -n1)
-          if [ -z "$RUN_ID" ]; then
-            echo "::error::No CI workflow run found for commit ${TARGET_SHA}. Cannot verify schema-freshness gate."
-            exit 1
-          fi
-          echo "Found CI run: ${RUN_ID}"
-
-          # Wait up to 45 minutes: the backend test suite can take about 30 minutes,
-          # so the old 10-minute bound rejected legitimate CI before it finished.
-          POLL_INTERVAL_SECONDS=10
-          MAX_WAIT_SECONDS=2700
-          MAX_POLLS=$((MAX_WAIT_SECONDS / POLL_INTERVAL_SECONDS))
-          STATUS=""
-          for ((poll=1; poll<=MAX_POLLS; poll++)); do
-            STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}" --jq '.status')
-            if [ "$STATUS" = "completed" ]; then
-              break
-            fi
-            echo "CI run ${RUN_ID} still in progress (status: ${STATUS}), waiting... (${poll}/${MAX_POLLS}; ${POLL_INTERVAL_SECONDS}s interval)"
-            sleep "$POLL_INTERVAL_SECONDS"
-          done
-          if [ "$STATUS" != "completed" ]; then
-            echo "::error::Timed out after ${MAX_WAIT_SECONDS}s waiting for CI run ${RUN_ID} to complete (last status: ${STATUS}). Refusing to proceed."
-            exit 1
-          fi
-
-          # Check the schema-freshness job conclusion
-          SCHEMA_JOB=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs" \
-            --jq '.jobs[] | select(.name == "Schema freshness") | {conclusion: .conclusion, name: .name}')
-          if [ -z "$SCHEMA_JOB" ]; then
-            echo "::error::Schema freshness job not found in CI run ${RUN_ID}"
-            exit 1
-          fi
-          SCHEMA_CONCLUSION=$(echo "$SCHEMA_JOB" | jq -r '.conclusion')
-          echo "Schema freshness job conclusion: ${SCHEMA_CONCLUSION}"
-
-          if [ "$SCHEMA_CONCLUSION" != "success" ]; then
-            echo "::error::Schema freshness gate did not pass (conclusion: ${SCHEMA_CONCLUSION}) on commit ${TARGET_SHA}. Refusing to tag."
-            exit 1
-          fi
-          echo "Schema freshness gate passed on ${TARGET_SHA}."
-
-      # -----------------------------------------------------------------------
       # Version bump (cut only). The publication hold is established first so
       # publish-images cannot publish stable latest during the main push below.
       # The later release-freeze tag remains the authoritative release boundary.
       # -----------------------------------------------------------------------
       - name: Establish release publication hold (cut only)
+        id: publication-hold
         if: inputs.mode == 'cut'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -314,30 +246,181 @@ jobs:
           fi
           git tag -a release-publication-hold -m "Suppress stable publication while cut establishes release-freeze"
           git push origin release-publication-hold
-          echo "Established release-publication-hold before the version-bump push."
+          echo "established=true" >> "$GITHUB_OUTPUT"
+          echo "Established release-publication-hold before the version-bump PR."
 
-      - name: Bump version in SoT files and commit to main (cut only)
+      - name: Prepare exact cut commit through protected main (cut only)
+        id: cut-commit
         if: inputs.mode == 'cut'
-        # Mapped through the step env block (S7630): GitHub expressions inside a
-        # run block are interpolated before the shell parses the script, so
-        # values are data, never code.
         env:
+          # FAR-2213: release PR creation and PR-driving dispatches must use the
+          # trusted bot PAT. The checkout github.token remains the branch-push
+          # credential, preserving least privilege for git operations.
+          GH_TOKEN: ${{ secrets.MODULO_RELEASE_PR_TOKEN }}
           VERSION: ${{ inputs.version }}
+        shell: bash
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::MODULO_RELEASE_PR_TOKEN is missing or empty; refusing to create the release PR as github-actions[bot] (author_association NONE is rejected by the same-repo author guard)."
+            exit 1
+          fi
+          git fetch origin main
           CURRENT="$(python3 -c 'import tomllib; print(tomllib.load(open("backend/pyproject.toml", "rb"))["project"]["version"])')"
           if [ "$CURRENT" = "$VERSION" ]; then
-            echo "backend/pyproject.toml is already at ${VERSION}; no bump required."
+            CUT_SHA="$(git rev-parse origin/main)"
+            git checkout --detach "$CUT_SHA"
+            echo "Version ${VERSION} is already on main; using exact main commit ${CUT_SHA}."
           else
-            python3 scripts/bump-version.py --set "$VERSION"
-            git add backend/pyproject.toml frontend/package.json deploy/helm/modulo/Chart.yaml
-            if git diff --cached --quiet; then
-              echo "::error::bump-version.py changed nothing - refusing to tag an unbumped tree."
+            BRANCH="release/version-${VERSION}"
+            PR_NUMBER="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+            if [ -n "$PR_NUMBER" ]; then
+              echo "Reusing existing open release PR #${PR_NUMBER}; duplicate cut refused."
+              git fetch origin "$BRANCH"
+              git checkout --detach "origin/$BRANCH"
+            else
+              CLOSED_PR="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state closed --json number --jq '.[0].number // empty')"
+              if [ -n "$CLOSED_PR" ]; then
+                echo "::error::Release branch ${BRANCH} has a closed PR (#${CLOSED_PR}); refusing to create a duplicate cut."
+                exit 1
+              fi
+              git checkout -B "$BRANCH" origin/main
+              python3 scripts/bump-version.py --set "$VERSION"
+              git add backend/pyproject.toml frontend/package.json deploy/helm/modulo/Chart.yaml
+              if git diff --cached --quiet; then
+                echo "::error::bump-version.py changed nothing - refusing to create an empty release PR."
+                exit 1
+              fi
+              git commit -m "chore(release): bump version to ${VERSION}"
+              BUMP_SHA="$(git rev-parse HEAD)"
+              git push --set-upstream origin "$BRANCH"
+              PR_NUMBER="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base main --head "$BRANCH" \
+                --title "chore(release): bump version to ${VERSION}" \
+                --body "Release version bump for ${VERSION}. This PR is created by the unified release workflow and must pass the normal CI, review, and merge-queue gates before the release is cut.")"
+            fi
+            PR_NUMBER="${PR_NUMBER##*/}"
+            PR_SHA="$(gh pr view "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq '.headRefOid')"
+            if [ -z "$PR_SHA" ]; then
+              echo "::error::Release PR #${PR_NUMBER} has no head SHA; refusing to dispatch validation."
               exit 1
             fi
-            git commit -m "chore(release): bump version to ${VERSION}"
-            git push origin main
-            echo "Committed version bump to ${VERSION} on main."
+            # Keep explicit dispatches as a deterministic hand-off so the release
+            # never depends on webhook delivery for its CI run and reviewer
+            # dispatch; the merge queue remains the only merger.
+            gh workflow run "CI: Fast Validation" --repo "${GITHUB_REPOSITORY}" --ref "$BRANCH"
+            gh workflow run pr-review.yml --repo "${GITHUB_REPOSITORY}" --ref main \
+              -f pr_number="$PR_NUMBER" -f head_sha="$PR_SHA" -f head_branch="$BRANCH"
+            echo "Dispatched CI and PR review for release PR #${PR_NUMBER} at ${PR_SHA}."
+            echo "Waiting for release PR #${PR_NUMBER} to merge through the normal protected-main path."
+
+            MAX_POLLS=360
+            for ((poll=1; poll<=MAX_POLLS; poll++)); do
+              PR_JSON="$(gh pr view "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" \
+                --json state,mergedAt,mergeCommit,headRefOid,reviewDecision,mergeStateStatus)" || {
+                echo "::error::Could not read release PR #${PR_NUMBER}; refusing to proceed without merge evidence."
+                exit 1
+              }
+              PR_STATE="$(jq -r '.state' <<<"$PR_JSON")"
+              MERGED_AT="$(jq -r '.mergedAt // empty' <<<"$PR_JSON")"
+              if [ "$PR_STATE" = "MERGED" ] && [ -n "$MERGED_AT" ]; then
+                CUT_SHA="$(jq -r '.mergeCommit.oid // empty' <<<"$PR_JSON")"
+                if [ -z "$CUT_SHA" ]; then
+                  echo "::error::Release PR #${PR_NUMBER} is merged but has no merge commit SHA; refusing to tag."
+                  exit 1
+                fi
+                break
+              fi
+              if [ "$PR_STATE" = "CLOSED" ]; then
+                echo "::error::Release PR #${PR_NUMBER} closed without merging; refusing to continue."
+                exit 1
+              fi
+              REVIEW_DECISION="$(jq -r '.reviewDecision // \"unknown\"' <<<"$PR_JSON")"
+              MERGE_STATUS="$(jq -r '.mergeStateStatus // \"unknown\"' <<<"$PR_JSON")"
+              echo "Release PR #${PR_NUMBER} is ${PR_STATE} (review=${REVIEW_DECISION}, merge=${MERGE_STATUS}); waiting (${poll}/${MAX_POLLS})."
+              sleep 15
+            done
+            if [ -z "${CUT_SHA:-}" ]; then
+              echo "::error::Timed out waiting for release PR #${PR_NUMBER} to merge through CI, review, and merge queue."
+              exit 1
+            fi
+            git fetch origin "$CUT_SHA"
+            git checkout --detach "$CUT_SHA"
+            MERGED_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("backend/pyproject.toml", "rb"))["project"]["version"])')"
+            if [ "$MERGED_VERSION" != "$VERSION" ]; then
+              echo "::error::Merged release PR #${PR_NUMBER} resolved to ${CUT_SHA} but contains version ${MERGED_VERSION}, expected ${VERSION}."
+              exit 1
+            fi
+            echo "Release PR #${PR_NUMBER} merged at exact commit ${CUT_SHA}; bump commit was ${BUMP_SHA}."
+          fi
+          echo "cut_sha=$CUT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Assert schema-freshness gate green on exact cut/recut commit
+        id: schema-freshness
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          CUT_SHA: ${{ steps.cut-commit.outputs.cut_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "cut" ]; then
+            TARGET_SHA="$CUT_SHA"
+            if [ -z "$TARGET_SHA" ]; then
+              echo "::error::Cut preparation produced no exact merged commit SHA."
+              exit 1
+            fi
+          else
+            git fetch origin main
+            TARGET_SHA="$(git rev-parse origin/main)"
+          fi
+          echo "Checking schema-freshness on exact target ${TARGET_SHA}..."
+          RUN_ID="$(gh run list --workflow ci.yml --commit "$TARGET_SHA" --limit 100 --json databaseId,path \
+            --jq '.[] | select(.path == ".github/workflows/ci.yml") | .databaseId' | head -n1)"
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::No CI workflow run found for exact target ${TARGET_SHA}; refusing to tag."
+            exit 1
+          fi
+          echo "Found CI run: ${RUN_ID}"
+          POLL_INTERVAL_SECONDS=10
+          MAX_WAIT_SECONDS=2700
+          MAX_POLLS=$((MAX_WAIT_SECONDS / POLL_INTERVAL_SECONDS))
+          STATUS=""
+          for ((poll=1; poll<=MAX_POLLS; poll++)); do
+            STATUS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '.status')"
+            if [ "$STATUS" = "completed" ]; then
+              break
+            fi
+            echo "CI run ${RUN_ID} still in progress (${STATUS}); waiting (${poll}/${MAX_POLLS})."
+            sleep "$POLL_INTERVAL_SECONDS"
+          done
+          if [ "$STATUS" != "completed" ]; then
+            echo "::error::Timed out waiting for CI run ${RUN_ID}; refusing to tag."
+            exit 1
+          fi
+          SCHEMA_CONCLUSION="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" \
+            --jq '[.jobs[] | select(.name == "Schema freshness")][0].conclusion // empty')"
+          if [ "$SCHEMA_CONCLUSION" != "success" ]; then
+            echo "::error::Schema freshness was '${SCHEMA_CONCLUSION:-missing}' on exact target ${TARGET_SHA}; refusing to tag."
+            exit 1
+          fi
+          echo "Schema freshness passed on exact target ${TARGET_SHA}."
+
+      - name: Clean up publication hold after failed cut preparation
+        if: always() && inputs.mode == 'cut' && steps.publication-hold.outputs.established == 'true' && (steps.cut-commit.outcome != 'success' || steps.schema-freshness.outcome != 'success')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
+            if ! git push origin --delete release-publication-hold; then
+              echo "::error::Could not remove release-publication-hold after a failed cut preparation."
+              exit 1
+            fi
+            echo "Removed release-publication-hold after failed cut preparation."
+          else
+            echo "No release-publication-hold remains; no cleanup required."
           fi
 
       # -----------------------------------------------------------------------
@@ -381,6 +464,24 @@ jobs:
           # rc-validate.yml is dispatched once, by the consolidated
           # "Dispatch Deploy and rc-validate" step after the artefacts publish.
           echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
+          echo "cut_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Clean up publication hold after failed release cut
+        if: always() && inputs.mode == 'cut' && steps.publication-hold.outputs.established == 'true' && steps.cut.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
+            if ! git push origin --delete release-publication-hold; then
+              echo "::error::Could not remove release-publication-hold after a failed release cut."
+              exit 1
+            fi
+            echo "Removed release-publication-hold after failed release cut."
+          else
+            echo "No release-publication-hold remains; no cleanup required."
+          fi
 
       # -----------------------------------------------------------------------
       # RECUT: tag current main as the next RC (no version bump)
@@ -428,12 +529,20 @@ jobs:
         id: promote
         if: inputs.mode == 'promote'
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Every gh PR create/view and CI/review dispatch in this step must
+          # authenticate as the trusted bot identity; never fall back to the
+          # workflow token, which the same-repo author guard rejects.
+          GH_TOKEN: ${{ secrets.MODULO_RELEASE_PR_TOKEN }}
           VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::MODULO_RELEASE_PR_TOKEN is missing or empty; refusing to drive the promote PR with github-actions[bot]."
+            exit 1
+          fi
           GA_TAG="v${VERSION}"
+          BRANCH="release/promote-${VERSION}"
 
           # Safety 1: only promote OUT of an active freeze.
           if ! git rev-parse -q --verify "refs/tags/release-freeze" >/dev/null 2>&1; then
@@ -456,8 +565,8 @@ jobs:
           RC_SHA=$(git rev-parse "${LATEST_RC}^{commit}")
 
           # Safety 4: main must still be exactly the validated RC commit. Fetch
-          # live so a commit landing after checkout is caught - we promote the
-          # commit that was validated, never "whatever is on main now".
+          # live so a commit landing after checkout is caught - the release PR
+          # starts from this exact validated commit.
           git fetch origin main
           HEAD_SHA=$(git rev-parse origin/main)
           if [ "$RC_SHA" != "$HEAD_SHA" ]; then
@@ -477,16 +586,249 @@ jobs:
             exit 1
           fi
 
-          echo "Promoting $LATEST_RC to GA as $GA_TAG"
-          git tag -a "$GA_TAG" -m "Release $GA_TAG (promoted from $LATEST_RC)"
-          git push origin "$GA_TAG"
-
-          # Lift the freeze: the merge queue resumes on its next tick.
+          # CHANGELOG.md is release metadata and must land through protected
+          # main. The only authorised merger is merge-queue.yml, whose queue job
+          # runs only while no release-freeze exists and whose TOCTOU guard
+          # aborts any tick overlapping a freeze. Holding release-freeze during
+          # the PR wait would therefore deadlock promotion: the promote PR could
+          # never merge. Swap the freeze for the temporary
+          # release-publication-hold (which also suppresses stable publication),
+          # then re-establish release-freeze at the exact GA commit once the tag
+          # is pushed.
+          #
+          # Keep the remote branch as the auditable release record; reuse one
+          # open PR and refuse a closed duplicate rather than racing a second
+          # promotion.
+          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
+            echo "::error::release-publication-hold already exists; refusing to promote over an unresolved hold."
+            exit 1
+          fi
+          git tag -a release-publication-hold -m "Suppress stable publication while the promote PR merges"
+          git push origin release-publication-hold
           git push origin --delete release-freeze
-          echo "Freeze lifted - merge queue resumes."
+          git tag -d release-freeze
+          echo "Swapped release-freeze for release-publication-hold while the promote PR merges."
+          git fetch origin --tags
+          PREV_FILE="$(mktemp)"
+          PREV=""
+          if git describe --tags --abbrev=0 "${RC_SHA}^" > "$PREV_FILE" 2>/dev/null; then
+            PREV="$(cat "$PREV_FILE")"
+          fi
+          if [ -z "$PREV" ]; then
+            PREV="$(git rev-list --max-parents=0 "$RC_SHA" | tail -n1)"
+          fi
+           PR_NUMBER="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+           if [ -n "$PR_NUMBER" ]; then
+             echo "Reusing existing promote PR #${PR_NUMBER} for ${VERSION}."
+           else
+             CLOSED_PR="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state closed --json number --jq '.[0].number // empty')"
+             if [ -n "$CLOSED_PR" ]; then
+               echo "::error::Promote branch ${BRANCH} has a closed PR (#${CLOSED_PR}); refusing to create a duplicate."
+               exit 1
+             fi
+              git checkout -B "$BRANCH" "$RC_SHA"
+              EXPECTED_CHANGELOG="$(mktemp)"
+              python3 scripts/generate_changelog.py \
+                --from "$PREV" --to "$RC_SHA" \
+                --version "$VERSION" --body-only > "$EXPECTED_CHANGELOG"
+              RELEASE_NOTES="$(mktemp)"
+              python3 scripts/generate_changelog.py \
+                --from "$PREV" --to "$RC_SHA" \
+                --version "$VERSION" --output CHANGELOG.md > "$RELEASE_NOTES"
+              EXPECTED_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' "$EXPECTED_CHANGELOG")"
+              ACTUAL_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' CHANGELOG.md)"
+              EXPECTED_SECTION="$(printf '%s\\n' "$EXPECTED_SECTION" | sed -E '1s/ — [0-9]{4}-[0-9]{2}-[0-9]{2}//')"
+              ACTUAL_SECTION="$(printf '%s\\n' "$ACTUAL_SECTION" | sed -E '1s/ — [0-9]{4}-[0-9]{2}-[0-9]{2}//')"
+              if [ -z "$ACTUAL_SECTION" ] || [ "$ACTUAL_SECTION" != "$EXPECTED_SECTION" ]; then
+                echo "::error::CHANGELOG.md does not contain the exact generated release metadata for ${GA_TAG}."
+                exit 1
+              fi
+              git add CHANGELOG.md
+              if git diff --cached --quiet; then
+                echo "::error::CHANGELOG.md produced no promote metadata change; refusing to create an empty release PR."
+                exit 1
+              fi
+              git commit -m "changelog: ${GA_TAG}"
+             git push --set-upstream origin "$BRANCH"
+             PR_NUMBER="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base main --head "$BRANCH" \
+               --title "chore(release): promote ${GA_TAG}" \
+               --body "Promote ${LATEST_RC} to ${GA_TAG}. This release metadata PR must pass normal CI, review, and merge-queue gates before GA publication and freeze lift.")"
+             PR_NUMBER="${PR_NUMBER##*/}"
+           fi
 
-          echo "ga_tag=$GA_TAG" >> "$GITHUB_OUTPUT"
-          echo "rc_tag=$LATEST_RC" >> "$GITHUB_OUTPUT"
+           # A reused PR is shared state. Prove that it is still the expected
+           # release branch, is based on this exact validated RC, and contains
+           # the release metadata change before asking any gate to run.
+           PR_JSON="$(gh pr view "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" \
+             --json headRefName,headRefOid,baseRefName,state)" || {
+             echo "::error::Could not read promote PR #${PR_NUMBER}; refusing to trust shared release state."
+             exit 1
+           }
+           PR_HEAD_REF="$(jq -r '.headRefName // empty' <<<"$PR_JSON")"
+           PR_BASE_REF="$(jq -r '.baseRefName // empty' <<<"$PR_JSON")"
+           PR_STATE="$(jq -r '.state // empty' <<<"$PR_JSON")"
+           PR_SHA="$(jq -r '.headRefOid // empty' <<<"$PR_JSON")"
+           if [ "$PR_STATE" != "OPEN" ] || [ "$PR_HEAD_REF" != "$BRANCH" ] || [ "$PR_BASE_REF" != "main" ]; then
+             echo "::error::Promote PR #${PR_NUMBER} is not the expected open ${BRANCH}->main PR (state=${PR_STATE}, head=${PR_HEAD_REF}, base=${PR_BASE_REF})."
+             exit 1
+           fi
+           BRANCH_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BRANCH}" --jq '.object.sha')" || {
+             echo "::error::Could not read release branch ${BRANCH}; refusing to trust reused promote PR."
+             exit 1
+           }
+           if [ -z "$BRANCH_SHA" ] || [ "$BRANCH_SHA" != "$PR_SHA" ]; then
+             echo "::error::Promote PR #${PR_NUMBER} head SHA (${PR_SHA}) does not match release branch ${BRANCH} (${BRANCH_SHA}); refusing stale or externally modified PR."
+             exit 1
+           fi
+           git fetch origin "$BRANCH"
+           if ! git merge-base --is-ancestor "$RC_SHA" "$PR_SHA"; then
+             echo "::error::Promote PR #${PR_NUMBER} head ${PR_SHA} is not based on validated RC ${LATEST_RC} (${RC_SHA}); refusing stale PR reuse."
+             exit 1
+           fi
+            if git diff --quiet "${RC_SHA}..${PR_SHA}" -- CHANGELOG.md; then
+              echo "::error::Promote PR #${PR_NUMBER} contains no CHANGELOG.md release metadata diff from ${RC_SHA}; refusing to publish."
+              exit 1
+            fi
+            PR_CHANGELOG="$(mktemp)"
+            git show "${PR_SHA}:CHANGELOG.md" > "$PR_CHANGELOG"
+            EXPECTED_CHANGELOG="$(mktemp)"
+            python3 scripts/generate_changelog.py \
+              --from "$PREV" --to "$RC_SHA" \
+              --version "$VERSION" --body-only > "$EXPECTED_CHANGELOG"
+            EXPECTED_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' "$EXPECTED_CHANGELOG")"
+            ACTUAL_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' "$PR_CHANGELOG")"
+            EXPECTED_SECTION="$(printf '%s\\n' "$EXPECTED_SECTION" | sed -E '1s/ — [0-9]{4}-[0-9]{2}-[0-9]{2}//')"
+            ACTUAL_SECTION="$(printf '%s\\n' "$ACTUAL_SECTION" | sed -E '1s/ — [0-9]{4}-[0-9]{2}-[0-9]{2}//')"
+            if [ -z "$ACTUAL_SECTION" ] || [ "$ACTUAL_SECTION" != "$EXPECTED_SECTION" ]; then
+              echo "::error::Promote PR #${PR_NUMBER} CHANGELOG.md is not the exact generated release metadata for ${GA_TAG}."
+              exit 1
+            fi
+
+            # A workflow-created PR does not receive pull_request CI/review events.
+           # Explicitly request the normal gates for this exact PR head; only
+           # the protected merge queue may merge it.
+           gh workflow run "CI: Fast Validation" --repo "${GITHUB_REPOSITORY}" --ref "$BRANCH"
+           gh workflow run pr-review.yml --repo "${GITHUB_REPOSITORY}" --ref main \
+             -f pr_number="$PR_NUMBER" -f head_sha="$PR_SHA" -f head_branch="$BRANCH"
+
+           # Find the dispatched CI run by its exact head SHA, never by branch
+           # alone. A stable-branch run is not evidence for this release PR.
+           CI_RUN_ID=""
+           for ((ci_poll=1; ci_poll<=30; ci_poll++)); do
+             CI_RUN_ID="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "CI: Fast Validation" --branch "$BRANCH" --limit 20 --json databaseId,headSha,createdAt \
+               | jq -r --arg sha "$PR_SHA" '[.[] | select(.headSha == $sha)] | sort_by(.createdAt) | last.databaseId // empty')"
+             if [ -n "$CI_RUN_ID" ]; then
+               break
+             fi
+             echo "Waiting for CI: Fast Validation run for exact PR head ${PR_SHA} (${ci_poll}/30)."
+             sleep 10
+           done
+           if [ -z "$CI_RUN_ID" ]; then
+             echo "::error::No CI: Fast Validation run found for exact promote PR head ${PR_SHA}; refusing to merge."
+             exit 1
+           fi
+           gh run watch "$CI_RUN_ID" --repo "${GITHUB_REPOSITORY}" --exit-status
+           CI_JSON="$(gh run view "$CI_RUN_ID" --repo "${GITHUB_REPOSITORY}" --json headSha,status,conclusion)"
+           if [ "$(jq -r '.headSha' <<<"$CI_JSON")" != "$PR_SHA" ] || [ "$(jq -r '.status' <<<"$CI_JSON")" != "completed" ] || [ "$(jq -r '.conclusion' <<<"$CI_JSON")" != "success" ]; then
+             echo "::error::CI: Fast Validation run ${CI_RUN_ID} did not succeed for exact promote PR head ${PR_SHA}: ${CI_JSON}"
+             exit 1
+           fi
+
+           MERGED_SHA=""
+
+          MAX_POLLS=360
+          for ((poll=1; poll<=MAX_POLLS; poll++)); do
+            PR_JSON="$(gh pr view "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" \
+              --json state,mergedAt,mergeCommit,headRefOid,reviewDecision,mergeStateStatus)" || {
+              echo "::error::Could not read promote PR #${PR_NUMBER}; refusing to proceed without merge evidence."
+              exit 1
+            }
+             PR_STATE="$(jq -r '.state' <<<"$PR_JSON")"
+             CURRENT_PR_SHA="$(jq -r '.headRefOid // empty' <<<"$PR_JSON")"
+             if [ "$CURRENT_PR_SHA" != "$PR_SHA" ]; then
+               echo "::error::Promote PR #${PR_NUMBER} changed head from ${PR_SHA} to ${CURRENT_PR_SHA} after exact-head CI; refusing to merge stale CI evidence."
+               exit 1
+             fi
+             MERGED_AT="$(jq -r '.mergedAt // empty' <<<"$PR_JSON")"
+             if [ "$PR_STATE" = "MERGED" ] && [ -n "$MERGED_AT" ]; then
+               FINAL_PR_HEAD_SHA="$CURRENT_PR_SHA"
+               if [ "$FINAL_PR_HEAD_SHA" != "$PR_SHA" ]; then
+                 echo "::error::Promote PR #${PR_NUMBER} final head changed from ${PR_SHA} to ${FINAL_PR_HEAD_SHA}; refusing to accept stale CI evidence."
+                 exit 1
+               fi
+               FINAL_CI_JSON="$(gh run view "$CI_RUN_ID" --repo "${GITHUB_REPOSITORY}" --json headSha,status,conclusion)"
+               if [ "$(jq -r '.headSha // empty' <<<"$FINAL_CI_JSON")" != "$FINAL_PR_HEAD_SHA" ] || \
+                  [ "$(jq -r '.status // empty' <<<"$FINAL_CI_JSON")" != "completed" ] || \
+                  [ "$(jq -r '.conclusion // empty' <<<"$FINAL_CI_JSON")" != "success" ]; then
+                 echo "::error::Final CI: Fast Validation evidence is not successful for exact merged PR head ${FINAL_PR_HEAD_SHA}: ${FINAL_CI_JSON}"
+                 exit 1
+               fi
+               MERGED_SHA="$(jq -r '.mergeCommit.oid // empty' <<<"$PR_JSON")"
+               if [ -z "$MERGED_SHA" ]; then
+                 echo "::error::Promote PR #${PR_NUMBER} is merged but has no merge commit SHA; refusing to publish."
+                 exit 1
+               fi
+               break
+             fi
+            if [ "$PR_STATE" = "CLOSED" ]; then
+              echo "::error::Promote PR #${PR_NUMBER} closed without merging; refusing to publish."
+              exit 1
+            fi
+            echo "Promote PR #${PR_NUMBER} is ${PR_STATE} (review=$(jq -r '.reviewDecision // "unknown"' <<<"$PR_JSON"), merge=$(jq -r '.mergeStateStatus // "unknown"' <<<"$PR_JSON")); waiting (${poll}/${MAX_POLLS})."
+            sleep 15
+          done
+          if [ -z "$MERGED_SHA" ]; then
+            echo "::error::Timed out waiting for promote PR #${PR_NUMBER} to merge through CI, review, and merge queue."
+            exit 1
+          fi
+
+          # Exact merged-SHA handoff: the GA tag is created only at the commit
+          # the protected merge returned, never at a moving branch or main ref.
+          git fetch origin "$MERGED_SHA"
+          git checkout --detach "$MERGED_SHA"
+          if [ "$(git rev-parse HEAD)" != "$MERGED_SHA" ]; then
+            echo "::error::Could not check out exact merged SHA ${MERGED_SHA}; refusing to publish."
+            exit 1
+          fi
+           git tag -a "$GA_TAG" -m "Release $GA_TAG (promoted from $LATEST_RC)"
+           git push origin "$GA_TAG"
+           TAG_SHA="$(git rev-parse "${GA_TAG}^{commit}")"
+           if [ "$TAG_SHA" != "$MERGED_SHA" ]; then
+             echo "::error::GA tag ${GA_TAG} resolved to ${TAG_SHA}, expected merged PR SHA ${MERGED_SHA}."
+             exit 1
+           fi
+           REMOTE_TAG_SHA="$(git ls-remote origin "refs/tags/${GA_TAG}" | awk '{print $1}')"
+           if [ -z "$REMOTE_TAG_SHA" ]; then
+             echo "::error::Remote GA tag ${GA_TAG} is missing after push."
+             exit 1
+           fi
+           if [ "$(git cat-file -t "$REMOTE_TAG_SHA")" = "tag" ]; then
+             REMOTE_TAG_SHA="$(git cat-file tag "$REMOTE_TAG_SHA" | awk '/^object / {print $2; exit}')"
+           fi
+           if [ "$REMOTE_TAG_SHA" != "$MERGED_SHA" ]; then
+             echo "::error::Remote GA tag ${GA_TAG} resolved to ${REMOTE_TAG_SHA}, expected merged PR SHA ${MERGED_SHA}."
+             exit 1
+           fi
+            # Re-establish the authoritative release-freeze at the exact GA
+            # commit now that the protected merge has landed. Every downstream
+            # GA publication step runs under it, and the finalisation step
+            # below is the only place allowed to lift it.
+            git tag -f -a release-freeze -m "Release freeze active for ${GA_TAG}"
+            git push origin release-freeze --force
+            # The temporary suppression marker is now redundant with the freeze.
+            if ! git push origin --delete release-publication-hold; then
+              echo "::error::Could not remove release-publication-hold after re-establishing release-freeze; refusing a stale suppression marker."
+              exit 1
+            fi
+            echo "GA tag ${GA_TAG} published at ${TAG_SHA}; release-freeze remains active until all publication steps finish."
+
+
+           {
+
+            echo "ga_tag=$GA_TAG"
+            echo "rc_tag=$LATEST_RC"
+            echo "promote_sha=$MERGED_SHA"
+          } >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
       # RECUT: publish from the new RC tag, which was created at current main.
@@ -537,12 +879,17 @@ jobs:
                 dockerfile="frontend/Dockerfile.prod"
                 image_name="$IMAGE_NAMESPACE/frontend"
                 ;;
-              runner-opencode)
-                context="."
-                dockerfile="deploy/docker/runner-opencode.Dockerfile"
-                image_name="$IMAGE_NAMESPACE/runner-opencode"
-                ;;
-            esac
+               runner-opencode)
+                 context="."
+                 dockerfile="deploy/docker/runner-opencode.Dockerfile"
+                 image_name="$IMAGE_NAMESPACE/runner-opencode"
+                 ;;
+               *)
+                 echo "::error::unsupported image key: $img"
+                 exit 1
+                 ;;
+             esac
+
 
             echo "Building and pushing $img with tag $TAG..."
 
@@ -570,21 +917,31 @@ jobs:
               frontend)
                 docker run --rm --entrypoint nginx "$IMAGE" -t
                 ;;
-              runner-opencode)
-                docker run --rm --entrypoint opencode "$IMAGE" --version
-                ;;
-            esac
+               runner-opencode)
+                 docker run --rm --entrypoint opencode "$IMAGE" --version
+                 ;;
+               *)
+                 echo "::error::unsupported image key during smoke check: $img"
+                 exit 1
+                 ;;
+             esac
+
           done
 
-          # Resolve the immutable manifest digest for every published image.
-          # The tag is only a lookup key; attestations target these digests.
-          for img in all-in-one backend frontend runner-opencode; do
-            case "$img" in
-              all-in-one) image_name="$IMAGE_NAMESPACE"; output_name=all_in_one_digest ;;
-              backend) image_name="$IMAGE_NAMESPACE/backend"; output_name=backend_digest ;;
-              frontend) image_name="$IMAGE_NAMESPACE/frontend"; output_name=frontend_digest ;;
-              runner-opencode) image_name="$IMAGE_NAMESPACE/runner-opencode"; output_name=runner_opencode_digest ;;
-            esac
+           # Resolve the immutable manifest digest for every published image.
+           # The tag is only a lookup key; attestations target these digests.
+           for img in all-in-one backend frontend runner-opencode; do
+             case "$img" in
+               all-in-one) image_name="$IMAGE_NAMESPACE"; output_name=all_in_one_digest ;;
+               backend) image_name="$IMAGE_NAMESPACE/backend"; output_name=backend_digest ;;
+               frontend) image_name="$IMAGE_NAMESPACE/frontend"; output_name=frontend_digest ;;
+               runner-opencode) image_name="$IMAGE_NAMESPACE/runner-opencode"; output_name=runner_opencode_digest ;;
+               *)
+                 echo "::error::unsupported image key during digest lookup: $img"
+                 exit 1
+                 ;;
+             esac
+
             digest="$(docker buildx imagetools inspect "ghcr.io/$image_name:$TAG" --format '{{json .Manifest.Digest}}' | tr -d '"')"
             if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "::error::missing or invalid digest for ghcr.io/$image_name:$TAG: $digest"
@@ -666,12 +1023,17 @@ jobs:
               frontend)
                 image_name="$IMAGE_NAMESPACE/frontend"
                 ;;
-              runner-opencode)
-                image_name="$IMAGE_NAMESPACE/runner-opencode"
-                ;;
-            esac
+               runner-opencode)
+                 image_name="$IMAGE_NAMESPACE/runner-opencode"
+                 ;;
+               *)
+                 echo "::error::unsupported image key during retag: $img"
+                 exit 1
+                 ;;
+             esac
 
-            echo "Retagging $img ($RC_TAG -> $VERSION_NUM, latest)..."
+             echo "Retagging $img ($RC_TAG -> $VERSION_NUM, latest)..."
+
             if docker buildx imagetools create \
                 --tag "ghcr.io/$image_name:$VERSION_NUM" \
                 --tag "ghcr.io/$image_name:latest" \
@@ -695,7 +1057,12 @@ jobs:
               backend) image_name="$IMAGE_NAMESPACE/backend"; output_name=backend_digest ;;
               frontend) image_name="$IMAGE_NAMESPACE/frontend"; output_name=frontend_digest ;;
               runner-opencode) image_name="$IMAGE_NAMESPACE/runner-opencode"; output_name=runner_opencode_digest ;;
+              *)
+                echo "::error::unsupported image key during digest lookup: $img"
+                exit 1
+                ;;
             esac
+
             digest="$(docker buildx imagetools inspect "ghcr.io/$image_name:$VERSION_NUM" --format '{{json .Manifest.Digest}}' | tr -d '"')"
             if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "::error::missing or invalid digest for ghcr.io/$image_name:$VERSION_NUM: $digest"
@@ -738,73 +1105,105 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           GA_TAG: ${{ steps.promote.outputs.ga_tag }}
+          MERGED_SHA: ${{ steps.promote.outputs.promote_sha }}
         shell: bash
         run: |
-          set -uo pipefail
-          rc=0
+          set -euo pipefail
           NOTES_FILE="$(mktemp)"
 
-          # 1. Previous tag
-          git fetch origin --tags 2>/dev/null || true
-          PREV="$(git describe --tags --abbrev=0 "${GA_TAG}^" 2>/dev/null || true)"
+          # The CHANGELOG change was already merged through protected main in the
+          # promote step. Re-read the exact GA tag; never mutate main here.
+          git fetch origin --tags
+          if ! git checkout --detach "$GA_TAG"; then
+            echo "::error::Could not check out the exact GA tag ${GA_TAG}; refusing to publish release notes."
+            exit 1
+          fi
+          if [ "$(git rev-parse "${GA_TAG}^{commit}")" != "${{ steps.promote.outputs.promote_sha }}" ]; then
+            echo "::error::GA tag ${GA_TAG} is not at the protected promote merge SHA; refusing to publish release notes."
+            exit 1
+          fi
+
+          PREV_FILE="$(mktemp)"
+          PREV=""
+          if git describe --tags --abbrev=0 "${GA_TAG}^" > "$PREV_FILE" 2>/dev/null; then
+            PREV="$(cat "$PREV_FILE")"
+          fi
           if [ -z "$PREV" ]; then
             PREV="$(git rev-list --max-parents=0 "$GA_TAG" | tail -n1)"
           fi
           echo "Changelog range: ${PREV}..${GA_TAG}"
 
-          # 2. Sync local main
-          if ! git fetch origin main || ! git checkout -B main origin/main; then
-            echo "::error::Could not sync local main to origin/main"
-            rc=1
-          fi
+          # Generate release notes from the already-merged metadata. A notes
+          # generation failure is fatal; there is no minimal-notes fallback that
+          # could hide a broken or incomplete CHANGELOG.
+          python3 scripts/generate_changelog.py \
+            --from "$PREV" --to "$GA_TAG" \
+            --version "$VERSION" --output CHANGELOG.md > "$NOTES_FILE"
 
-          # 3. Generate CHANGELOG section + release notes
-          if [ "$rc" -eq 0 ]; then
-            if ! python3 scripts/generate_changelog.py \
-                --from "$PREV" --to "$GA_TAG" \
-                --version "$VERSION" --output CHANGELOG.md > "$NOTES_FILE"; then
-              echo "::warning::generate_changelog.py failed; falling back to minimal notes"
-              printf 'See CHANGELOG.md in the repository for details.\n' > "$NOTES_FILE"
-              rc=1
-            fi
-
-            # 4. Commit CHANGELOG.md
-            if [ "$rc" -eq 0 ]; then
-              git add CHANGELOG.md
-              if git diff --cached --quiet; then
-                echo "CHANGELOG.md already up to date for ${GA_TAG}"
-              elif git commit -m "changelog: ${GA_TAG}" && git push origin main; then
-                echo "CHANGELOG.md committed to main for ${GA_TAG}."
-              else
-                echo "::error::Failed to commit/push CHANGELOG.md"
-                rc=1
-              fi
-            fi
-          fi
-
-          if [ ! -s "$NOTES_FILE" ]; then
-            printf 'See CHANGELOG.md in the repository for details.\n' > "$NOTES_FILE"
-          fi
-
-          # 5. Update or create GitHub Release
           if gh release view "$GA_TAG" >/dev/null 2>&1; then
-            if ! gh release edit "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE" 2>/dev/null; then
-              echo "::warning::GitHub Release update failed for ${GA_TAG}"
-            else
-              echo "GitHub Release updated for ${GA_TAG}."
-            fi
+            gh release edit "$GA_TAG" --target "$MERGED_SHA" --title "$GA_TAG" --notes-file "$NOTES_FILE"
+            echo "GitHub Release updated for ${GA_TAG}."
           else
-            if ! gh release create "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE" 2>/dev/null; then
-              echo "::warning::GitHub Release creation failed for ${GA_TAG}"
-            else
-              echo "GitHub Release created for ${GA_TAG}."
+            gh release create "$GA_TAG" --target "$MERGED_SHA" --title "$GA_TAG" --notes-file "$NOTES_FILE"
+
+             echo "GitHub Release created for ${GA_TAG}."
+           fi
+
+      - name: Re-establish release freeze after failed GA publication
+        if: inputs.mode == 'promote' && failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          GA_TAG="v${VERSION}"
+          if git rev-parse -q --verify "refs/tags/${GA_TAG}" >/dev/null 2>&1; then
+            git tag -f -a release-freeze -m "Release freeze retained after failed GA publication for ${GA_TAG}"
+            git push origin release-freeze --force
+            echo "Re-established release-freeze after failed GA publication."
+          elif git rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1; then
+            echo "GA tag ${GA_TAG} was not created; existing release-freeze remains active."
+          else
+            # The promote step removes release-freeze for the PR-merge window so
+            # the merge queue can run. If promotion then fails before the GA tag
+            # exists, the freeze must be restored at the still-validated RC
+            # commit (main) rather than left absent.
+            git fetch origin main
+            RESTORE_SHA="$(git rev-parse origin/main)"
+            git tag -f -a release-freeze -m "Release freeze restored after failed GA promotion for ${GA_TAG}" "$RESTORE_SHA"
+            git push origin release-freeze --force
+            echo "Restored release-freeze at ${RESTORE_SHA} after failed GA promotion."
+          fi
+          # A failed promotion must not leave the temporary suppression marker
+          # behind once the authoritative freeze is active again.
+          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
+            if ! git push origin --delete release-publication-hold; then
+              echo "::error::Could not remove release-publication-hold after a failed GA promotion."
+              exit 1
             fi
+            echo "Removed release-publication-hold after failed GA promotion."
           fi
 
-          exit $rc
+
+      - name: Lift release freeze after successful GA publication
+        if: inputs.mode == 'promote' && success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1; then
+            echo "::error::release-freeze is missing at final GA publication step; refusing to lift an unknown hold."
+            exit 1
+          fi
+          git push origin --delete release-freeze
+          echo "All GA publication steps succeeded; freeze lifted and merge queue resumes."
 
   # ---------------------------------------------------------------------------
+
   # Build and sign the release bundle (cut and recut).
+
   #
   # Delegated to the single implementation in bundle-release.yml (FAR-670 /
   # FAR-675): it builds from the RC tag, writes the per-file SHA256SUMS and the
@@ -831,6 +1230,14 @@ jobs:
     name: Validate Windows installer prerequisite
     needs: [release, bundle]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    # The reusable workflow declares OIDC and attestation permissions for its
+    # non-dry-run signing/attestation jobs. Permissions cannot be elevated
+    # across a reusable-workflow boundary, so grant the caller the maximum
+    # permissions the called workflow can request.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/windows-installer.yml
     with:
       version: ${{ inputs.version }}
@@ -844,9 +1251,14 @@ jobs:
   # Build macOS installer (cut and recut)
   # ---------------------------------------------------------------------------
   macos-installer:
-    name: Validate macOS installer prerequisite
+    name: Build and notarize macOS installer
     needs: [release, bundle]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    # macOS currently declares only contents: read. The structural test derives
+    # this from the called workflow and forces a caller update if macOS ever
+    # adds an attest/OIDC job that requires a stronger permission.
+    permissions:
+      contents: read
     uses: ./.github/workflows/macos-installer.yml
     with:
       version: ${{ inputs.version }}
@@ -857,13 +1269,94 @@ jobs:
 
 
   # ---------------------------------------------------------------------------
-  # Create the GitHub Release from the bundle artefacts (cut and recut)
+  # Final cross-platform manifest (cut and recut)
+  # ---------------------------------------------------------------------------
+  final-release-manifest:
+    name: Generate final cross-platform release manifest
+    needs: [release, bundle, windows-installer, macos-installer]
+    if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.rc_tag }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bundle-artefacts-amd64
+          path: release-artefacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-installer-${{ inputs.version }}
+          path: release-artefacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-installer-${{ inputs.version }}
+          path: release-artefacts
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Build final signed manifest after every platform artifact
+        env:
+          MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ -n "$MANIFEST_SIGNING_KEY" ]] || { echo '::error::manifest signing key is required'; exit 1; }
+          cd release-artefacts
+          sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "modulo-${VERSION}-windows-amd64.exe" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+          cd ..
+          uv run --no-project --no-sync --no-build python - <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, "backend/src")
+          from modulo.launcher import manifest as m
+          root = Path("release-artefacts")
+          version = os.environ["VERSION"]
+          names = [f"modulo-{version}-linux-amd64.tar.gz", f"modulo-{version}-windows-amd64.exe", f"Modulo-{version}-macos-arm64.dmg"]
+          body = m.build_release_manifest(release=f"bundle-v{version}", platform="multi-platform", generated_at=os.environ.get("GITHUB_SHA", ""), components={"linux": "amd64", "windows": "amd64", "macos": "arm64"}, artifacts=[{"name": n, "sha256": hashlib.sha256((root / n).read_bytes()).hexdigest(), "version": version} for n in names])
+          payload = json.dumps(body, indent=2, sort_keys=True).encode()
+          signing_key = os.environ["MANIFEST_SIGNING_KEY"]
+          if len(signing_key) != 64:
+              raise SystemExit("BUNDLE_MANIFEST_SIGNING_KEY must be exactly 32-byte Ed25519 private-key hex")
+          try:
+              int(signing_key, 16)
+          except ValueError as exc:
+              raise SystemExit("BUNDLE_MANIFEST_SIGNING_KEY must contain only hexadecimal characters") from exc
+          sig = m.sign_release_bytes(payload, key_id=m._KEY_ID_CURRENT, private_key_hex=signing_key)
+          if sig["key_id"] != m._KEY_ID_CURRENT:
+              raise SystemExit("generated manifest signature used an unexpected key_id")
+          try:
+              verified_key_id = m.verify_signature(payload, sig)
+          except m.ManifestSecurityError as exc:
+              raise SystemExit(f"generated manifest signature failed trust-store verification: {exc}") from exc
+          if verified_key_id != m._KEY_ID_CURRENT:
+              raise SystemExit("generated manifest signature did not verify under the expected current key_id")
+          print(f"final manifest signature verified under expected key_id {verified_key_id}")
+          (root / "RELEASE_MANIFEST.json").write_bytes(payload)
+          (root / "RELEASE_MANIFEST.json.sig").write_text(json.dumps(sig), encoding="utf-8")
+          print("final manifest covers: " + ", ".join(names))
+
+          PY
+          (cd release-artefacts && sha256sum --check SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: final-release-artefacts-${{ inputs.version }}
+          path: release-artefacts
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Create the GitHub Release from the final cross-platform artefacts
   # ---------------------------------------------------------------------------
   publish-release:
     name: Create GitHub Release
-    # Do not publish the bundle-v* tag until its tarball has a provenance
-    # attestation; native-release-smoke is fail-closed on that attestation.
-    needs: [release, bundle, attest-artefacts, windows-installer, macos-installer]
+    needs: [release, final-release-manifest, attest-artefacts, windows-installer, macos-installer]
+    # Do not publish until the final signed manifest covers the macOS DMG.
+
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
@@ -875,23 +1368,28 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.release.outputs.rc_tag }}
 
-      - name: Download bundle artefacts
+      - name: Download final cross-platform release artefacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: bundle-artefacts-amd64
+          name: final-release-artefacts-${{ inputs.version }}
           path: release-artefacts
 
-      - name: Download Windows installer artefact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: windows-installer-${{ inputs.version }}
-          path: release-artefacts
-
-      - name: Download macOS installer artefact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: macos-installer-${{ inputs.version }}
-          path: release-artefacts
+      - name: Verify portable release artefacts
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          for artifact in \
+            "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz" \
+            "release-artefacts/modulo-${VERSION}-windows-amd64.exe" \
+            "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg" \
+            release-artefacts/SHA256SUMS \
+            release-artefacts/RELEASE_MANIFEST.json \
+            release-artefacts/RELEASE_MANIFEST.json.sig; do
+            test -s "$artifact"
+          done
+          (cd release-artefacts && sha256sum --check SHA256SUMS)
+          echo "Final signed manifest and SHA256SUMS cover Linux, Windows and macOS arm64 artifacts."
 
       - name: Set up Python 3.12 for OpenAPI dump
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
@@ -907,9 +1405,44 @@ jobs:
         working-directory: backend
         run: uv sync --frozen  # NOSONAR
 
+      - name: Verify final manifest signature against the checked-in trust store
+        working-directory: backend
+        env:
+          EXPECTED_KEY_ID: modulo-2026-a
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          uv run --no-build --no-sync python - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "src")
+          from modulo.launcher import manifest as m
+
+          root = Path("../release-artefacts")
+          signature = m.read_signature_file(root / "RELEASE_MANIFEST.json.sig")
+          expected_key_id = os.environ["EXPECTED_KEY_ID"]
+          if signature["key_id"] != expected_key_id:
+              raise SystemExit(
+                  f"final manifest signature key_id {signature['key_id']!r} does not match expected {expected_key_id!r}"
+              )
+          verified_manifest = m.verify_release_from_files(
+              manifest_path=root / "RELEASE_MANIFEST.json",
+              signature_path=root / "RELEASE_MANIFEST.json.sig",
+              artifacts_root=root,
+          )
+          if verified_manifest.release != f"bundle-v{os.environ['VERSION']}":
+              raise SystemExit(
+                  f"final manifest release is {verified_manifest.release!r}, not the requested version"
+              )
+          print(f"final manifest signature verified under checked-in key_id {signature['key_id']}")
+          PY
+
       - name: Dump OpenAPI schema from backend
         working-directory: backend
         env:
+
           DATABASE_URL: "sqlite+aiosqlite:///./modulo-gen-test.db"
           SECRET_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -1121,10 +1654,10 @@ jobs:
   # ---------------------------------------------------------------------------
   attest-artefacts:
     name: Attest released artefacts
-    needs: [produce-sbom, bundle, release]
+    needs: [produce-sbom, final-release-manifest, release]
     # The bundle is available for cut/recut; promote still attests the SBOM
     # without waiting on the intentionally skipped bundle job.
-    if: always() && inputs.mode != 'dry-run' && needs.produce-sbom.result == 'success' && (inputs.mode == 'promote' || needs.bundle.result == 'success')
+    if: always() && inputs.mode != 'dry-run' && needs.produce-sbom.result == 'success' && (inputs.mode == 'promote' || needs.final-release-manifest.result == 'success')
     runs-on: ubicloud-standard-2
     timeout-minutes: 10
     permissions:
@@ -1138,12 +1671,30 @@ jobs:
           name: sbom-cyclonedx
           path: release-artefacts
 
-      - name: Download the published bundle artefact
+      - name: Download the final cross-platform release artefact
         if: inputs.mode == 'cut' || inputs.mode == 'recut'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: bundle-artefacts-amd64
+          name: final-release-artefacts-${{ inputs.version }}
           path: release-artefacts
+
+      - name: Download the macOS installer artefact
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-installer-${{ inputs.version }}
+          path: release-artefacts
+
+      - name: Assert the exact macOS DMG is present
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          DMG="release-artefacts/Modulo-${VERSION}-macos-arm64.dmg"
+          test -s "$DMG"
+          printf 'Attestation subject: %s\n' "$DMG"
 
       - name: Attest the file artefacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -1216,8 +1767,13 @@ jobs:
               "$IMAGE_NAMESPACE") digest="$ALL_IN_ONE_DIGEST" ;;
               "$IMAGE_NAMESPACE/backend") digest="$BACKEND_DIGEST" ;;
               "$IMAGE_NAMESPACE/frontend") digest="$FRONTEND_DIGEST" ;;
-              "$IMAGE_NAMESPACE/runner-opencode") digest="$RUNNER_OPENCODE_DIGEST" ;;
-            esac
+               "$IMAGE_NAMESPACE/runner-opencode") digest="$RUNNER_OPENCODE_DIGEST" ;;
+               *)
+                 echo "::error::unsupported attestation image: $image_name"
+                 exit 1
+                 ;;
+             esac
+
             subject="ghcr.io/$image_name@$digest"
             echo "Verifying attestation for $subject"
             gh attestation verify "$subject" --repo "${{ github.repository }}"

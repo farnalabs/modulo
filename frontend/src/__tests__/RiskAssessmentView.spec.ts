@@ -26,7 +26,12 @@ vi.mock('vue-router', () => ({
 
 import RiskAssessmentView from '../views/RiskAssessmentView.vue'
 import enUS from '../locales/en-US.js'
-import { RISK_ACTIONS } from '../lib/riskAssessment'
+import { RISK_ACTIONS, RISK_WINDOW_CHOICES } from '../lib/riskAssessment'
+
+// The wire form the API's `pipeline_id` query parameter parses — deep-link
+// fixtures carry a real id so the hydration contract is exercised, not a
+// short shape no backend would accept.
+const PIPELINE_ID = '0f8d5a2e-6f4b-4c8a-9e1d-3b7c2a5d8f01'
 
 const i18n = createI18n({
   legacy: false,
@@ -66,7 +71,7 @@ function projectionResponse() {
 }
 
 function pipelinesResponse() {
-  return { items: [{ id: 'p-1', name: 'Alpha' }] }
+  return { items: [{ id: PIPELINE_ID, name: 'Alpha' }] }
 }
 
 function ok(data: unknown) {
@@ -112,7 +117,7 @@ describe('RiskAssessmentView', () => {
 
   it('hydrates filters from the URL and re-affirms the deep link', async () => {
     routeAwareGet()
-    setRouteQuery({ key_prefix: 'risk.', pipeline_id: 'p-1', days: '30', action: 'block' })
+    setRouteQuery({ key_prefix: 'risk.', pipeline_id: PIPELINE_ID, days: '30', action: 'block' })
 
     const wrapper = await mountView()
 
@@ -121,12 +126,12 @@ describe('RiskAssessmentView', () => {
     ).toBe('risk.')
     expect(mockGet).toHaveBeenLastCalledWith('/api/v1/evidence/risk-assessment', {
       params: {
-        query: { key_prefix: 'risk.', pipeline_id: 'p-1', days: 30, action: 'block', limit: 100 },
+        query: { key_prefix: 'risk.', pipeline_id: PIPELINE_ID, days: 30, action: 'block', limit: 100 },
       },
     })
     expect(routerState.query).toEqual({
       key_prefix: 'risk.',
-      pipeline_id: 'p-1',
+      pipeline_id: PIPELINE_ID,
       days: '30',
       action: 'block',
     })
@@ -141,6 +146,48 @@ describe('RiskAssessmentView', () => {
     expect(mockGet).toHaveBeenLastCalledWith('/api/v1/evidence/risk-assessment', {
       params: { query: { days: 7, limit: 100 } },
     })
+  })
+
+  it('drops out-of-contract deep-link values to defaults instead of sending a 422 the retry can never clear', async () => {
+    // Each of these values is answered 422 by the backend (days outside the
+    // offered windows, an unknown action, a non-UUID pipeline id) — and the
+    // error alert's Retry re-applies the same filters, so a hydrated 422 would
+    // loop forever. A deep link is written by this surface, so only the facet
+    // vocabulary is hydratable; anything else is a malformed link.
+    for (const malformed of [
+      { days: '400' },
+      { days: '-5' },
+      { days: '30abc' },
+      { action: 'nonsense' },
+      { pipeline_id: 'not-a-uuid' },
+    ]) {
+      mockGet.mockClear()
+      routeAwareGet()
+      setRouteQuery(malformed)
+
+      await mountView()
+
+      expect(mockGet).toHaveBeenLastCalledWith(
+        '/api/v1/evidence/risk-assessment',
+        expect.objectContaining({
+          params: { query: { days: 7, limit: 100 } },
+        }),
+      )
+    }
+  })
+
+  it('keeps a deep link inside the offered time-window vocabulary round-trippable', async () => {
+    for (const choice of RISK_WINDOW_CHOICES) {
+      mockGet.mockClear()
+      routeAwareGet()
+      setRouteQuery({ days: String(choice.value) })
+
+      await mountView()
+
+      expect(mockGet).toHaveBeenLastCalledWith('/api/v1/evidence/risk-assessment', {
+        params: { query: { days: choice.value, limit: 100 } },
+      })
+    }
   })
 
   it('ignores non-string query params', async () => {

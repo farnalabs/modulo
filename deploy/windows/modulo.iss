@@ -5,8 +5,16 @@
 ;
 ; Required ISPP defines:
 ;   VERSION_NUM - release version
-;   BUNDLE_ARCH - amd64 or arm64
+;   BUNDLE_ARCH - amd64 (the only supported installer architecture)
 ;   BUNDLE_DIR  - extracted native Windows bundle root
+; Optional ISPP define:
+;   MODULO_URL  - local URL opened by the post-install checkbox
+;
+; Bundle contract:
+;   BUNDLE_DIR\launcher
+;   BUNDLE_DIR\RELEASE_MANIFEST.json
+;   adjacent RELEASE_MANIFEST.json.sig
+; The signed release manifest is the single provenance contract.
 ;
 ; Build example:
 ;   iscc /DVERSION_NUM=0.4.0 /DBUNDLE_ARCH=amd64 /DBUNDLE_DIR=C:\bundle modulo.iss
@@ -19,6 +27,26 @@
 #endif
 #ifndef BUNDLE_DIR
   #error BUNDLE_DIR is required
+#endif
+#ifndef MODULO_URL
+  #define MODULO_URL "http://127.0.0.1:8000"
+#endif
+
+#if BUNDLE_ARCH != "amd64"
+  #error Unsupported BUNDLE_ARCH: only amd64 Windows installers are supported
+#endif
+
+#ifexist "{#BUNDLE_DIR}\launcher"
+#else
+  #error Required native launcher is missing: {#BUNDLE_DIR}\launcher
+#endif
+#ifexist "{#BUNDLE_DIR}\RELEASE_MANIFEST.json"
+#else
+  #error Required signed release manifest is missing: {#BUNDLE_DIR}\RELEASE_MANIFEST.json
+#endif
+#ifexist "{#BUNDLE_DIR}\RELEASE_MANIFEST.json.sig"
+#else
+  #error Required release-manifest signature is missing: {#BUNDLE_DIR}\RELEASE_MANIFEST.json.sig
 #endif
 
 [Setup]
@@ -41,9 +69,12 @@ DisableProgramGroupPage=yes
 DisableDirPage=auto
 DisableReadyMemo=yes
 DisableReadyPage=yes
-DisableFinishedPage=yes
+DisableFinishedPage=no
 WizardStyle=modern
 AppId={{7B7A9F3B-69DA-4EA0-9EB8-0D8F2D4B8A6B}}
+LicenseFile={#SourcePath}\..\..\LICENSE
+InfoBeforeFile={#SourcePath}\INSTALLER-INFO.txt
+Uninstallable=yes
 UninstallDisplayIcon={app}\launcher
 UninstallDisplayName=Modulo {#VERSION_NUM}
 CloseApplications=yes
@@ -56,23 +87,31 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-; skipifsourcedoesntexist keeps the dry-run compiler check honest without
-; manufacturing a fake executable. A real native bundle is required before
-; any non-dry-run workflow can publish an installer.
-Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+; The compile-time contract above is the primary guard. Copy the established
+; bundle layout and the signed release-manifest handoff without inventing a
+; Windows-only manifest.
+Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Modulo"; Filename: "{app}\launcher"; WorkingDir: "{app}"
 Name: "{commondesktop}\Modulo"; Filename: "{app}\launcher"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\modulo.exe"; Description: "Launch Modulo"; Flags: nowait postinstall shellexec skipifdoesntexist
-Filename: "sc.exe"; Parameters: "create Modulo binPath= \"{app}\modulo.exe service\" start= auto"; StatusMsg: "Installing Modulo service..."; Flags: runhidden waituntilterminated skipifdoesntexist
-Filename: "sc.exe"; Parameters: "start Modulo"; StatusMsg: "Starting Modulo service..."; Flags: runhidden waituntilterminated skipifdoesntexist
+; The service contract is modulo.exe service. Runtime readiness and the local
+; HTTP listener remain the native launcher's responsibility.
+Filename: "sc.exe"; Parameters: "create Modulo binPath= \"{app}\launcher start\" start= auto"; StatusMsg: "Installing Modulo service..."; Flags: runhidden waituntilterminated
+Filename: "sc.exe"; Parameters: "start Modulo"; StatusMsg: "Starting Modulo service..."; Flags: runhidden waituntilterminated
+Filename: "{#MODULO_URL}"; Description: "Open Modulo in your browser"; Flags: postinstall shellexec unchecked; Check: ShouldOpenModulo
 
 [UninstallRun]
-Filename: "sc.exe"; Parameters: "stop Modulo"; StatusMsg: "Stopping Modulo service..."; Flags: runhidden waituntilterminated skipifdoesntexist
-Filename: "sc.exe"; Parameters: "delete Modulo"; StatusMsg: "Removing Modulo service..."; Flags: runhidden waituntilterminated skipifdoesntexist
+Filename: "sc.exe"; Parameters: "stop Modulo"; StatusMsg: "Stopping Modulo service..."; Flags: runhidden waituntilterminated
+Filename: "sc.exe"; Parameters: "delete Modulo"; StatusMsg: "Removing Modulo service..."; Flags: runhidden waituntilterminated
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
+
+[Code]
+function ShouldOpenModulo: Boolean;
+begin
+  Result := not IsUninstaller;
+end;

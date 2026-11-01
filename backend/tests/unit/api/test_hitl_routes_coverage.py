@@ -1466,3 +1466,148 @@ def test_modify_approve_unresolvable_config_fails_open_without_answer(client: tu
 
     assert resp.status_code == 200, resp.text
     assert mgr_call.await_args.kwargs.get("answer") is None
+
+
+# ---------------------------------------------------------------------------
+# Viewer account-team-membership clamp on the HITL list reads
+#
+# ``hitl.list`` is viewer-reachable and ``hitl_claims`` carries only the
+# org-only RLS policy, so each list read MUST add the account-team-membership
+# predicate itself — a viewer has no team-scoped credential, so without it the
+# read is org-wide.
+# ---------------------------------------------------------------------------
+
+
+def _viewer_principal() -> AuthenticatedPrincipal:
+    return AuthenticatedPrincipal(
+        username="viewer@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="viewer",
+    )
+
+
+def _empty_execute_capture(session: AsyncMock) -> list[object]:
+    captured: list[object] = []
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        captured.append(stmt)
+        result = MagicMock()
+        result.scalars.return_value = []
+        result.all.return_value = []
+        result.first.return_value = None
+        result.scalar_one.return_value = 0
+        result.scalar_one_or_none.return_value = None
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return captured
+
+
+def test_viewer_org_pending_gates_query_contains_account_team_scope(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    http, session = client
+    app.dependency_overrides[get_current_user] = _viewer_principal
+    captured = _empty_execute_capture(session)
+
+    resp = http.get("/api/v1/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    assert any("team_memberships" in str(stmt) for stmt in captured), (
+        "a viewer pending-gate read must be bounded by the account's team memberships"
+    )
+
+
+def test_viewer_run_pending_gates_query_contains_account_team_scope(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    http, session = client
+    app.dependency_overrides[get_current_user] = _viewer_principal
+    run = MagicMock()
+    run.snapshot_id = None
+    run.owner_team_id = None
+    captured = _empty_execute_capture(session)
+
+    with (
+        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.api.routes.hitl.viewer_run_scope_visible", new=AsyncMock(return_value=True)),
+    ):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    assert any("team_memberships" in str(stmt) for stmt in captured), (
+        "a viewer run-level pending read must be bounded by the account's team memberships"
+    )
+
+
+def test_viewer_run_pending_foreign_team_run_maps_to_not_found(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Mirror the MCP ``get_hitl_review`` not-found mapping: a viewer outside
+    the run's owning team must not learn the run exists — 404, never a
+    200-with-empty-gates cross-team existence oracle."""
+    http, _session = client
+    app.dependency_overrides[get_current_user] = _viewer_principal
+    run = MagicMock()
+    run.snapshot_id = None
+    run.owner_team_id = None
+
+    with (
+        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.api.routes.hitl.viewer_run_scope_visible", new=AsyncMock(return_value=False)),
+    ):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Run not found"
+
+
+def test_run_pending_non_viewer_never_consults_the_membership_clamp(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    http, _session = client
+    run = MagicMock()
+    run.snapshot_id = None
+    run.owner_team_id = None
+    clamp = AsyncMock(return_value=False)
+
+    with (
+        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.api.routes.hitl.viewer_run_scope_visible", new=clamp),
+    ):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    clamp.assert_not_awaited()
+
+
+def test_viewer_reviews_query_contains_account_team_scope(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    http, session = client
+    app.dependency_overrides[get_current_user] = _viewer_principal
+    captured = _capture_gates_execute(session, gates=[], total=0)
+
+    resp = http.get("/api/v1/hitl/reviews")
+
+    assert resp.status_code == 200, resp.text
+    assert any("team_memberships" in str(stmt) for stmt in captured), (
+        "both the count and the page query must carry the viewer membership clamp"
+    )
+
+
+def test_viewer_reviews_unfenced_status_still_carries_account_team_scope(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """The history/audit statuses are not fenced to actionable runs, but a
+    viewer must still get the membership clamp on BOTH statements — the
+    unfenced path must add the runs + pipelines joins itself."""
+    http, session = client
+    app.dependency_overrides[get_current_user] = _viewer_principal
+    captured = _capture_gates_execute(session, gates=[], total=0)
+
+    resp = http.get("/api/v1/hitl/reviews", params={"status": "approved"})
+
+    assert resp.status_code == 200, resp.text
+    assert any("team_memberships" in str(stmt) for stmt in captured)

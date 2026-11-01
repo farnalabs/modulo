@@ -11,6 +11,12 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 # Single home so model modules import it instead of re-declaring the literal.
 ONDELETE_SET_NULL: Final[str] = "SET NULL"
 
+# Foreign-key target for the owning account. Model modules that declare an
+# explicit ``account_id`` FK column import this instead of re-declaring the
+# ``"accounts.id"`` literal (which also keeps Sonar's duplicated-string-literal
+# rule from firing on a module with many account FKs).
+FK_ACCOUNTS_ID: Final[str] = "accounts.id"
+
 # Column type for a JSON column whose physical Postgres type is ``jsonb``: use
 # it for the columns migration ``0147_json_to_jsonb_standardize`` promoted and
 # for every column a migration created ``jsonb`` directly. Generic ``JSON``

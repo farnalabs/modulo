@@ -257,6 +257,7 @@ class TestInactiveTriggers:
         now = datetime.now(UTC)
         session.add(
             Trigger(
+                name="trigger-1",
                 id=uuid.uuid4(),
                 organisation_id=_ORG_A,
                 pipeline_id=uuid.uuid4(),
@@ -267,6 +268,7 @@ class TestInactiveTriggers:
         )
         session.add(
             Trigger(
+                name="trigger-2",
                 id=uuid.uuid4(),
                 organisation_id=_ORG_A,
                 pipeline_id=uuid.uuid4(),
@@ -278,6 +280,7 @@ class TestInactiveTriggers:
         )
         session.add(
             Trigger(
+                name="trigger-3",
                 id=uuid.uuid4(),
                 organisation_id=_ORG_A,
                 pipeline_id=uuid.uuid4(),
@@ -288,6 +291,7 @@ class TestInactiveTriggers:
         )
         session.add(
             Trigger(
+                name="trigger-4",
                 id=uuid.uuid4(),
                 organisation_id=_ORG_A,
                 pipeline_id=uuid.uuid4(),
@@ -299,6 +303,7 @@ class TestInactiveTriggers:
         )
         session.add(
             Trigger(
+                name="trigger-5",
                 id=uuid.uuid4(),
                 organisation_id=_ORG_B,
                 pipeline_id=uuid.uuid4(),
@@ -489,6 +494,7 @@ class TestDuplicateTriggers:
         pipeline_id = uuid.uuid4()
         session.add(
             Trigger(
+                name="trigger-6",
                 id=uuid.uuid4(),
                 organisation_id=_ORG_A,
                 pipeline_id=pipeline_id,
@@ -499,6 +505,7 @@ class TestDuplicateTriggers:
         )
         session.add(
             Trigger(
+                name="trigger-7",
                 id=uuid.uuid4(),
                 organisation_id=_ORG_A,
                 pipeline_id=pipeline_id,
@@ -509,6 +516,7 @@ class TestDuplicateTriggers:
         )
         session.add(
             Trigger(
+                name="trigger-8",
                 id=uuid.uuid4(),
                 organisation_id=_ORG_A,
                 pipeline_id=pipeline_id,
@@ -519,6 +527,7 @@ class TestDuplicateTriggers:
         )
         session.add(
             Trigger(
+                name="trigger-9",
                 id=uuid.uuid4(),
                 organisation_id=_ORG_A,
                 pipeline_id=pipeline_id,
@@ -540,6 +549,7 @@ class TestDuplicateTriggers:
     async def test_returns_empty_when_no_duplicates(self, session: AsyncSession) -> None:
         session.add(
             Trigger(
+                name="trigger-10",
                 id=uuid.uuid4(),
                 organisation_id=_ORG_A,
                 pipeline_id=uuid.uuid4(),
@@ -719,6 +729,7 @@ class TestUntriggeredPipelines:
         session.add_all([untouched, deleted, has_trigger, has_run])
         session.add(
             Trigger(
+                name="trigger-11",
                 id=uuid.uuid4(),
                 organisation_id=_ORG_A,
                 pipeline_id=has_trigger.id,

@@ -9,9 +9,9 @@
       <div class="page-wide">
         <PageHeader :title="$t('views.SettingsMonitorConfigView.browser_monitoring')" :subtitle="$t('views.SettingsMonitorConfigView.description')" />
 
-        <div class="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
+        <DataCard variant="bordered" padding="md" card-class="text-sm text-muted-foreground">
           {{ $t('views.SettingsMonitorConfigView.explainer') }}
-        </div>
+        </DataCard>
 
         <div v-if="loading" class="flex items-center justify-center h-32">
           <span class="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full" />
@@ -24,42 +24,44 @@
 
         <template v-else>
           <div class="space-y-6">
-            <div
+            <DataCard
               v-for="b in backendForms"
               :key="b.key"
-              class="border rounded-lg p-5 space-y-4"
-              :class="{}"
+              variant="bordered"
+              padding="none"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <h3 :id="`settingsmonitorconfigview-backend-label-${b.key}`" class="font-medium">{{ b.label }}</h3>
-                  <p class="text-xs text-muted-foreground">{{ b.description }}</p>
-                  <p v-if="!b.enabled" class="text-xs text-muted-foreground/60 mt-1">{{ b.hint }}</p>
+              <div class="p-5 space-y-4">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <h3 :id="`settingsmonitorconfigview-backend-label-${b.key}`" class="font-medium">{{ b.label }}</h3>
+                    <p class="text-xs text-muted-foreground">{{ b.description }}</p>
+                    <p v-if="!b.enabled" class="text-xs text-muted-foreground/60 mt-1">{{ b.hint }}</p>
+                  </div>
+                  <label :for="`settingsmonitorconfigview-toggle-${b.key}`" class="relative inline-flex items-center cursor-pointer">
+                    <input :id="`settingsmonitorconfigview-toggle-${b.key}`" type="checkbox" v-model="b.enabled" class="sr-only peer" :aria-labelledby="`settingsmonitorconfigview-backend-label-${b.key}`" @change="onDirty" />
+                    <div class="w-9 h-5 bg-muted rounded-full peer peer-checked:bg-primary peer-focus:ring-2 peer-focus:ring-primary/20 after:content-[''] after:absolute after:top-0.5 after:start-0.5 after:bg-background after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full" />
+                  </label>
                 </div>
-                <label :for="`settingsmonitorconfigview-toggle-${b.key}`" class="relative inline-flex items-center cursor-pointer">
-                  <input :id="`settingsmonitorconfigview-toggle-${b.key}`" type="checkbox" v-model="b.enabled" class="sr-only peer" :aria-labelledby="`settingsmonitorconfigview-backend-label-${b.key}`" @change="onDirty" />
-                  <div class="w-9 h-5 bg-muted rounded-full peer peer-checked:bg-primary peer-focus:ring-2 peer-focus:ring-primary/20 after:content-[''] after:absolute after:top-0.5 after:start-0.5 after:bg-background after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full" />
-                </label>
-              </div>
 
-              <div v-if="b.enabled" class="space-y-3">
-                <div v-for="field in b.fields" :key="field.key">
-                  <label for="settingsmonitorconfigview-field-1" class="block text-xs text-muted-foreground mb-1">{{ field.label }}</label>
-                  <input id="settingsmonitorconfigview-field-1"
-                    v-model="field.value"
-                    :type="field.secret && !field.revealed ? 'password' : 'text'"
-                    :placeholder="field.placeholder"
-                    class="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20"
-                    @input="onDirty"
-                  />
-                  <div v-if="field.secret" class="mt-1">
-                    <button type="button" class="text-xs text-muted-foreground hover:text-foreground" @click="field.revealed = !field.revealed">
-                      {{ field.revealed ? $t('common.hide') : $t('common.show') }}
-                    </button>
+                <div v-if="b.enabled" class="space-y-3">
+                  <div v-for="field in b.fields" :key="field.key">
+                    <label for="settingsmonitorconfigview-field-1" class="block text-xs text-muted-foreground mb-1">{{ field.label }}</label>
+                    <input id="settingsmonitorconfigview-field-1"
+                      v-model="field.value"
+                      :type="field.secret && !field.revealed ? 'password' : 'text'"
+                      :placeholder="field.placeholder"
+                      class="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      @input="onDirty"
+                    />
+                    <div v-if="field.secret" class="mt-1">
+                      <button type="button" class="text-xs text-muted-foreground hover:text-foreground" @click="field.revealed = !field.revealed">
+                        {{ field.revealed ? $t('common.hide') : $t('common.show') }}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            </DataCard>
           </div>
 
           <div v-if="flash" class="p-3 rounded-md text-sm" :class="flashType === 'success' ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-600'">
@@ -91,6 +93,7 @@ import { getErrorTracker } from '../lib/error-tracking'
 import { loadBackends } from '../monitor'
 import type { MonitorConfig } from '../monitor/types'
 import PageHeader from '../components/shared/PageHeader.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import Button from 'primevue/button'
 

@@ -48,18 +48,3 @@ class NodeMissingModelBackendError(Exception):
             f"Assign a model backend to the agent, or use a "
             f"connector/manual node type if no model call is intended."
         )
-
-
-class ConnectorNodeFailedError(Exception):
-    """Raised when a connector node's action (query/write/dispatch) fails.
-
-    The connector node executes the action via the ConnectorHub. When the
-    action raises an exception (network error, auth failure, upstream error,
-    etc.), this exception is raised to propagate the failure to the executor,
-    which terminalizes the run with the ``connector.side_effect_unknown``
-    error code (FAR-2090).
-    """
-
-    def __init__(self, node_id: str, message: str) -> None:
-        self.node_id = node_id
-        super().__init__(f"Connector node {node_id!r} failed: {message}")
