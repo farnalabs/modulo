@@ -28,6 +28,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.exception_handlers import (
     http_exception_handler,
+    publish_validation_error_handler,
     sso_callback_error_handler,
     storage_exhausted_exception_handler,
     unhandled_exception_handler,
@@ -130,6 +131,7 @@ from modulo.api.routes.service_accounts import router as service_accounts_router
 from modulo.api.routes.slack import router as slack_router
 from modulo.api.routes.sso import router as sso_router
 from modulo.api.routes.stripe_webhook import router as stripe_webhook_router
+from modulo.api.routes.system_maps import PublishValidationErrorHTTP
 from modulo.api.routes.system_maps import router as system_maps_router
 from modulo.api.routes.teams import router as teams_router
 from modulo.api.routes.templates import router as templates_router
@@ -1408,6 +1410,11 @@ app.add_exception_handler(StorageExhaustedError, storage_exhausted_exception_han
 # callback routes raise instead of returning it, so the saml_acs_attempted
 # audit dependency records an honest outcome="error" for a failed sign-in).
 app.add_exception_handler(SsoCallbackError, sso_callback_error_handler)  # type: ignore[arg-type]
+# FAR-2236: a raised PublishValidationErrorHTTP renders the 200 PublishResponse
+# with validation errors (the publish endpoint raises instead of returning
+# inline, so the system_map_revision_published audit dependency records
+# outcome="error" for a refused publish).
+app.add_exception_handler(PublishValidationErrorHTTP, publish_validation_error_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
 

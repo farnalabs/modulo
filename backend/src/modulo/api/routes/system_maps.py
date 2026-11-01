@@ -72,6 +72,24 @@ from modulo.db.repositories.system_map import SystemMapRepository
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
+
+class PublishValidationErrorHTTP(HTTPException):
+    """422 raised when a system map revision publish fails validation.
+
+    The exception carries the validation errors and the revision so the exception handler
+    can render them as a 200 PublishResponse. Raising (instead of returning)
+    ensures the audited() dependency records outcome="error".
+    """
+
+    def __init__(self, validation_errors: list[PublishValidationError], revision: Any) -> None:
+        self.validation_errors = validation_errors
+        self.revision = revision
+        super().__init__(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"message": "Publish validation failed", "errors": [e.model_dump() for e in validation_errors]},
+        )
+
+
 _CODE_SYSTEM_MAPS_AUDIT_FAILED = "system_maps.audit_failed"
 _CODE_SYSTEM_MAP_LIST = "system_map.list"
 _CODE_SYSTEM_MAP_CREATE = "system_map.create"
@@ -816,11 +834,12 @@ async def publish_system_map_revision_endpoint(
             ]
 
             if not is_valid:
-                # Return validation errors but don't publish
+                # Raise validation error so audited() records outcome="error"
+                # Exception handler will render as 200 PublishResponse with errors
                 await session.flush()
-                return PublishResponse(
+                raise PublishValidationErrorHTTP(
+                    [PublishValidationError(**e) for e in validation_errors],
                     revision=SystemMapRevisionResponse.model_validate(revision),
-                    validation_errors=[PublishValidationError(**e) for e in validation_errors],
                 )
 
             # Publish the revision
