@@ -52,6 +52,31 @@ async def test_create_model_backend(rls_session: AsyncSession, test_org: uuid.UU
     assert mb.organisation_id == test_org
 
 
+async def test_create_model_backend_defaults_to_active(
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    mb = await create_model_backend(rls_session, **_mb_kwargs(test_org, test_user, suffix="-default"))
+    assert mb.status == "active"
+
+
+async def test_pending_setup_backend_becomes_active_on_credential_save(
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """FAR-2280: MCP creates the row pending_setup; completing setup flips it to active."""
+    mb = await create_model_backend(
+        rls_session,
+        **{
+            **_mb_kwargs(test_org, test_user, suffix="-pending"),
+            "credentials_ciphertext": b"",
+            "status": "pending_setup",
+        },
+    )
+    assert mb.status == "pending_setup"
+    updated = await update_model_backend(rls_session, mb.id, {"credentials_ciphertext": b"enc", "status": "active"})
+    assert updated is not None
+    assert updated.status == "active"
+
+
 async def test_get_model_backend_returns_existing(
     rls_session: AsyncSession,
     test_org: uuid.UUID,
