@@ -297,6 +297,31 @@ def test_gate_terminalises_node_started_run_with_observed_sandbox_activity() -> 
     assert "durable sandbox activity" in decision.reason
 
 
+def test_gate_terminalises_nodeless_run_with_observed_sandbox_activity() -> None:
+    """Durable evidence wins before the zero-node requeue arm."""
+    from modulo.core.worker_handoff import _handback_decision
+
+    decision = _handback_decision(
+        _row(dispatch_phase="claimed", observed_activity=True),
+        {"nodes": [{"id": "n1", "idempotent": False}]},
+    )
+
+    assert decision.may_requeue is False
+    assert "durable sandbox activity" in decision.reason
+
+
+def test_gate_requeues_nodeless_self_report_only_run() -> None:
+    """A self-reported-only envelope is not durable engine evidence."""
+    from modulo.core.worker_handoff import _handback_decision
+
+    decision = _handback_decision(
+        _row(dispatch_phase="claimed", observed_activity=False),
+        {"nodes": [{"id": "n1", "idempotent": False}]},
+    )
+
+    assert decision.may_requeue is True
+
+
 def test_gate_honours_never_retry_policy_on_node_started_run() -> None:
     """A policy covering neither failure nor stall forbids the requeue (M1)."""
     from modulo.core.worker_handoff import _handback_decision

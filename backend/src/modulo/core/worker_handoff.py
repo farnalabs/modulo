@@ -91,7 +91,8 @@ from dataclasses import dataclass, replace
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import exists, or_, select, text
+from sqlalchemy import and_, cast, exists, func, literal, or_, select, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
@@ -126,6 +127,42 @@ WORKER_LOST_NOT_REQUEUED_DETAIL = (
 # RLS set_config helper — same contract as the periodic sweeps (the per-org
 # statement runs inside set_config('app.organisation_id', ...)).
 _SQL_SET_ORG_ID = "SELECT set_config('app.organisation_id', :val, true)"
+
+
+def _engine_evidence_expr(column: Any) -> Any:
+    """Return a PostgreSQL expression for engine-owned evidence in one blob.
+
+    ``outputs_json`` and ``node_telemetry_json`` are maps of node id to an
+    envelope.  FAR-1780 stamps only agent-supplied datums in each envelope's
+    ``provenance`` map as ``reported``; every unstamped datum is engine-owned
+    (observed or derived).  A legacy envelope has no map, so its non-provenance
+    keys deliberately remain evidence.  The expression therefore avoids
+    substring or field-name heuristics and follows the persisted datum map.
+    """
+    node_entries = (
+        func.jsonb_each(cast(column, JSONB)).table_valued("node_id", "node_value").render_derived(name="node_entries")
+    )
+    node_value = node_entries.c.node_value
+    datum_keys = func.jsonb_object_keys(node_value).table_valued("datum_keys").render_derived(name="datum_keys")
+    datum_key = datum_keys.c.datum_keys
+    provenance_value = node_value.op("->")(literal("provenance")).op("->>")(datum_key)
+    engine_datum = exists(
+        select(1)
+        .select_from(datum_keys)
+        .where(
+            datum_key != literal("provenance"),
+            provenance_value.is_distinct_from(literal("reported")),
+        )
+    )
+    node_has_evidence = or_(
+        func.jsonb_typeof(node_value).is_distinct_from(literal("object")),
+        engine_datum,
+    )
+    return or_(
+        and_(column.is_not(None), func.jsonb_typeof(column).is_distinct_from(literal("object"))),
+        exists(select(1).select_from(node_entries).where(node_has_evidence)),
+    )
+
 
 # The handback RE-QUEUE arm. Fenced exactly like every other claim-fenced
 # writer:
@@ -337,8 +374,11 @@ async def _load_handback_row(
             RunNodeOutput.run_id == Run.id,
             RunNodeOutput.organisation_id == org_id,
             or_(
-                RunNodeOutput.outputs_json.is_not(None),
-                RunNodeOutput.node_telemetry_json.is_not(None),
+                _engine_evidence_expr(RunNodeOutput.node_telemetry_json),
+                and_(
+                    RunNodeOutput.node_telemetry_json.is_(None),
+                    _engine_evidence_expr(RunNodeOutput.outputs_json),
+                ),
                 RunNodeOutput.raw_output_markers.is_not(None),
                 RunNodeOutput.artifacts_json.is_not(None),
                 RunNodeOutput.schema_enforcement_json.is_not(None),
@@ -454,6 +494,16 @@ def _handback_decision(row: Any, graph_json: Any) -> _HandbackDecision:
     policy_ok, policy_reason = _node_started_policy_allows(row)
     node_start_safe = graph_idempotent and policy_ok
 
+    # Durable evidence wins before every requeue arm, including a row that
+    # otherwise satisfies the zero-node premise. Re-running after any observed
+    # or derived activity can repeat side effects and discard that evidence.
+    if getattr(row, "observed_activity", False):
+        return _HandbackDecision(
+            may_requeue=False,
+            node_start_safe=False,
+            reason="durable sandbox activity was observed; terminalisation is safer than re-execution",
+        )
+
     # age_minutes=0 disables ONLY the age leg (a shutdown hands back runs of
     # ANY age); the in-flight shield leg inside _is_nodeless_zombie_row stays
     # active, so a still-dispatching row is never handed back.
@@ -464,18 +514,6 @@ def _handback_decision(row: Any, graph_json: Any) -> _HandbackDecision:
             may_requeue=False,
             node_start_safe=node_start_safe,
             reason="zero-node retry budget / retry policy excludes a re-dispatch",
-        )
-
-    # A node-started handoff with any durable output, telemetry, marker, or
-    # artifact is proof that the sandbox did valuable work even when the final
-    # node envelope was lost. Re-running would discard observed evidence and may
-    # repeat side effects. Refuse the reset so the fenced terminal write gives
-    # the attempt a durable, inspectable fate instead.
-    if getattr(row, "observed_activity", False):
-        return _HandbackDecision(
-            may_requeue=False,
-            node_start_safe=False,
-            reason="durable sandbox activity was observed; terminalisation is safer than re-execution",
         )
 
     if not graph_idempotent:
