@@ -208,26 +208,52 @@ def _validate_inventory_presence(manifest: dict[str, Any]) -> None:
             raise ValueError(f"missing required {service} binary from inventory: {', '.join(missing)}")
 
 
+def _require_metadata_map(name: str, requirement: dict[str, Any]) -> dict[str, Any]:
+    """The per-binary metadata map for one service, or a failure when it is absent."""
+    metadata_map = requirement.get("metadata")
+    if not isinstance(metadata_map, dict):
+        raise ValueError(f"required {name} metadata is missing from manifest")
+    return metadata_map
+
+
+def _require_binary_file(name: str, path: Path) -> int:
+    """Require a bundled binary to exist and be non-empty; return its size in bytes."""
+    if not path.is_file():
+        raise ValueError(f"required {name} binary is missing or empty: {path}")
+    size = path.stat().st_size
+    if size == 0:
+        raise ValueError(f"required {name} binary is missing or empty: {path}")
+    return size
+
+
+def _assert_metadata_matches(name: str, binary: str, metadata: Any, path: Path, size: int) -> None:
+    """Require the manifest's recorded sha256 and size to describe the bundled file itself."""
+    if not isinstance(metadata, dict):
+        raise ValueError(f"required {name} binary metadata is invalid: {binary}")
+    if metadata.get("sha256") != _hash_file(path):
+        raise ValueError(f"required {name} binary hash does not match manifest: {path}")
+    if metadata.get("size_bytes") != size:
+        raise ValueError(f"required {name} binary size does not match manifest: {path}")
+
+
+def _validate_requirement_binaries(
+    name: str, requirement: dict[str, Any], native_root: Path, metadata_map: dict[str, Any]
+) -> None:
+    """Verify every binary one service must ship exists on disk and matches its manifest entry."""
+    for binary in requirement["binaries"]:
+        _validate_binary_name(binary, name)
+        path = _resolve_beneath(native_root, binary, f"{name} binary")
+        size = _require_binary_file(name, path)
+        if binary not in metadata_map:
+            raise ValueError(f"required {name} binary metadata is missing from manifest: {binary}")
+        _assert_metadata_matches(name, binary, metadata_map[binary], path, size)
+
+
 def _validate_binary_metadata(manifest: dict[str, Any], root: Path) -> None:
     for name, requirement in manifest["native_requirements"].items():
         native_root = _resolve_beneath(root, requirement["relative_path"], f"{name} relative path")
-        metadata_map = requirement.get("metadata")
-        if not isinstance(metadata_map, dict):
-            raise ValueError(f"required {name} metadata is missing from manifest")
-        for binary in requirement["binaries"]:
-            _validate_binary_name(binary, name)
-            path = _resolve_beneath(native_root, binary, f"{name} binary")
-            if not path.is_file() or path.stat().st_size == 0:
-                raise ValueError(f"required {name} binary is missing or empty: {path}")
-            if binary not in metadata_map:
-                raise ValueError(f"required {name} binary metadata is missing from manifest: {binary}")
-            metadata = metadata_map[binary]
-            if not isinstance(metadata, dict):
-                raise ValueError(f"required {name} binary metadata is invalid: {binary}")
-            if metadata.get("sha256") != _hash_file(path):
-                raise ValueError(f"required {name} binary hash does not match manifest: {path}")
-            if metadata.get("size_bytes") != path.stat().st_size:
-                raise ValueError(f"required {name} binary size does not match manifest: {path}")
+        metadata_map = _require_metadata_map(name, requirement)
+        _validate_requirement_binaries(name, requirement, native_root, metadata_map)
 
 
 def validate(manifest_path: Path, schema_path: Path, bundle_path: Path) -> dict[str, Any]:

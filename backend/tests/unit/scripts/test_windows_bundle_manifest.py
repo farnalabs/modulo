@@ -294,6 +294,25 @@ def test_manifest_rejects_changed_native_hash(tmp_path: Path) -> None:
         validate(manifest_path, _SCHEMA, bundle)
 
 
+def test_manifest_rejects_an_empty_native_binary(tmp_path: Path) -> None:
+    bundle, manifest_path = _bundle(tmp_path)
+    (bundle / "postgres" / "bin" / "initdb.exe").write_bytes(b"")
+
+    with pytest.raises(ValueError, match="binary is missing or empty"):
+        validate(manifest_path, _SCHEMA, bundle)
+
+
+def test_manifest_rejects_a_size_that_disagrees_with_the_bundled_binary(tmp_path: Path) -> None:
+    bundle, manifest_path = _bundle(tmp_path)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    recorded = data["native_requirements"]["postgresql"]["metadata"]["initdb.exe"]["size_bytes"]
+    data["native_requirements"]["postgresql"]["metadata"]["initdb.exe"]["size_bytes"] = recorded + 1
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="size does not match"):
+        validate(manifest_path, _SCHEMA, bundle)
+
+
 # ---------------------------------------------------------------------------
 # Builder output-path guard: exercised through the real script so the guard that
 # actually runs in the build is the guard that is proven.
@@ -376,6 +395,26 @@ def test_builder_refuses_an_unsafe_output_directory(
     normalised = _plain(combined)
     assert result.returncode != 0
     assert expected_refusal in normalised
+    assert (fake / "keep-me.txt").exists()
+
+
+@pytest.mark.skipif(_PWSH is None, reason="pwsh 7 is required to exercise the bundle builder")
+def test_builder_refuses_an_absolute_output_directory_outside_the_repository(tmp_path: Path) -> None:
+    fake = _fake_repo(tmp_path)
+    elsewhere = tmp_path / "elsewhere" / "windows-bundle"
+
+    result = _run_builder(
+        fake / "scripts" / _BUILDER.name,
+        "-OutputDirectory",
+        str(elsewhere),
+        "-ValidateOnly",
+        workdir=fake,
+    )
+
+    normalised = _plain(result.stdout + result.stderr)
+    assert result.returncode != 0
+    assert "not strictly beneath the repository root" in normalised
+    assert not elsewhere.exists()
     assert (fake / "keep-me.txt").exists()
 
 

@@ -77,6 +77,137 @@ function Fail([string]$Message) {
 # Safety: paths that may be written into or recursively deleted
 # ---------------------------------------------------------------------------
 
+function Get-PlatformPathComparison {
+    <#
+    .SYNOPSIS
+    The string comparison a path-containment guard must use on this platform.
+
+    Windows and macOS filesystems are case-insensitive, so a case-sensitive
+    comparison there would let a differently-cased path slip past a guard.
+    #>
+    if ($IsWindows -or $IsMacOS) {
+        return [StringComparison]::OrdinalIgnoreCase
+    }
+    return [StringComparison]::Ordinal
+}
+
+function Get-NormalizedFullPath {
+    <#
+    .SYNOPSIS
+    The absolute form of a path, with any trailing directory separators removed.
+
+    Trimming the trailing separator is what lets two paths be compared as
+    ancestors ("C:\repo" against "C:\repo\") without a prefix mismatch.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+
+    $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    return [IO.Path]::GetFullPath($Path).TrimEnd($separators)
+}
+
+function Resolve-OutputCandidatePath {
+    <#
+    .SYNOPSIS
+    Resolve -OutputDirectory against the repository root when it is not already rooted.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$RootFull,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$OutputDirectory
+    )
+
+    $candidate = if ([IO.Path]::IsPathRooted($OutputDirectory)) {
+        $OutputDirectory
+    } else {
+        Join-Path $RootFull $OutputDirectory
+    }
+    return Get-NormalizedFullPath -Path $candidate
+}
+
+function Assert-NotFilesystemRoot {
+    <#
+    .SYNOPSIS
+    Refuse a path that IS a filesystem root: there is nothing safely deletable above it.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Reference,
+        [Parameter(Mandatory)][string]$Resolved
+    )
+
+    $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $pathRoot = [IO.Path]::GetPathRoot($Resolved).TrimEnd($separators)
+    if ($Resolved -eq $pathRoot) {
+        Fail "refusing OutputDirectory '$Reference': '$Resolved' is a filesystem root."
+    }
+}
+
+function Assert-NotUserProfilePath {
+    <#
+    .SYNOPSIS
+    Refuse the user profile and any ancestor of it - a recursive delete there is destructive.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Reference,
+        [Parameter(Mandatory)][string]$Resolved,
+        [Parameter(Mandatory)][string]$Separator,
+        [Parameter(Mandatory)][StringComparison]$Comparison
+    )
+
+    if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        return
+    }
+    $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $profileFull = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd($separators)
+    if ($Resolved -eq $profileFull) {
+        Fail "refusing OutputDirectory '$Reference': '$Resolved' is the user profile."
+    }
+    if ($profileFull.StartsWith($Resolved + $Separator, $Comparison)) {
+        Fail "refusing OutputDirectory '$Reference': '$Resolved' is an ancestor of the user profile."
+    }
+}
+
+function Assert-NoGitSegment {
+    <#
+    .SYNOPSIS
+    Refuse an output path whose relative segments include a `.git` directory.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Reference,
+        [Parameter(Mandatory)][string]$Resolved,
+        [Parameter(Mandatory)][string]$Prefix
+    )
+
+    $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $relative = $Resolved.Substring($Prefix.Length)
+    foreach ($segment in $relative.Split($separators, [StringSplitOptions]::RemoveEmptyEntries)) {
+        if ($segment -eq ".git") {
+            Fail "refusing OutputDirectory '$Reference': '$Resolved' is inside a .git directory."
+        }
+    }
+}
+
+function Assert-BeneathRepositoryRoot {
+    <#
+    .SYNOPSIS
+    Refuse anything that is not STRICTLY beneath the repository root, or that lies inside `.git`.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Reference,
+        [Parameter(Mandatory)][string]$Resolved,
+        [Parameter(Mandatory)][string]$RootFull,
+        [Parameter(Mandatory)][string]$Separator,
+        [Parameter(Mandatory)][StringComparison]$Comparison
+    )
+
+    if ($Resolved -eq $RootFull) {
+        Fail "refusing OutputDirectory '$Reference': '$Resolved' is the repository root."
+    }
+    $prefix = $RootFull + $Separator
+    if (-not $Resolved.StartsWith($prefix, $Comparison)) {
+        Fail "refusing OutputDirectory '$Reference': '$Resolved' is not strictly beneath the repository root '$RootFull'."
+    }
+    Assert-NoGitSegment -Reference $Reference -Resolved $Resolved -Prefix $prefix
+}
+
 function Resolve-BundleOutputPath {
     <#
     .SYNOPSIS
@@ -95,41 +226,84 @@ function Resolve-BundleOutputPath {
     if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
         Fail "OutputDirectory must not be empty."
     }
-    $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
     $separator = [IO.Path]::DirectorySeparatorChar
-    $comparison = if ($IsWindows -or $IsMacOS) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
-    $rootFull = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd($separators)
-    $candidate = if ([IO.Path]::IsPathRooted($OutputDirectory)) { $OutputDirectory } else { Join-Path $rootFull $OutputDirectory }
-    $resolved = [IO.Path]::GetFullPath($candidate).TrimEnd($separators)
-
-    $pathRoot = [IO.Path]::GetPathRoot($resolved).TrimEnd($separators)
-    if ($resolved -eq $pathRoot) {
-        Fail "refusing OutputDirectory '$OutputDirectory': '$resolved' is a filesystem root."
-    }
-    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
-        $profileFull = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd($separators)
-        if ($resolved -eq $profileFull) {
-            Fail "refusing OutputDirectory '$OutputDirectory': '$resolved' is the user profile."
-        }
-        if ($profileFull.StartsWith($resolved + $separator, $comparison)) {
-            Fail "refusing OutputDirectory '$OutputDirectory': '$resolved' is an ancestor of the user profile."
-        }
-    }
-    if ($resolved -eq $rootFull) {
-        Fail "refusing OutputDirectory '$OutputDirectory': '$resolved' is the repository root."
-    }
-    $prefix = $rootFull + $separator
-    if (-not $resolved.StartsWith($prefix, $comparison)) {
-        Fail "refusing OutputDirectory '$OutputDirectory': '$resolved' is not strictly beneath the repository root '$rootFull'."
-    }
-    $relative = $resolved.Substring($prefix.Length)
-    $segments = $relative.Split($separators, [StringSplitOptions]::RemoveEmptyEntries)
-    foreach ($segment in $segments) {
-        if ($segment -eq ".git") {
-            Fail "refusing OutputDirectory '$OutputDirectory': '$resolved' is inside a .git directory."
-        }
-    }
+    $comparison = Get-PlatformPathComparison
+    $rootFull = Get-NormalizedFullPath -Path $RepositoryRoot
+    $resolved = Resolve-OutputCandidatePath -RootFull $rootFull -OutputDirectory $OutputDirectory
+    Assert-NotFilesystemRoot -Reference $OutputDirectory -Resolved $resolved
+    Assert-NotUserProfilePath -Reference $OutputDirectory -Resolved $resolved -Separator $separator -Comparison $comparison
+    Assert-BeneathRepositoryRoot -Reference $OutputDirectory -Resolved $resolved -RootFull $rootFull -Separator $separator -Comparison $comparison
     return $resolved
+}
+
+function Get-ParentPathOrFail {
+    <#
+    .SYNOPSIS
+    The parent directory of $Path, or a failure when the filesystem root is reached first.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Reference
+    )
+
+    $parent = [IO.Directory]::GetParent($Path)
+    if ($null -eq $parent) {
+        Fail "refusing OutputDirectory '$Reference': its existing ancestors cannot be traced to the repository root."
+    }
+    return Get-NormalizedFullPath -Path $parent.FullName
+}
+
+function Get-ExistingAncestorChain {
+    <#
+    .SYNOPSIS
+    Every EXISTING directory from $CandidatePath up to and including the repository root.
+
+    The walk always continues to the root, so a chain that cannot be traced there is
+    refused rather than partially checked. Non-existent members are skipped: they
+    cannot be inspected, and nothing is written into them before they are created.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [Parameter(Mandatory)][string]$CandidatePath
+    )
+
+    $existing = [System.Collections.Generic.List[string]]::new()
+    $cursor = Get-NormalizedFullPath -Path $CandidatePath
+    while ($true) {
+        if (Test-Path -LiteralPath $cursor) {
+            $existing.Add($cursor)
+        }
+        if ($cursor -eq $RepositoryRoot) {
+            return $existing
+        }
+        $cursor = Get-ParentPathOrFail -Path $cursor -Reference $CandidatePath
+    }
+}
+
+function Assert-AncestorIsSafe {
+    <#
+    .SYNOPSIS
+    Refuse an existing ancestor that is a reparse point, or that resolves outside the repository.
+
+    A reparse point is refused even when it resolves back inside the repository,
+    because a later recursive delete or copy must never follow a junction/symlink.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Reference,
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$RootFull,
+        [Parameter(Mandatory)][string]$RootPrefix,
+        [Parameter(Mandatory)][StringComparison]$Comparison
+    )
+
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        Fail "refusing OutputDirectory '$Reference': existing ancestor '$Path' is a reparse point (junction/symlink)."
+    }
+    $resolvedItem = Get-NormalizedFullPath -Path (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+    if (($resolvedItem -ne $RootFull) -and (-not $resolvedItem.StartsWith($RootPrefix, $Comparison))) {
+        Fail "refusing OutputDirectory '$Reference': existing ancestor '$Path' resolves outside the repository root."
+    }
 }
 
 function Assert-SafeExistingAncestors {
@@ -146,34 +320,12 @@ function Assert-SafeExistingAncestors {
         [Parameter(Mandatory)][string]$CandidatePath
     )
 
-    $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-    $comparison = if ($IsWindows -or $IsMacOS) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
-    $rootFull = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd($separators)
+    $comparison = Get-PlatformPathComparison
+    $rootFull = Get-NormalizedFullPath -Path $RepositoryRoot
     $rootPrefix = $rootFull + [IO.Path]::DirectorySeparatorChar
-    $cursor = [IO.Path]::GetFullPath($CandidatePath).TrimEnd($separators)
-    $existing = [System.Collections.Generic.List[string]]::new()
-
-    while ($true) {
-        if (Test-Path -LiteralPath $cursor) {
-            $existing.Add($cursor)
-        }
-        if ($cursor -eq $rootFull) { break }
-        $parent = [IO.Directory]::GetParent($cursor)
-        if ($null -eq $parent) {
-            Fail "refusing OutputDirectory '$CandidatePath': its existing ancestors cannot be traced to the repository root."
-        }
-        $cursor = $parent.FullName.TrimEnd($separators)
-    }
-
+    $existing = @(Get-ExistingAncestorChain -RepositoryRoot $rootFull -CandidatePath $CandidatePath)
     foreach ($path in $existing | Sort-Object Length) {
-        $item = Get-Item -LiteralPath $path -Force
-        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-            Fail "refusing OutputDirectory '$CandidatePath': existing ancestor '$path' is a reparse point (junction/symlink)."
-        }
-        $resolvedItem = (Resolve-Path -LiteralPath $path -ErrorAction Stop).Path.TrimEnd($separators)
-        if (($resolvedItem -ne $rootFull) -and (-not $resolvedItem.StartsWith($rootPrefix, $comparison))) {
-            Fail "refusing OutputDirectory '$CandidatePath': existing ancestor '$path' resolves outside the repository root."
-        }
+        Assert-AncestorIsSafe -Reference $CandidatePath -Path $path -RootFull $rootFull -RootPrefix $rootPrefix -Comparison $comparison
     }
 }
 
