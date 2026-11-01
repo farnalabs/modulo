@@ -7,15 +7,21 @@
        desktop (FAR-1851). The `h-[calc(100vh-3.5rem)]` class is only the
        pre-measurement fallback. -->
   <div ref="editorRootRef" data-testid="pipeline-editor-root" class="relative flex h-[calc(100vh-3.5rem)] overflow-hidden" :style="editorFitStyle">
+    <!-- FAR-1812: the live region is a SIBLING of the busy placeholder, never
+         the busy element or its ancestor. AT holds an announcement until a
+         busy wrapper clears, and this role="status" + aria-live element used
+         to unmount instead of clearing aria-busy, so the loading text was
+         never announced (same contract as TableSkeleton.spec.ts). The
+         placeholder shows the text visually; the <output> announces it. -->
     <div
       v-if="loading || historicResolving"
-      class="flex flex-1 items-center justify-center"
-      role="status"
-      aria-live="polite"
-      aria-busy="true"
+      class="flex flex-1 flex-col items-center justify-center gap-2"
     >
-      <span>{{ $t('views.PipelineEditorView.loading_editor') }}</span>
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" aria-hidden="true" />
+      <output class="sr-only" aria-live="polite">{{ $t('views.PipelineEditorView.loading_editor') }}</output>
+      <div class="flex items-center justify-center gap-2" aria-busy="true">
+        <span aria-hidden="true">{{ $t('views.PipelineEditorView.loading_editor') }}</span>
+        <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" aria-hidden="true" />
+      </div>
     </div>
     <!-- FAR-1812: graceful miss — an unknown/deleted version never renders a
          raw error or a dead page; it offers the route back to the latest

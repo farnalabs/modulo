@@ -91,6 +91,19 @@ describe('AppLayout', () => {
     enteredHeading.remove()
   })
 
+  it('falls back to focusing the main landmark when the route has no page heading', () => {
+    const shellMain = document.createElement('main')
+    shellMain.tabIndex = -1
+    shellMain.dataset.mainLandmark = ''
+    document.body.append(shellMain)
+    ;(document.activeElement as HTMLElement | null)?.blur()
+
+    focusRouteContent()
+
+    expect(document.activeElement).toBe(shellMain)
+    shellMain.remove()
+  })
+
   it('renders plan badge by default', async () => {
     const wrapper = mount(AppLayout, {
       global: {

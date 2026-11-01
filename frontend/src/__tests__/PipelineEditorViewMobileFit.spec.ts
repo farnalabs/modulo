@@ -14,11 +14,18 @@ const useApiFns = vi.hoisted(() => ({
   post: vi.fn(),
 }))
 
+// The view's page-level `loading` ref is what the loading region gates on, so
+// the mock exposes it for the live-region test below.
+const dataFetchLoading = vi.hoisted(() => ({
+  ref: null as null | { value: boolean },
+}))
+
 vi.mock('../composables/useDataFetch', async () => {
   const { ref } = await import('vue')
+  dataFetchLoading.ref = ref(false)
   return {
     useDataFetch: () => ({
-      loading: ref(false),
+      loading: dataFetchLoading.ref,
       error: ref(null),
       data: ref(undefined),
       fetched: ref(true),
@@ -146,6 +153,7 @@ function sheetFor(wrapper: ReturnType<typeof mount>, closeTestId: string): HTMLE
 }
 
 beforeEach(async () => {
+  if (dataFetchLoading.ref) dataFetchLoading.ref.value = false
   const { useRoute } = await import('vue-router')
   const route = (useRoute as unknown as () => { params: Record<string, string> })()
   route.params = { id: 'test-pipeline-id' }
@@ -905,6 +913,115 @@ describe('PipelineEditorView — toolbar popover anchoring (FAR-1899 changed-lin
     await nextTick()
     expect(wrapper.find('[data-testid="pipeline-editor-save-as-dropdown"]').exists()).toBe(true)
 
+    wrapper.unmount()
+  })
+})
+
+describe('PipelineEditorView — loading live region (FAR-1812)', () => {
+  it('announces loading without burying the live region under aria-busy', async () => {
+    dataFetchLoading.ref!.value = true
+    const wrapper = mountEditor()
+    await nextTick()
+
+    const live = wrapper.find('output')
+    expect(live.exists()).toBe(true)
+    expect(live.attributes('aria-live')).toBe('polite')
+    expect(live.text()).toBe('Loading pipeline editor...')
+
+    // A busy ancestor defers the live-region announcement until it clears —
+    // and this region unmounts instead of clearing busy. The placeholder is
+    // the thing that is actually busy, so it is a sibling, never an ancestor.
+    expect(live.element.closest('[aria-busy="true"]')).toBeNull()
+    expect(wrapper.find('[aria-busy="true"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-busy="true"]').find('output').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+})
+
+describe('PipelineEditorView — toolbar popover keyboard traps (review follow-up)', () => {
+  function firstFocusable(root: HTMLElement): HTMLElement | undefined {
+    return root.querySelector<HTMLElement>(FOCUSABLE_SELECTOR) ?? undefined
+  }
+
+  function lastFocusable(root: HTMLElement): HTMLElement | undefined {
+    return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).at(-1)
+  }
+
+  function dispatchKey(key: string, shiftKey = false): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true })
+    document.dispatchEvent(event)
+    return event
+  }
+
+  it('traps Tab inside the open run dialog', async () => {
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.openRunDialog()
+    await nextTick()
+
+    const root = wrapper.get('[data-testid="pipeline-editor-run-dialog-backdrop"] dialog')
+      .element as HTMLElement
+    lastFocusable(root)!.focus()
+    const event = dispatchKey('Tab')
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(firstFocusable(root))
+    wrapper.unmount()
+  })
+
+  it('traps Tab inside the retry-policy panel and closes it on Escape', async () => {
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.toggleRetryPolicy()
+    await nextTick()
+
+    const root = wrapper.get('[data-testid="pipeline-editor-retry-policy-panel"]')
+      .element as HTMLElement
+    lastFocusable(root)!.focus()
+    const tab = dispatchKey('Tab')
+    expect(tab.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(firstFocusable(root))
+
+    dispatchKey('Escape')
+    await nextTick()
+    expect(vm.retryPolicyOpen).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('traps Tab inside the autonomy panel', async () => {
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.toggleAutonomyPanel()
+    await nextTick()
+
+    const root = wrapper.get('[data-testid="pipeline-editor-autonomy-panel-dialog"]')
+      .element as HTMLElement
+    lastFocusable(root)!.focus()
+    const tab = dispatchKey('Tab')
+
+    expect(tab.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(firstFocusable(root))
+    wrapper.unmount()
+  })
+
+  it('moves focus to the first save-as menu item when the menu opens', async () => {
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    setViewport(800)
+    const trigger = wrapper.get('[data-testid="pipeline-editor-save-as-template"]').element as HTMLElement
+    trigger.getBoundingClientRect = () =>
+      ({ top: 60, right: 140, bottom: 100, left: 40, width: 100, height: 40, x: 40, y: 60, toJSON: () => ({}) }) as DOMRect
+
+    await wrapper.get('[data-testid="pipeline-editor-save-as-template"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    const firstItem = wrapper.get('[data-testid="pipeline-editor-save-as-dropdown"] [role="menuitem"]')
+    expect(document.activeElement).toBe(firstItem.element)
     wrapper.unmount()
   })
 })
