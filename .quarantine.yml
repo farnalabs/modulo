@@ -14,6 +14,15 @@
 #   owner: "GitHub username or team" (optional)
 
 quarantine:
+  # Full-suite-only failure: an unrelated earlier test leaks a never-awaited
+  # AsyncMock coroutine that CPython's generational GC happens to collect
+  # while this test runs, so pytest's unraisable-warning gate attributes the
+  # failure here. The test passes in isolation and with forced gc.collect();
+  # the leaking test still needs to be located and fixed (FAR hygiene).
+  - test_id: "tests/unit/test_guardrail_correction_e2e.py::test_e2e_resume_budget_exhausted_records_interrupted"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run"
+    expiry: "2026-11-15"
+    owner: "platform-team"
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
   #   reason: "Flaky due to GitHub API rate limit window — fails ~15% of CI runs"
