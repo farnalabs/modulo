@@ -19,6 +19,39 @@ if (!EMAIL || !PASSWORD) {
   process.exit(1);
 }
 
+// Minimal cookie jar. A browser stores Set-Cookie headers for you; Node's
+// fetch does not, so the cookie-based auth examples (login / refresh / logout)
+// pass a jar to `api()` and replay the cookies themselves.
+class CookieJar {
+  constructor() {
+    this.cookies = new Map();
+  }
+
+  store(res) {
+    // getSetCookie() exists on Node 18.14+ / 20+; older runtimes return an
+    // empty list, which surfaces as a clear "no CSRF token" error below.
+    const setCookies = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+    for (const header of setCookies) {
+      const pair = header.split(";")[0];
+      const eq = pair.indexOf("=");
+      if (eq === -1) continue;
+      const name = pair.slice(0, eq).trim();
+      const value = pair.slice(eq + 1).trim();
+      // An empty value is the server clearing the cookie (logout).
+      if (value === "") this.cookies.delete(name);
+      else this.cookies.set(name, value);
+    }
+  }
+
+  get(name) {
+    return this.cookies.get(name);
+  }
+
+  header() {
+    return [...this.cookies].map(([name, value]) => `${name}=${value}`).join("; ");
+  }
+}
+
 async function api(path, options = {}) {
   if (typeof path !== "string" || !path.startsWith("/") || path.includes("://")) {
     throw new Error(`Invalid API path: ${logSafe(path)}`);
@@ -31,10 +64,17 @@ async function api(path, options = {}) {
   if (url.origin !== base.origin) {
     throw new Error(`API path escapes base origin: ${logSafe(path)}`);
   }
+  const { jar, ...init } = options;
+  const headers = { "Content-Type": "application/json", ...init.headers };
+  if (jar) {
+    const cookie = jar.header();
+    if (cookie) headers.Cookie = cookie;
+  }
   const res = await fetch(url, { // NOSONAR [jssecurity:S7044,jssecurity:S8476] -- url origin pinned above
-    ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
+    ...init,
+    headers,
   });
+  if (jar) jar.store(res);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
@@ -63,4 +103,4 @@ async function runMain(mainFn) {
   }
 }
 
-module.exports = { BASE_URL, EMAIL, PASSWORD, api, logSafe, auth, runMain };
+module.exports = { BASE_URL, EMAIL, PASSWORD, api, logSafe, auth, runMain, CookieJar };
