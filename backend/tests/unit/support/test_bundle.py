@@ -563,6 +563,67 @@ def test_build_refuses_a_quoted_credential_when_the_seed_layer_is_bypassed(
     assert not out_path.exists()
 
 
+MULTI_TOKEN_AUTH_LOG_LINES = (
+    "probe: redis-cli AUTH default modulo",
+    'probe: redis-cli AUTH appuser "modulo"',
+    "probe: redis-cli auth default 'modulo'",
+    "probe: redis-cli AUTH alice something modulo",
+)
+
+
+@pytest.mark.parametrize("log_line", MULTI_TOKEN_AUTH_LOG_LINES)
+def test_multi_token_auth_log_line_never_reaches_a_member(tmp_path: Path, log_line: str) -> None:
+    """A `redis-cli AUTH <user> <password>` trace must not ship the password."""
+    sources = BundleSources(
+        install_shape="container",
+        members={"version.txt": "modulo version: test", "logs/app.log.tail": log_line},
+        secret_values={QUICKSTART_PASSWORD: REDACTED},
+    )
+    result = build_bundle(tmp_path / "auth.zip", sources=sources)
+    with zipfile.ZipFile(result.path) as archive:
+        tail = archive.read("logs/app.log.tail").decode()
+    assert QUICKSTART_PASSWORD not in tail
+    assert REDACTED in tail
+    assert result.redaction.seed_exact >= 1
+
+
+@pytest.mark.parametrize("log_line", MULTI_TOKEN_AUTH_LOG_LINES)
+def test_build_refuses_a_multi_token_auth_leak_when_the_seed_layer_is_bypassed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, log_line: str
+) -> None:
+    """Prove-the-fix at the build boundary: the gate alone still refuses."""
+    sources = BundleSources(
+        install_shape="container",
+        members={"version.txt": "modulo version: test", "logs/app.log.tail": log_line},
+        secret_values={QUICKSTART_PASSWORD: REDACTED},
+    )
+    monkeypatch.setattr(
+        bundle_module,
+        "redact_text",
+        lambda text, _secrets: RedactionResult(text=text, counts=RedactionCounts()),
+    )
+    out_path = tmp_path / "refused-auth.zip"
+    with pytest.raises(RedactionSelfCheckError) as caught:
+        build_bundle(out_path, sources=sources)
+    assert caught.value.member == "logs/app.log.tail"
+    assert not out_path.exists()
+
+
+def test_prose_with_the_weak_word_is_still_accepted_in_a_member(tmp_path: Path) -> None:
+    """`password authentication failed for user modulo` is prose, not a credential."""
+    prose = "FATAL: password authentication failed for user modulo\n"
+    sources = BundleSources(
+        install_shape="container",
+        members={"version.txt": "modulo version: test", "logs/postgres.log.tail": prose},
+        secret_values={QUICKSTART_PASSWORD: REDACTED},
+    )
+    result = build_bundle(tmp_path / "prose.zip", sources=sources)
+    with zipfile.ZipFile(result.path) as archive:
+        tail = archive.read("logs/postgres.log.tail").decode()
+    assert tail == prose
+    assert result.redaction.seed_exact == 0
+
+
 def test_inventory_is_gated_for_shapes_not_for_seeded_boilerplate() -> None:
     """The two gate calls have different scopes, on purpose."""
     seed = {QUICKSTART_PASSWORD: REDACTED}

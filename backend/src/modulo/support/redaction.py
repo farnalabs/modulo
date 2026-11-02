@@ -44,13 +44,22 @@ punctuation is tolerated, so ``requirepass "x"``, ``password: 'x'``,
 are all credential contexts. A key must be a whole token, so the ``auth``
 inside ``authentication`` never counts.
 
+The value is not necessarily the FIRST token after the key. ``redis-cli
+AUTH <username> <password>`` — the documented Redis 6 ACL form — puts the
+password second, and a shell trace can carry further command tokens before it.
+So up to :data:`MAX_CREDENTIAL_VALUE_TOKENS` tokens after a keyword are
+candidate value positions and every one of them is scrubbed when it holds a
+weak seed. The bound is small and explicit: it covers the documented command
+shapes without turning free prose into a credential command.
+
 That structural detector is shared with the gate, which means a bug in it would
 be invisible to the gate (one detector = a detector miss is a gate miss too).
 The gate therefore adds a SECOND, INDEPENDENT check
 (:func:`_weak_seed_near_credential_keyword`): any occurrence of the exact weak
-seed value within :data:`MAX_SEED_KEYWORD_GAP` characters of a credential
-keyword is a leak, whatever the separator looks like and whether or not the
-structural parse understood it. The gate fails closed on either check.
+seed value as one of the (bounded) tokens after a credential keyword is a leak,
+regardless of how many intervening tokens such as a username sit in between,
+whatever the separator looks like and whether or not the structural parse
+understood it. The gate fails closed on either check.
 """
 
 from __future__ import annotations
@@ -101,7 +110,7 @@ MIN_DISTINCTIVE_SEED_LENGTH: Final[int] = 12
 
 #: Keys that introduce a credential VALUE. A weak seed value is only scrubbed
 #: (and only detected) where one of these introduces a value, or sits within
-#: :data:`MAX_SEED_KEYWORD_GAP` characters of one.
+#: :data:`MAX_CREDENTIAL_VALUE_TOKENS` tokens of one.
 _CREDENTIAL_CONTEXT_KEYS: Final[str] = (
     r"(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|private[_-]?key|"
     r"access[_-]?key|hmac|requirepass|fernet[_-]?key|auth)"
@@ -132,19 +141,17 @@ _VALUE_TOKEN: Final[str] = (
 )
 
 #: ``KEY`` + tolerated separator + value token, as one structural match.
-_CREDENTIAL_CONTEXT_RE: Final[re.Pattern[str]] = re.compile(
-    rf"(?i)(?<![A-Za-z0-9]){_CREDENTIAL_CONTEXT_KEYS}(?![A-Za-z0-9])"
-    rf"{_KEY_VALUE_SEPARATOR}{_VALUE_TOKEN}"
-)
+_SEPARATOR_RE: Final[re.Pattern[str]] = re.compile(_KEY_VALUE_SEPARATOR)
+_VALUE_TOKEN_RE: Final[re.Pattern[str]] = re.compile(_VALUE_TOKEN)
 
-#: A weak seed counts as a leak if it begins within this many characters of the
-#: END of a credential keyword. Eight spans every realistic separator
-#: (``"x"``, ``: 'x'``, ``":"x"``, an aligned ``=``) while staying far below
-#: the distance in ordinary prose: ``password authentication failed for user
-#: modulo`` leaves 32 characters between the keyword and the word, so it is not
-#: flagged. This is the gate's INDEPENDENT backstop — it never consults the
-#: structural tokeniser above.
-MAX_SEED_KEYWORD_GAP: Final[int] = 8
+#: How many tokens after a credential keyword can be the credential VALUE.
+#: ``redis-cli AUTH <username> <password>`` (Redis 6 ACL form) puts the
+#: password SECOND and a shell trace can carry a command token before the
+#: username, so the FIRST-token-only parse leaked every one of those shapes.
+#: The bound is deliberately small: three tokens covers the documented command
+#: forms while staying far short of free prose, where the word can sit many
+#: tokens away (``password authentication failed for user modulo`` is five).
+MAX_CREDENTIAL_VALUE_TOKENS: Final[int] = 3
 
 
 def is_distinctive_seed(value: str) -> bool:
@@ -170,15 +177,48 @@ def _bounded_occurrences(text: str, value: str, start: int, end: int) -> list[tu
     return spans
 
 
+def _value_token_spans_after(text: str, start: int) -> list[tuple[int, int]]:
+    """Bounded spans of the value tokens a credential keyword introduces.
+
+    The credential VALUE is not always the first token after its keyword: the
+    documented Redis 6 ACL form is ``AUTH <username> <password>``, so the
+    password is the second token, and a shell trace can carry a command token
+    before the username. Up to :data:`MAX_CREDENTIAL_VALUE_TOKENS` tokens are
+    therefore returned as candidate value positions.
+
+    Only the first token may follow a newline (a YAML value on the next line);
+    the rest of the window must stay on that token's line, so a multi-token
+    window can never drift into unrelated prose on a later line.
+    """
+    spans: list[tuple[int, int]] = []
+    position = start
+    while len(spans) < MAX_CREDENTIAL_VALUE_TOKENS:
+        # The separator pattern is zero-or-more, so it always matches; the
+        # ``None`` arm exists only to satisfy the type checker.
+        separator = _SEPARATOR_RE.match(text, position)
+        separator_end = separator.end() if separator is not None else position
+        if spans and "\n" in text[position:separator_end]:
+            break
+        token = _VALUE_TOKEN_RE.match(text, separator_end)
+        if token is None:
+            break
+        spans.append(token.span())
+        position = token.end()
+    return spans
+
+
 def _credential_value_spans(text: str) -> list[tuple[int, int]]:
-    """Spans of *text* that occupy a credential VALUE position.
+    """Spans of *text* that occupy a candidate credential VALUE position.
 
     The structural parse shared by the redaction layer and the gate: find a
-    credential key, tolerate any realistic separator, then take the value token
-    that follows it. The span covers only the value token (its own quoting
-    included), never the key or the separator.
+    credential key, then take up to :data:`MAX_CREDENTIAL_VALUE_TOKENS` value
+    tokens that follow it. A span covers only a value token (its own quoting
+    included), never the key, the separator, or the intervening username.
     """
-    return [match.span("value") for match in _CREDENTIAL_CONTEXT_RE.finditer(text)]
+    spans: list[tuple[int, int]] = []
+    for keyword in _CREDENTIAL_KEYWORD_RE.finditer(text):
+        spans.extend(_value_token_spans_after(text, keyword.end()))
+    return spans
 
 
 def _weak_seed_occurrences(text: str, value: str) -> list[tuple[int, int]]:
@@ -198,21 +238,20 @@ def _seed_leak_occurrences(text: str, value: str) -> list[tuple[int, int]]:
 
 
 def _weak_seed_near_credential_keyword(text: str, value: str) -> bool:
-    """Independent gate backstop: a weak *value* close to a credential keyword.
+    """Independent gate backstop: a weak *value* in a credential token window.
 
-    Deliberately does NOT use :func:`_credential_value_spans`. Any occurrence of
-    the exact seed value beginning within :data:`MAX_SEED_KEYWORD_GAP`
-    characters of a credential keyword's end is a leak, so an unfamiliar
-    separator or a tokeniser miss cannot hide one.
+    Deliberately does NOT use :func:`_credential_value_spans` (the structural
+    parse shared with the scrub layer). It re-finds the credential keyword and
+    checks the exact seed value against each of the bounded value-token
+    positions that follow it. So a detector miss in the layer cannot blind the
+    gate: an unfamiliar separator, or any number of intervening tokens such as
+    a username, cannot hide a value that sits within
+    :data:`MAX_CREDENTIAL_VALUE_TOKENS` tokens of a credential keyword.
     """
-    window = MAX_SEED_KEYWORD_GAP + len(value)
     for keyword in _CREDENTIAL_KEYWORD_RE.finditer(text):
-        start = keyword.end()
-        # The search window ends at start + gap + len(value), so any occurrence
-        # found necessarily BEGINS within MAX_SEED_KEYWORD_GAP of the keyword —
-        # no separate distance comparison (and no unreachable branch) is needed.
-        if _bounded_occurrences(text, value, start, min(len(text), start + window)):
-            return True
+        for start, end in _value_token_spans_after(text, keyword.end()):
+            if _bounded_occurrences(text, value, start, end):
+                return True
     return False
 
 
@@ -409,8 +448,10 @@ def assert_redaction_proven(
             # redaction layer, so a bug in it would be invisible here — one
             # detector means a detector miss is a gate miss. This check depends
             # on neither the separator shape nor the structural tokeniser: any
-            # occurrence of the exact weak seed value within
-            # MAX_SEED_KEYWORD_GAP characters of a credential keyword is a leak.
+            # occurrence of the exact weak seed value in the bounded token
+            # window after a credential keyword (MAX_CREDENTIAL_VALUE_TOKENS)
+            # is a leak, however many intervening tokens such as a username sit
+            # between the keyword and the value.
             if not is_distinctive_seed(secret) and _weak_seed_near_credential_keyword(scrubbed, secret):
                 raise RedactionSelfCheckError(
                     name,
