@@ -10,7 +10,15 @@ from modulo.db.models.base import OrgScoped
 class OrgApiKey(OrgScoped):
     __tablename__ = "org_api_keys"
     __table_args__ = (
-        CheckConstraint("role IN ('operator', 'runner')", name="ck_org_api_keys_role"),
+        # FAR-2281: the role ceiling is split by credential PROVENANCE. An
+        # org/team/run-scoped key is an unattributed machine identity, capped
+        # at operator/runner; a user-scoped key is human-linked (its owner's
+        # live org role is the ceiling) and may carry admin. The migration
+        # (0346) recreates this CHECK with the same predicate.
+        CheckConstraint(
+            "role IN ('operator', 'runner') OR (role = 'admin' AND scope = 'user')",
+            name="ck_org_api_keys_role",
+        ),
         CheckConstraint("scope IN ('org', 'user')", name="ck_org_api_keys_scope"),
         UniqueConstraint("lookup_prefix", name="uq_org_api_keys_lookup_prefix"),
         # 0271_org_api_keys_revocation_sweep_indexes — per-run key revocation

@@ -4,14 +4,22 @@ All HITL operations are scoped to the authenticated user's organisation.
 Claim, approve, and reject require the run to be in ``awaiting_human`` status.
 
 Claim-token-based approve/reject require the token returned from a successful
-claim.  ``human_only`` gates additionally reject claim/decisions made with a
-non-browser credential: the claim route AND the resume routes (approve /
+claim.  ``human_only`` gates additionally reject claim and decisions made with
+a non-browser credential: the claim route AND the resume routes (approve /
 approve-with-modification / deliver-manual / submit-manual) resolve the gate's
-actual edge config and raise 403 for API-key principals (FAR-610 — the routes
-previously performed no ``human_only`` check at all; FAR-609 extended the same
-check to claim). When the config cannot be resolved but the gate fired (a
-claim row exists), API-key principals are denied too — fail closed, since the
-policy cannot be verified.
+actual edge config and raise 403 for a non-browser principal (FAR-610 — the
+routes previously performed no ``human_only`` check at all; FAR-609 extended
+the same check to claim). When the config cannot be resolved but the gate
+fired (a claim row exists), non-browser principals are denied too — fail
+closed, since the policy cannot be verified.
+
+These routes resolve principals from browser-login JWTs only
+(``get_current_tenant_user`` decodes a user JWT; an ``mk_`` API key is an MCP
+credential), so the non-browser case here is a programmatic JWT (FAR-634).
+There is deliberately NO human-linked authority on the REST surface: the
+user-scoped human-linked API-key path is an MCP credential and is evaluated
+only by the MCP gate under the default-OFF ``mcp_human_linked_hitl_authority``
+flag (ADR 063 step 1).
 
 ``reject_gate`` requires a claim_token, and that token can no longer be
 obtained by a non-browser principal on a ``human_only`` (now the default)
@@ -19,12 +27,13 @@ gate, so non-browser principals can neither claim, decide, NOR reject such a
 gate. Only a principal already holding a claim (e.g. claimed before the
 policy change) can reject; agent-only runs on default ``human_only`` gates
 require browser-human intervention — that is the intended policy, NOT an
-agent escape hatch. The MCP surface (``mcp_server.py``) denies ``human_only``
-claim, approve and deliver-manual to every credential except a consent-derived,
-human-linked OAuth credential (ADR 063 step 1, gated by the org-wide
-``mcp_human_linked_hitl_authority`` flag); ``mk_`` API keys and non-OAuth JWTs
-are never browser sessions and stay denied. ``deliver_manual`` stays
-browser-only regardless.
+agent escape hatch. The MCP surface (``mcp_server.py``) permits a verified,
+eligible consent-derived human-linked OAuth credential or user-scoped
+human-linked API key only when an organisation admin has explicitly enabled
+the default-OFF ``mcp_human_linked_hitl_authority`` flag (ADR 063 step 1).
+Org-, team-, service- and run-scoped API keys and non-OAuth JWTs remain
+denied; normal possession and claim-token requirements still apply.
+``deliver_manual`` stays browser-only regardless.
 """
 
 from __future__ import annotations
@@ -60,12 +69,6 @@ from modulo.api.hitl_answer_validation import (
 )
 from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.human_linkage import (
-    AUTH_TYPE_API_KEY,
-    AUTH_TYPE_JWT,
-    required_permission_for_action,
-    resolve_human_linkage,
-)
 from modulo.auth.jwt import CLIENT_KIND_BROWSER, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
@@ -380,28 +383,16 @@ async def _enforce_human_only_gate(
     default gates require browser-human intervention — that is the intended
     policy, not an agent escape hatch.
 
-    Credential semantics (FAR-610 finding + FAR-634 hardening): REST resolves
-    principals from browser-login JWTs today — org API keys (``mk_``) are
-    accepted solely by the MCP server and the few
-    ``require_permission_any_credential`` routes. FAR-634 extends the
-    credential marker to the JWT-level ``client_kind`` claim (stamped at mint
-    time; legacy tokens without the claim decode as ``browser``): the denial
-    rule is now ``via_api_key OR client_kind != "browser"`` — a future
-    programmatic JWT mint path is denied by construction, and unknown claim
-    values fail closed. HONEST LIMITATION (defense-in-depth, not absolute):
-    in this org agent sessions hold the admin password and mint through the
-    same login endpoint, so a password-minted JWT is indistinguishable from a
-    browser login at issuance — the FAR-611 sweep alarm is the detective
-    control for that residual. Step-up re-auth is a separate product
-    decision (deliberately NOT attempted here). MCP approvals — the observed
-    attack path — were denied outright for ``human_only`` gates in
-    ``mcp_server._check_human_only_gate`` (FAR-634); ADR 063 step 1 (FAR-1957)
-    replaces that hard-coded deny with the SAME shared authority resolver this
-    function now calls, so only a consent-derived, human-linked OAuth credential
-    (when the org-wide ``mcp_human_linked_hitl_authority`` flag is ON) may decide
-    such a gate over MCP. This REST path's own behaviour is unchanged: its
-    credentials are never consent-derived OAuth tokens, so the resolver always
-    reports not-human-linked and the verdict is identical.
+    Credential semantics (FAR-610 finding + FAR-634 hardening): these routes
+    resolve principals from browser-login JWTs only, so a non-browser principal
+    here is a programmatic JWT (FAR-634), and the browser-class short-circuit
+    above remains the UI enforcement surface. There is deliberately NO
+    human-linked authority on REST: the user-scoped human-linked API-key path
+    is an MCP credential, evaluated only by the MCP gate under the default-OFF
+    ``mcp_human_linked_hitl_authority`` flag (ADR 063 step 1). ``deliver_manual``
+    remains browser-only on every surface. Normal possession requirements are
+    unchanged: claim, approve, reject and deliver-manual still require the
+    applicable claim token and gate rules.
 
     Every denial emits a warning log + the ``hitl.human_only_denied`` audit
     event (FAR-634) via :func:`_emit_human_only_denial_audit`, invoked by the
@@ -431,22 +422,16 @@ async def _enforce_human_only_gate(
             review_id=review_id,
             org_id=principal.organisation_id,
         )
-    # ADR 063 step 1: one shared authority resolver for REST and MCP. REST
-    # resolves principals from browser-login JWTs / ``mk_`` API keys — neither
-    # is a consent-derived OAuth access token — so the resolver always reports
-    # not-human-linked here and the verdict is unchanged. Wiring it keeps the
-    # two surfaces on ONE resolver rather than a second bespoke rule; the
-    # browser-class short-circuit above is deliberately NOT reinterpreted.
-    linkage = await resolve_human_linkage(
-        session,
-        org_id=principal.organisation_id,
-        auth_type=AUTH_TYPE_API_KEY if principal.via_api_key else AUTH_TYPE_JWT,
-        account_id=principal.account_id,
-        token_family=None,
-        grants=principal.key_grants,
-        required_permission=required_permission_for_action(action),
+    # No human-linked authority is resolved here: REST principals are
+    # browser-login JWTs, and a non-browser one is always a programmatic JWT
+    # (FAR-634). The user-scoped human-linked API-key path is an MCP credential
+    # handled by ``mcp_server._check_human_only_gate`` under the default-OFF
+    # ``mcp_human_linked_hitl_authority`` flag (ADR 063 step 1).
+    verdict = human_only_denial(
+        config,
+        non_browser_credential=non_browser_credential,
+        gate_fired=gate_fired,
     )
-    verdict = human_only_denial(config, non_browser_credential=not linkage.linked, gate_fired=gate_fired)
     if verdict is not None:
         raise HumanOnlyDenied(
             verdict,

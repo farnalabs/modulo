@@ -350,8 +350,20 @@ _CALLER_SCOPED_SUFFIX = ".self"
 # must never mint an org-wide key (that would escape the user scope entirely),
 # so ``create_api_key`` is pinned org-only: under a user-scoped key the tool
 # is denied, under org keys it behaves exactly as today.
+# FAR-2281: ``review_hitl`` is explicitly ``any`` at the caller-scope leg. This
+# is a narrow reachability exception, not authority: every review_hitl action
+# still passes its permission/grant checks and the later human-linkage plus
+# persona-flag gate. Without this override, the default mutating-tool
+# classification (org-only) denies user-scoped keys before that HITL gate can
+# run. Keep the action keys explicit too because action-level permission
+# resolution takes precedence over the base tool mapping.
 _CALLER_SCOPE_REQUIREMENTS: dict[str, str] = {
     "create_api_key": _CALLER_SCOPE_ORG_ONLY,
+    "review_hitl": _CALLER_SCOPE_ANY,
+    "review_hitl:claim": _CALLER_SCOPE_ANY,
+    "review_hitl:approve": _CALLER_SCOPE_ANY,
+    "review_hitl:reject": _CALLER_SCOPE_ANY,
+    "review_hitl:deliver_manual": _CALLER_SCOPE_ANY,
 }
 
 CALLER_SCOPE_REQUIREMENTS: types.MappingProxyType[str, str] = types.MappingProxyType(_CALLER_SCOPE_REQUIREMENTS)
@@ -421,6 +433,26 @@ _LEG_GRANTS = "grants"
 _LEG_SYSTEM_ADMIN = "system_admin"
 
 
+def _caller_scope_denied(
+    tool: str,
+    action: str | None,
+    permission_key: str,
+    key_scope: str | None,
+    auth_type: str | None,
+) -> bool:
+    """Leg 3: is the call denied by the credential's caller-scope policy?
+
+    Action-specific entries are explicit policy keys too; they are used when
+    present rather than silently collapsing every action back to the base
+    tool's classification.
+    """
+    scope_key = f"{tool}:{action}" if action is not None else tool
+    classification = classify_caller_scope(scope_key, permission_key)
+    if classification == _CALLER_SCOPE_CALLER:
+        return key_scope != "user"
+    return classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key"
+
+
 def _resolve_tool_access_detail(
     *,
     tool: str,
@@ -454,10 +486,7 @@ def _resolve_tool_access_detail(
         return False, "", _LEG_UNMAPPED
 
     # Leg 3: caller-scope (kill-switch-ineligible).
-    classification = classify_caller_scope(tool, permission_key)
-    if classification == _CALLER_SCOPE_CALLER and key_scope != "user":
-        return False, permission_key, _LEG_CALLER_SCOPE
-    if classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key":
+    if _caller_scope_denied(tool, action, permission_key, key_scope, auth_type):
         return False, permission_key, _LEG_CALLER_SCOPE
 
     # Leg 4: role hierarchy (kill-switch-eligible). Fail-closed on a
@@ -720,8 +749,10 @@ def _denial_message(
             return f"Unknown action '{action}' for tool '{tool_name}'"
         return f"Tool '{tool_name}' is not registered in the scope policy"
 
-    # Leg 3: caller-scope (kill-switch-ineligible).
-    classification = classify_caller_scope(normalized, permission_key)
+    # Leg 3: caller-scope (kill-switch-ineligible). Keep action-specific
+    # classification aligned with the resolver's action-level permission key.
+    scope_key = f"{normalized}:{act}" if act is not None else normalized
+    classification = classify_caller_scope(scope_key, permission_key)
     if classification == _CALLER_SCOPE_CALLER and key_scope != "user":
         return (
             f"Tool '{tool_name}' is caller-scoped and requires a user-scoped "

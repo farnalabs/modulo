@@ -110,7 +110,7 @@ async def test_unreadable_grants_fail_closed_with_503() -> None:
     with (
         _patched_engine(factory),
         patch("modulo.auth.dependencies._lookup_api_key_org", AsyncMock(return_value=key.organisation_id)),
-        patch("modulo.auth.dependencies._validate_api_key_in_org", AsyncMock(return_value=(key, "admin"))),
+        patch("modulo.auth.dependencies._validate_api_key_in_org", AsyncMock(return_value=(key, "admin", "human"))),
         patch(
             "modulo.auth.api_key.resolve_key_grants",
             AsyncMock(side_effect=ApiKeyGrantsUnavailableError()),
@@ -129,7 +129,7 @@ async def test_missing_live_membership_is_rejected() -> None:
     with (
         _patched_engine(factory),
         patch("modulo.auth.dependencies._lookup_api_key_org", AsyncMock(return_value=key.organisation_id)),
-        patch("modulo.auth.dependencies._validate_api_key_in_org", AsyncMock(return_value=(key, None))),
+        patch("modulo.auth.dependencies._validate_api_key_in_org", AsyncMock(return_value=(key, None, None))),
         patch("modulo.auth.api_key.resolve_key_grants", AsyncMock(return_value=None)),
         pytest.raises(OrganisationMembershipNotFound),
     ):
@@ -142,7 +142,7 @@ async def test_unclampable_role_is_rejected() -> None:
     with (
         _patched_engine(factory),
         patch("modulo.auth.dependencies._lookup_api_key_org", AsyncMock(return_value=key.organisation_id)),
-        patch("modulo.auth.dependencies._validate_api_key_in_org", AsyncMock(return_value=(key, "admin"))),
+        patch("modulo.auth.dependencies._validate_api_key_in_org", AsyncMock(return_value=(key, "admin", "human"))),
         patch("modulo.auth.api_key.resolve_key_grants", AsyncMock(return_value=None)),
         pytest.raises(OrganisationMembershipNotFound),
     ):
@@ -157,7 +157,7 @@ async def test_resolved_principal_carries_api_key_markers() -> None:
     with (
         _patched_engine(factory),
         patch("modulo.auth.dependencies._lookup_api_key_org", AsyncMock(return_value=key.organisation_id)),
-        patch("modulo.auth.dependencies._validate_api_key_in_org", AsyncMock(return_value=(key, "operator"))),
+        patch("modulo.auth.dependencies._validate_api_key_in_org", AsyncMock(return_value=(key, "operator", "human"))),
         patch("modulo.auth.api_key.resolve_key_grants", AsyncMock(return_value=grants)),
     ):
         principal = await get_current_tenant_user_or_api_key(_credentials(), _settings())
@@ -215,11 +215,14 @@ async def test_validate_api_key_in_org_reads_live_role() -> None:
         patch("modulo.auth.api_key.validate_api_key", AsyncMock(return_value=key)),
         patch("modulo.db.rls.set_rls_org", AsyncMock()),
         patch(
-            "modulo.auth.dependencies.resolve_role_from_membership",
-            AsyncMock(return_value="viewer"),
+            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            AsyncMock(return_value=("viewer", "human")),
         ),
     ):
-        resolved_key, live_role = await _validate_api_key_in_org(_factory(session), _API_KEY, key.organisation_id)
+        resolved_key, live_role, owner_kind = await _validate_api_key_in_org(
+            _factory(session), _API_KEY, key.organisation_id
+        )
 
     assert resolved_key is key
     assert live_role == "viewer"
+    assert owner_kind == "human"

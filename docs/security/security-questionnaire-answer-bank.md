@@ -162,12 +162,16 @@ Evidence: `backend/src/modulo/auth/permissions.py`; `docs/architecture.md`
 
 **Q: Do you support least-privilege API keys?**
 
-A: Yes. Org API keys are always role-scoped (`operator` or `runner`), which is
-the default least-privilege control. An explicit per-key permission grant set -
-narrower than the role bundle - is available but sits behind the
-`api_key_grants` feature flag, which is **default-OFF** on every tier; if the
-customer has not enabled it, answer with the role-scoped answer, not the
-grant-set one.
+A: Yes. Org-scoped API keys are always role-scoped (`operator` or `runner`),
+which is the default least-privilege control. The role ceiling is split by
+credential provenance: a user-scoped key is human-linked and carries its
+owner's live org role, including `admin` (re-read on every call, so a demotion
+or removal degrades or revokes it), while an org/team/service/run-scoped key is
+an unattributed machine identity capped at operator/runner. An explicit per-key
+permission grant set - narrower than the role bundle - is available but sits
+behind the `api_key_grants` feature flag, which is **default-OFF** on every
+tier; if the customer has not enabled it, answer with the role-scoped answer,
+not the grant-set one.
 
 Evidence: `docs/architecture.md` ("API keys"); `modulo_create_api_key` /
 `GET /api/v1/api-keys`; `backend/src/modulo/auth/permissions.py`; the
@@ -199,12 +203,15 @@ A: Pipeline changes are versioned and every run executes against an immutable
 snapshot (frozen graph, models, prompts, schemas, guardrails and policy gates)
 recorded on the run. A human-in-the-loop gate marked `human_only` - the default
 for every gate - interrupts the run until a decision is recorded, and it does so
-at **every** autonomy level: `human_only` overrides autonomy. Such a gate rejects
-API keys and programmatic tokens over REST and MCP. Two conditions must be
-stated with that answer. (1) A browser session may decide a `human_only` gate,
-and so may a consent-derived, human-linked OAuth credential over MCP while the
-org-wide `mcp_human_linked_hitl_authority` flag is on - which is the default on
-every tier; `deliver_manual` stays browser-only. (2) Autonomy only changes the
+at **every** autonomy level: `human_only` overrides autonomy. The normal
+possession and claim-token requirements remain. A browser session may decide a
+`human_only` gate; when an organisation admin explicitly enables the default-OFF,
+org-scoped `mcp_human_linked_hitl_authority` override, an eligible
+consent-derived, human-linked OAuth credential or a verified user-scoped,
+human-linked API key may also act when its grant set covers the action. Org-,
+team-, service- and run-scoped API keys and non-OAuth JWTs remain denied, and
+verification failures fail closed. `deliver_manual` stays browser-only. (2)
+Autonomy only changes the
 outcome for a gate that explicitly opts out with `human_only: false`:
 `notify_on_complete` auto-approves it at run time and `fully_autonomous` skips
 it entirely. The default gate is never skipped.
