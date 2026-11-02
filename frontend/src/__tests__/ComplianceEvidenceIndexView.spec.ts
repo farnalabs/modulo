@@ -97,8 +97,12 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(wrapper.text()).toContain('1')
     expect(wrapper.text()).toContain('Present')
     expect(wrapper.text()).toContain('Observed')
-    expect(wrapper.text()).toContain('10/20/2026')
-    expect(wrapper.text()).toContain('10/22/2026')
+    // The view renders timestamps with the host locale's ``toLocaleString()``,
+    // so the expectation must be derived the same way: a hardcoded US-order
+    // literal ("10/20/2026") only passes on an en-US host and fails for every
+    // developer whose machine formats day-first.
+    expect(wrapper.text()).toContain(new Date('2026-10-20T12:00:00Z').toLocaleString())
+    expect(wrapper.text()).toContain(new Date('2026-10-22T12:00:00Z').toLocaleString())
     expect(wrapper.find('dl').exists()).toBe(true)
     expect(wrapper.findAll('dl dt')).not.toHaveLength(0)
     expect(wrapper.findAll('dl dd')).not.toHaveLength(0)
