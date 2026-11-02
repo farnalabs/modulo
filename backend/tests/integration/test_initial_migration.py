@@ -131,6 +131,17 @@ _MIGRATION_OWNED_CHECKS: dict[str, frozenset[str]] = {
     "variant_groups": frozenset({"ck_variant_groups_max_concurrent_runs", "ck_variant_groups_run_count"}),
 }
 
+# FKs that exist ONLY in migrations — per-(table, constraint) entries. The ORM
+# deliberately omits them (composite FK to a non-PK unique constraint, cyclic
+# table dependency), so the parity diff arrives as ``remove_fk``.
+# permanent (documented repo divergence)
+_MIGRATION_OWNED_FKS: dict[str, frozenset[str]] = {
+    # FAR-2236 (0341): system_maps.published_revision_id -> system_map_revisions
+    # (id, organisation_id). Declared in the migration after both tables exist;
+    # the ORM keeps only a viewonly relationship (see db/models/system_map.py).
+    "system_maps": frozenset({"fk_system_maps_published_revision"}),
+}
+
 # FAR-1902 expand/contract: the retired organisations cost mappings are
 # removed from the ORM in this release, while the physical columns (and the
 # ``ck_organisations_cum_spend`` CHECK) stay until migration
@@ -301,6 +312,7 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
         ):
             return True
         # Migration-owned FKs the ORM must not declare — per-(table, constraint).
+        # FKs the ORM deliberately leaves to the migration, per-constraint.
         return inner[1].name in _MIGRATION_OWNED_FKS.get(inner[1].table.name, frozenset())
     if kind == "add_fk":
         # DB-owned audit-chain FKs the migrations add but the ORM does not declare
