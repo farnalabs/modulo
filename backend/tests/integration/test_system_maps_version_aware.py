@@ -21,6 +21,7 @@ from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.repositories.system_map import SystemMapRepository
@@ -203,3 +204,78 @@ async def test_draft_revision_never_matches_by_time(
     )
     assert found is not None
     assert found.id == rev2_id
+
+
+async def _window_hits(session: AsyncSession, map_id: uuid.UUID, at: datetime) -> list[uuid.UUID]:
+    """All revisions whose effective window contains ``at`` (the raw predicate).
+
+    ``get_revision_by_time`` applies ``LIMIT 1`` so it cannot reveal an
+    overlapping-window data defect; counting here asserts the invariant the
+    limit exists to paper over.
+    """
+    result = await session.execute(
+        text(
+            "SELECT id FROM system_map_revisions "
+            "WHERE system_map_id = :map AND deleted_at IS NULL "
+            "AND effective_from IS NOT NULL AND effective_from <= :at "
+            "AND (effective_to IS NULL OR :at < effective_to)"
+        ),
+        {"map": map_id, "at": at},
+    )
+    return [row.id for row in result.all()]
+
+
+async def test_by_time_on_map_with_empty_history_returns_none(
+    repo: SystemMapRepository,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """A map with no revisions has no active revision at any timestamp."""
+    await set_rls_user_context(rls_session, test_user, "admin")
+    map_obj = await repo.create_map(
+        rls_session,
+        organisation_id=test_org,
+        name=f"Empty History {uuid.uuid4().hex[:8]}",
+        account_id=test_user,
+    )
+
+    found = await repo.get_revision_by_time(
+        rls_session, organisation_id=test_org, system_map_id=map_obj.id, at=datetime.now(UTC)
+    )
+    assert found is None
+    assert not await _window_hits(rls_session, map_obj.id, datetime.now(UTC))
+    assert await repo.get_published_revision(rls_session, organisation_id=test_org, system_map_id=map_obj.id) is None
+
+
+async def test_exactly_one_revision_is_active_at_every_boundary(
+    repo: SystemMapRepository,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """Adjacent half-open windows overlap at no instant: exactly one row matches.
+
+    The shared boundary ``t2`` belongs to rev2 only (rev1's ``effective_to`` is
+    exclusive), and every instant either side matches exactly one revision -
+    never zero inside the timeline and never two.
+    """
+    await set_rls_user_context(rls_session, test_user, "admin")
+    map_id, rev1_id, rev2_id, t1, t2 = await _publish_two_revisions(repo, rls_session, test_org, test_user)
+
+    midpoint = t1 + (t2 - t1) / 2
+    probes = {
+        "start of rev1 window": t1,
+        "inside rev1 window": midpoint,
+        "shared boundary": t2,
+        "after rev2 start": t2 + timedelta(seconds=1),
+        "now": datetime.now(UTC),
+    }
+    for label, at in probes.items():
+        hits = await _window_hits(rls_session, map_id, at)
+        assert len(hits) == 1, f"{label}: expected exactly one active revision, got {hits}"
+
+    assert await _window_hits(rls_session, map_id, t1) == [rev1_id]
+    assert await _window_hits(rls_session, map_id, t2) == [rev2_id]
+    # Before the first publish nothing is active.
+    assert not await _window_hits(rls_session, map_id, t1 - timedelta(seconds=1))

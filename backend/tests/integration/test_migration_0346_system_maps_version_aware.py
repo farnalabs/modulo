@@ -42,15 +42,20 @@ PREV_REV = "0345_system_maps_name_integrity"
 _ORG = "e0e00000-0000-0000-0000-000000000001"
 _LATEST_ARCHIVED_MAP = "e0e00000-0000-0000-0000-000000000002"
 _SUPERSEDED_MAP = "e0e00000-0000-0000-0000-000000000003"
+_DRAFT_ARCHIVED_MAP = "e0e00000-0000-0000-0000-000000000004"
 
 _A_REV1 = "e0e00000-0000-0000-0000-000000000011"
 _A_REV2 = "e0e00000-0000-0000-0000-000000000012"
 _B_REV1 = "e0e00000-0000-0000-0000-000000000021"
 _B_REV2 = "e0e00000-0000-0000-0000-000000000022"
+_C_REV1 = "e0e00000-0000-0000-0000-000000000031"
+_C_REV2 = "e0e00000-0000-0000-0000-000000000032"
+_C_REV3 = "e0e00000-0000-0000-0000-000000000033"
 
 _T1 = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 _T2 = datetime(2026, 1, 2, 12, 0, tzinfo=UTC)
 _T3 = datetime(2026, 1, 3, 12, 0, tzinfo=UTC)
+_T4 = datetime(2026, 1, 4, 12, 0, tzinfo=UTC)
 
 
 def _alembic_config(db_url: str) -> Config:
@@ -105,6 +110,13 @@ def _migrate(iso_url: str, target: str) -> None:
         _alembic_cmd("upgrade", target)
 
 
+def _downgrade(iso_url: str, target: str) -> None:
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setenv("DATABASE_URL", iso_url)
+        mp.setenv("DATABASE_ADMIN_URL", iso_url)
+        _alembic_cmd("downgrade", target)
+
+
 async def _seed_pre_upgrade(iso_url: str) -> None:
     """Seed the pre-0346 revision timeline.
 
@@ -115,17 +127,25 @@ async def _seed_pre_upgrade(iso_url: str) -> None:
     ``_LATEST_ARCHIVED_MAP`` is the defect case: its newest revision was
     explicitly archived and has no successor. ``_SUPERSEDED_MAP`` is the
     normal case: an archived superseded revision plus the current published one.
+    ``_DRAFT_ARCHIVED_MAP`` covers a revision that was NEVER published (a draft
+    archived directly, ``published_at IS NULL``) created after the current
+    published revision: it never had an active window, so it must not be
+    backfilled and must not truncate the published revision's open-ended window.
     """
     engine = create_async_engine(iso_url, poolclass=NullPool)
     rows = (
-        (_A_REV1, _LATEST_ARCHIVED_MAP, 1, "published", _T1, _T1),
-        (_A_REV2, _LATEST_ARCHIVED_MAP, 2, "archived", _T2, _T3),
-        (_B_REV1, _SUPERSEDED_MAP, 1, "archived", _T1, _T2),
-        (_B_REV2, _SUPERSEDED_MAP, 2, "published", _T2, _T2),
+        (_A_REV1, _LATEST_ARCHIVED_MAP, 1, "published", _T1, _T1, _T1),
+        (_A_REV2, _LATEST_ARCHIVED_MAP, 2, "archived", _T2, _T2, _T3),
+        (_B_REV1, _SUPERSEDED_MAP, 1, "archived", _T1, _T1, _T2),
+        (_B_REV2, _SUPERSEDED_MAP, 2, "published", _T2, _T2, _T2),
+        (_C_REV1, _DRAFT_ARCHIVED_MAP, 1, "archived", _T1, _T1, _T2),
+        (_C_REV2, _DRAFT_ARCHIVED_MAP, 2, "published", _T2, _T2, _T2),
+        # Never published: created as a draft at T3, explicitly archived at T4.
+        (_C_REV3, _DRAFT_ARCHIVED_MAP, 3, "archived", None, _T3, _T4),
     )
     async with engine.begin() as conn:
         await conn.execute(text("SET session_replication_role = replica"))
-        for rev_id, map_id, number, status, published_at, updated_at in rows:
+        for rev_id, map_id, number, status, published_at, created_at, updated_at in rows:
             await conn.execute(
                 text(
                     "INSERT INTO system_map_revisions "
@@ -141,7 +161,7 @@ async def _seed_pre_upgrade(iso_url: str) -> None:
                     "number": number,
                     "status": status,
                     "published_at": published_at,
-                    "created_at": published_at,
+                    "created_at": created_at,
                     "updated_at": updated_at,
                 },
             )
@@ -158,6 +178,23 @@ async def _effective_columns_present(engine: AsyncEngine) -> bool:
             )
         )
         return len(result.all()) == 2
+
+
+async def _rls_state(engine: AsyncEngine) -> tuple[bool, bool, bool]:
+    """(enabled, forced, org policy present) for system_map_revisions."""
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT c.relrowsecurity, c.relforcerowsecurity, "
+                    "(SELECT count(*) FROM pg_policies p "
+                    " WHERE p.schemaname = 'public' AND p.tablename = 'system_map_revisions' "
+                    " AND p.policyname = 'rls_org_isolation') AS policy_count "
+                    "FROM pg_class c WHERE c.oid = to_regclass('public.system_map_revisions')"
+                )
+            )
+        ).one()
+    return bool(row.relrowsecurity), bool(row.relforcerowsecurity), row.policy_count == 1
 
 
 async def _windows(engine: AsyncEngine) -> dict[str, dict[str, object]]:
@@ -260,5 +297,78 @@ async def test_superseded_and_current_windows(pre_upgrade_db_url: str) -> None:
         assert await _by_time(engine, _SUPERSEDED_MAP, _T1 + timedelta(hours=1)) == _B_REV1
         assert await _by_time(engine, _SUPERSEDED_MAP, _T2 + timedelta(hours=1)) == _B_REV2
         assert await _by_time(engine, _SUPERSEDED_MAP, _T1 - timedelta(hours=1)) is None
+    finally:
+        await engine.dispose()
+
+
+async def test_never_published_archived_revision_gets_no_window(pre_upgrade_db_url: str) -> None:
+    """A revision archived without ever being published had no active window.
+
+    Drafts can be archived directly. Such a revision has ``published_at IS
+    NULL``: it was never active, so the backfill must leave its effective dates
+    NULL (exactly like a live draft). Including it would do two kinds of damage:
+
+    * it would inherit an ``effective_from`` (its ``created_at``) and be
+      returned by a by-time read as the revision "active" at a timestamp when
+      the map was actually serving the published revision; and
+    * it would become the ``LEAD()`` successor for the current published
+      revision, closing that revision's open-ended window at an arbitrary
+      draft timestamp - so the published revision would disappear from by-time
+      reads before it was ever superseded.
+    """
+    engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
+    try:
+        await _seed_pre_upgrade(pre_upgrade_db_url)
+        _migrate(pre_upgrade_db_url, MIGRATION_REV)
+
+        windows = await _windows(engine)
+
+        superseded = windows[_C_REV1]
+        assert superseded["effective_from"] == _T1
+        assert superseded["effective_to"] == _T2
+
+        current = windows[_C_REV2]
+        assert current["status"] == "published"
+        assert current["effective_from"] == _T2
+        assert current["effective_to"] is None, (
+            "a never-published archived revision must not close the current published revision's window"
+        )
+
+        never_published = windows[_C_REV3]
+        assert never_published["status"] == "archived"
+        assert never_published["effective_from"] is None
+        assert never_published["effective_to"] is None
+
+        # At the archived draft's creation instant the map was still serving
+        # the published revision - exactly one revision is active, and it is
+        # the one that was actually published.
+        assert await _by_time(engine, _DRAFT_ARCHIVED_MAP, _T3 + timedelta(hours=1)) == _C_REV2
+        # The published revision's window stays open-ended.
+        assert await _by_time(engine, _DRAFT_ARCHIVED_MAP, _T4 + timedelta(days=1)) == _C_REV2
+    finally:
+        await engine.dispose()
+
+
+async def test_downgrade_restores_rls_and_backfill_is_idempotent(pre_upgrade_db_url: str) -> None:
+    """The downgrade must leave 0341's RLS intact, and the backfill must be stable.
+
+    The backfill is pure-set from source columns (no wall-clock term), so a
+    downgrade + re-upgrade round trip must reproduce byte-identical windows.
+    """
+    engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
+    try:
+        await _seed_pre_upgrade(pre_upgrade_db_url)
+        _migrate(pre_upgrade_db_url, MIGRATION_REV)
+        first_pass = await _windows(engine)
+        assert await _rls_state(engine) == (True, True, True)
+
+        _downgrade(pre_upgrade_db_url, PREV_REV)
+        assert not await _effective_columns_present(engine)
+        assert await _rls_state(engine) == (True, True, True), (
+            "downgrade must restore 0341's policy, not leave the table without RLS"
+        )
+
+        _migrate(pre_upgrade_db_url, MIGRATION_REV)
+        assert await _windows(engine) == first_pass, "the backfill must be deterministic on re-run"
     finally:
         await engine.dispose()

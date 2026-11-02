@@ -10,15 +10,21 @@ time.
 - effective_from: when this revision became active (set on publish)
 - effective_to: when this revision was superseded (NULL = current)
 
-Backfills existing published AND archived revisions: the earliest revision
-gets effective_from = its published_at (or created_at), and each subsequent
-revision gets effective_from = its published_at and the previous one's
-effective_to = this one's effective_from. The latest published revision has
-effective_to = NULL; the latest revision is closed at its updated_at when it
-is archived, so an explicitly-archived revision is never reported as active
-at a future timestamp. Archived revisions must be backfilled too because a
-re-publish archives the superseded revision, and a by-time read has to find
-it inside its historical window.
+Backfills every revision that was ever published (``published_at IS NOT
+NULL``), including archived ones: the earliest gets effective_from = its
+published_at, and each subsequent revision gets effective_from = its
+published_at and the previous one's effective_to = this one's effective_from.
+The latest *published* revision has effective_to = NULL; the latest revision is
+closed at its updated_at when it is archived, so an explicitly-archived
+revision is never reported as active at a future timestamp. Archived revisions
+must be backfilled too because a re-publish archives the superseded revision,
+and a by-time read has to find it inside its historical window.
+
+A revision with ``published_at IS NULL`` was never published (drafts can be
+archived directly) and never had an active window, so it is left alone: giving
+it one would make a by-time read return a never-published revision as active,
+and would close the current published revision's open-ended window at that
+draft's timestamp.
 
 The downgrade restores the ``rls_org_isolation`` policy installed by 0341:
 the table persists across this migration, so RLS must stay enabled.
@@ -164,21 +170,21 @@ def _assert_owner_is_migrate(bind: sa.Connection, table: str) -> None:
 
 
 def _backfill_effective_dates(bind: sa.Connection, pg: bool) -> None:
-    """Backfill effective_from/effective_to for existing published and archived revisions.
+    """Backfill effective_from/effective_to for revisions that were published.
 
-    Archived revisions must be included: publishing a new revision archives the
-    previous one, so excluding archived rows would leave every superseded
-    revision with NULL effective dates and make it unreachable by a by-time
-    read.
+    Only revisions with a non-NULL ``published_at`` ever had an active window.
+    Archived revisions must be included (publishing a new revision archives the
+    previous one), but a draft that was archived without ever being published
+    must be excluded - otherwise it gains a window it never had and truncates
+    the current published revision's open-ended window.
 
-    Strategy:
-    1. For each system_map, get all published + archived revisions ordered by
-       COALESCE(published_at, created_at), breaking ties on revision_number.
-    2. First revision: effective_from = published_at (or created_at),
-       effective_to = next's effective_from
-    3. Last published revision: effective_to = NULL
-    4. Last archived revision: effective_to = updated_at (the archive time), so
-       it is never left with an open-ended window.
+    Strategy, per system_map, ordered by published_at with revision_number as a
+    deterministic tiebreak:
+    1. effective_from = published_at.
+    2. effective_to = the next revision's effective_from (half-open interval).
+    3. The newest published revision keeps effective_to = NULL.
+    4. The newest revision, when archived, is closed at updated_at (the archive
+       time) so it is never left with an open-ended window.
     """
     if pg:
         # Use CTE for clean backfill on Postgres
@@ -187,28 +193,22 @@ def _backfill_effective_dates(bind: sa.Connection, pg: bool) -> None:
             WITH ranked AS (
                 SELECT
                     id,
-                    system_map_id,
                     status,
                     published_at,
-                    created_at,
                     updated_at,
-                    ROW_NUMBER() OVER (
+                    LEAD(published_at) OVER (
                         PARTITION BY system_map_id
-                        ORDER BY COALESCE(published_at, created_at) ASC, revision_number ASC
-                    ) as rn,
-                    LEAD(COALESCE(published_at, created_at)) OVER (
-                        PARTITION BY system_map_id
-                        ORDER BY COALESCE(published_at, created_at) ASC, revision_number ASC
+                        ORDER BY published_at ASC, revision_number ASC
                     ) as next_effective_from
                 FROM system_map_revisions
-                WHERE status IN ('published', 'archived') AND deleted_at IS NULL
+                WHERE published_at IS NOT NULL AND deleted_at IS NULL
             )
             UPDATE system_map_revisions r
             SET
-                effective_from = COALESCE(ranked.published_at, ranked.created_at),
+                effective_from = ranked.published_at,
                 effective_to = CASE
                     WHEN ranked.next_effective_from IS NOT NULL THEN ranked.next_effective_from
-                    WHEN ranked.status = 'archived' THEN COALESCE(ranked.updated_at, now())
+                    WHEN ranked.status = 'archived' THEN ranked.updated_at
                     ELSE NULL
                 END
             FROM ranked
@@ -219,10 +219,10 @@ def _backfill_effective_dates(bind: sa.Connection, pg: bool) -> None:
         # SQLite fallback: simpler approach
         result = bind.execute(
             sa.text("""
-            SELECT id, system_map_id, status, published_at, created_at, updated_at
+            SELECT id, system_map_id, status, published_at, updated_at
             FROM system_map_revisions
-            WHERE status IN ('published', 'archived') AND deleted_at IS NULL
-            ORDER BY system_map_id, COALESCE(published_at, created_at), revision_number
+            WHERE published_at IS NOT NULL AND deleted_at IS NULL
+            ORDER BY system_map_id, published_at, revision_number
         """)
         )
         rows = result.fetchall()
@@ -236,10 +236,8 @@ def _backfill_effective_dates(bind: sa.Connection, pg: bool) -> None:
 
         for revs in grouped.values():
             for i, rev in enumerate(revs):
-                effective_from = rev.published_at or rev.created_at
                 if i + 1 < len(revs):
-                    next_rev = revs[i + 1]
-                    effective_to = next_rev.published_at or next_rev.created_at
+                    effective_to = revs[i + 1].published_at
                 elif rev.status == "archived":
                     effective_to = rev.updated_at
                 else:
@@ -247,7 +245,7 @@ def _backfill_effective_dates(bind: sa.Connection, pg: bool) -> None:
 
                 bind.execute(
                     sa.text("UPDATE system_map_revisions SET effective_from = :ef, effective_to = :et WHERE id = :id"),
-                    {"ef": effective_from, "et": effective_to, "id": rev.id},
+                    {"ef": rev.published_at, "et": effective_to, "id": rev.id},
                 )
 
 
