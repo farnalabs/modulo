@@ -204,6 +204,10 @@ class TestSelfLockoutEndpoint:
 
     def test_self_demote_last_admin_returns_422(self, client: TestClient) -> None:
         """HTTP 422 when the guard rejects a last-admin self-demote."""
+        mock_membership = MagicMock()
+        mock_membership.role = "admin"
+        mock_membership.deactivated_at = None
+
         with (
             _patch_guard(
                 side_effect=LastAdminLockoutError(
@@ -212,6 +216,13 @@ class TestSelfLockoutEndpoint:
                 )
             ),
             patch("modulo.api.routes.admin.set_rls_org"),
+            # The session is a bare AsyncMock, so an unpatched membership lookup would
+            # call ``result.scalar_one_or_none()`` on an AsyncMock and leak a never-awaited
+            # coroutine (FAR-2289).
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                return_value=mock_membership,
+            ),
         ):
             resp = client.put(
                 self.URL.format(user_id=_USER_ID),
@@ -318,11 +329,18 @@ class TestSelfLockoutEndpoint:
         """Break-glass accounts are 422-rejected on the admin update route."""
         mock_account = self._make_mock_account(_ANOTHER_USER_ID)
         mock_account.is_break_glass = True
+        mock_membership = MagicMock()
+        mock_membership.role = "operator"
+        mock_membership.deactivated_at = None
 
         with (
             _patch_guard(),
             patch("modulo.api.routes.admin.set_rls_org"),
             patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                return_value=mock_membership,
+            ),
         ):
             resp = client.put(
                 self.URL.format(user_id=_ANOTHER_USER_ID),
