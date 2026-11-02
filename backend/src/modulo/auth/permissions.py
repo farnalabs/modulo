@@ -405,16 +405,20 @@ NON_DELEGABLE_PERMISSIONS: frozenset[str] = frozenset(
         #
         # The boundary is the gate's ``human_only`` POLICY, enforced at
         # RUNTIME — not a registry bar:
-        #   * MCP (``api/mcp_server._check_human_only_gate``) denies a
-        #     ``human_only`` gate outright regardless of credential class, so
-        #     a machine token can never answer one;
-        #   * REST (``api/routes/hitl._enforce_human_only_gate``) denies a
-        #     non-browser credential on a ``human_only`` gate.
+        #   * MCP (``api/mcp_server._check_human_only_gate``) denies every
+        #     unlinked credential outright. Only when an org admin enables the
+        #     default-OFF ``mcp_human_linked_hitl_authority`` flag may a
+        #     verified human-linked credential (consent-derived OAuth or a
+        #     user-scoped key) claim, approve or reject one; ``deliver_manual``
+        #     stays browser-only (ADR 035).
+        #   * REST (``api/routes/hitl._enforce_human_only_gate``) denies every
+        #     non-browser credential on a ``human_only`` gate — its principals
+        #     are browser-login JWTs only.
         # A human-linked connection may therefore answer NON-``human_only``
         # gates (an explicit ``human_only: false`` opt-out) while ``human_only``
-        # gates stay browser-human-only. Removing the registry bar does not
-        # widen that policy — it only stops the bar from masking which layer
-        # did the denying (pinned by
+        # gates stay browser-human-only unless that MCP flag is enabled.
+        # Removing the registry bar does not widen that policy — it only stops
+        # the bar from masking which layer did the denying (pinned by
         # ``tests/unit/mcp/test_hitl_delegation_boundary.py``).
         #
         # org destruction.
