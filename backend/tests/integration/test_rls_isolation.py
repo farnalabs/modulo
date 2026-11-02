@@ -114,9 +114,10 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
 
     Expected tables are derived from information_schema (tables with an
     organisation_id column) so this test stays accurate as new tables are added.
-    The team-scoped tables (0124 + 0287 + later team-visibility adopters)
-    intentionally carry ``rls_team_isolation`` (which includes the org check)
-    instead of the org-only policy — they are asserted by
+    The team-scoped tables (0124 + 0287 + 0314 + FAR-2236, and later
+    team-visibility adopters) intentionally carry ``rls_team_isolation`` (which
+    includes the org check) instead of the org-only policy — they are asserted
+    by
     ``test_team_scoped_tables_have_no_org_only_policy``.
     """
     team_scoped = {
@@ -135,8 +136,9 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
         "external_agents",
         "mcp_servers",
         # FAR-2236 (0341): system_maps carries visibility/owner_team_id, so
-        # 0341 gives it rls_team_isolation and the org-only policy to the
-        # other seven System Maps tables.
+        # 0341 gives it rls_team_isolation while its seven sibling tables stay
+        # org-only (the org-only policy applies to the other seven System Maps
+        # tables).
         "system_maps",
     }
 
@@ -162,7 +164,7 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
         }
 
     # organisations table has no organisation_id column — correctly excluded.
-    # The eight team-scoped tables carry rls_team_isolation (org check
+    # The team-scoped tables carry rls_team_isolation (org check
     # included), never the org-only policy — excluded here, asserted by the
     # sibling test.
     # The LangGraph checkpoint tables are runtime-managed by
@@ -360,12 +362,13 @@ async def test_register_rls_reset_hook_clears_gucs_on_checkout(db_engine: AsyncE
 
 
 async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None:
-    """Team-scoped tables carry rls_team_isolation (0025 + 0124 + 0287).
+    """Team-scoped tables carry rls_team_isolation (0025 + 0124 + 0287 + 0314 + 0341).
 
     Checks every table in the Phase-1 team-scoped set: pipelines,
     connector_instances, model_backends, library_primitives (original set),
-    environment_profiles (0124), and lifecycle_maps / eval_datasets /
-    eval_suites (FAR-1514, migration 0287).
+    environment_profiles (0124), lifecycle_maps / eval_datasets /
+    eval_suites (FAR-1514, migration 0287), external_agents / mcp_servers
+    (FAR-1692, migration 0314), and system_maps (FAR-2236, migration 0341).
     """
     async with db_engine.connect() as conn:
         tables_with_policy = {
@@ -384,6 +387,9 @@ async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None
         "lifecycle_maps",
         "eval_datasets",
         "eval_suites",
+        "external_agents",
+        "mcp_servers",
+        "system_maps",
     }
     missing = expected - tables_with_policy
     assert not missing, f"Tables missing rls_team_isolation policy: {sorted(missing)}"
