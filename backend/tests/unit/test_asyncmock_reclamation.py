@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
-import gc
 import subprocess
 import sys
-import types
+import textwrap
 import warnings
-from collections.abc import Awaitable
-from unittest.mock import AsyncMock
 
 
 def test_known_fixture_leak_is_reclaimed_by_the_concrete_fix() -> None:
@@ -75,30 +71,62 @@ def test_unmarked_asyncmock_leak_remains_observable_under_warning_as_error() -> 
 
 
 def test_started_or_suspended_coroutine_is_not_force_closed() -> None:
-    """A started coroutine completes normally rather than being force-closed."""
-    mock = AsyncMock()
-    coroutine = mock()
+    """A started coroutine completes normally rather than being force-closed.
 
-    async def drive(coroutine_to_await: Awaitable[object]) -> None:
-        await coroutine_to_await
+    Runs in a SUBPROCESS so the forced ``gc.collect()`` can only ever inspect
+    this test's own objects. In the pytest process that call also collects
+    leaked coroutines left behind by unrelated tests, and the gated unit suite
+    escalates ``PytestUnraisableExceptionWarning`` to an error - so the failure
+    lands on this test rather than on the test that leaked the coroutine
+    (FAR-2674).
+    """
+    probe = subprocess.run(  # noqa: S603 - fixed probe script, no untrusted input
+        [
+            sys.executable,
+            "-W",
+            "error::RuntimeWarning",
+            "-c",
+            textwrap.dedent(
+                """\
+                import asyncio
+                import gc
+                import types
+                from unittest.mock import AsyncMock
 
-    asyncio.run(drive(coroutine))
-    assert isinstance(coroutine, types.CoroutineType)
-    assert coroutine.cr_frame is None
-    del coroutine
-    del mock
-    gc.collect()
 
-    async def suspend() -> None:
-        await asyncio.sleep(0)
+                async def main() -> None:
+                    mock = AsyncMock()
+                    coroutine = mock()
+                    await coroutine
+                    assert isinstance(coroutine, types.CoroutineType)
+                    assert coroutine.cr_frame is None
+                    del coroutine, mock
+                    gc.collect()
 
-    suspended = suspend()
-    assert isinstance(suspended, types.CoroutineType)
-    try:
-        assert suspended.cr_frame is not None
-        assert suspended.cr_await is None
-    finally:
-        suspended.close()
+                    async def suspend() -> None:
+                        await asyncio.sleep(0)
+
+                    suspended = suspend()
+                    assert isinstance(suspended, types.CoroutineType)
+                    try:
+                        assert suspended.cr_frame is not None
+                        assert suspended.cr_await is None
+                    finally:
+                        suspended.close()
+
+
+                asyncio.run(main())
+                """
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert probe.returncode == 0, probe.stderr
+    assert "never awaited" not in probe.stderr
 
 
 def test_unrelated_runtime_warning_keeps_normal_warning_policy() -> None:
