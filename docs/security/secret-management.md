@@ -45,11 +45,28 @@ Gitleaks runs as a pre-commit hook and in CI to catch accidental commits of thes
    `FERNET_KEY_OLD` during the rotation window so existing values remain
    decryptable.
 3. Restart Modulo services (a rolling restart is recommended).
-4. As an administrator, call `POST /api/v1/admin/rotation/rotate-key` with the
-   new key and, when needed, the previous key. This re-encrypts stored secrets
-   and checkpoint data. Keep `FERNET_KEY_OLD` available until the operation
-   completes successfully, then remove it and restart the services.
-5. Verify successful startup and a successful rotation result in the logs.
+4. As a system administrator (permission `system.config.manage`), start the
+   rotation:
+
+   ```bash
+   curl -X POST "$MODULO_URL/api/v1/admin/rotation/rotate-key" \
+     -H "Authorization: Bearer $ACCESS_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"new_fernet_key": "<new-key>", "old_fernet_key": "<current-key>"}'
+   ```
+
+   `old_fernet_key` is optional and defaults to the running `FERNET_KEY`. The
+   call returns `202 Accepted` with a `task_id`: re-encryption runs as a
+   background task, and the old key stays valid for reads until it finishes,
+   so the rotation needs no downtime. The endpoint answers `409` while another
+   rotation is in progress and `503` when `MODULO_SYSTEM_DATABASE_URL` is unset
+   (the cross-org `modulo_system` role is required; without it the rotation
+   would silently re-encrypt nothing).
+5. Poll `GET /api/v1/admin/rotation/status` until `rotation_in_progress` is
+   `false`, then inspect `last_rotation_result`. Keep `FERNET_KEY_OLD`
+   available until the rotation completes successfully, then remove it and
+   restart the services.
+6. Verify successful startup and a successful rotation result in the logs.
 
 **Note**: Rotating `SECRET_KEY` invalidates all existing JWT sessions. Setting
 `FERNET_KEY` alone does not rewrite existing ciphertext. The rotation endpoint

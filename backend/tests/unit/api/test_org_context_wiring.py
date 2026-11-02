@@ -366,6 +366,10 @@ class TestMcpAuthSurface:
                     "modulo.api.mcp_server.resolve_role_from_membership",
                     new=AsyncMock(return_value="operator"),
                 ),
+                patch(
+                    "modulo.api.mcp_server.resolve_live_role_and_kind",
+                    new=AsyncMock(return_value=("operator", "human")),
+                ),
                 patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql")),
                 # The plan/flag gate is unrelated to org resolution (and needs a
                 # real plan store); the bind happens BEFORE it, so pass it

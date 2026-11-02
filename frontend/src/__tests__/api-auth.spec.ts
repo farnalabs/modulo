@@ -137,6 +137,19 @@ describe('attemptTokenRefresh', () => {
     })
   }
 
+  it('does not refresh demo sessions or change their token state', async () => {
+    setAccessToken('demo-access')
+    setDemoSession(true)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(attemptTokenRefresh()).resolves.toBe(false)
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(getAccessToken()).toBe('demo-access')
+    expect(localStorage.getItem('modulo_demo_session')).toBe('1')
+  })
+
   it('POSTs bodyless and sends the CSRF double-submit header from the cookie', async () => {
     setCsrfCookie('modulo_refresh=ref-cookie')
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({

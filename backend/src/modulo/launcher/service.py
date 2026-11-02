@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import Any
 
 from modulo.launcher import policy
+from modulo.launcher.platform import is_windows
 
 # The published console-script name (also the unit's ExecStart program).
 CONSOLE_SCRIPT_NAME = "modulo"
@@ -133,11 +134,10 @@ def _default_runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
 
 def assert_linux() -> None:
     """Refuse unsupported service platforms loudly (Windows = TODO(P3))."""
-    if sys.platform == "win32":
-        # Deferred P3: Windows service seam (sc.exe / Task Scheduler).
+    if is_windows():
         raise ServiceError(
-            "The service install is not implemented on Windows yet (TODO(P3)); Linux uses a "
-            "systemd user unit and macOS uses a launchd LaunchAgent. Use `modulo start` directly meanwhile."
+            "Windows service lifecycle requires Task Scheduler validation with the native installer (FAR-2229); "
+            "use `modulo start` directly until that validation is complete"
         )
     if sys.platform not in ("linux", "darwin"):
         raise ServiceError(
