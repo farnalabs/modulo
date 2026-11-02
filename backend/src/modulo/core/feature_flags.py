@@ -186,7 +186,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Mobile icon-rail sidebar (experimental)",
         tier="community",
     ),
-    # ── Community tier — user-scoped MCP keys (default OFF, FAR-620) ────────
+    # ── Community tier — user-scoped MCP keys (default ON, FAR-2301) ────────
+    # Default ON since FAR-2301: a human-linked user-scoped key is already
+    # quota-limited, TTL-capped, live-role clamped and attribution-bearing, so
+    # the flag is a per-org kill switch rather than an opt-in gate. An org
+    # override of ``false`` still disables it (mint and auth both deny).
     FeatureFlag(
         name="user_scoped_mcp_keys",
         description="Per-user MCP API keys (keys operate as their creator's identity)",
@@ -294,7 +298,6 @@ DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
         "mobile_sidebar_rail",
         "dashboard_charts",
         "saved_views",
-        "user_scoped_mcp_keys",
         "webhook_notification_log",
         "library_collection",
         "sso_unrestricted_provisioning",
