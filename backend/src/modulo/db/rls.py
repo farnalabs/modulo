@@ -198,7 +198,14 @@ async def _ensure_active_transaction(session: AsyncSession) -> str:
     For sync sessions, get_bind() returns a sync Engine directly;
     for async sessions, it returns a coroutine that must be awaited.
     """
-    if not session.in_transaction():
+    in_transaction = session.in_transaction()
+    if asyncio.iscoroutine(in_transaction):
+        # Session doubles (and some driver/session combinations) return an
+        # awaitable here. A coroutine is always truthy, so leaving it
+        # un-awaited both skips the real guard and leaks a never-awaited
+        # coroutine at GC — await it, mirroring the get_bind() handling below.
+        in_transaction = await in_transaction
+    if not in_transaction:
         raise RuntimeError("set_rls_* requires an active transaction; wrap the call in `async with session.begin():`")
     bind = session.get_bind()
     if asyncio.iscoroutine(bind):

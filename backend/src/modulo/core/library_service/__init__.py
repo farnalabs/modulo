@@ -260,7 +260,15 @@ async def _scoped_execute[T](
     Reuses the caller's transaction when already active (``set_rls_org`` sets a
     ``SET LOCAL`` context bound to the current transaction), otherwise opens one.
     """
-    if session.in_transaction():
+    # ``in_transaction()`` is sync on a real AsyncSession, but some session
+    # doubles return an awaitable. Every coroutine is truthy, so an un-awaited
+    # result would take the "txn active" branch AND leak a never-awaited
+    # coroutine at GC - await it when present (same guard as
+    # ``library_sync.sync._in_transaction``).
+    in_transaction = session.in_transaction()
+    if asyncio.iscoroutine(in_transaction):
+        in_transaction = await in_transaction
+    if in_transaction:
         await set_rls_org(session, org_id)
         return await query(session)
     async with session.begin():

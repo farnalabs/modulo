@@ -26,6 +26,10 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _ORG_ROLE = "admin"
 
 
+async def _resolved(value: bool) -> bool:
+    return value
+
+
 def _make_session(*, in_tx: bool = True, dialect: str = "postgresql") -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
     session.in_transaction.return_value = in_tx
@@ -67,6 +71,22 @@ class TestSetRlsOrg:
         await set_rls_org(session, None)
 
         session.execute.assert_not_called()
+
+    async def test_awaitable_in_transaction_is_awaited(self) -> None:
+        """A coroutine-returning in_transaction() must be awaited, not discarded."""
+        session = _make_session()
+        session.in_transaction = lambda: _resolved(True)
+
+        await set_rls_org(session, _ORG_ID)
+
+        session.execute.assert_awaited_once()
+
+    async def test_awaitable_in_transaction_false_raises(self) -> None:
+        session = _make_session()
+        session.in_transaction = lambda: _resolved(False)
+
+        with pytest.raises(RuntimeError, match="requires an active transaction"):
+            await set_rls_org(session, _ORG_ID)
 
 
 class TestSetRlsUserContext:

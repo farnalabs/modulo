@@ -59,3 +59,39 @@ async def test_begins_transaction_when_none_active():
 
     assert org_page.total == 1
     session.begin.assert_called_once_with()
+
+
+def _awaitable_session(value: bool) -> MagicMock:
+    """A session whose ``in_transaction()`` returns an awaitable, not a bool."""
+
+    async def _in_transaction() -> bool:
+        return value
+
+    session = MagicMock()
+    session.in_transaction = _in_transaction
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=ctx)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=ctx)
+    return session
+
+
+async def test_awaitable_in_transaction_is_awaited_and_reused():
+    """A coroutine-returning in_transaction() must be awaited, not discarded."""
+    session = _awaitable_session(True)
+    expected = PageResult(items=[MagicMock()], total=1, page=1, page_size=20)
+
+    org_page = await _load(session, expected)
+
+    assert org_page.total == 1
+    session.begin.assert_not_called()
+
+
+async def test_awaitable_in_transaction_false_opens_transaction():
+    session = _awaitable_session(False)
+    expected = PageResult(items=[MagicMock()], total=1, page=1, page_size=20)
+
+    org_page = await _load(session, expected)
+
+    assert org_page.total == 1
+    session.begin.assert_called_once_with()
