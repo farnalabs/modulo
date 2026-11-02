@@ -7,7 +7,7 @@
       </div>
     </header>
 
-    <main class="max-w-3xl mx-auto px-6 py-8">
+    <section class="max-w-3xl mx-auto px-6 py-8">
       <div class="flex items-center gap-2 mb-8">
         <div
           v-for="(s, i) in steps"
@@ -343,7 +343,7 @@
           </div>
         </div>
       </template>
-    </main>
+    </section>
   </div>
 </template>
 

@@ -7264,6 +7264,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system-maps/{map_id}/revisions/by-time": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Revision By Time Endpoint
+         * @description Get the revision active at a specific timestamp.
+         *
+         *     Returns the revision (published, or superseded/archived after a re-publish)
+         *     where effective_from <= at < effective_to (or effective_to IS NULL for the
+         *     current revision). Drafts have no effective_from and never match.
+         */
+        get: operations["get_revision_by_time_endpoint_api_v1_system_maps__map_id__revisions_by_time_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/revisions/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Current Revision Endpoint
+         * @description Get the currently active (published) revision.
+         *
+         *     Alias for the existing published revision endpoint with clearer semantics.
+         */
+        get: operations["get_current_revision_endpoint_api_v1_system_maps__map_id__revisions_current_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/revisions/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Revision History Endpoint
+         * @description List all revisions for a system map with their effective time ranges.
+         *
+         *     Returns all revisions (published, draft, archived) ordered by revision_number
+         *     so the caller can see the full history with effective_from/effective_to.
+         *     The current (published) revision is marked with is_current=True.
+         */
+        get: operations["get_revision_history_endpoint_api_v1_system_maps__map_id__revisions_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system-maps/{map_id}/revisions/{rev_id}": {
         parameters: {
             query?: never;
@@ -7358,6 +7428,10 @@ export interface paths {
         /**
          * Get System Map Overview Endpoint
          * @description Aggregate read model with node health, loop configs, and bottleneck detection.
+         *
+         *     Can optionally specify a revision_id or 'at' timestamp to get the overview
+         *     for a specific historical revision (FAR-2288 version-aware read model).
+         *     Metrics cover the trailing seven UTC days.
          */
         get: operations["get_system_map_overview_endpoint_api_v1_system_maps__map_id__overview_get"];
         put?: never;
@@ -17161,12 +17235,12 @@ export interface components {
         };
         /**
          * McpAuthorityResponse
-         * @description The org's human-linked MCP HITL authority setting.
+         * @description The org's human-linked MCP HITL persona-authority setting.
          *
          *     ``enabled`` is the effective intent: the org override when one is set, else
-         *     the flag's documented default. ``overridden`` reports whether the org has an
-         *     explicit override (so the UI can distinguish "on by default" from "on
-         *     because someone set it").
+         *     the flag's documented default (OFF). ``overridden`` reports whether the org has an
+         *     explicit override (so the UI can distinguish the default-OFF state from an
+         *     explicit enable).
          */
         McpAuthorityResponse: {
             /** Enabled */
@@ -22316,6 +22390,13 @@ export interface components {
              */
             default_map: boolean;
         };
+        /**
+         * SystemMapCurrentRevisionResponse
+         * @description Currently active (published) revision - alias for the published revision.
+         */
+        SystemMapCurrentRevisionResponse: {
+            revision: components["schemas"]["SystemMapRevisionResponse"];
+        };
         /** SystemMapDiscoveryReport */
         SystemMapDiscoveryReport: {
             /** Sources Inspected */
@@ -22595,18 +22676,12 @@ export interface components {
             last_admission_at?: string | null;
             /** Last Admission Status */
             last_admission_status?: string | null;
-            /**
-             * Cooldown Active
-             * @default false
-             */
-            cooldown_active: boolean;
+            /** Cooldown Active */
+            cooldown_active?: boolean | null;
             /** Cooldown Until */
             cooldown_until?: string | null;
-            /**
-             * Budget Used Usd
-             * @default 0
-             */
-            budget_used_usd: string;
+            /** Budget Used Usd */
+            budget_used_usd?: string | null;
             /** Budget Period Start */
             budget_period_start?: string | null;
         };
@@ -22646,6 +22721,12 @@ export interface components {
         /**
          * SystemMapOverviewResponse
          * @description Aggregate read model for a published system map.
+         *
+         *     Metrics cover the half-open UTC interval ``[window_start, window_end)``.
+         *     ``window_end`` is the generation instant and facts without an observed
+         *     timestamp remain null rather than being inferred. Failure rates use the
+         *     canonical analytics definition: only non-benign ``failed``/``stalled`` runs
+         *     count as failures, so a deliberate cancel or reject is not a fault.
          */
         SystemMapOverviewResponse: {
             /**
@@ -22665,6 +22746,18 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+            /** Window Days */
+            window_days: number;
+            /**
+             * Window Start
+             * Format: date-time
+             */
+            window_start: string;
+            /**
+             * Window End
+             * Format: date-time
+             */
+            window_end: string;
             /** Nodes */
             nodes: components["schemas"]["SystemMapOverviewNodeHealth"][];
             /** Loop Configs */
@@ -22774,6 +22867,23 @@ export interface components {
             updated_at: string;
         };
         /**
+         * SystemMapRevisionByTimeResponse
+         * @description The revision active at a specific timestamp.
+         */
+        SystemMapRevisionByTimeResponse: {
+            revision: components["schemas"]["SystemMapRevisionResponse"];
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /**
+             * Matched
+             * @default true
+             */
+            matched: boolean;
+        };
+        /**
          * SystemMapRevisionCreate
          * @description Create a draft revision (nodes, relationships, loop configs).
          */
@@ -22803,6 +22913,31 @@ export interface components {
             /** Loop Configs */
             loop_configs: components["schemas"]["SystemMapLoopConfigResponse"][];
         };
+        /**
+         * SystemMapRevisionHistoryEntry
+         * @description Single entry in the revision history with its effective time range.
+         */
+        SystemMapRevisionHistoryEntry: {
+            revision: components["schemas"]["SystemMapRevisionResponse"];
+            /**
+             * Is Current
+             * @default false
+             */
+            is_current: boolean;
+        };
+        /**
+         * SystemMapRevisionHistoryResponse
+         * @description List of all revisions for a system map with their effective time ranges.
+         */
+        SystemMapRevisionHistoryResponse: {
+            /**
+             * System Map Id
+             * Format: uuid
+             */
+            system_map_id: string;
+            /** Revisions */
+            revisions: components["schemas"]["SystemMapRevisionHistoryEntry"][];
+        };
         /** SystemMapRevisionResponse */
         SystemMapRevisionResponse: {
             /**
@@ -22830,6 +22965,10 @@ export interface components {
             };
             /** Published At */
             published_at: string | null;
+            /** Effective From */
+            effective_from?: string | null;
+            /** Effective To */
+            effective_to?: string | null;
             /** Deleted At */
             deleted_at: string | null;
             /** Deleted By */
@@ -39397,6 +39536,110 @@ export interface operations {
             };
         };
     };
+    get_revision_by_time_endpoint_api_v1_system_maps__map_id__revisions_by_time_get: {
+        parameters: {
+            query: {
+                /** @description ISO8601 timestamp to find the active revision at */
+                at: string;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapRevisionByTimeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_current_revision_endpoint_api_v1_system_maps__map_id__revisions_current_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapCurrentRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_revision_history_endpoint_api_v1_system_maps__map_id__revisions_history_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapRevisionHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     get_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__get: {
         parameters: {
             query?: {
@@ -39582,6 +39825,10 @@ export interface operations {
     get_system_map_overview_endpoint_api_v1_system_maps__map_id__overview_get: {
         parameters: {
             query?: {
+                /** @description Specific revision ID to get overview for */
+                revision_id?: string | null;
+                /** @description ISO8601 timestamp to get overview for the revision active at that time */
+                at?: string | null;
                 _fresh?: boolean;
             };
             header?: never;

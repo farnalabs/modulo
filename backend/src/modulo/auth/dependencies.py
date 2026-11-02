@@ -272,7 +272,7 @@ async def _resolve_api_key_principal(
         if org_id is None:
             raise ApiKeyInvalidError
 
-        key, live_role = await _validate_api_key_in_org(factory, token, org_id)
+        key, live_role, owner_kind = await _validate_api_key_in_org(factory, token, org_id)
         # FAR-1477: tri-state grant-set (None = legacy role bundle, no
         # flag read). A grant-bearing key with the flag OFF is denied.
         # Resolved AFTER the validation session closes: for grant-bearing
@@ -299,7 +299,7 @@ async def _resolve_api_key_principal(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
         ) from None
-    return _bind_api_key_principal(request, key, live_role, key_grants)
+    return _bind_api_key_principal(request, key, live_role, key_grants, owner_kind)
 
 
 async def _lookup_api_key_org(factory: async_sessionmaker[AsyncSession], token: str) -> uuid.UUID | None:
@@ -349,9 +349,10 @@ async def _validate_api_key_in_org(
     factory: async_sessionmaker[AsyncSession],
     token: str,
     org_id: uuid.UUID,
-) -> tuple["OrgApiKey", str | None]:
-    """Re-validate the key inside its org's RLS context and read the live role."""
+) -> tuple["OrgApiKey", str | None, str | None]:
+    """Re-validate the key inside its org's RLS context and read the live role/kind."""
     from modulo.auth.api_key import validate_api_key
+    from modulo.db.crud.org_membership import resolve_live_role_and_kind
     from modulo.db.rls import set_rls_org
 
     async with factory() as session, session.begin():
@@ -361,13 +362,18 @@ async def _validate_api_key_in_org(
         # ADR 047 live-role re-read: clamp the minted role to the
         # account's current membership role, matching the MCP auth
         # path (api/mcp_server.py:770-790). A demoted or removed
-        # member's key must not retain elevated privileges.
-        live_role = await resolve_role_from_membership(
+        # member's key must not retain elevated privileges. FAR-2281:
+        # the same query returns the owner's ``Account.kind`` so a
+        # user-scoped key can be attributed to its live human owner.
+        membership = await resolve_live_role_and_kind(
             session,
             str(key.account_id),
             str(key.organisation_id),
         )
-    return key, live_role
+    if membership is None:
+        return key, None, None
+    live_role, owner_kind = membership
+    return key, live_role, owner_kind
 
 
 def _bind_api_key_principal(
@@ -375,6 +381,7 @@ def _bind_api_key_principal(
     key: "OrgApiKey",
     live_role: str | None,
     key_grants: frozenset[str] | None,
+    owner_kind: str | None = None,
 ) -> TenantPrincipal:
     """Clamp the minted role to the live role, then build the principal."""
     # Clamp: if the account has no active membership, reject.
@@ -397,6 +404,20 @@ def _bind_api_key_principal(
             },
         )
         raise OrganisationMembershipNotFound
+    # FAR-2281: a user-scoped key owned by a live human acts as that human.
+    # Thread the key's caller scope + the owner kind onto the principal so the
+    # human-linkage resolver and the audit stamp can attribute the action to
+    # the human instead of a generic ``api_key`` principal. An org-scoped key
+    # (even one owned by a human) stays an unattributed machine identity.
+    # Lazy imports: pulling auth.api_key (feature-flag registry) or the ORM
+    # account model into this module's import time would widen/circle the auth
+    # dependency graph; both are fully loaded by the time a request is bound.
+    from modulo.auth.api_key import KEY_SCOPE_USER
+    from modulo.db.models.account import KIND_HUMAN
+
+    key_scope = getattr(key, "scope", None)
+    key_scope = key_scope if isinstance(key_scope, str) else None
+    human_linked_owner = key_scope == KEY_SCOPE_USER and owner_kind == KIND_HUMAN
     return bind_principal_context(
         request,
         TenantPrincipal(
@@ -421,6 +442,12 @@ def _bind_api_key_principal(
             # subsumes the via_api_key check through this stamp.
             client_kind=CLIENT_KIND_PROGRAMMATIC,
             key_grants=key_grants,
+            key_scope=key_scope,
+            owner_kind=owner_kind if key_scope == KEY_SCOPE_USER else None,
+            # FAR-2281: only a user-scoped key owned by a live human carries a
+            # human principal kind, so the audit stamp records the human rather
+            # than omitting the kind for every programmatic credential.
+            principal_kind=KIND_HUMAN if human_linked_owner else None,
         ),
     )
 
