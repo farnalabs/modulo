@@ -20,12 +20,19 @@
     <div v-if="store.overviewLoading" class="text-sm text-muted-foreground" data-testid="system-map-overview-loading">
       {{ $t('views.DashboardView.system_maps_loading') }}
     </div>
-    <div v-else-if="store.overviewError" class="text-sm text-destructive" data-testid="system-map-overview-error" aria-live="assertive">
-      {{ $t('views.DashboardView.system_maps_error') }}
-    </div>
-    <div v-else-if="store.overviewEmpty" class="text-sm text-muted-foreground" data-testid="system-map-overview-empty">
-      {{ $t('views.DashboardView.system_maps_empty') }}
-    </div>
+    <ErrorAlert
+      v-else-if="store.overviewError"
+      :message="$t('views.DashboardView.system_maps_error')"
+      :on-retry="retryOverview"
+      data-testid="system-map-overview-error"
+      aria-live="assertive"
+    />
+    <EmptyState
+      v-else-if="store.overviewEmpty"
+      :title="$t('views.DashboardView.system_maps_empty_title')"
+      :description="$t('views.DashboardView.system_maps_empty_description')"
+      data-testid="system-map-overview-empty"
+    />
     <div v-else-if="store.overview" class="space-y-3" data-testid="system-map-overview-metrics">
       <p class="text-xs text-muted-foreground">
         {{ $t('views.DashboardView.system_maps_window', { days: store.overview.window_days }) }}
@@ -49,6 +56,8 @@
 
 <script setup lang="ts">
 import SectionCard from '../shared/SectionCard.vue'
+import EmptyState from '../shared/EmptyState.vue'
+import ErrorAlert from '../shared/ErrorAlert.vue'
 import SystemMapDraftReview from '../system-maps/SystemMapDraftReview.vue'
 import { onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -57,6 +66,7 @@ import { useSystemMapsStore } from '../../stores/systemMaps'
 const { t } = useI18n()
 const store = useSystemMapsStore()
 const healthLabel = (health: string): string => t(`views.DashboardView.system_maps_health_${health}`)
+const retryOverview = (): Promise<void> => store.fetchDefaultOverview()
 
 onMounted(async () => {
   await store.fetchDiscovery()

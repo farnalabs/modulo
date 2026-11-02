@@ -132,6 +132,18 @@ describe('DashboardSystemOverview', () => {
     expect(wrapper.find('[data-testid="system-map-overview-empty"]').exists()).toBe(false)
   })
 
+  it('retries the overview fetch from the shared error alert', async () => {
+    const { wrapper, store, fetchDefaultOverview } = mountOverview()
+    await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(1))
+    store.overviewLoading = false
+    store.overviewError = 'failed'
+    await wrapper.vm.$nextTick()
+
+    await wrapper.get('[data-testid="error-alert-retry"]').trigger('click')
+
+    expect(fetchDefaultOverview).toHaveBeenCalledTimes(2)
+  })
+
   it('renders a distinct empty state, not an error', async () => {
     const { wrapper, store } = mountOverview()
     store.overviewLoading = false
