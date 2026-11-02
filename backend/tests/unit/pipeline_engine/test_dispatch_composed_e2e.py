@@ -124,7 +124,15 @@ def _dispatch_graph() -> dict[str, Any]:
                     "data": {"pipeline_id": _PROJECT_SLUG},
                 },
                 "await_completion": True,
-                "wait_timeout": 10,
+                # Generous on purpose: this window is WALL-CLOCK, and on a
+                # contended CI runner (4 xdist workers + coverage) an event-loop
+                # stall between the two polled responses can easily outlast a
+                # tight deadline — the wait then fails with
+                # ``DispatchWaitTimeoutError`` even though the substrate script
+                # only ever reports "running" then "success". The loop still
+                # finishes in two polls (the interval is patched to 1 ms below);
+                # the ceiling only needs to be larger than any stall.
+                "wait_timeout": 120,
             },
             {
                 "id": "consume-result",
