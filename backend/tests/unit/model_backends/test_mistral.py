@@ -26,21 +26,6 @@ async def test_aclose_is_idempotent_without_a_pinned_client(backend):
     assert backend._http_async_client is None
 
 
-@pytest.mark.parametrize(
-    "model_id",
-    [
-        "open-mistral-7b",
-        "mistral-small-latest",
-        "mistral-medium-latest",
-        "mistral-large-latest",
-    ],
-)
-def test_supported_models(model_id):
-    with patch("modulo.model_backends.mistral.ChatMistralAI"):
-        backend = MistralBackend(api_key="sk-test", model_id=model_id)
-        assert backend.backend_id == f"mistral/{model_id}"
-
-
 async def test_health_check_uses_mistral_base_url():
     with patch("modulo.model_backends.mistral.ChatMistralAI"):
         backend = MistralBackend(api_key="sk-test", model_id="mistral-large-latest")

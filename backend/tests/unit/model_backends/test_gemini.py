@@ -18,10 +18,6 @@ def test_gemini_base_url_constant():
     assert GEMINI_BASE_URL == "https://generativelanguage.googleapis.com/v1beta"
 
 
-def test_backend_id(backend):
-    assert backend.backend_id == "gemini/gemini-2.0-flash"
-
-
 async def test_aclose_is_idempotent_without_a_pinned_transport(backend):
     """A backend built without a custom endpoint owns no transport to close."""
     assert backend._pin_transport is None

@@ -4,7 +4,8 @@ These replace the boilerplate tests that were previously duplicated
 in every individual backend test file.
 """
 
-from unittest.mock import AsyncMock, patch
+import importlib
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -403,3 +404,137 @@ class TestPackageLazyLoading:
         assert "AnthropicBackend" in names
         assert "StubModelBackend" in names
         assert "OpenAIBackend" in names
+
+
+# Thin OpenAI-compatible adapters differ only in the endpoint they pin and the
+# provider name they use for the api-key placeholder. Their wiring behaviour is
+# identical, so the cases live here instead of one copy-paste file per provider.
+# ``constant_name`` is None for adapters that inline their base URL.
+OPENAI_COMPATIBLE_ADAPTERS = [
+    pytest.param(
+        "modulo.model_backends.ai21",
+        "Ai21Backend",
+        "AI21_BASE_URL",
+        "https://api.ai21.com/studio/v1",
+        "ai21",
+        "jamba-1.5-mini",
+        id="ai21",
+    ),
+    pytest.param(
+        "modulo.model_backends.fireworks",
+        "FireworksBackend",
+        "FIREWORKS_BASE_URL",
+        "https://api.fireworks.ai/inference/v1",
+        "fireworks",
+        "accounts/fireworks/models/llama-v3p1-8b",
+        id="fireworks",
+    ),
+    pytest.param(
+        "modulo.model_backends.groq",
+        "GroqBackend",
+        "GROQ_BASE_URL",
+        "https://api.groq.com/openai/v1",
+        "groq",
+        "llama3-70b-8192",
+        id="groq",
+    ),
+    pytest.param(
+        "modulo.model_backends.perplexity",
+        "PerplexityBackend",
+        "PERPLEXITY_BASE_URL",
+        "https://api.perplexity.ai",
+        "perplexity",
+        "llama-3.1-sonar-small-128k-online",
+        id="perplexity",
+    ),
+    pytest.param(
+        "modulo.model_backends.togetherai",
+        "TogetherAIBackend",
+        "TOGETHERAI_BASE_URL",
+        "https://api.together.xyz/v1",
+        "togetherai",
+        "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        id="togetherai",
+    ),
+    pytest.param(
+        "modulo.model_backends.deepseek",
+        "DeepSeekBackend",
+        None,
+        "https://api.deepseek.com/v1",
+        "deepseek",
+        "deepseek-chat",
+        id="deepseek",
+    ),
+    pytest.param(
+        "modulo.model_backends.grok",
+        "GrokBackend",
+        None,
+        "https://api.x.ai/v1",
+        "grok",
+        "grok-2",
+        id="grok",
+    ),
+    pytest.param(
+        "modulo.model_backends.openrouter",
+        "OpenRouterBackend",
+        None,
+        "https://openrouter.ai/api/v1",
+        "openrouter",
+        "gpt-4o",
+        id="openrouter",
+    ),
+    pytest.param(
+        "modulo.model_backends.qwen",
+        "QwenBackend",
+        None,
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "qwen",
+        "qwen-max",
+        id="qwen",
+    ),
+]
+
+
+class TestOpenAICompatibleAdapters:
+    @pytest.mark.parametrize(
+        ("module_path", "class_name", "constant_name", "base_url", "provider", "model_id"),
+        OPENAI_COMPATIBLE_ADAPTERS,
+    )
+    def test_chat_openai_wired_with_provider_endpoint(
+        self,
+        module_path,
+        class_name,
+        constant_name,
+        base_url,
+        provider,
+        model_id,
+    ):
+        module = importlib.import_module(module_path)
+        if constant_name is not None:
+            assert getattr(module, constant_name) == base_url
+        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat:
+            getattr(module, class_name)(api_key="sk-test", model_id=model_id)
+        mock_chat.assert_called_once_with(
+            model=model_id,
+            api_key="sk-test",
+            base_url=base_url,
+            http_async_client=ANY,
+        )
+
+    @pytest.mark.parametrize(
+        ("module_path", "class_name", "constant_name", "base_url", "provider", "model_id"),
+        OPENAI_COMPATIBLE_ADAPTERS,
+    )
+    def test_api_key_placeholder_uses_provider_name(
+        self,
+        module_path,
+        class_name,
+        constant_name,
+        base_url,
+        provider,
+        model_id,
+    ):
+        module = importlib.import_module(module_path)
+        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat:
+            getattr(module, class_name)(api_key=None, model_id=model_id)
+        assert mock_chat.call_args.kwargs["api_key"] == provider
