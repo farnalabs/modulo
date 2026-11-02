@@ -101,10 +101,20 @@ def test_initdb_argv_pins_every_argument(tmp_path: Path) -> None:
     assert "--username" in argv
     assert BOOTSTRAP_USERNAME in argv
     assert "--locale" in argv
-    assert INITDB_LOCALE in argv
+    # The Windows locale seam pins "C" (no POSIX C.UTF-8); see test_platform.py.
+    assert ("C" if sys.platform == "win32" else INITDB_LOCALE) in argv
     assert "--auth=scram-sha-256" in argv
     assert "--pwfile" in argv
     assert str(pwfile) in argv
+
+
+def test_initdb_argv_uses_windows_locale_and_executable_seam(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    tmp_pgdata = tmp_path / "tmp"
+    pwfile = tmp_path / "pw"
+    monkeypatch.setattr(sys, "platform", "win32")
+    argv = initdb_argv(tmp_pgdata, tmp_path / "bin", BOOTSTRAP_USERNAME, pwfile)
+    assert argv[argv.index("--locale") + 1] == "C"
+    assert argv[0].endswith("initdb.exe")
 
 
 def test_bootstrap_role_name_is_fixed_not_os_username() -> None:
@@ -152,7 +162,7 @@ def test_bootstrap_happy_path_records_pinned_invocation_and_promotes(
     assert "--username" in argv
     assert BOOTSTRAP_USERNAME in argv
     assert "--locale" in argv
-    assert INITDB_LOCALE in argv
+    assert ("C" if sys.platform == "win32" else INITDB_LOCALE) in argv
     assert "--pgdata" in argv
     # The pinned --pgdata pointed at the TEMP dir, and the temp dir no longer
     # exists (promoted by rename into pgdata).
@@ -361,10 +371,29 @@ def test_pause_gate_resume_completes_the_bootstrap(tmp_path: Path) -> None:
             proc.stderr.close()
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="the refusal seam is Windows-specific")
 def test_bootstrap_refuses_windows_today(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The autouse fixture bypasses the platform guard for logic tests; this
-    # test re-installs the REAL guard to prove the refusal itself.
+    # test re-installs the REAL guard and drives it through the platform seam,
+    # so the refusal body executes on every host (CI runs Linux) instead of
+    # being skipped there.
     monkeypatch.setattr(initdb_module, "assert_supported_platform", assert_supported_platform)
-    with pytest.raises(InitdbError, match=r"TODO\(P3\)"):
+    monkeypatch.setattr(initdb_module, "is_windows", lambda: True)
+    with pytest.raises(InitdbError, match=r"requires validation with the shipped Windows binary"):
         bootstrap_pgdata(tmp_path / "pgdata", password="pw")
+
+
+def test_assert_supported_platform_refuses_windows_until_installer_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Call the REAL guard imported at module import: the autouse fixture
+    # replaces the module attribute with a no-op on Windows hosts.
+    monkeypatch.setattr(initdb_module, "is_windows", lambda: True)
+
+    with pytest.raises(InitdbError, match="requires validation with the shipped Windows binary"):
+        assert_supported_platform()
+
+
+def test_assert_supported_platform_accepts_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(initdb_module, "is_windows", lambda: False)
+
+    assert assert_supported_platform() is None
