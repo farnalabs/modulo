@@ -14,6 +14,16 @@
 #   owner: "GitHub username or team" (optional)
 
 quarantine:
+  - test_id: "tests/unit/test_far2005_dead_heartbeat_reap.py::TestDeadHeartbeatReapScope::test_non_running_status_is_untouched"
+    reason: >-
+      Ambient pre-existing AsyncMock leak (FAR-2674 / FAR-2289): an unrelated
+      test's never-awaited coroutine is GC'd while this test runs in the full
+      unit run, so the escalated PytestUnraisableExceptionWarning fails this
+      innocent victim. Passes in isolation and under forced gc (PR #2719 CI run
+      41523847563, 2026-11-02).
+    expiry: "2026-11-17"
+    owner: "platform-team"
+
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
   #   reason: "Flaky due to GitHub API rate limit window — fails ~15% of CI runs"
