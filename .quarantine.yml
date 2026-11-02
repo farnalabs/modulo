@@ -32,6 +32,10 @@ quarantine:
     reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI 2026-11-01)"
     expiry: "2026-11-15"
     owner: "platform-team"
+  - test_id: "tests/unit/trigger_engine/test_agent_signal.py::TestFireAgentSignalChildPayloadShape::test_child_payload_carries_the_pure_return[agent-embeds-pure-return]"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (merge-queue run 41495603068, 2026-11-02)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
 
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
