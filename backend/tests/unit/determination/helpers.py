@@ -1,9 +1,12 @@
 """Shared factories for the determination unit test package."""
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any
 
-from modulo.connectors.base import ConnectorType
+from modulo.connectors.base import ConnectorQuery, ConnectorType
 from modulo.determination.draft import PipelineDraft, generate_draft
 from modulo.determination.inference import Finding, infer
 from modulo.determination.scanner import ScanSample
@@ -28,6 +31,57 @@ def make_sample(
         sample_count=len(records),
         error=error,
     )
+
+
+def issues_sample(statuses: list[str]) -> ScanSample:
+    """Return a Jira ``issues`` sample whose records expose *statuses* via ``fields.status``.
+
+    Every planning/transition test needs the same Jira-shaped record; building it
+    here keeps each test down to the statuses it actually cares about.
+    """
+    return make_sample(
+        "issues",
+        [{"fields": {"status": {"name": status}}} for status in statuses],
+        connector_type=ConnectorType.JIRA,
+    )
+
+
+class FakeConnector:
+    """Stub connector for scanner tests, with each behaviour injected by the caller.
+
+    ``health_check_error`` / ``query_error`` are raised from the corresponding
+    method (use for skip and cancellation cases), ``query_records`` is returned
+    wrapped in a query result, and a stub with neither set fails loudly on
+    ``query`` — most stubs must never be queried at all.
+    """
+
+    def __init__(
+        self,
+        connector_type: ConnectorType = ConnectorType.GITHUB,
+        *,
+        health_check_error: BaseException | None = None,
+        query_error: BaseException | None = None,
+        query_records: list[dict] | None = None,
+        delay_seconds: float = 0.0,
+    ) -> None:
+        self.connector_type = connector_type
+        self._health_check_error = health_check_error
+        self._query_error = query_error
+        self._query_records = query_records
+        self._delay_seconds = delay_seconds
+
+    async def health_check(self) -> None:
+        if self._health_check_error is not None:
+            raise self._health_check_error
+
+    async def query(self, _query: ConnectorQuery) -> Any:
+        if self._delay_seconds:
+            await asyncio.sleep(self._delay_seconds)
+        if self._query_error is not None:
+            raise self._query_error
+        if self._query_records is None:
+            raise AssertionError("query should not be reached for this stub connector")
+        return SimpleNamespace(records=list(self._query_records))
 
 
 def make_finding(category: str, finding: str, confidence: str = "high") -> Finding:
