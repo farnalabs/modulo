@@ -264,9 +264,22 @@ jobs:
             exit 1
           fi
           MERGED_PRS="$(jq -r '[.[] | select(.merged_at != null)] | map("#" + (.number | tostring)) | join(", ")' <<<"$MATCHING_PRS")"
+          # A merged version-bump PR is the normal end state of a completed cut,
+          # not a duplicate: if the version already reached main and no release
+          # artifact exists yet, the cut legitimately resumes at tagging. Every
+          # artifact/hold check below still runs before anything is published.
           if [ -n "$MERGED_PRS" ]; then
-            echo "::error::Release version ${VERSION} has merged PR(s) ${MERGED_PRS}; refusing to cut again."
-            exit 1
+            git fetch origin main --quiet
+            if ! MAIN_VERSION="$(git show origin/main:backend/pyproject.toml 2>/dev/null | python3 -c 'import sys, tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])' 2>/dev/null)"; then
+              echo "::error::Could not read version from main backend/pyproject.toml; refusing to resume the cut."
+              exit 1
+            fi
+            if [ "$MAIN_VERSION" = "$VERSION" ]; then
+              echo "Release version ${VERSION} already landed on main via ${MERGED_PRS}; resuming at tagging (no new bump PR)."
+            else
+              echo "::error::Release version ${VERSION} has merged PR(s) ${MERGED_PRS} but main is at ${MAIN_VERSION}; refusing to cut again."
+              exit 1
+            fi
           fi
 
           # git ls-remote returns 2 for an absent ref. Any other failure is a

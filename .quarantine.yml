@@ -44,6 +44,10 @@ quarantine:
     reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (merge-queue CI run 41515691281, 2026-11-02)"
     expiry: "2026-11-16"
     owner: "platform-team"
+  - test_id: "tests/unit/scripts/test_run_validate_translations.py::test_main_ok_on_real_repo"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI run 41505252319, PR #2709)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
 
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"

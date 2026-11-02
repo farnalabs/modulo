@@ -840,6 +840,8 @@ def _run_cut_state_gate(
     existing_refs: set[str] | None = None,
     gh_failure: str | None = None,
     git_failure: bool = False,
+    main_version: str = "0.2.0",
+    main_version_unreadable: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "cut-state-bin"
     bin_dir.mkdir()
@@ -902,10 +904,22 @@ def _run_cut_state_gate(
     real_git = shutil.which("git")
     assert real_git is not None
     refs_json = shlex.quote(json.dumps(sorted(existing)))
+    unreadable = "1" if main_version_unreadable else "0"
     _write_executable(
         bin_dir / "git",
         f"""#!/usr/bin/env bash
 set -euo pipefail
+if [ "$1" = "fetch" ]; then
+  exit 0
+fi
+if [ "$1" = "show" ]; then
+  if [ "{unreadable}" = "1" ]; then
+    echo "fatal: path 'backend/pyproject.toml' does not exist on 'origin/main'" >&2
+    exit 128
+  fi
+  printf '[project]\\nversion = "%s"\\n' {shlex.quote(main_version)}
+  exit 0
+fi
 if [ "$1" != "ls-remote" ]; then
   exec {shlex.quote(real_git)} "$@"
 fi
@@ -990,9 +1004,48 @@ def test_cut_state_gate_rejects_closed_merged_pr(tmp_path: Path) -> None:
                 "mergedAt": "2026-01-01T00:00:00Z",
             }
         ],
+        main_version="0.1.0",
     )
     assert result.returncode != 0
     assert "merged PR(s) #2649" in result.stdout
+    assert "main is at 0.1.0" in result.stdout
+    assert "refusing to cut again" in result.stdout
+
+
+def test_cut_state_gate_resumes_merged_bump_pr_when_main_version_matches(tmp_path: Path) -> None:
+    result = _run_cut_state_gate(
+        tmp_path,
+        closed_prs=[
+            {
+                "number": 2649,
+                "headRefName": "release/version-0.2.0",
+                "baseRefName": "main",
+                "mergedAt": "2026-01-01T00:00:00Z",
+            }
+        ],
+        main_version="0.2.0",
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "already landed on main via #2649" in result.stdout
+    assert "resuming at tagging" in result.stdout
+    assert "refusing to cut again" not in result.stdout
+
+
+def test_cut_state_gate_rejects_merged_bump_pr_when_main_version_unreadable(tmp_path: Path) -> None:
+    result = _run_cut_state_gate(
+        tmp_path,
+        closed_prs=[
+            {
+                "number": 2649,
+                "headRefName": "release/version-0.2.0",
+                "baseRefName": "main",
+                "mergedAt": "2026-01-01T00:00:00Z",
+            }
+        ],
+        main_version_unreadable=True,
+    )
+    assert result.returncode != 0
+    assert "::error::Could not read version from main backend/pyproject.toml" in result.stdout
 
 
 def test_cut_state_gate_rejects_active_publication_hold(tmp_path: Path) -> None:
