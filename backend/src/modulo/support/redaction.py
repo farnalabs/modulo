@@ -30,12 +30,27 @@ mangle every member or fail the gate on a value that was never a leak.
 *distinctive* values (long, or containing any non-letter) are scrubbed and
 detected as bare substrings; *weak* values (short and alphabetic) are scrubbed
 and detected only inside a structural credential context — a URL userinfo
-position or immediately after a credential-bearing key such as
+position, or a value introduced by a credential-bearing key such as
 ``password``/``requirepass``/``token``. The trade-off is explicit: a weak
 credential mentioned in free text with no credential context cannot be
 distinguished from the same English word in boilerplate, so it is not treated
-as a leak. One function decides that (:func:`_scrub_seed`) for BOTH the
-redaction layer and the gate, so the two cannot drift.
+as a leak.
+
+The credential context is parsed structurally (:func:`_credential_value_spans`),
+not matched by a fixed separator: between the key and the value any run of
+whitespace, quotes, brackets/braces/parens and the ``:``/``=`` assignment
+punctuation is tolerated, so ``requirepass "x"``, ``password: 'x'``,
+``{"password": "x"}``, ``{'password': 'x'}`` and ``{"POSTGRES_PASSWORD":"x"}``
+are all credential contexts. A key must be a whole token, so the ``auth``
+inside ``authentication`` never counts.
+
+That structural detector is shared with the gate, which means a bug in it would
+be invisible to the gate (one detector = a detector miss is a gate miss too).
+The gate therefore adds a SECOND, INDEPENDENT check
+(:func:`_weak_seed_near_credential_keyword`): any occurrence of the exact weak
+seed value within :data:`MAX_SEED_KEYWORD_GAP` characters of a credential
+keyword is a leak, whatever the separator looks like and whether or not the
+structural parse understood it. The gate fails closed on either check.
 """
 
 from __future__ import annotations
@@ -85,11 +100,51 @@ SENSITIVE_FIELD_TOKENS: Final[tuple[str, ...]] = (
 MIN_DISTINCTIVE_SEED_LENGTH: Final[int] = 12
 
 #: Keys that introduce a credential VALUE. A weak seed value is only scrubbed
-#: (and only detected) where one of these is immediately adjacent.
+#: (and only detected) where one of these introduces a value, or sits within
+#: :data:`MAX_SEED_KEYWORD_GAP` characters of one.
 _CREDENTIAL_CONTEXT_KEYS: Final[str] = (
     r"(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|private[_-]?key|"
-    r"access[_-]?key|hmac|requirepass|fernet[_-]?key)"
+    r"access[_-]?key|hmac|requirepass|fernet[_-]?key|auth)"
 )
+
+#: A credential key as a WHOLE token: ``POSTGRES_PASSWORD`` matches, the ``auth``
+#: inside ``authentication`` does not, and prose stays prose.
+_CREDENTIAL_KEYWORD_RE: Final[re.Pattern[str]] = re.compile(
+    rf"(?i)(?<![A-Za-z0-9]){_CREDENTIAL_CONTEXT_KEYS}(?![A-Za-z0-9])"
+)
+
+#: What may sit between a credential key and its value without changing what
+#: the value IS: whitespace, quotes, brackets/braces/parens, and the ``:``/``=``
+#: assignment punctuation used by env files, YAML/TOML, JSON and shell. A
+#: quoted JSON *key* puts its closing quote here (``{"password": "x"}``) —
+#: the separator shape a ``[:=]``-only pattern could not span.
+_KEY_VALUE_SEPARATOR: Final[str] = r"""[\s"'`(\[{:,=]*"""
+
+#: The value token a credential key introduces: a quoted string, a bracketed
+#: run, or a bare run. One group, so the span is the whole token (its own
+#: quoting included) and no shape can leave every alternative unmatched.
+_VALUE_TOKEN: Final[str] = (
+    r'(?P<value>"[^"\n]*"'
+    r"|'[^'\n]*'"
+    r"|\([^)\n]*\)"
+    r"|\[[^\]\n]*\]"
+    r'|[^\s"\'`()\[\]{},;=]+)'
+)
+
+#: ``KEY`` + tolerated separator + value token, as one structural match.
+_CREDENTIAL_CONTEXT_RE: Final[re.Pattern[str]] = re.compile(
+    rf"(?i)(?<![A-Za-z0-9]){_CREDENTIAL_CONTEXT_KEYS}(?![A-Za-z0-9])"
+    rf"{_KEY_VALUE_SEPARATOR}{_VALUE_TOKEN}"
+)
+
+#: A weak seed counts as a leak if it begins within this many characters of the
+#: END of a credential keyword. Eight spans every realistic separator
+#: (``"x"``, ``: 'x'``, ``":"x"``, an aligned ``=``) while staying far below
+#: the distance in ordinary prose: ``password authentication failed for user
+#: modulo`` leaves 32 characters between the keyword and the word, so it is not
+#: flagged. This is the gate's INDEPENDENT backstop — it never consults the
+#: structural tokeniser above.
+MAX_SEED_KEYWORD_GAP: Final[int] = 8
 
 
 def is_distinctive_seed(value: str) -> bool:
@@ -97,42 +152,95 @@ def is_distinctive_seed(value: str) -> bool:
     return len(value) >= MIN_DISTINCTIVE_SEED_LENGTH or not value.isalpha()
 
 
-def _seed_pattern(value: str) -> re.Pattern[str]:
-    """Pattern matching every occurrence of *value* that counts as a leak."""
+def _is_word_char(char: str) -> bool:
+    return char.isalnum() or char == "_"
+
+
+def _bounded_occurrences(text: str, value: str, start: int, end: int) -> list[tuple[int, int]]:
+    """Spans where *value* appears in ``text[start:end]`` as a whole token."""
+    spans: list[tuple[int, int]] = []
+    position = text.find(value, start, end)
+    while position != -1:
+        after = position + len(value)
+        preceded_by_word = position > 0 and _is_word_char(text[position - 1])
+        followed_by_word = after < len(text) and _is_word_char(text[after])
+        if not preceded_by_word and not followed_by_word:
+            spans.append((position, after))
+        position = text.find(value, position + 1, end)
+    return spans
+
+
+def _credential_value_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of *text* that occupy a credential VALUE position.
+
+    The structural parse shared by the redaction layer and the gate: find a
+    credential key, tolerate any realistic separator, then take the value token
+    that follows it. The span covers only the value token (its own quoting
+    included), never the key or the separator.
+    """
+    return [match.span("value") for match in _CREDENTIAL_CONTEXT_RE.finditer(text)]
+
+
+def _weak_seed_occurrences(text: str, value: str) -> list[tuple[int, int]]:
+    """Spans where a WEAK *value* is a leak: a credential value or URL userinfo."""
     escaped = re.escape(value)
+    occurrences = [(match.start(0) + 1, match.end(0) - 1) for match in re.finditer(rf":{escaped}@", text)]
+    for start, end in _credential_value_spans(text):
+        occurrences.extend(_bounded_occurrences(text, value, start, end))
+    return sorted(occurrences)
+
+
+def _seed_leak_occurrences(text: str, value: str) -> list[tuple[int, int]]:
+    """Spans where *value* counts as a leak: bare when distinctive, contextual when weak."""
     if is_distinctive_seed(value):
-        return re.compile(escaped)
-    return re.compile(
-        "|".join(
-            (
-                rf"(?i:{_CREDENTIAL_CONTEXT_KEYS})\s*[:=]\s*[\"']?{escaped}",
-                rf"(?i:{_CREDENTIAL_CONTEXT_KEYS})\s+{escaped}",
-                rf":{escaped}@",
-            )
-        )
-    )
+        return [(match.start(), match.end()) for match in re.finditer(re.escape(value), text)]
+    return _weak_seed_occurrences(text, value)
+
+
+def _weak_seed_near_credential_keyword(text: str, value: str) -> bool:
+    """Independent gate backstop: a weak *value* close to a credential keyword.
+
+    Deliberately does NOT use :func:`_credential_value_spans`. Any occurrence of
+    the exact seed value beginning within :data:`MAX_SEED_KEYWORD_GAP`
+    characters of a credential keyword's end is a leak, so an unfamiliar
+    separator or a tokeniser miss cannot hide one.
+    """
+    window = MAX_SEED_KEYWORD_GAP + len(value)
+    for keyword in _CREDENTIAL_KEYWORD_RE.finditer(text):
+        start = keyword.end()
+        # The search window ends at start + gap + len(value), so any occurrence
+        # found necessarily BEGINS within MAX_SEED_KEYWORD_GAP of the keyword —
+        # no separate distance comparison (and no unreachable branch) is needed.
+        if _bounded_occurrences(text, value, start, min(len(text), start + window)):
+            return True
+    return False
 
 
 def _scrub_seed(text: str, value: str, replacement: str) -> tuple[str, int]:
     """Replace every leak occurrence of *value* in *text*; return (text, count).
 
-    The SAME pattern decides what a leak is here and in
-    :func:`assert_redaction_proven`, so a value the layer scrubbed can never be
-    reported as surviving, and a value the layer left alone is never refused.
+    The SAME structural detector (:func:`_seed_leak_occurrences`) decides what a
+    leak is here and in :func:`assert_redaction_proven`, so a value the layer
+    scrubbed is never reported as surviving and a value the layer left alone is
+    never refused by the shared check. The gate adds one INDEPENDENT check on
+    top, so a miss in this detector is not a miss in the gate.
     """
-    pattern = _seed_pattern(value)
-    occurrences = 0
+    occurrences = _seed_leak_occurrences(text, value)
+    if not occurrences:
+        return text, 0
 
-    def _replace(match: re.Match[str]) -> str:
-        nonlocal occurrences
-        chunk = match.group(0)
-        offset = chunk.find(value)
-        if offset < 0:  # pragma: no cover - a match always contains the value
-            return chunk
-        occurrences += 1
-        return chunk[:offset] + replacement + chunk[offset + len(value) :]
-
-    return pattern.sub(_replace, text), occurrences
+    pieces: list[str] = []
+    cursor = 0
+    substituted = 0
+    for start, end in occurrences:
+        if start < cursor:  # pragma: no cover - defensive: overlapping spans
+            continue
+        pieces.append(text[cursor:start])
+        pieces.append(replacement)
+        cursor = end
+        substituted += 1
+    pieces.append(text[cursor:])
+    return "".join(pieces), substituted
 
 
 @dataclass(frozen=True)
@@ -269,8 +377,11 @@ def assert_redaction_proven(
     * the member name is on the caller's v1 allowlist (a new member cannot
       slip into the bundle without a golden-list update);
     * no seeded secret value survives (the seed-exact layer ran) — matched by
-      the same detector the layer uses, so a short common-word credential is
-      only a leak in a credential context, never in boilerplate;
+      the same structural detector the layer uses, so a short common-word
+      credential is only a leak in a credential context, never in boilerplate;
+    * no weak seeded value survives NEAR a credential keyword — a second,
+      independent check that does not depend on the structural parse, so a
+      detector miss in the layer (and in the check above) cannot blind the gate;
     * no secret-shaped value survives (the pattern layer ran);
     * no sensitive ``KEY=value`` pair survives (the structural layer ran).
 
@@ -289,9 +400,22 @@ def assert_redaction_proven(
 
         scrubbed = _without_markers(text)
         for secret in secret_values:
-            if secret and _seed_pattern(secret).search(scrubbed):
+            if not secret:
+                continue
+            if _seed_leak_occurrences(scrubbed, secret):
                 layer = "seed-exact layer" if is_distinctive_seed(secret) else "seed-exact layer (credential context)"
                 raise RedactionSelfCheckError(name, f"a seeded secret value survived the {layer}")
+            # SECOND, INDEPENDENT check. The detector above is shared with the
+            # redaction layer, so a bug in it would be invisible here — one
+            # detector means a detector miss is a gate miss. This check depends
+            # on neither the separator shape nor the structural tokeniser: any
+            # occurrence of the exact weak seed value within
+            # MAX_SEED_KEYWORD_GAP characters of a credential keyword is a leak.
+            if not is_distinctive_seed(secret) and _weak_seed_near_credential_keyword(scrubbed, secret):
+                raise RedactionSelfCheckError(
+                    name,
+                    "a seeded secret value survived near a credential keyword (independent proximity check)",
+                )
 
         if mask_secret_values_in_text(text) != text:
             raise RedactionSelfCheckError(name, "secret-shaped content survived the pattern layer")

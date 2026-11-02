@@ -520,6 +520,49 @@ def test_common_word_password_is_scrubbed_out_of_a_real_log(tmp_path: Path) -> N
     assert result.redaction.seed_exact >= 1
 
 
+def test_quoted_credential_is_scrubbed_out_of_a_real_json_log(tmp_path: Path) -> None:
+    """FAR-2305 review: quoting/JSON between key and value must not hide the seed."""
+    sources = BundleSources(
+        install_shape="container",
+        members={
+            "version.txt": "modulo version: test",
+            "logs/app.log.tail": 'loaded config {"POSTGRES_PASSWORD":"modulo"} ok',
+        },
+        secret_values={QUICKSTART_PASSWORD: REDACTED},
+    )
+    result = build_bundle(tmp_path / "quoted.zip", sources=sources)
+    with zipfile.ZipFile(result.path) as archive:
+        tail = archive.read("logs/app.log.tail").decode()
+    assert QUICKSTART_PASSWORD not in tail
+    assert f'"POSTGRES_PASSWORD":"{REDACTED}"' in tail
+    assert result.redaction.seed_exact >= 1
+
+
+def test_build_refuses_a_quoted_credential_when_the_seed_layer_is_bypassed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prove-the-fix for the quoted/JSON shapes, not only the plain `value` shape."""
+    sources = BundleSources(
+        install_shape="container",
+        members={
+            "version.txt": "modulo version: test",
+            "logs/postgres.log.tail": 'FATAL: {"password": "modulo"} rejected',
+        },
+        secret_values={QUICKSTART_PASSWORD: REDACTED},
+    )
+    monkeypatch.setattr(
+        bundle_module,
+        "redact_text",
+        lambda text, _secrets: RedactionResult(text=text, counts=RedactionCounts()),
+    )
+    out_path = tmp_path / "refused-quoted.zip"
+    with pytest.raises(RedactionSelfCheckError) as caught:
+        build_bundle(out_path, sources=sources)
+    assert caught.value.member == "logs/postgres.log.tail"
+    assert "credential context" in caught.value.reason
+    assert not out_path.exists()
+
+
 def test_inventory_is_gated_for_shapes_not_for_seeded_boilerplate() -> None:
     """The two gate calls have different scopes, on purpose."""
     seed = {QUICKSTART_PASSWORD: REDACTED}

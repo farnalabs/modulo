@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+import modulo.support.redaction as redaction_module
 from modulo.support.redaction import (
     REDACTED,
     RedactionSelfCheckError,
@@ -218,3 +219,118 @@ def test_empty_seed_value_is_skipped() -> None:
     result = redact_text("modulo version: 0.3.323", {"": REDACTED})
     assert result.text == "modulo version: 0.3.323"
     assert result.counts.seed_exact == 0
+
+
+# ---------------------------------------------------------------------------
+# FAR-2305 review: quoting / JSON between the key and the value must not hide a
+# weak seed. The narrowed `[:=]`-only separator leaked every shape below (the
+# pre-fix bare-substring gate covered them), and the gate re-scanned with the
+# same detector, so the layer miss was invisible to the gate too.
+# ---------------------------------------------------------------------------
+
+#: Every separator shape a real leak takes: shell/redis quoting, YAML/TOML,
+#: JSON (double- and single-quoted keys), and an env var with a quoted value.
+QUOTED_LEAK_SHAPES = (
+    'requirepass "modulo"',
+    "requirepass 'modulo'",
+    'password "modulo"',
+    'AUTH "modulo"',
+    '{"password": "modulo"}',
+    "{'password': 'modulo'}",
+    '{"POSTGRES_PASSWORD":"modulo"}',
+)
+
+
+@pytest.mark.parametrize("shape", QUOTED_LEAK_SHAPES)
+def test_quoted_and_json_credential_shapes_are_scrubbed(shape: str) -> None:
+    result = redact_text(shape, collect_seed_values("modulo"))
+    assert "modulo" not in result.text
+    assert REDACTED in result.text
+    assert result.counts.seed_exact >= 1
+
+
+@pytest.mark.parametrize("shape", QUOTED_LEAK_SHAPES)
+def test_gate_refuses_quoted_and_json_shapes_when_the_scrub_layer_is_disabled(
+    shape: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prove-the-fix: the gate, not only the scrub layer, recognises these shapes."""
+    monkeypatch.setattr(redaction_module, "_scrub_seed", lambda text, _value, _replacement: (text, 0))
+    with pytest.raises(RedactionSelfCheckError) as caught:
+        assert_redaction_proven({"member.txt": shape}, collect_seed_values("modulo"), member_allowed=_allow)
+    assert caught.value.member == "member.txt"
+    assert "credential context" in caught.value.reason
+    assert "modulo" not in str(caught.value)
+
+
+@pytest.mark.parametrize("shape", QUOTED_LEAK_SHAPES)
+def test_gate_independent_detector_refuses_when_the_structural_parse_misses(
+    shape: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate must not share a blind spot with the layer's detector.
+
+    With the shared structural detector neutralised, the second, independent
+    proximity check still fails closed on every quoted/JSON shape.
+    """
+    monkeypatch.setattr(redaction_module, "_weak_seed_occurrences", lambda _text, _value: [])
+    with pytest.raises(RedactionSelfCheckError) as caught:
+        assert_redaction_proven({"member.txt": shape}, collect_seed_values("modulo"), member_allowed=_allow)
+    assert caught.value.member == "member.txt"
+    assert "proximity" in caught.value.reason
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "modulo support bundle\nformat: modulo-support-bundle/v1",
+        "modulo version: 0.3.323",
+        "FATAL: password authentication failed for user modulo",
+        "auth failed for user modulo",
+        "docs: modulo is a governance platform",
+    ],
+)
+def test_widened_detector_does_not_flag_boilerplate_or_prose(text: str) -> None:
+    """Widening the separator must not turn ordinary prose into a credential context."""
+    result = redact_text(text, collect_seed_values("modulo"))
+    assert result.text == text
+    assert result.counts.seed_exact == 0
+    assert_redaction_proven({"version.txt": text}, collect_seed_values("modulo"), member_allowed=_allow)
+
+
+def test_weak_seed_userinfo_is_still_matched() -> None:
+    """The URL-userinfo position survived the separator rewrite."""
+    result = redact_text("redis://:modulo@127.0.0.1:6379/0", collect_seed_values("modulo"))
+    assert "modulo" not in result.text
+    assert result.counts.seed_exact == 1
+
+
+def test_percent_encoded_seed_form_is_still_matched() -> None:
+    """Percent-encoded forms remain distinctive and are scrubbed verbatim."""
+    from urllib.parse import quote
+
+    password = "p@ssword"
+    encoded = quote(password, safe="")
+    result = redact_text(f"redis://:{encoded}@host/0", collect_seed_values(password))
+    assert encoded not in result.text
+    assert password not in result.text
+
+
+def test_gate_ignores_an_empty_seed_value() -> None:
+    """An empty seed key must not make the gate refuse every member."""
+    assert_redaction_proven({"version.txt": "modulo version: 0.3.323"}, {"": REDACTED}, member_allowed=_allow)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "requirepass modulox",
+        "requirepass xmodulo",
+        '{"password": "modulox"}',
+        '{"password": "xmodulo"}',
+    ],
+)
+def test_seed_inside_a_longer_credential_value_is_not_a_leak(shape: str) -> None:
+    """A credential value that merely contains the word is a different value."""
+    result = redact_text(shape, collect_seed_values("modulo"))
+    assert result.text == shape
+    assert result.counts.seed_exact == 0
+    assert_redaction_proven({"member.txt": shape}, collect_seed_values("modulo"), member_allowed=_allow)
