@@ -97,8 +97,11 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(wrapper.text()).toContain('1')
     expect(wrapper.text()).toContain('Present')
     expect(wrapper.text()).toContain('Observed')
-    expect(wrapper.text()).toContain('10/20/2026')
-    expect(wrapper.text()).toContain('10/22/2026')
+    // formatTimestamp renders through the JS runtime's default locale, so the
+    // expectation must be built the same way: a US-format literal fails on any
+    // en-GB machine while the component is correct.
+    expect(wrapper.text()).toContain(new Date('2026-10-20T12:00:00Z').toLocaleDateString())
+    expect(wrapper.text()).toContain(new Date('2026-10-22T12:00:00Z').toLocaleDateString())
     expect(wrapper.find('dl').exists()).toBe(true)
     expect(wrapper.findAll('dl dt')).not.toHaveLength(0)
     expect(wrapper.findAll('dl dd')).not.toHaveLength(0)
@@ -359,7 +362,11 @@ describe('ComplianceEvidenceIndexView', () => {
     const wrapper = mountView()
     await settle()
 
-    expect(wrapper.find('[data-testid="compliance-evidence-index-error"]').text()).toContain('index unavailable')
+    const errorRegion = wrapper.find('[data-testid="compliance-evidence-index-error"]')
+    expect(errorRegion.text()).toContain('index unavailable')
+    // One live region for the message: ErrorAlert's root, never the wrapper.
+    expect(errorRegion.attributes('aria-live')).toBeUndefined()
+    expect(errorRegion.findAll('[role="alert"]')).toHaveLength(1)
     mockGet.mockResolvedValue({ data: payload(), error: undefined })
     await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
     await settle()

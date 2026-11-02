@@ -2,10 +2,12 @@
   <div class="p-6 max-w-2xl mx-auto space-y-6">
     <PageHeader :title="$t('views.MyProfileView.my_profile')" :subtitle="$t('views.MyProfileView.manage_your_account_settings_and_password')" />
 
+    <!-- One live region per message: ErrorAlert's root owns role="alert" (the
+         FolderListError house rule), so these wrappers carry layout, class and
+         data-testid only. A second role/aria-live here would announce the same
+         failure twice. -->
     <div
       v-if="profileLoadError"
-      role="alert"
-      aria-live="assertive"
       class="my-profile-profile-error"
     >
       <ErrorAlert
@@ -59,8 +61,6 @@
         </div>
         <div
           v-else-if="myTeamsError"
-          role="alert"
-          aria-live="assertive"
           class="my-profile-my-teams-error"
         >
           <ErrorAlert
@@ -96,8 +96,6 @@
       </div>
        <div
          v-else-if="hitlPrefsLoadError"
-          role="alert"
-          aria-live="assertive"
            data-testid="my-profile-hitl-email-load-error"
            class="my-profile-hitl-email-load-error"
         >
@@ -127,8 +125,6 @@
           <p class="text-xs text-muted-foreground mb-2">{{ $t('views.MyProfileView.hitl_email_overrides_help') }}</p>
             <div
               v-if="hitlPipelinesLoadError"
-              role="alert"
-              aria-live="assertive"
               class="my-profile-hitl-email-pipelines-error"
             >
               <ErrorAlert

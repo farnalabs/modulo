@@ -28,7 +28,7 @@
       <p class="mt-1">{{ $t('views.ComplianceEvidenceIndex.permission_denied_description') }}</p>
     </div>
 
-    <div v-else-if="loadError" aria-live="assertive" data-testid="compliance-evidence-index-error">
+    <div v-else-if="loadError" data-testid="compliance-evidence-index-error">
       <ErrorAlert :message="loadError" :on-retry="load" />
     </div>
 

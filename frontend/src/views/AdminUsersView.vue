@@ -19,7 +19,9 @@
       data-testid="admin-users-loading"
     />
 
-    <div v-else-if="error" aria-live="assertive">
+    <!-- ErrorAlert's root carries role="alert"; the wrapper must not add a
+         second live region for the same message. -->
+    <div v-else-if="error">
       <ErrorAlert :message="error" :on-retry="loadUsers" />
     </div>
 
@@ -134,7 +136,7 @@
         :aria-label="$t('common.loading')"
         data-testid="admin-invitations-loading"
       />
-      <div v-else-if="invitationsError" aria-live="assertive" data-testid="admin-invitations-error">
+      <div v-else-if="invitationsError" data-testid="admin-invitations-error">
         <ErrorAlert :message="invitationsError" :on-retry="loadInvitations" />
       </div>
       <EmptyState

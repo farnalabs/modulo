@@ -388,7 +388,7 @@ describe('PipelineEditorView — branch coverage sweep', () => {
   })
 
   // -- loadPipeline error path --
-  it('loadPipeline sets pageError on API failure', async () => {
+  it('loadPipeline routes a record failure to the non-fatal banner and keeps the editor', async () => {
     ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       if (url.includes('/api/v1/pipelines/{pipeline_id}') && !url.includes('graph') && !url.includes('snapshots')) {
         return Promise.reject(new Error('pipeline_load_fail'))
@@ -402,7 +402,19 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     const vm = wrapper.vm as any
     await vm.loadPipeline()
     await flushPromises()
-    expect(vm.pageError).toContain('pipeline_load_fail')
+
+    // The record only supplies the name/settings; the graph drives the editor,
+    // so a record failure is an ANNOUNCED banner, never a page takeover.
+    expect(vm.pipelineLoadError).toContain('pipeline_load_fail')
+    expect(vm.pageError).toBeNull()
+    const banner = wrapper
+      .findAll('[role="alert"]')
+      .find((alert) => alert.text().includes('pipeline_load_fail'))
+    expect(banner).toBeDefined()
+    expect(banner!.text()).toContain('pipeline_load_fail')
+    expect(banner!.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    // The editor survives beside the banner.
+    expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

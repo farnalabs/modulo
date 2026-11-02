@@ -7,7 +7,9 @@
 
     <LoadingSpinner v-if="loading" data-testid="settings-notifications-loading" />
 
-    <div v-else-if="loadError" data-testid="settings-notifications-error" aria-live="assertive">
+    <!-- ErrorAlert's root owns the role="alert" live region; the wrapper adds
+         no second one for the same message. -->
+    <div v-else-if="loadError" data-testid="settings-notifications-error">
       <ErrorAlert
         :message="loadError"
         :on-retry="loadPreferences"
@@ -106,7 +108,7 @@
       </p>
 
       <!-- Save failure: inline, assertive, with the failed change as its retry. -->
-      <div v-if="saveError" data-testid="settings-notifications-save-error" aria-live="assertive">
+      <div v-if="saveError" data-testid="settings-notifications-save-error">
         <ErrorAlert
           :message="saveError"
           :on-retry="retryFailedSave"

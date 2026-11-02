@@ -1510,7 +1510,7 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
   })
 
   // -- loadPipeline: error path --
-  it('loadPipeline error sets pageError', async () => {
+  it('loadPipeline error surfaces a non-fatal banner and keeps the editor', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = mountEditor()
@@ -1523,7 +1523,17 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
 
     await vm.loadPipeline()
     await flushPromises()
-    expect(vm.pageError).toContain('pipeline_not_found')
+
+    // Non-fatal: the graph-driven editor stays usable and the failure is
+    // announced by the banner, so pageError must stay clear.
+    expect(vm.pipelineLoadError).toContain('pipeline_not_found')
+    expect(vm.pageError).toBeNull()
+    const banner = wrapper
+      .findAll('[role="alert"]')
+      .find((alert) => alert.text().includes('pipeline_not_found'))
+    expect(banner).toBeDefined()
+    expect(banner!.text()).toContain('pipeline_not_found')
+    expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
