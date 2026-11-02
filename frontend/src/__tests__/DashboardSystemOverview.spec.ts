@@ -2,6 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
+
+const mockGet = vi.hoisted(() => vi.fn())
+
+vi.mock('../lib/api/client', () => ({
+  api: { GET: mockGet },
+  getAccessToken: () => 'test-token',
+}))
+
 import enUS from '../locales/en-US.js'
 import DashboardSystemOverview from '../components/dashboard/DashboardSystemOverview.vue'
 import { useSystemMapsStore } from '../stores/systemMaps'
@@ -53,7 +61,9 @@ const overview = {
 /**
  * Mount with the store's own network actions stubbed: this spec covers the
  * RENDERING contract (loading / error / empty / metrics states), while the real
- * fetch functions are exercised end-to-end in systemMapsStore.spec.ts.
+ * fetch functions are exercised end-to-end in systemMapsStore.spec.ts. The
+ * retry case below deliberately leaves the real fetch in place (with `api.GET`
+ * mocked) so the retry path is proven through the store rather than a stub.
  */
 function mountOverview() {
   setActivePinia(createPinia())
@@ -67,6 +77,7 @@ function mountOverview() {
 describe('DashboardSystemOverview', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    mockGet.mockReset()
   })
 
   it('loads discovery and then the default overview on mount', async () => {
@@ -129,7 +140,44 @@ describe('DashboardSystemOverview', () => {
     const error = wrapper.get('[data-testid="system-map-overview-error"]')
     expect(error.text()).toContain('unavailable')
     expect(error.attributes('aria-live')).toBe('assertive')
+    // The shared ErrorAlert carries the retry affordance into this view.
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="system-map-overview-empty"]').exists()).toBe(false)
+  })
+
+  it('retries the overview from the error state and replaces it with the loaded metrics', async () => {
+    setActivePinia(createPinia())
+    const store = useSystemMapsStore()
+    const fetchDiscovery = vi.spyOn(store, 'fetchDiscovery').mockResolvedValue()
+    mockGet
+      // First list request fails: the view settles into its error state.
+      .mockResolvedValueOnce({ error: { detail: 'System map list request failed' } })
+      // The retry re-runs the failing list request, which now succeeds...
+      .mockResolvedValueOnce({
+        data: {
+          items: [{ id: 'map', published_revision_id: 'revision', default_map: true }],
+          total: 1,
+          page: 1,
+          page_size: 20,
+        },
+      })
+      // ...and the overview it resolves to.
+      .mockResolvedValueOnce({ data: overview })
+
+    const wrapper = mount(DashboardSystemOverview, { global: { plugins: [i18n] } })
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="system-map-overview-error"]').exists()).toBe(true),
+    )
+
+    await wrapper.get('[data-testid="error-alert-retry"]').trigger('click')
+
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="system-map-overview-metrics"]').exists()).toBe(true),
+    )
+    expect(wrapper.find('[data-testid="system-map-overview-error"]').exists()).toBe(false)
+    // The retry re-runs every source the view reads, not only the leaf overview.
+    expect(fetchDiscovery).toHaveBeenCalledTimes(2)
+    expect(mockGet).toHaveBeenCalledTimes(3)
   })
 
   it('renders a distinct empty state, not an error', async () => {
@@ -139,7 +187,10 @@ describe('DashboardSystemOverview', () => {
     store.overviewEmpty = true
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.get('[data-testid="system-map-overview-empty"]').text()).toContain('No published system map')
+    const empty = wrapper.get('[data-testid="system-map-overview-empty"]')
+    expect(empty.text()).toContain('No published system map')
+    // Rendered through the shared EmptyState rather than a bespoke box.
+    expect(empty.classes()).toContain('card')
     expect(wrapper.find('[data-testid="system-map-overview-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-overview-metrics"]').exists()).toBe(false)
   })
