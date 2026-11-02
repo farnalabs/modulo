@@ -29,7 +29,8 @@
     />
     <EmptyState
       v-else-if="store.overviewEmpty"
-      :title="$t('views.DashboardView.system_maps_empty')"
+      :title="$t('views.DashboardView.system_maps_empty_title')"
+      :description="$t('views.DashboardView.system_maps_empty_description')"
       data-testid="system-map-overview-empty"
     />
     <div v-else-if="store.overview" class="space-y-3" data-testid="system-map-overview-metrics">
@@ -55,8 +56,8 @@
 
 <script setup lang="ts">
 import SectionCard from '../shared/SectionCard.vue'
-import ErrorAlert from '../shared/ErrorAlert.vue'
 import EmptyState from '../shared/EmptyState.vue'
+import ErrorAlert from '../shared/ErrorAlert.vue'
 import SystemMapDraftReview from '../system-maps/SystemMapDraftReview.vue'
 import { onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
