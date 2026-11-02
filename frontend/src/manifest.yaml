@@ -5901,6 +5901,9 @@ elements:
       - testid: settings-mcp-create-key-role
         type: select
         dynamic_testid: false
+      - testid: settings-mcp-create-key-scope
+        type: select
+        dynamic_testid: false
       - testid: api-key-grants-selector
         type: element
         dynamic_testid: false

@@ -206,13 +206,22 @@ def test_every_registered_tool_has_a_valid_caller_scope_classification() -> None
         )
 
 
-def test_no_mutating_tool_classified_any() -> None:
+def test_no_mutating_tool_classified_any_except_review_hitl_reachability_override() -> None:
+    """Only HITL reachability may bypass the default mutating-tool scope pin.
+
+    ``review_hitl`` still has action-level permission/grant and human-linkage
+    gates after this chokepoint; every other mutating tool remains org-only.
+    """
     mutating = _EXPECTED_TOOLS - READ_ONLY_TOOLS
     for tool in mutating:
         classification = _classified_caller_scope(tool)
-        assert classification != _ANY, (
-            f"mutating tool '{tool}' classified '{_ANY}' — a mutating tool must never be callable by every caller scope"
-        )
+        if tool == "review_hitl":
+            assert classification == _ANY
+        else:
+            assert classification != _ANY, (
+                f"mutating tool '{tool}' classified '{_ANY}' — a mutating tool must never be "
+                "callable by every caller scope"
+            )
 
 
 def test_caller_scope_requirements_reference_registered_tools() -> None:
@@ -220,7 +229,8 @@ def test_caller_scope_requirements_reference_registered_tools() -> None:
 
     registered = _registered_tool_names()
     for tool in CALLER_SCOPE_REQUIREMENTS:
-        assert tool in registered, f"CALLER_SCOPE_REQUIREMENTS references unregistered tool '{tool}'"
+        base_tool = tool.split(":", maxsplit=1)[0]
+        assert base_tool in registered, f"CALLER_SCOPE_REQUIREMENTS references unregistered tool '{tool}'"
 
 
 def test_caller_scope_requirements_values_are_valid() -> None:

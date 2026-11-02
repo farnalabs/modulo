@@ -343,14 +343,17 @@ applications. Built on the auth + model-backend core.
       (`SCOPE_ALIASES`: `trigger:run` → `run.trigger`, `hitl:review` →
       `hitl.review`, `library:browse` → `resource.read_only`). The five
       `hitl.*` decision keys were removed from `NON_DELEGABLE_PERMISSIONS` on
-      the 2026-10-09 decision record: a human-linked credential (a human's
+      the 2026-10-09 decision record: a human-linked       credential (a human's
       OAuth connection) may hold them, and the boundary is the gate's runtime
       `human_only` policy - the MCP surface (`_check_human_only_gate`) denies
-      a `human_only` gate outright regardless of credential class and REST
-      (`routes/hitl._enforce_human_only_gate`) denies a non-browser
-      credential - so a token holding `hitl.*` CAN decide an explicitly
-      opted-out gate and is denied on a `human_only` one with the RUNTIME
-      `human_only_gate` error rather than `insufficient_scope`. The
+      an unlinked credential; a verified human-linked OAuth credential or
+      user-scoped human-linked API key is admitted only when the default-OFF
+      `mcp_human_linked_hitl_authority` flag is enabled, and `deliver_manual`
+      remains browser-only. REST (`routes/hitl._enforce_human_only_gate`)
+      denies every non-browser credential because its principals are
+      browser-login JWTs only - so a token holding `hitl.*` CAN decide an
+      explicitly opted-out gate and is denied on a `human_only` one with the
+      RUNTIME `human_only_gate` error rather than `insufficient_scope`. The
       registration picker is backend-driven: `GET /api/v1/mcp/oauth/scopes`
       serves the delegable keys + role floors filtered to the caller's role,
       and the card renders them grouped by namespace and searchable with no
