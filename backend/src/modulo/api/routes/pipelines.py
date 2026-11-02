@@ -1941,17 +1941,13 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             raise ValueError("Manual nodes cannot reference an agent")
         if self.connector_binding is not None:
             raise ValueError("Manual nodes cannot have connector bindings")
-        # FAR-2278: same three forms the write-path guard
-        # (``enforce_manual_node_output_schemas``) accepts. Library/template
-        # manual gates carry only an inline ``output_schema_json``; rejecting
-        # it here made ``get_pipeline_graph`` output fail ``update_pipeline_graph``.
-        has_output = (
-            self.output_schema_pin is not None
-            or self.output_schema_id is not None
-            or self.output_schema_json is not None
-        )
-        if not has_output:
-            raise ValueError("Manual nodes require an output schema")
+        # FAR-2283: the output-schema requirement is NOT checked here. This
+        # model cannot see the stored graph, and a legacy manual node stored
+        # without a schema must be writable back unchanged. The requirement is
+        # enforced under the row lock in ``replace_pipeline_graph`` via
+        # ``enforce_manual_node_output_schemas`` (stored-graph aware; every
+        # graph write funnels through it), which still rejects new manual
+        # nodes and removal of an existing schema.
         if self.label is None:
             raise ValueError("Manual nodes require a label")
 
@@ -2683,9 +2679,24 @@ def _validated_graph_node(
     node_id = str(raw_node_id) if raw_node_id is not None else "unknown"
     try:
         # First attempt: strict validation (write-path quality).
-        return PipelineGraphNode.model_validate(node_dict)
+        node = PipelineGraphNode.model_validate(node_dict)
     except ValidationError:
         return _read_legacy_graph_node(node_dict, node_id, issues)
+    # FAR-2283: the output-schema requirement moved out of the model into the
+    # stored-graph-aware write guard, so surface a legacy schema-less manual
+    # node as the same ``node_legacy_data`` warning the read path always gave.
+    if node_dict.get("node_type") == "manual" and not (
+        node.output_schema_id is not None or node.output_schema_pin is not None or node.output_schema_json is not None
+    ):
+        issues.append(
+            GraphValidationIssue(
+                severity="warning",
+                code="node_legacy_data",
+                message=f"Node {node_id} is a manual node with no output schema (legacy data).",
+                node_id=node_id,
+            )
+        )
+    return node
 
 
 def _read_legacy_graph_node(

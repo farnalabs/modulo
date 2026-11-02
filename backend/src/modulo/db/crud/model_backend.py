@@ -5,7 +5,7 @@ All functions require RLS org context to be set by the caller.
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, TypedDict, Unpack
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -21,6 +21,24 @@ from modulo.db.models.pipeline import Pipeline
 _log = logging.getLogger(__name__)
 
 
+class CreateModelBackendOptions(TypedDict, total=False):
+    """Keyword-only options accepted by :func:`create_model_backend` (python:S107).
+
+    Grouped behind ``**options: Unpack[CreateModelBackendOptions]`` so the
+    function stays inside the S107 parameter budget without changing a single
+    caller: every option keeps its exact name, type and default, and mypy still
+    type-checks each keyword at the call site. ``total=False`` models the
+    defaults; the body applies them via ``options.get(name, default)``.
+    """
+
+    default_params: dict[str, Any] | None
+    visibility: str
+    owner_team_id: uuid.UUID | None
+    fallback_backend_ids: list[str] | None
+    tier: str
+    status: str | None
+
+
 async def create_model_backend(
     session: AsyncSession,
     *,
@@ -31,12 +49,19 @@ async def create_model_backend(
     model_id: str,
     credentials_ciphertext: bytes,
     account_id: uuid.UUID,
-    default_params: dict[str, Any] | None = None,
-    visibility: str = "org",
-    owner_team_id: uuid.UUID | None = None,
-    fallback_backend_ids: list[str] | None = None,
-    tier: str = "native",
+    **options: Unpack[CreateModelBackendOptions],
 ) -> ModelBackend:
+    """Create a model backend; optional metadata rides on :class:`CreateModelBackendOptions`."""
+    default_params = options.get("default_params")
+    visibility = options.get("visibility", "org")
+    owner_team_id = options.get("owner_team_id")
+    fallback_backend_ids = options.get("fallback_backend_ids")
+    tier = options.get("tier", "native")
+    status = options.get("status")
+    unknown_options = set(options) - set(CreateModelBackendOptions.__annotations__)
+    if unknown_options:
+        raise TypeError(f"unexpected create_model_backend options: {sorted(unknown_options)}")
+
     mb = ModelBackend(
         organisation_id=org_id,
         name=name,
@@ -50,6 +75,7 @@ async def create_model_backend(
         owner_team_id=owner_team_id,
         fallback_backend_ids=fallback_backend_ids,
         tier=tier,
+        **({"status": status} if status is not None else {}),
     )
     session.add(mb)
     await session.flush()

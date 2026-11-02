@@ -3,10 +3,14 @@ import { defineStore } from 'pinia'
 import { api, getAccessToken } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
 import { withTimeout } from '../lib/asyncUtils'
+import { withTimeout as withRequestDeadline } from '../lib/requestTimeout'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { usePlanStore } from './planStore'
 import { SYSTEM_CONFIG_MANAGE_PERMISSION } from '../composables/useLicenceAccess'
 import i18n from '../i18n'
+
+type SystemMapOverview = components['schemas']['SystemMapOverviewResponse']
+type SystemMapList = components['schemas']['SystemMapListResponse']
 
 export type SystemMap = components['schemas']['SystemMapResponse']
 export type SystemMapRevision = components['schemas']['SystemMapRevisionResponse']
@@ -32,6 +36,24 @@ export type RelationshipType = (typeof RELATIONSHIP_TYPES)[number]
 
 interface InternalFeatureFlagsPayload { flags?: Array<{ name: string; currently_active: boolean }> }
 
+/** The overview aggregate is a read model; a stalled request must not hang it. */
+const OVERVIEW_REQUEST_TIMEOUT_MS = 15000
+const SYSTEM_MAP_PAGE_SIZE = 20
+const MAX_SYSTEM_MAP_PAGES = 1000
+
+/** Prefer the detail the API returned over a generic message. */
+function apiErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === 'object') {
+    const detail = (error as { detail?: unknown }).detail
+    if (typeof detail === 'string' && detail.length > 0) return detail
+  }
+  return fallback
+}
+
+function thrownMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
+}
+
 // The store is not a component, so it cannot call useI18n(). Use the shared
 // i18n instance directly so error strings stay translatable and consistent.
 function tr(key: string): string { return i18n.global.t(key) }
@@ -49,10 +71,20 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const graph = ref<SystemMapGraph | null>(null)
   const revisions = ref<SystemMapRevision[]>([])
   const discovery = ref<DiscoveryReport | null>(null)
+  const overview = ref<SystemMapOverview | null>(null)
+  const overviewLoading = ref(false)
+  const overviewError = ref<string | null>(null)
+  // Distinct from an error: discovery has published nothing yet, which is an
+  // empty state rather than a failed request.
+  const overviewEmpty = ref(false)
   const accessLoaded = ref(false)
   const systemMapsEnabled = ref(false)
   let accessPromise: Promise<void> | null = null
   let accessGeneration = 0
+  // Bumped by every overview fetch AND by reset(), so a superseded request can
+  // never repopulate state (a stale principal's response after a logout, or an
+  // older fetch resolving after a newer one).
+  let overviewGeneration = 0
   let accessTokenKey: string | null = null
 
   const planStore = usePlanStore()
@@ -63,6 +95,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
 
   function reset(): void {
     accessGeneration += 1
+    overviewGeneration += 1
     loaded.value = false
     loading.value = false
     error.value = null
@@ -72,6 +105,10 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     graph.value = null
     revisions.value = []
     discovery.value = null
+    overview.value = null
+    overviewLoading.value = false
+    overviewError.value = null
+    overviewEmpty.value = false
     accessLoaded.value = false
     systemMapsEnabled.value = false
     accessPromise = null
@@ -80,6 +117,19 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
 
   function isCurrentAccessRequest(generation: number, token: string | null): boolean {
     return generation === accessGeneration && token === getAccessToken() && token === accessTokenKey
+  }
+
+  /** Start an overview request and capture the principal that owns its result. */
+  function beginOverviewRequest(): { generation: number; token: string | null } {
+    overviewGeneration += 1
+    overviewLoading.value = true
+    overviewError.value = null
+    overviewEmpty.value = false
+    return { generation: overviewGeneration, token: getAccessToken() }
+  }
+
+  function isCurrentOverviewRequest(generation: number, token: string | null): boolean {
+    return generation === overviewGeneration && token === getAccessToken()
   }
 
   async function fetchAccess(): Promise<void> {
@@ -111,6 +161,90 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
       if (current()) error.value = err instanceof Error ? err.message : tr('systemMaps.errors.feature_flags')
     } finally {
       if (current()) { accessLoaded.value = true; loading.value = false }
+    }
+  }
+
+  /**
+   * Load the overview for the caller's default map.
+   *
+   * Only a map with a published revision can be aggregated, so drafts are never
+   * selected: a published default wins, then any published map. No published
+   * map settles to the empty state; a failed request is an error.
+   */
+  async function fetchDefaultOverview(): Promise<void> {
+    const request = beginOverviewRequest()
+    try {
+      const publishedItems: SystemMapList['items'] = []
+      let nextPage = 1
+      let listTotal = Number.POSITIVE_INFINITY
+
+      while (publishedItems.length < listTotal && nextPage <= MAX_SYSTEM_MAP_PAGES) {
+        const response = await withRequestDeadline(
+          (signal) =>
+            api.GET('/api/v1/system-maps', {
+              params: { query: { page: nextPage, page_size: SYSTEM_MAP_PAGE_SIZE } },
+              signal,
+            }),
+          OVERVIEW_REQUEST_TIMEOUT_MS,
+        )
+        if (!isCurrentOverviewRequest(request.generation, request.token)) return
+        if (response.error || !response.data) {
+          throw new Error(apiErrorMessage(response.error, 'System map list request failed'))
+        }
+
+        const pageData = response.data as SystemMapList
+        publishedItems.push(...pageData.items.filter((item) => item.published_revision_id != null))
+        listTotal = pageData.total
+        if (pageData.items.length === 0 || pageData.items.length < pageData.page_size) break
+        nextPage += 1
+      }
+
+      if (nextPage > MAX_SYSTEM_MAP_PAGES) {
+        throw new Error('System map list pagination exceeded its safety limit')
+      }
+      const map = publishedItems.find((item) => item.default_map) ?? publishedItems[0]
+      if (!map) {
+        overview.value = null
+        overviewEmpty.value = true
+        return
+      }
+      await fetchOverview(map.id)
+    } catch (err: unknown) {
+      if (!isCurrentOverviewRequest(request.generation, request.token)) return
+      overview.value = null
+      overviewEmpty.value = false
+      overviewError.value = thrownMessage(err, 'System map list request failed')
+    } finally {
+      if (isCurrentOverviewRequest(request.generation, request.token)) overviewLoading.value = false
+    }
+  }
+
+  /** Load the overview aggregate for one published map. */
+  async function fetchOverview(mapId: string): Promise<void> {
+    const request = beginOverviewRequest()
+    try {
+      const response = await withRequestDeadline(
+        (signal) =>
+          api.GET('/api/v1/system-maps/{map_id}/overview', {
+            params: { path: { map_id: mapId } },
+            signal,
+          }),
+        OVERVIEW_REQUEST_TIMEOUT_MS,
+      )
+      if (!isCurrentOverviewRequest(request.generation, request.token)) return
+      if (response.error || !response.data) {
+        throw new Error(apiErrorMessage(response.error, 'System overview request failed'))
+      }
+      overview.value = response.data
+      overviewEmpty.value = false
+      overviewError.value = null
+    } catch (err: unknown) {
+      if (!isCurrentOverviewRequest(request.generation, request.token)) return
+      overview.value = null
+      overviewEmpty.value = false
+      overviewError.value = thrownMessage(err, 'System overview request failed')
+    } finally {
+      if (isCurrentOverviewRequest(request.generation, request.token)) overviewLoading.value = false
     }
   }
 
@@ -209,5 +343,5 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   // Kept for the dashboard's preview card; discovery is now a real operation.
   async function fetchDiscovery(): Promise<void> { loaded.value = true }
 
-  return { loaded, loading, error, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, accessLoaded, systemMapsEnabled, hasAccess, reset, fetchAccess, fetchMaps, createMap, deleteMap, loadMap, loadRevision, saveDraft, publish, archive, discover, clearActive, fetchDiscovery }
+  return { loaded, loading, error, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, saveDraft, publish, archive, discover, clearActive, fetchDiscovery }
 })
