@@ -28,11 +28,14 @@ class _LoopConfig:
 
 
 def test_accepts_a_consistent_graph() -> None:
-    validate_system_map_graph_references(
+    result = validate_system_map_graph_references(
         nodes=[_Node("a"), _Node("loop-1", "improvement_loop")],
         relationships=[_Relationship("a", "loop-1")],
         loop_configs=[_LoopConfig("loop-1")],
     )
+
+    # The contract is silence: a consistent graph validates and returns None.
+    assert result is None
 
 
 def test_rejects_duplicate_node_keys() -> None:
