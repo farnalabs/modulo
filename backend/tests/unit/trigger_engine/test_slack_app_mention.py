@@ -328,7 +328,7 @@ def _make_session(
     session.add = MagicMock()
     session.flush = AsyncMock()
 
-    nested_cm = AsyncMock()
+    nested_cm = MagicMock()
     nested_cm.__aenter__ = AsyncMock(return_value=None)
     nested_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin_nested = MagicMock(return_value=nested_cm)

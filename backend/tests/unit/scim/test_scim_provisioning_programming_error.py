@@ -96,7 +96,7 @@ def _make_mock_session() -> MagicMock:
     session.delete = AsyncMock()
     session.rollback = AsyncMock()
     session.refresh = AsyncMock()
-    begin_cm = AsyncMock()
+    begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
