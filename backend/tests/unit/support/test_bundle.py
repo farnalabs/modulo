@@ -703,3 +703,34 @@ def test_cli_prints_no_missing_line_when_nothing_is_missing(
     printed = capsys.readouterr().out
     assert FORMAT_ID in printed
     assert "missing:" not in printed
+
+
+def test_weak_seeded_password_is_scrubbed_from_a_real_log_when_seeding_works(tmp_path: Path) -> None:
+    """Seed-exact still catches the credential in a genuine log member."""
+    (tmp_path / "secrets.json").write_text(
+        json.dumps(
+            {
+                "postgres_password": QUICKSTART_PASSWORD,
+                "redis_password": QUICKSTART_PASSWORD,
+                "state_hmac_key": "b2c4" * 16,
+            }
+        ),
+        encoding="utf-8",
+    )
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "redis.log").write_text(f"requirepass {QUICKSTART_PASSWORD}\n", encoding="utf-8")
+
+    sources = collect_sources(
+        install_shape="native", data_dir=tmp_path, doctor_output="doctor: ok", collect_async=False
+    )
+    assert QUICKSTART_PASSWORD in sources.secret_values
+
+    result = build_bundle(tmp_path / "native.zip", sources=sources)
+    with zipfile.ZipFile(result.path) as archive:
+        tail = archive.read("logs/redis.log.tail").decode()
+        report = json.loads(archive.read("report.json"))
+    assert f"requirepass {QUICKSTART_PASSWORD}" not in tail
+    assert f"requirepass {REDACTED}" in tail
+    assert report["redaction"]["layers"]["seed_exact"] >= 1
+    assert not report["degraded_layers"]
