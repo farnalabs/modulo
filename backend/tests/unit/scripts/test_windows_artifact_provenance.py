@@ -11,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 def resolve_powershell() -> str | None:
@@ -74,11 +75,73 @@ def workflow_source(repo_root: Path) -> str:
     return (repo_root / ".github" / "workflows" / "windows-artifacts.yml").read_text(encoding="utf-8")
 
 
+@pytest.fixture(scope="session")
+def build_script_source(repo_root: Path) -> str:
+    return (repo_root / "scripts" / "windows" / "build-launcher.ps1").read_text(encoding="utf-8")
+
+
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_pins_are_strict_and_consistent(windows_pins: dict[str, str], linux_pins: dict[str, str]) -> None:
+def workflow_step_run(workflow_source: str, step_name: str) -> str:
+    """Return the ``run`` body of a named step in the artifact workflow."""
+    document = yaml.safe_load(workflow_source)
+    for step in document["jobs"]["download-and-verify"]["steps"]:
+        if isinstance(step, dict) and step.get("name") == step_name:
+            run_body = step.get("run")
+            assert isinstance(run_body, str), step_name
+            return run_body
+    raise AssertionError(f"workflow step not found: {step_name}")
+
+
+def stage_bundle(
+    script: Path,
+    stage: Path,
+    python_root: Path,
+    backend_source: Path,
+    site_packages: Path,
+    frontend_dist: Path,
+    launcher: Path,
+    *,
+    preserve_existing: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    assert POWERSHELL is not None
+    command = [POWERSHELL, "-NoProfile", "-NonInteractive"]
+    if sys.platform == "win32":
+        # Execution policy is a Windows-only concept; pwsh on POSIX has none to bypass.
+        command += ["-ExecutionPolicy", "Bypass"]
+    invocation = (
+        f". '{script}'; Invoke-WindowsBundleStaging -StagePath '{stage}' "
+        f"-PythonRoot '{python_root}' -BackendSource '{backend_source}' "
+        f"-SitePackagesSource '{site_packages}' -FrontendDistSource '{frontend_dist}' "
+        f"-LauncherPath '{launcher}'"
+    )
+    if preserve_existing:
+        invocation += " -PreserveExisting"
+    command += ["-Command", invocation]
+    return subprocess.run(  # noqa: S603 - resolved PowerShell runs a fixed test script with isolated temp paths
+        command, capture_output=True, text=True, check=False, timeout=60
+    )
+
+
+def snapshot_tree(root: Path) -> dict[str, str]:
+    """Map every staged file to its digest, independent of traversal order."""
+    return {path.relative_to(root).as_posix(): sha256(path) for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+def nested_duplicate_directories(root: Path) -> list[str]:
+    """Return directories that contain a same-named child directory."""
+    return [
+        directory.relative_to(root).as_posix()
+        for directory in root.rglob("*")
+        if directory.is_dir() and (directory / directory.name).is_dir()
+    ]
+
+
+def test_pins_are_strict_and_consistent(
+    windows_pins: dict[str, str], linux_pins: dict[str, str], workflow_source: str
+) -> None:
     expected = {
         "VALKEY_VERSION",
         "VALKEY_PROVENANCE_POLICY",
@@ -112,13 +175,18 @@ def test_pins_are_strict_and_consistent(windows_pins: dict[str, str], linux_pins
             assert re.fullmatch(r"[a-f0-9]{64}", value)
         if key.endswith("_URL"):
             assert value.startswith("https://")
+        # Every value is interpolated into a pwsh command string, so it must fit
+        # the workflow's strict charset (no quotes, whitespace, backticks, ; or $).
+        assert re.fullmatch(r"[A-Za-z0-9._:/@%+-]+", value), key
+    pins_step = workflow_step_run(workflow_source, "Load and validate version pins")
+    assert "Unsupported characters in pin value" in pins_step
     assert windows_pins["PBS_RELEASE"] == linux_pins["PBS_RELEASE"]
     assert windows_pins["PBS_CPYTHON_VERSION"] == linux_pins["PBS_CPYTHON_VERSION"]
     assert windows_pins["PG_MAJOR"] == linux_pins["PG_MAJOR"]
     assert windows_pins["PG_VERSION"] == linux_pins["PG_VERSION"]
 
 
-def test_hash_verification_uses_actual_fixture_bytes(tmp_path: Path) -> None:
+def test_hash_verification_uses_actual_fixture_bytes(tmp_path: Path, workflow_source: str) -> None:
     artifact = tmp_path / "artifact.bin"
     artifact.write_bytes(b"fixture payload")
     expected = sha256(artifact)
@@ -126,8 +194,16 @@ def test_hash_verification_uses_actual_fixture_bytes(tmp_path: Path) -> None:
     artifact.write_bytes(b"tampered payload")
     assert hashlib.sha256(artifact.read_bytes()).hexdigest() != expected
 
+    # The digest check above is only meaningful if the workflow verifies each
+    # pinned archive against the matching ``*_SHA256`` pin.
+    download_step = workflow_step_run(workflow_source, "Download and verify pinned archives")
+    assert "Get-FileHash -Algorithm SHA256" in download_step
+    assert "if ($actual -ne $Expected.ToLowerInvariant()) { throw" in download_step
+    for pin in ("VALKEY_ZIP_SHA256", "PBS_WIN_X64_SHA256", "PG_WIN_X64_ZIP_SHA256"):
+        assert f"steps.pins.outputs.{pin}" in download_step, pin
 
-def test_offline_archive_layout_fixture(tmp_path: Path, windows_pins: dict[str, str]) -> None:
+
+def test_offline_archive_layout_fixture(tmp_path: Path, windows_pins: dict[str, str], workflow_source: str) -> None:
     zip_path = tmp_path / "valkey.zip"
     with zipfile.ZipFile(zip_path, "w") as archive:
         archive.writestr(f"{windows_pins['VALKEY_ARCHIVE_ROOT']}/bin/{windows_pins['VALKEY_SERVER_EXE']}", b"server")
@@ -146,6 +222,29 @@ def test_offline_archive_layout_fixture(tmp_path: Path, windows_pins: dict[str, 
         archive.add(source, arcname=f"{windows_pins['PBS_ARCHIVE_ROOT']}/{windows_pins['PBS_PYTHON_EXE']}")
     with tarfile.open(tar_path, "r:gz") as archive:
         assert f"{windows_pins['PBS_ARCHIVE_ROOT']}/{windows_pins['PBS_PYTHON_EXE']}" in archive.getnames()
+
+    # The fixture layout above is only a contract if the workflow extracts and
+    # verifies exactly the pinned archive roots and executable filenames.
+    stage_step = workflow_step_run(workflow_source, "Stage exact bundle layout")
+    for pin in (
+        "VALKEY_ARCHIVE_ROOT",
+        "VALKEY_SERVER_EXE",
+        "VALKEY_CLI_EXE",
+        "PBS_ARCHIVE_ROOT",
+        "PBS_PYTHON_EXE",
+        "PG_ARCHIVE_ROOT",
+        "PG_SERVER_EXE",
+        "PG_CTL_EXE",
+        "PG_DUMP_EXE",
+        "PG_ISREADY_EXE",
+        "PG_PSQL_EXE",
+    ):
+        assert f"steps.pins.outputs.{pin}" in stage_step, pin
+    verify_step = workflow_step_run(workflow_source, "Verify staged binaries and launcher")
+    assert "redis/${{ steps.pins.outputs.VALKEY_SERVER_EXE }}" in verify_step
+    assert "pg/bin/${{ steps.pins.outputs.PG_SERVER_EXE }}" in verify_step
+    assert "redis/valkey-server.exe" not in verify_step
+    assert "pg/bin/postgres.exe" not in verify_step
 
 
 @requires_powershell
@@ -168,26 +267,13 @@ def test_offline_staged_payload_contract(tmp_path: Path, repo_root: Path) -> Non
     (frontend_dist / "index.html").write_text("ok", encoding="utf-8")
     launcher.write_bytes(b"launcher")
     stage = tmp_path / "stage"
-    command = [POWERSHELL, "-NoProfile", "-NonInteractive"]
-    if sys.platform == "win32":
-        # Execution policy is a Windows-only concept; pwsh on POSIX has none to bypass.
-        command += ["-ExecutionPolicy", "Bypass"]
-    command += [
-        "-Command",
-        (
-            f". '{script}'; Invoke-WindowsBundleStaging -StagePath '{stage}' "
-            f"-PythonRoot '{python_root}' -BackendSource '{backend_source}' "
-            f"-SitePackagesSource '{site_packages}' -FrontendDistSource '{frontend_dist}' "
-            f"-LauncherPath '{launcher}'"
-        ),
-    ]
-    result = subprocess.run(  # noqa: S603 - a resolved PowerShell runs a fixed test script with isolated temp paths
-        command, capture_output=True, text=True, check=False, timeout=60
-    )
+    result = stage_bundle(script, stage, python_root, backend_source, site_packages, frontend_dist, launcher)
     assert result.returncode == 0, result.stderr
     expected_files = [
         stage / "runtime/python/python.exe",
         stage / "runtime/python/python312.dll",
+        stage / "runtime/bin/python3.exe",
+        stage / "runtime/bin/python312.dll",
         stage / "backend/src/modulo/__init__.py",
         stage / "runtime/python/Lib/site-packages/modulo_dep/__init__.py",
         stage / "frontend-dist/index.html",
@@ -195,6 +281,64 @@ def test_offline_staged_payload_contract(tmp_path: Path, repo_root: Path) -> Non
     ]
     for path in expected_files:
         assert path.is_file(), path
+
+
+@requires_powershell
+def test_staging_twice_is_byte_identical_and_never_nests(tmp_path: Path, repo_root: Path) -> None:
+    """Re-staging in preserve-existing mode must be idempotent for every payload."""
+    assert POWERSHELL is not None  # guaranteed by requires_powershell
+    script = repo_root / "scripts" / "windows" / "build-launcher.ps1"
+    fixture = tmp_path / "fixture"
+    python_root = fixture / "python"
+    # Name the backend source ``src`` so the historical push was
+    # Copy-Item -Destination backend/src, which nested backend/src/src.
+    backend_source = fixture / "src"
+    site_packages = fixture / "site-packages"
+    frontend_dist = fixture / "frontend-dist"
+    launcher = fixture / "modulo.exe"
+    for directory in (
+        python_root / "DLLs",
+        python_root / "Lib" / "encodings",
+        backend_source / "modulo" / "core",
+        site_packages / "modulo_dep",
+        frontend_dist / "assets",
+    ):
+        directory.mkdir(parents=True)
+    (python_root / "python.exe").write_bytes(b"python")
+    (python_root / "python312.dll").write_bytes(b"dll")
+    (python_root / "DLLs" / "vcruntime140.dll").write_bytes(b"runtime")
+    (python_root / "Lib" / "encodings" / "utf_8.py").write_bytes(b"codec")
+    (backend_source / "modulo" / "__init__.py").write_text("", encoding="utf-8")
+    (backend_source / "modulo" / "core" / "engine.py").write_text("engine", encoding="utf-8")
+    (site_packages / "modulo_dep" / "__init__.py").write_text("", encoding="utf-8")
+    (frontend_dist / "index.html").write_text("ok", encoding="utf-8")
+    (frontend_dist / "assets" / "app.js").write_text("app", encoding="utf-8")
+    launcher.write_bytes(b"launcher")
+    stage = tmp_path / "stage"
+
+    first = stage_bundle(script, stage, python_root, backend_source, site_packages, frontend_dist, launcher)
+    assert first.returncode == 0, first.stderr
+    initial = snapshot_tree(stage)
+    assert initial
+    assert (stage / "backend/src/modulo/core/engine.py").is_file()
+
+    second = stage_bundle(
+        script,
+        stage,
+        python_root,
+        backend_source,
+        site_packages,
+        frontend_dist,
+        launcher,
+        preserve_existing=True,
+    )
+    assert second.returncode == 0, second.stderr
+    assert snapshot_tree(stage) == initial
+    assert not nested_duplicate_directories(stage)
+    assert not (stage / "backend/src/src").exists()
+    assert not (stage / "runtime/python/python").exists()
+    assert not (stage / "runtime/python/Lib/site-packages/site-packages").exists()
+    assert not (stage / "frontend-dist/frontend-dist").exists()
 
 
 def test_launcher_clean_environment_contract(launcher_source: str) -> None:
@@ -252,25 +396,52 @@ def test_launcher_command_line_size_covers_zero_and_quoted_arguments(launcher_so
     assert "while (backslashes > 0)" in launcher_source
 
 
-def test_workflow_contract(workflow_source: str) -> None:
+def test_workflow_contract(workflow_source: str, build_script_source: str) -> None:
     assert "d3f86a106a0bac45b974a628896c90dbdf5c8093" in workflow_source
     assert "520d128f165991a6c774bcb264f323e3d70747f4" in workflow_source
     assert "Invoke-Expression" not in workflow_source
     assert "runtime/python" in workflow_source
-    assert "python312.dll" in workflow_source
+    assert workflow_source.count("Invoke-WindowsBundleStaging") == 1
+    assert "python312.dll" in build_script_source
     assert "backend/src" in workflow_source
     assert "runtime/python/Lib/site-packages" in workflow_source
     assert "frontend-dist" in workflow_source
     assert "runtime/bin/python3.exe" in workflow_source
-    assert "redis/valkey-server.exe" in workflow_source
-    assert "pg/bin/postgres.exe" in workflow_source
+    assert "redis/${{ steps.pins.outputs.VALKEY_SERVER_EXE }}" in workflow_source
+    assert "pg/bin/${{ steps.pins.outputs.PG_SERVER_EXE }}" in workflow_source
     assert "Get-Date -AsUTC" in workflow_source
     assert "subject-path: windows-artifacts/windows-native-artifacts.zip" in workflow_source
     assert "--help" in workflow_source
 
 
-def test_manifest_round_trip(tmp_path: Path) -> None:
+def test_manifest_round_trip(tmp_path: Path, workflow_source: str) -> None:
+    manifest_step = workflow_step_run(workflow_source, "Create manifest and payload archive")
+    # Every manifest field must be sourced from a pin or a verified download,
+    # never from a literal, or the provenance record could drift from the payload.
+    sources = (
+        "steps.pins.outputs.VALKEY_VERSION",
+        "steps.downloads.outputs.valkey_sha256",
+        "steps.pins.outputs.PBS_CPYTHON_VERSION",
+        "steps.pins.outputs.PBS_RELEASE",
+        "steps.downloads.outputs.python_sha256",
+        "steps.pins.outputs.PG_VERSION",
+        "steps.downloads.outputs.postgres_sha256",
+    )
+    for source in sources:
+        assert "${{ " + source + " }}" in manifest_step, source
+    for section in ("valkey", "python", "postgres", "generated_at", "generated_by"):
+        assert f"{section} =" in manifest_step, section
+    assert 'generated_by = "github-actions-${{ github.run_id }}"' in manifest_step
+    assert "ConvertTo-Json -Depth 5" in manifest_step
+
+    # The emitted manifest shape survives the JSON round trip the workflow relies on.
+    payload = {
+        "valkey": {"version": "9.1.3", "archive_sha256": "a" * 64, "provenance": "external-release-pinned"},
+        "python": {"version": "3.12.14", "release": "20260901", "archive_sha256": "b" * 64},
+        "postgres": {"version": "16.15", "archive_sha256": "c" * 64},
+        "generated_at": "2026-11-02T00:00:00Z",
+        "generated_by": "github-actions-1",
+    }
     manifest = tmp_path / "manifest.json"
-    payload = {"artifact_sha256": "a" * 64, "generated_at": "2026-11-02T00:00:00Z"}
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     assert json.loads(manifest.read_text(encoding="utf-8")) == payload

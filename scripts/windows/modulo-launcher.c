@@ -1,4 +1,7 @@
 /* Windows native launcher for the Modulo single-install bundle. */
+/* The launcher uses the checked-by-construction wide-string helpers below and
+ * builds with /WX; MSVC's C4996 deprecation warning would otherwise fail it. */
+#define _CRT_SECURE_NO_WARNINGS
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdio.h>
@@ -36,12 +39,29 @@ static BOOL build_path(wchar_t *buffer, size_t buffer_len, const wchar_t *root, 
     return second == NULL || path_append(buffer, buffer_len, second);
 }
 
-static BOOL read_inherited_env(const wchar_t *name, wchar_t *value, size_t value_len, BOOL required) {
-    DWORD length = GetEnvironmentVariableW(name, value, (DWORD)value_len);
+#define ENV_READ_ERROR (-1)
+#define ENV_READ_SKIP 0
+#define ENV_READ_FOUND 1
+
+/* Returns ENV_READ_FOUND with a value, ENV_READ_SKIP when an optional variable
+ * is absent or empty, or ENV_READ_ERROR when a required variable is unusable.
+ * A present-but-empty variable returns zero from GetEnvironmentVariableW while
+ * GetLastError stays ERROR_SUCCESS, so length alone cannot distinguish it from
+ * an absent variable. */
+static int read_inherited_env(const wchar_t *name, wchar_t *value, size_t value_len, BOOL required) {
+    DWORD length;
+    DWORD error;
+    SetLastError(ERROR_SUCCESS);
+    length = GetEnvironmentVariableW(name, value, (DWORD)value_len);
     if (length == 0) {
-        return !required && GetLastError() == ERROR_ENVVAR_NOT_FOUND;
+        error = GetLastError();
+        if (error == ERROR_ENVVAR_NOT_FOUND || error == ERROR_SUCCESS) {
+            /* Absent or present-but-empty: skip optional, reject required. */
+            return required ? ENV_READ_ERROR : ENV_READ_SKIP;
+        }
+        return ENV_READ_ERROR;
     }
-    return length < value_len;
+    return length < value_len ? ENV_READ_FOUND : ENV_READ_ERROR;
 }
 
 static BOOL append_environment_entry(wchar_t *block, size_t block_len, size_t *used, const wchar_t *name, const wchar_t *value) {
@@ -61,8 +81,9 @@ static BOOL append_environment_entry(wchar_t *block, size_t block_len, size_t *u
 
 static BOOL append_inherited_env(wchar_t *block, size_t block_len, size_t *used, const wchar_t *name, BOOL required) {
     wchar_t value[ENVIRONMENT_BLOCK_LEN];
-    if (!read_inherited_env(name, value, sizeof(value) / sizeof(value[0]), required)) return FALSE;
-    if (value[0] == L'\0') return !required;
+    int status = read_inherited_env(name, value, sizeof(value) / sizeof(value[0]), required);
+    if (status == ENV_READ_SKIP) return TRUE;
+    if (status == ENV_READ_ERROR) return FALSE;
     return append_environment_entry(block, block_len, used, name, value);
 }
 
@@ -221,15 +242,17 @@ static BOOL build_pythonpath(const wchar_t *bundle_root, wchar_t *pythonpath, si
 }
 
 int wmain(int argc, wchar_t *argv[]) {
-    wchar_t exe_dir[MAX_PATH_LEN];
-    wchar_t bundle_root[MAX_PATH_LEN];
-    wchar_t bundle_bin_dir[MAX_PATH_LEN];
-    wchar_t runtime_bin[MAX_PATH_LEN];
-    wchar_t pg_bin[MAX_PATH_LEN];
-    wchar_t redis_dir[MAX_PATH_LEN];
-    wchar_t path_value[MAX_PATH_LEN * 4];
-    wchar_t pythonpath[MAX_PATH_LEN * 4];
-    wchar_t python_exe[MAX_PATH_LEN];
+    /* These path buffers total ~1 MB; keeping them on the default 1 MB stack
+     * overflows it. The launcher is single-threaded, so make them static. */
+    static wchar_t exe_dir[MAX_PATH_LEN];
+    static wchar_t bundle_root[MAX_PATH_LEN];
+    static wchar_t bundle_bin_dir[MAX_PATH_LEN];
+    static wchar_t runtime_bin[MAX_PATH_LEN];
+    static wchar_t pg_bin[MAX_PATH_LEN];
+    static wchar_t redis_dir[MAX_PATH_LEN];
+    static wchar_t path_value[MAX_PATH_LEN * 4];
+    static wchar_t pythonpath[MAX_PATH_LEN * 4];
+    static wchar_t python_exe[MAX_PATH_LEN];
     wchar_t *last_slash;
     wchar_t *command_line;
     wchar_t *environment = NULL;

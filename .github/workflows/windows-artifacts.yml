@@ -49,8 +49,12 @@ jobs:
             if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
             if ($trimmed -notmatch '^([A-Z0-9_]+)=([^=]+)$') { throw "Invalid pin line: $trimmed" }
             $name = $Matches[1]
+            $value = $Matches[2]
             if ($allowed -notcontains $name -or $pins.ContainsKey($name)) { throw "Unexpected or duplicate pin: $name" }
-            $pins[$name] = $Matches[2]
+            # Pin values are interpolated into pwsh command strings below, so
+            # reject anything that could terminate or extend one.
+            if ($value -notmatch '^[A-Za-z0-9._:/@%+-]+$') { throw "Unsupported characters in pin value: $name" }
+            $pins[$name] = $value
           }
           if ($pins.Keys.Count -ne $allowed.Count) { throw "Pin key set mismatch" }
           if ($pins.VALKEY_VERSION -ne $env:VALKEY_VERSION -or $pins.PBS_RELEASE -ne $env:PBS_RELEASE -or $pins.PBS_CPYTHON_VERSION -ne $env:PBS_CPYTHON_VERSION -or $pins.PG_VERSION -ne $env:PG_VERSION) { throw 'Workflow version pins drift from bundle-versions-windows.env' }
@@ -110,42 +114,6 @@ jobs:
             throw 'Frontend payload contract missing: frontend/dist was not created'
           }
 
-      - name: Stage exact bundle layout
-        id: stage
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $stage = Join-Path $PWD 'windows-artifacts-staging'
-          $stageScript = Join-Path $PWD 'scripts/windows/build-launcher.ps1'
-          . $stageScript
-          if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
-          New-Item -ItemType Directory -Path (Join-Path $stage 'runtime/python'), (Join-Path $stage 'pg/bin'), (Join-Path $stage 'redis'), (Join-Path $stage 'bin'), (Join-Path $stage 'backend') | Out-Null
-          $valkeyExtract = Join-Path $PWD 'valkey-extracted'; Expand-Archive '${{ steps.downloads.outputs.valkey_file }}' $valkeyExtract
-          Copy-Item (Join-Path $valkeyExtract '${{ steps.pins.outputs.VALKEY_ARCHIVE_ROOT }}/bin/${{ steps.pins.outputs.VALKEY_SERVER_EXE }}') (Join-Path $stage 'redis/${{ steps.pins.outputs.VALKEY_SERVER_EXE }}')
-          Copy-Item (Join-Path $valkeyExtract '${{ steps.pins.outputs.VALKEY_ARCHIVE_ROOT }}/bin/${{ steps.pins.outputs.VALKEY_CLI_EXE }}') (Join-Path $stage 'redis/${{ steps.pins.outputs.VALKEY_CLI_EXE }}')
-          $pythonExtract = Join-Path $PWD 'python-extracted'; New-Item -ItemType Directory $pythonExtract | Out-Null; tar -xzf '${{ steps.downloads.outputs.python_file }}' -C $pythonExtract
-          $pythonRoot = Join-Path $pythonExtract '${{ steps.pins.outputs.PBS_ARCHIVE_ROOT }}'
-          if (-not (Test-Path (Join-Path $pythonRoot '${{ steps.pins.outputs.PBS_PYTHON_EXE }}'))) { throw 'PBS archive layout changed: python/python.exe is required' }
-           Copy-Item (Join-Path $pythonRoot '*') (Join-Path $stage 'runtime/python') -Recurse -Force
-           $pythonExe = Join-Path $stage 'runtime/python/${{ steps.pins.outputs.PBS_PYTHON_EXE }}'
-           if (-not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) { throw 'PBS runtime contract missing: python/python.exe' }
-           if (-not (Test-Path -LiteralPath (Join-Path $stage 'runtime/python/python312.dll') -PathType Leaf)) { throw 'PBS runtime contract missing: python/python312.dll' }
-           Copy-Item $pythonExe (Join-Path $stage 'runtime/bin/python3.exe') -Force
-           Copy-Item (Join-Path $stage 'runtime/python/python312.dll') (Join-Path $stage 'runtime/bin/python312.dll') -Force
-
-          $pgExtract = Join-Path $PWD 'postgres-extracted'; Expand-Archive '${{ steps.downloads.outputs.postgres_file }}' $pgExtract
-          $pgBin = Join-Path $pgExtract '${{ steps.pins.outputs.PG_ARCHIVE_ROOT }}/bin'
-          foreach ($exe in @('${{ steps.pins.outputs.PG_SERVER_EXE }}','${{ steps.pins.outputs.PG_CTL_EXE }}','${{ steps.pins.outputs.PG_DUMP_EXE }}','${{ steps.pins.outputs.PG_ISREADY_EXE }}','${{ steps.pins.outputs.PG_PSQL_EXE }}')) { if (-not (Test-Path (Join-Path $pgBin $exe))) { throw "Missing PostgreSQL binary: $exe" } }
-           Copy-Item (Join-Path $pgBin '*') (Join-Path $stage 'pg/bin') -Recurse -Force
-           Copy-Item (Join-Path $PWD 'backend/src') (Join-Path $stage 'backend/src') -Recurse -Force
-           Copy-Item (Join-Path $PWD 'backend/.venv/Lib/site-packages') (Join-Path $stage 'runtime/python/Lib/site-packages') -Recurse -Force
-           Copy-Item (Join-Path $PWD 'frontend/dist/*') (Join-Path $stage 'frontend-dist') -Recurse -Force
-           if (-not (Test-Path -LiteralPath (Join-Path $stage 'backend/src/modulo') -PathType Container)) { throw 'Backend payload contract missing: backend/src/modulo' }
-           if (-not (Test-Path -LiteralPath (Join-Path $stage 'runtime/python/Lib/site-packages') -PathType Container)) { throw 'Backend payload contract missing: runtime/python/Lib/site-packages' }
-           if (-not (Test-Path -LiteralPath (Join-Path $stage 'frontend-dist/index.html') -PathType Leaf)) { throw 'Frontend payload contract missing: frontend-dist/index.html' }
-           "stage=$stage" >> $env:GITHUB_OUTPUT
-
-
       - name: Build native launcher
         shell: pwsh
         run: |
@@ -158,8 +126,40 @@ jobs:
           $build = Join-Path $PWD 'scripts/windows/build-launcher.ps1'
           & cmd.exe /d /s /c "call `"$vcvars`" x64 && pwsh -NoProfile -File `"$build`" -OutputPath `"$PWD/modulo.exe`""
           if ($LASTEXITCODE -ne 0) { throw "Launcher build failed: $LASTEXITCODE" }
-           Copy-Item modulo.exe (Join-Path '${{ steps.stage.outputs.stage }}' 'bin/modulo.exe')
-           Invoke-WindowsBundleStaging -StagePath '${{ steps.stage.outputs.stage }}' -PythonRoot (Join-Path '${{ steps.stage.outputs.stage }}' 'runtime/python') -BackendSource (Join-Path $PWD 'backend/src') -SitePackagesSource (Join-Path $PWD 'backend/.venv/Lib/site-packages') -FrontendDistSource (Join-Path $PWD 'frontend/dist') -LauncherPath (Join-Path $PWD 'modulo.exe') -PreserveExisting
+          if (-not (Test-Path -LiteralPath (Join-Path $PWD 'modulo.exe') -PathType Leaf)) { throw 'Launcher build contract missing: modulo.exe' }
+
+      - name: Stage exact bundle layout
+        id: stage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path $PWD 'windows-artifacts-staging'
+          $stageScript = Join-Path $PWD 'scripts/windows/build-launcher.ps1'
+          . $stageScript
+          # Extract every third-party archive before staging; the staging function
+          # then creates the stage from scratch and owns the bundled payload copies.
+          $valkeyExtract = Join-Path $PWD 'valkey-extracted'
+          Expand-Archive '${{ steps.downloads.outputs.valkey_file }}' $valkeyExtract -Force
+          $pythonExtract = Join-Path $PWD 'python-extracted'
+          New-Item -ItemType Directory -Force $pythonExtract | Out-Null
+          tar -xzf '${{ steps.downloads.outputs.python_file }}' -C $pythonExtract
+          $pythonRoot = Join-Path $pythonExtract '${{ steps.pins.outputs.PBS_ARCHIVE_ROOT }}'
+          if (-not (Test-Path (Join-Path $pythonRoot '${{ steps.pins.outputs.PBS_PYTHON_EXE }}'))) { throw 'PBS archive layout changed: python/python.exe is required' }
+          $pgExtract = Join-Path $PWD 'postgres-extracted'
+          Expand-Archive '${{ steps.downloads.outputs.postgres_file }}' $pgExtract -Force
+          $pgBin = Join-Path $pgExtract '${{ steps.pins.outputs.PG_ARCHIVE_ROOT }}/bin'
+          foreach ($exe in @('${{ steps.pins.outputs.PG_SERVER_EXE }}','${{ steps.pins.outputs.PG_CTL_EXE }}','${{ steps.pins.outputs.PG_DUMP_EXE }}','${{ steps.pins.outputs.PG_ISREADY_EXE }}','${{ steps.pins.outputs.PG_PSQL_EXE }}')) { if (-not (Test-Path (Join-Path $pgBin $exe))) { throw "Missing PostgreSQL binary: $exe" } }
+          # Single canonical staging invocation: every bundled payload is copied here.
+          Invoke-WindowsBundleStaging -StagePath $stage -PythonRoot $pythonRoot -BackendSource (Join-Path $PWD 'backend/src') -SitePackagesSource (Join-Path $PWD 'backend/.venv/Lib/site-packages') -FrontendDistSource (Join-Path $PWD 'frontend/dist') -LauncherPath (Join-Path $PWD 'modulo.exe')
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage 'pg/bin'), (Join-Path $stage 'redis') | Out-Null
+          Copy-Item (Join-Path $valkeyExtract '${{ steps.pins.outputs.VALKEY_ARCHIVE_ROOT }}/bin/${{ steps.pins.outputs.VALKEY_SERVER_EXE }}') (Join-Path $stage 'redis/${{ steps.pins.outputs.VALKEY_SERVER_EXE }}')
+          Copy-Item (Join-Path $valkeyExtract '${{ steps.pins.outputs.VALKEY_ARCHIVE_ROOT }}/bin/${{ steps.pins.outputs.VALKEY_CLI_EXE }}') (Join-Path $stage 'redis/${{ steps.pins.outputs.VALKEY_CLI_EXE }}')
+          Copy-Item (Join-Path $pgBin '*') (Join-Path $stage 'pg/bin') -Recurse -Force
+          if (-not (Test-Path -LiteralPath (Join-Path $stage 'backend/src/modulo') -PathType Container)) { throw 'Backend payload contract missing: backend/src/modulo' }
+          if (-not (Test-Path -LiteralPath (Join-Path $stage 'runtime/python/Lib/site-packages') -PathType Container)) { throw 'Backend payload contract missing: runtime/python/Lib/site-packages' }
+          if (-not (Test-Path -LiteralPath (Join-Path $stage 'frontend-dist/index.html') -PathType Leaf)) { throw 'Frontend payload contract missing: frontend-dist/index.html' }
+          if (-not (Test-Path -LiteralPath (Join-Path $stage 'runtime/bin/python3.exe') -PathType Leaf)) { throw 'PBS runtime contract missing: runtime/bin/python3.exe' }
+          "stage=$stage" >> $env:GITHUB_OUTPUT
 
 
       - name: Verify staged binaries and launcher
@@ -167,9 +167,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $stage = '${{ steps.stage.outputs.stage }}'
-          & (Join-Path $stage 'redis/valkey-server.exe') --version
+          & (Join-Path $stage 'redis/${{ steps.pins.outputs.VALKEY_SERVER_EXE }}') --version
           if ($LASTEXITCODE -ne 0) { throw 'Valkey server verification failed' }
-          & (Join-Path $stage 'pg/bin/postgres.exe') --version
+          & (Join-Path $stage 'pg/bin/${{ steps.pins.outputs.PG_SERVER_EXE }}') --version
           if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL verification failed' }
           $help = & (Join-Path $stage 'bin/modulo.exe') --help 2>&1
           if ($LASTEXITCODE -ne 0 -or ($help -notmatch 'modulo')) { throw "Launcher verification failed: exit=$LASTEXITCODE output=$help" }
