@@ -20,21 +20,18 @@ of every trigger whose resolved config declares such entries.
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from modulo.cli.apply.executor import _SECRETREF_BLOCK_REASON, ApplyHttpError, _failure_message, _find
+from modulo.cli.apply.executor import _SECRETREF_BLOCK_REASON, ApplyHttpError, _find, _record_entity_failure
 from modulo.cli.apply.models import ENV_REF_PATTERN, TriggerEntity, config_declares_secrets
 from modulo.cli.apply.plan import KIND_PIPELINE, KIND_TRIGGER
 
 if TYPE_CHECKING:
     from modulo.cli.apply.executor import ApplyExecutor
     from modulo.cli.apply.models import EntitySet
-
-_log = logging.getLogger(__name__)
 
 
 def resolve_trigger_config_refs(
@@ -269,11 +266,15 @@ def _record_trigger_failure(
     exc: Exception,
 ) -> None:
     """Move a failed trigger entry to ``report['failed']`` (isolated per trigger)."""
-    message = _failure_message(exc)
-    displayed_name = entity.display_key() if entity else entry["name"]
-    _log.exception("apply trigger failed: %s: %s", displayed_name, message)
-    report[status].remove(entry)
-    report["failed"].append({"kind": KIND_TRIGGER, "name": entry["name"], "error": message})
+    _record_entity_failure(
+        report,
+        status,
+        entry,
+        kind=KIND_TRIGGER,
+        displayed_name=entity.display_key() if entity else entry["name"],
+        exc=exc,
+        entity_label="trigger",
+    )
 
 
 def apply_triggers(

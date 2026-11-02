@@ -1256,6 +1256,29 @@ def _failure_message(exc: Exception) -> str:
     return message
 
 
+def _record_entity_failure(
+    report: dict[str, list[dict[str, Any]]],
+    status: str,
+    entry: dict[str, Any],
+    *,
+    kind: str,
+    displayed_name: str,
+    exc: Exception,
+    entity_label: str,
+) -> None:
+    """Move a failed entity entry to ``report['failed']`` (isolated per entity).
+
+    Shared by the per-entity apply modules (pipelines, system maps, triggers):
+    only the kind, log label and displayed name differ, while the failure
+    accounting contract — drop the entry from its success lane and append one
+    ``failed`` record — must not drift between them.
+    """
+    message = _failure_message(exc)
+    _log.exception("apply %s failed: %s: %s", entity_label, displayed_name, message)
+    report[status].remove(entry)
+    report["failed"].append({"kind": kind, "name": entry["name"], "error": message})
+
+
 def _format_validation_detail(item: Any) -> str:
     """Render one FastAPI validation-detail entry, preserving its typed code.
 

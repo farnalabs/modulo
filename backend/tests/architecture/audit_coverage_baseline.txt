@@ -43,4 +43,5 @@ schemas.py:infer_schema_endpoint
 schemas.py:migrate_data_endpoint
 schemas.py:migration_plan_endpoint
 schemas.py:validate_schema_endpoint
+system_maps.py:diff_system_map_revision_endpoint
 triggers.py:test_polling_condition

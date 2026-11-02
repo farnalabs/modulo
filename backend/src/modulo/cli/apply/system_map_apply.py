@@ -10,20 +10,17 @@ number is always auto-assigned by the server.
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from modulo.cli.apply.executor import ApplyHttpError, _failure_message, _find
+from modulo.cli.apply.executor import ApplyHttpError, _find, _record_entity_failure
 from modulo.cli.apply.models import SystemMapEntity
 from modulo.cli.apply.plan import KIND_SYSTEM_MAP
 
 if TYPE_CHECKING:
     from modulo.cli.apply.executor import ApplyExecutor
     from modulo.cli.apply.models import EntitySet
-
-_log = logging.getLogger(__name__)
 
 
 def _entity_map(current_entities: dict[str, Any], key: str) -> dict[str, Any]:
@@ -162,11 +159,15 @@ def _record_system_map_failure(
     exc: Exception,
 ) -> None:
     """Move a failed system map entry to ``report['failed']`` (isolated per map)."""
-    message = _failure_message(exc)
-    displayed_name = entity.name if entity else entry["name"]
-    _log.exception("apply system map failed: %s: %s", displayed_name, message)
-    report[status].remove(entry)
-    report["failed"].append({"kind": KIND_SYSTEM_MAP, "name": entry["name"], "error": message})
+    _record_entity_failure(
+        report,
+        status,
+        entry,
+        kind=KIND_SYSTEM_MAP,
+        displayed_name=entity.name if entity else entry["name"],
+        exc=exc,
+        entity_label="system map",
+    )
 
 
 def apply_system_maps(
