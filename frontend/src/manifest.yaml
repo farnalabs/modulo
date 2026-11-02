@@ -1160,30 +1160,6 @@ elements:
       - testid: system-map-create-submit
         type: button
         dynamic_testid: false
-      - testid: system-map-action-menu
-        type: menu
-        dynamic_testid: false
-      - testid: system-map-action-view
-        type: menuitem
-        dynamic_testid: false
-      - testid: system-map-action-edit
-        type: menuitem
-        dynamic_testid: false
-      - testid: system-map-action-discover
-        type: menuitem
-        dynamic_testid: false
-      - testid: system-map-action-delete
-        type: menuitem
-        dynamic_testid: false
-      - testid: system-map-delete-confirm
-        type: dialog
-        dynamic_testid: false
-      - testid: system-map-delete-cancel
-        type: button
-        dynamic_testid: false
-      - testid: system-map-delete-confirm-btn
-        type: button
-        dynamic_testid: false
       - testid: system-maps-pagination
         type: element
         dynamic_testid: false
@@ -1205,9 +1181,6 @@ elements:
         type: button
         dynamic_testid: false
       - testid: system-map-save-draft
-        type: button
-        dynamic_testid: false
-      - testid: system-map-rescan
         type: button
         dynamic_testid: false
       - testid: system-map-discover
@@ -1247,15 +1220,6 @@ elements:
         type: button
         dynamic_testid: false
       - testid: system-map-discovery-save
-        type: button
-        dynamic_testid: false
-      - testid: system-map-rescan-dialog
-        type: dialog
-        dynamic_testid: false
-      - testid: system-map-rescan-cancel
-        type: button
-        dynamic_testid: false
-      - testid: system-map-rescan-apply
         type: button
         dynamic_testid: false
       - testid: system-map-relationship-type
@@ -7624,18 +7588,20 @@ features:
         status: covered
         behaviours:
             - "[x] System Maps list page (/system-maps) with create, view, edit, delete, discover actions"
-            - "[x] Map detail page (/system-maps/:id) with bounded visual graph editor for 7 node types and 4 relationship types"
-            - "[x] Revision history sidebar with current/historical revision switching via /revisions/current and /revisions/by-time"
+            - "[x] Map detail page (/system-maps/:id) with bounded visual graph editor for the backend node/relationship vocabularies, connected edges, endpoint selection, and drag/keyboard repositioning"
+            - "[ ] Revision history sidebar with current/historical revision switching via /revisions/current and /revisions/by-time (deferred: the version-aware read-model API lands separately; this branch shows revisions created in the current session)"
             - "[x] Draft revision creation and save with node/relationship/loop-config payload"
             - "[x] Publish revision (validation + status change to published)"
             - "[x] Archive revision (status change to archived)"
-            - "[x] Discover My System integration (POST /api/v1/system-maps/discover) with accept/reject review panel"
-            - "[x] Re-scan existing organisation resources into existing draft with added/removed/ambiguous diff and operator edit preservation"
+            - "[x] Discover My System integration (POST /api/v1/system-maps/discover) with accept/reject review panel that applies accepted nodes/relationships to the draft"
+            - "[ ] Re-scan existing organisation resources into existing draft with added/removed/ambiguous diff and operator edit preservation (deferred: no re-scan endpoint exists on this branch; the mock re-scan was removed rather than shipped as a no-op)"
             - "[x] No auto-publish — operator must explicitly publish"
             - "[x] Access gated by system_maps feature + developer mode + operator/admin + system_maps_access permission"
             - "[x] i18n keys and product-map test IDs registered"
             - "[x] Accessibility: STATE-1/2/6, A11Y-1/2/4, I18N-1, TYPE-1, VIS-4"
         deferrals:
+            - "Current/historical revision switching (/revisions/current, /revisions/by-time) depends on the version-aware read-model API"
+            - "Re-scan into an existing draft depends on a re-scan endpoint; the UI is withheld until it exists"
             - "No per-ticket tracking UI (Beta 3 scope)"
             - "No loop dispatch runtime/budgets/concurrency (Beta 3 scope)"
             - "No broad arbitrary graph/cycle editor (Beta 2 scope: only bounded node/relationship types)"
