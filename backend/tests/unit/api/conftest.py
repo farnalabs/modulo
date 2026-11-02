@@ -90,8 +90,8 @@ def make_system_session_mock(
 
     empty_row = MagicMock()
     empty_row.scalar_one_or_none = MagicMock(return_value=None)
-    empty_row.scalar_one = AsyncMock(return_value=0)
-    empty_row.scalar = AsyncMock(return_value=0)
+    empty_row.scalar_one = MagicMock(return_value=0)
+    empty_row.scalar = MagicMock(return_value=0)
     empty_scalars = MagicMock()
     empty_scalars.all = MagicMock(return_value=[])
     empty_row.scalars = MagicMock(return_value=empty_scalars)
