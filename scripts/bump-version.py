@@ -32,8 +32,9 @@ from pathlib import Path
 from typing import Literal
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+UV_LOCK_FILENAME = "uv.lock"
 BACKEND_PYPROJECT = PROJECT_ROOT / "backend" / "pyproject.toml"
-BACKEND_UV_LOCK = PROJECT_ROOT / "backend" / "uv.lock"
+BACKEND_UV_LOCK = PROJECT_ROOT / "backend" / UV_LOCK_FILENAME
 FRONTEND_PACKAGE = PROJECT_ROOT / "frontend" / "package.json"
 HELM_CHART = PROJECT_ROOT / "deploy" / "helm" / "modulo" / "Chart.yaml"
 
@@ -49,7 +50,7 @@ _UV_LOCK_MODULO_BLOCK_RE = re.compile(r'(?m)^\[\[package\]\]\r?\nname = "farnala
 
 def _extract_version(content: str, path: Path) -> str | None:
     """Pull the version value out of one target file's content."""
-    if path.name == "uv.lock":
+    if path.name == UV_LOCK_FILENAME:
         m = _UV_LOCK_MODULO_BLOCK_RE.search(content)
     elif path.suffix == ".toml":
         m = re.search(r'(?m)^version\s*=\s*"([^"]+)"', content)
@@ -79,7 +80,7 @@ def bump(version: str, part: str) -> str:
 
 def _field_patterns(path: Path, old_version: str, new_version: str) -> list[tuple[re.Pattern[str], str]]:
     """(pattern, replacement) pairs that carry the version in one target file."""
-    if path.name == "uv.lock":
+    if path.name == UV_LOCK_FILENAME:
         return [
             (
                 re.compile(
