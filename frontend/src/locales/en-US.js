@@ -1965,6 +1965,7 @@ export default {
       "remove_relationship": "Remove relationship",
       "remove": "Remove",
       "discovery_results": "Discover My System results",
+      "node_key_label": "Key: {key}",
       "discovery_results_hint": "Review inferred resources and relationships before adding them to your draft.",
       "sources_inspected": "Sources inspected",
       "inferred_nodes": "Suggested nodes",

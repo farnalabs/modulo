@@ -24,7 +24,13 @@
       <!-- Main Editor Area -->
       <main class="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         <ErrorAlert
-          v-if="actionError"
+          v-if="loadError"
+          :message="loadError"
+          :on-retry="loadData"
+          class="m-3"
+        />
+        <ErrorAlert
+          v-else-if="actionError"
           :message="actionError"
           :on-dismiss="clearActionError"
           :dismiss-label="$t('common.dismiss')"
@@ -34,10 +40,7 @@
         <HeaderBar
           :map="activeMap"
           :revision="activeRevision"
-          :graph="graph"
-          :loading="loading"
           :saving="saving"
-          :show-sidebar="showSidebar"
           @toggle-sidebar="showSidebar = !showSidebar"
           @save="saveDraft"
           @publish="publishRevision"
@@ -74,7 +77,6 @@
           <DiscoveryPanel
             v-if="discoveryOpen"
             :discovery="discovery"
-            :graph="graph"
             @close="discoveryOpen = false"
             @save="saveDraftWithDiscovery"
             data-testid="system-map-discovery-panel"
@@ -107,7 +109,7 @@ const activeRevision = computed(() => store.activeRevision)
 const graph = computed(() => store.graph)
 const revisions = computed(() => store.revisions)
 const discovery = computed(() => store.discovery)
-const loading = computed(() => store.loading)
+const loadError = computed(() => store.error)
 
 const showSidebar = ref(true)
 const discoveryOpen = ref(false)

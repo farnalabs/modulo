@@ -26,7 +26,7 @@
               >
                 <div>
                   <p class="font-medium">{{ node.node_type }}: {{ node.display_name }}</p>
-                  <p class="text-xs text-muted-foreground">Key: {{ node.node_key }}</p>
+                  <p class="text-xs text-muted-foreground">{{ $t('views.SystemMapDetailView.node_key_label', { key: node.node_key }) }}</p>
                 </div>
                 <div class="flex gap-1">
                   <button type="button" class="rounded border px-2 py-1 text-xs" :class="activeClass(`node:${index}`, 'accepted')" :aria-pressed="decisions[`node:${index}`] === 'accepted'" @click="onAccept(`node:${index}`)" :data-testid="`system-map-accept-node-${node.node_key}`">{{ $t('views.SystemMapDetailView.accept') }}</button>
@@ -79,7 +79,7 @@
 import { ref } from 'vue'
 import type { DiscoveryReport, DiscoverySelection } from '../../stores/systemMaps'
 
-defineProps<{ discovery: DiscoveryReport | null; graph: unknown; dataTestId?: string }>()
+defineProps<{ discovery: DiscoveryReport | null; dataTestId?: string }>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'save', selections: DiscoverySelection): void }>()
 
 type Decision = 'accepted' | 'rejected'

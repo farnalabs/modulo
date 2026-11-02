@@ -153,7 +153,7 @@ describe('DiscoveryPanel', () => {
 
   it('only includes accepted suggestions in the save payload', async () => {
     const wrapper = mount(DiscoveryPanel, {
-      props: { discovery, graph: null },
+      props: { discovery },
       global: { plugins: [i18n] },
     })
 
@@ -169,7 +169,7 @@ describe('DiscoveryPanel', () => {
 
   it('toggles a decision off when the same action is pressed twice', async () => {
     const wrapper = mount(DiscoveryPanel, {
-      props: { discovery, graph: null },
+      props: { discovery },
       global: { plugins: [i18n] },
     })
 

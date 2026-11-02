@@ -29,8 +29,8 @@
 </template>
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { SystemMap, SystemMapRevision, SystemMapGraph } from '../../stores/systemMaps'
-const props = defineProps<{ map: SystemMap | null; revision: SystemMapRevision | null; graph: SystemMapGraph | null; loading?: boolean; saving?: boolean; showSidebar?: boolean; dataTestId?: string }>()
+import type { SystemMap, SystemMapRevision } from '../../stores/systemMaps'
+const props = defineProps<{ map: SystemMap | null; revision: SystemMapRevision | null; saving?: boolean; dataTestId?: string }>()
 defineEmits<{ (e: 'toggle-sidebar'): void; (e: 'save'): void; (e: 'publish'): void; (e: 'archive'): void; (e: 'discover'): void }>()
 const readOnly = computed(() => props.revision?.status === 'published' || props.revision?.status === 'archived')
 </script>
