@@ -87,7 +87,7 @@
                         type="button"
                         class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
                         :data-testid="`system-map-action-${map.id}`"
-                        :aria-label="$t('views.SystemMapsView.actions', { name: map.name })"
+                        :aria-label="$t('views.SystemMapsView.map_actions', { name: map.name })"
                         @click.stop="openActionMenu($event, map)"
                       >
                         <MoreVertical class="h-3.5 w-3.5" aria-hidden="true" />

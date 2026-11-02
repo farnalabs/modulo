@@ -1908,7 +1908,8 @@ export default {
       "status": "Status",
       "revisions": "Revisions",
       "last_updated": "Last updated",
-      "actions": "Actions for {name}",
+      "actions": "Actions",
+      "map_actions": "Actions for {name}",
       "revision_count": "{count} revision | {count} revisions",
       "page_of": "Page {page} of {total}",
       "draft": "Draft",
@@ -1980,7 +1981,10 @@ export default {
       "ambiguous_matches": "Ambiguous matches",
       "rescan_preserves_edits": "Re-scan never publishes automatically and does not overwrite operator edits.",
       "apply_rescan": "Apply to draft",
-      "back": "Back to System Maps"
+      "back": "Back to System Maps",
+      "close": "Close",
+      "graph_controls": "Graph controls",
+      "relationship_type": "Relationship type"
     },
     "ComplianceEvidenceIndex": {
       "title": "Compliance Evidence Index",

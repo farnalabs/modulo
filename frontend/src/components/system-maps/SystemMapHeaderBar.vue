@@ -9,7 +9,7 @@
       </p>
     </div>
     <div class="flex items-center gap-2">
-      <button type="button" class="rounded border px-2.5 py-1.5 text-sm" :aria-label="$t('views.SystemMapDetailView.toggle_history')" @click="$emit('toggle-sidebar')" :data-testid="`${dataTestId}-toggle-history`">
+      <button type="button" class="rounded border px-2.5 py-1.5 text-sm" :aria-label="$t('views.SystemMapDetailView.toggle_history')" @click="$emit('toggle-sidebar')" data-testid="system-map-header-toggle-history">
         {{ $t('views.SystemMapDetailView.history') }}
       </button>
       <button type="button" class="rounded border px-2.5 py-1.5 text-sm" :disabled="readOnly || saving" @click="$emit('save')" data-testid="system-map-save-draft">

@@ -1,6 +1,6 @@
 <template>
   <div class="h-full overflow-auto bg-muted/20 p-6" :data-testid="dataTestId">
-    <div class="mb-4 flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3" aria-label="Graph controls">
+    <div class="mb-4 flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3" :aria-label="$t('views.SystemMapDetailView.graph_controls')">
       <span class="text-sm font-medium">{{ $t('views.SystemMapDetailView.node_types') }}</span>
       <button
         v-for="type in nodeTypes"
@@ -12,7 +12,7 @@
         :data-testid="`system-map-add-node-${type}`"
       >{{ type.replace('_', ' ') }}</button>
       <span class="ml-2 text-sm font-medium">{{ $t('views.SystemMapDetailView.relationship_types') }}</span>
-      <select v-model="relationshipType" class="rounded border px-2 py-1 text-xs" :disabled="readOnly" aria-label="Relationship type" data-testid="system-map-relationship-type">
+      <select v-model="relationshipType" class="rounded border px-2 py-1 text-xs" :disabled="readOnly" :aria-label="$t('views.SystemMapDetailView.relationship_type')" data-testid="system-map-relationship-type">
         <option v-for="type in relationshipTypes" :key="type" :value="type">{{ type.replace('_', ' ') }}</option>
       </select>
       <button type="button" class="rounded border px-2 py-1 text-xs" :disabled="readOnly || localNodes.length < 2" @click="addRelationship" data-testid="system-map-add-relationship">{{ $t('views.SystemMapDetailView.add_relationship') }}</button>
@@ -64,12 +64,27 @@ const props = defineProps<{ nodes: SystemMapNode[]; relationships: SystemMapRela
 const emit = defineEmits<{ (e: 'nodes-change', nodes: Array<Record<string, unknown>>): void; (e: 'relationships-change', relationships: Array<Record<string, unknown>>): void }>()
 const localNodes = ref<Array<SystemMapNode & { config_json: Record<string, unknown> }>>([])
 const localRelationships = ref<SystemMapRelationship[]>([])
+const nodeCounters = new Map<NodeType, number>()
 const relationshipType = ref<RelationshipType>(props.relationshipTypes[0])
 const readOnly = computed(() => props.readOnly === true)
-watch(() => props.nodes, (nodes) => { localNodes.value = nodes.map((node) => ({ ...node, config_json: { ...node.config_json } })) }, { immediate: true, deep: true })
+watch(() => props.nodes, (nodes) => {
+  localNodes.value = nodes.map((node) => ({ ...node, config_json: { ...node.config_json } }))
+  for (const node of nodes) {
+    const nodeType = node.node_type as NodeType
+    const match = node.node_key.match(new RegExp(`^${nodeType}-(\\d+)$`))
+    const index = match ? Number(match[1]) : 0
+    nodeCounters.set(nodeType, Math.max(nodeCounters.get(nodeType) ?? 0, index))
+  }
+}, { immediate: true, deep: true })
 watch(() => props.relationships, (relationships) => { localRelationships.value = relationships.map((relationship) => ({ ...relationship, config_json: { ...relationship.config_json } })) }, { immediate: true, deep: true })
 function emitNodes(): void { emit('nodes-change', localNodes.value as unknown as Array<Record<string, unknown>>) }
-function addNode(nodeType: NodeType): void { const index = localNodes.value.length + 1; localNodes.value.push({ id: `local-${Date.now()}`, organisation_id: '', revision_id: '', node_key: `${nodeType}-${index}`, node_type: nodeType, display_name: `${nodeType.replace('_', ' ')} ${index}`, config_json: {}, pipeline_id: null, connector_instance_id: null, owner_team_id: null, eval_id: null, position_x: String(40 + (index % 3) * 220), position_y: String(40 + Math.floor(index / 3) * 140), deleted_at: null, deleted_by: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }); emitNodes() }
+function addNode(nodeType: NodeType): void {
+  const index = (nodeCounters.get(nodeType) ?? 0) + 1
+  nodeCounters.set(nodeType, index)
+  const nodeKey = `${nodeType}-${index}`
+  localNodes.value.push({ id: `local-${Date.now()}-${nodeKey}`, organisation_id: '', revision_id: '', node_key: nodeKey, node_type: nodeType, display_name: `${nodeType.replace('_', ' ')} ${index}`, config_json: {}, pipeline_id: null, connector_instance_id: null, owner_team_id: null, eval_id: null, position_x: String(40 + (localNodes.value.length % 3) * 220), position_y: String(40 + Math.floor(localNodes.value.length / 3) * 140), deleted_at: null, deleted_by: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+  emitNodes()
+}
 function removeNode(nodeKey: string): void { localNodes.value = localNodes.value.filter((node) => node.node_key !== nodeKey); localRelationships.value = localRelationships.value.filter((relationship) => relationship.source_node_key !== nodeKey && relationship.target_node_key !== nodeKey); emitNodes(); emitRelationships() }
 function addRelationship(): void { const [source, target] = localNodes.value; if (!source || !target) return; localRelationships.value.push({ id: `local-rel-${Date.now()}`, organisation_id: '', revision_id: '', source_node_key: source.node_key, target_node_key: target.node_key, relationship_type: relationshipType.value, config_json: {}, deleted_at: null, deleted_by: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }); emitRelationships() }
 function removeRelationship(id: string): void { localRelationships.value = localRelationships.value.filter((relationship) => relationship.id !== id); emitRelationships() }

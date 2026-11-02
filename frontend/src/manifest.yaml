@@ -1140,6 +1140,133 @@ elements:
       - testid: page-header-right
         type: element
         dynamic_testid: false
+
+    /system-maps:
+      - testid: system-maps-create
+        type: button
+        dynamic_testid: false
+      - testid: system-map-create-dialog
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-create-name
+        type: input
+        dynamic_testid: false
+      - testid: system-map-create-description
+        type: textarea
+        dynamic_testid: false
+      - testid: system-map-create-cancel
+        type: button
+        dynamic_testid: false
+      - testid: system-map-create-submit
+        type: button
+        dynamic_testid: false
+      - testid: system-map-action-menu
+        type: menu
+        dynamic_testid: false
+      - testid: system-map-action-view
+        type: menuitem
+        dynamic_testid: false
+      - testid: system-map-action-edit
+        type: menuitem
+        dynamic_testid: false
+      - testid: system-map-action-discover
+        type: menuitem
+        dynamic_testid: false
+      - testid: system-map-action-delete
+        type: menuitem
+        dynamic_testid: false
+      - testid: system-map-delete-confirm
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-delete-cancel
+        type: button
+        dynamic_testid: false
+      - testid: system-map-delete-confirm-btn
+        type: button
+        dynamic_testid: false
+      - testid: system-maps-pagination
+        type: element
+        dynamic_testid: false
+      - testid: system-maps-prev
+        type: button
+        dynamic_testid: false
+      - testid: system-maps-next
+        type: button
+        dynamic_testid: false
+
+    /system-maps/:id:
+      - testid: system-map-detail-back
+        type: link
+        dynamic_testid: false
+      - testid: system-map-detail-header
+        type: header
+        dynamic_testid: false
+      - testid: system-map-header-toggle-history
+        type: button
+        dynamic_testid: false
+      - testid: system-map-save-draft
+        type: button
+        dynamic_testid: false
+      - testid: system-map-rescan
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discover
+        type: button
+        dynamic_testid: false
+      - testid: system-map-publish
+        type: button
+        dynamic_testid: false
+      - testid: system-map-archive
+        type: button
+        dynamic_testid: false
+      - testid: system-map-graph-editor
+        type: element
+        dynamic_testid: false
+      - testid: system-map-graph-canvas
+        type: element
+        dynamic_testid: false
+      - testid: system-map-empty-state
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-sidebar
+        type: aside
+        dynamic_testid: false
+      - testid: system-map-new-draft
+        type: button
+        dynamic_testid: false
+      - testid: system-map-sidebar-discover
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-panel
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-discovery-close
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-cancel
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-save
+        type: button
+        dynamic_testid: false
+      - testid: system-map-rescan-dialog
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-rescan-cancel
+        type: button
+        dynamic_testid: false
+      - testid: system-map-rescan-apply
+        type: button
+        dynamic_testid: false
+      - testid: system-map-relationship-type
+        type: select
+        dynamic_testid: false
+      - testid: system-map-add-relationship
+        type: button
+        dynamic_testid: false
+      - testid: system-map-relationships
+        type: element
+        dynamic_testid: false
     /library/collections/:id:
       - testid: collection-install
         type: button
@@ -7494,7 +7621,7 @@ features:
             - "[x] Org-level license management: GET/PUT/DELETE on /api/v1/admin/orgs/{org_id}/license resolves/stores/clears the org's settings_json.license_key via parse_and_verify, falls back to the system license, and is role-gated (GET org.license.view / PUT+DELETE org.license.manage) — BDD: system_admin_orgs.feature"
     feat-system-maps:
         description: Bounded visual authoring of delivery system maps
-        status: partial
+        status: covered
         behaviours:
             - "[x] System Maps list page (/system-maps) with create, view, edit, delete, discover actions"
             - "[x] Map detail page (/system-maps/:id) with bounded visual graph editor for 7 node types and 4 relationship types"

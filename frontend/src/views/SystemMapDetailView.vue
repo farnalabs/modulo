@@ -8,7 +8,7 @@
         v-if="showSidebar"
         class="w-80 border-r bg-card flex flex-col hidden lg:flex"
         :data-testid="`system-map-revision-sidebar`"
-        aria-label="Revision history"
+        :aria-label="$t('views.SystemMapDetailView.revision_history')"
       >
         <RevisionSidebar
           :map-id="mapId"
@@ -22,8 +22,9 @@
       </aside>
 
       <!-- Main Editor Area -->
-      <main class="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-        <HeaderBar
+        <main class="flex-1 flex flex-col min-w-0 overflow-hidden relative">
+          <ErrorAlert v-if="error" :message="error" :on-retry="loadData" class="m-4" />
+          <HeaderBar
           :map="activeMap"
           :revision="activeRevision"
           :graph="graph"
@@ -67,7 +68,6 @@
           <DiscoveryPanel
             v-if="discoveryOpen"
             :discovery="discovery"
-            :graph="graph"
             @close="discoveryOpen = false"
             @accept="acceptSuggestion"
             @reject="rejectSuggestion"
@@ -100,6 +100,7 @@ import GraphEditor from '../components/system-maps/SystemMapGraphEditor.vue'
 import RevisionSidebar from '../components/system-maps/SystemMapRevisionSidebar.vue'
 import DiscoveryPanel from '../components/system-maps/SystemMapDiscoveryPanel.vue'
 import RescanDialog from '../components/system-maps/SystemMapRescanDialog.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 const route = useRoute()
 const store = useSystemMapsStore()
 
@@ -110,6 +111,7 @@ const graph = computed(() => store.graph)
 const revisions = computed(() => store.revisions)
 const discovery = computed(() => store.discovery)
 const loading = computed(() => store.loading)
+const error = computed(() => store.error)
 
 const showSidebar = ref(true)
 const discoveryOpen = ref(false)
