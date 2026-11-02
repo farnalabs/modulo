@@ -1,4 +1,4 @@
-"""Runtime guards on the S107 keyword-option groups (agent / env profile / library).
+"""Runtime guards on the S107 keyword-option groups (agent / env profile / library / model backend).
 
 Each grouped function takes ``**options: Unpack[TypedDict]``: mypy validates
 keyword names and types at the call site, while the body keeps a runtime
@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.agent import create_agent
 from modulo.db.crud.environment_profile import create_environment_profile
 from modulo.db.crud.library_primitive import create_library_primitive
+from modulo.db.crud.model_backend import create_model_backend
 
 
 def _library_primitive_kwargs(**overrides: Any) -> dict[str, Any]:
@@ -96,6 +97,45 @@ class TestLibraryPrimitiveRequiredOptions:
             )
 
 
+def _model_backend_kwargs(**overrides: Any) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "org_id": uuid.uuid4(),
+        "name": "backend",
+        "display_name": "Backend",
+        "provider": "openai",
+        "model_id": "gpt-4o",
+        "credentials_ciphertext": b"enc",
+        "account_id": uuid.uuid4(),
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+class TestModelBackendOptionGroup:
+    async def test_known_options_reach_the_row(self) -> None:
+        """The no-unknown-options path persists the row with its defaults."""
+        session = AsyncMock(spec=AsyncSession)
+        with patch("modulo.db.crud.model_backend.ModelBackend") as model:
+            await create_model_backend(session, **_model_backend_kwargs())
+
+        row_kwargs = model.call_args.kwargs
+        assert row_kwargs["visibility"] == "org"
+        assert row_kwargs["tier"] == "native"
+        # Absent status: the column's server default ("active") applies.
+        assert "status" not in row_kwargs
+        session.add.assert_called_once_with(model.return_value)
+        session.flush.assert_awaited_once()
+
+    async def test_explicit_status_reaches_the_row(self) -> None:
+        """FAR-2280: an explicit status (e.g. pending_setup) rides through."""
+        session = AsyncMock(spec=AsyncSession)
+        with patch("modulo.db.crud.model_backend.ModelBackend") as model:
+            await create_model_backend(session, **_model_backend_kwargs(status="pending_setup"))
+
+        assert model.call_args.kwargs["status"] == "pending_setup"
+        session.flush.assert_awaited_once()
+
+
 class TestGroupedCrudUnknownOptions:
     async def test_create_agent_rejects_unknown_option(self) -> None:
         kwargs: dict[str, Any] = {
@@ -108,6 +148,21 @@ class TestGroupedCrudUnknownOptions:
         }
         with pytest.raises(TypeError, match="unexpected create_agent options"):
             await create_agent(**kwargs)
+
+    async def test_create_model_backend_rejects_unknown_option(self) -> None:
+        kwargs: dict[str, Any] = {
+            "session": None,
+            "org_id": uuid.uuid4(),
+            "name": "backend",
+            "display_name": "Backend",
+            "provider": "openai",
+            "model_id": "gpt-4o",
+            "credentials_ciphertext": b"enc",
+            "account_id": uuid.uuid4(),
+            "unexpected_option": True,
+        }
+        with pytest.raises(TypeError, match="unexpected create_model_backend options"):
+            await create_model_backend(**kwargs)
 
     async def test_create_environment_profile_rejects_unknown_option(self) -> None:
         kwargs: dict[str, Any] = {
