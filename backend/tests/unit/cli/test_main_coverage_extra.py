@@ -19,12 +19,17 @@ def test_doctor_report_builds_archive(tmp_path: Path):
     # Uninitialized data dir -> doctor exits 3, but the report archive is built.
     assert result.exit_code == 3
     assert report.is_file()
+    import json
     import zipfile
 
     with zipfile.ZipFile(report) as archive:
         names = archive.namelist()
+        manifest = json.loads(archive.read("report.json"))
     assert "report.json" in names
-    assert "doctor-output.txt" in names
+    assert "MANIFEST.txt" in names
+    assert "doctor.txt" in names
+    assert manifest["format"] == "modulo-support-bundle/v1"
+    assert manifest["bundle_format_version"] == 1
 
 
 def test_logs_rotate_child_refused(tmp_path: Path):

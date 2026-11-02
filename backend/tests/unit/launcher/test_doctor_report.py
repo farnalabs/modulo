@@ -132,12 +132,15 @@ def test_report_zip_inventory_and_versions(tmp_path: Path) -> None:
         names = set(archive.namelist())
         manifest = json.loads(archive.read("report.json"))
         version_text = archive.read("version.txt").decode()
-    assert "doctor-output.txt" in names
+    assert "doctor.txt" in names
+    assert "MANIFEST.txt" in names
     assert "logs/app.log.tail" in names
     assert "logs/postgres.log.tail" in names
     assert "logs/redis.log.tail" in names
+    assert manifest["format"] == "modulo-support-bundle/v1"
+    assert manifest["bundle_format_version"] == 1
     assert manifest["generated_by"] == "modulo doctor --report"
-    assert manifest["redacted_marker"] == REDACTED
+    assert manifest["redaction"]["redacted_marker"] == REDACTED
     assert "modulo version:" in version_text
     assert "os:" in version_text
 
@@ -154,7 +157,7 @@ def test_build_failure_secrets_unreadable_still_redacts_structurally(tmp_path: P
     doctor_output = f"SECRET_KEY={chr(115) * 12}value\n"
     out_path = build_report(tmp_path, tmp_path / "report.zip", doctor_output=doctor_output)
     with zipfile.ZipFile(out_path) as archive:
-        text = archive.read("doctor-output.txt").decode()
+        text = archive.read("doctor.txt").decode()
     assert f"SECRET_KEY={REDACTED}" in text
 
 

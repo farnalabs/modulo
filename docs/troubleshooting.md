@@ -250,8 +250,15 @@ modulo logs app         # launcher/supervisor log (pass -f to follow; postgres/r
 - `status` prints `DEGRADED: <reason>` when a previous crash tripped the
   terminal-degraded trip: resume with `modulo start --clear-degraded`
   (persistence: `degraded.json` beside `state.json` in the data dir).
-- `doctor --report report.zip` writes a REDACTED diagnostic archive
-  (versions, OS info, doctor output, log tails) for bug reports.
+- `doctor --report report.zip` writes a REDACTED support bundle (format
+  `modulo-support-bundle/v1`): a fixed allowlist of versions, doctor output,
+  health, settings key inventory, deployment facts, DB migration state, error
+  groups, failed runs, licence status and log tails. Inspect it before sending:
+  `python -m modulo.support.bundle --list report.zip` and
+  `python -m modulo.support.bundle --show MANIFEST.txt report.zip`. A
+  post-assembly gate refuses to write the archive if any secret-shaped content
+  survives redaction. `python -m modulo.support.bundle --out report.zip` builds
+  the same bundle inside an app container (no launcher data dir required).
 
 Where things live: install root `~/.local/opt/modulo/` (versions under
 `versions/<version>/`, the `current` symlink), data dir

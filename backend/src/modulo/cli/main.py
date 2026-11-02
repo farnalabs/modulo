@@ -432,8 +432,10 @@ def doctor(
 
 def _build_doctor_report(data_dir: Path, report_path: Path, doctor_output: str) -> None:
     from modulo.launcher.doctor_report import build_report
+    from modulo.support.bundle import FORMAT_ID
 
-    click.echo(f"diagnostic report written: {build_report(data_dir, report_path, doctor_output=doctor_output)}")
+    written = build_report(data_dir, report_path, doctor_output=doctor_output)
+    click.echo(f"diagnostic report written: {written} ({FORMAT_ID})")
 
 
 @cli.command("env")
