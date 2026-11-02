@@ -2208,6 +2208,28 @@ def test_overview_with_at_no_revision_returns_404(client: tuple[TestClient, _Har
     assert "No revision active at" in resp.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (_PROG, 501),
+        (_SQL, 503),
+        (_RUNTIME, 500),
+    ],
+)
+def test_get_revision_by_time_error_mapping(
+    client: tuple[TestClient, _Harness],
+    exc: Exception,
+    expected: int,
+) -> None:
+    """get_revision_by_time honours the route error convention (FAR-2288)."""
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(side_effect=exc))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/revisions/by-time", params={"at": datetime.now(UTC).isoformat()})
+
+    assert resp.status_code == expected, f"{type(exc).__name__}: {resp.text}"
+
+
 def _binding_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "pipeline_id": str(uuid.uuid4()),

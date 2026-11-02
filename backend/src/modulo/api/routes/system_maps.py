@@ -71,7 +71,7 @@ from modulo.core.system_maps_discovery import (
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_folder import PipelineFolder
-from modulo.db.models.system_map import SystemMap
+from modulo.db.models.system_map import SystemMap, SystemMapLoopConfig, SystemMapNode, SystemMapRevision
 from modulo.db.models.trigger import Trigger
 from modulo.db.repositories.system_map import SystemMapRepository
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -1257,6 +1257,109 @@ async def delete_system_map_revision_endpoint(
 # ─── Overview (Aggregate Read Model) ───
 
 
+async def _resolve_overview_revision(
+    repository: SystemMapRepository,
+    session: AsyncSession,
+    *,
+    organisation_id: uuid.UUID,
+    map_id: uuid.UUID,
+    revision_id: uuid.UUID | None,
+    at: datetime | None,
+) -> SystemMapRevision:
+    """Resolve which revision an overview request targets (FAR-2288)."""
+    if revision_id:
+        revision = await repository.get_revision_by_id(
+            session, organisation_id=organisation_id, revision_id=revision_id
+        )
+        if not revision or revision.system_map_id != map_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+        return revision
+    if at:
+        revision = await repository.get_revision_by_time(
+            session, organisation_id=organisation_id, system_map_id=map_id, at=at
+        )
+        if not revision:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No revision active at {at.isoformat()}",
+            )
+        return revision
+    revision = await repository.get_published_revision(session, organisation_id=organisation_id, system_map_id=map_id)
+    if not revision:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No published revision found for this map",
+        )
+    return revision
+
+
+def _build_overview_node_health(nodes: list[SystemMapNode]) -> list[SystemMapOverviewNodeHealth]:
+    """Build node health entries (telemetry is not yet wired up)."""
+    return [
+        SystemMapOverviewNodeHealth(
+            node_key=node.node_key,
+            node_type=node.node_type,
+            display_name=node.display_name,
+            health="unknown",
+            queue_depth=None,
+            throughput_per_min=None,
+            capacity_pressure=None,
+            failure_rate=None,
+            telemetry_coverage=None,
+            last_run_id=None,
+            last_run_status=None,
+            last_run_completed_at=None,
+        )
+        for node in nodes
+    ]
+
+
+def _build_overview_loop_configs(loop_configs: list[SystemMapLoopConfig]) -> list[SystemMapOverviewLoopConfig]:
+    """Build loop configuration overviews (admission data is not yet wired up)."""
+    return [
+        SystemMapOverviewLoopConfig(
+            node_key=lc.node_key,
+            target_signal=lc.target_signal,
+            observation_window_seconds=lc.observation_window_seconds,
+            action_pipeline_id=lc.action_pipeline_id,
+            budget_limit_usd=lc.budget_limit_usd,
+            cooldown_seconds=lc.cooldown_seconds,
+            outcome_metric=lc.outcome_metric,
+            last_admission_at=None,
+            last_admission_status=None,
+            cooldown_active=False,
+            cooldown_until=None,
+            budget_used_usd=Decimal(0),
+            budget_period_start=None,
+        )
+        for lc in loop_configs
+    ]
+
+
+def _build_overview_bottlenecks(
+    nodes: list[SystemMapNode],
+    loop_configs: list[SystemMapLoopConfig],
+) -> list[SystemMapOverviewBottleneck]:
+    """Detect unobserved improvement-loop nodes with a simple heuristic."""
+    bottlenecks: list[SystemMapOverviewBottleneck] = []
+    for node in nodes:
+        if node.node_type != "improvement_loop":
+            continue
+        matching_lc = next((lc for lc in loop_configs if lc.node_key == node.node_key), None)
+        if not matching_lc:
+            bottlenecks.append(
+                SystemMapOverviewBottleneck(
+                    node_key=node.node_key,
+                    node_type=node.node_type,
+                    display_name=node.display_name,
+                    kind="unobserved",
+                    detail=f"Improvement loop node '{node.node_key}' missing loop configuration",
+                    severity="high",
+                )
+            )
+    return bottlenecks
+
+
 @router.get("/{map_id}/overview")
 @handle_db_errors(_EP_GET_SYSTEM_MAP_OVERVIEW)
 async def get_system_map_overview_endpoint(
@@ -1292,33 +1395,14 @@ async def get_system_map_overview_endpoint(
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
-            # Determine which revision to use
-            target_revision = None
-            if revision_id:
-                target_revision = await repository.get_revision_by_id(
-                    session, organisation_id=principal.organisation_id, revision_id=revision_id
-                )
-                if not target_revision or target_revision.system_map_id != map_id:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
-            elif at:
-                target_revision = await repository.get_revision_by_time(
-                    session, organisation_id=principal.organisation_id, system_map_id=map_id, at=at
-                )
-                if not target_revision:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"No revision active at {at.isoformat()}",
-                    )
-            else:
-                # Default to published revision
-                target_revision = await repository.get_published_revision(
-                    session, organisation_id=principal.organisation_id, system_map_id=map_id
-                )
-                if not target_revision:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail="No published revision found for this map",
-                    )
+            target_revision = await _resolve_overview_revision(
+                repository,
+                session,
+                organisation_id=principal.organisation_id,
+                map_id=map_id,
+                revision_id=revision_id,
+                at=at,
+            )
 
             # Get full graph for the target revision
             graph = await repository.get_full_revision_graph(
@@ -1330,73 +1414,14 @@ async def get_system_map_overview_endpoint(
             nodes = graph["nodes"]
             loop_configs = graph["loop_configs"]
 
-            # Build node health from runs data (simplified - would query runs in production)
-            node_health: list[SystemMapOverviewNodeHealth] = []
-            for node in nodes:
-                # In a real implementation, this would query run data for the node's pipeline
-                health = SystemMapOverviewNodeHealth(
-                    node_key=node.node_key,
-                    node_type=node.node_type,
-                    display_name=node.display_name,
-                    health="unknown",
-                    queue_depth=None,
-                    throughput_per_min=None,
-                    capacity_pressure=None,
-                    failure_rate=None,
-                    telemetry_coverage=None,
-                    last_run_id=None,
-                    last_run_status=None,
-                    last_run_completed_at=None,
-                )
-                node_health.append(health)
-
-            # Build loop config overview
-            loop_config_overview: list[SystemMapOverviewLoopConfig] = []
-            for lc in loop_configs:
-                # In a real implementation, this would query admission attempts and reservations
-                loop_overview = SystemMapOverviewLoopConfig(
-                    node_key=lc.node_key,
-                    target_signal=lc.target_signal,
-                    observation_window_seconds=lc.observation_window_seconds,
-                    action_pipeline_id=lc.action_pipeline_id,
-                    budget_limit_usd=lc.budget_limit_usd,
-                    cooldown_seconds=lc.cooldown_seconds,
-                    outcome_metric=lc.outcome_metric,
-                    last_admission_at=None,
-                    last_admission_status=None,
-                    cooldown_active=False,
-                    cooldown_until=None,
-                    budget_used_usd=Decimal(0),
-                    budget_period_start=None,
-                )
-                loop_config_overview.append(loop_overview)
-
-            # Detect bottlenecks (simplified heuristic)
-            bottlenecks: list[SystemMapOverviewBottleneck] = []
-            for node in nodes:
-                if node.node_type == "improvement_loop":
-                    # Check if loop config exists
-                    matching_lc = next((lc for lc in loop_configs if lc.node_key == node.node_key), None)
-                    if not matching_lc:
-                        bottlenecks.append(
-                            SystemMapOverviewBottleneck(
-                                node_key=node.node_key,
-                                node_type=node.node_type,
-                                display_name=node.display_name,
-                                kind="unobserved",
-                                detail=(f"Improvement loop node '{node.node_key}' missing loop configuration"),
-                                severity="high",
-                            )
-                        )
-
             return SystemMapOverviewResponse(
                 system_map_id=map_id,
                 revision_id=target_revision.id,
                 revision_number=target_revision.revision_number,
                 generated_at=datetime.now(UTC),
-                nodes=node_health,
-                loop_configs=loop_config_overview,
-                bottlenecks=bottlenecks,
+                nodes=_build_overview_node_health(nodes),
+                loop_configs=_build_overview_loop_configs(loop_configs),
+                bottlenecks=_build_overview_bottlenecks(nodes, loop_configs),
             )
     except HTTPException:
         raise
