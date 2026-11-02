@@ -38,7 +38,7 @@ Jinja2 against the runtime variables supplied per call
 | `headers` | `dict` | `{}` | Header templates. May not override auth/transport headers (`authorization`, `host`, `content-length`, …). |
 | `params` | `dict` | `{}` | Query parameter templates (URL-encoded by httpx). |
 | `body` | `dict` | `{}` | JSON body template (write path). |
-| `operations` | `dict` | `{}` | Per-resource override map: `{ "<resource>": { "method", "path", "headers", "params", "body", "records_path", "next_cursor_path", "passthrough", "idempotency_header" } }`. |
+| `operations` | `dict` | `{}` | Per-resource override map: `{ "<resource>": { "method", "path", "headers", "params", "body", "records_path", "next_cursor_path", "passthrough", "idempotency_header", "on_unknown" } }`. |
 | `records_path` | `str` | `null` | JMESPath expression into the JSON response for records (e.g. `data.items`). |
 | `next_cursor_path` | `str` | `null` | Optional pagination cursor (JMESPath). |
 | `allowed_hosts` | `list[str]` | `[]` | Optional scheme/host allowlist. |
