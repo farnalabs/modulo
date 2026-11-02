@@ -6,8 +6,9 @@ import pytest
 
 from modulo.connectors.base import ConnectorType
 from modulo.determination.inference import Finding, infer
+from modulo.determination.scanner import ScanSample
 
-from .helpers import iso_days_ago, make_sample
+from .helpers import iso_days_ago, issues_sample, make_sample
 
 
 def test_empty_samples_returns_findings() -> None:
@@ -159,48 +160,29 @@ def test_pr_timestamp_spelling_decides_bottleneck_finding(
 
 
 def test_planning_stage_from_jira_issues() -> None:
-    samples = [
-        make_sample(
-            "issues",
-            records=[
-                {
-                    "fields": {
-                        "status": {"name": "Backlog"},
-                        "summary": "Task 1",
-                    }
-                },
-                {
-                    "fields": {
-                        "status": {"name": "In Progress"},
-                        "summary": "Task 2",
-                    }
-                },
-            ],
-            connector_type=ConnectorType.JIRA,
-        )
-    ]
-    findings = infer(samples)
+    findings = infer([issues_sample(["Backlog", "In Progress"])])
     planning = [f for f in findings if f.category == "stage" and "Planning" in f.finding]
     assert len(planning) == 1
+    # Only the backlog status counts as planning; "In Progress" is a transition.
     assert "1 issues in planning statuses" in planning[0].evidence
 
 
 def test_issue_lifecycle_transition() -> None:
-    samples = [
-        make_sample(
-            "issues",
-            records=[
-                {"fields": {"status": {"name": "Backlog"}, "summary": "T1"}},
-                {"fields": {"status": {"name": "In Progress"}, "summary": "T2"}},
-                {"fields": {"status": {"name": "Done"}, "summary": "T3"}},
-            ],
-            connector_type=ConnectorType.JIRA,
-        )
-    ]
-    findings = infer(samples)
+    findings = infer([issues_sample(["Backlog", "In Progress", "Done"])])
     transitions = [f for f in findings if f.category == "transition"]
     assert len(transitions) == 1
-    assert "Issue lifecycle" in transitions[0].finding
+    lifecycle = transitions[0]
+    assert lifecycle.confidence == "medium"
+    assert "Issue lifecycle" in lifecycle.finding
+    # Planning statuses collapse into the synthetic "planning" label; the rest are
+    # reported verbatim so the transition line names every observed state.
+    assert "planning" in lifecycle.finding
+    assert "in progress" in lifecycle.finding
+    assert "done" in lifecycle.finding
+    assert "backlog" not in lifecycle.finding
+    assert "'backlog': 1" in lifecycle.evidence
+    assert "'in progress': 1" in lifecycle.evidence
+    assert "'done': 1" in lifecycle.evidence
 
 
 def _repo_record_with_ci_hint(carrier: str, marker: str) -> dict:
@@ -237,14 +219,19 @@ def test_non_string_repo_identifier_does_not_crash() -> None:
     assert "1 repository" in development[0].evidence
 
 
-def test_confidence_levels_present() -> None:
+def test_confidence_reflects_evidence_strength() -> None:
+    """Observed stages are high confidence; a gap inferred from absent metadata is low."""
     samples = [
         make_sample("repos", [{"name": "repo"}]),
         make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(2)}]),
     ]
     findings = infer(samples)
-    confidences = {f.confidence for f in findings}
-    assert confidences == {"high", "medium", "low"}
+    development = next(f for f in findings if f.category == "stage" and "Development" in f.finding)
+    assert development.confidence == "high"
+    # No CI marker in the sampled repo metadata, so the automation finding is a guess.
+    automation = next(f for f in findings if f.category == "automation")
+    assert automation.confidence == "low"
+    assert {f.confidence for f in findings} <= {"high", "medium", "low"}
 
 
 def test_each_finding_has_evidence() -> None:
@@ -318,6 +305,43 @@ def test_issue_records_without_any_status_are_skipped() -> None:
     findings = infer(samples)
     assert not any(f.category == "stage" and "Planning" in f.finding for f in findings)
     assert not any(f.category == "transition" for f in findings)
+
+
+@pytest.mark.parametrize(
+    ("samples", "expected_stages", "expected_stage_count", "expected_verb"),
+    [
+        pytest.param(
+            [make_sample("repos", [{"name": "repo-a"}])],
+            "development",
+            1,
+            "was",
+            id="single-stage",
+        ),
+        pytest.param(
+            [
+                make_sample("repos", [{"name": "repo-a"}]),
+                make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(2)}]),
+            ],
+            "development, code review",
+            2,
+            "were",
+            id="two-stages",
+        ),
+    ],
+)
+def test_overview_lists_detected_stages(
+    samples: list[ScanSample],
+    expected_stages: str,
+    expected_stage_count: int,
+    expected_verb: str,
+) -> None:
+    """The overview names every detected stage and inflects its verb by stage count."""
+    overviews = [f for f in infer(samples) if f.category == "overview"]
+    assert len(overviews) == 1
+    overview = overviews[0]
+    assert overview.confidence == "medium"
+    assert overview.finding == f"SDLC stages detected: {expected_stages}"
+    assert f"{expected_stage_count} {expected_verb} detected" in overview.evidence
 
 
 def test_unknown_resource_samples_are_ignored() -> None:
