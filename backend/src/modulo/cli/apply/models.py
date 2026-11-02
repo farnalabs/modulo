@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 
 from modulo.connectors.base import connector_binding_operation
 from modulo.core.stdout_retention import StdoutRetentionValidatorMixin
+from modulo.core.system_map_validation import validate_system_map_graph_references
 
 API_VERSION_PREFIX = "modulo.dev/v"
 API_VERSION_SUPPORTED_MAJOR = 1
@@ -1330,38 +1331,7 @@ class SystemMapRevisionEntity(BaseModel):
 
     @model_validator(mode="after")
     def validate_graph_references(self) -> SystemMapRevisionEntity:
-        node_keys = [node.node_key for node in self.nodes]
-        node_key_set = set(node_keys)
-        if len(node_keys) != len(node_key_set):
-            raise ValueError("node_key values must be unique within a revision")
-        relationship_keys = {
-            (rel.source_node_key, rel.target_node_key, rel.relationship_type) for rel in self.relationships
-        }
-        if len(relationship_keys) != len(self.relationships):
-            raise ValueError("relationships must be unique within a revision")
-        missing_relationship_nodes = sorted(
-            {
-                key
-                for rel in self.relationships
-                for key in (rel.source_node_key, rel.target_node_key)
-                if key not in node_key_set
-            }
-        )
-        if missing_relationship_nodes:
-            raise ValueError(f"relationships reference missing nodes: {', '.join(missing_relationship_nodes)}")
-        loop_keys = [loop.node_key for loop in self.loop_configs]
-        if len(loop_keys) != len(set(loop_keys)):
-            raise ValueError("loop_configs must be unique by node_key within a revision")
-        missing_loop_nodes = sorted(key for key in loop_keys if key not in node_key_set)
-        if missing_loop_nodes:
-            raise ValueError(f"loop_configs reference missing nodes: {', '.join(missing_loop_nodes)}")
-        wrong_loop_types = sorted(
-            loop.node_key
-            for loop in self.loop_configs
-            if next(node for node in self.nodes if node.node_key == loop.node_key).node_type != "improvement_loop"
-        )
-        if wrong_loop_types:
-            raise ValueError(f"loop_configs require improvement_loop nodes: {', '.join(wrong_loop_types)}")
+        validate_system_map_graph_references(self.nodes, self.relationships, self.loop_configs)
         return self
 
     def managed_view(self) -> dict[str, Any]:
