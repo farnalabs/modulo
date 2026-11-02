@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 
 def canonical_hash(payload: dict[str, Any]) -> str:
@@ -177,26 +180,32 @@ def _trigger_current_view(current: dict[str, Any], desired_view: dict[str, Any])
     return view
 
 
-def _system_map_current_view(current: dict[str, Any]) -> dict[str, Any]:
-    """Current view for system maps - managed fields only.
+def _system_map_managed_desired_view(desired_view: dict[str, Any]) -> dict[str, Any]:
+    """Desired system-map view without the create-only revision block.
 
-    The revision content is managed when declared. The revision_number is
-    auto-assigned by the server, so it's not part of the managed view.
-    Only "draft" status is managed by apply (publish is explicit action).
+    ``modulo apply`` creates a map's declared revision only on CREATE. The
+    system-map list endpoint exposes only map metadata (``published_revision_id``
+    — never revision content), so an existing map can never report its revision
+    back. Hashing the declared revision against every existing map classified
+    it ``updated`` on every run and never converged. Revision content is
+    therefore outside the managed comparison for existing maps, and a declared
+    revision on an existing map is surfaced as an explicit warning by
+    :func:`plan_entity` rather than being silently ignored.
+    """
+    return {key: value for key, value in desired_view.items() if key != "revision"}
+
+
+def _system_map_current_view(current: dict[str, Any]) -> dict[str, Any]:
+    """Current view for system maps - map metadata only.
+
+    Revision content is create-only (see
+    :func:`_system_map_managed_desired_view`); only "draft" status is managed
+    by apply, and publish is an explicit API action rather than an implicit
+    state transition.
     """
     view: dict[str, Any] = {}
     for key in ("description", "owner_team_id", "visibility", "default_map"):
         view[key] = current.get(key)
-    # Revision content is managed when the config declares a revision
-    if "revision" in current and current["revision"] is not None:
-        revision = current["revision"]
-        view["revision"] = {
-            "status": revision.get("status"),
-            "nodes": revision.get("nodes"),
-            "relationships": revision.get("relationships"),
-            "loop_configs": revision.get("loop_configs"),
-            "notes": revision.get("notes"),
-        }
     return view
 
 
@@ -264,7 +273,16 @@ def plan_entity(
     if desired_view is None:
         msg = f"desired entity not recognised for kind {kind}"
         raise ValueError(msg)
-    desired_hash = canonical_hash(desired_view)
+    desired_hash_view = desired_view
+    if kind == KIND_SYSTEM_MAP and current is not None:
+        if "revision" in desired_view:
+            _log.warning(
+                "apply.system_map.revision_create_only: system map %r already exists; "
+                "declared revision content is applied on create only and is not reconciled on update",
+                name,
+            )
+        desired_hash_view = _system_map_managed_desired_view(desired_view)
+    desired_hash = canonical_hash(desired_hash_view)
     if current is None:
         return Decision(
             kind=kind,

@@ -1120,7 +1120,7 @@ async def restore_system_map_revision_endpoint(
                 organisation_id=principal.organisation_id,
                 system_map_id=map_id,
                 source_revision_id=rev_id,
-                notes=req.notes.format(revision_number=source_revision.revision_number),
+                notes=req.notes.replace("{revision_number}", str(source_revision.revision_number)),
             )
             if not new_revision:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)

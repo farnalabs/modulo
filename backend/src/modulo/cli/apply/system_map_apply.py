@@ -1,9 +1,11 @@
 """System Maps entity resolution + execution for ``modulo apply`` (FAR-2288).
 
 System Maps identity is by name (unique per org). The map's revision content
-is managed declaratively when declared. Only "draft" status is managed by
-apply — publish is an explicit action via the API, not an implicit state
-transition. The revision_number is auto-assigned by the server if omitted.
+is managed declaratively when declared, but only on CREATE: the API list
+endpoint exposes no revision content, so apply cannot reconcile a revision on
+an existing map. Only "draft" status is managed by apply — publish is an
+explicit action via the API, not an implicit state transition. The revision
+number is always auto-assigned by the server.
 """
 
 from __future__ import annotations
@@ -100,15 +102,12 @@ def _revision_payload(entity: SystemMapEntity) -> dict[str, Any] | None:
     """Build the POST /api/v1/system-maps/{map_id}/revisions body for a declared revision."""
     if entity.revision is None:
         return None
-    payload: dict[str, Any] = {
+    return {
         "nodes": [n.model_dump(mode="json") for n in entity.revision.nodes],
         "relationships": [r.model_dump(mode="json") for r in entity.revision.relationships],
         "loop_configs": [lc.model_dump(mode="json") for lc in entity.revision.loop_configs],
         "notes": entity.revision.notes,
     }
-    if entity.revision.revision_number is not None:
-        payload["revision_number"] = entity.revision.revision_number
-    return payload
 
 
 def _apply_one_system_map(
@@ -148,8 +147,10 @@ def _apply_one_system_map(
         patch = _patch_payload(entity)
         if patch:
             executor._patch(f"/api/v1/system-maps/{map_id}", patch)
-        # Revision creation on update is not supported (revisions are immutable once created)
-        # A new revision would be a separate apply run with a new map+revision declaration
+        # Revision content is create-only: the list endpoint exposes no revision
+        # content to reconcile, so an update cannot decide whether a declared
+        # revision differs. plan_entity emits an explicit warning when an
+        # existing map declares a revision, so this is never a silent drop.
     return map_id
 
 

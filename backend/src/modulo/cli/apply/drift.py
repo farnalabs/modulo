@@ -32,6 +32,7 @@ from modulo.cli.apply.plan import (
     KIND_SCHEMA,
     KIND_SYSTEM_MAP,
     KIND_TRIGGER,
+    _system_map_managed_desired_view,
     _trigger_current_view,
 )
 
@@ -387,7 +388,7 @@ def _add_managed_field_drift(
     current_entities: dict[str, Any],
 ) -> None:
     """Add the managed-field breakdown for drifted non-pipeline entities."""
-    for kind in (KIND_SCHEMA, KIND_BACKEND, KIND_TRIGGER):
+    for kind in (KIND_SCHEMA, KIND_BACKEND, KIND_TRIGGER, KIND_SYSTEM_MAP):
         desired_views = dict(desired.get(kind) or [])
         for name in updated[kind]:
             entry = _managed_field_breakdown(kind, name, desired_views, current_entities)
@@ -405,6 +406,8 @@ def _managed_field_breakdown(
     view = desired_views.get(name)
     if not view:
         return None
+    if kind == KIND_SYSTEM_MAP:
+        view = _system_map_managed_desired_view(view)
     current_view = _managed_current_view(kind, name, view, current_entities)
     if current_view is None:
         return None

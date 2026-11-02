@@ -69,7 +69,6 @@ def _system_map_entity(
 
 
 def _revision_entity(
-    revision_number: int | None = None,
     status: str = "draft",
     nodes: list[SystemMapNodeEntity] | None = None,
     relationships: list[SystemMapRelationshipEntity] | None = None,
@@ -77,7 +76,6 @@ def _revision_entity(
     notes: str = "",
 ) -> SystemMapRevisionEntity:
     return SystemMapRevisionEntity(
-        revision_number=revision_number,
         status=status,
         nodes=nodes or [],
         relationships=relationships or [],
@@ -529,3 +527,92 @@ def test_apply_system_maps_failure_isolated() -> None:
     assert len(report["failed"]) == 1
     assert report["failed"][0]["kind"] == "system_map"
     assert "Revision create failed" in report["failed"][0]["error"]
+
+
+def test_system_map_plan_apply_plan_is_idempotent(caplog) -> None:
+    """A second plan against the API's list shape must report unchanged."""
+    import logging
+
+    from modulo.cli.apply.models import EntitySet
+    from modulo.cli.apply.plan import build_plan
+
+    node = _loop_node_entity()
+    loop = _loop_config_entity()
+    rev = _revision_entity(nodes=[node], loop_configs=[loop], notes="v1")
+    entity = _system_map_entity(name="Converge Map", revision=rev)
+    entity_set = EntitySet(system_maps=[entity])
+
+    desired: dict[str, list[tuple[str, dict[str, Any]]]] = {"system_map": []}
+    blocked: list[tuple[str, str, str]] = []
+    desired, blocked = build_desired_views(entity_set, {"system_map": {}}, desired, blocked, set())
+
+    first = build_plan(desired, {"system_map": {}})
+    assert [entry["name"] for entry in first["created"]] == ["Converge Map"]
+
+    executor = _MockExecutor()
+    report: dict[str, list[dict[str, Any]]] = {
+        "created": first["created"],
+        "updated": [],
+        "unchanged": [],
+        "blocked": [],
+        "failed": [],
+    }
+    apply_system_maps(executor, {"system_map": [("Converge Map", entity)]}, {"system_map": {}}, report)
+    assert len(executor.posts) == 2
+
+    # GET /api/v1/system-maps returns map metadata only (no revision content).
+    current = {"system_map": {"Converge Map": _map_row(name="Converge Map")}}
+    with caplog.at_level(logging.WARNING, logger="modulo.cli.apply.plan"):
+        second = build_plan(desired, current)
+
+    assert [entry["name"] for entry in second["unchanged"]] == ["Converge Map"]
+    assert not second["updated"]
+    assert "revision_create_only" in caplog.text
+
+
+def test_system_map_declared_revision_change_does_not_flap(caplog) -> None:
+    """Revision content is create-only: a changed revision still converges, loudly."""
+    import logging
+
+    from modulo.cli.apply.models import EntitySet
+    from modulo.cli.apply.plan import build_plan
+
+    node = _loop_node_entity()
+    loop = _loop_config_entity()
+    rev = _revision_entity(nodes=[node], loop_configs=[loop], notes="v2")
+    entity = _system_map_entity(name="Converge Map", revision=rev)
+    entity_set = EntitySet(system_maps=[entity])
+
+    desired: dict[str, list[tuple[str, dict[str, Any]]]] = {"system_map": []}
+    blocked: list[tuple[str, str, str]] = []
+    desired, _blocked = build_desired_views(entity_set, {"system_map": {}}, desired, blocked, set())
+
+    current = {"system_map": {"Converge Map": _map_row(name="Converge Map")}}
+    with caplog.at_level(logging.WARNING, logger="modulo.cli.apply.plan"):
+        report = build_plan(desired, current)
+
+    assert [entry["name"] for entry in report["unchanged"]] == ["Converge Map"]
+    assert not report["updated"]
+    assert "revision_create_only" in caplog.text
+
+
+def test_system_map_metadata_change_is_still_detected() -> None:
+    """Excluding the create-only revision must not mask a real metadata change."""
+    from modulo.cli.apply.models import EntitySet
+    from modulo.cli.apply.plan import build_plan
+
+    node = _loop_node_entity()
+    loop = _loop_config_entity()
+    rev = _revision_entity(nodes=[node], loop_configs=[loop])
+    entity = _system_map_entity(name="Converge Map", description="Desired", revision=rev)
+    entity_set = EntitySet(system_maps=[entity])
+
+    desired: dict[str, list[tuple[str, dict[str, Any]]]] = {"system_map": []}
+    blocked: list[tuple[str, str, str]] = []
+    desired, _blocked = build_desired_views(entity_set, {"system_map": {}}, desired, blocked, set())
+
+    current = {"system_map": {"Converge Map": _map_row(name="Converge Map", description="Stored")}}
+    report = build_plan(desired, current)
+
+    assert [entry["name"] for entry in report["updated"]] == ["Converge Map"]
+    assert not report["unchanged"]

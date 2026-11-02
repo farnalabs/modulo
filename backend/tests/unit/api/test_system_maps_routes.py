@@ -2101,7 +2101,7 @@ def test_diff_revision_missing_target_revision_returns_404(client: tuple[TestCli
 # ─── Revision Restore-as-New tests (FAR-2288) ───
 
 
-def test_restore_revision_as_new_returns_201(client: tuple[TestClient, _Harness]) -> None:
+def test_restore_revision_as_new_returns_200(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     published_rev = _revision_row(status="published", revision_number=2)
     new_rev = _diff_revision_row(revision_number=3, status="draft")
@@ -2117,6 +2117,24 @@ def test_restore_revision_as_new_returns_201(client: tuple[TestClient, _Harness]
     body = resp.json()
     assert body["new_revision"]["revision_number"] == 3
     assert body["source_revision_number"] == 2
+
+
+def test_restore_revision_as_new_preserves_braced_notes(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    published_rev = _revision_row(status="published", revision_number=2)
+    new_rev = _diff_revision_row(revision_number=3, status="draft")
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=published_rev))
+    restore = AsyncMock(return_value=new_rev)
+    harness.stub("restore_revision_as_new_draft", restore)
+
+    resp = http.post(
+        f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/restore-as-new",
+        json={"notes": "Restored from {revision_number}; keep {braces} and {} literally"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert restore.await_args.kwargs["notes"] == ("Restored from 2; keep {braces} and {} literally")
 
 
 def test_restore_draft_revision_rejected_409(client: tuple[TestClient, _Harness]) -> None:

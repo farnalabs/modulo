@@ -1313,11 +1313,15 @@ class SystemMapLoopConfigEntity(BaseModel):
 
 
 class SystemMapRevisionEntity(BaseModel):
-    """A declarative system map revision (mirrors SystemMapRevisionCreate)."""
+    """A declarative system map revision (mirrors SystemMapRevisionCreate).
+
+    The server always auto-assigns the next revision number, so a declared
+    ``revision_number`` is rejected (``extra="forbid"``) rather than silently
+    discarded by the API.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    revision_number: int | None = None  # When omitted, auto-assign next number
     status: str = "draft"  # Only "draft" is valid for apply (publish is explicit action)
     nodes: list[SystemMapNodeEntity] = Field(default_factory=list)
     relationships: list[SystemMapRelationshipEntity] = Field(default_factory=list)
@@ -1374,10 +1378,11 @@ class SystemMapRevisionEntity(BaseModel):
 class SystemMapEntity(BaseModel):
     """A declarative system map (FAR-2288).
 
-    Identity is by name (unique per org). The revision content is managed
-    declaratively: the revision_number is optional (auto-assigned if omitted),
-    and only "draft" status is managed by apply (publish is an explicit action
-    via the API, not an implicit state transition).
+    Identity is by name (unique per org). Revision content is create-only:
+    apply creates the declared revision on CREATE but cannot reconcile it on an
+    existing map (the list endpoint exposes no revision content). Only "draft"
+    status is managed by apply — publish is an explicit API action, not an
+    implicit state transition.
     """
 
     model_config = ConfigDict(extra="forbid")
