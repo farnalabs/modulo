@@ -72,10 +72,6 @@ _CODE_LIST_FAILED = "admin_org_feature_flags.list_failed"
 _CODE_SET_FAILED = "admin_org_feature_flags.set_failed"
 _CODE_CLEAR_FAILED = "admin_org_feature_flags.clear_failed"
 
-_MSG_LIST_FAILED = "Failed to read the organisation feature flags."
-_MSG_SET_FAILED = "Failed to update the organisation feature flag."
-_MSG_CLEAR_FAILED = "Failed to clear the organisation feature flag."
-_MSG_NOT_AVAILABLE = "Feature flags are not available. Run database migrations to enable this feature."
 _MSG_UNKNOWN_FLAG = "Unknown feature flag: {flag_name}"
 _MSG_NOT_ORG_SETTABLE = (
     "Feature flag '{flag_name}' is not settable by an organisation administrator; a system administrator must set it."

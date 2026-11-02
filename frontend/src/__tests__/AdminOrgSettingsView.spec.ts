@@ -1089,4 +1089,64 @@ describe('AdminOrgSettingsView', () => {
     expect(wrapper.find('[data-testid="org-feature-flags-note"]').exists()).toBe(true)
     wrapper.unmount()
   })
+
+  it('renders the empty state when the flags response carries no body', async () => {
+    orgFlagsState.data = undefined
+    const wrapper = await mountWindowView()
+
+    expect(wrapper.find('[data-testid="org-feature-flags-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="org-feature-flags-load-error"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps the previous state when the save request throws', async () => {
+    const wrapper = await mountWindowView()
+    vi.mocked(api.PUT).mockRejectedValueOnce(new Error('network down'))
+
+    await wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-feature-flags-error"]').text()).toContain('network down')
+    })
+    expect(
+      wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').attributes('aria-checked'),
+    ).toBe('true')
+    expect(wrapper.find('[data-testid="org-feature-flags-saved"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('falls back to the requested state when the save response carries no body', async () => {
+    const wrapper = await mountWindowView()
+    vi.mocked(api.PUT).mockResolvedValueOnce({ data: undefined, error: undefined } as any)
+
+    await wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-feature-flags-saved"]').exists()).toBe(true)
+    })
+    expect(
+      wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').attributes('aria-checked'),
+    ).toBe('false')
+    expect(wrapper.findAll('[data-testid="org-feature-flag-status"]')[0].text()).toContain(
+      'Overridden for this organisation',
+    )
+    wrapper.unmount()
+  })
+
+  it('ignores a second toggle while a save is in flight', async () => {
+    const wrapper = await mountWindowView()
+    let resolvePut: (value: unknown) => void = () => {}
+    vi.mocked(api.PUT).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePut = resolve
+        }) as any,
+    )
+
+    await wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').trigger('click')
+    await wrapper.find('[data-testid="org-feature-flag-toggle-dashboard_charts"]').trigger('click')
+    expect(vi.mocked(api.PUT)).toHaveBeenCalledTimes(1)
+
+    resolvePut({ data: undefined, error: undefined })
+    await flushPromises()
+    wrapper.unmount()
+  })
 })

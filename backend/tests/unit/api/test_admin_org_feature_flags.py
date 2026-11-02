@@ -323,6 +323,22 @@ class TestClearFlag:
         assert kwargs["event_type"] == "feature_flag_override_cleared"
         assert kwargs["payload"] == {"flag_name": _SETTABLE}
 
+    def test_missing_org_is_a_404(self, admin_client: TestClient) -> None:
+        """A cleared override on a vanished org fails closed, never optimistic.
+
+        ``get_organisation`` returning ``None`` must surface as a 404 inside the
+        write transaction. Falling through to the patch helper would either
+        report a bogus success or touch a row that does not exist, so the
+        handler raises before the write (and ``audited()`` records the error).
+        """
+        with (
+            patch.object(route_module, "_build_registry", AsyncMock(return_value=_mock_registry())),
+            patch.object(route_module, "get_organisation", AsyncMock(return_value=None)),
+        ):
+            resp = admin_client.delete(f"{_PATH}/{_SETTABLE}")
+
+        assert resp.status_code == 404
+
     def test_unknown_flag_is_a_404(self, admin_client: TestClient) -> None:
         with patch.object(route_module, "_build_registry", AsyncMock(return_value=_mock_registry())):
             resp = admin_client.delete(f"{_PATH}/no_such_flag")
