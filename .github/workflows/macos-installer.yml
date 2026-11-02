@@ -147,6 +147,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.normalize-inputs.outputs.ref }}
+          persist-credentials: false
 
       - name: Install build tools
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
