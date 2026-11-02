@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.api_key import _UNSET
+from modulo.auth.api_key import _UNSET, ApiKeyScopeError
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.audit_coverage import audit_session
@@ -471,11 +471,82 @@ def test_update_api_key_partial_name(client: TestClient) -> None:
 
 
 def test_update_api_key_rejects_invalid_role(client: TestClient) -> None:
+    """An unknown role is a payload-shape error (422) before any DB work."""
     resp = client.put(
         f"/api/v1/api-keys/{_KEY_ID}",
-        json={"name": "k", "role": "admin"},
+        json={"name": "k", "role": "viewer"},
     )
     assert resp.status_code == 422
+
+
+def test_update_api_key_admin_on_org_scoped_key_is_422(client: TestClient) -> None:
+    """FAR-2281: admin is a known role, but the key's OWN scope decides it. An
+    org-scoped key refuses the promotion as a client error (422), never 500."""
+    with (
+        patch(
+            "modulo.api.routes.api_keys.update_api_key",
+            side_effect=ApiKeyScopeError("role 'admin' is permitted only for user-scoped API keys"),
+        ),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "k", "role": "admin"},
+        )
+    assert resp.status_code == 422
+    assert "admin" in resp.json()["detail"]
+
+
+def test_update_api_key_admin_with_team_is_422(client: TestClient) -> None:
+    """FAR-2281 M2: ``admin`` + ``team_id`` on a user-scoped key is a client
+    error (422), never the unhandled ``ApiKeyInvalidError`` 500 it used to be.
+    The core refusal is pinned in ``test_api_key_scope.py``; this proves the
+    route maps it to the 422 contract."""
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    with (
+        patch(
+            "modulo.api.routes.api_keys.update_api_key",
+            side_effect=ApiKeyScopeError("team-scoped API keys cannot have admin role"),
+        ),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
+    ):
+        resp = client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "k", "role": "admin", "team_id": str(_TEAM_ID)},
+        )
+    assert resp.status_code == 422
+    assert "team-scoped" in resp.json()["detail"]
+
+
+def test_create_api_key_admin_with_team_is_422(client: TestClient) -> None:
+    """FAR-2281 M2: minting a user-scoped admin key scoped to a team is a
+    client error (422), never the unhandled ``ApiKeyInvalidError`` 500.
+
+    Drives the REAL ``auth.api_key.create_api_key`` through the route (only
+    the session seams / caps are stubbed), so the shared team-aware predicate
+    is what refuses it.
+    """
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    with (
+        patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(True)),
+        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=False)),
+        patch("modulo.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()),
+        patch("modulo.api.routes.api_keys._enforce_mint_cap", new=AsyncMock()),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
+    ):
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": "k", "role": "admin", "scope": "user", "team_id": str(_TEAM_ID)},
+        )
+    assert resp.status_code == 422
+    assert "team-scoped" in resp.json()["detail"]
 
 
 def test_update_api_key_not_found_returns_404(client: TestClient) -> None:
@@ -811,6 +882,32 @@ def test_create_user_scoped_key_flag_on(client: TestClient) -> None:
     assert body["scope"] == "user"
     assert mint.await_args.kwargs["scope"] == "user"
     quota.assert_awaited_once()
+
+
+def test_create_user_scoped_admin_key_flag_on(client: TestClient) -> None:
+    """FAR-2281: a user-scoped key may carry admin (its owner's live role is
+    the ceiling; ``_enforce_mint_cap`` still runs unchanged)."""
+    key = _make_key()
+    key.scope = "user"
+    key.role = "admin"
+    with (
+        patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(True)),
+        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=True)),
+        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_admin_key")) as mint,
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()),
+        patch("modulo.api.routes.api_keys._enforce_mint_cap", new=AsyncMock()) as cap,
+    ):
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": "user:duncan", "role": "admin", "scope": "user"},
+        )
+    assert resp.status_code == 201
+    assert resp.json()["role"] == "admin"
+    assert mint.await_args.kwargs["role"] == "admin"
+    # The live-role mint cap still runs unchanged — a user key cannot exceed it.
+    cap.assert_awaited_once()
 
 
 def test_create_user_scoped_key_flag_off_rejected_422(client: TestClient) -> None:

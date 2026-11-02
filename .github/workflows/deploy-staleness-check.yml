@@ -252,6 +252,15 @@ jobs:
             echo "work_dir=$WORK"
           } >> "$GITHUB_OUTPUT"
 
+      # FAR-2290: Zoho raises 'new login activity' alerts for SMTP logins from
+      # runner IPs (expected on Ubicloud/GitHub runners). Logging the egress IP
+      # lets such an alert be matched to this run. Non-fatal; logs only the IP.
+      - name: Log runner egress IP (for Zoho login alerts)
+        if: always()
+        shell: bash
+        run: |
+          echo "runner egress IP: $(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo unknown)" || true
+
       # FAR-2139: the transition decision, the message and the SMTP send are ONE
       # shared step with deploy-watchdog.yml (.github/scripts/deploy-health-notify.sh),
       # rendered by .github/scripts/deploy_health.py. Two copies of an escalation

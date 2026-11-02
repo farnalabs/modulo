@@ -311,7 +311,10 @@ async def test_env_var_secret_ref_resolves_from_vault():
     node_def = _base_node_def(env_vars={"FOO": "{{ secrets.FOO }}"})
     session = MagicMock()
     session.__aenter__.return_value = session
-    session.begin.return_value = AsyncMock()
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin.return_value = begin_cm
     backend = MagicMock()
     backend.get_secret = AsyncMock(return_value="vault-secret")
 
@@ -341,7 +344,10 @@ async def test_env_var_secret_ref_does_not_fall_back_to_host_env(caplog):
     node_def = _base_node_def(env_vars={"FOO": "{{ secrets.FOO }}"})
     session = MagicMock()
     session.__aenter__.return_value = session
-    session.begin.return_value = AsyncMock()
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin.return_value = begin_cm
     backend = MagicMock()
     backend.get_secret = AsyncMock(side_effect=KeyError("FOO"))
 
