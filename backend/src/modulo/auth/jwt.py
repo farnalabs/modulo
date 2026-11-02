@@ -88,6 +88,20 @@ class AuthenticatedPrincipal:
     #: explicit deny-all; otherwise the exact permission keys. Enforced as
     #: ``grant_set INTERSECT bundle(live_role)`` by ``_assert_tenant_permission``.
     key_grants: frozenset[str] | None = None
+    #: FAR-2281: the caller scope of an ``mk_`` credential (``org``/``user``),
+    #: else ``None`` for JWT principals. A ``user``-scoped key acts as its
+    #: owner's identity, so the human-linkage resolver and the audit stamp can
+    #: attribute it to the live human owner. Immutable post-mint on the key row.
+    key_scope: str | None = None
+    #: FAR-2281: the credential owner's ``Account.kind`` when it was read at
+    #: auth time for a user-scoped key (``human``/``service``), else ``None``.
+    #: Only a live human owner makes the key human-linked; a service-owned
+    #: user key stays an unattributed machine credential.
+    owner_kind: str | None = None
+    #: FAR-2281: the honest principal kind for the audit stamp — ``human`` only
+    #: when a user-scoped key's live human owner was verified, else ``None``.
+    #: Never set from a client field.
+    principal_kind: str | None = None
 
     @property
     def user_id(self) -> uuid.UUID:
