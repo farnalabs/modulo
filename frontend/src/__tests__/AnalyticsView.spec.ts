@@ -911,6 +911,43 @@ describe('AnalyticsView', () => {
     expect(wrapper.find('[data-testid="analytics-table"]').text()).toContain('5')
   })
 
+  it('renders an em dash delta for a row with no previous-window baseline', async () => {
+    // The previous window comes back empty, so the first row has no baseline to
+    // compare against: its delta cell must fall back to the em dash rather than
+    // render a trend arrow.
+    const previousResponse = {
+      group_by: 'day',
+      dimension: null,
+      date_from: '2026-07-23',
+      date_to: '2026-07-30',
+      buckets: [],
+    }
+    let queryCalls = 0
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/analytics/query') {
+        queryCalls += 1
+        return Promise.resolve({
+          data: queryCalls === 1 ? validResponse : previousResponse,
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/pipeline-folders') return Promise.resolve({ data: [], error: undefined })
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [], total: 0, page: 1, page_size: 100, next_cursor: null, has_more: false },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    const rows = wrapper.findAll('[data-testid="analytics-table"] tbody tr')
+    expect(rows.length).toBe(2)
+    expect(rows[0].find('[data-testid="analytics-trend-arrow"]').exists()).toBe(false)
+    expect(rows[0].text()).toContain('—')
+  })
+
   it('hides the day/week group-by control and shows a disabled Hour pill for hour-granular timespans', async () => {
     setupMocks()
     const store = useAnalyticsStore()
