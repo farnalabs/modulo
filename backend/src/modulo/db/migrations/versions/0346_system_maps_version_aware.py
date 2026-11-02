@@ -10,11 +10,16 @@ time.
 - effective_from: when this revision became active (set on publish)
 - effective_to: when this revision was superseded (NULL = current)
 
-Backfills existing published revisions: the earliest published revision gets
-effective_from = its published_at (or created_at), and each subsequent
-published revision gets effective_from = its published_at and the previous
-one's effective_to = this one's effective_from. The latest published
-revision has effective_to = NULL.
+Backfills existing published AND archived revisions: the earliest revision
+gets effective_from = its published_at (or created_at), and each subsequent
+revision gets effective_from = its published_at and the previous one's
+effective_to = this one's effective_from. The latest published revision has
+effective_to = NULL. Archived revisions must be backfilled too because a
+re-publish archives the superseded revision, and a by-time read has to find
+it inside its historical window.
+
+The downgrade restores the ``rls_org_isolation`` policy installed by 0341:
+the table persists across this migration, so RLS must stay enabled.
 """
 
 from __future__ import annotations
@@ -33,6 +38,25 @@ _TABLE_REVISIONS = "system_map_revisions"
 _MIGRATE_ROLE = "modulo_migrate"
 _APP_ROLE = "modulo_app"
 _SYSTEM_ROLE = "modulo_system"
+
+# Verbatim org-only policy installed by 0341_system_maps for
+# system_map_revisions. Restored (not dropped) by the downgrade because the
+# table outlives this migration.
+_ORG_POLICY = "((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid))"
+_RESTORE_RLS_STATEMENTS: tuple[str, ...] = (
+    'DROP POLICY IF EXISTS rls_org_isolation ON "' + _TABLE_REVISIONS + '"',
+    (
+        'CREATE POLICY rls_org_isolation ON "'
+        + _TABLE_REVISIONS
+        + '" USING ('
+        + _ORG_POLICY
+        + ") WITH CHECK ("
+        + _ORG_POLICY
+        + ")"
+    ),
+    'ALTER TABLE "' + _TABLE_REVISIONS + '" ENABLE ROW LEVEL SECURITY',
+    'ALTER TABLE "' + _TABLE_REVISIONS + '" FORCE ROW LEVEL SECURITY',
+)
 
 
 def _is_postgres(bind: sa.Connection) -> bool:
@@ -138,12 +162,19 @@ def _assert_owner_is_migrate(bind: sa.Connection, table: str) -> None:
 
 
 def _backfill_effective_dates(bind: sa.Connection, pg: bool) -> None:
-    """Backfill effective_from/effective_to for existing published revisions.
+    """Backfill effective_from/effective_to for existing published and archived revisions.
+
+    Archived revisions must be included: publishing a new revision archives the
+    previous one, so excluding archived rows would leave every superseded
+    revision with NULL effective dates and make it unreachable by a by-time
+    read.
 
     Strategy:
-    1. For each system_map, get all published revisions ordered by published_at (then created_at)
-    2. First published: effective_from = published_at (or created_at), effective_to = next's effective_from
-    3. Last published: effective_to = NULL
+    1. For each system_map, get all published + archived revisions ordered by
+       COALESCE(published_at, created_at)
+    2. First revision: effective_from = published_at (or created_at),
+       effective_to = next's effective_from
+    3. Last published revision: effective_to = NULL
     """
     if pg:
         # Use CTE for clean backfill on Postgres
@@ -158,7 +189,7 @@ def _backfill_effective_dates(bind: sa.Connection, pg: bool) -> None:
                     ROW_NUMBER() OVER (PARTITION BY system_map_id ORDER BY COALESCE(published_at, created_at) ASC) as rn,
                     LEAD(COALESCE(published_at, created_at)) OVER (PARTITION BY system_map_id ORDER BY COALESCE(published_at, created_at) ASC) as next_effective_from
                 FROM system_map_revisions
-                WHERE status = 'published' AND deleted_at IS NULL
+                WHERE status IN ('published', 'archived') AND deleted_at IS NULL
             )
             UPDATE system_map_revisions r
             SET
@@ -180,7 +211,7 @@ def _backfill_effective_dates(bind: sa.Connection, pg: bool) -> None:
             sa.text("""
             SELECT id, system_map_id, published_at, created_at
             FROM system_map_revisions
-            WHERE status = 'published' AND deleted_at IS NULL
+            WHERE status IN ('published', 'archived') AND deleted_at IS NULL
             ORDER BY system_map_id, COALESCE(published_at, created_at)
         """)
         )
@@ -208,10 +239,10 @@ def downgrade() -> None:
     bind = op.get_bind()
     if _is_postgres(bind):
         op.execute("SET search_path TO public")
-        for statement in [
-            'DROP POLICY IF EXISTS rls_org_isolation ON "system_map_revisions"',
-            'ALTER TABLE "system_map_revisions" DISABLE ROW LEVEL SECURITY',
-        ]:
+        # The table persists across this migration (only columns are dropped),
+        # so restore 0341's org-isolation policy instead of dropping it and
+        # disabling RLS.
+        for statement in _RESTORE_RLS_STATEMENTS:
             op.execute(statement)
 
     # Drop indexes

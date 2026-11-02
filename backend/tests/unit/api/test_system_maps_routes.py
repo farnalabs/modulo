@@ -2040,7 +2040,7 @@ def test_get_revision_by_time_no_revision_at_time_returns_404(client: tuple[Test
     resp = http.get(f"{_BASE}/{_MAP_ID}/revisions/by-time", params={"at": datetime.now(UTC).isoformat()})
 
     assert resp.status_code == 404
-    assert "No published revision active at" in resp.json()["detail"]
+    assert "No revision active at" in resp.json()["detail"]
 
 
 def test_get_current_revision_returns_200(client: tuple[TestClient, _Harness]) -> None:
@@ -2205,7 +2205,7 @@ def test_overview_with_at_no_revision_returns_404(client: tuple[TestClient, _Har
     resp = http.get(f"{_BASE}/{_MAP_ID}/overview", params={"at": datetime.now(UTC).isoformat()})
 
     assert resp.status_code == 404
-    assert "No published revision active at" in resp.json()["detail"]
+    assert "No revision active at" in resp.json()["detail"]
 
 
 def _binding_payload(**overrides: object) -> dict[str, object]:

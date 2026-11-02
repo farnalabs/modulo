@@ -312,18 +312,24 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
 
         Returns the revision where effective_from <= at < effective_to
         (or effective_to IS NULL for the current revision).
+
+        Deliberately does NOT filter on status: superseding a revision stamps
+        its effective_to and flips its status to 'archived', so a status filter
+        would hide every historical revision after a re-publish. The
+        effective_from <= at predicate already excludes drafts (their
+        effective_from is NULL).
         """
         stmt = (
             select(SystemMapRevision)
             .where(
                 SystemMapRevision.system_map_id == system_map_id,
                 SystemMapRevision.organisation_id == organisation_id,
-                SystemMapRevision.status == "published",
                 SystemMapRevision.deleted_at.is_(None),
                 SystemMapRevision.effective_from <= at,
                 (SystemMapRevision.effective_to.is_(None)) | (SystemMapRevision.effective_to > at),
             )
             .order_by(SystemMapRevision.effective_from.desc())
+            .limit(1)
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
@@ -353,6 +359,11 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
 
         Returns all revisions (published, draft, archived) ordered by revision_number
         so the caller can see the full history with effective_from/effective_to.
+
+        Intentionally unpaginated: a map's revision history is bounded by the
+        publish history the caller needs to render the timeline, and the
+        version-aware read model needs the complete set to show every
+        effective range. Use ``list_revisions`` when a paginated page is wanted.
         """
         stmt = (
             select(SystemMapRevision)

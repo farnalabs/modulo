@@ -7225,8 +7225,9 @@ export interface paths {
          * Get Revision By Time Endpoint
          * @description Get the revision active at a specific timestamp.
          *
-         *     Returns the published revision where effective_from <= at < effective_to
-         *     (or effective_to IS NULL for the current revision).
+         *     Returns the revision (published, or superseded/archived after a re-publish)
+         *     where effective_from <= at < effective_to (or effective_to IS NULL for the
+         *     current revision). Drafts have no effective_from and never match.
          */
         get: operations["get_revision_by_time_endpoint_api_v1_system_maps__map_id__revisions_by_time_get"];
         put?: never;

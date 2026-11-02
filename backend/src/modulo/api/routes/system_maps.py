@@ -558,8 +558,9 @@ async def get_revision_by_time_endpoint(
 ) -> SystemMapRevisionByTimeResponse:
     """Get the revision active at a specific timestamp.
 
-    Returns the published revision where effective_from <= at < effective_to
-    (or effective_to IS NULL for the current revision).
+    Returns the revision (published, or superseded/archived after a re-publish)
+    where effective_from <= at < effective_to (or effective_to IS NULL for the
+    current revision). Drafts have no effective_from and never match.
     """
     try:
         async with session.begin():
@@ -602,7 +603,7 @@ async def get_revision_by_time_endpoint(
         # No revision active at that time - return 404 with context
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No published revision active at {at.isoformat()}",
+            detail=f"No revision active at {at.isoformat()}",
         )
 
     return SystemMapRevisionByTimeResponse(
@@ -1306,7 +1307,7 @@ async def get_system_map_overview_endpoint(
                 if not target_revision:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"No published revision active at {at.isoformat()}",
+                        detail=f"No revision active at {at.isoformat()}",
                     )
             else:
                 # Default to published revision
