@@ -6,6 +6,7 @@ import { withTimeout } from '../lib/asyncUtils'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { usePlanStore } from './planStore'
 import { SYSTEM_CONFIG_MANAGE_PERMISSION } from '../composables/useLicenceAccess'
+import i18n from '../i18n'
 
 export type SystemMap = components['schemas']['SystemMapResponse']
 export type SystemMapRevision = components['schemas']['SystemMapRevisionResponse']
@@ -30,6 +31,10 @@ export type NodeType = (typeof NODE_TYPES)[number]
 export type RelationshipType = (typeof RELATIONSHIP_TYPES)[number]
 
 interface InternalFeatureFlagsPayload { flags?: Array<{ name: string; currently_active: boolean }> }
+
+// The store is not a component, so it cannot call useI18n(). Use the shared
+// i18n instance directly so error strings stay translatable and consistent.
+function tr(key: string): string { return i18n.global.t(key) }
 
 export const useSystemMapsStore = defineStore('systemMaps', () => {
   const loaded = ref(false)
@@ -103,7 +108,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
       const flags = (response.data as InternalFeatureFlagsPayload | undefined)?.flags
       if (current()) systemMapsEnabled.value = Array.isArray(flags) && flags.some((flag) => flag.name === 'system_maps' && flag.currently_active)
     } catch (err: unknown) {
-      if (current()) error.value = err instanceof Error ? err.message : 'Internal feature flags request failed'
+      if (current()) error.value = err instanceof Error ? err.message : tr('systemMaps.errors.feature_flags')
     } finally {
       if (current()) { accessLoaded.value = true; loading.value = false }
     }
@@ -114,26 +119,26 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     error.value = null
     try {
       const response = await api.GET('/api/v1/system-maps', { params: { query: { page: nextPage, page_size: pageSize.value } } })
-      if (response.error) throw new Error('Could not load system maps')
+      if (response.error) throw new Error(tr('systemMaps.errors.load_maps'))
       const payload = response.data
       maps.value = payload?.items ?? []
       total.value = payload?.total ?? 0
       page.value = payload?.page ?? nextPage
       loaded.value = true
-    } catch (err: unknown) { error.value = err instanceof Error ? err.message : 'Could not load system maps' }
+    } catch (err: unknown) { error.value = err instanceof Error ? err.message : tr('systemMaps.errors.load_maps') }
     finally { loading.value = false }
   }
 
   async function createMap(name: string, description = ''): Promise<SystemMap | null> {
     const response = await api.POST('/api/v1/system-maps', { body: { name, description, visibility: 'org', default_map: false } })
-    if (response.error || !response.data) throw new Error('Could not create system map')
+    if (response.error || !response.data) throw new Error(tr('systemMaps.errors.create_map'))
     await fetchMaps(1)
     return response.data
   }
 
   async function deleteMap(mapId: string): Promise<void> {
     const response = await api.DELETE('/api/v1/system-maps/{map_id}', { params: { path: { map_id: mapId } } })
-    if (response.error) throw new Error('Could not delete system map')
+    if (response.error) throw new Error(tr('systemMaps.errors.delete_map'))
     if (activeMap.value?.id === mapId) clearActive()
     await fetchMaps()
   }
@@ -143,16 +148,16 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     error.value = null
     try {
       const response = await api.GET('/api/v1/system-maps/{map_id}', { params: { path: { map_id: mapId } } })
-      if (response.error || !response.data) throw new Error('Could not load system map')
+      if (response.error || !response.data) throw new Error(tr('systemMaps.errors.load_map'))
       activeMap.value = response.data
       if (response.data.published_revision_id) await loadRevision(mapId, response.data.published_revision_id)
-    } catch (err: unknown) { error.value = err instanceof Error ? err.message : 'Could not load system map' }
+    } catch (err: unknown) { error.value = err instanceof Error ? err.message : tr('systemMaps.errors.load_map') }
     finally { loading.value = false }
   }
 
   async function loadRevision(mapId: string, revisionId: string): Promise<void> {
     const response = await api.GET('/api/v1/system-maps/{map_id}/revisions/{rev_id}', { params: { path: { map_id: mapId, rev_id: revisionId }, query: { include_graph: true } } })
-    if (response.error || !response.data) throw new Error('Could not load map revision')
+    if (response.error || !response.data) throw new Error(tr('systemMaps.errors.load_map_revision'))
     const value = response.data as SystemMapGraph
     activeRevision.value = 'revision' in value ? value.revision : value as SystemMapRevision
     graph.value = 'revision' in value ? value : null
@@ -161,7 +166,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
 
   async function saveDraft(mapId: string, nodes: Array<{ node_key: string; node_type: string; display_name: string; config_json?: Record<string, unknown>; pipeline_id?: string | null; connector_instance_id?: string | null; owner_team_id?: string | null; eval_id?: string | null; position_x: string | number; position_y: string | number }>, relationships: Array<{ source_node_key: string; target_node_key: string; relationship_type: string; config_json?: Record<string, unknown> }>, notes: string): Promise<SystemMapRevision> {
     const response = await api.POST('/api/v1/system-maps/{map_id}/revisions', { params: { path: { map_id: mapId } }, body: { nodes, relationships, loop_configs: [], notes } })
-    if (response.error || !response.data) throw new Error('Could not save draft revision')
+    if (response.error || !response.data) throw new Error(tr('systemMaps.errors.save_draft_revision'))
     activeRevision.value = response.data
     revisions.value = [...revisions.value, response.data]
     await loadRevision(mapId, response.data.id)
@@ -170,19 +175,19 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
 
   async function publish(mapId: string, revisionId: string): Promise<void> {
     const response = await api.POST('/api/v1/system-maps/{map_id}/revisions/{rev_id}/publish', { params: { path: { map_id: mapId, rev_id: revisionId } } })
-    if (response.error) throw new Error('Could not publish revision')
+    if (response.error) throw new Error(tr('systemMaps.errors.publish_revision'))
     await loadMap(mapId)
   }
 
   async function archive(mapId: string, revisionId: string): Promise<void> {
     const response = await api.POST('/api/v1/system-maps/{map_id}/revisions/{rev_id}/archive', { params: { path: { map_id: mapId, rev_id: revisionId } } })
-    if (response.error) throw new Error('Could not archive revision')
+    if (response.error) throw new Error(tr('systemMaps.errors.archive_revision'))
     await loadMap(mapId)
   }
 
   async function discover(name = 'Discovered System Map', description?: string): Promise<DiscoveryReport> {
     const response = await api.POST('/api/v1/system-maps/discover', { body: { name, description } })
-    if (response.error || !response.data) throw new Error('Could not discover system map')
+    if (response.error || !response.data) throw new Error(tr('systemMaps.errors.discover_map'))
     discovery.value = response.data
     await loadMap(response.data.draft_map_id)
     // The map read model only exposes the published revision, so load the
@@ -193,7 +198,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
         await loadRevision(response.data.draft_map_id, response.data.draft_revision_id)
       } catch (err: unknown) {
         // Discovery succeeded; surface the draft-fetch failure without discarding the report.
-        error.value = err instanceof Error ? err.message : 'Could not load the discovered draft'
+        error.value = err instanceof Error ? err.message : tr('systemMaps.errors.load_discovered_draft')
       }
     }
     return response.data

@@ -90,6 +90,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useSystemMapsStore, NODE_TYPES, RELATIONSHIP_TYPES } from '../stores/systemMaps'
 import type { DiscoverySelection, SystemMapNode, SystemMapRelationship } from '../stores/systemMaps'
 import BackLink from '../components/BackLink.vue'
@@ -102,6 +103,7 @@ import { mergeDiscoverySelections } from '../components/system-maps/discoveryMer
 
 const route = useRoute()
 const store = useSystemMapsStore()
+const { t } = useI18n()
 
 const mapId = computed(() => route.params.id as string)
 const activeMap = computed(() => store.activeMap)
@@ -167,7 +169,7 @@ async function selectRevision(revisionId: string): Promise<void> {
   try {
     await store.loadRevision(activeMap.value.id, revisionId)
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : 'Could not load revision'
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.load_revision')
   }
 }
 
@@ -183,7 +185,7 @@ async function createNewDraft(): Promise<void> {
       `Draft from revision ${activeRevision.value.revision_number}`,
     )
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : 'Could not create draft'
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.create_draft')
   } finally {
     saving.value = false
   }
@@ -196,7 +198,7 @@ async function runDiscovery(): Promise<void> {
     await store.discover(`Discovered ${activeMap.value.name}`, `Discovery at ${new Date().toISOString()}`)
     discoveryOpen.value = true
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : 'Discovery failed'
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.discovery_failed')
   }
 }
 
@@ -220,7 +222,7 @@ async function saveDraft(): Promise<void> {
       'Manual save',
     )
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : 'Could not save draft'
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.save_draft')
   } finally {
     saving.value = false
   }
@@ -241,7 +243,7 @@ async function publishRevision(): Promise<void> {
   try {
     await store.publish(activeMap.value.id, activeRevision.value.id)
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : 'Could not publish revision'
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.publish_revision')
   }
 }
 
@@ -251,7 +253,7 @@ async function archiveRevision(): Promise<void> {
   try {
     await store.archive(activeMap.value.id, activeRevision.value.id)
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : 'Could not archive revision'
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.archive_revision')
   }
 }
 
