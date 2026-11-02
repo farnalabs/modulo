@@ -574,6 +574,7 @@ class TestAuthenticateApiKey:
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch.object(ms, "validate_api_key", new=AsyncMock(return_value=_mock_api_key())),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="operator")),
+            patch.object(ms, "resolve_live_role_and_kind", new=AsyncMock(return_value=("operator", "human"))),
         ):
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
         assert handled is True
@@ -599,6 +600,7 @@ class TestAuthenticateApiKey:
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch.object(ms, "validate_api_key", new=AsyncMock(return_value=_mock_api_key())),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value=None)),
+            patch.object(ms, "resolve_live_role_and_kind", new=AsyncMock(return_value=None)),
         ):
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
         assert handled is False
@@ -615,6 +617,7 @@ class TestAuthenticateApiKey:
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch.object(ms, "validate_api_key", new=AsyncMock(return_value=_mock_api_key("operator"))),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="runner")),
+            patch.object(ms, "resolve_live_role_and_kind", new=AsyncMock(return_value=("runner", "human"))),
         ):
             handled, _err = await _authenticate_api_key(_mock_request(), _API_KEY)
         assert handled is True
@@ -642,6 +645,7 @@ class TestAuthenticateApiKey:
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch.object(ms, "validate_api_key", new=AsyncMock(return_value=_mock_api_key())),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="operator")),
+            patch.object(ms, "resolve_live_role_and_kind", new=AsyncMock(return_value=("operator", "human"))),
             patch.object(ms, "resolve_key_grants", new=AsyncMock(side_effect=ApiKeyGrantsUnavailableError)),
         ):
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)

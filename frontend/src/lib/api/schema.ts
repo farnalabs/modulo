@@ -17111,12 +17111,12 @@ export interface components {
         };
         /**
          * McpAuthorityResponse
-         * @description The org's human-linked MCP HITL authority setting.
+         * @description The org's human-linked MCP HITL persona-authority setting.
          *
          *     ``enabled`` is the effective intent: the org override when one is set, else
-         *     the flag's documented default. ``overridden`` reports whether the org has an
-         *     explicit override (so the UI can distinguish "on by default" from "on
-         *     because someone set it").
+         *     the flag's documented default (OFF). ``overridden`` reports whether the org has an
+         *     explicit override (so the UI can distinguish the default-OFF state from an
+         *     explicit enable).
          */
         McpAuthorityResponse: {
             /** Enabled */
