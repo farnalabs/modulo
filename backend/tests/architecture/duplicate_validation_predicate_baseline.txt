@@ -76,7 +76,6 @@
 {"detail": "Cron expression is required", "modules": ["api/mcp_server.py", "api/routes/triggers.py"]}
 {"detail": "expires_at must be in the future", "modules": ["api/mcp_server.py", "api/routes/api_keys.py", "api/routes/service_accounts.py"]}
 {"detail": "owner_team_id is required when visibility is 'team'", "modules": ["api/routes/pipelines.py", "api/team_scope.py"]}
-{"detail": "role must be 'operator' or 'runner'. admin keys are prohibited.", "modules": ["api/mcp_server.py", "api/routes/api_keys.py"]}
 {"near_body": ["api/middleware/rate_limiter.py:_client_ip", "api/routes/auth.py:_client_ip"]}
 {"near_body": ["api/routes/admin.py:_list_org_accounts", "api/routes/service_accounts.py:_list_service_accounts"]}
 {"near_body": ["api/routes/analytics.py:_csv_stream_line", "api/routes/audit.py:_csv_stream_line"]}

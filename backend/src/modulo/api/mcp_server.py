@@ -95,10 +95,13 @@ from modulo.api.routes.triggers import (
     _validate_trigger_config_keys,
 )
 from modulo.auth.api_key import (
+    KEY_SCOPE_ORG,
     ApiKeyGrantsUnavailableError,
     ApiKeyInvalidError,
+    ApiKeyScopeError,
     ApiKeyTtlError,
     api_key_grants_enabled,
+    api_key_role_violation,
     resolve_key_grants,
     validate_api_key,
 )
@@ -113,6 +116,8 @@ from modulo.auth.api_key import (
 )
 from modulo.auth.dependencies import resolve_role_from_membership
 from modulo.auth.human_linkage import (
+    LINKAGE_OAUTH_CONSENT,
+    LINKAGE_USER_SCOPED_KEY,
     HumanLinkage,
     required_permission_for_action,
     resolve_human_linkage,
@@ -222,12 +227,14 @@ from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.account import AccountNotFoundError
 from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied, HitlReviewWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
+from modulo.db.crud.org_membership import resolve_live_role_and_kind
 from modulo.db.crud.pipeline import CircuitBreakerThresholdChangeDenied, get_pipeline
 from modulo.db.crud.run import WorkItemRefsRequiredError, get_run
 from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs
 from modulo.db.crud.schema import create_schema as db_create_schema
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
+from modulo.db.models.account import KIND_HUMAN
 from modulo.db.models.agent import Agent
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
@@ -491,6 +498,11 @@ _ctx_node_allowed_tools: contextvars.ContextVar[list[str] | None] = contextvars.
 # ``is_system_admin=False`` and OAuth claims do not carry it); only a regular
 # JWT whose decoded principal holds the flag sets it True.
 _ctx_is_system_admin: contextvars.ContextVar[bool] = contextvars.ContextVar("mcp_is_system_admin", default=False)
+# FAR-2281: the credential owner's ``Account.kind`` when a USER-scoped mk_ key
+# is bound to a live human (``human``) — else None. Drives the audit
+# attribution: the action is recorded against the human, never collapsed to a
+# generic api_key principal. Fail-closed default None.
+_ctx_principal_kind: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_principal_kind", default=None)
 
 
 def _bind_org_context(
@@ -1559,6 +1571,65 @@ async def _node_allowed_tools_for_key(
         return None
 
 
+async def _resolve_api_key_org(prefix: str) -> uuid.UUID | None:
+    """Resolve the organisation owning an ``mk_`` key prefix (RLS-safe).
+
+    org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and the key's
+    org is unknown until the record is read — a plain lookup in an empty org
+    context would be filtered out by RLS and reject every valid key. On
+    Postgres the runtime app role is RLS-subject (a non-owner DML-granted
+    role), so the org is resolved through a SECURITY DEFINER function owned
+    by the migration role rather than SET row_security TO OFF (which only
+    bypasses RLS for owners and raises for a regular role). On generic
+    backends there is no RLS, so a plain prefix scan works.
+    """
+    from sqlalchemy import select, text
+
+    from modulo.db.models.api_key import OrgApiKey
+    from modulo.db.rls import _ensure_active_transaction
+
+    factory = _get_session_factory()
+    async with factory() as s, s.begin():
+        dialect = await _ensure_active_transaction(s)
+        if dialect == "postgresql":
+            return (
+                await s.execute(
+                    text("SELECT public.lookup_api_key_org(:prefix)"),
+                    {"prefix": prefix},
+                )
+            ).scalar_one_or_none()
+        key_record = (
+            await s.execute(
+                select(OrgApiKey).where(
+                    OrgApiKey.lookup_prefix == prefix,
+                    OrgApiKey.revoked_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        return key_record.organisation_id if key_record is not None else None
+
+
+async def _resolve_key_owner_kind(
+    session: AsyncSession,
+    key: Any,
+    live_role: str | None,
+) -> str | None:
+    """Return a user-scoped key owner's live account kind, else ``None``.
+
+    Only a user-scoped key needs the additional account-kind projection.
+    The historical role read stays the clamp's sole query for org/team/run
+    keys, preserving the existing auth path.
+    """
+    if getattr(key, "scope", None) != "user" or live_role is None:
+        return None
+    membership = await resolve_live_role_and_kind(
+        session,
+        str(key.account_id),
+        str(key.organisation_id),
+    )
+    return membership[1] if membership is not None else None
+
+
 async def _authenticate_api_key(
     request: Request,
     token: str,
@@ -1570,44 +1641,12 @@ async def _authenticate_api_key(
     should proceed to ``call_next``) or ``(False, error_response)`` on failure.
     """
     try:
-        # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and
-        # the key's org is unknown until the record is read — a plain
-        # lookup in an empty org context would be filtered out by RLS
-        # and reject every valid key. On Postgres the runtime app role
-        # is RLS-subject (a non-owner DML-granted role), so the org is
-        # resolved through a SECURITY DEFINER function owned by the
-        # migration role rather than SET row_security TO OFF (which
-        # only bypasses RLS for owners and raises for a regular role).
-        # On generic backends there is no RLS, so a plain prefix scan
-        # works. Then re-validate inside the org context before
-        # trusting the key.
-        from sqlalchemy import select, text
-
         from modulo.auth.api_key import _MK_PREFIX, _PREFIX_LEN
-        from modulo.db.models.api_key import OrgApiKey
-        from modulo.db.rls import _ensure_active_transaction
 
         prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
-        factory = _get_session_factory()
-        async with factory() as s, s.begin():
-            dialect = await _ensure_active_transaction(s)
-            if dialect == "postgresql":
-                org_id = (
-                    await s.execute(
-                        text("SELECT public.lookup_api_key_org(:prefix)"),
-                        {"prefix": prefix},
-                    )
-                ).scalar_one_or_none()
-            else:
-                key_record = (
-                    await s.execute(
-                        select(OrgApiKey).where(
-                            OrgApiKey.lookup_prefix == prefix,
-                            OrgApiKey.revoked_at.is_(None),
-                        )
-                    )
-                ).scalar_one_or_none()
-                org_id = key_record.organisation_id if key_record is not None else None
+        # Resolve the org first, then re-validate inside the org's RLS context
+        # before trusting the key.
+        org_id = await _resolve_api_key_org(prefix)
         if org_id is None:
             raise ApiKeyInvalidError
 
@@ -1636,6 +1675,7 @@ async def _authenticate_api_key(
                 str(key.account_id),
                 str(key.organisation_id),
             )
+            owner_kind = await _resolve_key_owner_kind(s, key, live_role)
             clamped = _clamp_role(key.role, live_role)
             if not clamped:
                 _record_api_key_role_cap(
@@ -1685,13 +1725,19 @@ async def _authenticate_api_key(
         _ctx_user_id.set(key.account_id)
         _ctx_auth_token.set(token)
         _ctx_auth_type.set("api_key")
-        # ADR 063 step 1: an API key carries no signed token family — fail
-        # closed for human-linkage (linkage is always "none" for an mk_ key).
+        # ADR 063 step 1: an API key carries no signed token family. The family
+        # is the observed OAuth half of human-linkage, so it stays None (fail
+        # closed); a user-scoped key can still be human-linked through its
+        # server-derived key_scope + live human owner (FAR-2281).
         _ctx_token_family.set(None)
         # FAR-620: the credential's caller scope drives the tool-scope
         # caller-scope leg. The isinstance guard keeps test doubles (MagicMock
         # rows) on the fail-closed None; real rows always carry a string.
         _ctx_key_scope.set(key.scope if isinstance(key.scope, str) else None)
+        # FAR-2281: a USER-scoped key owned by a live human acts as that human,
+        # so the audit record attributes the action to the human rather than a
+        # generic api_key principal. Org/team/run-scoped keys stay unattributed.
+        _ctx_principal_kind.set(KIND_HUMAN if _ctx_key_scope.get() == "user" and owner_kind == KIND_HUMAN else None)
         _ctx_key_grants.set(key_grants)
         # FAR-696: an API-key principal is never a system admin — REST
         # constructs API-key tenants with ``is_system_admin=False`` and the
@@ -6783,9 +6829,10 @@ def _hitl_human_only_denial_payload(
       and the signed token-family claim, both ``None`` when the credential
       carries no such value);
     * ``principal_kind`` — **derived** from ``Account.kind`` + live membership
-      (``None`` when not evaluated because the credential is not an OAuth
-      candidate — the only class that can be human-linked);
-    * ``linkage`` — **derived** step-1 conditions (``none``/``oauth_consent``);
+      (``None`` when the credential is not a human-linkable class, i.e. neither
+      consent-derived OAuth nor a user-scoped ``mk_`` key);
+    * ``linkage`` — **derived** step-1 conditions
+      (``none``/``oauth_consent``/``user_scoped_key``);
     * ``verdict`` — **derived** from ``human_only_denial``.
 
     The pre-ADR-063 payload named its auth-type field ``principal_kind``
@@ -6869,14 +6916,13 @@ async def _check_human_only_gate(
 ) -> dict[str, Any] | None:
     """Return an error dict when the gate is human_only, else ``None``.
 
-    Called for the ``claim``, ``approve`` and ``deliver_manual`` actions
-    (FAR-609: claim is human_only too). ``reject`` is not mechanically
-    intercepted but it is NOT an agent escape hatch: reject requires a
-    claim_token, and the claim action is denied for MCP callers on a
-    human_only (now the default) gate, so an agent can neither claim, decide,
-    NOR reject such a gate — only a principal already holding a claim (e.g.
-    claimed before the policy change) can reject. Agent-only runs on default
-    gates require browser-human intervention (intended policy).
+    Called for the ``claim``, ``approve``, ``reject`` and ``deliver_manual``
+    actions (FAR-609: claim is human_only too). ``reject`` still requires a
+    claim_token, and an unlinked MCP caller can no longer claim a default
+    human_only gate, so an unlinked agent can neither claim, decide nor reject
+    one — only a principal already holding a claim (e.g. claimed before the
+    policy change) can reject. Agent-only runs on default gates require
+    browser-human intervention (intended policy).
 
     FAR-610: the gate's config is resolved from the RUN's snapshot graph
     (falling back to the live pipeline edges, then the live HITL-node config)
@@ -6892,17 +6938,22 @@ async def _check_human_only_gate(
 
     ADR 063 step 1 (FAR-1957): ``non_browser_credential`` is COMPUTED from the
     single shared authority resolver (``auth.human_linkage.resolve_human_linkage``)
-    over the verified credential — no longer a hard-coded ``True``. A
-    consent-derived OAuth credential belonging to a live human principal whose
-    grant set covers the action is *human-linked*; when the org-wide
-    ``mcp_human_linked_hitl_authority`` flag is ON (the default), such a
-    credential is treated as a browser-class decision and may decide the gate.
-    Every other credential — ``mk_`` API key, non-OAuth JWT (including a
-    browser-class password JWT, FAR-634), service account, blacklisted family,
-    inactive account/membership, missing scope — and every verification failure
-    resolves to deny. ``deliver_manual`` stays browser-only in step 1 (ADR 035).
-    Every denial emits a warning log + the ``hitl.human_only_denied`` audit
-    event (FAR-634) before the error dict is returned.
+    over the verified credential — no longer a hard-coded ``True``. The
+    ``mcp_human_linked_hitl_authority`` flag is default-OFF and must be explicitly
+    enabled by an organisation admin. When enabled, an eligible consent-derived
+    OAuth credential belonging to a live human principal (with the action's
+    consented grant), or a verified user-scoped human-linked API key (whose live
+    role supplies its authority), is human-linked and may claim, approve or
+    reject the gate. ``deliver_manual`` is excluded even then: it injects the
+    run's output directly (ADR 035) and stays browser-only over MCP. Org-,
+    team-, service- and run-scoped API keys, non-OAuth JWTs (including a
+    browser-class password JWT, FAR-634), blacklisted families, inactive
+    accounts or memberships, missing scopes, and every verification failure
+    resolve to deny. Normal possession requirements still apply: claim, approve,
+    reject and deliver-manual require the applicable claim token and gate rules.
+    Every denial emits a warning log + the
+    ``hitl.human_only_denied`` audit event (FAR-634) before the error dict is
+    returned.
     """
     from modulo.db.crud.hitl_review_config import (
         EVENT_HUMAN_ONLY_DENIED,
@@ -6933,18 +6984,26 @@ async def _check_human_only_gate(
         token_family=_ctx_token_family.get(None),
         grants=_ctx_key_grants.get(None),
         required_permission=required_permission_for_action(action),
+        key_scope=_ctx_key_scope.get(None),
     )
-    # The org-wide escape hatch (default ON). Read only when the credential IS
-    # human-linked: for a not-linked credential the verdict is already deny and
-    # the flag is irrelevant.
+    # FAR-2281: the org-wide persona authority flag is consulted only after
+    # server-side linkage verification. It is default-OFF and resolves
+    # fail-closed, so neither an unlinked credential nor a flag read failure can
+    # widen this boundary.
     human_linked_authority = linkage.linked and await resolve_mcp_human_linked_hitl_authority(
         org_id=org_id,
         flag_name="mcp_human_linked_hitl_authority",
     )
-    # deliver_manual injects the run's output directly (ADR 035) and stays
-    # browser-only in step 1 — never honoured over MCP, even for a human-linked
-    # credential.
-    allow_via_linkage = human_linked_authority and action != "deliver_manual"
+    # A verified human-linked credential may claim, approve or reject when the
+    # org explicitly enables persona authority. ``deliver_manual`` is excluded:
+    # it injects the run's output directly (ADR 035) and stays browser-only
+    # over MCP even for a human-linked credential. Possession remains out of
+    # scope; the flag controls only this persona-based authority.
+    allow_via_linkage = (
+        human_linked_authority
+        and linkage.linkage in {LINKAGE_OAUTH_CONSENT, LINKAGE_USER_SCOPED_KEY}
+        and action != "deliver_manual"
+    )
     non_browser_credential = not allow_via_linkage
     verdict = human_only_denial(config, non_browser_credential=non_browser_credential, gate_fired=gate_fired)
     if verdict is not None:
@@ -7312,19 +7371,19 @@ async def _review_hitl_impl(
         if run is None:
             return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
 
-        if action in ("claim", "approve", "deliver_manual"):
-            # FAR-610: deliver_manual is a decision exactly like approve — a
-            # human_only gate must not be decided by an API-key/MCP client.
-            # FAR-609: claim is human_only too — non-browser principals can
-            # neither claim OR decide a human_only gate. reject is not
-            # intercepted, but it is not an agent escape hatch either: reject
-            # requires a claim_token and claim is denied for non-browser
-            # principals on default-human_only gates, so only a principal
-            # already holding a claim can reject; agent-only runs on default
-            # gates require browser-human intervention (intended policy).
-            human_only_err = await _check_human_only_gate(s, org_id, run, review_id, action)
-            if human_only_err:
-                return human_only_err
+        # FAR-610: deliver_manual is a decision exactly like approve — a
+        # human_only gate must not be decided by an API-key/MCP client.
+        # FAR-609: claim and reject are human_only too — an unlinked non-browser
+        # principal can neither claim, decide NOR reject a human_only gate.
+        # reject also requires a claim_token, and claim is denied on
+        # default-human_only gates, so only a principal already holding a claim
+        # can reject; agent-only runs on default gates require browser-human
+        # intervention (intended policy). ``_parse_hitl_action`` has already
+        # validated ``action`` against this exact set, so every reachable value
+        # is gated here.
+        human_only_err = await _check_human_only_gate(s, org_id, run, review_id, action)
+        if human_only_err:
+            return human_only_err
 
         try:
             return await _dispatch_hitl_action(
@@ -7352,13 +7411,16 @@ async def _review_hitl_impl(
         "Step 1: call with action='claim' to get a claim_token. "
         "Step 2: call with action='approve', 'reject', or 'deliver_manual' + your claim_token. "
         "'deliver_manual' requires 'output' (a dict) to supply the output directly. "
-        "human_only gates return 403 on claim, approve and deliver_manual "
-        "(FAR-609: claim is human_only too) — only a browser-authenticated "
-        "human can claim or decide them. reject is NOT an agent escape hatch: "
-        "it requires a claim_token, and claim is denied on default-"
-        "human_only gates, so only a principal already holding a claim can "
-        "reject; agent-only runs on default gates require browser-human "
-        "intervention (intended policy)."
+        "human_only gates (the default) deny claim, approve, reject and "
+        "deliver_manual to every MCP caller unless the organisation enables the "
+        "default-OFF mcp_human_linked_hitl_authority flag; when enabled, a "
+        "consent-derived human-linked OAuth credential or a verified user-scoped "
+        "human-linked API key may claim, approve or reject such a gate (reject "
+        "IS intercepted). deliver_manual stays browser-only in every case. An "
+        "unlinked agent cannot claim, decide or reject a human_only gate: reject "
+        "requires a claim_token, and claim is denied, so only a principal "
+        "already holding a claim can reject; agent-only runs on default gates "
+        "require browser-human intervention (intended policy)."
     ),
 )
 @mcp_audited("hitl_review_actioned", "hitl_review", fail_closed=False)
@@ -9474,13 +9536,22 @@ async def _require_admin_for_team_key(org_id: uuid.UUID) -> None:
         raise MCPAuthorizationError("Only admin users can perform this action")
 
 
-def _validate_api_key_role_and_name(name: str, role: str) -> dict[str, Any] | None:
-    """Return a validation error dict for invalid role/name, or None."""
-    if role not in ("operator", "runner"):
+def _validate_api_key_role_and_name(name: str, role: str, scope: str = KEY_SCOPE_ORG) -> dict[str, Any] | None:
+    """Return a validation error dict for invalid role/name, or None.
+
+    FAR-2281: the role ceiling is scope-aware, using the SAME shared predicate
+    as the REST mint path (``api_key_role_violation``). The MCP mint tool pins
+    ``scope`` to ``org`` (an MCP caller mints an org-scoped machine key), so
+    ``admin`` stays prohibited there; a user-scoped key's admin ceiling is
+    reachable only through the REST surface that can mint it. The parameter
+    exists so both surfaces enforce one rule rather than two drifting copies.
+    """
+    role_violation = api_key_role_violation(role, scope)
+    if role_violation is not None:
         return {
             "error": "validation_failed",
             "field": "role",
-            "detail": "role must be 'operator' or 'runner'. admin keys are prohibited.",
+            "detail": role_violation,
         }
     if not name.strip():
         return {
@@ -9804,9 +9875,11 @@ async def _mint_api_key_txn(
                 expires_at=parsed_expires_at,
                 grants=grants,
             )
-        except ApiKeyTtlError as exc:
-            # FAR-1478: a >365d expiry on a service-owned key — client error,
-            # same 422 shape as the REST surface, never a silent clamp.
+        except (ApiKeyScopeError, ApiKeyTtlError) as exc:
+            # FAR-1478 / FAR-2281: a >365d expiry on a service-owned key, or a
+            # role not permitted for the key's scope (admin on a team-scoped
+            # key) — client errors with the same 422 shape as the REST surface,
+            # never a silent clamp.
             return {"error": "validation_error", "status": 422, "detail": str(exc)}
     return key, full_key
 
@@ -9851,7 +9924,9 @@ def _api_key_created_response(key: Any, full_key: str, grants: list[str] | None)
     description=(
         "Create a new organisation API key. Returns the full mk_... key value "
         "ONLY at creation — store it immediately, it is never returned again. "
-        "Mirrors POST /api/v1/api-keys. Roles: 'operator' or 'runner'. A key "
+        "Mirrors POST /api/v1/api-keys. Roles: 'operator' or 'runner' (this "
+        "tool mints an ORG-scoped key, so 'admin' is not available here; a "
+        "user-scoped key may carry 'admin' and is minted via the REST surface). A key "
         "cannot be minted above the caller's live org role. Optional 'grants' "
         "(list of permission names, e.g. ['pipeline.list', 'pipeline.graph.read']) "
         "restricts the key to exactly those permissions instead of its full role "

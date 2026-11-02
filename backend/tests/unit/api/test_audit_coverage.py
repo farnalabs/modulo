@@ -676,6 +676,33 @@ def test_resolve_principal_kind_is_none_for_a_programmatic_jwt_principal() -> No
     assert audit_coverage._resolve_principal_kind(_bare_request(), _make_programmatic_jwt_principal()) is None
 
 
+def _make_user_key_principal() -> TenantPrincipal:
+    """A user-scoped mk_ key owned by a live human (FAR-2281)."""
+    return TenantPrincipal(
+        username="user-key",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+        is_system_admin=False,
+        via_api_key=True,
+        client_kind=CLIENT_KIND_PROGRAMMATIC,
+        key_scope="user",
+        owner_kind="human",
+        principal_kind="human",
+    )
+
+
+def test_resolve_principal_kind_is_human_for_a_human_linked_user_key() -> None:
+    """FAR-2281: a user-scoped key owned by a live human is attributed to the
+    human, not collapsed into a generic api_key principal."""
+    assert audit_coverage._resolve_principal_kind(_bare_request(), _make_user_key_principal()) == "human"
+
+
+def test_coarse_payload_stamps_the_human_for_a_human_linked_user_key() -> None:
+    payload = audit_coverage._coarse_payload(_bare_request(), "success", _make_user_key_principal())
+    assert payload["principal_kind"] == "human"
+
+
 def test_coarse_payload_carries_the_bound_principal_kind() -> None:
     request = _bare_request()
     audit_coverage.bind_principal_kind(request, "service")

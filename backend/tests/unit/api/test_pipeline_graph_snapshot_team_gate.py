@@ -339,8 +339,8 @@ def test_graph_still_accepts_an_mk_org_api_key() -> None:
             ),
             patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
             patch(
-                "modulo.auth.dependencies.resolve_role_from_membership",
-                new=AsyncMock(return_value="operator"),
+                "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                new=AsyncMock(return_value=("operator", "human")),
             ),
             patch(f"{_PREFIX}get_pipeline_graph", new=AsyncMock(return_value=(nodes, edges))),
         ):
