@@ -124,6 +124,231 @@ When running the downloaded script, pass options like:  bash modulo-install.sh -
 EOF
 }
 
+# --- install transcript + support reference (FAR-2303) ----------------------
+#
+# A failed install is the most likely first experience for a new operator, and
+# the terminal scrollback is gone by the time they ask for help. Everything the
+# installer prints is mirrored into a private, size-capped log under
+# ~/.local/state/modulo/, and every failure path prints ONE delimited support
+# block as its LAST output: the target being installed, the failing stage in
+# plain words, the absolute log path, and a short support reference. The
+# reference is also part of the log filename, so the block and the file can be
+# matched without opening either.
+#
+# Logging is best-effort. If the state dir cannot be created or written the
+# installer warns on stderr and continues exactly as before: no new failure
+# mode, and no change to any exit code (requirement: exit codes stay as they
+# are today).
+
+MAX_INSTALL_LOGS=5
+MAX_LOG_BYTES=1048576
+
+STAGE="starting up (reading arguments)"
+SUPPORT_REF=""
+LOG_FILE=""
+LOG_FIFO=""
+LOG_FIFO_ERR=""
+TEE_PID=""
+TEE_PID_ERR=""
+LOG_ACTIVE=0
+
+support_ref() {
+  # support_ref — 8 lowercase hex chars, stable for this run, embedded in the
+  # log filename so a support block can be matched to its log at a glance.
+  local ref=""
+  if [[ -r /dev/urandom ]]; then
+    ref="$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')" || ref=""
+  fi
+  if [[ ! "${ref}" =~ ^[0-9a-f]{8}$ ]]; then
+    ref="$(printf '%08x' "$(( (RANDOM << 16 ^ RANDOM) & 0xffffffff ))")"
+  fi
+  printf '%s' "${ref}"
+}
+
+redact() {
+  # redact <text> — strip credential-shaped content before it reaches the
+  # terminal, the log, or the support block.
+  #
+  # This installer handles NO credentials today (public GitHub release URLs and
+  # local paths only), so this is a defence-in-depth choke point: any future
+  # value that could carry a token, password, signed-URL userinfo or
+  # Authorization header must be passed through here before it is printed.
+  # Redaction FAILS CLOSED — if the scrub cannot run, the value is withheld
+  # rather than printed unredacted.
+  local text="$1"
+  if command -v sed >/dev/null 2>&1; then
+    text="$(printf '%s' "${text}" | sed -E \
+      -e 's#(://)[^/@[:space:]]+@#\1[redacted]@#g' \
+      -e 's/(([Aa]uthorization|[Tt]oken|[Ss]ecret|[Pp]assword|[Pp]asswd|[Aa]pi[_-]?[Kk]ey|[Ss]ignature|[Cc]redential)[[:space:]]*[=:][[:space:]]*)(([Bb]earer|[Bb]asic|[Tt]oken)[[:space:]]+)?[^[:space:]"]+/\1[redacted]/g' \
+      2>/dev/null)" || text="[withheld: redaction failed]"
+  else
+    text="[withheld: redaction unavailable]"
+  fi
+  printf '%s' "${text}"
+}
+
+stage() {
+  # stage <plain-words> — record the phase the installer is in, so a failure
+  # can name it. Also keeps the transcript bounded across long phases.
+  STAGE="$1"
+  trim_log
+}
+
+target_description() {
+  # target_description — what is being installed, as far as it is known. The
+  # support block must always answer this, even when the run died in preflight.
+  if [[ -n "${VERSION_NUM:-}" ]]; then
+    printf 'bundle-v%s (%s-%s)' "${VERSION_NUM}" "${OS:-unknown}" "${ARCH:-unknown}"
+  elif [[ -n "${FROM_FILE:-}" ]]; then
+    printf 'unversioned (offline install from %s)' "$(basename -- "${FROM_FILE}" 2>/dev/null || printf '%s' "${FROM_FILE}")"
+  elif [[ -n "${VERSION:-}" ]] && [[ "${VERSION}" != "latest" ]]; then
+    printf '%s' "${VERSION}"
+  else
+    printf 'latest (not yet resolved)'
+  fi
+}
+
+trim_log() {
+  # trim_log — cap the transcript, keeping the TAIL (the failure is the useful
+  # part). Truncates IN PLACE: tee holds the log open in append mode, so
+  # replacing the inode would silently orphan every later line.
+  [[ -n "${LOG_FILE:-}" ]] || return 0
+  [[ -f "${LOG_FILE}" ]] || return 0
+  local size keep scratch
+  size="$(wc -c < "${LOG_FILE}" 2>/dev/null)" || return 0
+  [[ "${size}" =~ ^[0-9]+$ ]] || return 0
+  (( size > MAX_LOG_BYTES )) || return 0
+  keep=$(( MAX_LOG_BYTES - 96 ))
+  (( keep > 0 )) || keep=0
+  scratch="$(mktemp 2>/dev/null)" || return 0
+  {
+    printf '[log truncated: this transcript is capped at %s bytes; earlier output was discarded]\n' "${MAX_LOG_BYTES}"
+    tail -c "${keep}" -- "${LOG_FILE}" 2>/dev/null || true
+  } > "${scratch}" 2>/dev/null || { rm -f -- "${scratch}" 2>/dev/null; return 0; }
+  cat -- "${scratch}" > "${LOG_FILE}" 2>/dev/null || true
+  rm -f -- "${scratch}" 2>/dev/null || true
+  chmod 600 -- "${LOG_FILE}" 2>/dev/null || true
+}
+
+prune_install_logs() {
+  # prune_install_logs — keep only the newest (MAX_INSTALL_LOGS - 1) existing
+  # transcripts; the run about to start becomes the Nth.
+  local keep_existing stale
+  keep_existing=$(( MAX_INSTALL_LOGS - 1 ))
+  (( keep_existing >= 1 )) || keep_existing=1
+  # shellcheck disable=SC2012  # log names are generated (timestamp + hex ref, no spaces); ls -1dt is the newest-first mtime primitive.
+  while IFS= read -r stale; do
+    [[ -n "${stale}" ]] || continue
+    rm -f -- "${stale}" 2>/dev/null || true
+  done < <(ls -1dt -- "${STATE_DIR}"/install-*.log 2>/dev/null | tail -n +"$(( keep_existing + 1 ))")
+}
+
+start_logging() {
+  # start_logging — create the state dir + log, then mirror stdout and stderr
+  # into the log through two tee processes.
+  #
+  # Two FIFOs, not one: stdout and stderr MUST stay separate streams (a caller
+  # redirecting `2>/dev/null`, and the installer's own error assertions, depend
+  # on it). Each tee keeps its own stream on the terminal and appends both to
+  # the one log file. A FIFO (not a process substitution) is used so the tee
+  # PIDs are known and can be waited on: without that wait the script can exit
+  # before tee has flushed, losing exactly the tail that matters.
+  SUPPORT_REF="$(support_ref)"
+  STATE_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/modulo"
+  if [[ ! -d "${STATE_DIR}" ]]; then
+    if ! mkdir -p -- "${STATE_DIR}" 2>/dev/null; then
+      printf 'WARNING: cannot create %s — the install transcript will not be saved.\n' "${STATE_DIR}" >&2
+      return 0
+    fi
+    chmod 700 -- "${STATE_DIR}" 2>/dev/null || true
+  fi
+  prune_install_logs
+  LOG_FILE="${STATE_DIR}/install-$(date -u +%Y%m%dT%H%M%SZ)-${SUPPORT_REF}.log"
+  if ! : > "${LOG_FILE}" 2>/dev/null; then
+    printf 'WARNING: cannot write %s — the install transcript will not be saved.\n' "${LOG_FILE}" >&2
+    LOG_FILE=""
+    return 0
+  fi
+  chmod 600 -- "${LOG_FILE}" 2>/dev/null || true
+  LOG_FIFO="$(mktemp -u 2>/dev/null)" || { LOG_FIFO=""; LOG_FILE=""; return 0; }
+  LOG_FIFO_ERR="$(mktemp -u 2>/dev/null)" || { LOG_FIFO=""; LOG_FIFO_ERR=""; LOG_FILE=""; return 0; }
+  if ! mkfifo -- "${LOG_FIFO}" 2>/dev/null || ! mkfifo -- "${LOG_FIFO_ERR}" 2>/dev/null; then
+    rm -f -- "${LOG_FIFO}" "${LOG_FIFO_ERR}" 2>/dev/null || true
+    LOG_FIFO=""
+    LOG_FIFO_ERR=""
+    LOG_FILE=""
+    return 0
+  fi
+  tee -a -- "${LOG_FILE}" < "${LOG_FIFO}" &
+  TEE_PID=$!
+  tee -a -- "${LOG_FILE}" < "${LOG_FIFO_ERR}" >&2 &
+  TEE_PID_ERR=$!
+  exec > "${LOG_FIFO}" 2> "${LOG_FIFO_ERR}"
+  LOG_ACTIVE=1
+}
+
+stop_logging() {
+  # stop_logging — close our ends of both FIFOs and wait for each tee to flush,
+  # so the log file is complete before the process exits.
+  [[ "${LOG_ACTIVE}" -eq 1 ]] || return 0
+  LOG_ACTIVE=0
+  exec 1>&- 2>&-
+  if [[ -n "${TEE_PID}" ]]; then
+    wait "${TEE_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${TEE_PID_ERR}" ]]; then
+    wait "${TEE_PID_ERR}" 2>/dev/null || true
+  fi
+  rm -f -- "${LOG_FIFO}" "${LOG_FIFO_ERR}" 2>/dev/null || true
+  LOG_FIFO=""
+  LOG_FIFO_ERR=""
+}
+
+print_support_block() {
+  # print_support_block — the delimited block every failure prints LAST.
+  local target log_display
+  target="$(target_description)"
+  if [[ -n "${LOG_FILE}" ]]; then
+    log_display="${LOG_FILE}"
+  else
+    log_display="(no log was created — the installer failed before it could start logging)"
+  fi
+  {
+    printf '\n'
+    printf -- '----- Modulo install failed: support reference %s -----\n' "${SUPPORT_REF:-unknown}"
+    printf '  Install target   : %s\n' "$(redact "${target}")"
+    printf '  Failing stage    : %s\n' "$(redact "${STAGE}")"
+    printf '  Install log      : %s\n' "$(redact "${log_display}")"
+    printf '  Support reference: %s\n' "${SUPPORT_REF:-unknown}"
+    printf '\n'
+    printf 'Send this block AND the install log file above to Modulo support so the\n'
+    printf 'failure can be diagnosed: https://github.com/%s/issues\n' "${REPO}"
+    printf -- '----- end of Modulo install support block -----\n'
+  } >&2
+}
+
+on_exit() {
+  # on_exit — single EXIT path for every failure mode (die, a bare `exit 1`,
+  # `set -e`, or a signal). The support block is the LAST thing printed.
+  local rc=$?
+  if [[ -n "${tmp:-}" ]]; then
+    rm -rf -- "${tmp}" 2>/dev/null || true
+    tmp=""
+  fi
+  if [[ "${rc}" -ne 0 ]]; then
+    print_support_block || true
+  fi
+  stop_logging || true
+  trim_log || true
+  exit "${rc}"
+}
+
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+start_logging
+
 fetch() {
   # fetch <url> <output-path> — curl with strict TLS, retries, and friendly
   # failure text (proxy / corporate TLS interception / offline alternative).
@@ -347,7 +572,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+stage "preflight (platform and tool checks)"
 preflight
+stage "resolving the release to install"
 
 # --- resolve version --------------------------------------------------------
 
@@ -381,7 +608,6 @@ else
 fi
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "${tmp}"' EXIT
 
 # --- signed release manifest (FAR-675, ADR 031 Decision 3 P1b) ---------------
 #
@@ -582,21 +808,25 @@ if [[ -n "${FROM_FILE}" ]]; then
   if [[ ! -f "${manifest_file}" ]] || [[ ! -f "${signature_file}" ]]; then
     die "offline install REFUSED: the SIGNED release manifest must sit beside the tarball: ${manifest_file} (+ .sig). The bundle's internal SHA256SUMS is verified too, but a signature over the SIGNED manifest is REQUIRED (ADR 031 Decision 3) - download exactly these two release assets from the matched bundle release."
   fi
+  stage "verify (signature and checksum)"
   verify_shipped_manifest "${manifest_file}" "${signature_file}" "${FROM_FILE}" "bundle-v${VERSION_NUM}"
   cp "${FROM_FILE}" "${tmp}/${tarball_name}"
 else
   info "Installing Modulo bundle ${RELEASE_TAG} (${OS}-${ARCH})"
+  stage "download"
   fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/${tarball_name}" "${tmp}/${tarball_name}"
   fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/RELEASE_MANIFEST.json" "${tmp}/RELEASE_MANIFEST.json"
   fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/RELEASE_MANIFEST.json.sig" "${tmp}/RELEASE_MANIFEST.json.sig"
   # The SIGNED manifest is the primary gate: signature verify FIRST, then the
   # tarball's sha256 against the manifest's entry - BEFORE extraction.
+  stage "verify (signature and checksum)"
   verify_shipped_manifest "${tmp}/RELEASE_MANIFEST.json" "${tmp}/RELEASE_MANIFEST.json.sig" "${tmp}/${tarball_name}" "${RELEASE_TAG}"
   info "sha256 verified against the SIGNED manifest: $(sha256_of "${tmp}/${tarball_name}")"
 fi
 
 # --- extract and verify the bundle's internal checksums ---------------------
 
+stage "extract"
 expected_bundle_dir="${tarball_name%.tar.gz}"
 extract_root="${tmp}/extracted"
 mkdir -p "${extract_root}"
@@ -614,6 +844,7 @@ bundle_dir_name="${bundle_dir##*/}"
   "archive top-level directory '${bundle_dir_name}' does not match archive identity '${expected_bundle_dir}'"
 [[ -f "${bundle_dir}/SHA256SUMS" && ! -L "${bundle_dir}/SHA256SUMS" ]] || \
   die "malformed bundle: SHA256SUMS missing from the archive"
+stage "verify (bundle checksums)"
 verify_sums_in_dir "${bundle_dir}"
 info "bundle internal SHA256SUMS verified"
 
@@ -632,6 +863,7 @@ newest_pre_upgrade_snapshot() {
   ls -1dt "${DATA_DIR}"/pre-upgrade-dump-* 2>/dev/null | head -n 1
 }
 
+stage "pre-upgrade backup"
 UPGRADE_SNAPSHOT_PATH=""
 if [[ -f "${DATA_DIR}/state.json" ]]; then
   if [[ -f "${INSTALL_ROOT}/current/runtime/bin/python3" ]]; then
@@ -663,6 +895,7 @@ fi
 
 # --- lay out the versioned install + `current` symlink ----------------------
 
+stage "layout (installing the bundle)"
 mkdir -p "${INSTALL_ROOT}/versions"
 
 target="${INSTALL_ROOT}/versions/${VERSION_NUM}"
@@ -693,6 +926,7 @@ info "current -> $(readlink "${INSTALL_ROOT}/current")"
 # The collision was validated in preflight before any install-root mutation.
 # This phase only performs the already-authorised rename.
 
+stage "finalise (PATH shim and summary)"
 legacy_shim="${MODULO_LEGACY_SHIM_PATH:-/usr/local/bin/modulo}"
 if [[ -e "${legacy_shim}" || -L "${legacy_shim}" ]]; then
   if [[ -f "${MARKER_FILE}" ]] || [[ "${FORCE}" -eq 1 ]]; then
