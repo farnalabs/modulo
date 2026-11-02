@@ -1,7 +1,7 @@
-"""Unit tests for the 0346 backfill's dialect-independent path.
+"""Unit tests for the 0347 backfill's dialect-independent path.
 
 The Postgres CTE is covered against real Postgres by
-``tests/integration/test_migration_0346_system_maps_version_aware.py``. This
+``tests/integration/test_migration_0347_system_maps_version_aware.py``. This
 module calls ``_backfill_effective_dates(bind, pg=False)`` directly against an
 in-memory SQLite database, pinning the fallback loop (which CI's Postgres-only
 integration lane never executes) without Docker:
@@ -33,7 +33,7 @@ from typing import Any
 import sqlalchemy as sa
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_PATH = _VERSIONS / "0346_system_maps_version_aware.py"
+_MIGRATION_PATH = _VERSIONS / "0347_system_maps_version_aware.py"
 
 _T1 = datetime(2026, 1, 1, 12, 0)
 _T2 = datetime(2026, 1, 2, 12, 0)
@@ -42,7 +42,7 @@ _T4 = datetime(2026, 1, 4, 12, 0)
 
 
 def _load_migration() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("migration_0346_system_maps_version_aware", _MIGRATION_PATH)
+    spec = importlib.util.spec_from_file_location("migration_0347_system_maps_version_aware", _MIGRATION_PATH)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)

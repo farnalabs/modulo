@@ -13,7 +13,7 @@ code:
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/db/models/system_map.py
   - backend/src/modulo/db/repositories/system_map.py
-  - backend/src/modulo/db/migrations/versions/0346_system_maps_version_aware.py
+  - backend/src/modulo/db/migrations/versions/0347_system_maps_version_aware.py
   - frontend/src/stores/systemMaps.ts
   - frontend/src/components/dashboard/DashboardSystemOverview.vue
   - frontend/src/components/system-maps/SystemMapDraftReview.vue

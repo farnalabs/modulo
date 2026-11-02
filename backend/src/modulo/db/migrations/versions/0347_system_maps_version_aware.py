@@ -1,7 +1,7 @@
 """System Maps version-aware read model (FAR-2288).
 
-Revision ID: 0346_system_maps_version_aware
-Revises: 0345_system_maps_name_integrity
+Revision ID: 0347_system_maps_version_aware
+Revises: 0346_org_api_keys_role_scope
 
 Adds effective_from / effective_to to system_map_revisions so runs and
 metrics can be interpreted against the map revision active at a point in
@@ -37,8 +37,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0346_system_maps_version_aware"
-down_revision: str | None = "0345_system_maps_name_integrity"
+revision: str = "0347_system_maps_version_aware"
+down_revision: str | None = "0346_org_api_keys_role_scope"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

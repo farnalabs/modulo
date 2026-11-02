@@ -1,7 +1,7 @@
-"""FAR-2288: migration ``0346_system_maps_version_aware`` backfill.
+"""FAR-2288: migration ``0347_system_maps_version_aware`` backfill.
 
 Against REAL Postgres (testcontainers, private database per test - the
-``test_migration_0308`` harness). Seeds the pre-0346 shape at
+``test_migration_0308`` harness). Seeds the pre-0347 shape at
 ``0345_system_maps_name_integrity``, runs the REAL upgrade, and asserts the
 backfilled effective windows:
 
@@ -36,7 +36,7 @@ from sqlalchemy.pool import NullPool
 pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
-MIGRATION_REV = "0346_system_maps_version_aware"
+MIGRATION_REV = "0347_system_maps_version_aware"
 PREV_REV = "0345_system_maps_name_integrity"
 
 _ORG = "e0e00000-0000-0000-0000-000000000001"
@@ -118,7 +118,7 @@ def _downgrade(iso_url: str, target: str) -> None:
 
 
 async def _seed_pre_upgrade(iso_url: str) -> None:
-    """Seed the pre-0346 revision timeline.
+    """Seed the pre-0347 revision timeline.
 
     ``session_replication_role = replica`` switches FK triggers off for the seed
     connection only, so the fixture does not have to construct a whole
@@ -230,7 +230,7 @@ async def _by_time(engine: AsyncEngine, map_id: str, at: datetime) -> str | None
 
 @pytest_asyncio.fixture
 async def pre_upgrade_db_url(db_url: str) -> AsyncGenerator[str, None]:
-    db_name, iso_url = await _fresh_db(db_url, "m0346_pre")
+    db_name, iso_url = await _fresh_db(db_url, "m0347_pre")
     try:
         await _ensure_alembic_table(iso_url)
         _migrate(iso_url, PREV_REV)
@@ -244,7 +244,7 @@ async def test_newest_archived_revision_gets_a_closed_window(pre_upgrade_db_url:
     engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
     try:
         # NEGATIVE CONTROL: at 0345 neither column exists, so the assertions
-        # below cannot pass without the real 0346 upgrade.
+        # below cannot pass without the real 0347 upgrade.
         assert not await _effective_columns_present(engine)
 
         await _seed_pre_upgrade(pre_upgrade_db_url)
