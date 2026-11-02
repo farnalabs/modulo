@@ -2435,3 +2435,29 @@ def test_system_map_revision_schema_rejects_duplicate_and_dangling_entries() -> 
 
     with pytest.raises(ValidationError):
         SystemMapRevisionCreate(nodes=[node], loop_configs=[loop])
+
+
+def test_diff_revision_repository_returns_none_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    """A diff the repository cannot compute is a 404, not an empty 200."""
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row()))
+    harness.stub("list_revisions", AsyncMock(return_value=[_diff_revision_row(status="draft")]))
+    harness.stub("diff_revisions", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff", json={})
+
+    assert resp.status_code == 404
+    assert "Could not compute diff" in resp.json()["detail"]
+
+
+def test_restore_revision_repository_returns_none_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    """A restore the repository cannot perform is a 404."""
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("restore_revision_as_new_draft", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/restore-as-new", json={"notes": "Restored"})
+
+    assert resp.status_code == 404

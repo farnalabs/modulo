@@ -346,7 +346,7 @@ def test_apply_one_system_map_create() -> None:
 
     assert map_id == str(_MAP_ID)
     assert len(executor.posts) == 1
-    assert executor.posts[0][0] == "/api/v1/system-maps"
+    assert executor.posts[0][0] == "/system-maps"
     assert executor.posts[0][1]["name"] == "New Map"
     assert map_ids["New Map"] == str(_MAP_ID)
 
@@ -373,8 +373,8 @@ def test_apply_one_system_map_create_with_revision() -> None:
 
     assert map_id == str(_MAP_ID)
     assert len(executor.posts) == 2
-    assert executor.posts[0][0] == "/api/v1/system-maps"
-    assert executor.posts[1][0] == f"/api/v1/system-maps/{_MAP_ID}/revisions"
+    assert executor.posts[0][0] == "/system-maps"
+    assert executor.posts[1][0] == f"/system-maps/{_MAP_ID}/revisions"
     assert "nodes" in executor.posts[1][1]
     assert "loop_configs" in executor.posts[1][1]
     assert map_ids["New Map"] == str(_MAP_ID)
@@ -401,7 +401,7 @@ def test_apply_one_system_map_update() -> None:
 
     assert map_id == str(_MAP_ID)
     assert len(executor.patches) == 1
-    assert executor.patches[0][0] == f"/api/v1/system-maps/{_MAP_ID}"
+    assert executor.patches[0][0] == f"/system-maps/{_MAP_ID}"
     assert executor.patches[0][1]["description"] == "Updated"
 
 
@@ -616,3 +616,67 @@ def test_system_map_metadata_change_is_still_detected() -> None:
 
     assert [entry["name"] for entry in report["updated"]] == ["Converge Map"]
     assert not report["unchanged"]
+
+
+def test_system_map_revision_entity_rejects_duplicate_relationships() -> None:
+    node_a = _node_entity(node_key="a")
+    node_b = _node_entity(node_key="b")
+    rel = _relationship_entity(source_node_key="a", target_node_key="b")
+    with pytest.raises(ValidationError, match="relationships must be unique"):
+        _revision_entity(nodes=[node_a, node_b], relationships=[rel, rel])
+
+
+def test_system_map_revision_entity_rejects_duplicate_loop_configs() -> None:
+    node = _loop_node_entity(node_key="loop-1")
+    loop = _loop_config_entity(node_key="loop-1")
+    with pytest.raises(ValidationError, match="loop_configs must be unique"):
+        _revision_entity(nodes=[node], loop_configs=[loop, loop])
+
+
+def test_system_map_revision_entity_rejects_loop_config_for_missing_node() -> None:
+    node = _loop_node_entity(node_key="loop-1")
+    loop = _loop_config_entity(node_key="ghost")
+    with pytest.raises(ValidationError, match="loop_configs reference missing nodes"):
+        _revision_entity(nodes=[node], loop_configs=[loop])
+
+
+def test_system_map_entity_rejects_invalid_visibility() -> None:
+    with pytest.raises(ValidationError, match="visibility must be"):
+        _system_map_entity(name="Test Map", visibility="public")
+
+
+def test_system_map_entity_team_visibility_requires_owner() -> None:
+    with pytest.raises(ValidationError, match="team visibility requires owner_team_id"):
+        _system_map_entity(name="Test Map", visibility="team")
+
+
+def test_build_desired_views_skips_already_blocked_key() -> None:
+    from modulo.cli.apply.models import EntitySet
+
+    entity = _system_map_entity(name="Test Map")
+    entity_set = EntitySet(system_maps=[entity])
+    desired: dict[str, list[tuple[str, dict[str, Any]]]] = {"system_map": []}
+    blocked: list[tuple[str, str, str]] = []
+    blocked_keys: set[tuple[str, str]] = {("system_map", "Test Map")}
+
+    desired, blocked = build_desired_views(entity_set, {"system_map": {}}, desired, blocked, blocked_keys)
+
+    assert not desired["system_map"]
+    assert not blocked
+
+
+def test_system_map_existing_map_without_revision_is_unchanged() -> None:
+    """An existing map with no declared revision plans from metadata only."""
+    from modulo.cli.apply.models import EntitySet
+    from modulo.cli.apply.plan import build_plan
+
+    entity = _system_map_entity(name="Converge Map")
+    entity_set = EntitySet(system_maps=[entity])
+
+    desired, _blocked = build_desired_views(entity_set, {"system_map": {}}, {"system_map": []}, [], set())
+
+    current = {"system_map": {"Converge Map": _map_row(name="Converge Map")}}
+    report = build_plan(desired, current)
+
+    assert [entry["name"] for entry in report["unchanged"]] == ["Converge Map"]
+    assert not report["updated"]

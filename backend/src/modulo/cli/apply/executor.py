@@ -620,7 +620,7 @@ class ApplyExecutor:
         # System Maps: fetch when declared (lazy like pipelines)
         system_maps_list: list[dict[str, Any]] = []
         if wants_system_maps:
-            system_maps_list = self._get_paginated("/api/v1/system-maps", params={"page_size": 100})
+            system_maps_list = self._get_paginated("/system-maps", params={"page_size": 100})
         ambiguous_system_map_names = _duplicate_name_counts(system_maps_list)
         system_maps = {
             item["name"]: item

@@ -47,8 +47,8 @@ def _system_map_block_reason(
 def _plan_system_map_view(
     entity: SystemMapEntity,
     current_entities: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any] | None] | str:
-    """Plan one system map's desired view; returns the block reason (str) on failure."""
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Plan one system map's desired view and declared revision (if any)."""
     view = entity.managed_view()
     return view, view.get("revision")
 
@@ -76,11 +76,7 @@ def build_desired_views(
         if block_reason is not None:
             blocked.append((KIND_SYSTEM_MAP, entity.name, block_reason))
             continue
-        planned = _plan_system_map_view(entity, current_entities)
-        if isinstance(planned, str):
-            blocked.append((KIND_SYSTEM_MAP, entity.name, planned))
-            continue
-        view, _revision = planned
+        view, _revision = _plan_system_map_view(entity, current_entities)
         desired[KIND_SYSTEM_MAP].append((entity.name, view))
     return desired, blocked
 
@@ -129,21 +125,18 @@ def _apply_one_system_map(
     so that a revision failure can clean it up.
     """
     if status == "created":
-        response = executor._post("/api/v1/system-maps", _create_payload(entity))
+        response = executor._post("/system-maps", _create_payload(entity))
         map_id = str(response["id"])
         # Add to map_ids immediately so a revision failure can clean it up
         map_ids[entity.name] = map_id
         # Create revision if declared
-        if entity.revision is not None:
-            rev_payload = _revision_payload(entity)
-            if rev_payload is not None:
-                executor._post(f"/api/v1/system-maps/{map_id}/revisions", rev_payload)
+        rev_payload = _revision_payload(entity)
+        if rev_payload is not None:
+            executor._post(f"/system-maps/{map_id}/revisions", rev_payload)
     else:
         current = current_system_maps[entity.name]
         map_id = str(current["id"])
-        patch = _patch_payload(entity)
-        if patch:
-            executor._patch(f"/api/v1/system-maps/{map_id}", patch)
+        executor._patch(f"/system-maps/{map_id}", _patch_payload(entity))
         # Revision content is create-only: the list endpoint exposes no revision
         # content to reconcile, so an update cannot decide whether a declared
         # revision differs. plan_entity emits an explicit warning when an

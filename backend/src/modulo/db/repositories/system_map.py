@@ -1541,7 +1541,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             or base_loops[key].outcome_metric != target_loops[key].outcome_metric
         )
 
-        content_json_changed = (
+        content_json_changed = bool(
             base_revision.content_json != target_revision.content_json
             or nodes_added
             or nodes_removed
