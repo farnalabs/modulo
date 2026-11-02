@@ -1571,6 +1571,65 @@ async def _node_allowed_tools_for_key(
         return None
 
 
+async def _resolve_api_key_org(prefix: str) -> uuid.UUID | None:
+    """Resolve the organisation owning an ``mk_`` key prefix (RLS-safe).
+
+    org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and the key's
+    org is unknown until the record is read — a plain lookup in an empty org
+    context would be filtered out by RLS and reject every valid key. On
+    Postgres the runtime app role is RLS-subject (a non-owner DML-granted
+    role), so the org is resolved through a SECURITY DEFINER function owned
+    by the migration role rather than SET row_security TO OFF (which only
+    bypasses RLS for owners and raises for a regular role). On generic
+    backends there is no RLS, so a plain prefix scan works.
+    """
+    from sqlalchemy import select, text
+
+    from modulo.db.models.api_key import OrgApiKey
+    from modulo.db.rls import _ensure_active_transaction
+
+    factory = _get_session_factory()
+    async with factory() as s, s.begin():
+        dialect = await _ensure_active_transaction(s)
+        if dialect == "postgresql":
+            return (
+                await s.execute(
+                    text("SELECT public.lookup_api_key_org(:prefix)"),
+                    {"prefix": prefix},
+                )
+            ).scalar_one_or_none()
+        key_record = (
+            await s.execute(
+                select(OrgApiKey).where(
+                    OrgApiKey.lookup_prefix == prefix,
+                    OrgApiKey.revoked_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        return key_record.organisation_id if key_record is not None else None
+
+
+async def _resolve_key_owner_kind(
+    session: AsyncSession,
+    key: Any,
+    live_role: str | None,
+) -> str | None:
+    """Return a user-scoped key owner's live account kind, else ``None``.
+
+    Only a user-scoped key needs the additional account-kind projection.
+    The historical role read stays the clamp's sole query for org/team/run
+    keys, preserving the existing auth path.
+    """
+    if getattr(key, "scope", None) != "user" or live_role is None:
+        return None
+    membership = await resolve_live_role_and_kind(
+        session,
+        str(key.account_id),
+        str(key.organisation_id),
+    )
+    return membership[1] if membership is not None else None
+
+
 async def _authenticate_api_key(
     request: Request,
     token: str,
@@ -1582,44 +1641,12 @@ async def _authenticate_api_key(
     should proceed to ``call_next``) or ``(False, error_response)`` on failure.
     """
     try:
-        # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and
-        # the key's org is unknown until the record is read — a plain
-        # lookup in an empty org context would be filtered out by RLS
-        # and reject every valid key. On Postgres the runtime app role
-        # is RLS-subject (a non-owner DML-granted role), so the org is
-        # resolved through a SECURITY DEFINER function owned by the
-        # migration role rather than SET row_security TO OFF (which
-        # only bypasses RLS for owners and raises for a regular role).
-        # On generic backends there is no RLS, so a plain prefix scan
-        # works. Then re-validate inside the org context before
-        # trusting the key.
-        from sqlalchemy import select, text
-
         from modulo.auth.api_key import _MK_PREFIX, _PREFIX_LEN
-        from modulo.db.models.api_key import OrgApiKey
-        from modulo.db.rls import _ensure_active_transaction
 
         prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
-        factory = _get_session_factory()
-        async with factory() as s, s.begin():
-            dialect = await _ensure_active_transaction(s)
-            if dialect == "postgresql":
-                org_id = (
-                    await s.execute(
-                        text("SELECT public.lookup_api_key_org(:prefix)"),
-                        {"prefix": prefix},
-                    )
-                ).scalar_one_or_none()
-            else:
-                key_record = (
-                    await s.execute(
-                        select(OrgApiKey).where(
-                            OrgApiKey.lookup_prefix == prefix,
-                            OrgApiKey.revoked_at.is_(None),
-                        )
-                    )
-                ).scalar_one_or_none()
-                org_id = key_record.organisation_id if key_record is not None else None
+        # Resolve the org first, then re-validate inside the org's RLS context
+        # before trusting the key.
+        org_id = await _resolve_api_key_org(prefix)
         if org_id is None:
             raise ApiKeyInvalidError
 
@@ -1648,17 +1675,7 @@ async def _authenticate_api_key(
                 str(key.account_id),
                 str(key.organisation_id),
             )
-            owner_kind: str | None = None
-            # FAR-2281: only a user-scoped key needs the additional account-kind
-            # projection. Keep the historical role read as the clamp's sole
-            # query for org/team/run keys, preserving the existing auth path.
-            if getattr(key, "scope", None) == "user" and live_role is not None:
-                membership = await resolve_live_role_and_kind(
-                    s,
-                    str(key.account_id),
-                    str(key.organisation_id),
-                )
-                owner_kind = membership[1] if membership is not None else None
+            owner_kind = await _resolve_key_owner_kind(s, key, live_role)
             clamped = _clamp_role(key.role, live_role)
             if not clamped:
                 _record_api_key_role_cap(
@@ -7354,18 +7371,19 @@ async def _review_hitl_impl(
         if run is None:
             return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
 
-        if action in ("claim", "approve", "reject", "deliver_manual"):
-            # FAR-610: deliver_manual is a decision exactly like approve — a
-            # human_only gate must not be decided by an API-key/MCP client.
-            # FAR-609: claim and reject are human_only too — an unlinked
-            # non-browser principal can neither claim, decide NOR reject a
-            # human_only gate. reject also requires a claim_token, and claim is
-            # denied on default-human_only gates, so only a principal already
-            # holding a claim can reject; agent-only runs on default gates
-            # require browser-human intervention (intended policy).
-            human_only_err = await _check_human_only_gate(s, org_id, run, review_id, action)
-            if human_only_err:
-                return human_only_err
+        # FAR-610: deliver_manual is a decision exactly like approve — a
+        # human_only gate must not be decided by an API-key/MCP client.
+        # FAR-609: claim and reject are human_only too — an unlinked non-browser
+        # principal can neither claim, decide NOR reject a human_only gate.
+        # reject also requires a claim_token, and claim is denied on
+        # default-human_only gates, so only a principal already holding a claim
+        # can reject; agent-only runs on default gates require browser-human
+        # intervention (intended policy). ``_parse_hitl_action`` has already
+        # validated ``action`` against this exact set, so every reachable value
+        # is gated here.
+        human_only_err = await _check_human_only_gate(s, org_id, run, review_id, action)
+        if human_only_err:
+            return human_only_err
 
         try:
             return await _dispatch_hitl_action(

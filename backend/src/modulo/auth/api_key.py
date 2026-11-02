@@ -685,6 +685,27 @@ async def list_api_keys(
     return [_serialize_key_with_account(k, kind, display_name, email) for k, kind, display_name, email in rows]
 
 
+def _updated_key_role_violation(
+    key: OrgApiKey,
+    role: str | None,
+    team_id: uuid.UUID | object | None,
+) -> str | None:
+    """Return the role refusal for a key's POST-update scope/role, else ``None``.
+
+    The effective values are the post-update state, so setting a team on an
+    existing admin-role user key is refused as well as promoting a team-scoped
+    key to admin. The key's own immutable scope is read, never the caller's.
+    """
+    key_scope = getattr(key, "scope", None)
+    effective_role = role if role is not None else key.role
+    effective_team_id = key.team_id if team_id is _UNSET else team_id
+    return api_key_role_violation(
+        effective_role,
+        key_scope if isinstance(key_scope, str) else KEY_SCOPE_ORG,
+        cast(uuid.UUID | None, effective_team_id),
+    )
+
+
 async def update_api_key(
     session: AsyncSession,
     key_id: uuid.UUID,
@@ -729,19 +750,9 @@ async def update_api_key(
         await _enforce_service_key_ttl(session, key.account_id, expires_at)
     if role is not None or team_id is not _UNSET:
         # FAR-2281: a role change OR a team-scope change is held to the same
-        # scope- and team-aware ceiling as mint, read from the key's OWN
-        # immutable scope (never the caller's). The effective values are the
-        # post-update state, so setting a team on an existing admin-role user
-        # key is refused as well as promoting a team-scoped key to admin.
-        # Checked before any mutation so a refusal leaves the row untouched.
-        key_scope = getattr(key, "scope", None)
-        effective_role = role if role is not None else key.role
-        effective_team_id = key.team_id if team_id is _UNSET else team_id
-        role_violation = api_key_role_violation(
-            effective_role,
-            key_scope if isinstance(key_scope, str) else KEY_SCOPE_ORG,
-            cast(uuid.UUID | None, effective_team_id),
-        )
+        # scope- and team-aware ceiling as mint. Checked before any mutation
+        # so a refusal leaves the row untouched.
+        role_violation = _updated_key_role_violation(key, role, team_id)
         if role_violation is not None:
             raise ApiKeyScopeError(role_violation)
     if name is not None:

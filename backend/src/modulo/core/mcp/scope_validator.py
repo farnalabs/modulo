@@ -433,6 +433,26 @@ _LEG_GRANTS = "grants"
 _LEG_SYSTEM_ADMIN = "system_admin"
 
 
+def _caller_scope_denied(
+    tool: str,
+    action: str | None,
+    permission_key: str,
+    key_scope: str | None,
+    auth_type: str | None,
+) -> bool:
+    """Leg 3: is the call denied by the credential's caller-scope policy?
+
+    Action-specific entries are explicit policy keys too; they are used when
+    present rather than silently collapsing every action back to the base
+    tool's classification.
+    """
+    scope_key = f"{tool}:{action}" if action is not None else tool
+    classification = classify_caller_scope(scope_key, permission_key)
+    if classification == _CALLER_SCOPE_CALLER:
+        return key_scope != "user"
+    return classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key"
+
+
 def _resolve_tool_access_detail(
     *,
     tool: str,
@@ -465,14 +485,8 @@ def _resolve_tool_access_detail(
     if permission_key is None:
         return False, "", _LEG_UNMAPPED
 
-    # Leg 3: caller-scope (kill-switch-ineligible). Action-specific entries
-    # are explicit policy keys too; use them when present rather than silently
-    # collapsing every action back to the base tool's classification.
-    scope_key = f"{tool}:{action}" if action is not None else tool
-    classification = classify_caller_scope(scope_key, permission_key)
-    if classification == _CALLER_SCOPE_CALLER and key_scope != "user":
-        return False, permission_key, _LEG_CALLER_SCOPE
-    if classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key":
+    # Leg 3: caller-scope (kill-switch-ineligible).
+    if _caller_scope_denied(tool, action, permission_key, key_scope, auth_type):
         return False, permission_key, _LEG_CALLER_SCOPE
 
     # Leg 4: role hierarchy (kill-switch-eligible). Fail-closed on a

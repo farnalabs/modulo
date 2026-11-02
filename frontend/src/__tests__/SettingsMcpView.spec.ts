@@ -87,6 +87,7 @@ vi.mock('../lib/jwt', () => ({
 
 import { api } from '../lib/api/client'
 import { decodeJwtPayload } from '../lib/jwt'
+import { usePlanStore } from '../stores/planStore'
 import SettingsMcpView from '../views/SettingsMcpView.vue'
 import Badge from 'primevue/badge'
 import McpOauthClientsCard from '../components/settings/McpOauthClientsCard.vue'
@@ -2157,6 +2158,55 @@ describe('SettingsMcpView', () => {
     const options = (wrapper.vm as any).createKeyScopeOptions
     expect(options).toHaveLength(2)
     expect(options[1].value).toBe('user')
+  })
+
+  it('offers the admin role only for a user-scoped key', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] }, true)
+    const vm = wrapper.vm as any
+    expect(vm.createKeyRoleOptions.map((option: { value: string }) => option.value)).toEqual([
+      'operator',
+      'runner',
+    ])
+    vm.createKeyScope = 'user'
+    await nextTick()
+    expect(vm.createKeyRoleOptions.map((option: { value: string }) => option.value)).toEqual([
+      'operator',
+      'runner',
+      'admin',
+    ])
+  })
+
+  it('demotes an admin role when the scope switches back to the organisation', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] }, true)
+    const vm = wrapper.vm as any
+    vm.createKeyScope = 'user'
+    await nextTick()
+    vm.createKeyRole = 'admin'
+    await nextTick()
+    vm.createKeyScope = 'org'
+    await nextTick()
+    expect(vm.createKeyRole).toBe('operator')
+  })
+
+  it('falls back to the organisation scope when user-scoped keys are disabled', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] }, true)
+    const vm = wrapper.vm as any
+    vm.createKeyScope = 'user'
+    await nextTick()
+    usePlanStore().features['user_scoped_mcp_keys'] = false
+    await nextTick()
+    expect(vm.createKeyScope).toBe('org')
+  })
+
+  it('sends an explicit user scope and shows the personal-key hint', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] }, true)
+    const vm = wrapper.vm as any
+    vm.createKeyScope = 'user'
+    await nextTick()
+    expect(wrapper.text()).toContain('A user-scoped key acts as your account')
+    await vm.createKey()
+    await flushPromises()
+    expect(postMock.mock.calls[0][1].body).toEqual({ name: 'New Key', role: 'operator', scope: 'user' })
   })
 
   it('omits grants from the create body by default (role bundle)', async () => {
