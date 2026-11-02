@@ -3556,10 +3556,15 @@ describe('PipelineEditorView - system-admin snapshot lock (FAR-1287)', () => {
     const pendingStatus = new Promise<{ data?: unknown; error?: unknown }>((resolve) => {
       resolveGet = resolve
     })
-    // The card's probe is the ONLY api.GET issued at mount in this file (the
-    // page loaders sit behind the mocked useDataFetch, and AgentRunnerBindings
-    // only mounts inside the node panel), so one deferred impl intercepts it.
-    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementationOnce(() => pendingStatus)
+    // The card's probe is deferred by URL: the editor also issues the owner-team
+    // list GET (FAR-2279) at mount, so a blind mockImplementationOnce would hit
+    // that one instead. Every other URL falls through to the default impl.
+    const defaultGet = (api.GET as ReturnType<typeof vi.fn>).getMockImplementation() as ((...a: unknown[]) => unknown) | undefined
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string, ...rest: unknown[]) =>
+      url === '/api/v1/admin/pipelines/{pipeline_id}/snapshot-lock'
+        ? pendingStatus
+        : defaultGet?.(url, ...rest),
+    )
 
     const wrapper = await mountEditorLoaded()
 
