@@ -239,9 +239,7 @@ async def _with_org_txn[T](
     ProgrammingError (missing table/migration) is logged and re-raised.
     """
     try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            return await fn(session)
+        return await _scoped_execute(session, org_id, fn)
     except ProgrammingError:
         logger.exception(_LOG_COMPONENT)
         raise
@@ -968,15 +966,15 @@ async def notify_importers_of_update(
     version in the group, and sets their ``update_available_version_id`` to
     the newly published version.
     """
+
+    async def _notify(s: AsyncSession) -> None:
+        prim = await get_library_primitive(s, primitive_id)
+        if prim is None:
+            return
+        await _mark_update_recipients(s, prim)
+
     try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            prim = await get_library_primitive(session, primitive_id)
-
-            if prim is None:
-                return
-
-            await _mark_update_recipients(session, prim)
+        await _scoped_execute(session, org_id, _notify)
     except ProgrammingError:
         logger.warning("notify_importers_of_update failed (DB not migrated): %s", primitive_id)
     except asyncio.CancelledError:
@@ -1007,29 +1005,34 @@ async def _load_org_page(
     """Fetch the org page and published DB community rows, degrading gracefully."""
     org_page: PageResult[LibraryPrimitive] = PageResult(items=[], total=0, page=page, page_size=page_size)
     db_community: list[LibraryPrimitive] = []
-    try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            org_page = await list_library_primitives(
-                session,
-                org_id=org_id,
-                page=page,
-                page_size=page_size,
+
+    async def _query(s: AsyncSession) -> None:
+        nonlocal org_page, db_community
+        org_page = await list_library_primitives(
+            s,
+            org_id=org_id,
+            page=page,
+            page_size=page_size,
+            primitive_type=primitive_type,
+            primitive_types=primitive_types,
+            search=search,
+            source=source,
+            cursor=cursor,
+            excluded_tiers=excluded_tiers,
+        )
+        if include_community and (source is None or source == "community"):
+            db_community = await _fetch_published_community_from_db(
+                s,
+                org_id,
                 primitive_type=primitive_type,
                 primitive_types=primitive_types,
                 search=search,
-                source=source,
-                cursor=cursor,
-                excluded_tiers=excluded_tiers,
             )
-            if include_community and (source is None or source == "community"):
-                db_community = await _fetch_published_community_from_db(
-                    session,
-                    org_id,
-                    primitive_type=primitive_type,
-                    primitive_types=primitive_types,
-                    search=search,
-                )
+
+    try:
+        # Reuse the caller's transaction (routes open one before calling in);
+        # nesting session.begin() raised InvalidRequestError (FAR-2286).
+        await _scoped_execute(session, org_id, _query)
     except ProgrammingError:
         logger.warning("list_primitives — DB not migrated for org %s", org_id)
     except asyncio.CancelledError:
