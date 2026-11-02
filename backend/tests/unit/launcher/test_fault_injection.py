@@ -65,7 +65,6 @@ def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch,
         "modulo.launcher.secrets_file",
         "modulo.launcher.initdb",
-        "modulo.launcher.entry",
     )
 
 
