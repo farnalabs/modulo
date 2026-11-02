@@ -1122,77 +1122,6 @@ async def get_system_map_overview_endpoint(
                 window_end=window_end,
             )
 
-            node_health: list[SystemMapOverviewNodeHealth] = []
-            for node in nodes:
-                item = metrics.get(node.pipeline_id, {}) if node.pipeline_id else {}
-                run_count = item.get("run_count", 0)
-                failure_rate = item.get("failure_rate")
-                # A run count with no countable (non-benign) run leaves the
-                # failure rate undefined — that is unknown, never "healthy".
-                if run_count == 0 or failure_rate is None:
-                    health = "unknown"
-                elif failure_rate >= _UNHEALTHY_FAILURE_RATE_THRESHOLD:
-                    health = "unhealthy"
-                elif failure_rate > 0:
-                    health = "degraded"
-                else:
-                    health = "healthy"
-                node_health.append(
-                    SystemMapOverviewNodeHealth(
-                        node_key=node.node_key,
-                        node_type=node.node_type,
-                        display_name=node.display_name,
-                        health=health,
-                        queue_depth=item.get("queue_depth"),
-                        throughput_per_min=item.get("throughput_per_min"),
-                        capacity_pressure=item.get("capacity_pressure"),
-                        failure_rate=failure_rate,
-                        telemetry_coverage=item.get("telemetry_coverage"),
-                        last_run_id=item.get("last_run_id"),
-                        last_run_status=item.get("last_run_status"),
-                        last_run_completed_at=item.get("last_run_completed_at"),
-                    )
-                )
-
-            # Build loop config overview
-            loop_config_overview: list[SystemMapOverviewLoopConfig] = []
-            for lc in loop_configs:
-                loop_item = loop_metrics.get(lc.id, {})
-                loop_overview = SystemMapOverviewLoopConfig(
-                    node_key=lc.node_key,
-                    target_signal=lc.target_signal,
-                    observation_window_seconds=lc.observation_window_seconds,
-                    action_pipeline_id=lc.action_pipeline_id,
-                    budget_limit_usd=lc.budget_limit_usd,
-                    cooldown_seconds=lc.cooldown_seconds,
-                    outcome_metric=lc.outcome_metric,
-                    last_admission_at=loop_item.get("last_admission_at"),
-                    last_admission_status=loop_item.get("last_admission_status"),
-                    cooldown_active=loop_item.get("cooldown_active"),
-                    cooldown_until=loop_item.get("cooldown_until"),
-                    budget_used_usd=loop_item.get("budget_used_usd"),
-                    budget_period_start=loop_item.get("budget_period_start"),
-                )
-                loop_config_overview.append(loop_overview)
-
-            # Detect bottlenecks (simplified heuristic)
-            bottlenecks: list[SystemMapOverviewBottleneck] = []
-            for node in nodes:
-                if node.node_type == "improvement_loop":
-                    # Check if loop config exists
-                    matching_lc = next((lc for lc in loop_configs if lc.node_key == node.node_key), None)
-                    if not matching_lc:
-                        bottlenecks.append(
-                            SystemMapOverviewBottleneck(
-                                node_key=node.node_key,
-                                node_type=node.node_type,
-                                display_name=node.display_name,
-                                kind="unobserved",
-                                detail=(f"Improvement loop node '{node.node_key}' missing loop configuration"),
-                                severity="high",
-                            )
-                        )
-
             return SystemMapOverviewResponse(
                 system_map_id=map_id,
                 revision_id=published_revision.id,
@@ -1201,9 +1130,9 @@ async def get_system_map_overview_endpoint(
                 window_days=OVERVIEW_WINDOW_DAYS,
                 window_start=window_start,
                 window_end=window_end,
-                nodes=node_health,
-                loop_configs=loop_config_overview,
-                bottlenecks=bottlenecks,
+                nodes=_build_overview_node_health(nodes, metrics),
+                loop_configs=_build_overview_loop_configs(loop_configs, loop_metrics),
+                bottlenecks=_detect_overview_bottlenecks(nodes, loop_configs),
             )
     except HTTPException:
         raise
@@ -1226,6 +1155,101 @@ async def get_system_map_overview_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
+
+
+def _overview_node_health(run_count: int, failure_rate: float | None) -> str:
+    """Classify a node's health from observed run facts.
+
+    A run count with no countable (non-benign) run leaves the failure rate
+    undefined — that is unknown, never "healthy".
+    """
+    if run_count == 0 or failure_rate is None:
+        return "unknown"
+    if failure_rate >= _UNHEALTHY_FAILURE_RATE_THRESHOLD:
+        return "unhealthy"
+    if failure_rate > 0:
+        return "degraded"
+    return "healthy"
+
+
+def _build_overview_node_health(
+    nodes: list[Any],
+    metrics: dict[uuid.UUID, dict[str, Any]],
+) -> list[SystemMapOverviewNodeHealth]:
+    """Project each graph node onto its observed health row."""
+    node_health: list[SystemMapOverviewNodeHealth] = []
+    for node in nodes:
+        item = metrics.get(node.pipeline_id, {}) if node.pipeline_id else {}
+        failure_rate = item.get("failure_rate")
+        node_health.append(
+            SystemMapOverviewNodeHealth(
+                node_key=node.node_key,
+                node_type=node.node_type,
+                display_name=node.display_name,
+                health=_overview_node_health(item.get("run_count", 0), failure_rate),
+                queue_depth=item.get("queue_depth"),
+                throughput_per_min=item.get("throughput_per_min"),
+                capacity_pressure=item.get("capacity_pressure"),
+                failure_rate=failure_rate,
+                telemetry_coverage=item.get("telemetry_coverage"),
+                last_run_id=item.get("last_run_id"),
+                last_run_status=item.get("last_run_status"),
+                last_run_completed_at=item.get("last_run_completed_at"),
+            )
+        )
+    return node_health
+
+
+def _build_overview_loop_configs(
+    loop_configs: list[Any],
+    loop_metrics: dict[uuid.UUID, dict[str, Any]],
+) -> list[SystemMapOverviewLoopConfig]:
+    """Project each loop config onto its observed admission/budget row."""
+    loop_config_overview: list[SystemMapOverviewLoopConfig] = []
+    for lc in loop_configs:
+        loop_item = loop_metrics.get(lc.id, {})
+        loop_config_overview.append(
+            SystemMapOverviewLoopConfig(
+                node_key=lc.node_key,
+                target_signal=lc.target_signal,
+                observation_window_seconds=lc.observation_window_seconds,
+                action_pipeline_id=lc.action_pipeline_id,
+                budget_limit_usd=lc.budget_limit_usd,
+                cooldown_seconds=lc.cooldown_seconds,
+                outcome_metric=lc.outcome_metric,
+                last_admission_at=loop_item.get("last_admission_at"),
+                last_admission_status=loop_item.get("last_admission_status"),
+                cooldown_active=loop_item.get("cooldown_active"),
+                cooldown_until=loop_item.get("cooldown_until"),
+                budget_used_usd=loop_item.get("budget_used_usd"),
+                budget_period_start=loop_item.get("budget_period_start"),
+            )
+        )
+    return loop_config_overview
+
+
+def _detect_overview_bottlenecks(
+    nodes: list[Any],
+    loop_configs: list[Any],
+) -> list[SystemMapOverviewBottleneck]:
+    """Flag improvement-loop nodes that have no loop configuration (simplified heuristic)."""
+    bottlenecks: list[SystemMapOverviewBottleneck] = []
+    for node in nodes:
+        if node.node_type != "improvement_loop":
+            continue
+        if any(lc.node_key == node.node_key for lc in loop_configs):
+            continue
+        bottlenecks.append(
+            SystemMapOverviewBottleneck(
+                node_key=node.node_key,
+                node_type=node.node_type,
+                display_name=node.display_name,
+                kind="unobserved",
+                detail=f"Improvement loop node '{node.node_key}' missing loop configuration",
+                severity="high",
+            )
+        )
+    return bottlenecks
 
 
 async def _validate_attribution_binding_node(

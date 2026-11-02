@@ -1667,6 +1667,35 @@ class TestOverviewLoopMetrics:
         assert item["cooldown_active"] is True
         assert _aware(item["cooldown_until"]) == later
 
+    async def test_cooldown_ignores_an_older_row_with_a_sooner_deadline(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        later = _WINDOW_END + timedelta(hours=3)
+        earlier = _WINDOW_END + timedelta(hours=1)
+        # The most recently reserved row cools down last; the older row's
+        # earlier deadline must not overwrite it.
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=uuid.uuid4(),
+            status="active",
+            reserved_at=_WINDOW_START + timedelta(hours=2),
+            cooldown_until=later,
+        )
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=uuid.uuid4(),
+            status="active",
+            reserved_at=_WINDOW_START + timedelta(hours=1),
+            cooldown_until=earlier,
+        )
+        await session.flush()
+
+        item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
+
+        assert item["cooldown_active"] is True
+        assert _aware(item["cooldown_until"]) == later
+
     async def test_cooldown_is_current_state_outside_the_budget_window(self, overview_session: AsyncSession) -> None:
         session = overview_session
         cooldown_until = _WINDOW_END + timedelta(hours=3)

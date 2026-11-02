@@ -70,6 +70,60 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
+def _collect_loop_evidence(
+    admission_rows: Sequence[Any],
+    reservation_rows: Sequence[Any],
+    window_end: datetime,
+) -> dict[uuid.UUID, dict[str, Any]]:
+    """Assemble per-loop admission and cooldown evidence for the overview."""
+    observed: dict[uuid.UUID, dict[str, Any]] = {}
+    for row in admission_rows:
+        item = observed.setdefault(row.loop_config_id, {})
+        item.setdefault("last_admission_at", row.created_at)
+        item.setdefault("last_admission_status", row.status)
+    # Reservation evidence exists for these loops, so cooldown is a known
+    # False until an active, unexpired reservation says otherwise, and the
+    # budget starts unobserved (never a silent zero) until a reservation in
+    # the window is observed to hold it.
+    for row in reservation_rows:
+        item = observed.setdefault(row.loop_config_id, {})
+        item["cooldown_active"] = False
+        item.setdefault("budget_used_usd", None)
+    _apply_active_cooldown(observed, reservation_rows, window_end)
+    return observed
+
+
+def _apply_active_cooldown(
+    observed: dict[uuid.UUID, dict[str, Any]],
+    reservation_rows: Sequence[Any],
+    window_end: datetime,
+) -> None:
+    """Report the latest cooldown deadline across still-active reservations."""
+    for row in reservation_rows:
+        if row.status != "active" or _as_utc(row.cooldown_until) <= window_end:
+            continue
+        item = observed[row.loop_config_id]
+        item["cooldown_active"] = True
+        current_until = item.get("cooldown_until")
+        if current_until is None or _as_utc(row.cooldown_until) > _as_utc(current_until):
+            item["cooldown_until"] = row.cooldown_until
+
+
+def _apply_budget_observations(
+    observed: dict[uuid.UUID, dict[str, Any]],
+    in_window: Sequence[Any],
+    consuming: Sequence[Any],
+    cost_by_run: dict[uuid.UUID, Decimal | None],
+) -> None:
+    """Sum the observed cost of budget-consuming reservations in the window."""
+    for loop_id in {row.loop_config_id for row in in_window}:
+        costs = [cost_by_run.get(row.run_id) for row in consuming if row.loop_config_id == loop_id]
+        if any(cost is None for cost in costs):
+            observed[loop_id]["budget_used_usd"] = None
+        else:
+            observed[loop_id]["budget_used_usd"] = sum((cost for cost in costs if cost is not None), Decimal(0))
+
+
 class SystemMapRepository(BaseRepository):  # vulture: ignore
     """Repository for System Maps entities."""
 
@@ -1568,7 +1622,42 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         """
         if not loop_config_ids:
             return {}
-        admission_stmt = (
+        admission_rows = await self._load_loop_admission_rows(
+            session,
+            organisation_id=organisation_id,
+            loop_config_ids=loop_config_ids,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        # Cooldown is current state, so the reservation evidence is deliberately
+        # NOT windowed; the budget sum below applies the window itself.
+        reservation_rows = await self._load_loop_reservation_rows(
+            session,
+            organisation_id=organisation_id,
+            loop_config_ids=loop_config_ids,
+        )
+        in_window = [row for row in reservation_rows if window_start <= _as_utc(row.reserved_at) < window_end]
+        consuming = [row for row in in_window if row.status in _BUDGET_CONSUMING_RESERVATION_STATUSES]
+        cost_by_run = await self._load_run_costs(
+            session,
+            organisation_id=organisation_id,
+            run_ids={row.run_id for row in consuming},
+        )
+        observed = _collect_loop_evidence(admission_rows, reservation_rows, window_end)
+        _apply_budget_observations(observed, in_window, consuming, cost_by_run)
+        return observed
+
+    async def _load_loop_admission_rows(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        loop_config_ids: set[uuid.UUID],
+        window_start: datetime,
+        window_end: datetime,
+    ) -> Sequence[Any]:
+        """Return the loop admission attempts inside the observation window."""
+        statement = (
             select(
                 SystemMapLoopAdmissionAttempt.loop_config_id,
                 SystemMapLoopAdmissionAttempt.created_at,
@@ -1586,10 +1675,17 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
                 SystemMapLoopAdmissionAttempt.id.desc(),
             )
         )
-        admission_rows = (await session.execute(admission_stmt)).all()
-        # Cooldown is current state, so the reservation evidence is deliberately
-        # NOT windowed; the budget sum below applies the window itself.
-        reservation_stmt = (
+        return (await session.execute(statement)).all()
+
+    async def _load_loop_reservation_rows(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        loop_config_ids: set[uuid.UUID],
+    ) -> Sequence[Any]:
+        """Return every non-deleted loop reservation (cooldown is current state)."""
+        statement = (
             select(
                 SystemMapLoopReservation.loop_config_id,
                 SystemMapLoopReservation.reserved_at,
@@ -1607,52 +1703,30 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
                 SystemMapLoopReservation.id.desc(),
             )
         )
-        reservation_rows: Sequence[Any] = (await session.execute(reservation_stmt)).all()
-        in_window = [row for row in reservation_rows if window_start <= _as_utc(row.reserved_at) < window_end]
-        consuming = [row for row in in_window if row.status in _BUDGET_CONSUMING_RESERVATION_STATUSES]
-        run_ids = {row.run_id for row in consuming}
-        cost_by_run: dict[uuid.UUID, Decimal | None] = {}
-        if run_ids:
-            cost_stmt = (
-                select(RunDailyFact.run_id, func.sum(RunDailyFact.total_cost_usd))
-                .where(
-                    RunDailyFact.organisation_id == organisation_id,
-                    RunDailyFact.run_id.in_(run_ids),
-                )
-                .group_by(RunDailyFact.run_id)
+        return (await session.execute(statement)).all()
+
+    async def _load_run_costs(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        run_ids: set[uuid.UUID],
+    ) -> dict[uuid.UUID, Decimal | None]:
+        """Return observed cost per run; a run with no cost fact maps to ``None``."""
+        if not run_ids:
+            return {}
+        statement = (
+            select(RunDailyFact.run_id, func.sum(RunDailyFact.total_cost_usd))
+            .where(
+                RunDailyFact.organisation_id == organisation_id,
+                RunDailyFact.run_id.in_(run_ids),
             )
-            cost_by_run = {
-                row[0]: (None if row[1] is None else Decimal(str(row[1])))
-                for row in (await session.execute(cost_stmt)).all()
-            }
-        observed: dict[uuid.UUID, dict[str, Any]] = {}
-        for row in admission_rows:
-            item = observed.setdefault(row.loop_config_id, {})
-            item.setdefault("last_admission_at", row.created_at)
-            item.setdefault("last_admission_status", row.status)
-        # Reservation evidence exists for these loops, so cooldown is a known
-        # False until an active, unexpired reservation says otherwise, and the
-        # budget starts unobserved (never a silent zero) until a reservation in
-        # the window is observed to hold it.
-        for row in reservation_rows:
-            item = observed.setdefault(row.loop_config_id, {})
-            item["cooldown_active"] = False
-            item.setdefault("budget_used_usd", None)
-        for row in reservation_rows:
-            if row.status != "active" or _as_utc(row.cooldown_until) <= window_end:
-                continue
-            item = observed[row.loop_config_id]
-            item["cooldown_active"] = True
-            current_until = item.get("cooldown_until")
-            if current_until is None or _as_utc(row.cooldown_until) > _as_utc(current_until):
-                item["cooldown_until"] = row.cooldown_until
-        for loop_id in {row.loop_config_id for row in in_window}:
-            costs = [cost_by_run.get(row.run_id) for row in consuming if row.loop_config_id == loop_id]
-            if any(cost is None for cost in costs):
-                observed[loop_id]["budget_used_usd"] = None
-            else:
-                observed[loop_id]["budget_used_usd"] = sum((cost for cost in costs if cost is not None), Decimal(0))
-        return observed
+            .group_by(RunDailyFact.run_id)
+        )
+        return {
+            row[0]: (None if row[1] is None else Decimal(str(row[1])))
+            for row in (await session.execute(statement)).all()
+        }
 
     async def get_full_revision_graph(
         self,
