@@ -187,6 +187,26 @@ describe('PipelineEditorView - progressive autonomy panel popover', () => {
     wrapper.unmount()
   })
 
+  it('traps Shift+Tab inside the panel so focus cannot escape behind it', async () => {
+    const wrapper = await mountEditor()
+    // Attach the rendered tree to the document: `HTMLElement.focus()` on a
+    // detached node is a no-op in jsdom, so the focus move the trap performs
+    // is only observable when the tree is in the document.
+    document.body.append(wrapper.element)
+    await wrapper.find(TOGGLE).trigger('click')
+    await nextTick()
+    const dialog = wrapper.find(DIALOG).element as HTMLElement
+
+    const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, cancelable: true })
+    document.dispatchEvent(event)
+    await nextTick()
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    expect(document.activeElement).not.toBe(dialog)
+    wrapper.unmount()
+  })
+
   it('ignores an Escape key while the panel is already closed', async () => {
     const wrapper = await mountEditor()
     const vm = wrapper.vm as unknown as {
