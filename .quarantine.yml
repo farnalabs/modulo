@@ -14,6 +14,18 @@
 #   owner: "GitHub username or team" (optional)
 
 quarantine:
+  # Full-suite-only GC attribution: an unrelated earlier unit test leaks a
+  # never-awaited AsyncMock coroutine. CPython's generational GC collects it
+  # while whichever test happens to be running, so pytest's unraisable-warning
+  # gate attributes the failure there (this heavy AST-parsing test allocates
+  # enough to trigger the sweep). The victim passes in isolation and under a
+  # forced gc.collect(); quarantine is a non-strict xfail while the leaking
+  # test is located and fixed.
+  - test_id: "tests/unit/test_mcp_structural_coverage.py::test_declared_system_admin_tools_are_gated_under_their_own_name"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (PR #2695 CI, 2026-11-02)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
+
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
   #   reason: "Flaky due to GitHub API rate limit window — fails ~15% of CI runs"
