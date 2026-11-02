@@ -117,17 +117,14 @@ class BootError(RuntimeError):
 
 
 def default_data_dir() -> Path:
-    """Per-OS data dir root (ADR 031 Decision 6; Linux and macOS)."""
-    if sys.platform == "win32":
-        # Deferred P3: %PROGRAMDATA%\Modulo with icacls hardening.
-        raise BootError("The native launcher data dir is not supported on Windows yet (TODO(P3))")
-    xdg = os.environ.get("XDG_DATA_HOME")
-    if sys.platform == "darwin":
-        if xdg:
-            return Path(xdg).expanduser() / "modulo" / "data"
-        return Path.home() / "Library" / "Application Support" / "Modulo" / "data"
-    root = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "share"
-    return root / "modulo" / "data"
+    """Return the platform-native launcher data directory."""
+    from modulo.launcher.platform import LauncherPlatformError
+    from modulo.launcher.platform import default_data_dir as resolve_platform_data_dir
+
+    try:
+        return resolve_platform_data_dir()
+    except LauncherPlatformError as exc:
+        raise BootError(str(exc)) from exc
 
 
 def resolve_bin_dir(bin_dir: Path | None = None) -> Path:
