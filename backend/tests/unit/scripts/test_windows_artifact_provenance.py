@@ -3,12 +3,37 @@
 import hashlib
 import json
 import re
+import shutil
 import subprocess
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
 
 import pytest
+
+
+def resolve_powershell() -> str | None:
+    """Return the path of a PowerShell interpreter this host can run, else ``None``.
+
+    ``pwsh`` is PowerShell 7 and is what the Linux CI runner ships; ``powershell``
+    is Windows PowerShell 5.1 and is the only one a stock Windows host has. Both
+    can dot-source ``build-launcher.ps1``, so either is a usable interpreter -
+    hardcoding one name breaks every host that does not have that particular
+    binary.
+    """
+    for name in ("pwsh", "powershell"):
+        resolved = shutil.which(name)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+POWERSHELL = resolve_powershell()
+requires_powershell = pytest.mark.skipif(
+    POWERSHELL is None,
+    reason="no PowerShell interpreter (pwsh or powershell) on PATH; build-launcher.ps1 cannot be exercised",
+)
 
 
 def parse_pins_file(path: Path) -> dict[str, str]:
@@ -123,7 +148,10 @@ def test_offline_archive_layout_fixture(tmp_path: Path, windows_pins: dict[str, 
         assert f"{windows_pins['PBS_ARCHIVE_ROOT']}/{windows_pins['PBS_PYTHON_EXE']}" in archive.getnames()
 
 
+@requires_powershell
 def test_offline_staged_payload_contract(tmp_path: Path, repo_root: Path) -> None:
+    """The staging function produces the payload layout the launcher expects."""
+    assert POWERSHELL is not None  # guaranteed by requires_powershell
     script = repo_root / "scripts" / "windows" / "build-launcher.ps1"
     fixture = tmp_path / "fixture"
     python_root = fixture / "python"
@@ -140,12 +168,11 @@ def test_offline_staged_payload_contract(tmp_path: Path, repo_root: Path) -> Non
     (frontend_dist / "index.html").write_text("ok", encoding="utf-8")
     launcher.write_bytes(b"launcher")
     stage = tmp_path / "stage"
-    command = [
-        "powershell.exe",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
+    command = [POWERSHELL, "-NoProfile", "-NonInteractive"]
+    if sys.platform == "win32":
+        # Execution policy is a Windows-only concept; pwsh on POSIX has none to bypass.
+        command += ["-ExecutionPolicy", "Bypass"]
+    command += [
         "-Command",
         (
             f". '{script}'; Invoke-WindowsBundleStaging -StagePath '{stage}' "
@@ -154,8 +181,8 @@ def test_offline_staged_payload_contract(tmp_path: Path, repo_root: Path) -> Non
             f"-LauncherPath '{launcher}'"
         ),
     ]
-    result = subprocess.run(  # noqa: S603 - powershell.exe runs a fixed test script with isolated temp paths
-        command, capture_output=True, text=True, check=False, timeout=30
+    result = subprocess.run(  # noqa: S603 - a resolved PowerShell runs a fixed test script with isolated temp paths
+        command, capture_output=True, text=True, check=False, timeout=60
     )
     assert result.returncode == 0, result.stderr
     expected_files = [
