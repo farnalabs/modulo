@@ -7298,6 +7298,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Diff System Map Revision Endpoint
+         * @description Diff a revision against another revision or the current draft.
+         */
+        post: operations["diff_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__diff_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/revisions/{rev_id}/restore-as-new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore System Map Revision Endpoint
+         * @description Create a new draft revision from a published/archived revision.
+         */
+        post: operations["restore_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__restore_as_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system-maps/{map_id}/overview": {
         parameters: {
             query?: never;
@@ -22721,6 +22761,60 @@ export interface components {
             /** Loop Configs */
             loop_configs: components["schemas"]["SystemMapLoopConfigResponse"][];
         };
+        /**
+         * SystemMapRevisionDiffRequest
+         * @description Request to diff a revision against another revision or the current draft.
+         */
+        SystemMapRevisionDiffRequest: {
+            /**
+             * Against Revision Id
+             * @description Revision to diff against. If omitted, diffs against the current draft revision (if any).
+             */
+            against_revision_id?: string | null;
+        };
+        /**
+         * SystemMapRevisionDiffResponse
+         * @description Diff result between two revisions.
+         */
+        SystemMapRevisionDiffResponse: {
+            /**
+             * Base Revision Id
+             * Format: uuid
+             */
+            base_revision_id: string;
+            /** Base Revision Number */
+            base_revision_number: number;
+            /**
+             * Target Revision Id
+             * Format: uuid
+             */
+            target_revision_id: string;
+            /** Target Revision Number */
+            target_revision_number: number;
+            /** Nodes Added */
+            nodes_added?: string[];
+            /** Nodes Removed */
+            nodes_removed?: string[];
+            /** Nodes Modified */
+            nodes_modified?: string[];
+            /** Relationships Added */
+            relationships_added?: string[];
+            /** Relationships Removed */
+            relationships_removed?: string[];
+            /** Relationships Modified */
+            relationships_modified?: string[];
+            /** Loop Configs Added */
+            loop_configs_added?: string[];
+            /** Loop Configs Removed */
+            loop_configs_removed?: string[];
+            /** Loop Configs Modified */
+            loop_configs_modified?: string[];
+            /**
+             * Content Json Changed
+             * @default false
+             */
+            content_json_changed: boolean;
+        };
         /** SystemMapRevisionResponse */
         SystemMapRevisionResponse: {
             /**
@@ -22762,6 +22856,31 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * SystemMapRevisionRestoreAsNewRequest
+         * @description Request to restore a published/archived revision as a new draft revision.
+         */
+        SystemMapRevisionRestoreAsNewRequest: {
+            /**
+             * Notes
+             * @default Restored from revision {revision_number}
+             */
+            notes: string;
+        };
+        /**
+         * SystemMapRevisionRestoreAsNewResponse
+         * @description Response for restore-as-new operation.
+         */
+        SystemMapRevisionRestoreAsNewResponse: {
+            new_revision: components["schemas"]["SystemMapRevisionResponse"];
+            /**
+             * Source Revision Id
+             * Format: uuid
+             */
+            source_revision_id: string;
+            /** Source Revision Number */
+            source_revision_number: number;
         };
         /** SystemMapUpdate */
         SystemMapUpdate: {
@@ -39383,6 +39502,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemMapRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    diff_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__diff_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+                /** @description Revision ID */
+                rev_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SystemMapRevisionDiffRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapRevisionDiffResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    restore_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__restore_as_new_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+                /** @description Revision ID */
+                rev_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SystemMapRevisionRestoreAsNewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapRevisionRestoreAsNewResponse"];
                 };
             };
             /** @description Validation Error */

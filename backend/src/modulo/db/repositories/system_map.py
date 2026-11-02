@@ -1457,6 +1457,214 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             "loop_configs": loop_configs,
         }
 
+    # ─── Revision Lifecycle (FAR-2288) ───
+
+    async def diff_revisions(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        base_revision_id: uuid.UUID,
+        target_revision_id: uuid.UUID,
+    ) -> dict[str, Any] | None:
+        """Diff two revisions and return the differences."""
+        base_graph = await self.get_full_revision_graph(
+            session, organisation_id=organisation_id, revision_id=base_revision_id
+        )
+        target_graph = await self.get_full_revision_graph(
+            session, organisation_id=organisation_id, revision_id=target_revision_id
+        )
+
+        if not base_graph or not target_graph:
+            return None
+
+        base_revision = base_graph["revision"]
+        target_revision = target_graph["revision"]
+
+        # Compare nodes by node_key
+        base_nodes = {n.node_key: n for n in base_graph["nodes"]}
+        target_nodes = {n.node_key: n for n in target_graph["nodes"]}
+        base_node_keys = set(base_nodes.keys())
+        target_node_keys = set(target_nodes.keys())
+
+        nodes_added = sorted(target_node_keys - base_node_keys)
+        nodes_removed = sorted(base_node_keys - target_node_keys)
+        nodes_modified = sorted(
+            key
+            for key in base_node_keys & target_node_keys
+            if base_nodes[key].node_type != target_nodes[key].node_type
+            or base_nodes[key].display_name != target_nodes[key].display_name
+            or base_nodes[key].config_json != target_nodes[key].config_json
+            or base_nodes[key].pipeline_id != target_nodes[key].pipeline_id
+            or base_nodes[key].connector_instance_id != target_nodes[key].connector_instance_id
+            or base_nodes[key].owner_team_id != target_nodes[key].owner_team_id
+            or base_nodes[key].eval_id != target_nodes[key].eval_id
+            or base_nodes[key].position_x != target_nodes[key].position_x
+            or base_nodes[key].position_y != target_nodes[key].position_y
+        )
+
+        # Compare relationships by (source, target, type)
+        base_rels = {
+            (r.source_node_key, r.target_node_key, r.relationship_type): r for r in base_graph["relationships"]
+        }
+        target_rels = {
+            (r.source_node_key, r.target_node_key, r.relationship_type): r for r in target_graph["relationships"]
+        }
+        base_rel_keys = set(base_rels.keys())
+        target_rel_keys = set(target_rels.keys())
+
+        relationships_added = sorted(f"{s}->{t}:{ty}" for s, t, ty in (target_rel_keys - base_rel_keys))
+        relationships_removed = sorted(f"{s}->{t}:{ty}" for s, t, ty in (base_rel_keys - target_rel_keys))
+        relationships_modified = sorted(
+            f"{s}->{t}:{ty}"
+            for key in base_rel_keys & target_rel_keys
+            if base_rels[key].config_json != target_rels[key].config_json
+            for s, t, ty in [key]
+        )
+
+        # Compare loop configs by node_key
+        base_loops = {lc.node_key: lc for lc in base_graph["loop_configs"]}
+        target_loops = {lc.node_key: lc for lc in target_graph["loop_configs"]}
+        base_loop_keys = set(base_loops.keys())
+        target_loop_keys = set(target_loops.keys())
+
+        loop_configs_added = sorted(target_loop_keys - base_loop_keys)
+        loop_configs_removed = sorted(base_loop_keys - target_loop_keys)
+        loop_configs_modified = sorted(
+            key
+            for key in base_loop_keys & target_loop_keys
+            if base_loops[key].target_signal != target_loops[key].target_signal
+            or base_loops[key].observation_window_seconds != target_loops[key].observation_window_seconds
+            or base_loops[key].action_pipeline_id != target_loops[key].action_pipeline_id
+            or base_loops[key].budget_limit_usd != target_loops[key].budget_limit_usd
+            or base_loops[key].cooldown_seconds != target_loops[key].cooldown_seconds
+            or base_loops[key].outcome_metric != target_loops[key].outcome_metric
+        )
+
+        content_json_changed = (
+            base_revision.content_json != target_revision.content_json
+            or nodes_added
+            or nodes_removed
+            or nodes_modified
+            or relationships_added
+            or relationships_removed
+            or relationships_modified
+            or loop_configs_added
+            or loop_configs_removed
+            or loop_configs_modified
+        )
+
+        return {
+            "base_revision_id": base_revision.id,
+            "base_revision_number": base_revision.revision_number,
+            "target_revision_id": target_revision.id,
+            "target_revision_number": target_revision.revision_number,
+            "nodes_added": nodes_added,
+            "nodes_removed": nodes_removed,
+            "nodes_modified": nodes_modified,
+            "relationships_added": relationships_added,
+            "relationships_removed": relationships_removed,
+            "relationships_modified": relationships_modified,
+            "loop_configs_added": loop_configs_added,
+            "loop_configs_removed": loop_configs_removed,
+            "loop_configs_modified": loop_configs_modified,
+            "content_json_changed": content_json_changed,
+        }
+
+    async def restore_revision_as_new_draft(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        system_map_id: uuid.UUID,
+        source_revision_id: uuid.UUID,
+        notes: str,
+    ) -> SystemMapRevision | None:
+        """Create a new draft revision from an existing published/archived revision."""
+        # Verify source revision exists and belongs to map
+        source_revision = await self.get_revision_by_id(
+            session, organisation_id=organisation_id, revision_id=source_revision_id, include_deleted=True
+        )
+        if not source_revision or source_revision.system_map_id != system_map_id:
+            return None
+
+        if source_revision.status == "draft":
+            # Can't restore a draft as a new draft - it's already editable
+            return None
+
+        # Get next revision number
+        existing_revisions = await self.list_revisions(
+            session,
+            organisation_id=organisation_id,
+            system_map_id=system_map_id,
+            include_deleted=True,
+        )
+        next_revision_number = max((r.revision_number for r in existing_revisions), default=0) + 1
+
+        # Get full graph of source revision
+        source_graph = await self.get_full_revision_graph(
+            session, organisation_id=organisation_id, revision_id=source_revision_id
+        )
+        if not source_graph:
+            return None
+
+        # Create new draft revision with source content
+        new_revision = await self.create_revision(
+            session,
+            organisation_id=organisation_id,
+            system_map_id=system_map_id,
+            revision_number=next_revision_number,
+            status="draft",
+            content_json=source_revision.content_json,
+        )
+
+        # Copy nodes
+        for node in source_graph["nodes"]:
+            await self.create_node(
+                session,
+                organisation_id=organisation_id,
+                revision_id=new_revision.id,
+                node_key=node.node_key,
+                node_type=node.node_type,
+                display_name=node.display_name,
+                config_json=node.config_json,
+                pipeline_id=node.pipeline_id,
+                connector_instance_id=node.connector_instance_id,
+                owner_team_id=node.owner_team_id,
+                eval_id=node.eval_id,
+                position_x=node.position_x,
+                position_y=node.position_y,
+            )
+
+        # Copy relationships
+        for rel in source_graph["relationships"]:
+            await self.create_relationship(
+                session,
+                organisation_id=organisation_id,
+                revision_id=new_revision.id,
+                source_node_key=rel.source_node_key,
+                target_node_key=rel.target_node_key,
+                relationship_type=rel.relationship_type,
+                config_json=rel.config_json,
+            )
+
+        # Copy loop configs
+        for lc in source_graph["loop_configs"]:
+            await self.create_loop_config(
+                session,
+                organisation_id=organisation_id,
+                revision_id=new_revision.id,
+                node_key=lc.node_key,
+                target_signal=lc.target_signal,
+                observation_window_seconds=lc.observation_window_seconds,
+                action_pipeline_id=lc.action_pipeline_id,
+                budget_limit_usd=lc.budget_limit_usd,
+                cooldown_seconds=lc.cooldown_seconds,
+                outcome_metric=lc.outcome_metric,
+            )
+
+        return new_revision
+
 
 _SYSTEM_MAP_REPOSITORY_METHODS = (
     SystemMapRepository.get_default_map,

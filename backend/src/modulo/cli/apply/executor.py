@@ -29,6 +29,7 @@ from modulo.cli.apply.plan import (
     KIND_BACKEND,
     KIND_PIPELINE,
     KIND_SCHEMA,
+    KIND_SYSTEM_MAP,
     KIND_TRIGGER,
     build_plan,
     has_blockers,
@@ -554,6 +555,9 @@ class ApplyExecutor:
         EXCLUDED from the maps — name-based upsert cannot pick a row) and
         duplicate live trigger composite keys as ``duplicate_trigger_keys``.
 
+        System Maps are fetched by name (unique per org). Duplicate names
+        are reported as ``ambiguous_system_map_names``.
+
         S3776 split: the pipeline-family lookups/normalisation live in
         :meth:`_fetch_pipeline_bundle` and the trigger composite-key maps
         in :meth:`_fetch_trigger_lists`; the per-kind wants/lazy flags are
@@ -594,6 +598,7 @@ class ApplyExecutor:
         # evaluated here so the helpers stay pure fetch/normalise steps.
         wants_pipelines = bool(config.entities.pipelines)
         wants_triggers = bool(config.entities.triggers)
+        wants_system_maps = bool(config.entities.system_maps)
         needs_agents = any(
             entity.graph is not None and any(node.agent is not None for node in entity.graph.nodes)
             for entity in config.entities.pipelines
@@ -611,6 +616,17 @@ class ApplyExecutor:
         pipelines_list: list[dict[str, Any]] = []
         if wants_pipelines or wants_triggers:
             pipelines_list = self._get_paginated("/pipelines")
+
+        # System Maps: fetch when declared (lazy like pipelines)
+        system_maps_list: list[dict[str, Any]] = []
+        if wants_system_maps:
+            system_maps_list = self._get_paginated("/api/v1/system-maps", params={"page_size": 100})
+        ambiguous_system_map_names = _duplicate_name_counts(system_maps_list)
+        system_maps = {
+            item["name"]: item
+            for item in system_maps_list
+            if item.get("name") is not None and item["name"] not in ambiguous_system_map_names
+        }
 
         bundle = self._fetch_pipeline_bundle(
             config,
@@ -630,6 +646,7 @@ class ApplyExecutor:
             KIND_BACKEND: backends,
             KIND_PIPELINE: bundle.pipelines,
             KIND_TRIGGER: triggers,
+            KIND_SYSTEM_MAP: system_maps,
             "agents": bundle.agents,
             "users": bundle.users,
             "users_error": bundle.users_error,
@@ -637,6 +654,7 @@ class ApplyExecutor:
             "evals_error": bundle.evals_error,
             "ambiguous_agent_names": bundle.ambiguous_agent_names,
             "ambiguous_pipeline_names": bundle.ambiguous_pipeline_names,
+            "ambiguous_system_map_names": ambiguous_system_map_names,
             "duplicate_trigger_keys": duplicate_trigger_keys,
             "unreadable_graph_pipelines": bundle.unreadable_graph_pipelines,
         }
@@ -1087,7 +1105,7 @@ class ApplyExecutor:
         the dry-run return takes, so no POST/PATCH/PUT code path is
         reachable in drift mode (verified by tests/unit/cli/test_apply_drift.py).
         """
-        from modulo.cli.apply import pipeline_apply, trigger_apply
+        from modulo.cli.apply import pipeline_apply, system_map_apply, trigger_apply
 
         resolved_api_keys, blocked = resolve_secret_refs(config)
         # FAR-1216: plan-time validation of ``credential_ref`` keys against the
@@ -1131,6 +1149,7 @@ class ApplyExecutor:
             ],
             KIND_PIPELINE: [],
             KIND_TRIGGER: [],
+            KIND_SYSTEM_MAP: [],
         }
         desired, blocked = pipeline_apply.build_desired_views(
             config.entities, current_entities, desired, blocked, blocked_keys, refresh_secrets=refresh_secrets
@@ -1151,6 +1170,11 @@ class ApplyExecutor:
             pipeline_block_reasons=pipeline_block_reasons,
             refresh_secrets=refresh_secrets,
         )
+        # System Maps: no cross-entity refs to resolve, but they must see
+        # the updated blocked_keys so an ambiguous name is caught.
+        desired, blocked = system_map_apply.build_desired_views(
+            config.entities, current_entities, desired, blocked, blocked_keys
+        )
         report: dict[str, Any] = build_plan(desired, current_entities, blocked)
         report["failed"] = []
         if dry_run:
@@ -1168,6 +1192,7 @@ class ApplyExecutor:
             self, entities, current_entities, report, refresh_secrets=refresh_secrets
         )
         trigger_apply.apply_triggers(self, entities, current_entities, report, pipeline_ids, resolved_trigger_configs)
+        system_map_apply.apply_system_maps(self, entities, current_entities, report)
         return report
 
 
@@ -1178,6 +1203,7 @@ def _empty_current() -> dict[str, Any]:
         KIND_BACKEND: {},
         KIND_PIPELINE: {},
         KIND_TRIGGER: {},
+        KIND_SYSTEM_MAP: {},
         "agents": {},
         "users": {},
         "users_error": None,
@@ -1185,6 +1211,7 @@ def _empty_current() -> dict[str, Any]:
         "evals_error": None,
         "ambiguous_agent_names": {},
         "ambiguous_pipeline_names": {},
+        "ambiguous_system_map_names": {},
         "duplicate_trigger_keys": set(),
         "unreadable_graph_pipelines": {},
     }
@@ -1227,6 +1254,29 @@ def _failure_message(exc: Exception) -> str:
     if isinstance(exc, ApplyHttpError) and exc.status_code == 409:
         message += f" ({_CONFLICT_HINT})"
     return message
+
+
+def _record_entity_failure(
+    report: dict[str, list[dict[str, Any]]],
+    status: str,
+    entry: dict[str, Any],
+    *,
+    kind: str,
+    displayed_name: str,
+    exc: Exception,
+    entity_label: str,
+) -> None:
+    """Move a failed entity entry to ``report['failed']`` (isolated per entity).
+
+    Shared by the per-entity apply modules (pipelines, system maps, triggers):
+    only the kind, log label and displayed name differ, while the failure
+    accounting contract — drop the entry from its success lane and append one
+    ``failed`` record — must not drift between them.
+    """
+    message = _failure_message(exc)
+    _log.exception("apply %s failed: %s: %s", entity_label, displayed_name, message)
+    report[status].remove(entry)
+    report["failed"].append({"kind": kind, "name": entry["name"], "error": message})
 
 
 def _format_validation_detail(item: Any) -> str:

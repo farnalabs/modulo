@@ -50,7 +50,11 @@ from modulo.api.schemas.system_maps import (
     SystemMapResponse,
     SystemMapRevisionCreate,
     SystemMapRevisionDetailResponse,
+    SystemMapRevisionDiffRequest,
+    SystemMapRevisionDiffResponse,
     SystemMapRevisionResponse,
+    SystemMapRevisionRestoreAsNewRequest,
+    SystemMapRevisionRestoreAsNewResponse,
     SystemMapUpdate,
 )
 from modulo.api.team_scope import validate_owner_team_for_create
@@ -83,6 +87,8 @@ _CODE_SYSTEM_MAP_REVISION_GET = "system_map.revision.get"
 _CODE_SYSTEM_MAP_REVISION_PUBLISH = "system_map.revision.publish"
 _CODE_SYSTEM_MAP_REVISION_ARCHIVE = "system_map.revision.archive"
 _CODE_SYSTEM_MAP_REVISION_DELETE = "system_map.revision.delete"
+_CODE_SYSTEM_MAP_REVISION_DIFF = "system_map.revision.diff"
+_CODE_SYSTEM_MAP_REVISION_RESTORE = "system_map.revision.restore_as_new"
 _CODE_SYSTEM_MAP_OVERVIEW = "system_map.overview"
 _CODE_SYSTEM_MAP_NODE_CREATE = "system_map.node.create"
 _CODE_SYSTEM_MAP_RELATIONSHIP_CREATE = "system_map.relationship.create"
@@ -116,6 +122,8 @@ _EP_CREATE_SYSTEM_MAP_REVISION = "system_maps.create_system_map_revision_endpoin
 _EP_PUBLISH_SYSTEM_MAP_REVISION = "system_maps.publish_system_map_revision_endpoint"
 _EP_ARCHIVE_SYSTEM_MAP_REVISION = "system_maps.archive_system_map_revision_endpoint"
 _EP_DELETE_SYSTEM_MAP_REVISION = "system_maps.delete_system_map_revision_endpoint"
+_EP_DIFF_SYSTEM_MAP_REVISION = "system_maps.diff_system_map_revision_endpoint"
+_EP_RESTORE_SYSTEM_MAP_REVISION = "system_maps.restore_system_map_revision_endpoint"
 _EP_GET_SYSTEM_MAP_OVERVIEW = "system_maps.get_system_map_overview_endpoint"
 _EP_CREATE_ATTRIBUTION_BINDING = "system_maps.create_attribution_binding_endpoint"
 _EP_LIST_ATTRIBUTION_BINDINGS = "system_maps.list_attribution_bindings_endpoint"
@@ -965,6 +973,198 @@ async def archive_system_map_revision_endpoint(
         ) from None
 
     return SystemMapRevisionResponse.model_validate(revision)
+
+
+@router.post(
+    "/{map_id}/revisions/{rev_id}/diff",
+    response_model=SystemMapRevisionDiffResponse,
+)
+@handle_db_errors(_EP_DIFF_SYSTEM_MAP_REVISION)
+async def diff_system_map_revision_endpoint(
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    rev_id: uuid.UUID = Path(..., description=_DESC_REVISION_ID),
+    req: SystemMapRevisionDiffRequest = Body(default=SystemMapRevisionDiffRequest()),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_DIFF),
+    repository: SystemMapRepository = Depends(get_repo),
+) -> SystemMapRevisionDiffResponse:
+    """Diff a revision against another revision or the current draft."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Verify map exists
+            system_map = await repository.get_map_by_id(
+                session, organisation_id=principal.organisation_id, map_id=map_id
+            )
+            if not system_map:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
+
+            # Verify base revision exists and belongs to map
+            base_revision = await repository.get_revision_by_id(
+                session, organisation_id=principal.organisation_id, revision_id=rev_id
+            )
+            if not base_revision or base_revision.system_map_id != map_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+
+            # Determine target revision
+            target_revision_id = req.against_revision_id
+            if target_revision_id is None:
+                # Try to find the current draft revision
+                draft_revisions = await repository.list_revisions(
+                    session,
+                    organisation_id=principal.organisation_id,
+                    system_map_id=map_id,
+                    status="draft",
+                    limit=1,
+                )
+                if not draft_revisions:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="No draft revision found to diff against; specify against_revision_id",
+                    )
+                target_revision_id = draft_revisions[0].id
+            else:
+                # Verify target revision exists and belongs to map
+                target_revision = await repository.get_revision_by_id(
+                    session, organisation_id=principal.organisation_id, revision_id=target_revision_id
+                )
+                if not target_revision or target_revision.system_map_id != map_id:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+
+            diff_result = await repository.diff_revisions(
+                session,
+                organisation_id=principal.organisation_id,
+                base_revision_id=rev_id,
+                target_revision_id=target_revision_id,
+            )
+            if not diff_result:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Could not compute diff")
+    except HTTPException:
+        raise
+    except ProgrammingError as exc:
+        _log.exception(_EP_DIFF_SYSTEM_MAP_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _EP_DIFF_SYSTEM_MAP_REVISION)
+        _log.exception(_EP_DIFF_SYSTEM_MAP_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except Exception:
+        _log.exception("system_maps.diff_revision")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    return SystemMapRevisionDiffResponse(**diff_result)
+
+
+@router.post(
+    "/{map_id}/revisions/{rev_id}/restore-as-new",
+    response_model=SystemMapRevisionRestoreAsNewResponse,
+    dependencies=[
+        Depends(
+            audited(
+                "system_map_revision_restored_as_new",
+                "system_map_revision",
+                principal_dep=get_current_tenant_user_or_api_key,
+            )
+        )
+    ],
+)
+@handle_db_errors(_EP_RESTORE_SYSTEM_MAP_REVISION)
+async def restore_system_map_revision_endpoint(
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    rev_id: uuid.UUID = Path(..., description=_DESC_REVISION_ID),
+    req: SystemMapRevisionRestoreAsNewRequest = Body(default=SystemMapRevisionRestoreAsNewRequest()),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_RESTORE),
+    repository: SystemMapRepository = Depends(get_repo),
+) -> SystemMapRevisionRestoreAsNewResponse:
+    """Create a new draft revision from a published/archived revision."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Verify map exists
+            system_map = await repository.get_map_by_id(
+                session, organisation_id=principal.organisation_id, map_id=map_id
+            )
+            if not system_map:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
+
+            # Verify source revision exists and belongs to map
+            source_revision = await repository.get_revision_by_id(
+                session, organisation_id=principal.organisation_id, revision_id=rev_id, include_deleted=True
+            )
+            if not source_revision or source_revision.system_map_id != map_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+
+            if source_revision.status == "draft":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Cannot restore a draft revision as new; it is already editable",
+                )
+
+            # Create new draft from source
+            new_revision = await repository.restore_revision_as_new_draft(
+                session,
+                organisation_id=principal.organisation_id,
+                system_map_id=map_id,
+                source_revision_id=rev_id,
+                notes=req.notes.replace("{revision_number}", str(source_revision.revision_number)),
+            )
+            if not new_revision:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+
+            await _record_audit(
+                session,
+                org_id=principal.organisation_id,
+                event_type="system_map.revision.restored_as_new",
+                account_id=principal.account_id,
+                resource_id=new_revision.id,
+                payload_json={
+                    "system_map_id": str(map_id),
+                    "source_revision_id": str(rev_id),
+                    "source_revision_number": source_revision.revision_number,
+                    "new_revision_number": new_revision.revision_number,
+                },
+            )
+    except HTTPException:
+        raise
+    except ProgrammingError as exc:
+        _log.exception(_EP_RESTORE_SYSTEM_MAP_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _EP_RESTORE_SYSTEM_MAP_REVISION)
+        _log.exception(_EP_RESTORE_SYSTEM_MAP_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except Exception:
+        _log.exception("system_maps.restore_revision")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    return SystemMapRevisionRestoreAsNewResponse(
+        new_revision=SystemMapRevisionResponse.model_validate(new_revision),
+        source_revision_id=rev_id,
+        source_revision_number=source_revision.revision_number,
+    )
 
 
 @router.delete(
