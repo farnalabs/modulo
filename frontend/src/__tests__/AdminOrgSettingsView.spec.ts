@@ -504,6 +504,41 @@ describe('AdminOrgSettingsView', () => {
     wrapper.unmount()
   })
 
+  it('keeps the organisation feature-flags card outside the team gate and saving on the community tier', async () => {
+    // FAR-2302: the org feature-flags endpoint is not plan-gated, so its card
+    // sits OUTSIDE the team_rbac gate like the HITL review window. This mounts
+    // the REAL FeatureGate (never stubbed) in its community-tier state; a
+    // regression that moved the card inside the disabled overlay fails here.
+    const wrapper = await mountCommunityTierView()
+
+    // The gate must genuinely be in its DISABLED state, otherwise the
+    // placement assertion below would silently prove nothing.
+    expect(wrapper.find('[data-testid="feature-gate-disabled"]').exists()).toBe(true)
+
+    const toggle = wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]')
+    expect(toggle.exists()).toBe(true)
+
+    // The control may not live inside the disabled (pointer-events-none)
+    // subtree - that is exactly the "card moved inside the overlay" failure.
+    expect(toggle.element.closest('.pointer-events-none')).toBeNull()
+    expect(
+      wrapper.find('[data-testid="feature-gate-disabled"] [data-testid="org-feature-flag-toggle-webhook_notification_log"]').exists(),
+    ).toBe(false)
+
+    // Interactive end to end: the toggle still issues its PUT.
+    await toggle.trigger('click')
+    await vi.waitFor(() => {
+      expect(vi.mocked(api.PUT)).toHaveBeenCalledWith(
+        '/api/v1/admin/org/feature-flags/{flag_name}',
+        expect.objectContaining({
+          params: { path: { flag_name: 'webhook_notification_log' } },
+          body: { enabled: false },
+        }),
+      )
+    })
+    wrapper.unmount()
+  })
+
   it('shows a loading state while the org window request is still in flight', async () => {
     let resolveGet: (value: unknown) => void = () => {}
     hitlWindowState.deferred = new Promise((resolve) => {
