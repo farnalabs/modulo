@@ -174,3 +174,14 @@ def test_tail_budget_brings_back_few_bytes(tmp_path: Path, bytes_budget: int) ->
 
     tail = read_log_tail(path, max_bytes=bytes_budget)
     assert len(tail) == bytes_budget
+
+
+@pytest.mark.asyncio
+async def test_run_coroutine_from_within_a_running_loop() -> None:
+    """``build_report`` is safe to call from a thread with a live event loop."""
+    from modulo.launcher.doctor_report import _run_coroutine
+
+    async def _value() -> int:
+        return 42
+
+    assert _run_coroutine(_value()) == 42

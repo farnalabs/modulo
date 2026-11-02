@@ -71,3 +71,52 @@ def test_support_json_payload_carries_ref_and_ref_line(tmp_path: Path, monkeypat
     assert REF_SHAPE.fullmatch(str(payload["ref"]))
     assert str(payload["ref"]) in str(payload["ref_line"])
     assert payload["reference"] == "modulo-support-bundle-v1"
+
+
+def test_launcher_data_dir_or_none_resolves_and_falls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert cli_main._launcher_data_dir_or_none(tmp_path) == tmp_path
+
+    monkeypatch.setattr("modulo.launcher.entry.default_data_dir", lambda: tmp_path)
+    assert cli_main._launcher_data_dir_or_none(None) == tmp_path
+
+    monkeypatch.setattr("modulo.launcher.entry.default_data_dir", lambda: tmp_path / "missing")
+    assert cli_main._launcher_data_dir_or_none(None) is None
+
+    def _boom() -> Path:
+        raise RuntimeError("no home directory")
+
+    monkeypatch.setattr("modulo.launcher.entry.default_data_dir", _boom)
+    assert cli_main._launcher_data_dir_or_none(None) is None
+
+
+def test_support_command_reports_a_gate_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.support.bundle as bundle
+
+    async def _refuse(*_args: object, **_kwargs: object) -> None:
+        raise bundle.RedactionGateError("logs/app.log.tail", ["seeded secret value still present"])
+
+    monkeypatch.setattr(bundle, "build_bundle_async", _refuse)
+
+    result = CliRunner().invoke(
+        cli_main.cli, ["support", "--out", str(tmp_path / "b.zip"), "--data-dir", str(tmp_path)]
+    )
+
+    assert result.exit_code == 2
+    assert "refused: redaction gate refused member 'logs/app.log.tail'" in result.output
+    assert "no bundle written" in result.output
+
+
+def test_support_command_reports_a_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.support.bundle as bundle
+
+    async def _fail(*_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(bundle, "build_bundle_async", _fail)
+
+    result = CliRunner().invoke(
+        cli_main.cli, ["support", "--out", str(tmp_path / "b.zip"), "--data-dir", str(tmp_path)]
+    )
+
+    assert result.exit_code == 1
+    assert "could not write bundle: disk full" in result.output
