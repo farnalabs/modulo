@@ -25,10 +25,11 @@ import json
 import logging
 import os
 import secrets as _secrets
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from modulo.launcher.platform import is_windows, supports_posix_security_bits
 
 _log = logging.getLogger(__name__)
 
@@ -59,13 +60,12 @@ class SecretsFileError(RuntimeError):
 
 
 def assert_supported_platform() -> None:
-    """Refuse Windows until the P3 delivery (0600/ACL enforcement).
-
-    A silent 0o600 no-op would write launcher secrets with default ACLs —
-    refuse loudly instead (same seam shape as ``initdb.assert_supported_platform``).
-    """
-    if sys.platform == "win32":
-        raise SecretsFileError("The launcher secrets file is not supported on Windows yet (TODO(P3) ACL work)")
+    """Require a validated owner-only secret-file implementation."""
+    if is_windows():
+        raise SecretsFileError(
+            "The Windows launcher secrets file requires installer-host ACL validation (FAR-2229); "
+            "refusing to write credentials without an explicit ACL implementation"
+        )
 
 
 @dataclass(frozen=True)
@@ -119,7 +119,7 @@ def _parse(data: bytes) -> LauncherSecrets:
 
 def _load_existing(path: Path) -> LauncherSecrets:
     """Parse an existing secrets file, tightening an over-permissive mode first."""
-    if os.name == "posix" and (path.stat().st_mode & 0o777) != _PRIVATE_MODE:
+    if supports_posix_security_bits() and (path.stat().st_mode & 0o777) != _PRIVATE_MODE:
         _log.warning("launcher.secrets_file_mode_tightened path=%s", path)
         path.chmod(_PRIVATE_MODE)
     return _parse(path.read_bytes())
@@ -166,7 +166,7 @@ def load_or_create(path: Path) -> LauncherSecrets:
     }
     content = json.dumps(payload, indent=2, sort_keys=True).encode()
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if os.name == "posix":
+    if supports_posix_security_bits():
         flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(str(path), flags, _PRIVATE_MODE)
@@ -179,7 +179,7 @@ def load_or_create(path: Path) -> LauncherSecrets:
         finally:
             os.close(fd)
         # Belt-and-braces mode enforcement (umask variations must not widen it).
-        if os.name == "posix":
+        if supports_posix_security_bits():
             path.chmod(_PRIVATE_MODE)
             mode = path.stat().st_mode & 0o777
             if mode != _PRIVATE_MODE:
