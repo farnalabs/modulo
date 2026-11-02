@@ -1128,9 +1128,16 @@ async def archive_system_map_revision_endpoint(
             if revision.status == "archived":
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Revision is already archived")
 
-            # Archive the revision
-            revision.status = "archived"
-            await session.flush()
+            # Archive the revision and close its effective window (FAR-2288)
+            archived_revision = await repository.archive_revision(
+                session,
+                organisation_id=principal.organisation_id,
+                system_map_id=map_id,
+                revision_id=rev_id,
+            )
+            if archived_revision is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+            revision = archived_revision
 
             # If this was the published revision, clear the map's published_revision_id
             if system_map.published_revision_id == rev_id:

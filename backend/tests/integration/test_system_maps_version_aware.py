@@ -143,6 +143,43 @@ async def test_by_time_interval_is_half_open(
     assert before_first is None
 
 
+async def test_archive_revision_closes_effective_window(
+    repo: SystemMapRepository,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """Archiving the current revision directly must close its effective window.
+
+    Without the archive-path ``effective_to`` stamp the archived revision keeps
+    ``effective_to IS NULL``, so a by-time lookup at any future timestamp still
+    returns it as active even though it is no longer the published revision.
+    """
+    await set_rls_user_context(rls_session, test_user, "admin")
+    map_id, _rev1_id, rev2_id, _t1, _t2 = await _publish_two_revisions(repo, rls_session, test_org, test_user)
+
+    archived = await repo.archive_revision(
+        rls_session, organisation_id=test_org, system_map_id=map_id, revision_id=rev2_id
+    )
+    assert archived is not None
+    await rls_session.refresh(archived)
+
+    assert archived.status == "archived"
+    assert archived.effective_to is not None, "archiving must close the revision's effective window"
+
+    future = datetime.now(UTC) + timedelta(days=1)
+    found = await repo.get_revision_by_time(rls_session, organisation_id=test_org, system_map_id=map_id, at=future)
+    assert found is None, "an archived revision must not be active at a future timestamp"
+
+    # effective_to is exclusive: the revision is inactive from the closing instant.
+    at_close = await repo.get_revision_by_time(
+        rls_session, organisation_id=test_org, system_map_id=map_id, at=archived.effective_to
+    )
+    assert at_close is None
+
+    assert await repo.get_published_revision(rls_session, organisation_id=test_org, system_map_id=map_id) is None
+
+
 async def test_draft_revision_never_matches_by_time(
     repo: SystemMapRepository,
     rls_session: AsyncSession,

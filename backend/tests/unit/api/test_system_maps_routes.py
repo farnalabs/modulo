@@ -1089,14 +1089,23 @@ def test_publish_revision_rejects_cross_org_pipeline(client: tuple[TestClient, _
 
 def test_archive_revision_returns_200(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
+    revision = _revision_row(status="published")
+
+    async def _archive(*_args: object, **_kwargs: object) -> MagicMock:
+        revision.status = "archived"
+        return revision
+
+    archive_mock = AsyncMock(side_effect=_archive)
     harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
-    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=revision))
+    harness.stub("archive_revision", archive_mock)
 
     resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/archive")
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "archived"
+    archive_mock.assert_awaited_once()
 
 
 def test_archive_revision_already_archived_returns_409(client: tuple[TestClient, _Harness]) -> None:
@@ -1916,13 +1925,26 @@ def test_archive_revision_missing_revision_returns_404(client: tuple[TestClient,
     assert resp.status_code == 404
 
 
+def test_archive_revision_vanished_before_update_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("archive_revision", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/archive")
+
+    assert resp.status_code == 404
+
+
 def test_archive_revision_keeps_unrelated_published_pointer(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     harness.stub(
         "get_map_by_id",
         AsyncMock(return_value=_map_row(published_revision_id=uuid.uuid4())),
     )
-    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="published")))
+    revision = _revision_row(status="published")
+    harness.stub("get_revision_by_id", AsyncMock(return_value=revision))
+    harness.stub("archive_revision", AsyncMock(return_value=revision))
 
     resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/archive")
 

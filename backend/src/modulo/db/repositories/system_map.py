@@ -425,6 +425,36 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
 
         return revision
 
+    async def archive_revision(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        system_map_id: uuid.UUID,
+        revision_id: uuid.UUID,
+    ) -> SystemMapRevision | None:
+        """Archive a revision and close its effective window (FAR-2288).
+
+        Mirrors ``publish_revision``'s superseded-window semantics: an archived
+        revision must never keep an open-ended ``effective_to``, otherwise a
+        by-time read would return it as active at any future timestamp. A
+        revision that was never published (NULL ``effective_from``) has no
+        window to close.
+
+        Returns None when the revision does not exist or belongs to another map.
+        """
+        revision = await self.get_revision_by_id(session, organisation_id=organisation_id, revision_id=revision_id)
+        if not revision or revision.system_map_id != system_map_id:
+            return None
+
+        now = datetime.now(UTC)
+        revision.status = "archived"
+        if revision.effective_from is not None and revision.effective_to is None:
+            revision.effective_to = now
+        revision.updated_at = now
+        await session.flush()
+        return revision
+
     # ─── SystemMapNode CRUD ───
 
     async def create_node(

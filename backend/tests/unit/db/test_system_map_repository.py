@@ -1238,6 +1238,51 @@ class TestVersionAwareRevisionMethods:
         assert result[0].revision_number == 1
         assert result[1].revision_number == 2
 
+    async def test_archive_revision_missing_or_foreign(self, repo: SystemMapRepository) -> None:
+        assert (
+            await repo.archive_revision(
+                _session(_result(one=None)), organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV
+            )
+            is None
+        )
+
+        foreign = _revision(map_id=uuid.uuid4())
+        assert (
+            await repo.archive_revision(
+                _session(_result(one=foreign)), organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV
+            )
+            is None
+        )
+
+    async def test_archive_revision_closes_open_window(self, repo: SystemMapRepository) -> None:
+        rev = self._revision_with_effective(effective_from=datetime(2026, 1, 1, tzinfo=UTC), effective_to=None)
+        db = _session(_result(one=rev))
+        result = await repo.archive_revision(db, organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV)
+        assert result is rev
+        assert rev.status == "archived"
+        assert rev.effective_to is not None
+        assert db.flush.await_count == 1
+
+    async def test_archive_revision_leaves_unpublished_window_unset(self, repo: SystemMapRepository) -> None:
+        rev = self._revision_with_effective(status="draft", effective_from=None, effective_to=None)
+        db = _session(_result(one=rev))
+        result = await repo.archive_revision(db, organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV)
+        assert result is rev
+        assert rev.status == "archived"
+        assert rev.effective_to is None
+
+    async def test_archive_revision_preserves_existing_window(self, repo: SystemMapRepository) -> None:
+        closed_at = datetime(2026, 2, 1, tzinfo=UTC)
+        rev = self._revision_with_effective(
+            status="archived",
+            effective_from=datetime(2026, 1, 1, tzinfo=UTC),
+            effective_to=closed_at,
+        )
+        db = _session(_result(one=rev))
+        result = await repo.archive_revision(db, organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV)
+        assert result is rev
+        assert rev.effective_to == closed_at
+
     async def test_publish_revision_sets_effective_dates(self, repo: SystemMapRepository) -> None:
         """Test that publish_revision sets effective_from on new and effective_to on old."""
         revision = _revision()
