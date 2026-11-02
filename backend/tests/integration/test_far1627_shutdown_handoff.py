@@ -172,6 +172,31 @@ async def _seed_running_run(
     return run_id
 
 
+async def _seed_node_evidence(
+    db_engine: AsyncEngine,
+    env: _Env,
+    run_id: uuid.UUID,
+    *,
+    outputs: dict[str, object] | None = None,
+    telemetry: dict[str, object] | None = None,
+) -> None:
+    """Seed one final per-node output row using the production flat split shape."""
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO run_node_outputs "
+                "(run_id, organisation_id, node_id, attempt_key, outputs_json, node_telemetry_json) "
+                "VALUES (:rid, :oid, 'n1', '__final__', CAST(:outputs AS jsonb), CAST(:telemetry AS jsonb))"
+            ),
+            {
+                "rid": str(run_id),
+                "oid": str(env.org_id),
+                "outputs": json.dumps(outputs) if outputs is not None else None,
+                "telemetry": json.dumps(telemetry) if telemetry is not None else None,
+            },
+        )
+
+
 async def _fetch_run(db_engine: AsyncEngine, run_id: uuid.UUID) -> dict[str, object]:
     async with db_engine.connect() as conn:
         result = await conn.execute(
@@ -440,6 +465,44 @@ async def test_handoff_is_org_scoped(
         assert after_b["heartbeat_at"] is not None
     finally:
         await _teardown_env(db_engine, org_b)
+
+
+async def test_self_reported_only_output_requeues_but_engine_evidence_terminalises(
+    db_engine: AsyncEngine,
+    far1627_env: _Env,
+    clean_registry: InFlightRunRegistry,
+) -> None:
+    """The real SQL evidence gate ignores reported values but keeps engine facts."""
+    self_reported = await _seed_running_run(
+        db_engine, far1627_env, run_number=1, claim_token="tok-reported", dispatch_phase="first_node_dispatched"
+    )
+    observed = await _seed_running_run(
+        db_engine, far1627_env, run_number=2, claim_token="tok-observed", dispatch_phase="first_node_dispatched"
+    )
+    await _seed_node_evidence(
+        db_engine,
+        far1627_env,
+        self_reported,
+        outputs={"output_json": {"pr_url": "https://example.test/pr/1"}, "provenance": {"output_json": "reported"}},
+        telemetry={"status": "completed", "summary": "ok", "exit_code": 0, "stdout_length": 0, "stderr_length": 0},
+    )
+    await _seed_node_evidence(
+        db_engine,
+        far1627_env,
+        observed,
+        outputs={"output_json": {"pr_url": "https://example.test/pr/2"}, "provenance": {"output_json": "reported"}},
+        telemetry={"status": "completed", "summary": "ok", "exit_code": 0, "stdout_length": 128, "stderr_length": 0},
+    )
+    await _register_abandoned(clean_registry, self_reported, far1627_env.org_id, "tok-reported")
+    await _register_abandoned(clean_registry, observed, far1627_env.org_id, "tok-observed")
+
+    await handback_inflight_runs(db_engine)
+
+    reported_after = await _fetch_run(db_engine, self_reported)
+    observed_after = await _fetch_run(db_engine, observed)
+    assert reported_after["status"] == "pending"
+    assert observed_after["status"] == "failed"
+    assert "durable sandbox activity" in str(observed_after["error_detail"])
 
 
 async def test_non_idempotent_node_started_run_is_failed_in_place_not_requeued(

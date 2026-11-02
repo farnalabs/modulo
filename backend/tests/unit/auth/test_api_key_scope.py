@@ -279,3 +279,158 @@ class TestScopeCoexistsWithPrincipalKind:
         assert "ck_org_api_keys_scope" in checks
         assert "org" in checks["ck_org_api_keys_scope"]
         assert "user" in checks["ck_org_api_keys_scope"]
+
+
+class TestScopeAwareRoleCeiling:
+    """FAR-2281: the role ceiling is split by credential provenance.
+
+    ``admin`` is permitted only for a ``user``-scoped (human-linked) key; every
+    org/team/service/run-scoped key stays capped at operator/runner. Enforced in
+    the shared predicate, at mint, at update and by the DB CHECK.
+    """
+
+    def test_shared_predicate_allows_admin_only_for_user_scope(self) -> None:
+        from modulo.auth.api_key import api_key_role_violation
+
+        assert api_key_role_violation("admin", "user") is None
+        assert api_key_role_violation("operator", "user") is None
+        assert api_key_role_violation("runner", "user") is None
+        # A team-scoped key is never admin, even at user scope.
+        assert api_key_role_violation("admin", "user", uuid.uuid4()) is not None
+        assert api_key_role_violation("operator", "user", uuid.uuid4()) is None
+        # Org-scoped (and every non-user scope) keeps the flat prohibition.
+        assert api_key_role_violation("admin", "org") is not None
+        # An unknown role is refused for every scope.
+        assert api_key_role_violation("viewer", "user") is not None
+        assert api_key_role_violation("viewer", "org") is not None
+
+    @pytest.mark.asyncio
+    async def test_create_user_scoped_admin_key_succeeds(self) -> None:
+        session = _mock_session()
+        key, _full_key = await create_api_key(
+            session,
+            org_id=_ORG_ID,
+            name="user:admin",
+            role="admin",
+            account_id=_ACCOUNT_ID,
+            scope="user",
+        )
+        assert key.role == "admin"
+        assert key.scope == "user"
+
+    @pytest.mark.asyncio
+    async def test_create_org_scoped_admin_key_is_refused(self) -> None:
+        session = _mock_session()
+        with pytest.raises(ApiKeyScopeError):
+            await create_api_key(
+                session,
+                org_id=_ORG_ID,
+                name="org:admin",
+                role="admin",
+                account_id=_ACCOUNT_ID,
+                scope="org",
+            )
+        session.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_user_scoped_admin_key_with_team_is_refused(self) -> None:
+        """A team boundary never carries admin, even on a user-scoped key."""
+        session = _mock_session()
+        with pytest.raises(ApiKeyScopeError, match="team-scoped API keys cannot have admin role"):
+            await create_api_key(
+                session,
+                org_id=_ORG_ID,
+                name="user:admin:team",
+                role="admin",
+                account_id=_ACCOUNT_ID,
+                team_id=uuid.uuid4(),
+                scope="user",
+            )
+        session.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_org_key_to_admin_is_refused(self) -> None:
+        from modulo.auth.api_key import update_api_key
+
+        key = MagicMock()
+        key.scope = "org"
+        key.role = "operator"
+        key.team_id = None
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = key
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=result)
+        session.flush = AsyncMock()
+
+        with pytest.raises(ApiKeyScopeError):
+            await update_api_key(session, uuid.uuid4(), _ORG_ID, role="admin")
+        assert key.role == "operator"
+        session.flush.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_user_key_to_admin_is_allowed(self) -> None:
+        from modulo.auth.api_key import update_api_key
+
+        key = MagicMock()
+        key.scope = "user"
+        key.role = "operator"
+        key.team_id = None
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = key
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=result)
+        session.flush = AsyncMock()
+
+        updated = await update_api_key(session, uuid.uuid4(), _ORG_ID, role="admin")
+        assert updated is key
+        assert key.role == "admin"
+
+    @pytest.mark.asyncio
+    async def test_update_user_key_to_admin_with_team_is_refused(self) -> None:
+        """Promoting a user key to admin while scoping it to a team is a 422-shaped
+        refusal (``ApiKeyScopeError``), never an ``ApiKeyInvalidError`` 500."""
+        from modulo.auth.api_key import update_api_key
+
+        key = MagicMock()
+        key.scope = "user"
+        key.role = "operator"
+        key.team_id = None
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = key
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=result)
+        session.flush = AsyncMock()
+
+        with pytest.raises(ApiKeyScopeError, match="team-scoped API keys cannot have admin role"):
+            await update_api_key(session, uuid.uuid4(), _ORG_ID, role="admin", team_id=uuid.uuid4())
+        assert key.role == "operator"
+        assert key.team_id is None
+        session.flush.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_team_assignment_on_admin_user_key_is_refused(self) -> None:
+        """Assigning a team to an existing admin-role user key is refused too —
+        an unchanged role must not slip past the team rule."""
+        from modulo.auth.api_key import update_api_key
+
+        key = MagicMock()
+        key.scope = "user"
+        key.role = "admin"
+        key.team_id = None
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = key
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=result)
+        session.flush = AsyncMock()
+
+        with pytest.raises(ApiKeyScopeError, match="team-scoped API keys cannot have admin role"):
+            await update_api_key(session, uuid.uuid4(), _ORG_ID, team_id=uuid.uuid4())
+        assert key.team_id is None
+        session.flush.assert_not_awaited()
+
+    def test_model_check_is_scope_aware(self) -> None:
+        checks = {c.name: str(c.sqltext) for c in OrgApiKey.__table__.constraints if hasattr(c, "sqltext")}
+        role_check = checks["ck_org_api_keys_role"]
+        assert "admin" in role_check
+        assert "scope" in role_check
+        assert "user" in role_check

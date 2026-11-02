@@ -139,6 +139,20 @@ class TestCreateApiKey(AuthContext):
         assert result["error"] == "validation_failed"
         assert result["field"] == "role"
 
+    def test_shared_validator_allows_admin_only_for_user_scope(self) -> None:
+        """FAR-2281: the MCP validator uses the SAME scope-aware rule as REST.
+
+        The mint TOOL pins scope='org' (an MCP caller mints a machine key), so
+        admin stays prohibited there; the shared predicate itself permits it
+        for a user-scoped key, which only the REST surface can mint.
+        """
+        from modulo.api.mcp_server import _validate_api_key_role_and_name
+
+        assert _validate_api_key_role_and_name("CI", "admin", "user") is None
+        org_error = _validate_api_key_role_and_name("CI", "admin", "org")
+        assert org_error is not None
+        assert org_error["field"] == "role"
+
     async def test_blank_name_rejected(self) -> None:
         from modulo.api.mcp_server import create_api_key
 
