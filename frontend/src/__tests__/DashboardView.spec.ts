@@ -990,6 +990,43 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('142')
     wrapper.unmount()
   })
+
+  it('retries only the summary when the all-time window is selected', async () => {
+    // All-time has no finite trend source, so a retry must re-fetch just the
+    // summary and never ask for a trend series it never loaded.
+    localStorage.setItem('modulo.dashboard.trendWindow', 'all')
+    let summaryFails = true
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return summaryFails
+          ? Promise.reject(new Error('summary down'))
+          : Promise.resolve({ data: mockSummaryData, error: undefined })
+      }
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+
+    const alerts = wrapper.findAllComponents({ name: 'ErrorAlert' })
+    expect(alerts).toHaveLength(1)
+    expect(String(alerts[0].props('message'))).toContain('summary down')
+
+    summaryFails = false
+    await alerts[0].find('[data-testid="error-alert-retry"]').trigger('click')
+    await flushPromises()
+
+    // Retry re-asks with no window (the all-time default) and never fetches trends.
+    const summaryCalls = mockGet.mock.calls.filter(([url]) => url === '/api/v1/dashboard/summary')
+    const lastSummaryCall = summaryCalls[summaryCalls.length - 1]
+    expect(lastSummaryCall[1]).toEqual(expect.objectContaining({ params: { query: {} } }))
+    expect(mockGet.mock.calls.filter(([url]) => url === '/api/v1/dashboard/trends')).toHaveLength(0)
+
+    expect(wrapper.findAllComponents({ name: 'ErrorAlert' })).toHaveLength(0)
+    expect(wrapper.text()).toContain('142')
+    wrapper.unmount()
+  })
 })
 
 describe('StatCard delta arrow', () => {

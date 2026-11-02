@@ -166,6 +166,42 @@ describe('PipelineListView failure and retry', () => {
     expect(wrapper.find('[data-testid="pipeline-tree-row-p1"]').exists()).toBe(true)
     wrapper.unmount()
   })
+
+  it.each([
+    { label: 'Archive', archived_at: null, message: 'Archive failed' },
+    { label: 'Unarchive', archived_at: '2025-02-01T00:00:00Z', message: 'Unarchive failed' },
+  ])('keeps the table rendered when $label fails, showing an inline banner', async ({ label, archived_at, message }) => {
+    // Every row action shares the separate `actionError` surface: an archive
+    // or unarchive failure must not write into the list-load `error` that
+    // replaces the whole table with an error box.
+    const row = { id: 'p1', organisation_id: 'org1', name: `${label} Me`, description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at, run_enabled: true }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [row], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void; actionMenuItems: Array<{ label: string; command: () => void }> }
+    vm.openActionMenu({} as MouseEvent, row)
+    await nextTick()
+
+    postMock.mockResolvedValueOnce({ data: undefined, error: { detail: message } })
+    vm.actionMenuItems.find(i => i.label === label)!.command()
+    await flushPromises()
+    await nextTick()
+
+    const banner = wrapper.find('[role="alert"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain(message)
+    // The list is untouched: the row is still on screen and the list-load
+    // error state was not entered.
+    expect(wrapper.find('[data-testid="pipeline-tree-row-p1"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('No pipelines yet')
+    wrapper.unmount()
+  })
 })
 
 describe('PipelineListView', () => {
