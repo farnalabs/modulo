@@ -23,9 +23,19 @@ BASE_URL: str = os.environ.get(
     "https://staging-modulo.fly.dev",
 )
 _HTTP_TIMEOUT: float = 30.0
-_DELETION_REQUEST_PATH: str = "/api/v1/admin/org/deletion-request"
+_ADMIN_ORGS_PATH: str = "/api/v1/admin/orgs"
 _HEX_TOKEN_BYTES: int = 8
 _URLSAFE_TOKEN_BYTES: int = 16
+
+
+def _delete_org_path(org_id: str) -> str:
+    """Cross-organisation delete path for a test org.
+
+    The self-service ``/admin/org/deletion-request`` route can only ever
+    address the caller's OWN organisation and refuses every call with 403
+    (FAR-2225), so teardown must use the system-admin cross-organisation route.
+    """
+    return f"{_ADMIN_ORGS_PATH}/{org_id}"
 
 
 class IsolatedOrgContext:
@@ -171,10 +181,7 @@ async def create_isolated_org(
                     base_url,
                     token=admin_token,
                 ) as cleanup_client:
-                    await cleanup_client.post(
-                        _DELETION_REQUEST_PATH,
-                        json={"org_id": org_id},
-                    )
+                    await cleanup_client.delete(_delete_org_path(org_id))
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -202,10 +209,7 @@ async def destroy_isolated_org(ctx: IsolatedOrgContext) -> None:
             ctx.base_url,
             token=ctx.admin_token,
         ) as client:
-            resp = await client.post(
-                _DELETION_REQUEST_PATH,
-                json={"org_id": ctx.org_id},
-            )
+            resp = await client.delete(_delete_org_path(ctx.org_id))
             if resp.status_code == 404:
                 return
             if resp.status_code not in (200, 201, 202, 204):
