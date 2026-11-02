@@ -254,8 +254,6 @@ def _current_view(kind: str, current: dict[str, Any], desired_view: dict[str, An
         return _pipeline_current_view(current, desired_view)
     if kind == KIND_TRIGGER:
         return _trigger_current_view(current, desired_view)
-    if kind == KIND_SYSTEM_MAP:
-        return _system_map_current_view(current)
     return _CURRENT_VIEWS[kind](current)
 
 

@@ -307,13 +307,10 @@ def test_patch_payload() -> None:
 
 def test_plan_system_map_view() -> None:
     entity = _system_map_entity(name="Test Map")
-    current_entities: dict[str, Any] = {}
-    result = _plan_system_map_view(entity, current_entities)
-    assert isinstance(result, tuple)
-    view, revision = result
+    view = _plan_system_map_view(entity)
     # name is the identity key, not part of managed view
     assert view["visibility"] == "org"
-    assert revision is None
+    assert "revision" not in view
 
 
 def test_plan_system_map_view_with_revision() -> None:
@@ -321,10 +318,9 @@ def test_plan_system_map_view_with_revision() -> None:
     loop = _loop_config_entity()
     rev = _revision_entity(nodes=[node], loop_configs=[loop])
     entity = _system_map_entity(revision=rev)
-    current_entities: dict[str, Any] = {}
-    view, revision = _plan_system_map_view(entity, current_entities)
+    view = _plan_system_map_view(entity)
     assert "revision" in view
-    assert revision == view["revision"]
+    assert view["revision"] == rev.managed_view()
 
 
 def test_apply_one_system_map_create() -> None:

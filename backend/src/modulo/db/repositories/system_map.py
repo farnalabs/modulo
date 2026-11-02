@@ -1608,14 +1608,19 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         if not source_graph:
             return None
 
-        # Create new draft revision with source content
+        # Create new draft revision with the source content plus the requested
+        # notes. The create path stores notes in content_json, so restore must
+        # do the same; otherwise the documented `notes` parameter is dropped
+        # and the restored revision diverges from a freshly created one.
+        content_json = dict(source_revision.content_json or {})
+        content_json["notes"] = notes
         new_revision = await self.create_revision(
             session,
             organisation_id=organisation_id,
             system_map_id=system_map_id,
             revision_number=next_revision_number,
             status="draft",
-            content_json=source_revision.content_json,
+            content_json=content_json,
         )
 
         # Copy nodes

@@ -44,13 +44,9 @@ def _system_map_block_reason(
     return _system_map_name_conflict(entity, ambiguous_maps)
 
 
-def _plan_system_map_view(
-    entity: SystemMapEntity,
-    current_entities: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Plan one system map's desired view and declared revision (if any)."""
-    view = entity.managed_view()
-    return view, view.get("revision")
+def _plan_system_map_view(entity: SystemMapEntity) -> dict[str, Any]:
+    """Plan one system map's managed view (the declared revision is part of it)."""
+    return entity.managed_view()
 
 
 def build_desired_views(
@@ -76,8 +72,7 @@ def build_desired_views(
         if block_reason is not None:
             blocked.append((KIND_SYSTEM_MAP, entity.name, block_reason))
             continue
-        view, _revision = _plan_system_map_view(entity, current_entities)
-        desired[KIND_SYSTEM_MAP].append((entity.name, view))
+        desired[KIND_SYSTEM_MAP].append((entity.name, _plan_system_map_view(entity)))
     return desired, blocked
 
 

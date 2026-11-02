@@ -1364,8 +1364,33 @@ class TestRestoreRevisionAsNewDraft:
         assert new_revision is not None
         assert new_revision.status == "draft"
         assert new_revision.revision_number == 2
-        assert new_revision.content_json == {"stored": True}
+        assert new_revision.content_json == {"stored": True, "notes": "Restored"}
+        # The source revision's stored content must not be mutated by the copy.
+        assert published.content_json == {"stored": True}
         assert db.add.call_count == 4
+
+    async def test_restored_notes_round_trip_into_content_json(self, repo: SystemMapRepository) -> None:
+        published = _revision()
+        published.status = "published"
+        published.content_json = {"stored": True}
+        db = _session(
+            _result(one=published),
+            _result(rows=[published]),
+            _result(one=published),
+            _result(rows=[]),
+            _result(rows=[]),
+            _result(rows=[]),
+        )
+        new_revision = await repo.restore_revision_as_new_draft(
+            db,
+            organisation_id=_ORG,
+            system_map_id=_MAP,
+            source_revision_id=_REV,
+            notes="Restored from revision 2",
+        )
+        assert new_revision is not None
+        assert new_revision.content_json["notes"] == "Restored from revision 2"
+        assert new_revision.content_json["stored"] is True
 
     async def test_empty_source_graph_creates_only_revision(self, repo: SystemMapRepository) -> None:
         published = _revision()
