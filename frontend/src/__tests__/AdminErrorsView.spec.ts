@@ -329,6 +329,38 @@ describe('AdminErrorsView', () => {
     wrapper.unmount()
   })
 
+  it('copies the canonical support reference for a row without navigating', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mountWithLongMessageGroup()
+    await flushPromises()
+    await nextTick()
+
+    const copy = wrapper.find('[data-testid="admin-errors-copy-reference-eg-long-1"]')
+    expect(copy.exists()).toBe(true)
+    expect(copy.attributes('aria-label')).toBe('Copy support reference')
+    await copy.trigger('click')
+    await flushPromises()
+
+    const [details, url] = writeText.mock.calls[0][0].split('\n')
+    expect(details).toBe('error eg-long-1 · status new · level error · count 3')
+    expect(url).toBe(`url ${window.location.origin}/admin/errors/eg-long-1`)
+    expect(wrapper.find('[data-testid="admin-errors-copy-reference-feedback"]').text()).toBe('Copied')
+    expect(routerMocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('does not trigger row navigation when pressing a key on the copy button', async () => {
+    const wrapper = mountWithLongMessageGroup()
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-errors-copy-reference-eg-long-1"]').trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    expect(routerMocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('truncates and expands a null message as the (no message) fallback', async () => {
     getMock.mockImplementation(async (path: string) => {
       if (path === '/api/v1/errors') {

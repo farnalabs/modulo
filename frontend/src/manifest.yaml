@@ -1673,6 +1673,9 @@ elements:
       - testid: admin-errors-group-count
         type: element
         dynamic_testid: false
+      - testid: admin-errors-copy-reference-feedback
+        type: element
+        dynamic_testid: false
       - testid: admin-errors-loading
         type: element
         dynamic_testid: false
@@ -1724,6 +1727,12 @@ elements:
         dynamic_testid: false
       - testid: admin-error-detail-back
         type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-copy-reference
+        type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-copy-reference-feedback
+        type: element
         dynamic_testid: false
       - testid: admin-error-detail-events-loading
         type: element
@@ -4902,6 +4911,9 @@ elements:
         dynamic_testid: false
       - testid: run-detail-share-summary
         type: button
+        dynamic_testid: false
+      - testid: run-detail-share-summary-feedback
+        type: element
         dynamic_testid: false
       - testid: run-detail-queue-banner
         type: element

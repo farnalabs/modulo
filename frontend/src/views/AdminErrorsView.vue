@@ -163,8 +163,29 @@
           <template #cell-assignee="{ row }">
             <span class="text-xs text-muted-foreground font-mono">{{ formatErrorAssignee(row) }}</span>
           </template>
+          <!-- Support reference (FAR-2304): one click copies the canonical
+               reference for this error group. `.stop` on click/keydown keeps
+               the row's own navigation from firing alongside it. -->
+          <template #cell-support_reference="{ row }">
+            <button
+              type="button"
+              class="rounded-md px-2 py-1 text-xs font-medium text-primary-text hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              :aria-label="$t('common.support_reference.copy')"
+              :data-testid="'admin-errors-copy-reference-' + errorGroupRowId(row)"
+              @click.stop="copyGroupSupportReference(row)"
+              @keydown.stop
+            >
+              {{ $t('views.AdminErrorsView.copy') }}
+            </button>
+          </template>
         </DataTable>
       </div>
+
+      <output
+        data-testid="admin-errors-copy-reference-feedback"
+        aria-live="polite"
+        class="block min-h-[1em] text-sm text-muted-foreground"
+      >{{ supportReferenceFeedback }}</output>
 
       <div class="flex items-center justify-between">
         <span class="text-sm text-muted-foreground" data-testid="admin-errors-group-count">
@@ -229,6 +250,11 @@ import { DataTable, type Column } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronRight } from '@lucide/vue'
+import {
+  buildErrorGroupSupportReference,
+  useSupportReference,
+  type ErrorGroupSupportReferenceSource,
+} from '../composables/useSupportReference'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -243,6 +269,7 @@ const columns = computed<Column[]>(() => [
   { key: 'last_seen', label: t('views.AdminErrorDetailView.last_seen') },
   { key: 'status', label: t('views.AdminErrorsView.status') },
   { key: 'assignee', label: t('views.AdminErrorsView.assignee') },
+  { key: 'support_reference', label: t('views.AdminErrorsView.support_reference') },
 ])
 
 type FilterDefinition = { key: string; label: string; options: Array<{ value: string; label: string }> }
@@ -445,6 +472,38 @@ function navigateToDetail(id: string) {
     return
   }
   router.push(`/admin/errors/${id}`)
+}
+
+// FAR-2304: per-row support reference. DataTable hands rows over untyped, so
+// narrow the fields the reference reads (the same tolerant shape
+// errorGroupRowId / formatErrorAssignee use) rather than casting.
+function toSupportReferenceSource(row: Record<string, unknown>): ErrorGroupSupportReferenceSource {
+  return {
+    id: typeof row.id === 'string' ? row.id : null,
+    fingerprint: typeof row.fingerprint === 'string' ? row.fingerprint : null,
+    status: typeof row.status === 'string' ? row.status : null,
+    level_peak: typeof row.level_peak === 'string' ? row.level_peak : null,
+    count: typeof row.count === 'number' ? row.count : null,
+  }
+}
+
+const {
+  copied: supportReferenceCopied,
+  copyFailed: supportReferenceCopyFailed,
+  copyReference,
+} = useSupportReference()
+
+const supportReferenceFeedback = computed(() => {
+  if (supportReferenceCopied.value) return t('common.support_reference.copied')
+  if (supportReferenceCopyFailed.value) return t('common.support_reference.copy_failed')
+  return ''
+})
+
+async function copyGroupSupportReference(row: Record<string, unknown>) {
+  await copyReference(buildErrorGroupSupportReference(toSupportReferenceSource(row), {
+    t,
+    scope: isInstanceScope.value ? 'instance' : 'organisation',
+  }))
 }
 
 /* onMounted handled by useDataFetch */

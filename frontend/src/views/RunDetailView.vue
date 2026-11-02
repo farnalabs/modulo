@@ -52,14 +52,25 @@
           <div v-if="run.total_cost_usd != null" class="text-base font-semibold tabular-nums text-foreground">
             {{ $t('views.RunDetailView.total_label') }} {{ formatMoney(Number(formattedCost), currencyCode, 6) }}
           </div>
-          <button
-            type="button"
-            data-testid="run-detail-share-summary"
-            class="mt-2 inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium text-primary-text hover:bg-primary/10"
-            @click="copyShareSummary"
-          >
-            {{ shareCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.share_summary') }}
-          </button>
+          <!-- Support reference (FAR-2304): the single string a user copies when
+               they need to ask for help — full run id, real error code and a
+               link to this run. Built by the shared helper so every surface
+               produces the same shape. -->
+          <div class="mt-2 flex flex-col items-end gap-1">
+            <button
+              type="button"
+              data-testid="run-detail-share-summary"
+              class="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium text-primary-text hover:bg-primary/10"
+              @click="copySupportReference"
+            >
+              {{ $t('common.support_reference.copy') }}
+            </button>
+            <output
+              data-testid="run-detail-share-summary-feedback"
+              aria-live="polite"
+              class="min-h-[1em]"
+            >{{ supportReferenceFeedback }}</output>
+          </div>
         </div>
       </header>
 
@@ -1068,6 +1079,7 @@ import {
   type WorstCase,
 } from '../lib/worstCase'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
+import { buildRunSupportReference, useSupportReference } from '../composables/useSupportReference'
 import { Check, X, AlertTriangle, RotateCcw, Download, ChevronRight, CircleStop, Copy, ExternalLink, LoaderCircle } from '@lucide/vue'
 
 type RunResponse = components['schemas']['RunResponse'] & {
@@ -1199,7 +1211,6 @@ const runIO = ref<RunIOResponse | null>(null)
 const expandedNodes = ref(new Set<string>())
 const expandedLogs = ref(new Set<string>())
 const copied = ref(false)
-const shareCopied = ref(false)
 const promptCopied = ref(false)
 const outputCopied = ref(false)
 const inputPayloadCopied = ref(false)
@@ -1358,44 +1369,27 @@ async function submitOverride() {
   }
 }
 
-const shareSummary = computed(() => {
-  const r = run.value
-  if (!r) return ''
-  const completed = nodeEntries.value.filter(n => n.status === 'complete').length
-  const total = nodeEntries.value.length
-  let tokens: string
-  if (nodesReportedTokens.value) {
-    // nodesReportedTokens is true only when node_token_usage exists, which
-    // makes totalTokens non-null — the assertion cannot fail.
-    tokens = `${totalTokens.value!.toLocaleString()} (node-reported)`
-  } else if (costBasisTokens.value != null) {
-    tokens = `${costBasisTokens.value.toLocaleString()} (cost basis)`
-  } else {
-    tokens = totalTokens.value?.toLocaleString() ?? '—'
-  }
-  const cost = r.total_cost_usd != null ? formatMoney(Number(r.total_cost_usd), currencyCode.value, 6) : '—'
-  const runNumber = r.run_number != null ? `#${r.run_number}` : shortId(r.run_id)
-  return [
-    `Run: ${runNumber}`,
-    `Pipeline: ${r.pipeline_name || shortId(r.pipeline_id)}`,
-    `Status: ${r.status}`,
-    `Nodes: ${completed}/${total}`,
-    `Tokens: ${tokens}`,
-    `Cost: ${cost}`,
-    `Duration: —`,
-  ].join('\n')
+// FAR-2304: the run detail's copy block is the canonical support reference —
+// full run id, pipeline, status, real error code and a link — built by the one
+// shared helper (no per-view formatting, no placeholder values).
+const {
+  copied: supportReferenceCopied,
+  copyFailed: supportReferenceCopyFailed,
+  copyReference,
+} = useSupportReference()
+
+const supportReference = computed(() =>
+  run.value ? buildRunSupportReference(run.value, { t }) : '',
+)
+
+const supportReferenceFeedback = computed(() => {
+  if (supportReferenceCopied.value) return t('common.support_reference.copied')
+  if (supportReferenceCopyFailed.value) return t('common.support_reference.copy_failed')
+  return ''
 })
 
-async function copyShareSummary() {
-  const text = shareSummary.value
-  if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    shareCopied.value = true
-    setTimeout(() => { shareCopied.value = false }, 2000)
-  } catch (e) {
-    console.warn('Failed to copy share summary', e)
-  }
+async function copySupportReference() {
+  await copyReference(supportReference.value)
 }
 
 function toggleNodeIO(name: string) {

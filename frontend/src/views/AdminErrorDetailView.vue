@@ -18,6 +18,23 @@
           :subtitle="$t('views.AdminErrorDetailView.subtitle')"
         />
       </div>
+      <!-- Support reference (FAR-2304): the canonical string for this group,
+           built by the shared helper so it matches the dashboard's copy. -->
+      <div v-if="group" class="flex flex-col items-end gap-1">
+        <button
+          type="button"
+          data-testid="admin-error-detail-copy-reference"
+          class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          @click="copySupportReference"
+        >
+          {{ $t('common.support_reference.copy') }}
+        </button>
+        <output
+          data-testid="admin-error-detail-copy-reference-feedback"
+          aria-live="polite"
+          class="min-h-[1em] text-xs text-muted-foreground"
+        >{{ supportReferenceFeedback }}</output>
+      </div>
     </header>
 
     <div v-if="loading" data-testid="admin-error-detail-loading">
@@ -281,6 +298,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
 import { formatErrorDate, levelBadgeClass, statusBadgeClass } from '../utils/errorGroupPresentation'
 import Select from '../components/shared/AppSelect.vue'
+import { buildErrorGroupSupportReference, useSupportReference } from '../composables/useSupportReference'
 
 const route = useRoute()
 const router = useRouter()
@@ -323,6 +341,29 @@ const { data: groupData, loading, error, load: loadDetail } = useDataFetch(
 
 const group = computed(() => groupData.value ?? null)
 const sampleEvent = computed(() => groupData.value?.sample_event ?? null)
+
+// FAR-2304: support reference for this error group. The instance partition is
+// only reachable with `?scope=instance`, so the copied link carries it.
+const {
+  copied: supportReferenceCopied,
+  copyFailed: supportReferenceCopyFailed,
+  copyReference,
+} = useSupportReference()
+
+const supportReferenceFeedback = computed(() => {
+  if (supportReferenceCopied.value) return t('common.support_reference.copied')
+  if (supportReferenceCopyFailed.value) return t('common.support_reference.copy_failed')
+  return ''
+})
+
+async function copySupportReference() {
+  const current = group.value
+  if (!current) return
+  await copyReference(buildErrorGroupSupportReference(current, {
+    t,
+    scope: isInstanceScope ? 'instance' : 'organisation',
+  }))
+}
 
 watch(() => groupData.value, (g) => {
   if (g) assigneeId.value = g.assigned_to || ''

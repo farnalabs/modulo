@@ -155,6 +155,39 @@ describe('AdminErrorDetailView', () => {
     expect(wrapper.text()).toContain('Inspect occurrences, status, ownership, and event context for this error group.')
   })
 
+  it('copies the canonical support reference for the group', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mountView()
+    await flush()
+
+    const button = wrapper.find('[data-testid="admin-error-detail-copy-reference"]')
+    expect(button.exists()).toBe(true)
+    await button.trigger('click')
+    await flush()
+
+    const [details, url] = writeText.mock.calls[0][0].split('\n')
+    expect(details).toBe('error err-1 · fingerprint abcdef1234567890 · status new · level error · count 3')
+    expect(url).toBe(`url ${window.location.origin}/admin/errors/err-1`)
+    expect(wrapper.find('[data-testid="admin-error-detail-copy-reference-feedback"]').text()).toBe('Copied')
+  })
+
+  it('copies an instance-scope reference with the scope in its url', async () => {
+    authState.isSystemAdmin = true
+    routeState.query = { scope: 'instance' }
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mountView()
+    await flush()
+
+    await wrapper.find('[data-testid="admin-error-detail-copy-reference"]').trigger('click')
+    await flush()
+
+    expect(writeText.mock.calls[0][0].split('\n')[1]).toBe(
+      `url ${window.location.origin}/admin/errors/err-1?scope=instance`,
+    )
+  })
+
   it('raw events: pagination next/prev fetch successive offsets and disable at bounds', async () => {
     fetchEventsMock.mockResolvedValue(eventsPage([eventRow()], 45))
     const wrapper = mountView()

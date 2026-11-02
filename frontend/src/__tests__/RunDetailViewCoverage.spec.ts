@@ -543,37 +543,38 @@ describe('RunDetailView coverage — script logic branches', () => {
     expect(writeText.mock.calls[0][0]).toContain('"key": "val"')
   })
 
-  // ── share summary: with node data ──────────────────────────────
-  it('includes node counts in share summary', async () => {
+  // ── support reference: full run id ─────────────────────────────
+  it('copies the full run id in the support reference', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
-    const wrapper = await mountWith(
-      baseRun({ node_token_usage: { n1: {}, n2: {} } }),
-      { outputs_json: { n1: { output: 'ok' }, n2: { output: 'ok' } } },
-    )
+    const wrapper = await mountWith(baseRun())
     await wrapper.find('[data-testid="run-detail-share-summary"]').trigger('click')
     await flushPromises()
-    expect(writeText.mock.calls[0][0]).toContain('Nodes: 2/2')
+    const details = writeText.mock.calls[0][0].split('\n')[0]
+    expect(details).toContain('run test-run-id')
+    expect(details).not.toContain('...')
   })
 
-  // ── share summary: no tokens ───────────────────────────────────
-  it('shows dash for tokens when no token data', async () => {
+  // ── support reference: no error code ───────────────────────────
+  it('omits the error segment when the run has no error code', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
-    const wrapper = await mountWith(baseRun({ node_token_usage: null }))
+    const wrapper = await mountWith(baseRun({ status: 'complete', error_code: null }))
     await wrapper.find('[data-testid="run-detail-share-summary"]').trigger('click')
     await flushPromises()
-    expect(writeText.mock.calls[0][0]).toContain('Tokens: —')
+    const copied = writeText.mock.calls[0][0]
+    expect(copied).not.toContain('error ')
+    expect(copied).not.toContain('—')
   })
 
-  // ── share summary: no cost ─────────────────────────────────────
-  it('shows dash for cost when total_cost_usd null', async () => {
+  // ── support reference: real error code ─────────────────────────
+  it('includes the real error code for a failed run', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
-    const wrapper = await mountWith(baseRun({ total_cost_usd: null }))
+    const wrapper = await mountWith(baseRun({ status: 'failed', error_code: 'provider.rate_limit' }))
     await wrapper.find('[data-testid="run-detail-share-summary"]').trigger('click')
     await flushPromises()
-    expect(writeText.mock.calls[0][0]).toContain('Cost: —')
+    expect(writeText.mock.calls[0][0]).toContain('error provider.rate_limit')
   })
 
   // ── copyRunId ───────────────────────────────────────────────────

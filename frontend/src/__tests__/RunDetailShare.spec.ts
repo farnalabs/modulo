@@ -63,7 +63,7 @@ describe('RunDetailShare', () => {
     vi.clearAllMocks()
   })
 
-  it('renders Share Summary button when run loads', async () => {
+  it('renders the copy support reference button when run loads', async () => {
     const wrapper = mount(RunDetailView, {
       global: {
         mocks: { $t: (key: string) => key.split('.').pop() ?? key },
@@ -73,10 +73,10 @@ describe('RunDetailShare', () => {
     await new Promise(r => setTimeout(r, 0))
     const btn = wrapper.find('[data-testid="run-detail-share-summary"]')
     expect(btn.exists()).toBe(true)
-    expect(btn.text()).toBe('share_summary')
+    expect(btn.text()).toBe('copy')
   })
 
-  it('copies share summary to clipboard on click', async () => {
+  it('copies the canonical support reference to clipboard on click', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
 
@@ -92,13 +92,12 @@ describe('RunDetailShare', () => {
 
     expect(writeText).toHaveBeenCalledOnce()
     const text = writeText.mock.calls[0][0]
-    expect(text).toContain('Run: #test-run-id')
-    expect(text).toContain('Pipeline: #test')
-    expect(text).toContain('Status: complete')
-    expect(text).toContain('Cost: $1.230000')
+    const [details, url] = text.split('\n')
+    expect(details).toBe('run test-run-id · pipeline test-pipeline · status complete')
+    expect(url).toBe(`url ${window.location.origin}/runs/test-run-id`)
   })
 
-  it('shows Copied! text after clicking share button', async () => {
+  it('announces that the reference was copied after clicking', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
 
@@ -110,7 +109,11 @@ describe('RunDetailShare', () => {
     await nextTick()
     await new Promise(r => setTimeout(r, 0))
 
+    const feedback = wrapper.find('[data-testid="run-detail-share-summary-feedback"]')
+    expect(feedback.attributes('aria-live')).toBe('polite')
+    expect(feedback.text()).toBe('')
+
     await wrapper.find('[data-testid="run-detail-share-summary"]').trigger('click')
-    expect(wrapper.find('[data-testid="run-detail-share-summary"]').text()).toBe('copied')
+    expect(feedback.text()).toBe('Copied')
   })
 })
