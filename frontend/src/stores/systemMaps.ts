@@ -10,6 +10,8 @@ import type { components } from '../lib/api/schema'
 
 type SystemMapOverview = components['schemas']['SystemMapOverviewResponse']
 type SystemMapList = components['schemas']['SystemMapListResponse']
+type SystemMapDiscoveryReport = components['schemas']['SystemMapDiscoveryReport']
+type SystemMapDiscoveryRequest = components['schemas']['SystemMapDiscoveryRequest']
 
 interface InternalFeatureFlagsPayload {
   flags?: Array<{ name: string; currently_active: boolean }>
@@ -17,6 +19,8 @@ interface InternalFeatureFlagsPayload {
 
 /** The overview aggregate is a read model; a stalled request must not hang it. */
 const OVERVIEW_REQUEST_TIMEOUT_MS = 15000
+/** Discovery walks the whole organisation inventory; allow it longer. */
+const DISCOVERY_REQUEST_TIMEOUT_MS = 30000
 const SYSTEM_MAP_PAGE_SIZE = 20
 const MAX_SYSTEM_MAP_PAGES = 1000
 
@@ -34,17 +38,17 @@ function thrownMessage(error: unknown, fallback: string): string {
 }
 
 /**
- * System Maps is intentionally fail-closed while its discovery/review API is
- * not part of the current generated contract. The internal flag probe is
- * separate from the ordinary plan payload because the backend deliberately
- * omits this flag from ordinary callers.
+ * System Maps is an internal preview. The internal flag probe is separate from
+ * the ordinary plan payload because the backend deliberately omits this flag
+ * from ordinary callers. Discovery is an explicit, user-triggered action: it
+ * persists an unpublished draft, so it must never run on mount.
  */
 export const useSystemMapsStore = defineStore('systemMaps', () => {
-  const loaded = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
-  const discoveryAvailable = ref(false)
-  const draft = ref<null>(null)
+  const discoveryReport = ref<SystemMapDiscoveryReport | null>(null)
+  const discovering = ref(false)
+  const discoveryError = ref<string | null>(null)
   const overview = ref<SystemMapOverview | null>(null)
   const overviewLoading = ref(false)
   const overviewError = ref<string | null>(null)
@@ -59,6 +63,9 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   // never repopulate state (a stale principal's response after a logout, or an
   // older fetch resolving after a newer one).
   let overviewGeneration = 0
+  // Discovery persists a draft, so an in-flight response must not be applied
+  // after a logout, reset or principal change.
+  let discoveryGeneration = 0
   // A subject is stable across token refreshes, including refreshes that carry
   // demoted roles or capabilities. Cache against the complete token value so
   // every access-token change revalidates the authorization decision.
@@ -72,16 +79,16 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const canProbeInternalFlags = computed(
     () => planStore.userPermissions.includes(SYSTEM_CONFIG_MANAGE_PERMISSION),
   )
-  const hasDraft = computed(() => draft.value !== null)
 
   function reset(): void {
     accessGeneration += 1
     overviewGeneration += 1
-    loaded.value = false
+    discoveryGeneration += 1
     loading.value = false
     error.value = null
-    discoveryAvailable.value = false
-    draft.value = null
+    discoveryReport.value = null
+    discovering.value = false
+    discoveryError.value = null
     overview.value = null
     overviewLoading.value = false
     overviewError.value = null
@@ -257,24 +264,54 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     }
   }
 
-  /** No request is made until the discovery endpoint exists in schema.ts. */
-  async function fetchDiscovery(): Promise<void> {
-    loaded.value = true
-    discoveryAvailable.value = false
-    draft.value = null
+  /**
+   * Run discovery and hold the resulting unpublished draft report.
+   *
+   * Explicit only: discovery persists a draft revision, so the caller decides
+   * when it happens. A concurrent call is ignored rather than queued, and a
+   * response owned by a previous principal (or superseded by reset) is
+   * discarded.
+   */
+  async function fetchDiscovery(payload: SystemMapDiscoveryRequest): Promise<void> {
+    if (discovering.value) return
+    discoveryGeneration += 1
+    const generation = discoveryGeneration
+    const token = getAccessToken()
+    const isCurrent = (): boolean => generation === discoveryGeneration && token === getAccessToken()
+    discovering.value = true
+    discoveryError.value = null
+    try {
+      const response = await withRequestDeadline(
+        (signal) => api.POST('/api/v1/system-maps/discover', { body: payload, signal }),
+        DISCOVERY_REQUEST_TIMEOUT_MS,
+      )
+      if (!isCurrent()) return
+      if (response.error || !response.data) {
+        throw new Error(apiErrorMessage(response.error, 'System discovery request failed'))
+      }
+      discoveryReport.value = response.data
+    } catch (err: unknown) {
+      if (!isCurrent()) return
+      discoveryReport.value = null
+      discoveryError.value = thrownMessage(err, 'System discovery request failed')
+    } finally {
+      // Clear the in-flight flag unless a reset (which already cleared it) or a
+      // newer request superseded this one. A token change alone must not strand
+      // the control in its disabled state.
+      if (generation === discoveryGeneration) discovering.value = false
+    }
   }
 
   return {
-    loaded,
     loading,
     error,
-    discoveryAvailable,
-    draft,
+    discoveryReport,
+    discovering,
+    discoveryError,
     overview,
     overviewLoading,
     overviewError,
     overviewEmpty,
-    hasDraft,
     accessLoaded,
     systemMapsEnabled,
     reset,

@@ -80,23 +80,38 @@ describe('DashboardSystemOverview', () => {
     mockGet.mockReset()
   })
 
-  it('loads discovery and then the default overview on mount', async () => {
+  it('loads the default overview on mount without triggering discovery', async () => {
     const { fetchDiscovery, fetchDefaultOverview } = mountOverview()
     await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(1))
 
+    // Discovery persists an unpublished draft, so a page load must never run it.
+    expect(fetchDiscovery).not.toHaveBeenCalled()
+  })
+
+  it('enables the discover button and runs discovery only when clicked', async () => {
+    const { wrapper, fetchDiscovery } = mountOverview()
+
+    const button = wrapper.get('[data-testid="dashboard-system-discover"]')
+    expect(button.attributes('disabled')).toBeUndefined()
+    expect(fetchDiscovery).not.toHaveBeenCalled()
+
+    await button.trigger('click')
+
     expect(fetchDiscovery).toHaveBeenCalledTimes(1)
-    expect(fetchDiscovery.mock.invocationCallOrder[0]).toBeLessThan(
-      fetchDefaultOverview.mock.invocationCallOrder[0],
+    expect(fetchDiscovery).toHaveBeenCalledWith({ name: 'Discovered System Map' })
+    expect(wrapper.get('[data-testid="system-map-draft-review"]').text()).toContain(
+      'Discover your system',
     )
   })
 
-  it('keeps discovery disabled until the discovery API exists', () => {
-    const { wrapper } = mountOverview()
+  it('disables the discover button while a discovery run is in flight', async () => {
+    const { wrapper, store } = mountOverview()
+    store.discovering = true
+    await wrapper.vm.$nextTick()
 
-    expect(wrapper.get('[data-testid="dashboard-system-discover"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="system-map-draft-review"]').text()).toContain(
-      'No discovery request was made',
-    )
+    const button = wrapper.get('[data-testid="dashboard-system-discover"]')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(button.text()).toContain('Discovering')
   })
 
   it('renders observed metrics with interpolated window, rates and localized health', async () => {
@@ -187,8 +202,8 @@ describe('DashboardSystemOverview', () => {
       expect(wrapper.find('[data-testid="system-map-overview-metrics"]').exists()).toBe(true),
     )
     expect(wrapper.find('[data-testid="system-map-overview-error"]').exists()).toBe(false)
-    // The retry re-runs every source the view reads, not only the leaf overview.
-    expect(fetchDiscovery).toHaveBeenCalledTimes(2)
+    // The retry re-runs the overview sources, never discovery (which is explicit).
+    expect(fetchDiscovery).not.toHaveBeenCalled()
     expect(mockGet).toHaveBeenCalledTimes(3)
   })
 

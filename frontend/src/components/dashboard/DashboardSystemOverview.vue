@@ -8,12 +8,17 @@
     <template #header>
       <button
         type="button"
-        disabled
-        class="rounded-md border px-3 py-2 text-sm font-medium opacity-60"
+        :disabled="store.discovering"
+        class="rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-60"
         data-testid="dashboard-system-discover"
         :aria-label="$t('views.DashboardView.discover_my_system')"
+        @click="discover"
       >
-        {{ $t('views.DashboardView.discover_my_system') }}
+        {{
+          store.discovering
+            ? $t('views.DashboardView.system_maps_discovering')
+            : $t('views.DashboardView.discover_my_system')
+        }}
       </button>
     </template>
 
@@ -71,10 +76,18 @@ const healthLabel = (health: string): string => t(`views.DashboardView.system_ma
  * Load every source this overview renders from. The retry affordance reuses
  * this same entry point, so a retry re-runs the whole load rather than only the
  * leaf overview request.
+ *
+ * Discovery is NOT part of the load: it persists an unpublished draft, so it
+ * only runs when the operator explicitly asks for it.
  */
 async function loadOverview(): Promise<void> {
-  await store.fetchDiscovery()
   await store.fetchDefaultOverview()
+}
+
+async function discover(): Promise<void> {
+  await store.fetchDiscovery({
+    name: t('views.DashboardView.system_maps_discovery_default_name'),
+  })
 }
 
 onMounted(loadOverview)

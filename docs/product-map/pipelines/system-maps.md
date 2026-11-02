@@ -132,24 +132,35 @@ automatically.
       token, a malformed flag payload or a probe error
       (`frontend/src/stores/systemMaps.ts`, `frontend/src/views/DashboardView.vue`;
       `systemMapsStore.spec.ts`, `DashboardSystemOverview.spec.ts`)
-- [ ] The draft-review UI is still a placeholder: `fetchDiscovery()` is a
-      deliberate no-op, the "Discover My System" button is disabled, and the
-      review panel renders explanatory copy only. No page ever calls the
-      shipped `POST /api/v1/system-maps/discover` endpoint, even though it is
-      present in the generated contract (`frontend/src/lib/api/schema.ts`), and
-      there is no System Maps publish flow
-      (`frontend/src/stores/systemMaps.ts`, `SystemMapDraftReview.vue`;
-      `systemMapsStore.spec.ts`)
+- [x] The dashboard wires the shipped discovery endpoint (FAR-2244 /
+      FAR-2245 UI gap closed). The "Discover My System" button is enabled and
+      calls `POST /api/v1/system-maps/discover` only on an explicit click -
+      discovery persists an unpublished draft, so a page load NEVER runs it.
+      The store holds the returned report (`discoveryReport`) plus a distinct
+      `discovering` / `discoveryError` state, applies the same 30s abortable
+      request deadline as the overview reads, de-duplicates concurrent runs,
+      and discards a response owned by a previous principal (or superseded by
+      `reset()`) rather than applying it to the new session. The review panel
+      renders the draft summary (node / edge / source counts and revision
+      number), discovery warnings and skipped sources, and a first-class
+      loading / failure state; it keeps stating that nothing is published
+      (`frontend/src/stores/systemMaps.ts`,
+      `frontend/src/components/dashboard/DashboardSystemOverview.vue`,
+      `frontend/src/components/system-maps/SystemMapDraftReview.vue`;
+      `systemMapsStore.spec.ts`, `DashboardSystemOverview.spec.ts`,
+      `SystemMapDraftReview.spec.ts`)
+- [ ] There is no System Maps publish flow: discovery persists and the review
+      panel reports the unpublished draft, but no UI promotes a draft revision
+      to a published map (`frontend/src/components/system-maps/`,
+      `backend/src/modulo/api/routes/system_maps.py` publish route)
 
 ## Known Gaps
 
-- **No System Maps UI wires the discovery endpoint.** The backend discovery and
-  draft persistence ship, and the request/response types are in the generated
-  OpenAPI client, but the dashboard card never issues the request: the store's
-  `fetchDiscovery()` only sets `loaded = true` / `discoveryAvailable = false`,
-  the discovery button is permanently disabled, and the review panel is static
-  copy. This is tracked as the unchecked behaviour above; it needs a UI wiring
-  change (out of scope for a product-map walk).
+- **No System Maps publish flow.** Discovery is wired end to end, but the
+  review panel only reports the unpublished draft: no UI calls the existing
+  `POST /api/v1/system-maps/{map_id}/revisions/{rev_id}/publish` route, so an
+  operator still cannot promote an inferred map to the published map the
+  overview metrics read. Tracked as the unchecked behaviour above.
 - **No BDD coverage.** Discovery, persistence and gating are covered by unit
   tests and a Postgres integration test, but there is no Gherkin feature file
   for the System Maps surface.
@@ -163,6 +174,28 @@ automatically.
   agent tool.
 
 ## QA History
+
+- 2026-11-02: **Improve Architecture product-map walk** - closed the
+  "no UI wires the discovery endpoint" gap. `useSystemMapsStore.fetchDiscovery`
+  was a deliberate no-op even though `POST /api/v1/system-maps/discover` had
+  shipped into the generated contract, so the dashboard's "Discover My System"
+  button was permanently disabled and no page ever exercised the endpoint.
+  `fetchDiscovery()` now POSTs the discovery request (30s abortable deadline),
+  holds the returned report, and exposes separate `discovering` /
+  `discoveryError` state; it is explicitly user-triggered and is no longer
+  invoked on dashboard mount, because discovery persists an unpublished draft
+  revision. Concurrent runs are de-duplicated and a response owned by a
+  superseded principal or a reset is discarded. The review panel renders the
+  draft summary (nodes / edges / sources / revision), warnings and skipped
+  sources, with loading and failure states; the discover button is enabled and
+  disabled only while a run is in flight. The new static testids are registered
+  in the manifest elements inventory. Publishing remains a tracked gap, so the
+  entry stays `partial`. Proved by
+  `systemMapsStore.spec.ts` (POST + body + abort signal, error / non-Error
+  handling, concurrent de-duplication, stale-principal discard, reset) and
+  `DashboardSystemOverview.spec.ts` / `SystemMapDraftReview.spec.ts` (no
+  discovery on mount, click-triggered run, report / warning / loading / error
+  rendering).
 
 - 2026-10-31: **Improve Architecture product-map walk** - closed the feature-graph
   gap left by FAR-2244 (backend discovery) and FAR-2245 (dashboard draft-review

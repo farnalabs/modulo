@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
 const mockGet = vi.hoisted(() => vi.fn())
+const mockPost = vi.hoisted(() => vi.fn())
 const mockGetAccessToken = vi.hoisted(() => vi.fn())
 const mockIsOperator = vi.hoisted(() => ({ value: false }))
 const mockIsSystemAdmin = vi.hoisted(() => ({ value: false }))
@@ -15,7 +16,7 @@ const mockPlanStore = vi.hoisted(() => ({
 }))
 
 vi.mock('../lib/api/client', () => ({
-  api: { GET: mockGet },
+  api: { GET: mockGet, POST: mockPost },
   getAccessToken: mockGetAccessToken,
 }))
 vi.mock('../stores/planStore', () => ({ usePlanStore: () => mockPlanStore }))
@@ -41,6 +42,7 @@ describe('useSystemMapsStore access', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     mockGet.mockReset()
+    mockPost.mockReset()
     mockGetAccessToken.mockReturnValue(jwtFor('operator-1'))
     mockIsOperator.value = false
     mockIsSystemAdmin.value = false
@@ -241,9 +243,9 @@ describe('useSystemMapsStore access', () => {
     expect(store.accessLoaded).toBe(false)
     expect(store.systemMapsEnabled).toBe(false)
     expect(store.error).toBeNull()
-    expect(store.loaded).toBe(false)
-    expect(store.discoveryAvailable).toBe(false)
-    expect(store.draft).toBeNull()
+    expect(store.discoveryReport).toBeNull()
+    expect(store.discovering).toBe(false)
+    expect(store.discoveryError).toBeNull()
   })
 
   it('fails closed when no access token is present', async () => {
@@ -331,14 +333,131 @@ describe('useSystemMapsStore access', () => {
     }
   })
 
-  it('keeps discovery fail-closed until its endpoint exists', async () => {
+})
+
+function discoveryReport(overrides: Record<string, unknown> = {}) {
+  return {
+    sources_inspected: [
+      { kind: 'pipeline', identifier: 'pipeline-1', name: 'Build' },
+      { kind: 'trigger', identifier: 'trigger-1', name: 'Nightly' },
+    ],
+    node_count: 2,
+    edge_count: 1,
+    inferred_nodes: [],
+    inferred_edges: [],
+    skipped: [{ source: 'folder-1', reason: 'unsupported source kind' }],
+    warnings: ['Some organisation sources were skipped'],
+    draft_map_id: 'map-1',
+    draft_revision_id: 'revision-1',
+    draft_revision_number: 1,
+    published: false,
+    ...overrides,
+  }
+}
+
+describe('useSystemMapsStore discovery', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+    mockPost.mockReset()
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-1'))
+  })
+
+  it('posts the discovery request and holds the unpublished draft report', async () => {
+    mockPost.mockResolvedValue({ data: discoveryReport() })
     const store = useSystemMapsStore()
 
-    await store.fetchDiscovery()
+    await store.fetchDiscovery({ name: 'Discovered System Map' })
 
-    expect(store.loaded).toBe(true)
-    expect(store.discoveryAvailable).toBe(false)
-    expect(store.draft).toBeNull()
+    expect(mockPost).toHaveBeenCalledWith(
+      '/api/v1/system-maps/discover',
+      expect.objectContaining({ body: { name: 'Discovered System Map' } }),
+    )
+    expect(store.discoveryReport?.draft_revision_number).toBe(1)
+    expect(store.discovering).toBe(false)
+    expect(store.discoveryError).toBeNull()
+  })
+
+  it('sends an abort signal with the discovery request', async () => {
+    mockPost.mockResolvedValue({ data: discoveryReport() })
+    const store = useSystemMapsStore()
+
+    await store.fetchDiscovery({ name: 'Discovered System Map' })
+
+    const init = mockPost.mock.calls[0][1] as { signal?: unknown }
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('reports an API error without keeping a stale report', async () => {
+    mockPost
+      .mockResolvedValueOnce({ data: discoveryReport() })
+      .mockResolvedValueOnce({ error: { detail: 'discovery denied' }, data: undefined })
+    const store = useSystemMapsStore()
+
+    await store.fetchDiscovery({ name: 'Discovered System Map' })
+    await store.fetchDiscovery({ name: 'Discovered System Map' })
+
+    expect(store.discoveryReport).toBeNull()
+    expect(store.discoveryError).toBe('discovery denied')
+    expect(store.discovering).toBe(false)
+  })
+
+  it('uses a stable message for a non-Error discovery failure', async () => {
+    mockPost.mockRejectedValue('not an Error instance')
+    const store = useSystemMapsStore()
+
+    await store.fetchDiscovery({ name: 'Discovered System Map' })
+
+    expect(store.discoveryError).toBe('System discovery request failed')
+    expect(store.discoveryReport).toBeNull()
+    expect(store.discovering).toBe(false)
+  })
+
+  it('deduplicates concurrent discovery requests', async () => {
+    let resolveRequest: ((value: unknown) => void) | undefined
+    mockPost.mockImplementation(() => new Promise((resolve) => { resolveRequest = resolve }))
+    const store = useSystemMapsStore()
+
+    const first = store.fetchDiscovery({ name: 'Discovered System Map' })
+    const second = store.fetchDiscovery({ name: 'Discovered System Map' })
+    await vi.waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1))
+
+    resolveRequest?.({ data: discoveryReport() })
+    await Promise.all([first, second])
+  })
+
+  it('ignores a discovery response after the token changes', async () => {
+    let resolveRequest: ((value: unknown) => void) | undefined
+    mockPost.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRequest = resolve
+        }),
+    )
+    const store = useSystemMapsStore()
+
+    const request = store.fetchDiscovery({ name: 'Discovered System Map' })
+    await vi.waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1))
+
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-2'))
+    resolveRequest?.({ data: discoveryReport() })
+    await request
+
+    expect(store.discoveryReport).toBeNull()
+    expect(store.discoveryError).toBeNull()
+    expect(store.discovering).toBe(false)
+  })
+
+  it('clears discovery state on reset', async () => {
+    mockPost.mockResolvedValue({ data: discoveryReport() })
+    const store = useSystemMapsStore()
+
+    await store.fetchDiscovery({ name: 'Discovered System Map' })
+    store.reset()
+
+    expect(store.discoveryReport).toBeNull()
+    expect(store.discovering).toBe(false)
+    expect(store.discoveryError).toBeNull()
   })
 })
 
@@ -389,6 +508,7 @@ describe('useSystemMapsStore overview', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     mockGet.mockReset()
+    mockPost.mockReset()
     mockGetAccessToken.mockReturnValue(jwtFor('operator-1'))
   })
 
