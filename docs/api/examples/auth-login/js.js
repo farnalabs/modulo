@@ -1,8 +1,21 @@
 #!/usr/bin/env node
 /**
- * Modulo API Example: Authentication (Login) — fetch
+ * Modulo API Example: Authentication (Login) - fetch
  *
  * Demonstrates login, token refresh, and logout using fetch.
+ *
+ * Authentication model (FAR-1197):
+ *   - The access token is in the login JSON body as `access_token`.
+ *   - The refresh token is set ONLY as the httpOnly `modulo_refresh` cookie;
+ *     it never appears in a response body.
+ *   - `/auth/refresh` and `/auth/logout` take no request body. They read the
+ *     cookie and require a double-submit CSRF header: the JS-readable
+ *     `XSRF-TOKEN` cookie echoed in `X-CSRF-Token`.
+ *
+ * Node's fetch does not store cookies, so this example passes a CookieJar
+ * (from ../_shared/client.js) to `api()`. In a browser the cookie jar is the
+ * browser itself: call `fetch(..., { credentials: "include" })` and read
+ * `document.cookie` for XSRF-TOKEN.
  *
  * Usage:
  *   export MODULO_URL=http://localhost:8000
@@ -11,21 +24,31 @@
  *   node auth-login/js.js
  */
 
-const { api, logSafe, EMAIL, PASSWORD, runMain } = require("../_shared/client.js");
+const { api, logSafe, EMAIL, PASSWORD, runMain, CookieJar } = require("../_shared/client.js");
+
+function csrfHeaders(jar) {
+  const token = jar.get("XSRF-TOKEN");
+  if (!token) throw new Error("XSRF-TOKEN cookie missing: login did not return a CSRF token");
+  return { "X-CSRF-Token": token };
+}
 
 async function main() {
-  // Step 1: Login
+  const jar = new CookieJar();
+  const auth = (token) => ({ Authorization: `Bearer ${token}` });
+
+  // Step 1: Login. The access token is in the body; auth and CSRF cookies are
+  // set on the response and stored in the jar.
   console.log(`Logging in as ${EMAIL} ...`);
   const login = await api("/api/v1/auth/login", {
     method: "POST",
+    jar,
     body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
   });
-  const { access_token, refresh_token, token_type } = login;
+  const { access_token, token_type } = login;
   console.log(`  access_token:  ${logSafe(access_token.slice(0, 20))}...`);
-  console.log(`  refresh_token: ${logSafe(refresh_token.slice(0, 20))}...`);
   console.log(`  token_type:    ${logSafe(token_type)}`);
-
-  const auth = (token) => ({ Authorization: `Bearer ${token}` });
+  console.log(`  modulo_refresh cookie set: ${jar.get("modulo_refresh") !== undefined}`);
+  console.log(`  must_change_password:      ${login.must_change_password === true}`);
 
   // Step 2: Get current user
   console.log("\nFetching current user ...");
@@ -34,23 +57,24 @@ async function main() {
   console.log(`  role:    ${logSafe(me.org_role)}`);
   console.log(`  user_id: ${logSafe(me.id)}`);
 
-  // Step 3: Refresh tokens
+  // Step 3: Refresh tokens. No body: the server reads the modulo_refresh
+  // cookie, and the double-submit header must match the XSRF-TOKEN cookie.
   console.log("\nRefreshing token ...");
   const refreshResp = await api("/api/v1/auth/refresh", {
     method: "POST",
-    body: JSON.stringify({ refresh_token }),
+    jar,
+    headers: csrfHeaders(jar),
   });
   const newAccess = refreshResp.access_token;
-  const newRefresh = refreshResp.refresh_token;
-  console.log(`  new access_token:  ${logSafe(newAccess.slice(0, 20))}...`);
-  console.log(`  new refresh_token: ${logSafe(newRefresh.slice(0, 20))}...`);
+  console.log(`  new access_token: ${logSafe(newAccess.slice(0, 20))}...`);
+  console.log(`  rotated modulo_refresh cookie: ${jar.get("modulo_refresh") !== undefined}`);
 
-  // Step 4: Logout
+  // Step 4: Logout. Uses the rotated XSRF-TOKEN cookie, not the pre-refresh one.
   console.log("\nLogging out ...");
   const logout = await api("/api/v1/auth/logout", {
     method: "POST",
-    headers: auth(newAccess),
-    body: JSON.stringify({ refresh_token: newRefresh }),
+    jar,
+    headers: { ...auth(newAccess), ...csrfHeaders(jar) },
   });
   console.log(`  ${logSafe(logout.detail)}`);
 
