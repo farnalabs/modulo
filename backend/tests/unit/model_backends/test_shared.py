@@ -500,7 +500,7 @@ class TestOpenAICompatibleAdapters:
         ("module_path", "class_name", "constant_name", "base_url", "provider", "model_id"),
         OPENAI_COMPATIBLE_ADAPTERS,
     )
-    def test_chat_openai_wired_with_provider_endpoint(
+    async def test_chat_openai_wired_with_provider_endpoint(
         self,
         module_path,
         class_name,
@@ -513,7 +513,10 @@ class TestOpenAICompatibleAdapters:
         if constant_name is not None:
             assert getattr(module, constant_name) == base_url
         with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat:
-            getattr(module, class_name)(api_key="sk-test", model_id=model_id)
+            backend = getattr(module, class_name)(api_key="sk-test", model_id=model_id)
+        # The constructor allocates a pinned httpx.AsyncClient; close it so the
+        # test does not leak an unclosed transport into another test's GC.
+        await backend.aclose()
         mock_chat.assert_called_once_with(
             model=model_id,
             api_key="sk-test",
@@ -525,7 +528,7 @@ class TestOpenAICompatibleAdapters:
         ("module_path", "class_name", "constant_name", "base_url", "provider", "model_id"),
         OPENAI_COMPATIBLE_ADAPTERS,
     )
-    def test_api_key_placeholder_uses_provider_name(
+    async def test_api_key_placeholder_uses_provider_name(
         self,
         module_path,
         class_name,
@@ -536,5 +539,8 @@ class TestOpenAICompatibleAdapters:
     ):
         module = importlib.import_module(module_path)
         with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat:
-            getattr(module, class_name)(api_key=None, model_id=model_id)
+            backend = getattr(module, class_name)(api_key=None, model_id=model_id)
+        # The constructor allocates a pinned httpx.AsyncClient; close it so the
+        # test does not leak an unclosed transport into another test's GC.
+        await backend.aclose()
         assert mock_chat.call_args.kwargs["api_key"] == provider
