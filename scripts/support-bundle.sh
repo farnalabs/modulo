@@ -42,10 +42,14 @@
 #   * `docker info` is read through `--format` for selected fields only.
 #   * no docker-socket mount, no sidecar, no new service, no open port,
 #     no Farnalabs endpoint, no upload.
-#   * docker-level log members are included verbatim (the CLI's own output);
-#     they are marked `verbatim` in the manifest and the closing message tells
-#     the user to open the bundle before sending it. App-level members carry
-#     the module's redaction.
+#   * docker-level log members are NEVER shipped verbatim. `docker compose logs`
+#     output is piped through the module's own redaction (the same
+#     `python -m modulo.support.bundle --redact-stdin` gate app-level members
+#     use), run in a one-off container of the app image so it does not need the
+#     stack to be up. If that filter cannot run, the log member is WITHHELD and
+#     the reason is recorded - withholding is correct, leaking is not. A bash
+#     regex scrub is never substituted for the module's redaction.
+#   * the closing message tells the user to open the bundle before sending it.
 #
 # USAGE
 #   ./scripts/support-bundle.sh                    # bundle in the repo root
@@ -347,19 +351,42 @@ collect_logs() {
   safe="$(printf '%s' "$service" | tr -c 'A-Za-z0-9_.-' '_')"
   local rel="docker/logs/${safe}.log.tail"
   local dest="$MEMBERS/$rel"
-  mkdir -p "$(dirname "$dest")"
   local raw="$WORK/raw-${safe}.log"
+  local collapsed="$WORK/collapsed-${safe}.log"
+  local filtered="$WORK/filtered-${safe}.log"
   local rc=0
   compose logs --no-color --tail "$TAIL_LINES" "$service" >"$raw" 2>"$WORK/logs.err" || rc=$?
-  collapse_logs <"$raw" >"$dest"
+  collapse_logs <"$raw" >"$collapsed"
   if (( rc != 0 )); then
     {
       printf '\n[%s] docker compose logs %s failed (exit %d):\n' "$SCRIPT_NAME" "$service" "$rc"
       sed -n '1,3p' "$WORK/logs.err"
-    } >>"$dest"
+    } >>"$collapsed"
     note "$rel" "docker compose logs failed (exit $rc)"
   fi
-  register_member "$rel" "last $TAIL_LINES lines for service '$service', repeated lines collapsed" "docker" "verbatim (docker CLI output)"
+
+  # Never ship a docker-level log verbatim: it is raw engine output and can
+  # contain anything the app printed, including a credential. The module owns
+  # redaction, so pipe the bounded log through its stdin gate in a one-off
+  # container of the app image (this does not need the stack to be up). If the
+  # filter cannot run we WITHHOLD the member - a withheld log is recoverable, a
+  # leaked secret is not. A bash regex scrub is deliberately not a fallback.
+  local filter_rc=0
+  compose run --rm -T --no-deps --entrypoint python "$APP_SERVICE" \
+    -m modulo.support.bundle --redact-stdin \
+    <"$collapsed" >"$filtered" 2>"$WORK/redact-${safe}.err" || filter_rc=$?
+  if (( filter_rc != 0 )); then
+    local reason
+    reason="$(sed -n '1,3p' "$WORK/redact-${safe}.err" | tr '\n' ' ')"
+    note "$rel" "log tail withheld: redaction via 'python -m modulo.support.bundle --redact-stdin' in a one-off '$APP_SERVICE' container was unavailable (exit $filter_rc): ${reason:-no output}"
+    LOGS_WITHHELD=$((LOGS_WITHHELD + 1))
+    rm -f "$filtered"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$dest")"
+  mv "$filtered" "$dest"
+  register_member "$rel" "last $TAIL_LINES lines for service '$service', repeated lines collapsed, redacted" "docker" "module (modulo.support.bundle --redact-stdin)"
 }
 
 # ---------------------------------------------------------------------------
@@ -462,6 +489,7 @@ collect_compose_context() {
 COMPOSE_SERVICES=""
 COMPOSE_PROJECT=""
 COMPOSE_PROJECT_SOURCE=""
+LOGS_WITHHELD=0
 collect_compose_context
 
 # Per-container state: health, restart count and exit code are not all in the
@@ -831,8 +859,9 @@ MANIFEST="$MEMBERS/MANIFEST.txt"
       printf '  %s: %s\n' "$rel" "$reason"
     done <"$NOTES_FILE"
   fi
-  printf '\nredaction: app-level members are redacted by modulo.support.bundle; docker-level\n'
-  printf 'members are the Docker CLI output verbatim. Open this bundle and check its\n'
+  printf '\nredaction: app-level members and every docker-level log tail are redacted by\n'
+  printf 'modulo.support.bundle. A log tail whose redaction filter could not run is\n'
+  printf 'withheld and listed above, never shipped raw. Open this bundle and check its\n'
   printf 'contents before sending it to anyone.\n'
 } >"$MANIFEST"
 
@@ -940,4 +969,7 @@ TMP_ZIP=""
 # ---------------------------------------------------------------------------
 printf '%s\n' "$REF_LINE"
 printf 'bundle: %s (%s)\n' "$OUT" "$(human_size "$zip_size")"
+if (( LOGS_WITHHELD > 0 )); then
+  printf 'Log tails were withheld because redaction via modulo.support.bundle was unavailable (%d service(s)).\n' "$LOGS_WITHHELD"
+fi
 printf 'Open the bundle and check its contents before sending it to anyone.\n'

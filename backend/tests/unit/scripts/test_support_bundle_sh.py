@@ -130,6 +130,22 @@ case "${1:-}" in
         fi
         ;;
       images) printf 'CONTAINER REPOSITORY TAG IMAGE ID SIZE\n' ;;
+      run)
+        # One-off redaction filter (the contract with FAR-2305):
+        #   docker compose run --rm -T --no-deps --entrypoint python backend \
+        #     -m modulo.support.bundle --redact-stdin
+        # STUB_REDACT_STDIN_OK=1 makes this act as the module's stdin gate; the
+        # default is UNAVAILABLE, which is what the collector must tolerate.
+        if [[ "${STUB_REDACT_STDIN_OK:-0}" != "1" ]]; then
+          printf 'Error response from daemon: pull access denied for modulo\n' >&2
+          exit 1
+        fi
+        if [[ "${STUB_REDACT_STDIN_REFUSE:-0}" == "1" ]]; then
+          printf 'refused: redaction gate refused member: unclassified high-entropy token\n' >&2
+          exit 3
+        fi
+        sed -e 's/ghp_[A-Za-z0-9]*/[REDACTED:github-token]/g'
+        ;;
       exec)
         case " $* " in
           *" date "*) printf '%s\n' "${STUB_CONTAINER_EPOCH:-1700000000}"; exit 0 ;;
@@ -321,13 +337,30 @@ class TestStackDown:
             assert expected in names
 
     def test_stdout_is_ref_then_bundle_then_advice(self, tmp_path: Path) -> None:
-        proc, out = _collect(tmp_path, STUB_CONTAINER_IDS="", STUB_BACKEND_ID="")
+        # A working gate keeps the ordinary three-line stdout contract.
+        proc, out = _collect(
+            tmp_path,
+            STUB_CONTAINER_IDS="",
+            STUB_BACKEND_ID="",
+            STUB_REDACT_STDIN_OK="1",
+        )
         assert proc.returncode == 0, proc.stderr
         lines = proc.stdout.strip().splitlines()
         assert len(lines) == 3
         assert lines[0].startswith("modulo support bundle 1 ref=MSB-1-")
         assert lines[1].startswith(f"bundle: {out} (")
         assert "before sending" in lines[2]
+
+    def test_stdout_names_the_withheld_logs_when_the_gate_is_unavailable(self, tmp_path: Path) -> None:
+        proc, out = _collect(tmp_path, STUB_CONTAINER_IDS="", STUB_BACKEND_ID="")
+        assert proc.returncode == 0, proc.stderr
+        lines = proc.stdout.strip().splitlines()
+        assert lines[0].startswith("modulo support bundle 1 ref=MSB-1-")
+        assert lines[1].startswith(f"bundle: {out} (")
+        assert lines[2] == (
+            "Log tails were withheld because redaction via modulo.support.bundle was unavailable (3 service(s))."
+        )
+        assert "before sending" in lines[3]
 
     def test_app_failure_reason_is_recorded_not_swallowed(self, tmp_path: Path) -> None:
         # A running backend whose in-container module is absent: the run still
@@ -378,6 +411,9 @@ class TestLogs:
             STUB_CONTAINER_IDS="",
             STUB_BACKEND_ID="",
             STUB_LOGS_FILE=str(log),
+            # The module's redaction gate must be reachable for a log member to
+            # be included at all; it acts as a pass-through for harmless text.
+            STUB_REDACT_STDIN_OK="1",
         )
         assert proc.returncode == 0, proc.stderr
         member = _member_text(out, "docker/logs/backend.log.tail")
@@ -391,10 +427,102 @@ class TestLogs:
             STUB_CONTAINER_IDS="",
             STUB_BACKEND_ID="",
             STUB_LOGS_FAIL="1",
+            STUB_REDACT_STDIN_OK="1",
         )
         assert proc.returncode == 0, proc.stderr
         member = _member_text(out, "docker/logs/backend.log.tail")
         assert "docker compose logs backend failed" in member
+
+
+PLANTED_GITHUB_TOKEN = "ghp_planted1234567890abcdef"
+
+
+class TestLogRedaction:
+    """Docker-level logs are raw engine output; they must never ship unfiltered."""
+
+    def test_planted_token_never_reaches_the_bundle(self, tmp_path: Path) -> None:
+        log = tmp_path / "app.log"
+        log.write_text(
+            f"starting\nGITHUB_TOKEN={PLANTED_GITHUB_TOKEN}\nready\n",
+            encoding="utf-8",
+        )
+        proc, out = _collect(
+            tmp_path,
+            STUB_CONTAINER_IDS="",
+            STUB_BACKEND_ID="",
+            STUB_LOGS_FILE=str(log),
+            STUB_REDACT_STDIN_OK="1",
+        )
+        assert proc.returncode == 0, proc.stderr
+        names = _members(out)
+        assert "docker/logs/backend.log.tail" in names
+        for name in names:
+            assert PLANTED_GITHUB_TOKEN not in _member_text(out, name)
+        member = _member_text(out, "docker/logs/backend.log.tail")
+        assert "[REDACTED:github-token]" in member
+        assert "starting" in member
+        assert "ready" in member
+
+    def test_unavailable_filter_withholds_the_log_member(self, tmp_path: Path) -> None:
+        # Default stub: the one-off container cannot run (image absent). The
+        # collector must omit every log member and say why - never ship raw.
+        log = tmp_path / "app.log"
+        log.write_text(f"GITHUB_TOKEN={PLANTED_GITHUB_TOKEN}\n", encoding="utf-8")
+        proc, out = _collect(
+            tmp_path,
+            STUB_CONTAINER_IDS="",
+            STUB_BACKEND_ID="",
+            STUB_LOGS_FILE=str(log),
+        )
+        assert proc.returncode == 0, proc.stderr
+        names = _members(out)
+        assert not [name for name in names if name.startswith("docker/logs/")]
+        manifest = _member_text(out, "MANIFEST.txt")
+        assert "log tail withheld" in manifest
+        assert "python -m modulo.support.bundle --redact-stdin" in manifest
+        assert "pull access denied" in manifest
+        for name in names:
+            assert PLANTED_GITHUB_TOKEN not in _member_text(out, name)
+        assert "Log tails were withheld" in proc.stdout
+
+    def test_refused_token_withholds_the_member_and_records_the_reason(self, tmp_path: Path) -> None:
+        # The gate itself refused the input (exit non-zero): withhold and note,
+        # do not fail the whole run.
+        log = tmp_path / "app.log"
+        log.write_text(f"GITHUB_TOKEN={PLANTED_GITHUB_TOKEN}\n", encoding="utf-8")
+        proc, out = _collect(
+            tmp_path,
+            STUB_CONTAINER_IDS="",
+            STUB_BACKEND_ID="",
+            STUB_LOGS_FILE=str(log),
+            STUB_REDACT_STDIN_OK="1",
+            STUB_REDACT_STDIN_REFUSE="1",
+        )
+        assert proc.returncode == 0, proc.stderr
+        names = _members(out)
+        assert not [name for name in names if name.startswith("docker/logs/")]
+        manifest = _member_text(out, "MANIFEST.txt")
+        assert "log tail withheld" in manifest
+        assert "unclassified high-entropy token" in manifest
+        for name in names:
+            assert PLANTED_GITHUB_TOKEN not in _member_text(out, name)
+
+
+#: The FULL ``--json`` payload the FAR-2305 module emits after the ref-contract
+#: change. Pinned as a whole object (not just the two keys the collector reads)
+#: so a rename on either side fails loudly here instead of silently producing an
+#: empty ``REF`` and two halves that disagree.
+MODULE_JSON_PAYLOAD: dict[str, object] = {
+    "bundle_format_version": 7,
+    "ref": "MSB-7-20260101T000000Z-deadbeef",
+    "ref_line": "modulo support bundle 7 ref=MSB-7-20260101T000000Z-deadbeef",
+    "bundle_path": "/tmp/modulo-support.zip",
+    "members": [{"name": "version.txt", "bytes": 21}],
+    "bytes": 21,
+    "redaction": {"exact": 1, "structural": 0, "patterns": 2},
+    "missing": [],
+    "truncated_log_members": [],
+}
 
 
 def _app_bundle(tmp_path: Path, *, format_version: int = 7) -> Path:
@@ -410,24 +538,45 @@ def _app_bundle(tmp_path: Path, *, format_version: int = 7) -> Path:
 
 class TestAppMerge:
     def _run_with_app(self, tmp_path: Path) -> tuple[subprocess.CompletedProcess[str], Path]:
-        ref_line = "modulo support bundle 7 ref=MSB-7-20260101T000000Z-deadbeef"
-        payload = json.dumps(
-            {
-                "ref": "MSB-7-20260101T000000Z-deadbeef",
-                "ref_line": ref_line,
-                "path": "/tmp/modulo-support.zip",
-                "bundle_format_version": 7,
-            }
-        )
         return _collect(
             tmp_path,
             STUB_CONTAINER_IDS="cid123",
             STUB_BACKEND_ID="cid123",
             STUB_RUNNING="true",
             STUB_APP_OK="1",
-            STUB_APP_JSON=payload,
+            STUB_APP_JSON=json.dumps(MODULE_JSON_PAYLOAD),
             STUB_APP_ZIP=str(_app_bundle(tmp_path)),
+            STUB_REDACT_STDIN_OK="1",
         )
+
+    def test_module_json_payload_shape_is_pinned(self) -> None:
+        # The fixture above is the contract; this test fails if someone edits it
+        # to a shape the collector does not read.
+        assert set(MODULE_JSON_PAYLOAD) == {
+            "bundle_format_version",
+            "ref",
+            "ref_line",
+            "bundle_path",
+            "members",
+            "bytes",
+            "redaction",
+            "missing",
+            "truncated_log_members",
+        }
+        assert str(MODULE_JSON_PAYLOAD["ref"]).startswith("MSB-7-")
+        assert MODULE_JSON_PAYLOAD["ref_line"] == (f"modulo support bundle 7 ref={MODULE_JSON_PAYLOAD['ref']}")
+
+    def test_composite_ref_is_the_module_ref_when_the_app_half_is_present(self, tmp_path: Path) -> None:
+        proc, out = self._run_with_app(tmp_path)
+        assert proc.returncode == 0, proc.stderr
+        module_ref = str(MODULE_JSON_PAYLOAD["ref"])
+        report = json.loads(_member_text(out, "report.json"))
+        manifest = _member_text(out, "MANIFEST.txt")
+        assert report["ref"] == module_ref
+        assert report["ref_line"] == MODULE_JSON_PAYLOAD["ref_line"]
+        assert f"ref: {module_ref}" in manifest
+        assert f"ref_line: {MODULE_JSON_PAYLOAD['ref_line']}" in manifest
+        assert proc.stdout.splitlines()[0] == MODULE_JSON_PAYLOAD["ref_line"]
 
     def test_app_and_docker_members_share_one_zip(self, tmp_path: Path) -> None:
         proc, out = self._run_with_app(tmp_path)
