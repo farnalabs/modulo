@@ -164,6 +164,8 @@ class SystemMapRevision(SoftDeleteMixin, OrgScoped):
             ondelete=_ONDELETE_CASCADE,
             name="fk_system_map_revisions_map_org",
         ),
+        # Composite index for version-aware time-range queries (FAR-2288)
+        Index("ix_system_map_revisions_map_effective_range", "system_map_id", "effective_from", "effective_to"),
     )
 
     system_map_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
@@ -171,6 +173,9 @@ class SystemMapRevision(SoftDeleteMixin, OrgScoped):
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="draft")
     content_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Version-aware fields (FAR-2288)
+    effective_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )

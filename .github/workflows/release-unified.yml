@@ -489,8 +489,10 @@ jobs:
             TARGET_SHA="$(git rev-parse origin/main)"
           fi
           echo "Checking schema-freshness on exact target ${TARGET_SHA}..."
-          RUN_ID="$(gh run list --workflow ci.yml --commit "$TARGET_SHA" --limit 100 --json databaseId,path \
-            --jq '.[] | select(.path == ".github/workflows/ci.yml") | .databaseId' | head -n1)"
+          # `gh run list --workflow ci.yml` already scopes to ci.yml; `path` is not a
+          # supported --json field and made this lookup always fail (FAR-2213).
+          RUN_ID="$(gh run list --workflow ci.yml --commit "$TARGET_SHA" --limit 100 --json databaseId \
+            --jq '.[0].databaseId // empty')"
           if [ -z "$RUN_ID" ]; then
             echo "::error::No CI workflow run found for exact target ${TARGET_SHA}; refusing to tag."
             exit 1

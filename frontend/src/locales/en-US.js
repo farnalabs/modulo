@@ -4628,6 +4628,9 @@ export default {
     }
   },
   "components": {
+    "DataTable": {
+      "scroll_instructions": "Swipe horizontally to view all table columns."
+    },
     "LicenceRenewalNotice": {
       "renewal_due_auto_title": "Your Team license renews on {date}",
       "renewal_due_auto_body": "Team capability — single sign-on, team roles and the audit log — continues after {date}. A replacement key is sent to your billing contact when the renewal is charged. If it does not arrive, install it on this page.",
