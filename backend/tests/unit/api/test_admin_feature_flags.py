@@ -1637,7 +1637,10 @@ def _principal(org_id: uuid.UUID | None = None) -> AuthenticatedPrincipal:
 def _session() -> AsyncMock:
     session = AsyncMock()
     configure_rls_preamble(session)
-    session.begin = MagicMock(return_value=AsyncMock())
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
     return session
 
 
