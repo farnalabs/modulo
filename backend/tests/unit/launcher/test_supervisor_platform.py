@@ -23,10 +23,12 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import signal
 import sys
 import time
 import types
 from collections.abc import Callable
+from pathlib import Path
 from subprocess import Popen
 from typing import Any
 
@@ -449,7 +451,10 @@ def test_linux_start_epoch_is_none_when_clock_tick_rate_is_not_positive(
     backend = _LinuxProcessBackend()
     monkeypatch.setattr(backend, "starttime", lambda _pid: 100)
     _install_linux_proc(monkeypatch, text="10.00 20.00")
-    monkeypatch.setattr(supervisor_module.os, "sysconf", lambda _name: 0)
+    # raising=False: os.sysconf is POSIX-only, and the guard under test is the
+    # non-positive tick rate, not the attribute's existence. Installing it keeps
+    # the test exercising the real branch on a Windows developer host too.
+    monkeypatch.setattr(supervisor_module.os, "sysconf", lambda _name: 0, raising=False)
     assert backend.start_epoch(1234) is None
 
 
@@ -682,3 +687,168 @@ def test_darwin_supervisor_teardown_leaves_no_orphans() -> None:
     assert shim.poll() is not None
     for pid in service_pids:
         assert not _pid_alive(pid)
+
+
+# ---------------------------------------------------------------------------
+# File-locking / process-group seams (FAR-2229)
+#
+# The data-dir lock and child teardown dispatch on the platform seam. Every
+# test here patches the SEAM (never the host) so both arms - the POSIX flock /
+# killpg path and the Windows refusal / terminate path - execute on Linux CI
+# and on a Windows developer host alike. ``fcntl`` is injected into
+# ``sys.modules`` for the POSIX arm, which is exactly how ``import fcntl``
+# resolves inside the functions: the module does not exist on Windows.
+# ---------------------------------------------------------------------------
+
+
+class FakeFcntl(types.ModuleType):
+    """Recording stand-in for the POSIX ``fcntl`` module."""
+
+    LOCK_EX = 2
+    LOCK_NB = 4
+    LOCK_UN = 8
+
+    def __init__(self, *, lock_error: OSError | None = None) -> None:
+        super().__init__("fcntl")
+        self.lock_error = lock_error
+        self.flock_calls: list[tuple[int, int]] = []
+
+    def flock(self, fd: int, operation: int) -> None:
+        self.flock_calls.append((fd, operation))
+        if self.lock_error is not None and operation == self.LOCK_EX | self.LOCK_NB:
+            raise self.lock_error
+
+
+def _install_fake_fcntl(monkeypatch: pytest.MonkeyPatch, fake: FakeFcntl) -> None:
+    monkeypatch.setitem(sys.modules, "fcntl", fake)
+
+
+@pytest.fixture
+def fake_fcntl(monkeypatch: pytest.MonkeyPatch) -> FakeFcntl:
+    """A recording ``fcntl`` with the POSIX-arm seam reporting support."""
+    fake = FakeFcntl()
+    _install_fake_fcntl(monkeypatch, fake)
+    monkeypatch.setattr(supervisor_module, "supports_posix_file_locking", lambda: True)
+    return fake
+
+
+def test_data_dir_lock_acquire_uses_the_file_locking_seam(fake_fcntl: FakeFcntl, tmp_path: Path) -> None:
+    lock = supervisor_module.DataDirLock(tmp_path / "data", mode="serve")
+
+    lock.acquire()
+    try:
+        assert fake_fcntl.flock_calls[0][1] == FakeFcntl.LOCK_EX | FakeFcntl.LOCK_NB
+        holder = lock.holder
+        assert holder is not None
+        assert holder.pid == os.getpid()
+        assert holder.mode == "serve"
+    finally:
+        lock.release()
+
+
+def test_data_dir_lock_acquire_refuses_without_file_locking(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(supervisor_module, "supports_posix_file_locking", lambda: False)
+
+    with pytest.raises(supervisor_module.DataDirLockError, match="not implemented on Windows yet"):
+        supervisor_module.DataDirLock(tmp_path / "data", mode="serve").acquire()
+
+
+def test_data_dir_lock_release_unlocks_through_the_seam(fake_fcntl: FakeFcntl, tmp_path: Path) -> None:
+    lock = supervisor_module.DataDirLock(tmp_path / "data", mode="serve")
+    lock.acquire()
+
+    lock.release()
+
+    assert fake_fcntl.flock_calls[-1][1] == FakeFcntl.LOCK_UN
+    assert lock._fd is None
+
+
+def test_data_dir_lock_release_without_file_locking_closes_without_flock(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The Windows arm must never reach for ``fcntl`` - it still closes the fd."""
+    fake = FakeFcntl()
+    _install_fake_fcntl(monkeypatch, fake)
+    monkeypatch.setattr(supervisor_module, "supports_posix_file_locking", lambda: False)
+    lock = supervisor_module.DataDirLock(tmp_path / "data", mode="serve")
+    fd = os.open(str(tmp_path / "held.lock"), os.O_RDWR | os.O_CREAT, 0o644)
+    lock._fd = fd
+
+    lock.release()
+
+    assert not fake.flock_calls
+    assert lock._fd is None
+    with pytest.raises(OSError, match="Bad file descriptor"):
+        os.close(fd)  # release already closed it
+
+
+def test_lock_is_free_is_false_without_file_locking(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(supervisor_module, "supports_posix_file_locking", lambda: False)
+    lock_path = tmp_path / "data.lock"
+
+    assert supervisor_module._lock_is_free(lock_path) is False
+    assert not lock_path.exists()  # the probe never opens a file on this arm
+
+
+def test_lock_is_free_probes_through_the_file_locking_seam(fake_fcntl: FakeFcntl, tmp_path: Path) -> None:
+    lock_path = tmp_path / "data.lock"
+    lock_path.write_text("", encoding="utf-8")
+
+    assert supervisor_module._lock_is_free(lock_path) is True
+    assert fake_fcntl.flock_calls[0][1] == FakeFcntl.LOCK_EX | FakeFcntl.LOCK_NB
+    assert fake_fcntl.flock_calls[-1][1] == FakeFcntl.LOCK_UN
+
+
+def test_lock_is_free_reports_a_held_probe_as_locked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake = FakeFcntl(lock_error=OSError("held by another process"))
+    _install_fake_fcntl(monkeypatch, fake)
+    monkeypatch.setattr(supervisor_module, "supports_posix_file_locking", lambda: True)
+    lock_path = tmp_path / "data.lock"
+    lock_path.write_text("", encoding="utf-8")
+
+    assert supervisor_module._lock_is_free(lock_path) is False
+
+
+class RecordingProcess:
+    """The teardown surface ``_signal_group`` uses: a pid and terminate()."""
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.terminate_calls = 0
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+
+
+def test_signal_group_terminates_when_posix_process_groups_are_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(supervisor_module, "supports_posix_process_groups", lambda: False)
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(supervisor_module.os, "kill", lambda pid, signum: sent.append((pid, signum)), raising=False)
+    process = RecordingProcess(4242)
+
+    Supervisor._signal_group(process, signal.SIGTERM)
+
+    assert process.terminate_calls == 1
+    # The fallback must never pretend to own a Job Object: no PID signal is sent.
+    assert not sent
+
+
+def test_signal_group_signals_the_pid_when_the_group_cannot_be_resolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(supervisor_module, "supports_posix_process_groups", lambda: True)
+
+    def _no_group(_pid: int) -> int:
+        raise OSError("no such process group")
+
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(supervisor_module.os, "getpgid", _no_group, raising=False)
+    monkeypatch.setattr(supervisor_module.os, "kill", lambda pid, signum: sent.append((pid, signum)), raising=False)
+    process = RecordingProcess(4243)
+
+    Supervisor._signal_group(process, signal.SIGTERM)
+
+    assert process.terminate_calls == 1
+    assert sent == [(4243, signal.SIGTERM)]
