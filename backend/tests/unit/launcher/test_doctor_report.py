@@ -7,6 +7,7 @@ resulting archive proving NO secret value survives while the
 ``<redacted>`` marker DOES.
 """
 
+import asyncio
 import json
 import zipfile
 from pathlib import Path
@@ -184,4 +185,5 @@ async def test_run_coroutine_from_within_a_running_loop() -> None:
     async def _value() -> int:
         return 42
 
+    await asyncio.sleep(0)
     assert _run_coroutine(_value()) == 42

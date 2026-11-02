@@ -139,7 +139,7 @@ def test_health_json_degrades_when_readiness_raises(monkeypatch: pytest.MonkeyPa
     payload = json.loads(asyncio.run(bundle.build_health_json()))
     assert payload["status"] == "unknown"
     assert payload["error_code"] == "RuntimeError"
-    assert payload["checks"] == []
+    assert not payload["checks"]
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ def test_expected_migration_head_degrades_when_alembic_is_unavailable(
 
 
 def test_sanitize_message_rejects_a_non_string() -> None:
-    assert bundle._sanitize_message(123) == ""
+    assert not bundle._sanitize_message(123)
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +223,7 @@ def test_collapse_repeated_lines_truncates_to_the_max() -> None:
 
 
 def test_read_log_members_without_a_data_dir() -> None:
-    assert bundle._read_log_members(None, 1024) == {}
+    assert not bundle._read_log_members(None, 1024)
 
 
 # ---------------------------------------------------------------------------
@@ -324,21 +324,21 @@ def test_inspect_bundle_tolerates_corrupt_and_missing_report(tmp_path: Path) -> 
         archive.writestr("report.json", "{not json")
 
     corrupt_result = bundle.inspect_bundle(corrupt)
-    assert corrupt_result.redaction_counts == {}
-    assert corrupt_result.ref == ""
+    assert not corrupt_result.redaction_counts
+    assert not corrupt_result.ref
 
     without_report = tmp_path / "without-report.zip"
     with zipfile.ZipFile(without_report, "w") as archive:
         archive.writestr("version.txt", "clean")
 
     missing_result = bundle.inspect_bundle(without_report)
-    assert missing_result.ref == ""
+    assert not missing_result.ref
     assert missing_result.members == (("version.txt", len(b"clean")),)
 
 
 def test_bundle_ref_tokens_tolerates_missing_and_corrupt_report() -> None:
-    assert bundle._bundle_ref_tokens({}) == frozenset()
-    assert bundle._bundle_ref_tokens({"report.json": b"{bad"}) == frozenset()
+    assert not bundle._bundle_ref_tokens({})
+    assert not bundle._bundle_ref_tokens({"report.json": b"{bad"})
 
 
 def test_show_member_reports_read_missing_and_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -468,7 +468,7 @@ def test_seed_values_skips_empty_credentials(tmp_path: Path, monkeypatch: pytest
 
     monkeypatch.setattr(secrets_file, "_parse", lambda _data: _Empty())
 
-    assert seed_values_from_data_dir(tmp_path) == {}
+    assert not seed_values_from_data_dir(tmp_path)
 
 
 def test_structured_layer_skips_already_redacted_values() -> None:
