@@ -8,12 +8,13 @@
     <template #header>
       <button
         type="button"
-        disabled
-        class="rounded-md border px-3 py-2 text-sm font-medium opacity-60"
+        :disabled="store.discoveryLoading"
+        class="rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-60"
         data-testid="dashboard-system-discover"
         :aria-label="$t('views.DashboardView.discover_my_system')"
+        @click="runDiscovery"
       >
-        {{ $t('views.DashboardView.discover_my_system') }}
+        {{ store.discoveryLoading ? $t('views.DashboardView.discover_my_system_running') : $t('views.DashboardView.discover_my_system') }}
       </button>
     </template>
 
@@ -50,7 +51,11 @@
         </div>
       </div>
     </div>
-    <SystemMapDraftReview v-else />
+    <SystemMapDraftReview
+      :draft="store.draft"
+      :loading="store.discoveryLoading"
+      :error="store.discoveryError"
+    />
   </SectionCard>
 </template>
 
@@ -68,11 +73,16 @@ const store = useSystemMapsStore()
 const healthLabel = (health: string): string => t(`views.DashboardView.system_maps_health_${health}`)
 
 /**
- * Load every source this overview renders from. The retry affordance reuses
- * this same entry point, so a retry re-runs the whole load rather than only the
- * leaf overview request.
+ * Load the overview the card renders. Discovery is deliberately NOT run here:
+ * it is a mutating POST that persists a draft, so it waits for the explicit
+ * "Discover My System" action. A retry re-runs only the overview load.
  */
 async function loadOverview(): Promise<void> {
+  await store.fetchDefaultOverview()
+}
+
+/** Run discovery from the operator's explicit action, then refresh the overview. */
+async function runDiscovery(): Promise<void> {
   await store.fetchDiscovery()
   await store.fetchDefaultOverview()
 }

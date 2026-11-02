@@ -456,6 +456,7 @@ OWNED_PAGES = {
         "frontend/src/components/onboarding/SpotlightOverlay.vue",
         "frontend/src/components/DashboardNotificationsPanel.vue",
         "frontend/src/components/dashboard/DashboardSystemOverview.vue",
+        "frontend/src/components/system-maps/SystemMapDraftReview.vue",
     ),
     "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
     "/oauth/authorize": "frontend/src/views/OAuthConsentView.vue",

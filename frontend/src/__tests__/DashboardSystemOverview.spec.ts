@@ -4,9 +4,10 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 
 const mockGet = vi.hoisted(() => vi.fn())
+const mockPost = vi.hoisted(() => vi.fn())
 
 vi.mock('../lib/api/client', () => ({
-  api: { GET: mockGet },
+  api: { GET: mockGet, POST: mockPost },
   getAccessToken: () => 'test-token',
 }))
 
@@ -78,25 +79,35 @@ describe('DashboardSystemOverview', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     mockGet.mockReset()
+    mockPost.mockReset()
   })
 
-  it('loads discovery and then the default overview on mount', async () => {
+  it('loads only the overview on mount and leaves discovery to an explicit action', async () => {
     const { fetchDiscovery, fetchDefaultOverview } = mountOverview()
     await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(1))
 
-    expect(fetchDiscovery).toHaveBeenCalledTimes(1)
-    expect(fetchDiscovery.mock.invocationCallOrder[0]).toBeLessThan(
-      fetchDefaultOverview.mock.invocationCallOrder[0],
+    expect(fetchDiscovery).not.toHaveBeenCalled()
+  })
+
+  it('enables discovery and prompts the operator to run it', () => {
+    const { wrapper } = mountOverview()
+
+    const button = wrapper.get('[data-testid="dashboard-system-discover"]')
+    expect(button.attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="system-map-draft-review"]').text()).toContain(
+      'Run discovery to inspect your pipelines',
     )
   })
 
-  it('keeps discovery disabled until the discovery API exists', () => {
-    const { wrapper } = mountOverview()
+  it('runs discovery and refreshes the overview when the operator clicks Discover', async () => {
+    const { wrapper, store, fetchDiscovery, fetchDefaultOverview } = mountOverview()
+    await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(1))
 
-    expect(wrapper.get('[data-testid="dashboard-system-discover"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="system-map-draft-review"]').text()).toContain(
-      'No discovery request was made',
-    )
+    await wrapper.get('[data-testid="dashboard-system-discover"]').trigger('click')
+
+    await vi.waitFor(() => expect(fetchDiscovery).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(2))
+    expect(store.discoveryLoading).toBe(false)
   })
 
   it('renders observed metrics with interpolated window, rates and localized health', async () => {
@@ -119,7 +130,8 @@ describe('DashboardSystemOverview', () => {
     // Unobserved values stay n/a rather than being rendered as zero.
     expect(nodes[1].text()).toContain('Unknown')
     expect(nodes[1].text()).toContain('n/a')
-    expect(wrapper.find('[data-testid="system-map-draft-review"]').exists()).toBe(false)
+    // The draft-review panel is a separate surface and stays available below.
+    expect(wrapper.find('[data-testid="system-map-draft-review"]').exists()).toBe(true)
   })
 
   it('renders the loading state first', async () => {
@@ -187,8 +199,8 @@ describe('DashboardSystemOverview', () => {
       expect(wrapper.find('[data-testid="system-map-overview-metrics"]').exists()).toBe(true),
     )
     expect(wrapper.find('[data-testid="system-map-overview-error"]').exists()).toBe(false)
-    // The retry re-runs every source the view reads, not only the leaf overview.
-    expect(fetchDiscovery).toHaveBeenCalledTimes(2)
+    // The retry re-runs the overview load only; discovery stays an explicit action.
+    expect(fetchDiscovery).not.toHaveBeenCalled()
     expect(mockGet).toHaveBeenCalledTimes(3)
   })
 

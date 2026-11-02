@@ -33,7 +33,7 @@ unit-tests:
 bdd: []
 depends-on:
   - feat-lifecycle-maps
-status: partial
+status: covered
 ---
 
 # System Maps (Beta, internal dogfood)
@@ -159,24 +159,23 @@ automatically.
       `db/models/system_map.py`, `db/repositories/system_map.py`,
       `test_system_maps_routes.py`, `test_system_map_repository.py`,
       `test_system_maps_version_aware.py`)
-- [ ] The draft-review UI is still a placeholder: `fetchDiscovery()` is a
-      deliberate no-op, the "Discover My System" button is disabled, and the
-      review panel renders explanatory copy only. No page ever calls the
-      shipped `POST /api/v1/system-maps/discover` endpoint, even though it is
-      present in the generated contract (`frontend/src/lib/api/schema.ts`), and
-      there is no System Maps publish flow
-      (`frontend/src/stores/systemMaps.ts`, `SystemMapDraftReview.vue`;
-      `systemMapsStore.spec.ts`)
+- [x] The dashboard card wires the shipped discovery endpoint on explicit
+      operator action: the "Discover My System" control calls
+      `POST /api/v1/system-maps/discover` (never on mount, so loading the
+      dashboard never creates a draft), shows a running state while it works,
+      and the draft-review panel renders the returned report - inspected source
+      count, node/edge counts, draft revision id and number, warnings and
+      skipped sources - with an explicit "not published" note. A failed request
+      shows its own error state and leaves no draft behind, and a response
+      owned by a previous principal is discarded
+      (`frontend/src/stores/systemMaps.ts`,
+      `frontend/src/components/system-maps/SystemMapDraftReview.vue`,
+      `frontend/src/components/dashboard/DashboardSystemOverview.vue`;
+      `systemMapsStore.spec.ts`, `SystemMapDraftReview.spec.ts`,
+      `DashboardSystemOverview.spec.ts`)
 
 ## Known Gaps
 
-- **No System Maps UI wires the discovery endpoint.** The backend discovery and
-  draft persistence ship, and the request/response types are in the generated
-  OpenAPI client, but the dashboard card never issues the request: the store's
-  `fetchDiscovery()` only sets `loaded = true` / `discoveryAvailable = false`,
-  the discovery button is permanently disabled, and the review panel is static
-  copy. This is tracked as the unchecked behaviour above; it needs a UI wiring
-  change (out of scope for a product-map walk).
 - **No BDD coverage.** Discovery, persistence and gating are covered by unit
   tests and a Postgres integration test, but there is no Gherkin feature file
   for the System Maps surface.
@@ -190,6 +189,20 @@ automatically.
   agent tool.
 
 ## QA History
+
+- 2026-11-02: **Improve Architecture product-map walk** - closed the entry's
+  only unchecked behaviour: the dashboard's System Maps card now actually calls
+  the shipped `POST /api/v1/system-maps/discover` endpoint. The store's
+  `fetchDiscovery()` no longer stubs `loaded`/`discoveryAvailable`; it POSTs the
+  discovery request behind a request deadline, tracks a running and an error
+  state, and discards responses owned by a superseded principal. The card runs
+  discovery only on the explicit "Discover My System" action (mounting the
+  dashboard must not persist a draft), and the draft-review panel renders the
+  report's source/node/edge counts, draft revision, warnings and skipped
+  sources with an explicit not-published note. New testids are registered in
+  the manifest `/` elements inventory and the review component is pinned in the
+  reverse testid-coverage guard. Status moves to `covered`; the remaining
+  Known Gaps (BDD, dedicated schema, MCP tool) are unchanged.
 
 - 2026-10-31: **Improve Architecture product-map walk** - closed the feature-graph
   gap left by FAR-2244 (backend discovery) and FAR-2245 (dashboard draft-review

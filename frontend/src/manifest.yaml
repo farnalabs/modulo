@@ -1062,6 +1062,30 @@ elements:
       - testid: system-map-draft-review
         type: element
         dynamic_testid: false
+      - testid: system-map-draft-empty
+        type: element
+        dynamic_testid: false
+      - testid: system-map-draft-loading
+        type: element
+        dynamic_testid: false
+      - testid: system-map-draft-error
+        type: element
+        dynamic_testid: false
+      - testid: system-map-draft-summary
+        type: element
+        dynamic_testid: false
+      - testid: system-map-draft-revision
+        type: element
+        dynamic_testid: false
+      - testid: system-map-draft-not-published
+        type: element
+        dynamic_testid: false
+      - testid: system-map-draft-warnings
+        type: element
+        dynamic_testid: false
+      - testid: system-map-draft-skipped
+        type: element
+        dynamic_testid: false
       - testid: dashboard-recent-runs
         type: element
         dynamic_testid: false

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
 const mockGet = vi.hoisted(() => vi.fn())
+const mockPost = vi.hoisted(() => vi.fn())
 const mockGetAccessToken = vi.hoisted(() => vi.fn())
 const mockIsOperator = vi.hoisted(() => ({ value: false }))
 const mockIsSystemAdmin = vi.hoisted(() => ({ value: false }))
@@ -15,7 +16,7 @@ const mockPlanStore = vi.hoisted(() => ({
 }))
 
 vi.mock('../lib/api/client', () => ({
-  api: { GET: mockGet },
+  api: { GET: mockGet, POST: mockPost },
   getAccessToken: mockGetAccessToken,
 }))
 vi.mock('../stores/planStore', () => ({ usePlanStore: () => mockPlanStore }))
@@ -41,6 +42,7 @@ describe('useSystemMapsStore access', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     mockGet.mockReset()
+    mockPost.mockReset()
     mockGetAccessToken.mockReturnValue(jwtFor('operator-1'))
     mockIsOperator.value = false
     mockIsSystemAdmin.value = false
@@ -331,13 +333,15 @@ describe('useSystemMapsStore access', () => {
     }
   })
 
-  it('keeps discovery fail-closed until its endpoint exists', async () => {
+  it('keeps discovery fail-closed when the endpoint reports an error', async () => {
+    mockPost.mockResolvedValue({ error: { detail: 'discovery denied' }, data: undefined })
     const store = useSystemMapsStore()
 
     await store.fetchDiscovery()
 
     expect(store.loaded).toBe(true)
     expect(store.discoveryAvailable).toBe(false)
+    expect(store.discoveryError).toBe('discovery denied')
     expect(store.draft).toBeNull()
   })
 })
@@ -389,6 +393,7 @@ describe('useSystemMapsStore overview', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     mockGet.mockReset()
+    mockPost.mockReset()
     mockGetAccessToken.mockReturnValue(jwtFor('operator-1'))
   })
 
@@ -815,5 +820,132 @@ describe('useSystemMapsStore overview', () => {
     expect(store.overviewError).toBeNull()
     expect(store.overviewEmpty).toBe(false)
     expect(store.overviewLoading).toBe(false)
+  })
+})
+
+function discoveryPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    sources_inspected: [{ kind: 'pipeline', identifier: 'pipeline-1', name: 'Build' }],
+    node_count: 1,
+    edge_count: 0,
+    inferred_nodes: [{ node_key: 'pipeline:pipeline-1' }],
+    inferred_edges: [],
+    skipped: [],
+    warnings: [],
+    draft_map_id: 'draft-map',
+    draft_revision_id: 'draft-revision',
+    draft_revision_number: 1,
+    published: false,
+    ...overrides,
+  }
+}
+
+describe('useSystemMapsStore discovery', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+    mockPost.mockReset()
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-1'))
+  })
+
+  it('runs the shipped discovery endpoint with the default draft name', async () => {
+    mockPost.mockResolvedValue({ data: discoveryPayload() })
+    const store = useSystemMapsStore()
+
+    await store.fetchDiscovery()
+
+    expect(mockPost).toHaveBeenCalledWith(
+      '/api/v1/system-maps/discover',
+      expect.objectContaining({ body: { name: 'Discovered System Map' } }),
+    )
+    const init = mockPost.mock.calls[0][1] as { signal?: unknown }
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+    expect(store.draft?.draft_map_id).toBe('draft-map')
+    expect(store.discoveryAvailable).toBe(true)
+    expect(store.discoveryError).toBeNull()
+    expect(store.discoveryLoading).toBe(false)
+    expect(store.loaded).toBe(true)
+  })
+
+  it('passes an explicit draft name through', async () => {
+    mockPost.mockResolvedValue({ data: discoveryPayload() })
+    const store = useSystemMapsStore()
+
+    await store.fetchDiscovery('My discovered map')
+
+    expect(mockPost).toHaveBeenCalledWith(
+      '/api/v1/system-maps/discover',
+      expect.objectContaining({ body: { name: 'My discovered map' } }),
+    )
+  })
+
+  it('reports an unknown/null discovery payload as an error', async () => {
+    mockPost.mockResolvedValue({ data: undefined })
+    const store = useSystemMapsStore()
+
+    await store.fetchDiscovery()
+
+    expect(store.draft).toBeNull()
+    expect(store.discoveryAvailable).toBe(false)
+    expect(store.discoveryError).toBe('System discovery request failed')
+  })
+
+  it('uses a stable message for a non-Error discovery rejection', async () => {
+    mockPost.mockRejectedValue('not an Error instance')
+    const store = useSystemMapsStore()
+
+    await store.fetchDiscovery()
+
+    expect(store.discoveryError).toBe('System discovery request failed')
+    expect(store.discoveryLoading).toBe(false)
+  })
+
+  it('clears a previous draft when a later discovery fails', async () => {
+    mockPost
+      .mockResolvedValueOnce({ data: discoveryPayload() })
+      .mockResolvedValueOnce({ error: { detail: 'temporary failure' }, data: undefined })
+    const store = useSystemMapsStore()
+
+    await store.fetchDiscovery()
+    expect(store.draft).not.toBeNull()
+
+    await store.fetchDiscovery()
+    expect(store.draft).toBeNull()
+    expect(store.discoveryAvailable).toBe(false)
+    expect(store.discoveryError).toBe('temporary failure')
+  })
+
+  it('discards a discovery response after the token changes', async () => {
+    let resolveOldRequest: ((value: unknown) => void) | undefined
+    mockPost.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOldRequest = resolve
+        }),
+    )
+    const store = useSystemMapsStore()
+
+    const request = store.fetchDiscovery()
+    await vi.waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1))
+
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-2'))
+    resolveOldRequest?.({ data: discoveryPayload() })
+    await request
+
+    expect(store.draft).toBeNull()
+    expect(store.discoveryAvailable).toBe(false)
+  })
+
+  it('clears discovery state on reset', async () => {
+    mockPost.mockResolvedValue({ data: discoveryPayload() })
+    const store = useSystemMapsStore()
+
+    await store.fetchDiscovery()
+    store.reset()
+
+    expect(store.draft).toBeNull()
+    expect(store.discoveryError).toBeNull()
+    expect(store.discoveryLoading).toBe(false)
+    expect(store.discoveryAvailable).toBe(false)
   })
 })
