@@ -1,6 +1,6 @@
 <template>
   <div class="fixed inset-0 z-50" :data-testid="dataTestId">
-    <div class="absolute inset-0 bg-black/50" @click="$emit('close')" aria-hidden="true" />
+    <button type="button" class="absolute inset-0 bg-black/50" :aria-label="$t('common.close')" @click="$emit('close')" data-testid="system-map-discovery-backdrop" />
     <aside class="absolute right-0 top-0 h-full w-full max-w-2xl bg-card shadow-2xl overflow-hidden flex flex-col" role="dialog" aria-modal="true" aria-labelledby="discovery-panel-title">
       <header class="border-b px-4 py-3 flex items-center justify-between">
         <h2 id="discovery-panel-title" class="font-semibold">{{ $t('views.SystemMapDetailView.discovery_results') }}</h2>
