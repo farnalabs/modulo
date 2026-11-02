@@ -153,8 +153,8 @@ class TestApplyApiKeyAuth:
                 ),
                 patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
                 patch(
-                    "modulo.auth.dependencies.resolve_role_from_membership",
-                    new=AsyncMock(return_value="operator"),
+                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    new=AsyncMock(return_value=("operator", "human")),
                 ),
                 patch("modulo.api.routes.schemas.create_schema", return_value=schema),
             ):
@@ -206,8 +206,8 @@ class TestApplyApiKeyAuth:
                 ),
                 patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
                 patch(
-                    "modulo.auth.dependencies.resolve_role_from_membership",
-                    new=AsyncMock(return_value="operator"),
+                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    new=AsyncMock(return_value=("operator", "human")),
                 ),
                 patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
                 patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
@@ -250,8 +250,8 @@ class TestApplyApiKeyAuth:
                 ),
                 patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
                 patch(
-                    "modulo.auth.dependencies.resolve_role_from_membership",
-                    new=AsyncMock(return_value="runner"),
+                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    new=AsyncMock(return_value=("runner", "human")),
                 ),
             ):
                 client = TestClient(app)
@@ -310,8 +310,8 @@ class TestApplyApiKeyAuth:
                 ),
                 patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
                 patch(
-                    "modulo.auth.dependencies.resolve_role_from_membership",
-                    new=AsyncMock(return_value="operator"),
+                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    new=AsyncMock(return_value=("operator", "human")),
                 ),
                 patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline),
             ):
@@ -396,8 +396,8 @@ class TestApplyApiKeyAuth:
                 ),
                 patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
                 patch(
-                    "modulo.auth.dependencies.resolve_role_from_membership",
-                    new=AsyncMock(return_value="operator"),
+                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    new=AsyncMock(return_value=("operator", "human")),
                 ),
             ):
                 client = TestClient(app)
@@ -473,8 +473,8 @@ class TestApiKeyListsAgents:
                 ),
                 patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
                 patch(
-                    "modulo.auth.dependencies.resolve_role_from_membership",
-                    new=AsyncMock(return_value="operator"),
+                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    new=AsyncMock(return_value=("operator", "human")),
                 ),
                 patch("modulo.api.routes.agents.list_agents", return_value=listing),
             ):
@@ -543,8 +543,8 @@ class TestTeamGateKeyBoundary:
                 ),
                 patch("modulo.auth.api_key.validate_api_key", return_value=key),
                 patch(
-                    "modulo.auth.dependencies.resolve_role_from_membership",
-                    new=AsyncMock(return_value="operator"),
+                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    new=AsyncMock(return_value=("operator", "human")),
                 ),
                 patch("modulo.api.dependencies.set_rls_org", new=AsyncMock()),
                 patch("modulo.api.dependencies.set_rls_user_context", new=AsyncMock()),
