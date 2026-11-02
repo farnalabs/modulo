@@ -186,6 +186,7 @@ installable today.
 - [Continuity and escrow](docs/continuity-and-escrow.md)
 - [System requirements](docs/system-requirements.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Get support](docs/support.md)
 - [Upgrade process](docs/upgrade-process.md)
 
 ## Architecture
