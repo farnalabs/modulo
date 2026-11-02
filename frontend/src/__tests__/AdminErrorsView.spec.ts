@@ -695,4 +695,50 @@ describe('AdminErrorsView', () => {
     expect(routerMocks.push).toHaveBeenCalledWith({ path: '/admin/errors/eg-456', query: { scope: 'instance' } })
     wrapper.unmount()
   })
+
+  it('copies the canonical support reference for an error-group row (FAR-2304)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    getMock.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/errors') {
+        return {
+          items: [
+            {
+              id: 'eg-support-1',
+              fingerprint: 'fp-abcdef123456',
+              level_peak: 'error',
+              sample_message: 'boom',
+              count: 7,
+              first_seen: new Date().toISOString(),
+              last_seen: new Date().toISOString(),
+              status: 'new',
+              assigned_to: null,
+            },
+          ],
+          total: 1,
+        }
+      }
+      return { items: [], total: 0 }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const btn = wrapper.find('[data-testid="admin-errors-copy-support-eg-support-1"]')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await flushPromises()
+
+    const text = writeText.mock.calls[0][0]
+    expect(text).toContain('error eg-support-1')
+    expect(text).toContain('fingerprint fp-abcdef123456')
+    expect(text).toContain('level error')
+    expect(text).toContain('count 7')
+    // The list payload carries no group source, so the segment is omitted
+    // rather than invented.
+    expect(text).not.toContain('source')
+    // Copying is a cell action, not a row activation.
+    expect(routerMocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 })

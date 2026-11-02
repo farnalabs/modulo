@@ -346,4 +346,34 @@ describe('AdminErrorDetailView', () => {
     expect(routerPush).toHaveBeenCalledWith('/admin/errors')
     wrapper.unmount()
   })
+
+  it('copies the canonical support reference including the group source (FAR-2304)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mountView()
+    await flush()
+
+    const btn = wrapper.find('[data-testid="admin-error-detail-copy-support"]')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await flush()
+
+    expect(writeText).toHaveBeenCalledOnce()
+    // The detail payload's sample event carries the source the list payload
+    // cannot, so the reference here is the full canonical shape.
+    expect(writeText.mock.calls[0][0]).toBe(
+      'error err-1 · fingerprint abcdef1234567890 · level error · count 3 · source runner',
+    )
+    wrapper.unmount()
+  })
+
+  it('offers the support reference in instance scope too (read-only copy)', async () => {
+    authState.isSystemAdmin = true
+    routeState.query = { scope: 'instance' }
+    const wrapper = mountView()
+    await flush()
+
+    expect(wrapper.find('[data-testid="admin-error-detail-copy-support"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
 })
