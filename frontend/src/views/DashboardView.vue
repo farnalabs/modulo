@@ -33,8 +33,13 @@
       </div>
     </div>
     <!-- Full-page error -->
-    <ErrorAlert v-else-if="error && !summary" :message="error" :on-retry="dashboardStore.fetchSummary" />
+    <ErrorAlert v-else-if="error && !summary" :message="error" :on-retry="retryDashboard" />
     <template v-else-if="summary">
+      <!-- A failed refresh while data is already on screen. Without this the
+           dashboard kept rendering the stale summary and the failure was
+           silent: `error` is only rendered by the full-page branch above,
+           which requires `!summary`. -->
+      <ErrorAlert v-if="error" class="mb-4" :message="error" :on-retry="retryDashboard" />
       <DashboardSystemOverview
         v-if="systemMapsStore.accessLoaded && systemMapsStore.systemMapsEnabled"
         class="mb-4"
@@ -500,6 +505,16 @@ const trendSpendData = computed(() => trendData.value.map(d => d.token_spend_usd
 const trendHitlWaitMs = computed((): Array<number | null> => trendData.value.map(d => d.avg_time_to_approve_ms))
 const trendRejectionRate = computed((): Array<number | null> => trendData.value.map(d => d.rejection_rate))
 const trendLabels = computed(() => trendData.value.map(d => d.date))
+
+// Retry re-runs EVERY source the view reads, with the window the user is
+// actually looking at: the summary (retrying it with no argument fell back to
+// all-time and dropped the selected 1d/3d/… window) and, for a finite window,
+// the trend series that shares that window. Retrying only the summary left a
+// failed trends fetch in place, so the charts stayed empty with no error.
+function retryDashboard() {
+  void dashboardStore.fetchSummary(selectedWindow.value ?? undefined)
+  if (selectedWindow.value != null) void dashboardStore.fetchTrends(selectedWindow.value)
+}
 
 onMounted(async () => {
   // Restore the persisted window (FAR-115); default to 3d when nothing is stored.
