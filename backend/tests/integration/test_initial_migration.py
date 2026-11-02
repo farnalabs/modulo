@@ -131,6 +131,17 @@ _MIGRATION_OWNED_CHECKS: dict[str, frozenset[str]] = {
     "variant_groups": frozenset({"ck_variant_groups_max_concurrent_runs", "ck_variant_groups_run_count"}),
 }
 
+# FKs that exist ONLY in migrations — per-(table, constraint) entries. The ORM
+# deliberately omits them (composite FK to a non-PK unique constraint, cyclic
+# table dependency), so the parity diff arrives as ``remove_fk``.
+# permanent (documented repo divergence)
+_MIGRATION_OWNED_FKS: dict[str, frozenset[str]] = {
+    # FAR-2236 (0341): system_maps.published_revision_id -> system_map_revisions
+    # (id, organisation_id). Declared in the migration after both tables exist;
+    # the ORM keeps only a viewonly relationship (see db/models/system_map.py).
+    "system_maps": frozenset({"fk_system_maps_published_revision"}),
+}
+
 # FAR-1902 expand/contract: the retired organisations cost mappings are
 # removed from the ORM in this release, while the physical columns (and the
 # ``ck_organisations_cum_spend`` CHECK) stay until migration
@@ -232,6 +243,19 @@ _AUDIT_CHAIN_FK_COLUMNS: dict[str, frozenset[str]] = {
     "scheduled_reports": frozenset({"created_by", "updated_by", "deleted_by"}),
 }
 
+# FKs created by a migration that the ORM deliberately does not declare.
+# Keyed table -> constraint names. permanent (documented repo divergence)
+_MIGRATION_OWNED_FKS: dict[str, frozenset[str]] = {
+    # FAR-2236 (0341): system_maps.published_revision_id carries an
+    # organisation-scoped FK to system_map_revisions (id, organisation_id).
+    # system_map_revisions already points back at system_maps, so declaring
+    # both directions in ORM metadata makes the pair mutually dependent:
+    # create_all cannot topologically sort the cycle and SQLAlchemy drops the
+    # cyclic FK with a warning. The migration owns the DB constraint; the ORM
+    # keeps the single-direction relationships.
+    "system_maps": frozenset({"fk_system_maps_published_revision"}),
+}
+
 
 def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
     """Classify ONE compare_metadata diff against the reasoned entries above.
@@ -283,9 +307,13 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
         return inner[3].name in _COST_COLUMN_PARITY_EXPIRES.get(inner[2], frozenset())
     if kind == "remove_fk":
         # The audit-chain FKs on the trigger-maintained columns — per-table.
-        return inner[1].table.name in _AUDIT_CHAIN_FK_COLUMNS and bool(
+        if inner[1].table.name in _AUDIT_CHAIN_FK_COLUMNS and bool(
             {col.name for col in inner[1].columns} <= _AUDIT_CHAIN_FK_COLUMNS[inner[1].table.name]
-        )
+        ):
+            return True
+        # Migration-owned FKs the ORM must not declare — per-(table, constraint).
+        # FKs the ORM deliberately leaves to the migration, per-constraint.
+        return inner[1].name in _MIGRATION_OWNED_FKS.get(inner[1].table.name, frozenset())
     if kind == "add_fk":
         # DB-owned audit-chain FKs the migrations add but the ORM does not declare
         # (organisations.created_by + the sibling audit-chain tables) are benign,

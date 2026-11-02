@@ -77,10 +77,10 @@
                on the runner machine. -->
           <output
             v-if="row.health?.placeholder_digest"
-            class="block rounded-lg border border-warning/40 bg-warning/10 p-3"
+            class="block rounded-lg border border-border bg-muted/40 p-3"
             data-testid="runner-profile-image-unresolvable"
           >
-            <span class="block text-xs font-medium text-warning-text">{{ $t('views.RunnersProfilesTab.image_unresolvable_title') }}</span>
+            <span class="block text-xs font-medium">{{ $t('views.RunnersProfilesTab.image_unresolvable_title') }}</span>
             <span class="mt-0.5 block text-xs text-muted-foreground">{{ $t('views.RunnersProfilesTab.image_unresolvable_hint') }}</span>
           </output>
           <output
@@ -282,6 +282,10 @@ interface ProfileRow {
   configJson: Record<string, unknown>
 }
 
+// FAR-2239: no Docker engine endpoint on this deployment. Such a runner_docker
+// row is "not available" (neutral), never a red "engine unreachable".
+const engineNotConfigured = computed(() => props.status?.engine_configured === false)
+
 const rows = computed<ProfileRow[]>(() => {
   const byId = new Map((props.status?.profiles ?? []).map((p) => [p.id, p]))
   // qa F18: the probe-error lookup is the SAME machine-level error for
@@ -326,6 +330,7 @@ function healthLabel(row: ProfileRow): string {
   // with the note instead of the un-inspectable probe state.
   if (row.health?.placeholder_digest) return t('views.RunnersProfilesTab.health_image_unresolvable')
   if (row.profile.provider_type !== 'runner_docker') return row.profile.status === 'active' ? t('views.RunnersProfilesTab.status_active') : row.profile.status
+  if (engineNotConfigured.value) return t('views.RunnersProfilesTab.health_not_available')
   switch (row.health?.health_state) {
     case 'healthy':
       return t('views.RunnersProfilesTab.health_healthy')
@@ -339,8 +344,9 @@ function healthLabel(row: ProfileRow): string {
 }
 
 function healthBadgeClass(row: ProfileRow): string {
-  if (row.health?.placeholder_digest) return 'bg-warning/10 text-warning-text'
+  if (row.health?.placeholder_digest) return 'bg-muted text-muted-foreground'
   if (row.profile.provider_type !== 'runner_docker') return 'bg-success/10 text-success-text'
+  if (engineNotConfigured.value) return 'bg-muted text-muted-foreground'
   switch (row.health?.health_state) {
     case 'healthy':
       return 'bg-success/10 text-success-text'
@@ -354,8 +360,9 @@ function healthBadgeClass(row: ProfileRow): string {
 }
 
 function healthDotClass(row: ProfileRow): string {
-  if (row.health?.placeholder_digest) return 'bg-warning'
+  if (row.health?.placeholder_digest) return 'bg-muted-foreground'
   if (row.profile.provider_type !== 'runner_docker') return 'bg-success'
+  if (engineNotConfigured.value) return 'bg-muted-foreground'
   switch (row.health?.health_state) {
     case 'healthy':
       return 'bg-success'

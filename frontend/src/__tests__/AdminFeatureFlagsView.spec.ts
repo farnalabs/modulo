@@ -29,10 +29,22 @@ const mockLicenseData = {
   tier: 'community',
 }
 
+const mockPlanData = {
+  license: { tier: 'community', expires_at: null, org_id: null },
+  dev_mode: false,
+  flags: [
+    { name: 'flag-connectors', currently_active: true },
+    { name: 'flag-audit-log', currently_active: false },
+  ],
+}
+
 function setupDefaultMock() {
   api.GET = vi.fn((path: string) => {
     if (path.startsWith('/api/v1/admin/feature-flags') && path.includes('org-override')) {
       return Promise.resolve({ data: { override: null }, error: undefined })
+    }
+    if (path === '/api/v1/plan') {
+      return Promise.resolve({ data: mockPlanData, error: undefined })
     }
     if (path === '/api/v1/admin/feature-flags') {
       return Promise.resolve({ data: mockFlagsData, error: undefined })
@@ -264,6 +276,169 @@ describe('AdminFeatureFlagsView', () => {
     }
     const toggle = wrapper.find('[data-testid="flag-toggle-flag-v1"]')
     expect(toggle.attributes('aria-disabled')).toBe('true')
+  })
+
+  it('renders the loaded plan info in the header once the plan payload lands', async () => {
+    const wrapper = await mountView()
+    const header = wrapper.find('header')
+    expect(header.find('output').exists()).toBe(false)
+    expect(header.text()).toContain('Plan:')
+    expect(header.text()).toContain('Features enabled:')
+    expect(header.text()).toContain('community')
+  })
+
+  it('shows an inline plan-unavailable message with retry instead of a fabricated plan', async () => {
+    api.GET = vi.fn((path: string) => {
+      if (path.startsWith('/api/v1/admin/feature-flags') && path.includes('org-override')) {
+        return Promise.resolve({ data: { override: null }, error: undefined })
+      }
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: mockFlagsData, error: undefined })
+      }
+      if (path === '/api/v1/admin/tiers') {
+        return Promise.resolve({ data: mockTiersData, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: 'plan unavailable' })
+    }) as unknown as typeof api.GET
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(AdminFeatureFlagsView, { global: { plugins: [pinia] } })
+    for (let i = 0; i < 10; i++) {
+      await flushPromises()
+    }
+    const header = wrapper.find('header')
+    expect(header.text()).toContain('Plan information could not be loaded.')
+    expect(header.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+  })
+
+  it('surfaces a dev-mode toggle failure with a retry for the requested value', async () => {
+    const wrapper = await mountView()
+    const put = vi.fn()
+      .mockResolvedValueOnce({ data: null, error: 'not allowed' })
+      .mockResolvedValueOnce({ data: { enabled: true }, error: undefined })
+    api.PUT = put as unknown as typeof api.PUT
+
+    await wrapper.find('[data-testid="developer-mode-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Failed to update developer mode:')
+    expect(put).toHaveBeenCalledWith('/api/v1/admin/dev-mode', { body: { enabled: true } })
+    expect(wrapper.find('[data-testid="developer-mode-toggle"]').attributes('aria-checked')).toBe('false')
+
+    await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
+    for (let i = 0; i < 5; i++) {
+      await flushPromises()
+    }
+    expect(put).toHaveBeenCalledTimes(2)
+    expect(put).toHaveBeenLastCalledWith('/api/v1/admin/dev-mode', { body: { enabled: true } })
+    expect(wrapper.find('[data-testid="developer-mode-toggle"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.text()).not.toContain('Failed to update developer mode:')
+  })
+
+  it('surfaces a thrown dev-mode toggle rejection and retries the requested value', async () => {
+    const wrapper = await mountView()
+    const put = vi.fn()
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce({ data: { enabled: true }, error: undefined })
+    api.PUT = put as unknown as typeof api.PUT
+
+    await wrapper.find('[data-testid="developer-mode-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Failed to update developer mode:')
+    expect(wrapper.find('[data-testid="developer-mode-toggle"]').attributes('aria-checked')).toBe('false')
+
+    await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
+    for (let i = 0; i < 5; i++) {
+      await flushPromises()
+    }
+    expect(put).toHaveBeenCalledTimes(2)
+    expect(put).toHaveBeenLastCalledWith('/api/v1/admin/dev-mode', { body: { enabled: true } })
+    expect(wrapper.find('[data-testid="developer-mode-toggle"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.text()).not.toContain('Failed to update developer mode:')
+  })
+
+  it('renders an em dash for a flag with no description', async () => {
+    api.GET = vi.fn((path: string) => {
+      if (path.startsWith('/api/v1/admin/feature-flags') && path.includes('org-override')) {
+        return Promise.resolve({ data: { override: null }, error: undefined })
+      }
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({
+          data: {
+            ...mockFlagsData,
+            flags: [
+              { name: 'flag-no-desc', description: '', tier: 'community', currently_active: false, depends_on: null },
+            ],
+            would_activate: [],
+          },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/plan') {
+        return Promise.resolve({ data: mockPlanData, error: undefined })
+      }
+      if (path === '/api/v1/admin/tiers') {
+        return Promise.resolve({ data: mockTiersData, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    }) as unknown as typeof api.GET
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(AdminFeatureFlagsView, { global: { plugins: [pinia] } })
+    for (let i = 0; i < 10; i++) {
+      await flushPromises()
+    }
+    const cells = wrapper.find('tbody tr').findAll('td')
+    expect(cells[3].text()).toBe('—')
+  })
+
+  it('clamps back to the last page when a refetch shrinks the result set', async () => {
+    const manyFlags = Array.from({ length: 25 }, (_, i) => ({
+      name: `flag-${i}`,
+      description: `Flag number ${i}`,
+      tier: 'community',
+      currently_active: i < 5,
+      depends_on: null,
+    }))
+    let currentFlags = manyFlags
+    api.GET = vi.fn((path: string) => {
+      if (path.startsWith('/api/v1/admin/feature-flags') && path.includes('org-override')) {
+        return Promise.resolve({ data: { override: null }, error: undefined })
+      }
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({
+          data: { ...mockFlagsData, flags: currentFlags, would_activate: [] },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/plan') {
+        return Promise.resolve({ data: mockPlanData, error: undefined })
+      }
+      if (path === '/api/v1/admin/tiers') {
+        return Promise.resolve({ data: mockTiersData, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    }) as unknown as typeof api.GET
+    api.PUT = vi.fn().mockResolvedValue({ data: { enabled: false }, error: undefined }) as unknown as typeof api.PUT
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(AdminFeatureFlagsView, { global: { plugins: [pinia] } })
+    for (let i = 0; i < 10; i++) {
+      await flushPromises()
+    }
+    await wrapper.find('[data-testid="flags-next-page"]').trigger('click')
+    await wrapper.find('[data-testid="flags-next-page"]').trigger('click')
+    expect(wrapper.text()).toContain('Page 3 of 3')
+
+    currentFlags = manyFlags.slice(0, 3)
+    await wrapper.find('[data-testid="flag-toggle-flag-20"]').trigger('click')
+    for (let i = 0; i < 10; i++) {
+      await flushPromises()
+    }
+
+    expect(wrapper.text()).not.toContain('Page 3 of 3')
+    expect(wrapper.find('[data-testid="flags-next-page"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('flag-0')
   })
 
   it('allows disabling an active locked flag (backend only blocks enabling)', async () => {

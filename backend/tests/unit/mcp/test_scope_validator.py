@@ -42,7 +42,12 @@ class TestCheckToolScope:
             ("operator", "trigger_pipeline"),
             ("admin", "trigger_pipeline"),
             ("runner", "cancel_run"),
-            ("runner", "list_pending_hitl"),
+            ("viewer", "list_runs"),
+            ("viewer", "list_triggers"),
+            ("viewer", "list_trigger_events"),
+            ("viewer", "list_pending_hitl"),
+            ("viewer", "list_hitl_reviews"),
+            ("viewer", "get_hitl_review"),
             ("runner", "copy_library_primitive"),
             # FAR-1879: the MCP housekeeping LIST tool now shares the admin
             # org-role floor of its REST twin (GET /api/v1/admin/housekeeping),
@@ -71,7 +76,12 @@ class TestCheckToolScope:
             "operator-trigger_pipeline",
             "admin-trigger_pipeline",
             "runner-cancel_run",
-            "runner-list_pending_hitl",
+            "viewer-list_runs",
+            "viewer-list_triggers",
+            "viewer-list_trigger_events",
+            "viewer-list_pending_hitl",
+            "viewer-list_hitl_reviews",
+            "viewer-get_hitl_review",
             "runner-copy_library_primitive",
             "admin-list_housekeeping",
             "admin-perform_housekeeping",
@@ -189,7 +199,6 @@ class TestCheckToolScope:
         [
             ("viewer", "trigger_pipeline"),
             ("viewer", "cancel_run"),
-            ("viewer", "list_pending_hitl"),
             ("viewer", "copy_library_primitive"),
             ("viewer", "review_hitl"),
             ("viewer", "list_housekeeping"),
@@ -215,7 +224,6 @@ class TestCheckToolScope:
         ids=[
             "viewer-trigger_pipeline",
             "viewer-cancel_run",
-            "viewer-list_pending_hitl",
             "viewer-copy_library_primitive",
             "viewer-review_hitl",
             "viewer-list_housekeeping",
@@ -422,6 +430,7 @@ class TestNewlyGuardedTools:
             ("admin", "delete_secret"),
             ("operator", "list_secrets"),
             ("admin", "list_secrets"),
+            ("viewer", "list_trigger_events"),
             ("runner", "list_trigger_events"),
             ("operator", "list_trigger_events"),
             ("admin", "list_trigger_events"),
@@ -435,6 +444,7 @@ class TestNewlyGuardedTools:
             "admin-delete_secret",
             "operator-list_secrets",
             "admin-list_secrets",
+            "viewer-list_trigger_events",
             "runner-list_trigger_events",
             "operator-list_trigger_events",
             "admin-list_trigger_events",
@@ -442,10 +452,6 @@ class TestNewlyGuardedTools:
     )
     def test_authorized_role_passes(self, role: str, tool: str) -> None:
         assert check_tool_scope(role, tool) is None
-
-    def test_viewer_denied_list_trigger_events(self) -> None:
-        with pytest.raises(MCPAuthorizationError):
-            check_tool_scope("viewer", "list_trigger_events")
 
 
 class TestAllowedToolsNarrowing:
@@ -586,6 +592,10 @@ class TestConstants:
             "bind_connector_to_node",
             "set_pipeline_circuit_breaker",
             "set_pipeline_owners",
+            "set_resource_owner_team",
+            "set_resource_owner_team:pipeline",
+            "set_resource_owner_team:model_backend",
+            "set_resource_owner_team:connector",
             # FAR-1175: manual autonomy demote/promote share the pipeline
             # update permission key (admin/owner gate enforced in-handler).
             "demote_pipeline_autonomy",
@@ -866,6 +876,18 @@ class TestResolveToolAccessMatrix:
             pytest.param("user", "api_key", "create_api_key", "admin", False, False, id="userkey-mint-ks-elig"),
             pytest.param("user", "jwt", "create_api_key", "admin", True, True, id="jwt-mint-ok"),
             pytest.param("user", "oauth", "create_api_key", "admin", True, True, id="oauth-mint-ok"),
+            # ── review_hitl is a narrow caller-scope reachability exception ──
+            # The later human-linkage/persona gate still decides human_only
+            # authority; this matrix only proves the shared chokepoint does not
+            # deny a user-scoped key before that gate runs.
+            pytest.param("user", "api_key", "review_hitl", "operator", True, True, id="userkey-hitl-base-ok"),
+            pytest.param("user", "api_key", "review_hitl", "operator", True, True, id="userkey-hitl-operator-ok"),
+            pytest.param("user", "api_key", "review_hitl", "operator", False, True, id="userkey-hitl-ks-off"),
+            # Org/service credentials remain reachable here so the existing
+            # human-linkage denial remains the authority for human_only gates.
+            pytest.param("org", "api_key", "review_hitl", "operator", True, True, id="orgkey-hitl-reaches-gate"),
+            pytest.param("user", "jwt", "review_hitl", "operator", True, True, id="jwt-hitl-reaches-gate"),
+            pytest.param("user", "oauth", "review_hitl", "operator", True, True, id="oauth-hitl-reaches-gate"),
             # ── read-only tools classify 'any' (today's default preserved) ──
             pytest.param("org", "api_key", "list_pipelines", "viewer", True, True, id="orgkey-readonly"),
             pytest.param("user", "api_key", "list_pipelines", "viewer", True, True, id="userkey-readonly"),
@@ -1164,6 +1186,26 @@ class TestCallerScopeClassification:
 
     def test_explicit_org_only_pin_create_api_key(self) -> None:
         assert CALLER_SCOPE_REQUIREMENTS["create_api_key"] == "org-only"
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            "review_hitl",
+            "review_hitl:claim",
+            "review_hitl:approve",
+            "review_hitl:reject",
+            "review_hitl:deliver_manual",
+        ],
+    )
+    def test_review_hitl_explicitly_allows_caller_scope_reachability(self, tool: str) -> None:
+        """HITL action keys bypass only the caller-scope leg.
+
+        The human-linkage/persona gate remains later in the MCP tool path, while
+        ``create_api_key`` remains explicitly org-only.
+        """
+        assert CALLER_SCOPE_REQUIREMENTS[tool] == "any"
+        permission_key = TOOL_SCOPE_REQUIREMENTS[tool.split(":", maxsplit=1)[0]]
+        assert classify_caller_scope(tool, permission_key) == "any"
 
     def test_self_suffix_derives_caller_scoped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_caller_scoped_tool(monkeypatch)

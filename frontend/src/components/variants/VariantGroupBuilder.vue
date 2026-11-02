@@ -1,14 +1,13 @@
 <template>
-  <section class="space-y-6 rounded-lg border bg-card p-6" data-testid="variant-group-builder">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 class="text-base font-semibold tracking-tight">
-          {{ $t('views.variantCreator.title') }}
-        </h2>
-        <p class="mt-1 text-sm text-muted-foreground">
-          {{ $t('views.variantCreator.subtitle') }}
-        </p>
-      </div>
+  <DataCard
+    :title="$t('views.variantCreator.title')"
+    :description="$t('views.variantCreator.subtitle')"
+    heading-level="h2"
+    variant="bordered"
+    padding="lg"
+    data-testid="variant-group-builder"
+  >
+    <template #headerActions>
       <Button
         severity="secondary"
         outlined
@@ -18,11 +17,12 @@
       >
         {{ $t('views.variantCreator.cancel') }}
       </Button>
-    </div>
+    </template>
 
-    <LoadingSpinner v-if="loading" />
-    <ErrorAlert v-else-if="error" :message="error" />
-    <template v-else>
+    <div class="space-y-6">
+      <LoadingSpinner v-if="loading" />
+      <ErrorAlert v-else-if="error" :message="error" />
+      <template v-else>
       <div class="flex flex-wrap items-center gap-4">
         <label class="flex items-center gap-2 text-sm">
           <span class="text-muted-foreground">{{ $t('views.variantCreator.pipeline') }}</span>
@@ -70,14 +70,15 @@
           </Button>
         </EmptyState>
 
-        <section v-else class="space-y-4 rounded-lg border bg-card p-6">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <h3 class="text-base font-semibold tracking-tight">
-              {{ $t('views.variantCreator.variants_title') }}
-            </h3>
-            <p class="text-xs text-muted-foreground">
-              {{ $t('views.variantCreator.advanced_overrides_note') }}
-            </p>
+        <DataCard
+          v-else
+          :title="$t('views.variantCreator.variants_title')"
+          :description="$t('views.variantCreator.advanced_overrides_note')"
+          heading-level="h3"
+          variant="bordered"
+          padding="lg"
+        >
+          <template #headerActions>
             <div class="flex items-center gap-3">
               <span class="sr-only" id="variant-builder-headroom-label">{{ $t('views.variantCreator.variants_title') }}</span>
               <output
@@ -98,11 +99,12 @@
                 {{ $t('views.variantCreator.add_variant') }}
               </Button>
             </div>
-          </div>
+          </template>
 
-          <div class="overflow-x-auto">
-            <table class="w-full text-left text-sm">
-              <thead>
+          <div class="space-y-4">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-sm">
+                <thead>
                 <tr class="border-b text-xs uppercase text-muted-foreground">
                   <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.label') }}</th>
                   <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.snapshot') }}</th>
@@ -110,8 +112,8 @@
                   <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.prompt_version') }}</th>
                   <th class="py-2 font-medium text-right">{{ $t('views.variantCreator.actions') }}</th>
                 </tr>
-              </thead>
-              <tbody>
+                </thead>
+                <tbody>
                 <tr
                   v-for="(v, i) in variants"
                   :key="v.id"
@@ -200,11 +202,11 @@
                     </button>
                   </td>
                 </tr>
-              </tbody>
-            </table>
-          </div>
+                </tbody>
+              </table>
+            </div>
 
-          <output
+            <output
             v-if="variants.length < 2"
             data-testid="variant-builder-min-two"
             aria-labelledby="variant-builder-min-two-label"
@@ -221,22 +223,23 @@
             class="mb-3"
           />
 
-          <div class="flex flex-wrap items-center gap-3 pt-2">
-            <Button
-              :disabled="!canFire || firing"
-              data-testid="variant-builder-fire"
-              type="button"
-              class="px-5 py-2"
-              @click="openFireDialog"
-            >
-              <span v-if="firing" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              {{ firing ? $t('views.variantCreator.firing') : $t('views.variantCreator.fire_comparison') }}
-            </Button>
-            <span v-if="canFire" class="text-xs text-muted-foreground">
-              {{ $t('views.variantCreator.fires_n_runs', { count: variants.length }) }}
-            </span>
+            <div class="flex flex-wrap items-center gap-3 pt-2">
+              <Button
+                :disabled="!canFire || firing"
+                data-testid="variant-builder-fire"
+                type="button"
+                class="px-5 py-2"
+                @click="openFireDialog"
+              >
+                <span v-if="firing" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                {{ firing ? $t('views.variantCreator.firing') : $t('views.variantCreator.fire_comparison') }}
+              </Button>
+              <span v-if="canFire" class="text-xs text-muted-foreground">
+                {{ $t('views.variantCreator.fires_n_runs', { count: variants.length }) }}
+              </span>
+            </div>
           </div>
-        </section>
+        </DataCard>
       </template>
 
       <EmptyState
@@ -245,6 +248,7 @@
         :description="$t('views.variantCreator.no_pipelines_hint')"
       />
     </template>
+    </div>
 
     <Dialog
       v-if="showFireDialog"
@@ -286,7 +290,7 @@
         </div>
       </template>
     </Dialog>
-  </section>
+  </DataCard>
 </template>
 
 <script setup lang="ts">
@@ -303,6 +307,7 @@ import EmptyState from '../shared/EmptyState.vue'
 import Dialog from 'primevue/dialog'
 import Select from '../shared/AppSelect.vue'
 import { formatApiError } from '../../lib/api/formatError'
+import DataCard from '../ui/DataCard.vue'
 
 const props = defineProps<{
   initialPipelineId?: string | null
@@ -335,19 +340,20 @@ const comparisonName = ref('')
 const variants = ref<VariantForm[]>([])
 const snapshots = ref<Array<{ id: string; snapshot_version: number; tag: string | null }>>([])
 const promptVersionOptions = ref<Array<{ value: string; label: string }>>([])
-const error = ref<string | null>(null)
 const fireError = ref<string | null>(null)
 const firing = ref(false)
 const showFireDialog = ref(false)
 
-const { loading: pipelinesLoading, data: pipelinesData } = useDataFetch(
+const { loading: pipelinesLoading, data: pipelinesData, error: pipelinesError } = useDataFetch(
   () => api.GET('/api/v1/pipelines'),
   { immediate: true }
 )
-const { loading: backendsLoading, data: backendsData } = useDataFetch(
+const { loading: backendsLoading, data: backendsData, error: backendsError } = useDataFetch(
   () => api.GET('/api/v1/model-backends'),
   { immediate: true }
 )
+
+const error = computed(() => pipelinesError.value ?? backendsError.value)
 
 watch(() => backendsData.value, (data) => {
   if (data) {

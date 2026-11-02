@@ -319,6 +319,36 @@ describe('SettingsTriggerEventLogView', () => {
     expect(prevBtn.attributes('disabled')).toBeUndefined()
   })
 
+  it('previous button walks back to the first page after paging forward (FAR-2264)', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        items: [makeEvent()],
+        total: 10,
+        next_cursor: 'page2-cursor',
+      },
+      error: undefined,
+    })
+    const wrapper = mount(SettingsTriggerEventLogView)
+    await flushPromises()
+    await wrapper.find('[data-testid="settings-trigger-event-log-next"]').trigger('click')
+    await flushPromises()
+    expect(getMock).toHaveBeenLastCalledWith(
+      '/api/v1/admin/trigger-events',
+      expect.objectContaining({ params: { query: { limit: 50, cursor: 'page2-cursor' } } }),
+    )
+
+    const prevBtn = wrapper.find('[data-testid="settings-trigger-event-log-previous"]')
+    expect(prevBtn.attributes('disabled')).toBeUndefined()
+    await prevBtn.trigger('click')
+    await flushPromises()
+
+    expect(getMock).toHaveBeenLastCalledWith(
+      '/api/v1/admin/trigger-events',
+      expect.objectContaining({ params: { query: { limit: 50 } } }),
+    )
+    expect(wrapper.find('[data-testid="settings-trigger-event-log-previous"]').attributes('disabled')).toBeDefined()
+  })
+
   it('typeBadge returns correct class for each trigger type', async () => {
     getMock.mockResolvedValue({
       data: {

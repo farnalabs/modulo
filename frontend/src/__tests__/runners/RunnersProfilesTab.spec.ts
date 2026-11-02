@@ -55,6 +55,7 @@ function makeStatus(profileOverrides: Record<string, unknown> = {}): RunnersStat
     aggregate_state: 'healthy',
     probe_interval_seconds: 60,
     staleness_threshold_seconds: 120,
+    engine_configured: true,
     machines: [
       {
         machine_id: 'machine-1',
@@ -158,6 +159,21 @@ describe('RunnersProfilesTab', () => {
 
     expect(wrapper.find(`[data-testid="runner-profile-health-p-bundled"]`).text()).toBe('engine unreachable')
     expect(wrapper.find(`[data-testid="runner-profile-health-p-bundled"]`).classes()).toContain('text-destructive-text')
+  })
+
+  it('shows a neutral "not available" badge, not a red error, when no Docker engine is configured', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useEnvironmentProfilesStore()
+    store.$patch({ profiles: [BUNDLED_PROFILE] as never })
+    const status = { ...makeStatus({ health_state: 'engine_unreachable', available: false }), engine_configured: false }
+    const wrapper = mount(RunnersProfilesTab, { props: { status, reloadStatus } })
+    await nextTick()
+    await flushPromises()
+
+    const badge = wrapper.find('[data-testid="runner-profile-health-p-bundled"]')
+    expect(badge.text()).toBe('not available')
+    expect(badge.classes()).not.toContain('text-destructive-text')
   })
 
   it('flags an unavailable card without dimming its text below WCAG AA', async () => {
@@ -393,11 +409,11 @@ describe('RunnersProfilesTab', () => {
     const note = wrapper.find('[data-testid="runner-profile-image-unresolvable"]')
     expect(note.exists()).toBe(true)
     expect(note.element.tagName).toBe('OUTPUT')
-    expect(note.text()).toContain('Image cannot be resolved')
+    expect(note.text()).toContain('Bundled runner image not yet pinned')
     expect(note.text()).toContain('Edit')
   })
 
-  it('reports an unresolvable health badge, not a green healthy one, for a placeholder digest', async () => {
+  it('reports a neutral not-yet-pinned health badge, not a green healthy one, for a placeholder digest', async () => {
     // FAR-1779 F5: the backend excludes the placeholder ref from image
     // inspection and reports health_state='healthy', but a green "healthy"
     // badge above the resolution note is the more persuasive signal — the
@@ -412,8 +428,9 @@ describe('RunnersProfilesTab', () => {
     await flushPromises()
 
     const badge = wrapper.find('[data-testid="runner-profile-health-p-bundled"]')
-    expect(badge.text()).toBe('image unresolvable')
-    expect(badge.classes()).toContain('text-warning-text')
+    expect(badge.text()).toBe('image not yet pinned')
+    expect(badge.classes()).toContain('text-muted-foreground')
+    expect(badge.classes()).not.toContain('text-warning-text')
     expect(badge.classes()).not.toContain('text-success')
   })
 

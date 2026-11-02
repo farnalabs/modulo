@@ -87,10 +87,12 @@ def _make_mock_trigger(
     last_fired_at=None,
     next_fire_at=None,
     config_json: dict | None = None,
+    name: str = "test-trigger",
 ) -> MagicMock:
     t = MagicMock()
     t.id = trigger_id or uuid.uuid4()
     t.pipeline_id = uuid.uuid4()
+    t.name = name
     t.trigger_type = trigger_type
     t.active = active
     t.max_concurrent_runs = max_concurrent_runs
@@ -156,11 +158,17 @@ class _AuthContext:
             new=AsyncMock(return_value=(None, None)),
         )
         self._team_gate_patch.start()
+        # FAR-2227: the duplicate-name probe needs a real Result; the mocked
+        # sessions here do not model it, so it is stubbed to "no clash". The
+        # probe itself is covered by TestTriggerNameRequired and the REST tests.
+        self._unique_name_patch = patch("modulo.api.mcp_server._require_unique_trigger_name", new=AsyncMock())
+        self._unique_name_patch.start()
 
     def teardown_method(self) -> None:
         from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         self._team_gate_patch.stop()
+        self._unique_name_patch.stop()
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
@@ -260,6 +268,7 @@ class TestGetTriggerSuccess(_AuthContext):
 
         assert result["id"] == str(trigger.id)
         assert result["pipeline_id"] == str(trigger.pipeline_id)
+        assert result["name"] == "test-trigger"
         assert result["trigger_type"] == "cron"
         assert result["active"] is True
         assert result["max_concurrent_runs"] == 3
@@ -1191,6 +1200,7 @@ class TestCreateTriggerOngoing(_AuthContext):
 
         result = await create_trigger(
             pipeline_id=str(uuid.uuid4()),
+            name="t",
             trigger_type="ongoing",
             max_concurrent_runs=3,
             daily_spend_limit=None,
@@ -1214,6 +1224,7 @@ class TestCreateTriggerOngoing(_AuthContext):
 
         result = await create_trigger(
             pipeline_id=str(uuid.uuid4()),
+            name="t",
             trigger_type="ongoing",
             max_concurrent_runs=3,
             daily_spend_limit=25.0,
@@ -1237,6 +1248,7 @@ class TestCreateTriggerOngoing(_AuthContext):
 
         result = await create_trigger(
             pipeline_id=str(uuid.uuid4()),
+            name="t",
             trigger_type="ongoing",
             max_concurrent_runs=3,
             daily_spend_limit=25.0,
@@ -1263,6 +1275,7 @@ class TestCreateTriggerOngoing(_AuthContext):
 
         result = await create_trigger(
             pipeline_id=str(uuid.uuid4()),
+            name="t",
             trigger_type="ongoing",
             max_concurrent_runs=20,
             daily_spend_limit=25.0,
@@ -1308,6 +1321,7 @@ class TestCreateTriggerStreakStatus(_AuthContext):
         ) as get_status:
             result = await create_trigger(
                 pipeline_id=str(uuid.uuid4()),
+                name="t",
                 trigger_type="ongoing",
                 max_concurrent_runs=3,
                 daily_spend_limit=25.0,
@@ -1418,3 +1432,53 @@ class TestGetTriggerOngoing(_AuthContext):
 
         assert result["trigger_type"] == "ongoing"
         assert result["in_flight"] == 2
+
+
+# ---------------------------------------------------------------------------
+# FAR-2227: renaming a trigger through update_trigger
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateTriggerRename(_AuthContext):
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("operator")
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_rename_updates_the_name_and_returns_it(
+        self, mock_session: AsyncMock, mock_validate_auth: AsyncMock
+    ) -> None:
+        trigger = _make_mock_trigger(name="old-name")
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await update_trigger(trigger_id=str(trigger.id), name="  new-name  ")
+
+        assert result.get("error") is None
+        assert result["name"] == "new-name"
+        assert trigger.name == "new-name"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_rename_to_a_taken_name_is_refused_before_mutating(
+        self, mock_session: AsyncMock, mock_validate_auth: AsyncMock
+    ) -> None:
+        from fastapi import HTTPException
+
+        trigger = _make_mock_trigger(name="old-name")
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with patch(
+            "modulo.api.mcp_server._require_unique_trigger_name",
+            new=AsyncMock(side_effect=HTTPException(status_code=409, detail="duplicate trigger name 'taken'")),
+        ):
+            result = await update_trigger(trigger_id=str(trigger.id), name="taken")
+
+        assert result["error"] == "conflict"
+        assert trigger.name == "old-name"

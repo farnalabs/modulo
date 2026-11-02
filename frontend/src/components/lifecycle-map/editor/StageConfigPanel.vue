@@ -75,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, computed, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { GraduationCap as GraduationCapIcon } from '@lucide/vue'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
@@ -115,7 +115,7 @@ const stageTypeOptions = [
   { value: 'placeholder' as StageType, label: 'Placeholder', description: 'Not yet defined' },
 ]
 
-const form = reactive<FormModel>({
+const form = ref<FormModel>({
   name: '',
   description: '',
   stage_type: 'placeholder',
@@ -129,20 +129,20 @@ const isGraduatable = computed(() =>
 )
 
 watch(() => [props.name, props.description, props.stage_type, props.pipeline_id, props.external_url, props.owner], () => {
-  form.name = props.name || ''
-  form.description = props.description || ''
-  form.stage_type = props.stage_type || 'placeholder'
-  form.pipeline_id = props.pipeline_id || null
-  form.external_url = props.external_url || ''
-  form.owner = props.owner || ''
+  form.value.name = props.name || ''
+  form.value.description = props.description || ''
+  form.value.stage_type = props.stage_type || 'placeholder'
+  form.value.pipeline_id = props.pipeline_id || null
+  form.value.external_url = props.external_url || ''
+  form.value.owner = props.owner || ''
 }, { immediate: true })
 
 watch(form, () => {
-  emit('update', 'name', form.name)
-  emit('update', 'description', form.description)
-  emit('update', 'stage_type', form.stage_type)
-  emit('update', 'pipeline_id', form.pipeline_id)
-  emit('update', 'external_url', form.external_url || null)
-  emit('update', 'owner', form.owner || null)
+  emit('update', 'name', form.value.name)
+  emit('update', 'description', form.value.description)
+  emit('update', 'stage_type', form.value.stage_type)
+  emit('update', 'pipeline_id', form.value.pipeline_id)
+  emit('update', 'external_url', form.value.external_url || null)
+  emit('update', 'owner', form.value.owner || null)
 }, { deep: true })
 </script>

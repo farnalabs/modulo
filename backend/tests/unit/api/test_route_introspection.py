@@ -79,12 +79,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("DELETE", "/api/v1/assistant/sessions/{session_id}"): "Assistant own session auth",
     ("POST", "/api/v1/assistant/sessions/{session_id}/messages"): "Assistant own session auth",
     ("POST", "/api/v1/assistant/sessions/{session_id}/stream"): "Assistant own session auth",
-    ("POST", "/api/v1/assistant/sessions/{session_id}/permission-response"): "Assistant own session auth",
-    ("POST", "/api/v1/assistant/sessions/{session_id}/ui-command-results"): "Assistant own session auth",
-    ("POST", "/api/v1/assistant/sessions/{session_id}/reset-permissions"): "Assistant own session auth",
-    ("POST", "/api/v1/assistant/sessions/{session_id}/resume"): "Assistant own session auth",
-    ("POST", "/api/v1/assistant/sessions/{session_id}/stop"): "Assistant own session auth",
-    ("POST", "/api/v1/assistant/sessions/{session_id}/undo"): "Assistant own session auth",
     # me/*: the user's own profile (get_current_user is the correct gate).
     ("PUT", "/api/v1/me/settings"): "self-profile (get_current_user)",
     ("PUT", "/api/v1/me/password"): "self-profile (get_current_user)",

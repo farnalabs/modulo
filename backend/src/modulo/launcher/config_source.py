@@ -25,6 +25,9 @@ exclusive-create writer (``modulo.db.bootstrap._write_env_file``), which
 also refuses a symlink squatting on the contract path.
 """
 
+import base64
+import hashlib
+import hmac
 import logging
 import os
 from pathlib import Path
@@ -66,6 +69,18 @@ class LauncherConfigError(RuntimeError):
     """Raised when the launcher config source cannot read its inputs."""
 
 
+def _native_settings_keys(secrets: LauncherSecrets) -> tuple[str, str]:
+    """Derive stable native Settings keys without adding another secret file.
+
+    The state HMAC key is already owner-only and stable for the data directory.
+    Domain-separated HMAC derivations keep these values out of plists/logs while
+    making existing installs upgrade in place without rotating database keys.
+    """
+    secret_key = hmac.new(secrets.state_hmac_key, b"modulo/native/secret-key", hashlib.sha256).digest()
+    fernet_raw = hmac.new(secrets.state_hmac_key, b"modulo/native/fernet-key", hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(secret_key).decode("ascii"), base64.urlsafe_b64encode(fernet_raw).decode("ascii")
+
+
 def compose_config(state: LauncherState, secrets: LauncherSecrets) -> dict[str, str]:
     """Derive the bundled-service config values (credentials INCLUDED).
 
@@ -85,11 +100,14 @@ def compose_config(state: LauncherState, secrets: LauncherSecrets) -> dict[str, 
         f"@{POSTGRES_HOST}:{state.postgres_port}/{APP_DB_NAME}"
     )
     system_url = derive_system_database_url(database_url)
+    secret_key, fernet_key = _native_settings_keys(secrets)
     return {
         "DATABASE_URL": database_url,
         "DATABASE_ADMIN_URL": database_url,
         "REDIS_URL": f"redis://:{secrets.redis_password}@{POSTGRES_HOST}:{state.redis_port}/{_REDIS_DB}",
         "MODULO_SYSTEM_DATABASE_URL": system_url or "",
+        "SECRET_KEY": secret_key,
+        "FERNET_KEY": fernet_key,
     }
 
 
@@ -109,7 +127,13 @@ def render_env_file(composed: dict[str, str]) -> str:
     return "".join(f"{key}={composed[key]}\n" for key in sorted(composed))
 
 
-def write_pinned_env_file(data_dir: Path, state: LauncherState, secrets: LauncherSecrets) -> Path:
+def write_pinned_env_file(
+    data_dir: Path,
+    state: LauncherState,
+    secrets: LauncherSecrets,
+    *,
+    path: Path | None = None,
+) -> Path:
     """Write ``<datadir>/config.env`` (0600) and return its path.
 
     The writer is the promoted exclusive-create implementation (random temp
@@ -123,7 +147,7 @@ def write_pinned_env_file(data_dir: Path, state: LauncherState, secrets: Launche
 
     composed = compose_config(state, secrets)
     rendered = render_env_file(composed)
-    path = data_dir / CONFIG_ENV_FILENAME
+    path = path if path is not None else data_dir / CONFIG_ENV_FILENAME
     try:
         if path.exists() and path.read_text(encoding="utf-8") != rendered:
             _log.warning(

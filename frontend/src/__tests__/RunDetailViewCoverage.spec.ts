@@ -77,6 +77,7 @@ vi.mock('../lib/api/client', () => ({
 // branch unconditionally instead of falling through a runtime `if (btn.exists())`.
 vi.mock('../lib/jwt', () => ({
   decodeJwtPayload: () => ({ org_role: 'operator' }),
+  principalSubject: () => null,
 }))
 
 import RunDetailView from '../views/RunDetailView.vue'

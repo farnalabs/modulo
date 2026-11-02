@@ -1,13 +1,13 @@
 # System Requirements
 
-Supported platforms, minimum resources, and database backends for running Modulo in production. Modulo v1 supports Linux hosts only.
+Supported platforms, minimum resources, and database backends for running Modulo in production. Modulo v1 supports Linux hosts and the native macOS arm64 single-install artifact.
 
 ---
 
 ## Supported Platforms
 
-Modulo v1 targets **Linux hosts**. macOS and Windows are out of scope for v1:
-this is a recorded decision, not an oversight.
+Modulo v1 targets Linux hosts and Apple Silicon macOS for the native single-install
+artifact. Windows remains out of scope for v1.
 
 ### Platform support matrix (v1)
 
@@ -18,7 +18,7 @@ below).
 | Server host platform | v1 status |
 |----------------------|-----------|
 | **Linux** | Supported (native single-install and container paths) |
-| **macOS** | Not a supported v1 server host: no native installer, no macOS release artifact |
+| **macOS arm64** | Supported native single-install host (signed/notarized `.dmg`, macos-15 validation) |
 | **Windows** | Not a supported v1 server host: no native installer, no Windows release artifact |
 
 Docker Desktop (see Development / Evaluation below) is a developer
@@ -26,16 +26,12 @@ convenience on macOS and Windows: it runs the Linux containers inside a Linux
 VM, so the deployed stack is still Linux. It is not a supported production
 host.
 
-**Why macOS and Windows have no native install in v1:**
-
-- There is no macOS or Windows installer. `scripts/install.sh` refuses to run on
-  a non-Linux host, aborting with "this installer supports Linux only (P1a)" and
-  naming ADR 031 for the macOS and Windows installers that would come later.
-- There is no macOS or Windows release artifact, and no such job in the release
-  pipeline: `bundle-release.yml` builds `linux-amd64` only.
-- ADR 031 phases macOS as P2 and Windows as P3, both after v1, and records that
-  each needs its own signing work (Apple notarisation for macOS; Azure Trusted
-  Signing for Windows). Neither is part of the v1 release.
+macOS arm64 is a native release target. The signed and notarized `.dmg` is built
+on `macos-15` with the pinned native runtime and is validated separately from the
+Linux bundle. It requires Apple Silicon; x64/Rosetta is not supported. The
+macOS installer's trust boundary is Apple Developer ID signing/notarization and
+stapling, verified with `codesign`, `spctl` and `hdiutil verify`; it does not
+consume the Linux signed release manifest. Windows remains out of scope for v1.
 
 A Windows-hosted deployment therefore means Windows Server running the Linux
 stack in a VM or container host, not native Windows binaries.
@@ -65,7 +61,7 @@ actually ship - do not widen these rows until the packaging tickets land):
 | Debian 13+ | 2.41 | Supported |
 | Ubuntu 26.04+ | 2.41+ | Supported |
 | Ubuntu 24.04 and earlier | 2.39 and below | Not supported (below the bundled service-binary floor) |
-| macOS | - | Out of scope for v1 (post-v1: P2, ADR 031) |
+| macOS arm64 | Apple Silicon | Supported native `.dmg`; x64/Rosetta is not supported |
 | Windows | - | Out of scope for v1 (post-v1: P3, ADR 031) |
 
 The hard requirement is **glibc 2.41 or newer**. The bundled PostgreSQL 16 and
@@ -82,7 +78,7 @@ supported native-install target.
 |--------------|--------|
 | linux-amd64 (x86_64) | Supported |
 | linux-arm64 | Planned (pins exist; no artifact published yet) |
-| macOS / Windows | Out of scope for v1 (post-v1: P2/P3, ADR 031) |
+| macOS arm64 | Supported native artifact; Apple Silicon only |
 
 `linux-arm64` is not installable yet: the bundle build matrix carries only
 `amd64`, so no `linux-arm64` tarball is published even though the arm64 pins
@@ -141,7 +137,9 @@ MySQL and MariaDB are configured through `MODULO_DB` (`settings.py` accepts
 dependency, but they are **not** production-conformant:
 
 * `db/crud/run_node_outputs.py::dialect_insert` raises
-  `NotImplementedError` for any dialect other than `postgres` / `sqlite`. That
+  `NotImplementedError` for any SQLAlchemy dialect other than `postgresql` /
+  `sqlite` (note the dialect name is `postgresql`, not the `MODULO_DB` value
+  `postgres`). That
   module is the chokepoint for every `run_node_outputs` read and write (FAR-583),
   so a run cannot store its node outputs, telemetry, markers, or artifacts on
   either backend.
@@ -187,7 +185,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 | Redis | 8+ | **Yes** (production) | SAQ task queue, rate limiting, event broker |
 | Python | 3.12+ | Yes | Application runtime |
 | `uv` | 0.11.13 | Yes | Python package manager (exact pin in `backend/Dockerfile` and `deploy/docker/Dockerfile.all-in-one`) |
-| Node.js | 20+ | For frontend dev | Frontend build toolchain; CI pins Node 22. Use `pnpm` (the repo pins `pnpm@11.28.8` via `packageManager`), not npm |
+| Node.js | 20+ | For frontend dev | Frontend build toolchain; CI pins Node 22. Use `pnpm` (the repo pins `pnpm@11.28.9` via `packageManager`), not npm |
 | Docker | 24+ | For Docker Compose | Container runtime |
 
 ### Redis Requirement Table

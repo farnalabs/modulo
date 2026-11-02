@@ -205,7 +205,8 @@ class TestHumanLinkedMcpAuthority(_OAuthContext):
 
     @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
     async def test_deliver_manual_denied_even_when_human_linked(self) -> None:
-        """``deliver_manual`` stays browser-only in step 1 (ADR 035)."""
+        """``deliver_manual`` remains browser-only, even when persona authority
+        is enabled for the other human-linked MCP HITL actions."""
         run, snapshot, review_id = _run_and_snapshot(human_only=True)
         session = _session_with_run(run, snapshot)
         manager = MagicMock()
@@ -244,6 +245,75 @@ class TestMcpNonLinkedDenials(_OAuthContext):
             result = await review_hitl(run_id=str(run.id), review_id=review_id, action="claim")
 
         assert result.get("error") == "human_only_gate", result
+
+    async def test_user_scoped_human_key_denied_when_persona_authority_is_off(self) -> None:
+        """A user-scoped human key remains denied while the org flag is off."""
+        from modulo.api.mcp_server import (
+            _check_human_only_gate,
+            _ctx_auth_type,
+            _ctx_key_grants,
+            _ctx_key_scope,
+            _ctx_token_family,
+        )
+        from modulo.auth.human_linkage import LINKAGE_USER_SCOPED_KEY
+        from modulo.db.crud.hitl_review_config import MSG_HUMAN_ONLY_DENY
+
+        _ctx_auth_type.set("api_key")
+        _ctx_token_family.set(None)
+        _ctx_key_scope.set("user")
+        _ctx_key_grants.set(None)
+        run, snapshot, review_id = _run_and_snapshot(human_only=True)
+        session = AsyncMock()
+        # The direct gate call skips the run read: (1) claim-stamp lookup (no
+        # row — legacy), (2) the run's snapshot graph.
+        session.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(None),
+                _make_run_lookup_result(snapshot),
+            ]
+        )
+        audit = AsyncMock()
+
+        with (
+            _mcp_patches(session, MagicMock(), flag_enabled=False, membership=("admin", "human")),
+            patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=audit),
+        ):
+            verdict = await _check_human_only_gate(session, _ORG_ID, run, review_id, "claim")
+
+        assert verdict is not None
+        assert verdict["error"] == "human_only_gate"
+        assert verdict["detail"] == MSG_HUMAN_ONLY_DENY
+        audit.assert_awaited_once()
+        linkage = audit.await_args.kwargs["linkage"]
+        assert linkage.linked is True
+        assert linkage.linkage == LINKAGE_USER_SCOPED_KEY
+        assert linkage.principal_kind == "human"
+
+    async def test_user_scoped_human_key_allowed_when_persona_authority_is_on(self) -> None:
+        """An enabled org flag admits the verified human-linked user key."""
+        from modulo.api.mcp_server import _ctx_auth_type, _ctx_key_scope, _ctx_token_family
+
+        _ctx_auth_type.set("api_key")
+        _ctx_token_family.set(None)
+        _ctx_key_scope.set("user")
+        run, _snapshot, review_id = _run_and_snapshot(human_only=True)
+        session = AsyncMock()
+        manager = MagicMock()
+        manager.claim = AsyncMock(return_value=MagicMock(claim_token="claim-abc", expires_at=None))
+
+        with (
+            _mcp_patches(session, manager, flag_enabled=True, membership=("admin", "human")),
+            patch("modulo.api.mcp_server._check_agent_tool_scope", return_value=None),
+            patch("modulo.api.mcp_server._load_hitl_run", new=AsyncMock(return_value=run)),
+            patch(
+                "modulo.db.crud.hitl_review_config.resolve_hitl_review_config",
+                new=AsyncMock(return_value={"human_only": True}),
+            ),
+        ):
+            result = await review_hitl(run_id=str(run.id), review_id=review_id, action="claim")
+
+        assert result.get("status") == "claimed", result
+        manager.claim.assert_awaited_once()
 
     @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
     async def test_browser_class_password_jwt_denied(self) -> None:

@@ -12,7 +12,7 @@
       <header class="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div class="flex items-center gap-3">
-            <PageHeader :title="$t('views.RunDetailView.run_detail')" />
+            <PageHeader :title="$t('views.RunDetailView.run_detail')" :subtitle="$t('views.RunDetailView.subtitle')" />
             <span :class="statusBadgeClass" :title="runStatusDescription(run.status, t, run.error_code)" :aria-label="runStatusDescription(run.status, t, run.error_code)" :data-testid="isSupersededRun(run.status, run.error_code) ? 'run-detail-status-superseded' : undefined"><span :class="isSupersededRun(run.status, run.error_code) ? '' : 'capitalize'">{{ runStatusShortLabel(run.status, run.error_code, $t, runStatusLabel(run.status)) }}</span></span>
             <!-- FAR-1141: run provenance — a dispatched run (part of its work
                  ran outside Modulo) must never read indistinguishably from one

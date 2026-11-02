@@ -28,6 +28,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.exception_handlers import (
     http_exception_handler,
+    publish_validation_error_handler,
     sso_callback_error_handler,
     storage_exhausted_exception_handler,
     unhandled_exception_handler,
@@ -130,6 +131,7 @@ from modulo.api.routes.service_accounts import router as service_accounts_router
 from modulo.api.routes.slack import router as slack_router
 from modulo.api.routes.sso import router as sso_router
 from modulo.api.routes.stripe_webhook import router as stripe_webhook_router
+from modulo.api.routes.system_maps import router as system_maps_router
 from modulo.api.routes.teams import router as teams_router
 from modulo.api.routes.templates import router as templates_router
 from modulo.api.routes.triggers import pipeline_triggers_router
@@ -139,6 +141,7 @@ from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
 from modulo.api.routes.webhooks import router as webhooks_router
+from modulo.api.schemas.system_maps import PublishValidationErrorHTTP
 from modulo.auth.sso import SsoCallbackError
 from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
@@ -148,7 +151,7 @@ from modulo.core.logging_config import configure_logging
 from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 from modulo.core.seed_data.catalog import FLAGS, TIERS
 from modulo.db.capacity import StorageExhaustedError
-from modulo.db.health_checks import db_is_at_migration_head
+from modulo.db.health_checks import db_is_at_migration_head, resolve_migration_script_location
 from modulo.db.seed import rehash_existing_user, seed_modulo_user, seed_modulo_users
 from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
@@ -375,10 +378,7 @@ async def _run_migrations(settings: Settings) -> None:
                 if not acquired:
                     raise _MigrationLockTimeoutError("Timed out waiting for the migration advisory lock")
                 config = Config(str(alembic_ini))
-                config.set_main_option(
-                    "script_location",
-                    str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
-                )
+                config.set_main_option("script_location", str(resolve_migration_script_location(alembic_ini)))
                 # Keep the app's structured logging intact — env.py skips
                 # fileConfig when config_file_name is None.
                 config.config_file_name = None
@@ -438,10 +438,7 @@ async def _assert_single_alembic_head(settings: Settings) -> None:
     alembic_ini = _resolve_alembic_ini()
     try:
         config = Config(str(alembic_ini))
-        config.set_main_option(
-            "script_location",
-            str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
-        )
+        config.set_main_option("script_location", str(resolve_migration_script_location(alembic_ini)))
         config.config_file_name = None
         config.set_main_option("sqlalchemy.url", _to_sync_url(settings.database_url))
 
@@ -1338,6 +1335,7 @@ app.include_router(library_router)
 app.include_router(community_library_router)
 app.include_router(compliance_router)
 app.include_router(lifecycle_maps_router)
+app.include_router(system_maps_router)
 # OAuth discovery metadata (RFC 8414 authorization-server, RFC 9728
 # protected-resource) -- unauthenticated and org-less, so it deliberately
 # carries no mcp_server plan-feature gate: a harness must be able to read it
@@ -1406,6 +1404,11 @@ app.add_exception_handler(StorageExhaustedError, storage_exhausted_exception_han
 # callback routes raise instead of returning it, so the saml_acs_attempted
 # audit dependency records an honest outcome="error" for a failed sign-in).
 app.add_exception_handler(SsoCallbackError, sso_callback_error_handler)  # type: ignore[arg-type]
+# FAR-2236: a raised PublishValidationErrorHTTP renders the 200 PublishResponse
+# with validation errors (the publish endpoint raises instead of returning
+# inline, so the system_map_revision_published audit dependency records
+# outcome="error" for a refused publish).
+app.add_exception_handler(PublishValidationErrorHTTP, publish_validation_error_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
 

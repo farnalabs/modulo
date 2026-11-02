@@ -9,7 +9,7 @@ from typing import Any, ClassVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from langchain_core.messages import BaseMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -181,6 +181,21 @@ class AgentResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("connector_type_refs", mode="before")
+    @classmethod
+    def _normalise_legacy_connector_refs(cls, value: Any) -> Any:
+        """Accept bare-string connector refs stored by older library installs.
+
+        FAR-2238: library agent content (e.g. ``PR Review Agent``) was seeded
+        with ``connector_type_refs: ["github"]``.  Those rows failed response
+        validation, which surfaced as a 422 on ``GET /api/v1/agents`` and broke
+        the whole list.  A bare string is read as a ref with no declared
+        capabilities.
+        """
+        if isinstance(value, list):
+            return [{"connector_type": v, "capabilities": []} if isinstance(v, str) else v for v in value]
+        return value
 
 
 class AgentListResponse(BaseModel):

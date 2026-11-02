@@ -38,3 +38,7 @@ MSG_ENVIRONMENT_PROFILE_NOT_FOUND = "Environment profile not found"
 # Shared permission code (python:S1192): several system-admin routes gate on the
 # same instance-wide permission, so the identity-bearing string lives here once.
 PERM_SYSTEM_CONFIG_MANAGE = "system.config.manage"
+
+# Feature-flag names gated by more than one API module: the identity-bearing
+# string lives here once so a rename cannot leave one gate stale.
+SYSTEM_MAPS_FLAG = "system_maps"

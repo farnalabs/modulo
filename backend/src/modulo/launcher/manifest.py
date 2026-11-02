@@ -16,25 +16,42 @@ Verification contract (locked by ``tests/unit/launcher/test_manifest.py``):
 * the SIGNATURE is verified first (Ed25519 over the exact manifest bytes);
 * then every listed ARTIFACT's sha256 is verified against the files on disk
   (a missing or tampered artifact is a hard failure);
-* the trust store holds the CURRENT key and the NEXT key — both verify, so
-  releasing under the next key mid-rotation works before consumers update.
+* the current production key is provisioned and verifies; the NEXT slot is
+  reserved and empty. During rotation, both populated slots may verify, so
+  releasing under the next key works before consumers update.
 
 **Key rotation procedure** (recorded per ADR 031 in the distribution ADR):
-the CURRENT and NEXT trust-store keys — both verify, so releasing under the
-next key mid-rotation works before consumers update.
+the trust store has a CURRENT slot and a NEXT slot, and both populated slots
+remain accepted during the compatibility window. The release workflows always
+sign with :data:`_KEY_ID_CURRENT`; they must never be changed to sign with a
+literal replacement id.
 
-1. Generate the replacement keypair offline; publish its PUBLIC half by
-   moving the next key's id/key into the current slot of the trust store
-   (_TRUST_ROWS below). The checked-in module is the distribution point.
-2. Flip release signing to the new key (CI secret ``BUNDLE_MANIFEST_SIGNING_KEY``).
-3. After one full release cycle under the new key, demote the old key to the
-   next slot only if unwanted, then hard-remove it — every consumer older
-   than one cycle stops verifying with it by design.
+1. Generate the replacement keypair offline and choose a new key id. Add its
+   PUBLIC half to the NEXT slot of both trust-store assemblies (``_TRUST_ROWS``
+   below and the matching installer constants). Keep the old key in CURRENT.
+2. Ship that overlap so consumers receive the replacement public key while the
+   old CURRENT key is still accepted. Do not change the signing secret yet.
+3. For the promotion release, make one coordinated change before producing any
+   artifact: move the old public key to NEXT under its old key id, move the new
+   public key to CURRENT under its new key id, update the checked-in current-key
+   id and installer trust-store values, replace the CI secret
+   ``BUNDLE_MANIFEST_SIGNING_KEY`` with the matching new private key, and update
+   the workflow's expected-key-id contract to the new current id. The checked-in
+   trust store, current id, signing secret, and workflow expectation are one
+   atomic rotation set. The first release after that change is signed through
+   ``_KEY_ID_CURRENT`` and therefore carries the new id.
+4. Verify the promotion release before publishing it. Existing releases still
+   verify through the old key in NEXT; the new release verifies through the new
+   key in CURRENT. Merely changing the secret while CURRENT remains the old key
+   is invalid: it creates a mismatched envelope and must not be used as a
+   rotation step.
+5. After the compatibility window, remove the old key from NEXT in both
+   trust-store assemblies. Do not retire it before that window has elapsed.
 
-**PROVISIONING (needs-human):** this module SHIPS WITH AN EMPTY trust store
-and FAILS CLOSED — no `_TRUST_ROWS` entries means every verification refuses
-(no dev or experimental signing keys ship in the repo or wheel). See
-:const:`PROVISIONING_NOTE` for the exact fill-in targets.
+**PROVISIONING:** the current production key is provisioned in this module;
+the reserved NEXT slot remains empty until the next rotation. The trust store
+contains no dev or experimental signing keys. See :const:`PROVISIONING_NOTE`
+for the rotation procedure and the matching installer trust store.
 
 **--from-file escape hatch:** offline/corporate installs verify against a
 locally provided manifest + signature (:func:`verify_release_from_files`);
@@ -64,44 +81,54 @@ MANIFEST_SCHEMA_VERSION = 1
 _RELEASE = "modulo"
 
 # ---------------------------------------------------------------------------
-# Trust store (FAIL-CLOSED until the owner provisions production keys)
+# Trust store (current production key provisioned; next slot reserved)
 # ---------------------------------------------------------------------------
 
 _KEY_ID_CURRENT = "modulo-2026-a"
 _KEY_ID_NEXT = "modulo-2026-a-next"
 
-# The production trust store is EMPTY at ship time and must be PROVISIONED by
-# the repo owner (needs-human): paste the current + next ed25519 public hex
-# halves here as ``{key_id: (label, public_hex)}`` rows. With an empty store
-# every verification function REFUSES (fail-closed) — the module must never
-# ship a trust store that any key material found in a public repo can satisfy.
-# Test/CI keys are injected explicitly by the test suite (see
-# backend/tests/unit/launcher/conftest.py); signing never reads a key from
-# this module at all.
-_TRUST_ROWS: dict[str, tuple[str, str]] = {}
+# The current production public key is intentionally shipped here. The NEXT
+# slot stays absent until the next rotation; test/CI keys are injected
+# explicitly by the test suite (see backend/tests/unit/launcher/conftest.py).
+# Signing never reads a private key from this module.
+_TRUST_ROWS: dict[str, tuple[str, str]] = {
+    _KEY_ID_CURRENT: (
+        "Modulo production release signing key (2026-A)",
+        "73f7dd1483fff0c0df45d706ae9ce7a68151942b8e2e8bc715b5d9beb719b5b0",
+    ),
+}
 
 _NO_PROVISIONED_KEYS_MESSAGE = (
     "no provisioned production signing keys - refusing to verify (provisioning: see PROVISIONING_NOTE)"
 )
 
 PROVISIONING_NOTE = (
-    "TRUST-STORE PROVISIONING (needs-human, ONE-TIME owner task). The shipped "
-    "trust store is EMPTY and verification FAILS CLOSED until provisioned. "
-    "Exactly two fill-in targets, both carrying the SAME keypair set:\n"
+    "TRUST-STORE PROVISIONING: the current production key is provisioned in "
+    "the shipped trust store under modulo-2026-a; the modulo-2026-a-next slot "
+    "is reserved and currently empty. The two trust-store assemblies must stay "
+    "byte-equal:\n"
     "  1. backend/src/modulo/launcher/manifest.py -> _TRUST_ROWS: one row per "
     "key as {key_id: (label, ed25519 public hex)} for the current + next slots.\n"
     "  2. scripts/install.sh -> TRUST_KEY_CURRENT_B64 / TRUST_KEY_NEXT_B64: "
     "the same public keys as SPKI-DER base64.\n"
+    "For rotation, generate the replacement keypair offline and add its public "
+    "half to NEXT while the old key remains CURRENT; ship that overlap without "
+    "changing the secret. Before the promotion release, atomically move the old "
+    "public key to NEXT under its old id, move the replacement to CURRENT under "
+    "its new id, update the checked-in current id and installer trust values, "
+    "replace the BUNDLE_MANIFEST_SIGNING_KEY secret, and update the workflow's "
+    "expected-key-id contract. Release signing always derives its id from "
+    "_KEY_ID_CURRENT. After the compatibility window, retire the old key from "
+    "NEXT in both trust-store assemblies. Merely changing the secret while "
+    "CURRENT remains the old key creates a mismatched envelope and is invalid.\n"
     "The PRIVATE half is the CI secret BUNDLE_MANIFEST_SIGNING_KEY (ed25519 "
     "hex, repo-level Actions secret) - never committed. When the secret is "
-    "absent the bundle-release workflow refuses to publish (the signing step "
-    "fails loudly on every tagged release). A unit test asserts the Python "
-    "trust rows and install.sh's embedded keys stay byte-equal (no drift)."
+    "absent the bundle-release workflow refuses to publish."
 )
 
 
 def _load_trust_store() -> dict[str, Ed25519PublicKey]:
-    """Build the shipped trust store from _TRUST_ROWS (empty -> fail-closed).
+    """Build the shipped trust store from the provisioned public-key rows.
 
     The caller (verify_signature) refuses on an empty store: verification
     must never be shipped with "no key can pass" silently bridged over.
@@ -187,23 +214,24 @@ def verify_signature(
 ) -> str:
     """Verify Ed25519 over *manifest_payload*; return the verified key's id.
 
-    FAIL-CLOSED: the shipped store holds NO keys until the owner provisions
-    production ones — an empty/falsy store refuses before any signature is
-    touch-checked (see PROVISIONING_NOTE). Tests inject their trust store
-    explicitly via ``trust_store=``.
+    FAIL-CLOSED: an empty/falsy store refuses before any signature is
+    touch-checked (see PROVISIONING_NOTE). Tests inject their independent test
+    trust store explicitly via ``trust_store=``.
     """
     store = trust_store if trust_store is not None else _load_trust_store()
     if not store:
         raise ManifestSecurityError(_NO_PROVISIONED_KEYS_MESSAGE)
-    if not isinstance(signature, dict) or {"key_id", "signature"} - set(signature):
-        raise ManifestSecurityError("signature must be an object with key_id and signature")
-    key_id = str(signature["key_id"])
+    if not isinstance(signature, dict) or set(signature) != {"key_id", "signature"}:
+        raise ManifestSecurityError("signature must be an object with exactly key_id and signature")
+    key_id = signature["key_id"]
+    sig_text = signature["signature"]
+    if not isinstance(key_id, str) or not isinstance(sig_text, str):
+        raise ManifestSecurityError("signature key_id and signature must be strings")
     public_key = store.get(key_id)
     if public_key is None:
         raise ManifestSecurityError(
             f"unknown signing key-id '{key_id}' — not in the current+next trust store; refusing"
         )
-    sig_text = str(signature["signature"])
     if len(sig_text) != 128:
         raise ManifestSecurityError("ed25519 signatures are 128 hex characters")
     try:
@@ -334,14 +362,25 @@ def sign_release_bytes(payload: bytes, *, key_id: str, private_key_hex: str) -> 
     return {"key_id": key_id, "signature": raw_sig.hex()}
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    body: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in body:
+            raise ValueError(f"duplicate field: {key}")
+        body[key] = value
+    return body
+
+
 def read_signature_file(path: Path) -> dict[str, Any]:
-    """Parse + shape-check a .sig file."""
+    """Parse + strict-shape-check a .sig file."""
     try:
-        body = json.loads(path.read_text(encoding="utf-8"))
+        body = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
     except (OSError, ValueError) as exc:
         raise ManifestSecurityError(f"signature file {path} unreadable/garbled: {exc}") from exc
-    if not isinstance(body, dict) or {"key_id", "signature"} - set(body):
-        raise ManifestSecurityError(f"signature file {path} must carry key_id and signature")
+    if not isinstance(body, dict) or set(body) != {"key_id", "signature"}:
+        raise ManifestSecurityError(f"signature file {path} must carry exactly key_id and signature")
+    if not isinstance(body["key_id"], str) or not isinstance(body["signature"], str):
+        raise ManifestSecurityError(f"signature file {path} key_id and signature must be strings")
     return body
 
 

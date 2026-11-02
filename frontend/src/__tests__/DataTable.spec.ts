@@ -68,3 +68,33 @@ describe('DataTable keyboard accessibility', () => {
     expect(firstName).toContain('beta')
   })
 })
+
+describe('DataTable horizontal scroll region', () => {
+  it('is a keyboard focus stop with a visible ring and claims no interaction it does not have', () => {
+    const wrapper = mountTable()
+    const scrollRegion = wrapper.get('div.overflow-x-auto')
+
+    expect(scrollRegion.attributes('tabindex')).toBe('0')
+    // A11Y-3: a focus stop must be visible.
+    expect(scrollRegion.classes()).toContain('focus-visible:ring-2')
+    // A static element must not add a role or a handler it does not need —
+    // that is the pattern that drew the static-element-interaction warning.
+    expect(scrollRegion.attributes('role')).toBeUndefined()
+  })
+
+  it('stays reachable when the table has nothing focusable inside it', () => {
+    // No sortable header and non-clickable rows: the container is the only
+    // route a keyboard user has to the overflowed columns.
+    const wrapper = mount(DataTable, {
+      props: {
+        columns: [{ key: 'value', label: 'Value' }],
+        rows: [{ value: 1 }],
+        rowClickable: false,
+      },
+    })
+
+    expect(wrapper.findAll('thead th[tabindex="0"]')).toHaveLength(0)
+    expect(wrapper.findAll('tbody tr[tabindex="0"]')).toHaveLength(0)
+    expect(wrapper.get('div.overflow-x-auto').attributes('tabindex')).toBe('0')
+  })
+})

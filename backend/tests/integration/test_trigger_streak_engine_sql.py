@@ -121,9 +121,9 @@ async def _seed_ongoing_trigger(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO triggers (id, organisation_id, pipeline_id, account_id, trigger_type, "
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, account_id, trigger_type, "
                 "active, max_concurrent_runs, daily_spend_limit, config_json, streak_epoch) "
-                "VALUES (:id, :oid, :pid, :aid, 'ongoing', true, 2, 100.0, :cfg, :epoch)",
+                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, :aid, 'ongoing', true, 2, 100.0, :cfg, :epoch)",
             ),
             {
                 "id": str(trigger_id),

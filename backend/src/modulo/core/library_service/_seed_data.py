@@ -1228,7 +1228,7 @@ _MODULO_PRIMITIVES.extend(
                     "- findings: array of issues found (empty if APPROVE)\n\n"
                     "PR Diff:\n{{ input }}"
                 ),
-                "connector_type_refs": ["github"],
+                "connector_type_refs": [{"connector_type": "github", "capabilities": ["read", "code_review"]}],
             },
             tags=["agent", "code-review", "pr", "github"],
         ),
@@ -1342,7 +1342,7 @@ _MODULO_PRIMITIVES.extend(
                             "- findings: array of issues found (empty if APPROVE)\n\n"
                             "PR Diff:\n{{ input }}"
                         ),
-                        "connector_type_refs": ["github"],
+                        "connector_type_refs": [{"connector_type": "github", "capabilities": ["read", "code_review"]}],
                         "required_environment_capabilities": [_EGRESS_GITHUB],
                     },
                 ],

@@ -56,6 +56,8 @@ _EXPECTED_METADATA_COUNT = _EXPECTED_COUNT - len(_NO_ORM_MODEL_UUID_PKS)
 # its id column, same as the tables above.
 # trigger_event_findings (0333_trigger_event_findings, FAR-2028) sets
 # gen_random_uuid() inline on its id column, same as the tables above.
+# System Maps (0341_system_maps) set gen_random_uuid() inline on their id columns too,
+# so they are out of scope for this frozen migration.
 _POST_0194_TABLES = frozenset(
     {
         "collection_install",
@@ -71,6 +73,14 @@ _POST_0194_TABLES = frozenset(
         "mcp_servers",
         "run_attempts",
         "trigger_event_findings",
+        "system_maps",
+        "system_map_revisions",
+        "system_map_nodes",
+        "system_map_relationships",
+        "system_map_loop_configs",
+        "system_map_attribution_bindings",
+        "system_map_loop_admission_attempts",
+        "system_map_loop_reservations",
     }
 )
 

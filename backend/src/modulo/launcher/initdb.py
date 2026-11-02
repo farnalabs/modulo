@@ -16,7 +16,7 @@ Rules enforced here, all locked by tests:
   clear error, never re-init over it.
 * Every bundled-binary invocation goes through :func:`_run_command` with
   fully pinned arguments: initdb pins --pgdata/--username/--locale (it has
-  no endpoint to bind); the postmaster builder pins --pgdata/-h/-p and is
+  no endpoint to bind); the postmaster builder pins --pgdata=/-h/-p and is
   consumed by the slice-2 serving step.
 
 Deterministic test seam: setting ``MODULO_TEST_PAUSE_AT`` to a registered
@@ -33,6 +33,8 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+
+from modulo.launcher.platform import binary_name, initdb_locale, is_windows
 
 BOOTSTRAP_USERNAME = "modulo"
 INITDB_LOCALE = "C.UTF-8"
@@ -71,10 +73,8 @@ class InitdbError(RuntimeError):
 
 
 def _binary(bin_dir: Path, name: str) -> str:
-    """Resolve a bundled binary path (TODO(P3): Windows needs ``.exe`` + ACL work)."""
-    if sys.platform == "win32":
-        name = f"{name}.exe"
-    return str(bin_dir / name)
+    """Resolve a bundled binary path using the platform executable suffix."""
+    return str(bin_dir / binary_name(name))
 
 
 def _run_command(argv: list[str]) -> None:
@@ -148,7 +148,7 @@ def initdb_argv(tmp_pgdata: Path, bin_dir: Path, username: str, pwfile: Path) ->
         "--username",
         username,
         "--locale",
-        INITDB_LOCALE,
+        initdb_locale(),
         "--auth=scram-sha-256",
         "--pwfile",
         str(pwfile),
@@ -160,15 +160,23 @@ def postgres_server_argv(pgdata: Path, host: str, port: int, bin_dir: Path) -> l
 
     Every bundled-binary invocation pins its endpoint arguments — the
     postmaster binds ONLY the launcher-owned host/port persisted in
-    state.json, never defaults.
+    state.json, never defaults. PostgreSQL's long-form command-line parser
+    interprets server options as
+    valueless GUC-style arguments in this invocation, so use the unambiguous
+    short forms for the data directory, host, and port.
+
     """
     return [
         _binary(bin_dir, "postgres"),
-        "--pgdata",
+        # PostgreSQL server (postgres) accepts -D /path or --pgdata /path (with space)
+        # for the data directory. Using --pgdata=/path with = is parsed as a GUC
+        # and produces "unrecognized configuration parameter". The -D short option
+        # is unambiguous and universally accepted.
+        "-D",
         str(pgdata),
-        "--host",
+        "-h",
         host,
-        "--port",
+        "-p",
         str(port),
     ]
 
@@ -206,15 +214,16 @@ def _validate_pause_env() -> None:
 
 
 def assert_supported_platform() -> None:
-    """Refuse Windows until the P3 delivery (locale/ACL/binary seams).
+    """Validate the platform contract before touching a bundled cluster.
 
-    Extracted as a seam so logic tests can bypass it on any platform — the
-    fake-runner tests validate orchestration logic, not the OS.
+    The command and locale seams are testable on Linux, but actual Windows
+    bundled-Postgres bootstrap still requires installer-host validation.
     """
-    if sys.platform == "win32":
-        # Deferred P3: Windows initdb (locale, ACLs, .exe resolution) lands with
-        # the P3 delivery; refuse loudly instead of mis-initialising.
-        raise InitdbError("Bundled Postgres bootstrap is not supported on Windows yet (TODO(P3))")
+    if is_windows():
+        raise InitdbError(
+            "Bundled Postgres bootstrap on Windows requires validation with the shipped Windows binary "
+            "and installer test environment (FAR-2229); refusing unvalidated runtime bootstrap"
+        )
 
 
 def bootstrap_pgdata(
