@@ -222,7 +222,7 @@ from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.account import AccountNotFoundError
 from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied, HitlReviewWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
-from modulo.db.crud.pipeline import CircuitBreakerThresholdChangeDenied, get_pipeline
+from modulo.db.crud.pipeline import CircuitBreakerThresholdChangeDenied, ManualNodeOutputSchemaError, get_pipeline
 from modulo.db.crud.run import WorkItemRefsRequiredError, get_run
 from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs
 from modulo.db.crud.schema import create_schema as db_create_schema
@@ -4567,6 +4567,11 @@ async def _update_pipeline_graph_impl(
         return {
             "error": "guardrail_strip_forbidden",
             "detail": exc.detail,
+        }
+    except ManualNodeOutputSchemaError as exc:
+        return {
+            "error": "validation_failed",
+            "detail": f"Graph validation failed: {exc}",
         }
     except SQLAlchemyError as exc:
         # FAR-1361: the bounded lock above turns a contended graph write into
