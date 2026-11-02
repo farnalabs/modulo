@@ -27,7 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modulo.auth.jwt import create_access_token
-from modulo.core.feature_flags import _KNOWN_FLAGS, RETIRED_INTERNAL_FLAGS
+from modulo.core.feature_flags import _KNOWN_FLAGS, INTERNAL_FLAGS, RETIRED_INTERNAL_FLAGS
 from modulo.db.soft_delete import register_soft_delete_filter
 
 pytestmark = pytest.mark.integration
@@ -121,13 +121,13 @@ async def test_plan_bootstrap_serves_effective_plan_to_non_admin(
     # from the registry single source of truth (_KNOWN_FLAGS -> catalog.FLAGS)
     # rather than a magic number, so retiring a flag (FAR-1819 dropped
     # pipeline_diff_rollback) does not silently turn this into a stale check.
-    # Retired internal flags (FAR-2200 retired lifecycle_map_journeys) stay in
-    # _KNOWN_FLAGS for persisted-data compatibility but are deliberately
-    # filtered out of every customer-facing plan response, so the expected set
-    # is the known set minus RETIRED_INTERNAL_FLAGS.
-    known = {flag.name for flag in _KNOWN_FLAGS} - RETIRED_INTERNAL_FLAGS
+    # Retired and internal-only flags stay in _KNOWN_FLAGS for persisted-data
+    # compatibility but are deliberately filtered out of every customer-facing
+    # plan response. The effective customer-facing set excludes both categories.
+    known = {flag.name for flag in _KNOWN_FLAGS} - RETIRED_INTERNAL_FLAGS - INTERNAL_FLAGS
     served = {f["name"] for f in body["flags"]}
     assert known <= served, f"plan bootstrap dropped known flags: {sorted(known - served)}"
+    assert "system_maps" not in served
 
 
 async def test_viewmodel_feature_flags_agree_with_plan_bootstrap(

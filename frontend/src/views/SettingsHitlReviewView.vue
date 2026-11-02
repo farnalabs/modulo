@@ -242,10 +242,12 @@
            don't skip a heading level (page h1 → h2 → h3). -->
       <h2 class="sr-only">{{ $t('views.SettingsHitlReviewView.title') }}</h2>
       <div class="space-y-2">
-      <div
+      <DataCard
         v-for="gate in filteredGates"
         :key="gate.review_id + gate.run_id"
-        class="rounded-lg border bg-card shadow-sm"
+        variant="bordered"
+        padding="none"
+        elevation="sm"
       >
         <!-- The select checkbox is a sibling of the expand button, never a
              descendant: a focusable control nested inside a <button> is an axe
@@ -324,7 +326,7 @@
             @decided="onGateDecided"
           />
         </div>
-      </div>
+      </DataCard>
       </div>
       </div>
       <!-- FAR-692: server-side pagination over /hitl/reviews. Only rendered when
@@ -379,6 +381,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import HitlReviewCard from '../components/hitl/HitlReviewCard.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { usePlanStore } from '../stores/planStore'
 import { useHitlReviewState } from '../composables/useHitlReviewState'
 import { formatApiError } from '../lib/api/formatError'

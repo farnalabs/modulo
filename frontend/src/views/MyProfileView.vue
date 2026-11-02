@@ -140,17 +140,16 @@
            <div v-else class="space-y-2">
             <div v-for="pipeline in hitlPipelines" :key="pipeline.id" class="flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-3 py-2" data-testid="my-profile-hitl-email-pipeline">
               <span class="font-medium">{{ pipeline.name }}</span>
-              <select
-                :value="hitlOverrideChoice(pipeline.id)"
-                :aria-label="$t('views.MyProfileView.hitl_email_select_aria', { name: pipeline.name })"
-                class="rounded-lg border border-input bg-background px-2 py-1 text-sm"
+              <AppSelect
+                :model-value="hitlOverrideChoice(pipeline.id)"
+                :options="hitlOverrideOptions"
+                option-label="label"
+                option-value="value"
+                :label="$t('views.MyProfileView.hitl_email_select_aria', { name: pipeline.name })"
+                class="w-36"
                 data-testid="my-profile-hitl-email-pipeline-select"
-                @change="onHitlOverrideChange(pipeline.id, $event)"
-              >
-                <option value="default">{{ $t('views.MyProfileView.hitl_email_override_default') }}</option>
-                <option value="on">{{ $t('views.MyProfileView.hitl_email_override_on') }}</option>
-                <option value="off">{{ $t('views.MyProfileView.hitl_email_override_off') }}</option>
-              </select>
+                @update:model-value="onHitlOverrideChange(pipeline.id, $event)"
+              />
             </div>
           </div>
         </div>
@@ -181,6 +180,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import ChangePasswordForm from '../components/shared/ChangePasswordForm.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
@@ -282,8 +282,14 @@ function hitlOverrideChoice(pipelineId: string): 'default' | 'on' | 'off' {
   return 'default'
 }
 
-function onHitlOverrideChange(pipelineId: string, event: Event) {
-  const value = (event.target as HTMLSelectElement).value
+const hitlOverrideOptions = computed(() => [
+  { value: 'default', label: t('views.MyProfileView.hitl_email_override_default') },
+  { value: 'on', label: t('views.MyProfileView.hitl_email_override_on') },
+  { value: 'off', label: t('views.MyProfileView.hitl_email_override_off') },
+])
+
+function onHitlOverrideChange(pipelineId: string, value: unknown) {
+  if (typeof value !== 'string') return
   const next = { ...hitlOverrides.value }
   if (value === 'on') next[pipelineId] = true
   else if (value === 'off') next[pipelineId] = false

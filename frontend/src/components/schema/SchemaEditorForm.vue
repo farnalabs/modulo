@@ -1,7 +1,11 @@
 <template>
   <div class="space-y-6">
-    <section class="rounded-lg border bg-card p-6 shadow-sm">
-      <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaEditorView.schema_details') }}</h2>
+    <DataCard
+      :title="$t('views.SchemaEditorView.schema_details')"
+      heading-level="h2"
+      padding="lg"
+      elevation="sm"
+    >
       <div class="space-y-4">
         <div>
           <label for="schemaeditorview-field-8" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.name') }}</label>
@@ -34,15 +38,19 @@
           />
         </div>
       </div>
-    </section>
+    </DataCard>
 
-    <section class="rounded-lg border bg-card p-6 shadow-sm">
-      <div class="mb-4 flex items-center justify-between">
-        <h2 class="text-base font-semibold">{{ $t('views.SchemaEditorView.fields') }}</h2>
+    <DataCard
+      :title="$t('views.SchemaEditorView.fields')"
+      heading-level="h2"
+      padding="lg"
+      elevation="sm"
+    >
+      <template #headerActions>
         <Button size="small" data-testid="schema-editor-add-field" @click="addField">
           {{ $t('views.SchemaEditorView.add_field') }}
         </Button>
-      </div>
+      </template>
 
       <EmptyState v-if="fields.length === 0" :title="$t('views.SchemaEditorView.no_fields')" />
 
@@ -60,11 +68,12 @@
           @remove="removeField(index)"
         />
       </div>
-    </section>
+    </DataCard>
   </div>
 </template>
 
 <script setup lang="ts">
+import DataCard from '../ui/DataCard.vue'
 import Button from 'primevue/button'
 import EmptyState from '../shared/EmptyState.vue'
 import { createField, type SchemaField } from '../../utils/schema-definition'

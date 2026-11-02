@@ -1,9 +1,7 @@
-"""BDD step definitions: Assistant chat — sessions, messages, skills, config, and UI commands."""
+"""BDD step definitions: Assistant chat — sessions, messages, skills, config, and navigation."""
 
 import asyncio
 import json
-import threading
-import time
 import uuid
 from collections.abc import Callable
 from datetime import datetime
@@ -135,19 +133,6 @@ def _detail_of_error(error_event: str) -> str:
     return _sse_payload(error_event)["detail"]
 
 
-def _pop_engine_module_state(request: pytest.FixtureRequest, session_id: str) -> None:
-    """Finalizer: drain the engine's in-memory module state for this session."""
-    from modulo.api.routes import assistant as assistant_routes
-
-    def _drain() -> None:
-        assistant_routes._rate_limiters.pop(session_id, None)
-        assistant_routes._session_approvals.pop(session_id, None)
-        assistant_routes._permission_decisions.pop(session_id, None)
-        assistant_routes._pending_permissions.pop(session_id, None)
-
-    request.addfinalizer(_drain)
-
-
 # ── Load scenarios from feature files ──────────────────────────────────
 
 try:
@@ -157,7 +142,7 @@ try:
     scenarios("../features/assistant/assistant_skills.feature")
     scenarios("../features/assistant/assistant_access_control.feature")
     scenarios("../features/assistant/assistant_context_window.feature")
-    scenarios("../features/assistant/assistant_ui_commands.feature")
+    scenarios("../features/assistant/assistant_navigation.feature")
 except OSError:
     pass
 
@@ -1628,371 +1613,94 @@ def user_belongs_to_team(team_id: str, ctx) -> None:
     ctx.setdefault("team_ids", []).append(team_id)
 
 
-# ── When steps (UI Commands) ──────────────────────────────────────────
+# ── When steps (Navigation) ───────────────────────────────────────────
 
 
-def _start_ui_engine(request: pytest.FixtureRequest, ctx: dict, tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
-    """Run the REAL ``_stream_ui_tool_flow`` engine on a dedicated event loop.
+def _run_navigation_engine(ctx: dict, tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
+    """Drive the REAL ``_stream_tool_events`` navigation path.
 
-    The engine is started inside a background thread with its own asyncio
-    loop. All routes the frontend would hit in real life (permission
-    response, UI command results) are driven on that same loop because the
-    engine ``await``s on events those routes set — a call from another loop
-    would never wake them. Route seams are dependency overrides (auth +
-    engine db) on the real app; everything else in the engine runs as
-    written, including the permission-mode classification and the SSE
-    merging.
+    Navigation tool calls are resolved locally against the app manifest. The
+    function under test is the same one the SSE stream loop uses, so the
+    scenario asserts production behaviour rather than a reimplementation.
     """
-    import httpx
-
-    from modulo.api.dependencies import get_db_session
-    from modulo.api.main import app
     from modulo.api.routes import assistant as assistant_routes
     from modulo.auth.jwt import TenantPrincipal
 
-    session = ctx["sessions"]["ui-session"]
-    role = ctx.get("org_role", "admin")
-    config_mode = ctx.get("config", {}).get("permission_mode", "safe")
-
-    engine_db = _engine_db_double(session)
-    principal = TenantPrincipal(username="assistant-user", organisation_id=ORG_ID, account_id=USER_ID, org_role=role)
     req = assistant_routes.StreamRequest(**_valid_stream_payload())
-    config = assistant_routes.AssistantConfig(permission_mode=config_mode)
+    stream_ctx = assistant_routes._StreamContext(
+        db_session=AsyncMock(),
+        principal=TenantPrincipal(
+            username="assistant-user",
+            organisation_id=ORG_ID,
+            account_id=USER_ID,
+            org_role="admin",
+        ),
+        session_id=uuid.uuid4(),
+        req=req,
+        settings=make_settings(),
+        chat_session=MagicMock(),
+    )
+    tool_results: list[dict[str, Any]] = []
 
-    harness: dict[str, Any] = {
-        "session": session,
-        "engine_db": engine_db,
-        "config": config,
-        "tool_calls": tool_calls,
-        "tool_results": [],
-        "events": [],
-        "lock": threading.Lock(),
-        "errors": [],
-        "flags": {marker: threading.Event() for marker in ("permission_request", "ui_command_batch", "tool_call")},
-        "batch_event": None,
-        "permission_request_id": None,
-        "loop": None,
-        "http": None,
-        "done": threading.Event(),
-    }
-    ctx["ui_engine"] = harness
+    async def _run() -> list[str]:
+        return [event async for event in assistant_routes._stream_tool_events(tool_calls, stream_ctx, tool_results)]
 
-    async def _override_session():
-        yield engine_db
-
-    overrides = _auth_overrides(role)
-    overrides[get_db_session] = _override_session
-    _install_overrides(request, overrides)
-    _pop_engine_module_state(request, str(session.id))
-
-    def _capture(event: str) -> None:
-        with harness["lock"]:
-            harness["events"].append(event)
-            if "event: permission_request" in event:
-                harness["permission_request_id"] = _sse_payload(event)["request_id"]
-                harness["flags"]["permission_request"].set()
-            elif "event: ui_command_batch" in event:
-                harness["batch_event"] = event
-                harness["flags"]["ui_command_batch"].set()
-            elif "event: tool_call" in event:
-                harness["flags"]["tool_call"].set()
-
-    async def _engine_main() -> None:
-        http_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
-        harness["http"] = http_client
-        with (
-            patch.object(assistant_routes, "set_rls_org", new_callable=AsyncMock),
-            patch.object(assistant_routes, "set_rls_user_context", new_callable=AsyncMock),
-            patch.object(assistant_routes, "_is_ui_driving_enabled", new_callable=AsyncMock, return_value=True),
-            patch.object(
-                assistant_routes.AssistantConfigService,
-                "get_config",
-                new_callable=AsyncMock,
-                return_value=config,
-            ),
-            # Force the single-worker in-memory registry for the scenario. In
-            # CI REDIS_URL is set, so the unpatched ``_get_registry`` returns a
-            # process-wide ``AssistantRedisRegistry`` whose asyncio connections
-            # bind to the first event loop that uses them. This harness drives
-            # the engine on a fresh event loop per scenario and asserts on the
-            # in-memory events the routes signal, so the shared Redis singleton
-            # gets reused across closed loops -> ``Event loop is closed`` /
-            # ``Future attached to a different loop``. The in-memory
-            # registry is the real default path when REDIS_URL is unset
-            # (assistant.py:110-116), so this exercises production flow logic.
-            patch.object(assistant_routes, "_get_registry", return_value=None),
-        ):
-            stream_ctx = assistant_routes._StreamContext(
-                db_session=engine_db,
-                principal=principal,
-                session_id=session.id,
-                req=req,
-                settings=make_settings(),
-                chat_session=session,
-            )
-            flow = assistant_routes._UiToolFlow()
-            async for event in assistant_routes._stream_ui_tool_flow(
-                stream_ctx, tool_calls, harness["tool_results"], flow
-            ):
-                _capture(event)
-        await http_client.aclose()
-        # Keep the loop running for the scenario's follow-up POSTs: if the
-        # loop stopped the moment the flow ended, a step's in-flight POST
-        # coroutine would be abandoned mid-await (loop starvation).
-        quit_evt = asyncio.Event()
-        harness["quit"] = quit_evt
-        await quit_evt.wait()
-
-    def _thread_main() -> None:
-        loop = asyncio.new_event_loop()
-        harness["loop"] = loop
-        try:
-            loop.run_until_complete(_engine_main())
-        except Exception as exc:
-            with harness["lock"]:
-                harness["errors"].append(repr(exc))
-        finally:
-            # An unclosed loop leaks its AF_UNIX self-pipe socketpair (and any
-            # pending async generators) per scenario; pytest reports that as a
-            # ResourceWarning -> PytestUnraisableExceptionWarning under the
-            # warning gate. Drain async generators, then close the loop.
-            try:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-            finally:
-                loop.close()
-            harness["done"].set()
-
-    thread = threading.Thread(target=_thread_main, name="assistant-ui-engine", daemon=True)
-    thread.start()
-
-    def _join_engine() -> None:
-        # Signal the engine's keep-alive wait, then bound the teardown.
-        loop = harness["loop"]
-        if harness.get("quit") is not None and loop is not None and loop.is_running():
-            loop.call_soon_threadsafe(harness["quit"].set)
-        if not harness["done"].wait(timeout=60):
-            pytest.fail("assistant UI engine thread never finished within 60s of scenario end")
-
-    request.addfinalizer(_join_engine)
+    harness = {"tool_calls": tool_calls, "events": asyncio.run(_run()), "tool_results": tool_results}
+    ctx["nav_engine"] = harness
     return harness
 
 
-def _await_engine_ready(harness: dict[str, Any], timeout: float = 10.0) -> None:
-    deadline = time.monotonic() + timeout
-    while harness["loop"] is None or harness["http"] is None:
-        if time.monotonic() > deadline:
-            pytest.fail("assistant UI engine thread never came up")
-        time.sleep(0.01)
+@when("the assistant builds its navigation tool definitions")
+def build_navigation_tool_definitions(ctx) -> None:
+    from modulo.api.routes import assistant as assistant_routes
+
+    ctx["nav_tool_names"] = sorted(assistant_routes.NAV_TOOL_NAMES)
 
 
-def _run_in_reactor(harness: dict[str, Any], post_coro: Callable[[], Any], timeout: float = 30.0) -> Any:
-    """Schedule an HTTP call on the engine's event loop and block for the result.
-
-    The result is box-and-thrading-Event, NOT ``future.result()``: when the
-    engine's `run_until_complete` stops right after our POST completes, the
-    concurrent-future wakeup callback starves and ``result()`` hangs forever.
-    """
-    _await_engine_ready(harness)
-    done = threading.Event()
-    box: dict[str, Any] = {}
-
-    async def _runner() -> None:
-        try:
-            box["resp"] = await post_coro()
-        except Exception as exc:
-            box["error"] = repr(exc)
-        finally:
-            done.set()
-
-    asyncio.run_coroutine_threadsafe(_runner(), harness["loop"])
-    if not done.wait(timeout=timeout):
-        loop = harness["loop"]
-        with harness["lock"]:
-            tail = harness["events"][-5:]
-            errors = list(harness["errors"])
-        pytest.fail(
-            f"POST on the engine loop did not finish within {timeout}s; "
-            f"loop_running={loop.is_running()} loop_closed={loop.is_closed()} "
-            f"engine errors={errors} last SSE events={tail}"
-        )
-    if "error" in box:
-        pytest.fail(f"POST on the engine loop raised: {box['error']}")
-    return box["resp"]
+@then(parsers.parse('the navigation tool list is exactly "{expected}"'))
+def navigation_tool_list_is_exactly(ctx, expected: str) -> None:
+    assert ctx["nav_tool_names"] == [expected]
 
 
-def _assert_no_engine_errors(harness: dict[str, Any]) -> None:
-    if harness["errors"]:
-        pytest.fail(f"assistant UI engine crashed inside its loop: {harness['errors'][0]}")
-
-
-def _wait_for_marker(harness: dict[str, Any], marker: str, timeout: float = 20.0) -> None:
-    ready = harness["flags"][marker].wait(timeout=timeout)
-    _assert_no_engine_errors(harness)
-    assert ready, f"engine stream never produced {'event: ' + marker!r} within {timeout}s"
-
-
-def _submit_ui_command_results(harness: dict[str, Any], commands: list[dict[str, Any]]) -> None:
-    """Post the frontend's tool results through the REAL ui-command-results route.
-
-    The frontend's role in the scenarios: execute each command and post its
-    result row back. Result rows carry the command's id/name/success — the
-    route merges them by position with the approved calls.
-    """
-    session = harness["session"]
-    results = [
-        {"id": command["id"], "name": command["name"], "success": True, "result": {"value": True}}
-        for command in commands
-    ]
-    body = {"results": results}
-
-    async def _post():
-        return await harness["http"].post(f"/api/v1/assistant/sessions/{session.id}/ui-command-results", json=body)
-
-    resp = _run_in_reactor(harness, _post)
-    assert resp.status_code == 200, f"ui-command-results POST failed: {resp.status_code} {resp.text}"
-
-
-def _tool_calls_captured(harness: dict[str, Any]) -> list[dict[str, Any]]:
-    """Extract the ``tool_call`` SSE payloads captured from the engine."""
-    calls: list[dict[str, Any]] = []
-    with harness["lock"]:
-        for event in harness["events"]:
-            if "event: tool_call" in event:
-                calls.append(_sse_payload(event))
-    return calls
-
-
-@when(parsers.parse('the LLM emits an "{tool_name}" tool call with path "{path}"'))
 @when(parsers.parse('the LLM emits a "{tool_name}" tool call with path "{path}"'))
-@when(parsers.parse('the LLM emits an "{tool_name}" tool call with selector "{selector}"'))
-@when(parsers.parse('the LLM emits a "{tool_name}" tool call with selector "{selector}"'))
-@when(parsers.parse('the LLM emits an "{tool_name}" tool call with selector "{selector}" and value "{value}"'))
-@when(parsers.parse('the LLM emits a "{tool_name}" tool call with selector "{selector}" and value "{value}"'))
-@when(parsers.parse('the LLM emits an "{tool_name}" tool call'))
-@when(parsers.parse('the LLM emits a "{tool_name}" tool call'))
-def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value: str = "", path: str = "") -> None:
-    args: dict[str, Any] = {}
-    if path:
-        args["path"] = path
-    if selector:
-        args["selector"] = selector
-    if value:
-        args["value"] = value
-    tool_call = {"id": str(uuid.uuid4()), "name": tool_name, "args": args}
-    _start_ui_engine(request, ctx, [tool_call])
+def llm_emits_navigation_call(tool_name: str, ctx, path: str) -> None:
+    ctx["emitted_tool_name"] = tool_name
+    tool_call = {"id": str(uuid.uuid4()), "name": tool_name, "args": {"path": path}}
+    _run_navigation_engine(ctx, [tool_call])
 
 
-@when("the LLM emits a sequence of tool calls")
-def llm_emits_sequence(request, ctx) -> None:
-    tool_calls = [
-        {"id": str(uuid.uuid4()), "name": "navigate", "args": {"path": "/admin/pipelines"}},
-        {"id": str(uuid.uuid4()), "name": "wait", "args": {"ms": 500}},
-        {"id": str(uuid.uuid4()), "name": "click", "args": {"selector": "[data-testid=create-btn]"}},
-        {"id": str(uuid.uuid4()), "name": "go_back", "args": {}},
-    ]
-    _start_ui_engine(request, ctx, tool_calls)
+@when(parsers.parse('the LLM emits a "{tool_name}" tool call with no path'))
+def llm_emits_navigation_call_without_path(tool_name: str, ctx) -> None:
+    ctx["emitted_tool_name"] = tool_name
+    tool_call = {"id": str(uuid.uuid4()), "name": tool_name, "args": {}}
+    _run_navigation_engine(ctx, [tool_call])
 
 
-@when("the user approves the action")
-def user_approves_action(request, ctx) -> None:
-    """POST the approval through the REAL permission-response route, on the
-    engine's event loop (the engine's ``_await_permission_decision`` awaits
-    the event this route sets)."""
-    harness = ctx["ui_engine"]
-    request_id = harness["permission_request_id"]
-    assert request_id, "no pending permission request to approve"
-
-    session = harness["session"]
-
-    async def _post():
-        return await harness["http"].post(
-            f"/api/v1/assistant/sessions/{session.id}/permission-response",
-            json={"request_id": request_id, "action": "approve"},
-        )
-
-    resp = _run_in_reactor(harness, _post)
-    assert resp.status_code == 200, f"permission-response POST failed: {resp.status_code} {resp.text}"
-    ctx["permission_approved"] = True
+@then("the backend yields a tool_call event for the navigation tool")
+def backend_yields_navigation_tool_call(ctx) -> None:
+    harness = ctx["nav_engine"]
+    events = [_sse_payload(event) for event in harness["events"] if "event: tool_call" in event]
+    assert len(events) == 1, f"expected one tool_call event, got {events}"
+    assert events[0]["success"] is True
+    assert events[0]["tool_name"] == ctx["emitted_tool_name"]
 
 
-# ── Then steps (UI Commands) ──────────────────────────────────────────
+@then("the navigation result carries the route details")
+def navigation_result_carries_route(ctx) -> None:
+    harness = ctx["nav_engine"]
+    results = harness["tool_results"]
+    assert len(results) == 1
+    result = results[0]["result"]
+    assert "route" in result
+    assert "elements" in result
 
 
-@then(parsers.parse('the backend yields an "ui_command_batch" event with the {command_name} command'))
-def backend_yields_ui_command_batch(command_name: str, request, ctx) -> None:
-    harness = ctx["ui_engine"]
-    _wait_for_marker(harness, "ui_command_batch")
-    batch = _sse_payload(harness["batch_event"])
-    commands = batch["commands"]
-    names = [command["name"] for command in commands]
-    assert command_name in names, f"batch payload {names} does not contain a {command_name!r} command"
-    # Frontend role: execute the batch and post one result row per command.
-    _submit_ui_command_results(harness, commands)
-    _wait_for_marker(harness, "tool_call")
-
-
-@then('the backend yields a "permission_request" event')
-def backend_yields_permission_request(ctx) -> None:
-    harness = ctx["ui_engine"]
-    _wait_for_marker(harness, "permission_request")
-
-
-@then("the frontend shows the approval card")
-def frontend_shows_approval_card() -> None:
-    # Display-side: the wire flow (permission_request event + approval POST
-    # through the real route) is asserted by the neighbouring steps.
-    pass
-
-
-@then("the frontend executes the navigate command")
-def frontend_executes_navigate(request, ctx) -> None:
-    harness = ctx["ui_engine"]
-    calls = _tool_calls_captured(harness)
-    assert calls, "no tool_call event captured after the navigate batch"
-    assert calls[0].get("tool_name") == "navigate"
-
-
-@then('the URL changes to "/admin/pipelines"')
-def url_changes_to_pipelines(request, ctx) -> None:
-    harness = ctx["ui_engine"]
-    batch = _sse_payload(harness["batch_event"])
-    navigate = next(command for command in batch["commands"] if command["name"] == "navigate")
-    assert navigate["args"]["path"] == "/admin/pipelines"
-
-
-@then("the frontend fills the input field")
-def frontend_fills_input(request, ctx) -> None:
-    harness = ctx["ui_engine"]
-    calls = _tool_calls_captured(harness)
-    assert calls, "no tool_call event captured after the fill batch"
-    assert calls[0].get("tool_name") == "fill"
-
-
-@then("the frontend returns the element's text content")
-def frontend_returns_text(request, ctx) -> None:
-    harness = ctx["ui_engine"]
-    calls = _tool_calls_captured(harness)
-    assert calls, "no tool_call event captured after the extract batch"
-    assert calls[0].get("tool_name") == "extract"
-
-
-@then('each command is yielded as an "ui_command_batch" event')
-def each_command_yielded(request, ctx) -> None:
-    harness = ctx["ui_engine"]
-    _wait_for_marker(harness, "ui_command_batch")
-    batch = _sse_payload(harness["batch_event"])
-    commands = batch["commands"]
-    assert len(commands) == 4, f"expected the batch to carry all 4 tool calls, got {[c['name'] for c in commands]}"
-    # Frontend role: execute the whole batch, post all 4 result rows.
-    _submit_ui_command_results(harness, commands)
-    _wait_for_marker(harness, "tool_call")
-
-
-@then("the results are fed back to the LLM for the next turn")
-def results_fed_back(request, ctx) -> None:
-    harness = ctx["ui_engine"]
-    calls = _tool_calls_captured(harness)
-    assert len(calls) == len(harness["tool_calls"]), f"expected one tool_call per issued tool call: {calls}"
-    names = {call.get("tool_name") for call in calls}
-    issued_names = {tc["name"] for tc in harness["tool_calls"]}
-    assert names == issued_names, f"merged tool results differ from issued tools: {names} vs {issued_names}"
+@then("the navigation result carries the full manifest")
+def navigation_result_carries_full_manifest(ctx) -> None:
+    harness = ctx["nav_engine"]
+    results = harness["tool_results"]
+    assert len(results) == 1
+    result = results[0]["result"]
+    assert "routes" in result
+    assert "elements" in result
+    assert "sidebar_groups" in result

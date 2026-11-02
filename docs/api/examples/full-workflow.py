@@ -45,8 +45,13 @@ def bail(msg: str):
     sys.exit(1)
 
 
-def login(client: httpx.Client) -> tuple[str, str, str]:
-    """Authenticate and return (access_token, refresh_token, user_id)."""
+def login(client: httpx.Client) -> tuple[str, str]:
+    """Authenticate and return (access_token, user_id).
+
+    The refresh token is not returned here: since FAR-1197 it is set only as
+    the httpOnly ``modulo_refresh`` cookie, which this ``httpx.Client`` keeps
+    in its cookie jar for any later refresh or logout call.
+    """
     resp = client.post(
         "/api/v1/auth/login",
         json={
@@ -60,7 +65,7 @@ def login(client: httpx.Client) -> tuple[str, str, str]:
     print(f"✓ Logged in as {EMAIL}")
 
     me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {data['access_token']}"}).json()
-    return data["access_token"], data["refresh_token"], me["id"]
+    return data["access_token"], me["id"]
 
 
 def step(label: str):
@@ -89,7 +94,7 @@ def main():
         # STEP 1: Login
         # ═══════════════════════════════════════════════════════════
         step("1. Authentication")
-        token, _, _ = login(client)
+        token, _ = login(client)
         headers = {"Authorization": f"Bearer {token}"}
 
         # ═══════════════════════════════════════════════════════════
@@ -213,7 +218,7 @@ def main():
                 connector_id = connector["id"]
                 print(f"  Created connector: {connector.get('name', 'N/A')} ({connector_id})")
             else:
-                print(f"  Connector creation skipped ({resp.status_code}) — continuing without")
+                print(f"  Connector creation skipped ({resp.status_code}) - continuing without")
 
         # ═══════════════════════════════════════════════════════════
         # STEP 6: Set Pipeline Graph (add agent node)
@@ -221,7 +226,7 @@ def main():
         step("6. Set Pipeline Graph")
         # The graph body must round-trip the API's own node shape: a real UUID
         # ``id`` (PipelineGraphNode.id is uuid.UUID), ``node_type`` and a
-        # position — anything else is a 422 printed below instead of a save.
+        # position - anything else is a 422 printed below instead of a save.
         node_id = str(uuid.uuid4())
         graph = {
             "nodes": [
@@ -239,7 +244,7 @@ def main():
         if resp.status_code == 200:
             print(f"  Graph saved with 1 node (agent: {agent_id})")
         else:
-            print(f"  Graph update: {resp.status_code} — {resp.text}")
+            print(f"  Graph update: {resp.status_code} - {resp.text}")
 
         # ═══════════════════════════════════════════════════════════
         # STEP 7: Trigger a Run
@@ -287,7 +292,7 @@ def main():
             ws_url = f"{ws_scheme}://{urlparse(BASE_URL).netloc}"
             print(f"  WebSocket available: {ws_url}/api/v1/runs/{run_id}/ws?token={ws_token[:20]}...")
         else:
-            print("  WebSocket token not available — falling back to polling")
+            print("  WebSocket token not available - falling back to polling")
 
         # Poll until terminal
         terminal = {"completed", "failed", "cancelled"}
@@ -305,7 +310,7 @@ def main():
             if status in terminal:
                 break
         else:
-            print(f"  Run did not complete in {MAX_POLLS * POLL_INTERVAL}s — cancelling")
+            print(f"  Run did not complete in {MAX_POLLS * POLL_INTERVAL}s - cancelling")
             client.post(f"/api/v1/runs/{run_id}/cancel", headers=headers)
             final_status = "cancelled"
 

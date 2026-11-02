@@ -65,9 +65,9 @@ async def test_trigger(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
                 "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
+                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
             ),
             {
                 "id": str(trigger_id),
@@ -502,9 +502,9 @@ class TestWebhookFullPipeline:
             )
             await session.execute(
                 text(
-                    "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
                     "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                    "VALUES (:id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
+                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
                 ),
                 {
                     "id": str(trigger_id),
@@ -579,9 +579,9 @@ async def ci_failure_mapped_trigger(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
                 "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
+                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
             ),
             {
                 "id": str(trigger_id),
@@ -650,3 +650,69 @@ class TestCiFailureKeySurvivesPayloadMapping:
                 pipeline_id=test_pipeline,
                 coalesce_key=ci_key,
             )
+
+
+class TestGithubSignatureVerifiedDelivery:
+    """FAR-2241: a route-authenticated X-Hub-Signature-256 delivery skips the
+    engine's Modulo timestamp/HMAC checks but is still subject to payload dedup."""
+
+    async def test_github_verified_delivery_accepted_then_deduplicated(
+        self,
+        db_engine: AsyncEngine,
+        test_org: uuid.UUID,
+        test_pipeline: uuid.UUID,
+        test_user: uuid.UUID,
+        test_snapshot: uuid.UUID,
+    ) -> None:
+        # Dedicated trigger: the module-scoped one may already be at its
+        # concurrent-run cap from earlier tests in this module.
+        trigger_id = uuid.uuid4()
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text(
+                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
+                    "trigger_type, active, max_concurrent_runs, config_json, account_id) "
+                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 100, (:config)::json, :uid)",
+                ),
+                {
+                    "id": str(trigger_id),
+                    "oid": str(test_org),
+                    "pid": str(test_pipeline),
+                    "config": json.dumps({"hmac_secret": "whsec_gh_signature_secret"}),
+                    "uid": str(test_user),
+                },
+            )
+        raw_payload = {"action": "submitted", "review": {"state": "approved"}, "gh": "far-2241"}
+        body = json.dumps(raw_payload).encode()
+        engine = TriggerEngine()
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+        async with factory() as session, session.begin():
+            await set_rls_org(session, test_org)
+            _run, event, _ = await engine.handle_webhook(
+                session,
+                trigger_id=trigger_id,
+                org_id=test_org,
+                raw_body=body,
+                raw_payload=raw_payload,
+                hmac_signature=None,
+                modulo_timestamp=None,
+                snapshot_id=test_snapshot,
+                github_signature_verified=True,
+            )
+        assert event.validation_result == "accepted"
+
+        async with factory() as session, session.begin():
+            await set_rls_org(session, test_org)
+            with pytest.raises(DuplicateWebhookError):
+                await engine.handle_webhook(
+                    session,
+                    trigger_id=trigger_id,
+                    org_id=test_org,
+                    raw_body=body,
+                    raw_payload=raw_payload,
+                    hmac_signature=None,
+                    modulo_timestamp=None,
+                    snapshot_id=test_snapshot,
+                    github_signature_verified=True,
+                )

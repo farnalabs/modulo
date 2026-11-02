@@ -10,26 +10,22 @@
          When the onboarding banner or the mobile fixed header are present the
          chrome is taller than this offset and the page overflows into
          AppLayout's scroll area — accepted trade-off. -->
-    <header class="bg-card border-b border-border px-6 py-4">
-      <div class="mx-auto flex flex-wrap items-center justify-between gap-3 max-w-6xl">
-        <PageHeader :title="$t('views.PipelineListView.title')">
-          <template #right>
-            <div class="flex items-center gap-2">
-              <div class="w-full sm:w-auto">
-                <FilterBar
-                  :search="{ placeholder: $t('views.PipelineListView.search_pipelines') }"
-                  :search-value="search"
-                  @update:search="search = $event"
-                />
-              </div>
-              <Button :class="allPipelines.length > 0 && !loading ? '' : 'invisible'" as="router-link" to="/library" data-testid="pipeline-list-new-pipeline">
-                {{ $t('views.PipelineListView.new_pipeline') }}
-              </Button>
-            </div>
-          </template>
-        </PageHeader>
-      </div>
-    </header>
+    <PageHeader :title="$t('views.PipelineListView.title')" :subtitle="$t('views.PipelineListView.subtitle')" class="shrink-0 px-6 pt-6">
+      <template #right>
+        <div class="flex items-center gap-2">
+          <div class="w-full sm:w-auto">
+            <FilterBar
+              :search="{ placeholder: $t('views.PipelineListView.search_pipelines') }"
+              :search-value="search"
+              @update:search="search = $event"
+            />
+          </div>
+          <Button :class="allPipelines.length > 0 && !loading ? '' : 'invisible'" as="router-link" to="/library" data-testid="pipeline-list-new-pipeline">
+            {{ $t('views.PipelineListView.new_pipeline') }}
+          </Button>
+        </div>
+      </template>
+    </PageHeader>
 
     <div class="flex flex-1 min-h-0">
       <!-- Folder sidebar -->
@@ -40,14 +36,14 @@
         @folders-changed="loadPipelines"
         @move-pipeline="onMovePipeline"
       />
-      <main class="flex-1 page-wide min-w-0 overflow-y-auto">
-        <!-- Folder-list load failure. First child of <main> — never a flex
-             sibling of the sidebar, which would squeeze it into a vertical
-             column between the tree and the table. This is the <md owner of the
-             folder-error live region (the FolderTree sidebar owns >=md), hence
-             `gated`; the table keeps rendering underneath. The shared contract
-             — single live region, non-dismissible, retry re-fetches — lives in
-             FolderListError.vue. -->
+      <div class="flex-1 page-wide min-w-0 overflow-y-auto overscroll-contain">
+        <!-- Folder-list load failure. First child of the content column — never
+             a flex sibling of the sidebar, which would squeeze it into a
+             vertical column between the tree and the table. This is the <md
+             owner of the folder-error live region (the FolderTree sidebar owns
+             >=md), hence `gated`; the table keeps rendering underneath. The
+             shared contract — single live region, non-dismissible, retry
+             re-fetches — lives in FolderListError.vue. -->
         <FolderListError
           v-if="folderError"
           :message="$t('views.PipelineListView.failed_to_load_folders', { error: folderError })"
@@ -268,7 +264,7 @@
           </div>
         </div>
 
-      </main>
+      </div>
     </div>
 
       <!-- Move to Folder dialog -->

@@ -12,6 +12,7 @@ import time
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -318,6 +319,66 @@ def test_replay_webhook_unauthenticated_bad_hmac_returns_401(client: TestClient)
         assert "HMAC" in resp.json()["detail"]
     finally:
         app.dependency_overrides.pop(get_db_session, None)
+
+
+def _gh_replay_signature(body: bytes = _STORED_BODY, secret: str = _HMAC_SECRET) -> str:
+    return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def _replay_unauthenticated(client: TestClient, headers: dict[str, str]) -> tuple[Any, AsyncMock]:
+    """Unauthenticated replay against an HMAC trigger; returns (response, replay_event mock)."""
+    mock_session = _make_mock_session(trigger_config={"hmac_secret": _HMAC_SECRET})
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.dispatch_run"),
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        ):
+            m.return_value = (_make_mock_run(), None, {})
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{uuid.uuid4()}",
+                headers=headers,
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+    return resp, m
+
+
+def test_replay_webhook_github_signature_valid_returns_202(client: TestClient) -> None:
+    """FAR-2251: X-Hub-Signature-256 over the STORED body authenticates a replay."""
+    resp, engine = _replay_unauthenticated(client, {"X-Hub-Signature-256": _gh_replay_signature()})
+    assert resp.status_code == 202
+    assert engine.await_count == 1
+
+
+def test_replay_webhook_github_signature_bad_returns_401(client: TestClient) -> None:
+    resp, engine = _replay_unauthenticated(client, {"X-Hub-Signature-256": _gh_replay_signature(secret="wrong-secret")})
+    assert resp.status_code == 401
+    assert engine.await_count == 0
+
+
+def test_replay_webhook_github_signature_over_other_body_returns_401(client: TestClient) -> None:
+    resp, engine = _replay_unauthenticated(
+        client, {"X-Hub-Signature-256": _gh_replay_signature(body=b'{"other": true}')}
+    )
+    assert resp.status_code == 401
+    assert engine.await_count == 0
+
+
+def test_replay_webhook_modulo_header_blocks_github_fallback(client: TestClient) -> None:
+    """Any Modulo header present means the Modulo scheme is used; a valid GitHub
+    signature must not rescue a Modulo-scheme failure."""
+    ts = int(time.time())
+    headers = {"X-Modulo-Timestamp": str(ts), "X-Hub-Signature-256": _gh_replay_signature()}
+    resp, engine = _replay_unauthenticated(client, headers)
+    assert resp.status_code == 401
+    assert engine.await_count == 0
 
 
 def test_replay_webhook_unauthenticated_hmacless_trigger_denied(client: TestClient) -> None:

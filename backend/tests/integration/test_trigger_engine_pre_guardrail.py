@@ -94,9 +94,9 @@ async def intake_rig(
         )
         await conn.execute(
             text(
-                "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
                 "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)",
+                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)",
             ),
             {
                 "id": str(trigger_id),
@@ -598,9 +598,9 @@ class TestGuardrailRLSScoping:
             )
             await conn.execute(
                 text(
-                    "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
                     "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                    "VALUES (:id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)"
+                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)"
                 ),
                 {
                     "id": str(other_trigger),

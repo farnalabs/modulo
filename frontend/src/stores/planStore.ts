@@ -11,7 +11,7 @@ import { withTimeout } from "../lib/asyncUtils";
 import { formatApiError } from "../lib/api/formatError";
 import { registerSyncHandlers, disposeSyncHandlers } from "./syncRegistry";
 import { flagCacheKey, parseFlagCache, serializeFlagCache } from "../config/flagCache";
-import { decodeJwtPayload } from "../lib/jwt";
+import { decodeJwtPayload, principalSubject } from "../lib/jwt";
 import type { EventBusEvent } from "@/types/events";
 
 interface ApiResult<T> {
@@ -91,20 +91,6 @@ function currentOrgId(): string | null {
     // No storage / no token helper available: fall back to the unknown bucket.
     return null;
   }
-}
-
-/**
- * The subject (`sub` claim) a token belongs to. `null` = no token / opaque
- * token. Used to tell a ROTATED token for the same person (a refresh — same
- * sub, keep the list) from a different principal (reset), because a same-SPA
- * login can replace the token without ever passing through `null`.
- */
-function principalSubject(token: string | null | undefined): string | null {
-  // No token at all is its own answer — never decode an absent/opaque token
-  // into whoever the decoder last saw.
-  if (!token) return null;
-  const sub = decodeJwtPayload(token)?.sub;
-  return typeof sub === "string" && sub.length > 0 ? sub : null;
 }
 
 function initialPrincipalSubject(): string | null {

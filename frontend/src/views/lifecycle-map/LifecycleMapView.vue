@@ -2,7 +2,7 @@
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="mx-auto max-w-6xl">
-        <PageHeader :title="mapData?.name || 'Lifecycle Map'" back-link="/lifecycle-maps">
+        <PageHeader :title="mapData?.name || 'Lifecycle Map'" :subtitle="$t('views.LifecycleMapView.subtitle')" back-link="/lifecycle-maps">
           <template #right>
             <span
               v-if="mapData"
@@ -55,7 +55,7 @@
       </div>
     </header>
 
-    <main class="page-wide">
+    <section class="page-wide">
       <div v-if="isLoadingDetail" class="flex items-center justify-center py-20">
         <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
       </div>
@@ -297,7 +297,7 @@
       <div v-else class="text-center py-20 text-muted-foreground">
         Lifecycle map not found.
       </div>
-    </main>
+    </section>
 
     <!-- Import dialog -->
     <Dialog :visible="showImportDialog" :modal="true" :dismissable-mask="true" class="sm:max-w-lg" data-testid="lifecycle-map-import-dialog" @update:visible="showImportDialog = $event">

@@ -57,7 +57,7 @@ let _authListeners: Array<(token: string | null) => void> = []
 let _refreshingPromise: Promise<boolean> | null = null
 
 // Stable per-tab identifier so other tabs can tell refresh hints apart when
-// adopting rotated tokens across tabs (pattern: useUiCommandExecutor TAB_ID).
+// adopting rotated tokens across tabs.
 const TAB_ID = randomId('tab')
 
 let _authChannel: BroadcastChannel | null = null
@@ -257,6 +257,10 @@ async function doRefresh(): Promise<boolean> {
   }
 }
 export async function attemptTokenRefresh(): Promise<boolean> {
+  // Demo access tokens intentionally have no refresh token. Keep this guard in
+  // the shared refresh path so API retries and event streams both avoid the
+  // refresh endpoint when a demo session expires.
+  if (isDemoSession()) return false
   if (_refreshingPromise) return _refreshingPromise
 
   _refreshingPromise = (async () => {

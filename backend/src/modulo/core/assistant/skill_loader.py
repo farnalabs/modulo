@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel
@@ -56,12 +55,10 @@ class SkillLoader:
         session: AsyncSession,
         config_service: AssistantConfigService | None = None,
         ctx_service: AssistantContextSourceService | None = None,
-        ui_tools_text_fn: Callable[[], str] | None = None,
     ) -> None:
         self._session = session
         self._config_service = config_service
         self._ctx_service = ctx_service
-        self._ui_tools_text_fn = ui_tools_text_fn
 
     async def _get_skills(self, **filters: Any) -> list[SkillEntry]:
         try:
@@ -219,26 +216,12 @@ class SkillLoader:
         if section:
             parts.append(section)
 
-    def _append_ui_tools_text(self, parts: list[str], include_ui_tools_text: bool) -> None:
-        if not (include_ui_tools_text and self._ui_tools_text_fn):
-            return
-        try:
-            tools_text = self._ui_tools_text_fn()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Failed to build UI tools text")
-            return
-        if tools_text:
-            parts.extend([tools_text, "- Before navigating, call get_manifest() to learn page structure and elements."])
-
     async def build_system_prompt(
         self,
         org_id: uuid.UUID,
         user_id: uuid.UUID,
         page_context: str | None = None,
         system_prompt_override: str | None = None,
-        include_ui_tools_text: bool = False,
     ) -> str:
         config = await self._load_config(org_id)
         ctx_sources = await self._load_ctx_sources(org_id, user_id)
@@ -272,8 +255,6 @@ class SkillLoader:
 
         always_on_user = self._filter_always_on(user_skills)
         self._append_skills_block(parts, always_on_user, _SECTION_USER_SKILLS)
-
-        self._append_ui_tools_text(parts, include_ui_tools_text)
 
         return "\n\n".join(parts)
 

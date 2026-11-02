@@ -21,7 +21,9 @@ alerts, and an unreachable state that persists re-alerts only after a
 recovery in between. The VERY FIRST probe finding the engine down also
 emits the transition (no previous row defaults to "was reachable") — a
 deployment that boots with a dead engine is alerted once, not silently
-green.
+green. A deployment with NO engine configured (FAR-2242,
+:func:`docker_engine_configured`) never alerts; its probe row is still
+written so the UI state is unchanged.
 
 Tick shape (idle-in-transaction hygiene, qa F15): the engine probe and the
 image inspects run BEFORE any DB transaction is open; the write transaction
@@ -162,6 +164,31 @@ def _resolve_docker_host() -> str | None:
     # first (the filtered socket-proxy), then DOCKER_HOST, else None (the
     # engine's local socket).
     return os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
+
+
+def docker_engine_configured() -> bool:
+    """True when this deployment has a Docker engine endpoint it could reach.
+
+    FAR-2239: a deployment with no engine at all (e.g. the Fly app: no
+    ``MODULO_DOCKER_HOST``/``DOCKER_HOST`` and no local socket) is *not
+    configured* for the Bundled Runner, which is a different thing from a
+    configured engine that is failing. The Runners page uses this to show a
+    neutral "not available" state instead of a red "engine unreachable".
+
+    The answer must agree with the orphan sweep's engine-less decision, so it
+    delegates to :func:`runner_reconciler.docker_endpoint_skip_reason` rather
+    than re-implementing endpoint detection: that mirrors aiodocker's FULL host
+    resolution chain (``MODULO_DOCKER_HOST``/``DOCKER_HOST``, ``DOCKER_CONTEXT``
+    / ``~/.docker/config.json``, then the auto-detected local sockets checked
+    with ``is_socket()``). A weaker copy here would report "not configured" for
+    a deployment whose engine is reachable via a Docker context or an
+    alternative socket path, masking a healthy engine as unavailable.
+    """
+    # Imported lazily to keep this module's import graph free of the
+    # reconciler's (it is only needed on the request path).
+    from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
+
+    return docker_endpoint_skip_reason() is None
 
 
 class _EngineBoundary:
@@ -407,7 +434,11 @@ async def _upsert_org_probe(
         engine_info=outcome.engine_info,
         probe_error=outcome.error,
     )
-    if was_reachable and not outcome.reachable:
+    # FAR-2242: no Docker engine configured at all (e.g. the Fly app) is not an
+    # outage — the row above still records the state for the UI, but no
+    # error-dashboard event / admin notification is raised. A configured engine
+    # that is failing still alerts.
+    if was_reachable and not outcome.reachable and docker_engine_configured():
         await _emit_unreachable_transition(session, org_id, identity, outcome.error)
         return True
     return False

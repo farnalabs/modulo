@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 vi.mock('vue-i18n', () => ({
@@ -90,6 +90,19 @@ describe('VariantGroupBuilder', () => {
     const wrapper = await mountBuilder()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.find('[data-testid="variant-builder-pipeline-select"]').exists()).toBe(true)
+  })
+
+  it('surfaces a load error when the pipeline fetch fails', async () => {
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) =>
+      url === '/api/v1/pipelines'
+        ? Promise.resolve({ data: null, error: { detail: 'pipelines unavailable' } })
+        : mockGet(url)
+    )
+    const wrapper = mount(VariantGroupBuilder, { props: {} })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('pipelines unavailable')
   })
 
   it('adds rows with stable ids and defaults the snapshot to the pipeline snapshot', async () => {

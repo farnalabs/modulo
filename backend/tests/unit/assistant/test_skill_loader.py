@@ -2,7 +2,6 @@
 
 import asyncio
 import uuid
-from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -375,14 +374,11 @@ class TestSkillLoaderBuildSystemPrompt:
         ctx_overrides: dict[str, str] | None = None,
         page_context: str | None = None,
         system_prompt_override: str | None = None,
-        include_ui_tools_text: bool = False,
-        ui_tools_text_fn: Callable[[], str] | None = None,
     ) -> str:
         cfg_stub = _ConfigServiceStub(**(config_kwargs or {}))
         ctx_stub = _CtxSourceStub(overrides=ctx_overrides)
         with (
             patch.object(loader, "_config_service", cfg_stub),
-            patch.object(loader, "_ui_tools_text_fn", ui_tools_text_fn),
             patch("modulo.core.assistant.skill_loader.AssistantContextSourceService", return_value=ctx_stub),
         ):
             return await loader.build_system_prompt(
@@ -390,7 +386,6 @@ class TestSkillLoaderBuildSystemPrompt:
                 user_id=user_id,
                 page_context=page_context,
                 system_prompt_override=system_prompt_override,
-                include_ui_tools_text=include_ui_tools_text,
             )
 
     # ── Existing tests (adapted to new architecture) ──────────────────
@@ -511,34 +506,6 @@ class TestSkillLoaderBuildSystemPrompt:
         assert prompt.startswith("## Behaviour\n\n")
         assert "direct visual access to the application UI" in prompt
         assert prompt.count("## ") == 1
-
-    async def test_with_include_ui_tools_text_false_excludes_tools(
-        self,
-        loader: SkillLoader,
-        mock_session: AsyncMock,
-        org_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> None:
-        prompt = await self._run(loader, org_id, user_id, config_kwargs={"system_prompt": "You are helpful."})
-        assert "Browser Tools Available (Text Mode)" not in prompt
-
-    async def test_with_include_ui_tools_text_true_includes_tools(
-        self,
-        loader: SkillLoader,
-        mock_session: AsyncMock,
-        org_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> None:
-        prompt = await self._run(
-            loader,
-            org_id,
-            user_id,
-            config_kwargs={"system_prompt": "You are helpful."},
-            include_ui_tools_text=True,
-            ui_tools_text_fn=lambda: "# Browser Tools Available (Text Mode)\n**navigate**(path: 'url')\n",
-        )
-        assert "Browser Tools Available (Text Mode)" in prompt
-        assert "**navigate**(path:" in prompt
 
     # ── New tests for context source filtering ────────────────────────
 
@@ -844,40 +811,6 @@ class TestSkillLoaderBuildSystemPrompt:
             pytest.raises(asyncio.CancelledError),
         ):
             await loader.build_system_prompt(org_id=org_id, user_id=user_id)
-
-    async def test_ui_tools_text_failure_is_skipped(
-        self,
-        loader: SkillLoader,
-        mock_session: AsyncMock,
-        org_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> None:
-        def _boom() -> str:
-            raise RuntimeError("boom")
-
-        prompt = await self._run(
-            loader,
-            org_id,
-            user_id,
-            config_kwargs={"system_prompt": "You are helpful."},
-            include_ui_tools_text=True,
-            ui_tools_text_fn=_boom,
-        )
-        assert "Browser Tools Available (Text Mode)" not in prompt
-        assert "## Behaviour" in prompt
-
-    async def test_reraises_cancelled_error_on_ui_tools_text(
-        self,
-        loader: SkillLoader,
-        mock_session: AsyncMock,
-        org_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> None:
-        def _cancel() -> str:
-            raise asyncio.CancelledError
-
-        with patch.object(loader, "_ui_tools_text_fn", _cancel), pytest.raises(asyncio.CancelledError):
-            await loader.build_system_prompt(org_id=org_id, user_id=user_id, include_ui_tools_text=True)
 
     async def test_user_profile_included_when_always_on_with_account(
         self,

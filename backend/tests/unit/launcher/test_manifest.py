@@ -6,11 +6,11 @@ unknown key-id refuses loudly; a missing or tampered artifact refuses; both
 the current and the next trust-store keys verify (rotation); --from-file
 verifies a locally provided manifest + signature against the same store.
 
-Security posture (locked here): the SHIPPED store is EMPTY and every
-verification FAILS CLOSED until the owner provisions production keys; the
-private signing keys live in the test fixtures (conftest.py), never in the
-shipped module; scripts/install.sh's embedded keys must equal _TRUST_ROWS
-(no stored-byte drift between the two trust assemblies).
+Security posture (locked here): the SHIPPED store carries the current
+production public key and leaves the next rotation slot empty; private signing
+keys live in the test fixtures (conftest.py), never in the shipped module;
+scripts/install.sh's embedded keys must equal _TRUST_ROWS (no stored-byte drift
+between the two trust assemblies).
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -164,11 +165,18 @@ def test_unknown_key_id_refuses(tmp_path: Path, test_trust_store: dict, test_sig
         verify_signature(payload, misplaced, trust_store=test_trust_store)
 
 
-def test_malformed_signature_file_refuses(tmp_path: Path) -> None:
-    garbled = tmp_path / "not-a-sig"
-    garbled.write_text("{ no key_id }", encoding="utf-8")
-    with pytest.raises(ManifestSecurityError, match="garbled"):
-        read_signature_file(garbled)
+@pytest.mark.parametrize(
+    ("contents", "pattern"),
+    [
+        ('{"signature":"' + "0" * 128 + '"}', "exactly key_id and signature"),
+        ('{"key_id":"modulo-2026-a","signature":"' + "0" * 128 + '","key_id":"rogue"}', "duplicate field"),
+    ],
+)
+def test_malformed_signature_file_refuses(tmp_path: Path, contents: str, pattern: str) -> None:
+    malformed = tmp_path / "not-a-sig"
+    malformed.write_text(contents, encoding="utf-8")
+    with pytest.raises(ManifestSecurityError, match=re.escape(pattern)):
+        read_signature_file(malformed)
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -246,6 +254,9 @@ def test_manifest_payload_refusal_matrix(
 
 SIGNATURE_REFUSALS = [
     ("not-a-dict", lambda sig: ["nope"], "signature must be an object"),
+    ("extra-field", lambda sig: {**sig, "extra": True}, "exactly key_id and signature"),
+    ("wrong-key-type", lambda sig: {**sig, "key_id": 1}, "key_id and signature must be strings"),
+    ("wrong-signature-type", lambda sig: {**sig, "signature": 1}, "key_id and signature must be strings"),
     ("wrong-length", lambda sig: {**sig, "signature": "ab" * 20}, "128 hex characters"),
     ("not-hex", lambda sig: {**sig, "signature": "z" * 128}, "signature is not valid hex"),
 ]
@@ -272,6 +283,50 @@ def test_manifest_signature_refusal_matrix(
     sig = tamper({"key_id": _KEY_ID_CURRENT, "signature": "0" * 128})
     with pytest.raises(ManifestSecurityError, match=re.escape(pattern)):
         verify_manifest(payload, sig, trust_store=test_trust_store)
+
+
+@pytest.mark.parametrize(
+    ("signature", "pattern"),
+    [
+        ({"key_id": _KEY_ID_CURRENT}, "exactly key_id and signature"),
+        ({"key_id": _KEY_ID_CURRENT, "signature": "0" * 128, "extra": True}, "exactly key_id and signature"),
+        ({"key_id": 123, "signature": "0" * 128}, "key_id and signature must be strings"),
+        ({"key_id": _KEY_ID_CURRENT, "signature": 123}, "key_id and signature must be strings"),
+    ],
+    ids=["missing-signature", "extra-field", "non-string-key-id", "non-string-signature"],
+)
+def test_manifest_signature_envelope_rejects_invalid_shapes(
+    signature: Any, pattern: str, test_trust_store: dict
+) -> None:
+    payload = json.dumps(_manifest_body(artifact_count=1), indent=2, sort_keys=True).encode("utf-8")
+    with pytest.raises(ManifestSecurityError, match=re.escape(pattern)):
+        verify_signature(payload, signature, trust_store=test_trust_store)
+
+
+@pytest.mark.parametrize(
+    ("contents", "pattern"),
+    [
+        (
+            '{"key_id":"modulo-2026-a","key_id":"modulo-2026-a-next","signature":"' + "0" * 128 + '"}',
+            "duplicate field: key_id",
+        ),
+        (
+            '{"key_id":"modulo-2026-a","signature":"' + "0" * 128 + '","extra":true}',
+            "exactly key_id and signature",
+        ),
+        (
+            '{"key_id":123,"signature":"' + "0" * 128 + '"}',
+            "key_id and signature must be strings",
+        ),
+        ('{"key_id":"modulo-2026-a","signature":123}', "key_id and signature must be strings"),
+    ],
+    ids=["duplicate-key", "extra-field", "non-string-key-id", "non-string-signature"],
+)
+def test_signature_file_rejects_invalid_envelopes(tmp_path: Path, contents: str, pattern: str) -> None:
+    signature_path = tmp_path / manifest_module.SIGNATURE_NAME
+    signature_path.write_text(contents, encoding="utf-8")
+    with pytest.raises(ManifestSecurityError, match=re.escape(pattern)):
+        read_signature_file(signature_path)
 
 
 def test_missing_artifact_refuses(tmp_path: Path, test_trust_store: dict, test_signing_keys: dict) -> None:
@@ -521,31 +576,43 @@ def test_verify_release_from_files_none_refuses_missing_artifact(
 
 
 # ---------------------------------------------------------------------------
-# Security posture: fail-closed shipped store, dev-key-free shipping, and
+# Security posture: provisioned shipped store, dev-key-free shipping, and
 # no drift between the two trust assemblies (module + install.sh).
 # ---------------------------------------------------------------------------
 
 
-def test_shipped_verification_fails_closed_from_this_repo_file():
-    """CRITICAL: the shipped module refuses with an EMPTY trust store.
+def test_shipped_trust_store_has_only_the_provisioned_current_key() -> None:
+    assert set(manifest_module._TRUST_ROWS) == {_KEY_ID_CURRENT}
+    label, public_hex = manifest_module._TRUST_ROWS[_KEY_ID_CURRENT]
+    assert label == "Modulo production release signing key (2026-A)"
+    assert len(public_hex) == 64
+    assert bytes.fromhex(public_hex) == bytes.fromhex(
+        "73f7dd1483fff0c0df45d706ae9ce7a68151942b8e2e8bc715b5d9beb719b5b0"
+    )
+    assert _KEY_ID_NEXT not in manifest_module._TRUST_ROWS
 
-    The test runs against the REAL _TRUST_ROWS (no patched store, no
-    explicit trust_store argument) — verification must refuse with the
-    provisioning message, never silently produce a verdict.
-    """
+
+def test_shipped_verification_uses_the_provisioned_current_key() -> None:
+    body = _manifest_body(artifact_count=1)
+    payload = json.dumps(body, indent=2, sort_keys=True).encode("utf-8")
+    private_hex = os.environ.get("BUNDLE_MANIFEST_SIGNING_KEY")
+    if private_hex is None:
+        pytest.skip("BUNDLE_MANIFEST_SIGNING_KEY is not available in the test environment")
+    signature = sign_release_bytes(payload, key_id=_KEY_ID_CURRENT, private_key_hex=private_hex)
+    public_hex = manifest_module._TRUST_ROWS[_KEY_ID_CURRENT][1]
+    assert (
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_hex)).public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+        == public_hex
+    )
+    assert manifest_module.verify_signature(payload, signature) == _KEY_ID_CURRENT
+
+
+def test_shipped_verify_manifest_rejects_invalid_signature() -> None:
     body = _manifest_body(artifact_count=1)
     payload = json.dumps(body, indent=2, sort_keys=True).encode("utf-8")
     signature = {"key_id": _KEY_ID_CURRENT, "signature": "0" * 128}
-    with pytest.raises(ManifestSecurityError, match="no provisioned production signing keys"):
-        manifest_module.verify_signature(payload, signature)
-
-
-def test_shipped_verify_manifest_fails_closed() -> None:
-    body = _manifest_body(artifact_count=1)
-    payload = json.dumps(body, indent=2, sort_keys=True).encode("utf-8")
-    signature = {"key_id": _KEY_ID_CURRENT, "signature": "0" * 128}
-    assert not manifest_module._TRUST_ROWS, "the wheel must ship an EMPTY trust store"
-    with pytest.raises(ManifestSecurityError, match="no provisioned production signing keys"):
+    assert set(manifest_module._TRUST_ROWS) == {_KEY_ID_CURRENT}
+    with pytest.raises(ManifestSecurityError, match="FAILED to verify"):
         manifest_module.verify_manifest(payload, signature)
 
 
@@ -576,15 +643,13 @@ def _public_b64(public_hex: str) -> str:
 def test_installer_embedded_store_matches_trust_rows() -> None:
     """CRITICAL: install.sh's embedded keys and _TRUST_ROWS cannot drift.
 
-    Both assemblies must describe the SAME keypair set. At ship time BOTH
-    are empty (fail-closed); when the owner provisions production keys this
-    loop pins byte-equality between the two fill-in targets inwards.
+    Both assemblies must describe the SAME keypair set. The current slot is
+    provisioned and the next slot remains reserved; this pins byte-equality
+    between the two trust-store assemblies.
     """
     embedded = _installer_embedded_keys()
-    if not manifest_module._TRUST_ROWS:
-        assert not embedded["current"]
-        assert not embedded["next"]
-        return
+    assert set(manifest_module._TRUST_ROWS) == {_KEY_ID_CURRENT}
+    assert not embedded["next"]
     for key_id, (_label, public_hex) in manifest_module._TRUST_ROWS.items():
         slot = "current" if key_id == _KEY_ID_CURRENT else "next"
         expected_b64 = _public_b64(public_hex)
@@ -593,6 +658,13 @@ def test_installer_embedded_store_matches_trust_rows() -> None:
             f"install.sh's embedded '{slot}' key differs from _TRUST_ROWS[{key_id}] — the two "
             "trust-store assemblies MUST carry the SAME public keys (both from one provisioning)"
         )
+
+
+def test_install_sh_requires_explicit_key_id_and_signature_shape() -> None:
+    install_source = _INSTALL_SH_PATH.read_text(encoding="utf-8")
+    assert 'candidate_keys="current next"' not in install_source
+    assert "signature file must contain exactly key_id and signature" in install_source
+    assert "duplicate field" in install_source
 
 
 def test_sign_roundtrips_through_installersh_sig_extraction(

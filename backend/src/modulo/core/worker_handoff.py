@@ -127,6 +127,7 @@ WORKER_LOST_NOT_REQUEUED_DETAIL = (
 # statement runs inside set_config('app.organisation_id', ...)).
 _SQL_SET_ORG_ID = "SELECT set_config('app.organisation_id', :val, true)"
 
+
 # The handback RE-QUEUE arm. Fenced exactly like every other claim-fenced
 # writer:
 #   * ``status = 'running'`` — only a run still marked running is handed back
@@ -322,14 +323,22 @@ async def _load_handback_row(
     ``_should_redispatch_nodeless``), with ``outputs_absent`` /
     ``checkpoints_absent`` built from the ONE shared NOT-EXISTS expressions
     those predicates use — parity by construction, so the zero-node premise
-    rechecked here cannot drift from the reconcile's. Returns ``(row,
-    graph_json)``; ``None`` when the run (or its snapshot) is not visible —
-    fail closed: an entry with no evidence is skipped, never re-queued.
+    rechecked here cannot drift from the reconcile's. The durable-evidence
+    classification comes from the blob chokepoint
+    (``run_node_outputs.observed_activity_expr``), which owns every read of
+    those columns. Returns ``(row, graph_json)``; ``None`` when the run (or
+    its snapshot) is not visible — fail closed: an entry with no evidence is
+    skipped, never re-queued.
     """
     from modulo.core.cron_helpers import _checkpoint_absent_expr, _final_row_absent_expr
+    from modulo.db.crud.run_node_outputs import observed_activity_expr
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.pipeline_snapshot import PipelineSnapshot
     from modulo.db.models.run import Run
+
+    observed_activity = observed_activity_expr(run_id_column=Run.id, organisation_id_column=org_id).label(
+        "observed_activity"
+    )
 
     stmt = (
         select(
@@ -347,6 +356,7 @@ async def _load_handback_row(
             Run.sandbox_dispatch_state,
             Pipeline.retry_policy,
             PipelineSnapshot.graph_json,
+            observed_activity,
             _final_row_absent_expr().label("outputs_absent"),
             _checkpoint_absent_expr().label("checkpoints_absent"),
         )
@@ -367,6 +377,7 @@ async def _load_handback_row(
         dispatched_at=values["dispatched_at"],
         sandbox_dispatch_state=values["sandbox_dispatch_state"],
         retry_policy=values["retry_policy"],
+        observed_activity=bool(values["observed_activity"]),
         outputs_absent=bool(values["outputs_absent"]),
         checkpoints_absent=bool(values["checkpoints_absent"]),
     )
@@ -436,6 +447,16 @@ def _handback_decision(row: Any, graph_json: Any) -> _HandbackDecision:
     graph_idempotent = _graph_is_idempotent(graph)
     policy_ok, policy_reason = _node_started_policy_allows(row)
     node_start_safe = graph_idempotent and policy_ok
+
+    # Durable evidence wins before every requeue arm, including a row that
+    # otherwise satisfies the zero-node premise. Re-running after any observed
+    # or derived activity can repeat side effects and discard that evidence.
+    if getattr(row, "observed_activity", False):
+        return _HandbackDecision(
+            may_requeue=False,
+            node_start_safe=False,
+            reason="durable sandbox activity was observed; terminalisation is safer than re-execution",
+        )
 
     # age_minutes=0 disables ONLY the age leg (a shutdown hands back runs of
     # ANY age); the in-flight shield leg inside _is_nodeless_zombie_row stays

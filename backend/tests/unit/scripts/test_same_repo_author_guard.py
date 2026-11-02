@@ -78,8 +78,20 @@ def test_dependabot_lookalike_user_is_external() -> None:
     assert verdict == "external"
 
 
-def test_other_bot_with_none_association_is_external() -> None:
-    verdict, _ = guard.decide(_pr(association="NONE", author="renovate[bot]", author_type="Bot"), BASE)
+def test_same_repo_renovate_with_none_association_is_ok() -> None:
+    verdict, reason = guard.decide(_pr(association="NONE", author="renovate[bot]", author_type="Bot"), BASE)
+    assert verdict == "ok"
+    assert "renovate[bot]" in reason
+
+
+def test_renovate_fork_head_is_external() -> None:
+    pr = _pr(head_full="someone/fork", association="NONE", author="renovate[bot]", author_type="Bot")
+    verdict, _ = guard.decide(pr, BASE)
+    assert verdict == "external"
+
+
+def test_unlisted_bot_with_none_association_is_external() -> None:
+    verdict, _ = guard.decide(_pr(association="NONE", author="some-other[bot]", author_type="Bot"), BASE)
     assert verdict == "external"
 
 

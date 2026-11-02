@@ -234,13 +234,16 @@ def step_post_pipeline_empty_body(client, request: pytest.FixtureRequest) -> Non
 
 
 @when(parsers.parse('I create a cron trigger with expression "{expression}"'))
-def step_create_cron_trigger(expression: str, client, request: pytest.FixtureRequest) -> None:
+def step_create_cron_trigger(expression: str, client, request: pytest.FixtureRequest, mock_session) -> None:
     """Create a cron trigger with the given expression — invalid ones get 422."""
+    from tests.bdd.conftest import stub_no_duplicate_trigger
+
+    stub_no_duplicate_trigger(mock_session)
     _store_response(
         request,
         client.post(
             f"/api/v1/pipelines/{uuid.uuid4()}/triggers",
-            json={"trigger_type": "cron", "cron_expression": expression},
+            json={"trigger_type": "cron", "name": "cron-trigger", "cron_expression": expression},
         ),
     )
 

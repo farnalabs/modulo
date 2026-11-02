@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick as vueNextTick } from 'vue'
+import { createI18n } from 'vue-i18n'
 
 // Restore the REAL vue-router: the shared vitest setup (src/__tests__/setup.ts)
 // mocks 'vue-router' with a stub router whose push/currentRoute never navigate,
@@ -30,6 +31,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import CollectionCreateView from '../views/CollectionCreateView.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 const router = createRouter({
@@ -56,6 +58,43 @@ describe('CollectionCreateView (FAR-760)', () => {
     expect(wrapper.find('#collection-name').exists()).toBe(true)
     expect(wrapper.find('#collection-slug').exists()).toBe(true)
     expect(wrapper.find('[data-testid="collection-create-submit"]').exists()).toBe(true)
+  })
+
+  it('updates visibility option labels when the locale changes', async () => {
+    const i18n = createI18n({
+      legacy: false,
+      locale: 'en',
+      messages: {
+        en: {
+          views: { LibraryView: { collection_visibility_org: 'Organisation', collection_visibility_team: 'Team' } },
+        },
+        fr: {
+          views: { LibraryView: { collection_visibility_org: 'Organisation (FR)', collection_visibility_team: 'Équipe' } },
+        },
+      },
+    })
+    router.push('/library/collections/new')
+    await router.isReady()
+    const wrapper = mount(CollectionCreateView, {
+      global: {
+        plugins: [router, i18n],
+        stubs: { AppSelect: { props: ['options'], template: '<div />' } },
+      },
+    })
+    await nextTick()
+
+    const select = wrapper.findComponent(AppSelect)
+    expect(select.props('options')).toEqual([
+      { value: 'org', label: 'Organisation' },
+      { value: 'team', label: 'Team' },
+    ])
+
+    i18n.global.locale.value = 'fr'
+    await nextTick()
+    expect(select.props('options')).toEqual([
+      { value: 'org', label: 'Organisation (FR)' },
+      { value: 'team', label: 'Équipe' },
+    ])
   })
 
   it('adds and removes manifest pin rows', async () => {

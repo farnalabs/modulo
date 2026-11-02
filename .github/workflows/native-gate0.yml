@@ -1,7 +1,8 @@
 name: "Gate 0: native bundle offline boot proof (PR)"
 
 # FAR-673 / ADR 031 Decision 10: the per-PR verification gate for the
-# native single-install bundle. Linux-only; runs when a PR touches a path
+# native single-install bundle. Linux-only; macOS arm64 validation runs in the
+# macos-14 release workflow. This gate runs when a PR touches a path
 # on the launcher's direct boot path. The always-run paths list is checked
 # in (.github/native-gate0-paths.txt) and asserted by
 # backend/tests/unit/tools/test_gate0_paths.py, so the filter cannot rot
@@ -30,6 +31,13 @@ on:
       - "backend/src/modulo/api/main.py"
       - "deploy/fly/**"
       - ".github/workflows/native-gate0.yml"
+      - "scripts/macos/**"
+      - "scripts/create-macos-info-plist.sh"
+      - "backend/src/modulo/launcher/service.py"
+      - "backend/tests/unit/launcher/test_service.py"
+      - "docs/system-requirements.md"
+      - "docs/release-process.md"
+      - "docs/upgrade-process.md"
 
 concurrency:
   group: native-gate0-${{ github.ref }}
@@ -122,23 +130,28 @@ jobs:
           # The repo is mounted at its real path ($PWD) - NOT /repo - so the
           # host-absolute paths recorded in the venv (the editable .pth and the
           # venv directory itself) resolve inside the container despite --network none.
-          python_bin="$(cd backend && uv run --offline --no-build --no-sync which python)"
-          if [ ! -x "${python_bin}" ]; then
-            echo "::error::precondition violated: offline python interpreter not found at '${python_bin}'"
-            exit 1
-          fi
-          export python_bin
+           PYTHON_BIN="$(cd backend && uv run --offline --no-build --no-sync which python)"
+           if [ ! -x "${PYTHON_BIN}" ]; then
+             echo "::error::precondition violated: offline python interpreter not found at '${PYTHON_BIN}'"
+             exit 1
+           fi
+           export PYTHON_BIN
+
           docker run --rm --network none \
             -v "$PWD:$PWD" -w "$PWD/backend" \
             -v "${UV_CACHE_DIR}:${UV_CACHE_DIR}" \
             -v "${UV_PYTHON_INSTALL_DIR}:${UV_PYTHON_INSTALL_DIR}" \
-            -e UV_CACHE_DIR -e UV_PYTHON_INSTALL_DIR -e python_bin \
+            -e UV_CACHE_DIR -e UV_PYTHON_INSTALL_DIR -e PYTHON_BIN \
             ubuntu:24.04 \
-            /bin/bash -euc '
-              echo "container glibc: $(ldd --version | head -n1)"
-              "${python_bin:?precondition: python_bin env is not propagated into the container}" --version || {
+
+             /bin/bash -euc '
+               echo "container glibc: $(ldd --version | head -n1)"
+               "${PYTHON_BIN:?precondition: PYTHON_BIN env is not propagated into the container}" --version || {
+
+
                 echo "::error::venv interpreter does not run inside the min-glibc container (glibc/glibc-linked deps mismatch) - fail the release"
                 exit 1
               }
-              "${python_bin}" -c "import modulo.launcher.entry, modulo.launcher.config_source, modulo.launcher.upgrade, modulo.launcher.doctor; print(\"launcher boot import graph OK (offline, network none)\")"  #NOSONAR uv-locked, offline, network-none container import proof; no untrusted deps are executed
+               "${PYTHON_BIN}" -c "import modulo.launcher.entry, modulo.launcher.config_source, modulo.launcher.upgrade, modulo.launcher.doctor; print(\"launcher boot import graph OK (offline, network none)\")"  #NOSONAR uv-locked, offline, network-none container import proof; no untrusted deps are executed
+
             '

@@ -29,13 +29,6 @@ vi.mock('@/stores/planStore', () => ({
   })),
 }))
 
-vi.mock('@/composables/useUiCommandExecutor', () => ({
-  pauseUiCommands: vi.fn(),
-  resumeUiCommands: vi.fn(),
-  abortUiCommands: vi.fn(),
-  executeCommandBatch: vi.fn(),
-  isPaused: vi.fn(() => false),
-}))
 
 vi.mock('@/components/assistant/AssistantChat.vue', () => ({
   default: {
