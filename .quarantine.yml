@@ -14,6 +14,17 @@
 #   owner: "GitHub username or team" (optional)
 
 quarantine:
+  # Ambient leaked-AsyncMock GC-attribution victims (FAR-2674 / FAR-2289): an
+  # unrelated unit test leaks a never-awaited AsyncMock coroutine, and
+  # CPython's generational GC collects it while whichever test happens to be
+  # running, so the unraisable-warning gate blames an innocent victim. These
+  # are non-strict xfails until the true leaker is located — no test is deleted
+  # and the gate is not weakened.
+  - test_id: "tests/unit/test_analytics_facts.py::TestBackfillQueueWaitNonNegative::test_queue_wait_expression_excludes_the_redispatched_inversion"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (merge-queue CI run 41483710414, 2026-11-02)"
+    expiry: "2026-11-17"
+    owner: "platform-team"
+
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
   #   reason: "Flaky due to GitHub API rate limit window — fails ~15% of CI runs"
