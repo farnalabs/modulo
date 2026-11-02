@@ -1152,10 +1152,17 @@ def _shrink_logs(members: Mapping[str, str]) -> dict[str, str]:
 
 
 def _write_atomically(out_path: Path, data: bytes) -> None:
+    # ``out_path`` is the operator-chosen destination of a LOCAL command:
+    # ``modulo support --out PATH``, ``python -m modulo.support.bundle --out
+    # PATH`` or ``modulo doctor --report PATH``. It is never supplied over HTTP
+    # or by a model, and the process runs as the same operator that chose the
+    # path, so writing there crosses no privilege boundary and the S8707 taint
+    # flow from argparse argv is a false positive (same reasoning as the
+    # trusted ``--data-dir`` path in modulo.launcher.upgrade).
     tmp_path = out_path.with_name(f"{out_path.name}.tmp-{os.getpid()}")
     with tmp_path.open("wb") as handle:
         handle.write(data)
-    tmp_path.replace(out_path)
+    tmp_path.replace(out_path)  # NOSONAR pythonsecurity:S8707 - local operator-chosen --out path, not HTTP/model input
 
 
 def read_bundle(path: Path) -> dict[str, bytes]:
