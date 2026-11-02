@@ -192,9 +192,21 @@ class Redactor:
 
         return RedactionResult(text=text, counts=counts)
 
-    def gate(self, member: str, text: str) -> None:
-        """Layer 5: refuse the build when *member* still looks secret-bearing."""
-        reasons = _gate_reasons(text, self._seeds)
+    def gate(
+        self,
+        member: str,
+        text: str,
+        *,
+        allowed_tokens: frozenset[str] = frozenset(),
+    ) -> None:
+        """Layer 5: refuse the build when *member* still looks secret-bearing.
+
+        *allowed_tokens* are tokens this build itself GENERATED (the bundle's
+        own per-run reference). They are exempt from the entropy heuristic
+        only — every seeded value, pattern and structural ``KEY=value`` check
+        still applies to the text that carries them.
+        """
+        reasons = _gate_reasons(text, self._seeds, allowed_tokens)
         if reasons:
             raise RedactionGateError(member, reasons)
 
@@ -246,7 +258,11 @@ _HEX_ONLY = re.compile(r"[0-9a-fA-F]+")
 _MIN_ENTROPY_BITS = 3.5
 
 
-def _gate_reasons(text: str, seeds: list[str]) -> list[str]:
+def _gate_reasons(
+    text: str,
+    seeds: list[str],
+    allowed_tokens: frozenset[str] = frozenset(),
+) -> list[str]:
     reasons: list[str] = []
     for secret in seeds:
         if secret and secret in text:
@@ -267,6 +283,8 @@ def _gate_reasons(text: str, seeds: list[str]) -> list[str]:
             break
 
     for token in _ENTROPY_TOKEN.findall(text):
+        if token in allowed_tokens:
+            continue
         if _looks_like_unclassified_secret(token):
             reasons.append("unclassified high-entropy token present")
             break

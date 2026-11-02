@@ -11,6 +11,18 @@ bundle can still be inspected by an older reader (forward compatibility).
 Runs inside the app container with no launcher and no data dir:
 
 ``python -m modulo.support.bundle --out <path> [--json]``
+``python -m modulo.support.bundle --redact-stdin``
+
+Every bundle carries a PER-RUN reference (``MSB-<format_version>-<UTC
+yyyymmddThhmmssZ>-<8 lowercase hex>``) stamped in ``report.json`` and
+``MANIFEST.txt`` and printed as one pastable line, so a bundle file can be
+matched to the run that produced it. The Compose collector emits the same shape.
+
+``--redact-stdin`` is the text-only mode the collector uses so it never has to
+reimplement redaction in bash: it reads UTF-8 text on stdin and writes the
+redacted text on stdout. It reuses the SAME layers 2-4 scrubbers and the
+layer-5 gate as a bundle build, and it fails closed: an unclassified
+high-entropy token exits non-zero with nothing on stdout.
 
 Database-backed members (``db.txt`` / ``runs.json`` / ``errors.json``) degrade
 honestly: if the DB is unreachable the rest of the bundle is still emitted and
@@ -26,6 +38,7 @@ import io
 import json
 import os
 import platform
+import secrets
 import sys
 import time
 import zipfile
@@ -56,10 +69,13 @@ __all__ = [
     "build_bundle_async",
     "bundle_reference",
     "collapse_repeated_lines",
+    "generate_ref",
     "inspect_bundle",
     "is_allowed_member",
     "main",
     "read_bundle",
+    "ref_line",
+    "summary_lines",
 ]
 
 #: Integer format version, stamped in ``report.json`` and the printed ref line.
@@ -196,11 +212,18 @@ class BundleResult:
     missing: tuple[dict[str, str], ...]
     truncated_log_members: tuple[str, ...]
     bundle_format_version: int = BUNDLE_FORMAT_VERSION
+    #: Per-run reference (``MSB-...``); empty only for a bundle that predates
+    #: the ref or a reader that could not recover it.
+    ref: str = ""
 
     def to_json_dict(self) -> dict[str, Any]:
         return {
             "bundle_format_version": self.bundle_format_version,
+            # ``reference`` stays the FORMAT identifier; the per-run token is
+            # ``ref``. They are deliberately separate fields.
             "reference": bundle_reference(self.bundle_format_version),
+            "ref": self.ref,
+            "ref_line": ref_line(self.ref, self.bundle_format_version) if self.ref else "",
             "bundle_path": str(self.bundle_path),
             "members": [{"name": name, "bytes": size} for name, size in self.members],
             "bytes": self.total_bytes,
@@ -241,8 +264,42 @@ class _DbMembers:
 
 
 def bundle_reference(version: int = BUNDLE_FORMAT_VERSION) -> str:
-    """The printed reference token (format version lives in the token)."""
+    """The FORMAT identifier (stable across every bundle of that format).
+
+    Not to be confused with :func:`generate_ref`, the per-run token that is
+    also usable to match the produced file to its run.
+    """
     return f"modulo-support-bundle-v{version}"
+
+
+def generate_ref(version: int = BUNDLE_FORMAT_VERSION) -> str:
+    """One per-run reference: ``MSB-<version>-<UTC stamp>-<8 lowercase hex>``.
+
+    The Compose collector emits this exact shape, so both producers agree and a
+    file can be matched to its reference by name or by content.
+    """
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"MSB-{version}-{stamp}-{secrets.token_hex(4)}"
+
+
+def ref_line(ref: str, version: int = BUNDLE_FORMAT_VERSION) -> str:
+    """The single pastable line a user quotes when sending a bundle."""
+    return f"modulo support bundle {version} ref={ref}"
+
+
+def summary_lines(result: BundleResult) -> list[str]:
+    """Human lines every CLI entry point prints for a built bundle.
+
+    Ref line, bundle path + byte size, and the one instruction that matters:
+    the bundle is redacted but the user should still open it before sending.
+    """
+    lines = [
+        ref_line(result.ref, result.bundle_format_version),
+        f"bundle: {result.bundle_path} ({result.total_bytes} bytes)",
+        "Open the bundle and check it before sending it to Farnalabs support.",
+    ]
+    lines.extend(f"  missing {entry.get('member')}: {entry.get('reason')}" for entry in result.missing)
+    return lines
 
 
 def is_allowed_member(name: str) -> bool:
@@ -764,6 +821,7 @@ def _read_log_members(data_dir: Path | None, max_log_bytes: int) -> dict[str, st
 
 def _render_report(
     *,
+    ref: str,
     sizes: Mapping[str, int],
     redaction_counts: Mapping[str, int],
     missing: Sequence[Mapping[str, str]],
@@ -782,6 +840,7 @@ def _render_report(
     payload = {
         "bundle_format_version": BUNDLE_FORMAT_VERSION,
         "reference": bundle_reference(),
+        "ref": ref,
         "generated_at": datetime.now(UTC).isoformat(),
         "generated_by": "modulo support bundle",
         "redacted_marker": REDACTED,
@@ -796,6 +855,7 @@ def _render_report(
 
 def _render_manifest(
     *,
+    ref: str,
     sizes: Mapping[str, int],
     redaction_counts: Mapping[str, int],
     missing: Sequence[Mapping[str, str]],
@@ -807,6 +867,7 @@ def _render_manifest(
         "modulo support bundle",
         f"bundle_format_version: {BUNDLE_FORMAT_VERSION}",
         f"reference: {bundle_reference()}",
+        f"ref: {ref}",
         f"generated_at: {datetime.now(UTC).isoformat()}",
         f"redacted_marker: {REDACTED}",
         "",
@@ -839,6 +900,7 @@ def _render_manifest(
 
 def _render_meta(
     *,
+    ref: str,
     sizes: Mapping[str, int],
     redaction_counts: Mapping[str, int],
     missing: Sequence[Mapping[str, str]],
@@ -849,6 +911,7 @@ def _render_meta(
     manifest_size = 0
     for _ in range(8):
         report_text = _render_report(
+            ref=ref,
             sizes=sizes,
             redaction_counts=redaction_counts,
             missing=missing,
@@ -858,6 +921,7 @@ def _render_meta(
         )
         new_report = len(report_text.encode("utf-8"))
         manifest_text = _render_manifest(
+            ref=ref,
             sizes=sizes,
             redaction_counts=redaction_counts,
             missing=missing,
@@ -883,6 +947,7 @@ def _zip_bytes(members: Mapping[str, str]) -> bytes:
 def _assemble(
     members: Mapping[str, str],
     *,
+    ref: str,
     redaction_counts: Mapping[str, int],
     missing: Sequence[Mapping[str, str]],
     truncated: Sequence[str],
@@ -890,6 +955,7 @@ def _assemble(
     meta = {MANIFEST_MEMBER, REPORT_MEMBER}
     sizes = {name: len(text.encode("utf-8")) for name, text in members.items() if name not in meta}
     report_text, manifest_text = _render_meta(
+        ref=ref,
         sizes=sizes,
         redaction_counts=redaction_counts,
         missing=missing,
@@ -905,21 +971,28 @@ def build_bundle(
     out_path: Path,
     *,
     sources: BundleSources | None = None,
+    ref: str | None = None,
 ) -> BundleResult:
-    """Build the support bundle synchronously (CLI + ``doctor --report``)."""
-    return asyncio.run(build_bundle_async(out_path, sources=sources))
+    """Build the support bundle synchronously (CLI + ``doctor --report``).
+
+    *ref* lets a caller (``modulo support``) mint the per-run reference FIRST so
+    the default output filename can carry it; omit it and one is generated.
+    """
+    return asyncio.run(build_bundle_async(out_path, sources=sources, ref=ref))
 
 
 async def build_bundle_async(
     out_path: Path,
     *,
     sources: BundleSources | None = None,
+    ref: str | None = None,
 ) -> BundleResult:
     """Build the support bundle, or raise :class:`RedactionGateError`.
 
     The zip is written ONLY after every member passes the layer-5 gate, so a
     refused build leaves no partial artefact behind.
     """
+    bundle_ref = ref or generate_ref()
     resolved = sources if sources is not None else BundleSources()
     environ = resolved.resolved_environ()
     settings = resolved.settings
@@ -995,18 +1068,33 @@ async def build_bundle_async(
         for layer, count in outcome.counts.items():
             counts[layer] = counts.get(layer, 0) + count
 
-    final, archive = _assemble(redacted, redaction_counts=counts, missing=missing, truncated=())
+    # The ref is a token THIS build minted, so the entropy heuristic must not
+    # refuse our own report/MANIFEST text. Only that exact token is exempt.
+    allowed_tokens = frozenset({bundle_ref})
+    final, archive = _assemble(
+        redacted,
+        ref=bundle_ref,
+        redaction_counts=counts,
+        missing=missing,
+        truncated=(),
+    )
 
     truncated: list[str] = []
     for name in final:
-        redactor.gate(name, final[name])
+        redactor.gate(name, final[name], allowed_tokens=allowed_tokens)
     while len(archive) > resolved.max_bundle_bytes and _has_shrinkable_log(redacted):
         with_shrunk = _shrink_logs(redacted)
         redacted = with_shrunk
         truncated = [name for name in redacted if name.startswith(LOG_MEMBER_PREFIX)]
-        final, archive = _assemble(redacted, redaction_counts=counts, missing=missing, truncated=truncated)
+        final, archive = _assemble(
+            redacted,
+            ref=bundle_ref,
+            redaction_counts=counts,
+            missing=missing,
+            truncated=truncated,
+        )
         for name in final:
-            redactor.gate(name, final[name])
+            redactor.gate(name, final[name], allowed_tokens=allowed_tokens)
     if len(archive) > resolved.max_bundle_bytes:
         raise BundleTooLargeError(
             f"bundle is {len(archive)} bytes after truncating every log member (cap {resolved.max_bundle_bytes})"
@@ -1024,6 +1112,7 @@ async def build_bundle_async(
         redaction_counts=dict(counts),
         missing=tuple(missing),
         truncated_log_members=tuple(truncated),
+        ref=bundle_ref,
     )
 
 
@@ -1086,6 +1175,7 @@ def inspect_bundle(path: Path) -> BundleResult:
     counts: dict[str, int] = {}
     missing: list[dict[str, str]] = []
     truncated: list[str] = []
+    ref = ""
     report_raw = members.get(REPORT_MEMBER)
     if report_raw is not None:
         try:
@@ -1093,6 +1183,7 @@ def inspect_bundle(path: Path) -> BundleResult:
             counts = dict(report.get("redaction", {}))
             missing = list(report.get("missing", []))
             truncated = list(report.get("truncated_log_members", []))
+            ref = str(report.get("ref") or "")
         except ValueError:
             pass
     return BundleResult(
@@ -1102,7 +1193,20 @@ def inspect_bundle(path: Path) -> BundleResult:
         redaction_counts=counts,
         missing=tuple(missing),
         truncated_log_members=tuple(truncated),
+        ref=ref,
     )
+
+
+def _bundle_ref_tokens(members: Mapping[str, bytes]) -> frozenset[str]:
+    """The bundle's own ref, so ``--show`` accepts the text that carries it."""
+    report_raw = members.get(REPORT_MEMBER)
+    if report_raw is None:
+        return frozenset()
+    try:
+        ref = json.loads(report_raw).get("ref")
+    except ValueError:
+        return frozenset()
+    return frozenset({ref}) if isinstance(ref, str) and ref else frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -1113,13 +1217,24 @@ def inspect_bundle(path: Path) -> BundleResult:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m modulo.support.bundle",
-        description="Build or inspect a redacted Modulo support bundle.",
+        description="Build, inspect, or text-redact a Modulo support bundle.",
+        epilog=(
+            "--redact-stdin reads UTF-8 text on stdin and writes the redacted text on stdout, "
+            "using the same redaction layers and fail-closed gate as a bundle build. It exits "
+            "non-zero, writing nothing on stdout, when the gate finds an unclassified "
+            "high-entropy token."
+        ),
     )
-    parser.add_argument("--out", type=Path, required=True, metavar="PATH", help="Bundle zip path.")
-    parser.add_argument("--json", action="store_true", help="Print one JSON object (ref line + path).")
+    parser.add_argument("--out", type=Path, default=None, metavar="PATH", help="Bundle zip path.")
+    parser.add_argument("--json", action="store_true", help="Print one JSON object (ref + path).")
     parser.add_argument("--list", action="store_true", help="List members and sizes of the bundle.")
     parser.add_argument("--show", metavar="MEMBER", help="Print ONE redacted member.")
     parser.add_argument("--data-dir", type=Path, default=None, help="Native launcher data dir (optional).")
+    parser.add_argument(
+        "--redact-stdin",
+        action="store_true",
+        help="Read text on stdin, write redacted text on stdout (no bundle written).",
+    )
     return parser
 
 
@@ -1129,8 +1244,53 @@ def _emit(text: str, *, stream: Any = None) -> None:
     target.write(text + "\n")
 
 
+def _redact_stdin() -> int:
+    """Text-only mode: layers 2-4 plus the layer-5 gate, reading stdin.
+
+    Reuses the SAME scrubbers and gate as a bundle build, so the Compose
+    collector never reimplements redaction. Nothing is written on stdout when
+    the gate refuses: fail closed, exit non-zero.
+    """
+    text = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+    settings: object | None
+    try:
+        from modulo.settings import get_settings
+
+        settings = get_settings()
+    except Exception:  # pragma: no cover - settings are optional for text mode
+        settings = None
+    redactor = Redactor(collect_secret_values(data_dir=None, settings=settings))
+    redacted_text = redactor.redact(text).text
+    # The structural layer rebuilds the text line-by-line and therefore drops a
+    # trailing newline; restore it so a clean stream round-trips byte-for-byte
+    # (a collector may concatenate several of these).
+    if text.endswith("\n") and not redacted_text.endswith("\n"):
+        redacted_text += "\n"
+    try:
+        redactor.gate("<stdin>", redacted_text)
+    except RedactionGateError as exc:
+        _emit(f"refused: redaction gate refused stdin: {'; '.join(exc.reasons)}", stream=sys.stderr)
+        _emit("nothing written", stream=sys.stderr)
+        return 2
+    sys.stdout.write(redacted_text)
+    sys.stdout.flush()
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    if args.redact_stdin:
+        if args.out is not None or args.list or args.show or args.json or args.data_dir is not None:
+            _emit(
+                "error: --redact-stdin cannot be combined with --out/--list/--show/--json/--data-dir",
+                stream=sys.stderr,
+            )
+            return 2
+        return _redact_stdin()
+
+    if args.out is None:
+        _emit("error: --out is required unless --redact-stdin is given", stream=sys.stderr)
+        return 2
     if args.list and args.show:
         _emit("error: --list and --show are mutually exclusive", stream=sys.stderr)
         return 2
@@ -1169,13 +1329,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.json:
         _emit(json.dumps(result.to_json_dict(), sort_keys=True))
     else:
-        _emit(
-            f"{bundle_reference(result.bundle_format_version)}: {result.bundle_path} "
-            f"({len(result.members)} members, {result.total_bytes} bytes)"
-        )
-        if result.missing:
-            for entry in result.missing:
-                _emit(f"  missing {entry.get('member')}: {entry.get('reason')}")
+        for line in summary_lines(result):
+            _emit(line)
     return 0
 
 
@@ -1190,9 +1345,10 @@ def _show_member(bundle_path: Path, member: str) -> int:
         return 1
     text = members[member].decode("utf-8", errors="replace")
     # Defence in depth: never print a member that would fail the gate, even
-    # though a written bundle already passed it.
+    # though a written bundle already passed it. The bundle's OWN ref is
+    # exempt, exactly as it was at assembly time.
     try:
-        Redactor({}).gate(member, text)
+        Redactor({}).gate(member, text, allowed_tokens=_bundle_ref_tokens(members))
     except RedactionGateError as exc:
         _emit(f"refused: {exc}", stream=sys.stderr)
         return 2

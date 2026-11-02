@@ -420,6 +420,84 @@ def _build_doctor_report(data_dir: Path, report_path: Path, doctor_output: str) 
     click.echo(f"diagnostic report written: {build_report(data_dir, report_path, doctor_output=doctor_output)}")
 
 
+def _launcher_data_dir_or_none(data_dir: Path | None) -> Path | None:
+    """The launcher data dir when this host has one, else ``None``.
+
+    ``modulo support`` must work in a container (no launcher, no data dir), so a
+    resolution failure degrades to the launcher-less bundle rather than erroring.
+    """
+    if data_dir is not None:
+        return data_dir
+    try:
+        from modulo.launcher.entry import default_data_dir
+
+        candidate = default_data_dir()
+    except Exception:
+        return None
+    return candidate if candidate.is_dir() else None
+
+
+@cli.command("support")
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    metavar="PATH",
+    help="Bundle zip path (default: ./modulo-support-<ref>.zip).",
+)
+@click.option(
+    "--data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Data dir override (default: the per-OS launcher root, when one exists).",
+)
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON.")
+@click.pass_context
+def support(ctx: click.Context, out_path: Path | None, data_dir: Path | None, as_json: bool) -> None:
+    """Build a REDACTED support bundle to send to Farnalabs."""
+    _scrub_for_launcher_command()
+    import asyncio
+
+    from modulo.support.bundle import (
+        BundleSources,
+        BundleTooLargeError,
+        RedactionGateError,
+        build_bundle_async,
+        generate_ref,
+        summary_lines,
+    )
+
+    # Mint the per-run reference FIRST so the default output filename carries
+    # the same token that is stamped inside the archive.
+    ref = generate_ref()
+    resolved_out = out_path if out_path is not None else Path.cwd() / f"modulo-support-{ref}.zip"
+    try:
+        result = asyncio.run(
+            build_bundle_async(
+                resolved_out,
+                sources=BundleSources(data_dir=_launcher_data_dir_or_none(data_dir)),
+                ref=ref,
+            )
+        )
+    except RedactionGateError as exc:
+        click.echo(
+            f"refused: redaction gate refused member {exc.member!r}: {'; '.join(exc.reasons)}",
+            err=True,
+        )
+        click.echo("no bundle written", err=True)
+        ctx.exit(2)
+    except (BundleTooLargeError, OSError) as exc:
+        click.echo(f"error: could not write bundle: {exc}", err=True)
+        ctx.exit(1)
+
+    if as_json:
+        click.echo(json.dumps(result.to_json_dict(), sort_keys=True))
+        return
+    for line in summary_lines(result):
+        click.echo(line)
+
+
 @cli.command("env")
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON.")
 @click.option(

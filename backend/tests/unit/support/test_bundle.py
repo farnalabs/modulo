@@ -16,7 +16,10 @@ Covers the contract the ticket pins down:
 
 from __future__ import annotations
 
+import io
 import json
+import re
+import sys
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -31,6 +34,7 @@ from modulo.support.bundle import (
     BundleSources,
     RedactionGateError,
     build_bundle,
+    generate_ref,
     inspect_bundle,
     is_allowed_member,
     main,
@@ -47,6 +51,10 @@ BEARER_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVm
 SETTINGS_SECRET = "settings-secret-key-value-that-must-not-leak"
 SETTINGS_USERS = "admin@example.com:hunter2-in-a-users-list"
 UNCLASSIFIED_SECRET = "Xq7Lp2Rt9Vw4Bn6Mc8Kd3Fg5Hj1Sz0"
+
+#: The per-run reference shape BOTH producers (this package and the Compose
+#: collector) must emit.
+REF_SHAPE = re.compile(r"^MSB-[0-9]+-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")
 
 ALL_PLANTED = (
     POSTGRES_PASSWORD,
@@ -475,3 +483,130 @@ def test_cli_json_prints_one_object(
     assert payload["bundle_path"] == str(out)
     assert isinstance(payload["members"], list)
     assert isinstance(payload["redaction"], dict)
+    # (a) the per-run ref is a token, distinct from the format identifier
+    assert REF_SHAPE.fullmatch(str(payload["ref"]))
+    assert str(payload["ref"]) in str(payload["ref_line"])
+
+
+def test_ref_is_the_same_in_json_report_and_manifest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(b) one ref, stamped identically in the payload, report.json and MANIFEST."""
+    _seed_data_dir(tmp_path, "clean log")
+    out = tmp_path / "ref.zip"
+    monkeypatch.setattr(bundle_module, "_session_factory", lambda sources: None)
+
+    code = main(["--out", str(out), "--data-dir", str(tmp_path), "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    with zipfile.ZipFile(out) as archive:
+        report = json.loads(archive.read("report.json"))
+        manifest = archive.read("MANIFEST.txt").decode()
+    assert report["ref"] == payload["ref"]
+    assert f"ref: {payload['ref']}" in manifest
+    # the reader recovers the same token
+    assert inspect_bundle(out).ref == payload["ref"]
+
+
+def test_generate_ref_emits_the_shared_shape_and_is_unique() -> None:
+    first = generate_ref()
+    second = generate_ref()
+    assert REF_SHAPE.fullmatch(first)
+    assert first != second
+
+
+def test_cli_prints_the_pasteable_ref_line_and_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_data_dir(tmp_path, "clean log")
+    out = tmp_path / "printed.zip"
+    monkeypatch.setattr(bundle_module, "_session_factory", lambda sources: None)
+
+    code = main(["--out", str(out), "--data-dir", str(tmp_path)])
+
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert REF_SHAPE.fullmatch(_printed_ref(printed))
+    assert str(out) in printed
+    assert "bytes)" in printed
+    assert "check it before sending" in printed
+
+
+def _printed_ref(printed: str) -> str:
+    for line in printed.splitlines():
+        if "ref=" in line:
+            return line.split("ref=", 1)[1].strip()
+    return ""
+
+
+def test_show_accepts_the_bundle_own_ref(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--show report.json` must not be refused by the gate on its own ref."""
+    _seed_data_dir(tmp_path, "clean log")
+    out = tmp_path / "show.zip"
+    monkeypatch.setattr(bundle_module, "_session_factory", lambda sources: None)
+    main(["--out", str(out), "--data-dir", str(tmp_path)])
+    capsys.readouterr()
+
+    code = main(["--out", str(out), "--show", "report.json"])
+
+    shown = capsys.readouterr().out
+    assert code == 0
+    assert REF_SHAPE.fullmatch(str(json.loads(shown)["ref"]))
+
+
+# ---------------------------------------------------------------------------
+# (h) --redact-stdin: the collector's text mode, same scrubbers + gate
+# ---------------------------------------------------------------------------
+
+
+def _run_redact_stdin(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], payload: bytes
+) -> tuple[int, str, str]:
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(payload), encoding="utf-8"))
+    code = main(["--redact-stdin"])
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def test_redact_stdin_scrubs_token_and_url_credentials(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = (
+        "\n".join(
+            [
+                f"pull failed with token {GITHUB_PAT}",
+                "cache: redis://default:sup3rs3cret@cache.internal:6379/0",
+                "keep this line",
+            ]
+        )
+        + "\n"
+    )
+
+    code, out, _err = _run_redact_stdin(monkeypatch, capsys, text.encode("utf-8"))
+
+    assert code == 0
+    assert GITHUB_PAT not in out
+    assert "sup3rs3cret" not in out
+    assert "keep this line" in out
+    # a clean trailing newline survives (the collector may concatenate streams)
+    assert out.endswith("\n")
+
+
+def test_redact_stdin_fails_closed_on_unclassified_token(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, err = _run_redact_stdin(monkeypatch, capsys, f"GREETING={UNCLASSIFIED_SECRET}\n".encode())
+
+    assert code != 0
+    assert not out
+    assert "high-entropy" in err
+
+
+def test_redact_stdin_mode_is_documented(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["--help"])
+
+    assert "--redact-stdin" in capsys.readouterr().out
