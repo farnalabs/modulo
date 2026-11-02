@@ -116,6 +116,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $stage = Join-Path $PWD 'windows-artifacts-staging'
+          $stageScript = Join-Path $PWD 'scripts/windows/build-launcher.ps1'
+          . $stageScript
           if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
           New-Item -ItemType Directory -Path (Join-Path $stage 'runtime/python'), (Join-Path $stage 'pg/bin'), (Join-Path $stage 'redis'), (Join-Path $stage 'bin'), (Join-Path $stage 'backend') | Out-Null
           $valkeyExtract = Join-Path $PWD 'valkey-extracted'; Expand-Archive '${{ steps.downloads.outputs.valkey_file }}' $valkeyExtract
@@ -156,7 +158,9 @@ jobs:
           $build = Join-Path $PWD 'scripts/windows/build-launcher.ps1'
           & cmd.exe /d /s /c "call `"$vcvars`" x64 && pwsh -NoProfile -File `"$build`" -OutputPath `"$PWD/modulo.exe`""
           if ($LASTEXITCODE -ne 0) { throw "Launcher build failed: $LASTEXITCODE" }
-          Copy-Item modulo.exe (Join-Path '${{ steps.stage.outputs.stage }}' 'bin/modulo.exe')
+           Copy-Item modulo.exe (Join-Path '${{ steps.stage.outputs.stage }}' 'bin/modulo.exe')
+           Invoke-WindowsBundleStaging -StagePath '${{ steps.stage.outputs.stage }}' -PythonRoot (Join-Path '${{ steps.stage.outputs.stage }}' 'runtime/python') -BackendSource (Join-Path $PWD 'backend/src') -SitePackagesSource (Join-Path $PWD 'backend/.venv/Lib/site-packages') -FrontendDistSource (Join-Path $PWD 'frontend/dist') -LauncherPath (Join-Path $PWD 'modulo.exe') -PreserveExisting
+
 
       - name: Verify staged binaries and launcher
         shell: pwsh

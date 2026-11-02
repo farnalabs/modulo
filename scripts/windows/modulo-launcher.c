@@ -6,6 +6,7 @@
 #include <wchar.h>
 
 #define MAX_PATH_LEN 32767
+#define ENVIRONMENT_BLOCK_LEN 131072
 
 static BOOL get_executable_dir(wchar_t *buf, DWORD buf_len) {
     DWORD len = GetModuleFileNameW(NULL, buf, buf_len);
@@ -27,45 +28,81 @@ static BOOL path_append(wchar_t *dest, size_t dest_len, const wchar_t *component
     return TRUE;
 }
 
-static BOOL set_env(const wchar_t *name, const wchar_t *value) {
-    return _wputenv_s(name, value) == 0;
+static BOOL build_path(wchar_t *buffer, size_t buffer_len, const wchar_t *root, const wchar_t *first, const wchar_t *second) {
+    if (wcslen(root) >= buffer_len) return FALSE;
+    wcscpy(buffer, root);
+    if (!path_append(buffer, buffer_len, first)) return FALSE;
+    return second == NULL || path_append(buffer, buffer_len, second);
 }
 
-static BOOL prepend_path(const wchar_t *new_path) {
-    const wchar_t *old_path = _wgetenv(L"PATH");
-    size_t new_len = wcslen(new_path);
-    size_t old_len = old_path == NULL ? 0 : wcslen(old_path);
-    wchar_t *combined = (wchar_t *)malloc((new_len + (old_len > 0 ? 1 : 0) + old_len + 1) * sizeof(wchar_t));
-    int result;
-    if (combined == NULL) return FALSE;
-    wcscpy(combined, new_path);
-    if (old_len > 0) {
-        combined[new_len] = L';';
-        wcscpy(combined + new_len + 1, old_path);
+static BOOL read_inherited_env(const wchar_t *name, wchar_t *value, size_t value_len, BOOL required) {
+    DWORD length = GetEnvironmentVariableW(name, value, (DWORD)value_len);
+    if (length == 0) {
+        return !required && GetLastError() == ERROR_ENVVAR_NOT_FOUND;
     }
-    result = _wputenv_s(L"PATH", combined);
-    free(combined);
-    return result == 0;
+    return length < value_len;
 }
 
-static BOOL build_pythonpath(const wchar_t *bundle_root) {
-    wchar_t pythonpath[MAX_PATH_LEN * 4] = {0};
-    wchar_t component[MAX_PATH_LEN];
-    if (wcslen(bundle_root) >= MAX_PATH_LEN) return FALSE;
-    wcscpy(component, bundle_root);
-    if (!path_append(component, MAX_PATH_LEN, L"backend") || !path_append(component, MAX_PATH_LEN, L"src")) return FALSE;
-    wcscpy(pythonpath, component);
-    wcscpy(component, bundle_root);
-    if (!path_append(component, MAX_PATH_LEN, L"runtime") || !path_append(component, MAX_PATH_LEN, L"python") || !path_append(component, MAX_PATH_LEN, L"Lib") || !path_append(component, MAX_PATH_LEN, L"site-packages")) return FALSE;
-    if (wcslen(pythonpath) + 1 + wcslen(component) + 1 > sizeof(pythonpath) / sizeof(pythonpath[0])) return FALSE;
-    wcscat(pythonpath, L";");
-    wcscat(pythonpath, component);
-    wcscpy(component, bundle_root);
-    if (!path_append(component, MAX_PATH_LEN, L"runtime") || !path_append(component, MAX_PATH_LEN, L"Lib")) return FALSE;
-    if (wcslen(pythonpath) + 1 + wcslen(component) + 1 > sizeof(pythonpath) / sizeof(pythonpath[0])) return FALSE;
-    wcscat(pythonpath, L";");
-    wcscat(pythonpath, component);
-    return set_env(L"PYTHONPATH", pythonpath);
+static BOOL append_environment_entry(wchar_t *block, size_t block_len, size_t *used, const wchar_t *name, const wchar_t *value) {
+    size_t name_len = wcslen(name);
+    size_t value_len = wcslen(value);
+    size_t entry_len = name_len + 1 + value_len + 1;
+    if (*used + entry_len + 1 > block_len) return FALSE;
+    wmemcpy(block + *used, name, name_len);
+    *used += name_len;
+    block[(*used)++] = L'=';
+    wmemcpy(block + *used, value, value_len);
+    *used += value_len;
+    block[(*used)++] = L'\0';
+    block[*used] = L'\0';
+    return TRUE;
+}
+
+static BOOL append_inherited_env(wchar_t *block, size_t block_len, size_t *used, const wchar_t *name, BOOL required) {
+    wchar_t value[ENVIRONMENT_BLOCK_LEN];
+    if (!read_inherited_env(name, value, sizeof(value) / sizeof(value[0]), required)) return FALSE;
+    if (value[0] == L'\0') return !required;
+    return append_environment_entry(block, block_len, used, name, value);
+}
+
+/*
+ * Build the child environment instead of inheriting the caller's environment.
+ * The allowlist deliberately excludes interpreter/DLL and certificate controls
+ * such as PYTHONHOME, PYTHONUSERBASE, OPENSSL_CONF, SSL_CERT_FILE,
+ * SSL_CERT_DIR, REQUESTS_CA_BUNDLE, and CURL_CA_BUNDLE. TLS uses the Windows
+ * certificate store; the bundled runtime owns every executable search path.
+ * Identity and Windows service plumbing remain available to the child.
+ */
+static BOOL build_clean_environment(const wchar_t *bundle_root, const wchar_t *bundle_bin_dir, const wchar_t *python_path, const wchar_t *path_value, wchar_t **environment) {
+    static const wchar_t *const inherited_allowlist[] = {
+        L"SYSTEMROOT", L"WINDIR", L"TEMP", L"TMP", L"USERPROFILE", L"APPDATA", L"LOCALAPPDATA",
+        L"PROGRAMDATA", L"ALLUSERSPROFILE", L"HOMEDRIVE", L"HOMEPATH", L"USERNAME", L"USERDOMAIN",
+        L"USERDOMAIN_ROAMINGPROFILE", L"COMPUTERNAME", L"LOGONSERVER", L"SESSIONNAME", L"NUMBER_OF_PROCESSORS",
+        L"PROCESSOR_ARCHITECTURE", L"PROCESSOR_IDENTIFIER", L"PROCESSOR_LEVEL", L"PROCESSOR_REVISION",
+        L"OS", L"PATHEXT", L"COMSPEC", L"SERVICE_NAME", L"SERVICE_ID", L"SERVICE_INSTANCE_ID"
+    };
+    wchar_t *block = (wchar_t *)calloc(ENVIRONMENT_BLOCK_LEN, sizeof(wchar_t));
+    size_t used = 0;
+    size_t index;
+    wchar_t python_home[MAX_PATH_LEN];
+    if (block == NULL) return FALSE;
+    for (index = 0; index < sizeof(inherited_allowlist) / sizeof(inherited_allowlist[0]); index++) {
+        BOOL required = wcscmp(inherited_allowlist[index], L"SYSTEMROOT") == 0 || wcscmp(inherited_allowlist[index], L"WINDIR") == 0;
+        if (!append_inherited_env(block, ENVIRONMENT_BLOCK_LEN, &used, inherited_allowlist[index], required)) {
+            free(block);
+            return FALSE;
+        }
+    }
+    if (!build_path(python_home, MAX_PATH_LEN, bundle_root, L"runtime", L"python") ||
+        !append_environment_entry(block, ENVIRONMENT_BLOCK_LEN, &used, L"PATH", path_value) ||
+        !append_environment_entry(block, ENVIRONMENT_BLOCK_LEN, &used, L"PYTHONPATH", python_path) ||
+        !append_environment_entry(block, ENVIRONMENT_BLOCK_LEN, &used, L"PYTHONHOME", python_home) ||
+        !append_environment_entry(block, ENVIRONMENT_BLOCK_LEN, &used, L"MODULO_BUNDLED_BIN_DIR", bundle_bin_dir)) {
+        free(block);
+        return FALSE;
+    }
+    *environment = block;
+    return TRUE;
 }
 
 static size_t quoted_arg_length(const wchar_t *arg) {
@@ -133,20 +170,39 @@ static wchar_t *build_command_line(const wchar_t *python_exe, int argc, wchar_t 
     return command_line;
 }
 
-static BOOL build_path(wchar_t *buffer, size_t buffer_len, const wchar_t *root, const wchar_t *first, const wchar_t *second) {
-    if (wcslen(root) >= buffer_len) return FALSE;
-    wcscpy(buffer, root);
-    if (!path_append(buffer, buffer_len, first)) return FALSE;
-    return second == NULL || path_append(buffer, buffer_len, second);
+static BOOL build_pythonpath(const wchar_t *bundle_root, wchar_t *pythonpath, size_t pythonpath_len) {
+    wchar_t component[MAX_PATH_LEN];
+    if (wcslen(bundle_root) >= MAX_PATH_LEN) return FALSE;
+    wcscpy(component, bundle_root);
+    if (!path_append(component, MAX_PATH_LEN, L"backend") || !path_append(component, MAX_PATH_LEN, L"src")) return FALSE;
+    if (wcslen(component) + 1 > pythonpath_len) return FALSE;
+    wcscpy(pythonpath, component);
+    wcscpy(component, bundle_root);
+    if (!path_append(component, MAX_PATH_LEN, L"runtime") || !path_append(component, MAX_PATH_LEN, L"python") || !path_append(component, MAX_PATH_LEN, L"Lib") || !path_append(component, MAX_PATH_LEN, L"site-packages")) return FALSE;
+    if (wcslen(pythonpath) + 1 + wcslen(component) + 1 > pythonpath_len) return FALSE;
+    wcscat(pythonpath, L";");
+    wcscat(pythonpath, component);
+    wcscpy(component, bundle_root);
+    if (!path_append(component, MAX_PATH_LEN, L"runtime") || !path_append(component, MAX_PATH_LEN, L"Lib")) return FALSE;
+    if (wcslen(pythonpath) + 1 + wcslen(component) + 1 > pythonpath_len) return FALSE;
+    wcscat(pythonpath, L";");
+    wcscat(pythonpath, component);
+    return TRUE;
 }
 
 int wmain(int argc, wchar_t *argv[]) {
     wchar_t exe_dir[MAX_PATH_LEN];
     wchar_t bundle_root[MAX_PATH_LEN];
-    wchar_t path_component[MAX_PATH_LEN];
+    wchar_t bundle_bin_dir[MAX_PATH_LEN];
+    wchar_t runtime_bin[MAX_PATH_LEN];
+    wchar_t pg_bin[MAX_PATH_LEN];
+    wchar_t redis_dir[MAX_PATH_LEN];
+    wchar_t path_value[MAX_PATH_LEN * 4];
+    wchar_t pythonpath[MAX_PATH_LEN * 4];
     wchar_t python_exe[MAX_PATH_LEN];
     wchar_t *last_slash;
     wchar_t *command_line;
+    wchar_t *environment = NULL;
     STARTUPINFOW startup = {0};
     PROCESS_INFORMATION process = {0};
     DWORD exit_code;
@@ -162,30 +218,43 @@ int wmain(int argc, wchar_t *argv[]) {
         return 1;
     }
     *last_slash = L'\0';
-    if (!build_path(path_component, MAX_PATH_LEN, bundle_root, L"bin", NULL) || !set_env(L"MODULO_BUNDLED_BIN_DIR", path_component) || !build_pythonpath(bundle_root)) {
-        fwprintf(stderr, L"Failed to construct or set bundle environment\n");
+    if (!build_path(bundle_bin_dir, MAX_PATH_LEN, bundle_root, L"bin", NULL) ||
+        !build_path(runtime_bin, MAX_PATH_LEN, bundle_root, L"runtime", L"bin") ||
+        !build_path(pg_bin, MAX_PATH_LEN, bundle_root, L"pg", L"bin") ||
+        !build_path(redis_dir, MAX_PATH_LEN, bundle_root, L"redis", NULL) ||
+        wcslen(redis_dir) + 1 + wcslen(pg_bin) + 1 + wcslen(runtime_bin) + 1 > sizeof(path_value) / sizeof(path_value[0]) ||
+        !build_pythonpath(bundle_root, pythonpath, sizeof(pythonpath) / sizeof(pythonpath[0]))) {
+        fwprintf(stderr, L"Failed to construct bundle paths\n");
         return 1;
     }
-    if (!build_path(path_component, MAX_PATH_LEN, bundle_root, L"runtime", L"bin") || !prepend_path(path_component) || !build_path(path_component, MAX_PATH_LEN, bundle_root, L"pg", L"bin") || !prepend_path(path_component) || !build_path(path_component, MAX_PATH_LEN, bundle_root, L"redis", NULL) || !prepend_path(path_component)) {
-        fwprintf(stderr, L"Failed to construct or set PATH\n");
-        return 1;
-    }
+    wcscpy(path_value, redis_dir);
+    wcscat(path_value, L";");
+    wcscat(path_value, pg_bin);
+    wcscat(path_value, L";");
+    wcscat(path_value, runtime_bin);
     if (!build_path(python_exe, MAX_PATH_LEN, bundle_root, L"runtime", L"bin") || !path_append(python_exe, MAX_PATH_LEN, L"python3.exe") || GetFileAttributesW(python_exe) == INVALID_FILE_ATTRIBUTES) {
         fwprintf(stderr, L"Python executable not found at runtime\\bin\\python3.exe (runtime/python must contain the complete PBS tree)\n");
+        return 1;
+    }
+    if (!build_clean_environment(bundle_root, bundle_bin_dir, pythonpath, path_value, &environment)) {
+        fwprintf(stderr, L"Failed to construct the clean bundled runtime environment\n");
         return 1;
     }
     command_line = build_command_line(python_exe, argc, argv);
     if (command_line == NULL) {
         fwprintf(stderr, L"Failed to build Python command line\n");
+        free(environment);
         return 1;
     }
     startup.cb = sizeof(startup);
-    if (!CreateProcessW(python_exe, command_line, NULL, NULL, TRUE, 0, NULL, bundle_root, &startup, &process)) {
+    if (!CreateProcessW(python_exe, command_line, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT, environment, bundle_root, &startup, &process)) {
         fwprintf(stderr, L"Failed to launch Python (error %lu)\n", GetLastError());
         free(command_line);
+        free(environment);
         return 1;
     }
     free(command_line);
+    free(environment);
     WaitForSingleObject(process.hProcess, INFINITE);
     if (!GetExitCodeProcess(process.hProcess, &exit_code)) exit_code = 1;
     CloseHandle(process.hProcess);
