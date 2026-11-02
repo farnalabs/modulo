@@ -8,7 +8,7 @@
         v-if="showSidebar"
         class="absolute inset-y-0 left-0 z-30 w-80 max-w-full border-r bg-card shadow-lg flex flex-col lg:static lg:z-auto lg:shadow-none"
         :data-testid="`system-map-revision-sidebar`"
-        aria-label="Revision history"
+        :aria-label="$t('views.SystemMapDetailView.revision_history')"
       >
         <RevisionSidebar
           :map-id="mapId"
@@ -27,7 +27,7 @@
           v-if="actionError"
           :message="actionError"
           :on-dismiss="clearActionError"
-          dismiss-label="Dismiss"
+          :dismiss-label="$t('common.dismiss')"
           class="m-3"
         />
 

@@ -17,7 +17,7 @@
           v-if="actionError"
           :message="actionError"
           :on-dismiss="clearActionError"
-          dismiss-label="Dismiss"
+          :dismiss-label="$t('common.dismiss')"
           class="mb-3"
         />
 
@@ -43,7 +43,7 @@
                     <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.description') }}</th>
                     <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.status') }}</th>
                     <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.last_updated') }}</th>
-                    <th class="px-4 py-3 font-medium text-right">{{ $t('views.SystemMapsView.actions') }}</th>
+                    <th class="px-4 py-3 font-medium text-right">{{ $t('views.SystemMapsView.actions_header') }}</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y">

@@ -1,6 +1,6 @@
 <template>
   <div class="h-full overflow-auto bg-muted/20 p-6" :data-testid="dataTestId">
-    <div class="mb-4 flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3" aria-label="Graph controls">
+    <div class="mb-4 flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3" :aria-label="$t('views.SystemMapDetailView.graph_controls')">
       <span class="text-sm font-medium">{{ $t('views.SystemMapDetailView.node_types') }}</span>
       <button
         v-for="type in nodeTypes"
@@ -23,7 +23,7 @@
         <option v-for="node in localNodes" :key="node.node_key" :value="node.node_key">{{ node.display_name }}</option>
       </select>
       <label class="sr-only" :for="`${uid}-rel-type`">{{ $t('views.SystemMapDetailView.relationship_types') }}</label>
-      <select :id="`${uid}-rel-type`" v-model="relationshipType" class="rounded border px-2 py-1 text-xs" :disabled="readOnly" aria-label="Relationship type" data-testid="system-map-relationship-type">
+      <select :id="`${uid}-rel-type`" v-model="relationshipType" class="rounded border px-2 py-1 text-xs" :disabled="readOnly" :aria-label="$t('views.SystemMapDetailView.relationship_type_label')" data-testid="system-map-relationship-type">
         <option v-for="type in relationshipTypes" :key="type" :value="type">{{ type.replace('_', ' ') }}</option>
       </select>
       <label class="sr-only" :for="`${uid}-rel-target`">{{ $t('views.SystemMapDetailView.relationship_target') }}</label>
