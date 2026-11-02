@@ -11,8 +11,16 @@
       @open-command-palette="openCommandPalette"
     />
 
+    <!-- Single main landmark for the shell. `tabindex="-1"` + the landmark
+         marker make this the fallback focus target for `focusRouteContent`
+         (router/index.ts) on a route with no `[data-page-heading]` - the
+         landmark is programmatically focusable, never tab-reachable. Do not
+         drop the tabindex without moving that fallback: an unfocusable
+         landmark would leave route focus on the outgoing view. -->
     <main
-      class="flex-1 min-w-0 overflow-auto bg-background relative"
+      class="flex-1 min-w-0 overflow-auto overscroll-contain bg-background relative"
+      data-main-landmark
+      tabindex="-1"
       :class="mainPaddingClass"
     >
       <div class="relative z-10 space-y-2">
@@ -40,7 +48,7 @@
       </div>
       <Breadcrumb class="px-6 pt-4 pb-3" />
       <router-view v-slot="{ Component, route }">
-        <transition name="page" mode="out-in">
+        <transition name="page" mode="out-in" @after-enter="focusRouteContent">
           <component :is="Component" :key="route.fullPath" />
         </transition>
       </router-view>
@@ -54,6 +62,7 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, provide, watch } from "vue";
+import { focusRouteContent } from "../router";
 import { useRoute, useRouter } from "vue-router";
 import { api, clearAccessTokenForLogout } from "../lib/api/client";
 import { useCurrentUser } from "../composables/useCurrentUser";

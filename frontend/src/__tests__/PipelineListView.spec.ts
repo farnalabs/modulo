@@ -1223,7 +1223,7 @@ describe('PipelineListView', () => {
     }
   })
 
-  it('renders the folder-list failure alert inside <main>, never as a flex sibling of the sidebar', async () => {
+  it('renders the folder-list failure alert inside the single page landmark, never as a flex sibling of the sidebar', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       mockResponses['/api/v1/pipeline-folders'] = undefined
@@ -1237,8 +1237,9 @@ describe('PipelineListView', () => {
 
       const alert = wrapper.find('[data-testid="pipeline-list-folder-error"]')
       expect(alert.exists()).toBe(true)
-      // It lives INSIDE <main> ...
-      expect(wrapper.find('main').find('[data-testid="pipeline-list-folder-error"]').exists()).toBe(true)
+      // It lives inside the page's single content landmark ...
+      const contentColumn = wrapper.find('.page-wide.min-w-0')
+      expect(contentColumn.find('[data-testid="pipeline-list-folder-error"]').exists()).toBe(true)
       // ... and never as a direct flex child of the sidebar/table row. The old
       // mis-placed <p> was a sibling there, squeezing a vertical column between
       // the tree and the table instead of alerting above the content.
