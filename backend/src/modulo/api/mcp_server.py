@@ -7892,6 +7892,10 @@ async def create_model_backend(
                 default_params=default_params or {},
                 visibility=visibility,
                 fallback_backend_ids=None,
+                # FAR-2280: the setup route refuses unless the stored status is
+                # "pending_setup"; the column default ("active") made every
+                # setup URL return already_configured.
+                status="pending_setup",
             )
             handoff = await create_handoff(
                 s,
@@ -7907,7 +7911,7 @@ async def create_model_backend(
             "display_name": mb.display_name,
             "provider": mb.provider,
             "model_id": mb.model_id,
-            "status": "pending_setup",
+            "status": mb.status,
             "visibility": mb.visibility,
             **handoff,
         }
