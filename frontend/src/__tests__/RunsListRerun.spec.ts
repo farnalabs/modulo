@@ -156,7 +156,7 @@ describe('RunsListView rerun (FAR-788)', () => {
     await btn.trigger('click')
     await nextTick()
     expect(api.POST).not.toHaveBeenCalledWith('/api/v1/runs/{run_id}/rerun', expect.anything())
-    expect(wrapper.find('[data-testid="runs-list-rerun-run1"]').text()).toContain('Re-run?')
+    expect(wrapper.find('[data-testid="runs-list-rerun-run1"]').text()).toContain('Re-run this run?')
 
     await wrapper.find('[data-testid="runs-list-rerun-run1"]').trigger('click')
     await flushPromises()
