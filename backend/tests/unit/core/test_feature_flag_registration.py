@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 import pytest
 
 from modulo.core.feature_flags import FeatureFlag, FeatureFlagRegistry
@@ -231,3 +233,64 @@ class TestAllFlagsRegistered:
         for flag in registry.list_flags():
             if flag.depends_on:
                 assert flag.depends_on in names, f"Flag {flag.name} depends on unknown flag {flag.depends_on}"
+
+
+class TestOrgAdminSettableClassification:
+    """FAR-2302: only the curated low-sensitivity community flags are org-settable.
+
+    The classification is fail-closed — a flag that does not opt in stays
+    system-administrator-only — so this pins both the curated set and the
+    sensitive flags that must never be opened to org admins by default.
+    """
+
+    _EXPECTED: ClassVar[set[str]] = {
+        "user_scoped_mcp_keys",
+        "api_key_grants",
+        "webhook_notification_log",
+        "mobile_sidebar_rail",
+        "dashboard_charts",
+        "saved_views",
+        "library_collection",
+        "autonomy_gating",
+        "analytics_page",
+    }
+
+    #: Sensitive or instance-scoped flags that must stay system-admin-only.
+    _MUST_NOT_BE_SETTABLE: ClassVar[set[str]] = {
+        "sso_unrestricted_provisioning",
+        "web_vitals_analytics",
+        "observability",
+        "scim",
+        "error_forwarders",
+        "runtime_config",
+        "rate_limits",
+        "assistant",
+        "mcp_human_linked_hitl_authority",
+    }
+
+    def test_curated_set_is_exactly_the_org_settable_flags(self) -> None:
+        registry = FeatureFlagRegistry()
+        settable = {flag.name for flag in registry.list_flags() if flag.org_admin_settable}
+        assert settable == self._EXPECTED
+
+    def test_org_settable_flags_are_all_community_tier(self) -> None:
+        registry = FeatureFlagRegistry()
+        for flag in registry.list_flags():
+            if flag.org_admin_settable:
+                assert flag.tier == "community", f"{flag.name} is org-settable but not community-tier"
+
+    def test_no_team_tier_flag_is_org_settable(self) -> None:
+        registry = FeatureFlagRegistry()
+        team_flags = [flag for flag in registry.list_flags() if flag.tier == "team"]
+        assert team_flags, "expected the registry to expose team-tier flags"
+        assert all(not flag.org_admin_settable for flag in team_flags)
+
+    def test_sensitive_flags_remain_system_admin_only(self) -> None:
+        registry = FeatureFlagRegistry()
+        for name in self._MUST_NOT_BE_SETTABLE:
+            flag = registry.get_flag(name)
+            assert flag is not None, f"{name} must stay registered"
+            assert flag.org_admin_settable is False, f"{name} must not be org-admin-settable"
+
+    def test_unknown_flag_defaults_to_system_admin_only(self) -> None:
+        assert FeatureFlag(name="new_flag", description="unclassified", tier="community").org_admin_settable is False

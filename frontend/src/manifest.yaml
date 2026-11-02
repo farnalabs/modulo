@@ -2238,6 +2238,33 @@ elements:
       - testid: org-mcp-authority-saved
         type: element
         dynamic_testid: false
+      - testid: org-feature-flags-loading
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-load-error
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-list
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flag-row
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flag-status
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-empty
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-note
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-error
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-saved
+        type: element
+        dynamic_testid: false
     /admin/parameter-schemas:
       - testid: paramschema-new
         type: button
@@ -7228,6 +7255,7 @@ features:
         behaviours:
             - "[x] Organization settings are configurable with team management and member roles"
             - "[x] Feature flags can be toggled per organisation"
+            - "[x] Org admins manage the low-sensitivity community feature flags for their own organisation through GET/PUT/DELETE /api/v1/admin/org/feature-flags[/{flag_name}] (org.feature_flags.manage, admin, non-delegable) and the Organisation feature flags card on /admin/org; the set is fail-closed (FeatureFlag.org_admin_settable defaults False, team-tier flags and mcp_human_linked_hitl_authority are refused, and the DB catalog preserves the code-level classification), writes persist to the org feature_overrides map, invalidate the flag cache and emit the existing feature_flag_override_set / feature_flag_override_cleared audit events, and every other flag remains system-administrator-only (backend/src/modulo/api/routes/admin_org_feature_flags.py, backend/src/modulo/core/feature_flags.py, frontend/src/views/AdminOrgSettingsView.vue)"
             - "[x] Org-level feature-flag override governance is auditable end to end: every set/clear/toggle of an org feature_overrides entry (PUT /api/v1/admin/feature-flags/{flag}, PUT/DELETE /{flag}/org-override) appends a tamper-evident audit event to the org chain (feature_flag_override_set / feature_flag_override_cleared, resource_type org, payload {flag_name, enabled}) — fail-open, so a broken audit append never rolls back the already-committed override (backend/src/modulo/api/routes/admin_feature_flags.py, backend/tests/unit/api/test_admin_feature_flags.py)"
             - "[x] The org-settings UI ships at /admin/org: org delete requires a typed confirmation (org-delete-confirm-input), product-analytics (product-analytics-toggle) and community-objects (community-objects-toggle) toggles render, and the product-analytics error strip dismisses via shared ErrorAlert — surface documented in the manifest elements inventory; backend admin-org endpoints drive it (docs/product-map/admin/org.md)"
             - "[x] The /admin/org page is reachable on every plan tier (FAR-1269): the route is community-tier with an explicit [admin] role list (required_roles and required_tier are enforced as separate guards), the team-only sections (org info, data export, product analytics, community objects, delete org) stay behind the team_rbac FeatureGate disabled overlay, and only the HITL review window card renders outside the gate so a community admin can configure the org review window"
