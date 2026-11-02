@@ -15,7 +15,7 @@ name = "farnalabs-modulo"
 # scripts/bump-version.py into frontend/package.json and
 # deploy/helm/modulo/Chart.yaml (version + appVersion). Files carry X.Y.Z only;
 # -rcN prerelease suffixes live in git tags only. See docs/upgrade-process.md.
-version = "0.3.323"
+version = "0.3.324"
 description = "Agent governance for your agentic SDLC"
 license = "BUSL-1.1"
 license-files = ["LICENSE"]
@@ -676,7 +676,10 @@ dev = [
     "mypy>=2.1.0",
     "playwright>=1.60.0",
     "pre-commit>=4.6.0",
-    "pytest>=9.1.1",
+    # pytest 9.2 renamed FixtureManager._arg2fixturedefs, which the pinned
+    # pytest-bdd commit below still reads; hold pytest <9.2 until a
+    # pytest-bdd release supports the rename.
+    "pytest>=9.1.1,<9.2.0",
     "pytest-asyncio>=1.4.0",
     # Pinned to the pytest-9.1 fix for the _register_fixture(nodeid=...) deprecation
     # (pytest-dev/pytest-bdd#823): no PyPI release carries it yet (8.1.0 is latest).

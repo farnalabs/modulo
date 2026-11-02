@@ -87,12 +87,53 @@ cp -a "${ROOT_DIR}/frontend/dist/." "${BUNDLE_ROOT}/frontend-dist/"
 
 mkdir -p "${BUNDLE_ROOT}/backend"
 cp -a "${ROOT_DIR}/backend/src" "${BUNDLE_ROOT}/backend/src"
-cp "${ROOT_DIR}/backend/pyproject.toml" "${ROOT_DIR}/backend/uv.lock" "${BUNDLE_ROOT}/backend/"
+cp "${ROOT_DIR}/backend/alembic.ini" "${ROOT_DIR}/backend/pyproject.toml" "${ROOT_DIR}/backend/uv.lock" "${BUNDLE_ROOT}/backend/"
+test -f "${BUNDLE_ROOT}/backend/alembic.ini"
+test -d "${BUNDLE_ROOT}/backend/src/modulo/db/migrations"
+# Keep Alembic's config beside the bundled backend source. The app starts from
+# launchd's data directory, so the relative script_location in alembic.ini must
+# be resolved from this installed bundle rather than the build checkout.
 # Build the venv against the bundled interpreter with copies, rather than copying
 # the developer venv. This keeps the signed app relocatable: venv entry points
 # and interpreter links resolve inside the app instead of to build-time paths.
 "${BUNDLE_ROOT}/runtime/bin/python3.12" -m venv --copies "${BUNDLE_ROOT}/backend/.venv"
 uv sync --frozen --no-dev --no-install-project --project "${BUNDLE_ROOT}/backend" --python "${BUNDLE_ROOT}/backend/.venv/bin/python"
+# The native launcher starts the bundled interpreter directly. Its child
+# supervisor processes deliberately receive an allowlisted environment that
+# excludes PYTHONPATH, so make the application source importable without an
+# inherited environment variable. A relative .pth keeps the installed app
+# relocatable after it is copied out of the build workspace.
+RUNTIME_SITE_PACKAGES="${BUNDLE_ROOT}/runtime/lib/python3.12/site-packages"
+mkdir -p "${RUNTIME_SITE_PACKAGES}"
+printf '%s\n' '../../../../backend/src' > "${RUNTIME_SITE_PACKAGES}/modulo-bundle.pth"
+env -u PYTHONPATH -u PYTHONHOME "${BUNDLE_ROOT}/runtime/bin/python3" -c 'import modulo.launcher.supervisor'
+
+# Assert the installed bundle's actual launcher module emits PostgreSQL's
+# server argv contract as separate elements. A shell command string would be
+# the wrong contract here: the supervisor passes an argv list directly.
+PYTHONPATH="${BUNDLE_ROOT}/backend/src:${BUNDLE_ROOT}/backend/.venv/lib/python3.12/site-packages" \
+  "${BUNDLE_ROOT}/backend/.venv/bin/python" - "${BUNDLE_ROOT}" <<'PY'
+from pathlib import Path
+import sys
+
+from modulo.launcher.initdb import postgres_server_argv
+
+bundle = Path(sys.argv[1])
+pgdata = bundle / "runtime-contract-pgdata"
+argv = postgres_server_argv(pgdata, "127.0.0.1", 18000, bundle / "bin")
+assert argv == [
+    str(bundle / "bin" / "postgres"),
+    "-D",
+    str(pgdata),
+    "-h",
+    "127.0.0.1",
+    "-p",
+    "18000",
+], argv
+assert "--host" not in argv and "--port" not in argv, argv
+assert f"--pgdata={pgdata}" not in argv, argv
+print(f"bundled postgres argv contract: {argv}")
+PY
 
 assert_no_escaping_symlinks() {
   local root="$1" link target resolved canonical_root

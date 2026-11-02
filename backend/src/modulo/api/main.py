@@ -151,7 +151,7 @@ from modulo.core.logging_config import configure_logging
 from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 from modulo.core.seed_data.catalog import FLAGS, TIERS
 from modulo.db.capacity import StorageExhaustedError
-from modulo.db.health_checks import db_is_at_migration_head
+from modulo.db.health_checks import db_is_at_migration_head, resolve_migration_script_location
 from modulo.db.seed import rehash_existing_user, seed_modulo_user, seed_modulo_users
 from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
@@ -378,10 +378,7 @@ async def _run_migrations(settings: Settings) -> None:
                 if not acquired:
                     raise _MigrationLockTimeoutError("Timed out waiting for the migration advisory lock")
                 config = Config(str(alembic_ini))
-                config.set_main_option(
-                    "script_location",
-                    str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
-                )
+                config.set_main_option("script_location", str(resolve_migration_script_location(alembic_ini)))
                 # Keep the app's structured logging intact — env.py skips
                 # fileConfig when config_file_name is None.
                 config.config_file_name = None
@@ -441,10 +438,7 @@ async def _assert_single_alembic_head(settings: Settings) -> None:
     alembic_ini = _resolve_alembic_ini()
     try:
         config = Config(str(alembic_ini))
-        config.set_main_option(
-            "script_location",
-            str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
-        )
+        config.set_main_option("script_location", str(resolve_migration_script_location(alembic_ini)))
         config.config_file_name = None
         config.set_main_option("sqlalchemy.url", _to_sync_url(settings.database_url))
 

@@ -155,7 +155,7 @@ def test_macos_is_refused_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_windows_is_refused_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
-    with pytest.raises(ServiceError, match=r"TODO\(P3\)"):
+    with pytest.raises(ServiceError, match="Task Scheduler"):
         assert_linux()
 
 
@@ -409,6 +409,9 @@ def test_render_launchd_plist_includes_data_dir_when_provided(tmp_path: Path) ->
 
     plist = plistlib.loads(render_launchd_plist(tmp_path / "modulo", data_dir=tmp_path / "data").encode("utf-8"))
     assert plist["ProgramArguments"] == [str(tmp_path / "modulo"), "start", "--data-dir", str(tmp_path / "data")]
+    assert plist["WorkingDirectory"] == str(tmp_path / "data")
+    assert plist["StandardOutPath"] == str(tmp_path / "data" / "launcher.log")
+    assert plist["StandardErrorPath"] == str(tmp_path / "data" / "launcher.log")
 
 
 def test_darwin_install_load_failure(darwin_only: None, tmp_path: Path) -> None:
