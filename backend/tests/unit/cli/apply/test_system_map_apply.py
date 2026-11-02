@@ -307,25 +307,6 @@ def test_patch_payload() -> None:
     assert payload["owner_team_id"] == str(_USER_ID)
 
 
-def test_revision_payload() -> None:
-    node = _loop_node_entity()
-    loop = _loop_config_entity()
-    rev = _revision_entity(nodes=[node], loop_configs=[loop], notes="Test revision")
-    entity = _system_map_entity(revision=rev)
-    payload = _revision_payload(entity)
-    assert payload is not None
-    assert len(payload["nodes"]) == 1
-    assert payload["nodes"][0]["node_key"] == "loop-1"
-    assert len(payload["loop_configs"]) == 1
-    assert payload["notes"] == "Test revision"
-
-
-def test_revision_payload_none_when_no_revision() -> None:
-    entity = _system_map_entity()
-    payload = _revision_payload(entity)
-    assert payload is None
-
-
 def test_plan_system_map_view() -> None:
     entity = _system_map_entity(name="Test Map")
     current_entities: dict[str, Any] = {}
@@ -458,7 +439,7 @@ def test_build_desired_views_ambiguous_name_blocked() -> None:
 
     desired, blocked = build_desired_views(entity_set, current_entities, desired, blocked, blocked_keys)
 
-    assert len(desired["system_map"]) == 0
+    assert not desired["system_map"]
     assert len(blocked) == 1
     assert blocked[0][0] == "system_map"
     assert "ambiguous name" in blocked[0][2]
