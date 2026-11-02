@@ -47,7 +47,6 @@ def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch,
         "modulo.launcher.secrets_file",
         "modulo.launcher.initdb",
-        "modulo.launcher.entry",
     )
 
 
@@ -922,7 +921,13 @@ def test_detach_refused_on_windows(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
 def test_default_data_dir_is_posix_root(monkeypatch: pytest.MonkeyPatch) -> None:
     if sys.platform == "win32":
-        with pytest.raises(BootError):
+        # Windows now resolves through the platform seam (PROGRAMDATA) and only
+        # translates a missing PROGRAMDATA into BootError; the XDG contract
+        # below is POSIX-only.
+        monkeypatch.setenv("PROGRAMDATA", str(Path.home() / "programdata-test"))
+        assert default_data_dir() == Path.home() / "programdata-test" / "Modulo" / "data"
+        monkeypatch.delenv("PROGRAMDATA", raising=False)
+        with pytest.raises(BootError, match="PROGRAMDATA is required"):
             default_data_dir()
         return
     monkeypatch.setenv("XDG_DATA_HOME", str(Path.home() / "xdg-test"))
@@ -930,6 +935,26 @@ def test_default_data_dir_is_posix_root(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.delenv("XDG_DATA_HOME")
     expected = Path.home() / ".local" / "share" / "modulo" / "data"
     assert default_data_dir() == expected
+
+
+def test_default_data_dir_translates_a_platform_refusal_into_boot_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The platform seam owns the native policy; entry only reports it as BootError.
+
+    Driven through the platform module's own seam so the translation executes on
+    every host (the Windows PROGRAMDATA refusal is a Windows-only state).
+    """
+    from modulo.launcher import platform as platform_module
+
+    def _refuse() -> Path:
+        raise platform_module.LauncherPlatformError("PROGRAMDATA is required for the Windows native launcher")
+
+    monkeypatch.setattr(platform_module, "default_data_dir", _refuse)
+
+    with pytest.raises(BootError, match="PROGRAMDATA is required") as excinfo:
+        default_data_dir()
+    assert isinstance(excinfo.value.__cause__, platform_module.LauncherPlatformError)
 
 
 def test_resolve_bin_dir_param_env_and_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

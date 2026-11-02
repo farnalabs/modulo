@@ -1736,7 +1736,16 @@ def test_stop_with_no_holder_refuses_when_lock_is_held(monkeypatch: pytest.Monke
 def test_request_stop_refuses_on_windows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(supervisor_module.sys, "platform", "win32")
 
-    with pytest.raises(supervisor_module.LauncherError, match=r"not supported on Windows"):
+    # Pin the Windows service-control refusal specifically: the message names the
+    # missing implementation and refuses to signal an unverified launcher, so a
+    # generic LauncherError (or a POSIX path failure) must not satisfy this.
+    with pytest.raises(
+        supervisor_module.LauncherError,
+        match=(
+            r"requires a Windows service-control implementation"
+            r".*refusing to signal an unverified Windows launcher"
+        ),
+    ):
         supervisor_module.request_stop(tmp_path / "data")
 
 
@@ -1840,6 +1849,9 @@ def test_load_status_state_missing_state_file_is_honest_unknown(
 def test_request_stop_returns_signal_outcome(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     holder = supervisor_module.LockHolder(pid=4242, mode="foreground", acquired_at=0.0)
+    # This test exercises the signalling branch, not the platform gate (which
+    # test_request_stop_refuses_on_windows owns): allow the POSIX path on any host.
+    monkeypatch.setattr(supervisor_module, "supports_posix_file_locking", lambda: True)
     monkeypatch.setattr(supervisor_module, "_read_lock_holder", lambda _path: holder)
     monkeypatch.setattr(supervisor_module, "_signal_holder", lambda _holder, _path, _timeout: 0)
 
@@ -1849,6 +1861,8 @@ def test_request_stop_returns_signal_outcome(monkeypatch: pytest.MonkeyPatch, tm
 def test_request_stop_awaits_lock_release_after_signal(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     holder = supervisor_module.LockHolder(pid=4242, mode="foreground", acquired_at=0.0)
+    # As above: the await-release branch, not the Windows refusal path.
+    monkeypatch.setattr(supervisor_module, "supports_posix_file_locking", lambda: True)
     monkeypatch.setattr(supervisor_module, "_read_lock_holder", lambda _path: holder)
     monkeypatch.setattr(supervisor_module, "_signal_holder", lambda _holder, _path, _timeout: None)
     monkeypatch.setattr(supervisor_module, "_await_lock_release", lambda _path, _pid, _timeout: 0)
