@@ -122,11 +122,35 @@ def test_offline_archive_layout_fixture(tmp_path: Path, windows_pins: dict[str, 
         assert f"{windows_pins['PBS_ARCHIVE_ROOT']}/{windows_pins['PBS_PYTHON_EXE']}" in archive.getnames()
 
 
+def test_offline_staged_payload_contract(tmp_path: Path, launcher_source: str) -> None:
+    stage = tmp_path / "stage"
+    (stage / "runtime/python").mkdir(parents=True)
+    (stage / "runtime/bin").mkdir(parents=True)
+    (stage / "backend/src/modulo").mkdir(parents=True)
+    (stage / "runtime/python/python.exe").write_bytes(b"python")
+    (stage / "runtime/python/python312.dll").write_bytes(b"dll")
+    (stage / "runtime/bin/python3.exe").write_bytes(b"launcher")
+    (stage / "backend/src/modulo/__init__.py").write_text("", encoding="utf-8")
+    (stage / "frontend-dist").mkdir()
+    (stage / "frontend-dist/index.html").write_text("ok", encoding="utf-8")
+
+    assert (stage / "runtime/python/python.exe").is_file()
+    assert (stage / "runtime/python/python312.dll").is_file()
+    assert (stage / "runtime/bin/python3.exe").is_file()
+    assert (stage / "backend/src/modulo").is_dir()
+    assert (stage / "frontend-dist/index.html").is_file()
+    assert 'L"runtime"' in launcher_source
+    assert 'L"python"' in launcher_source
+    assert 'L"bin"' in launcher_source
+    assert 'L"python3.exe"' in launcher_source
+
+
 def test_launcher_contract(launcher_source: str) -> None:
     assert 'L"python3.exe"' in launcher_source
     assert "modulo.cli.main" in launcher_source
     assert "CreateProcessW(python_exe" in launcher_source
     assert "_wputenv_s" in launcher_source
+    assert 'L"python"' in launcher_source
     assert "return FALSE" in launcher_source
 
 
@@ -134,6 +158,11 @@ def test_workflow_contract(workflow_source: str) -> None:
     assert "d3f86a106a0bac45b974a628896c90dbdf5c8093" in workflow_source
     assert "520d128f165991a6c774bcb264f323e3d70747f4" in workflow_source
     assert "Invoke-Expression" not in workflow_source
+    assert "runtime/python" in workflow_source
+    assert "python312.dll" in workflow_source
+    assert "backend/src" in workflow_source
+    assert "runtime/python/Lib/site-packages" in workflow_source
+    assert "frontend-dist" in workflow_source
     assert "runtime/bin/python3.exe" in workflow_source
     assert "redis/valkey-server.exe" in workflow_source
     assert "pg/bin/postgres.exe" in workflow_source
