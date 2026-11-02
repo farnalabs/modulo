@@ -7585,7 +7585,7 @@ features:
             - "[x] Org-level license management: GET/PUT/DELETE on /api/v1/admin/orgs/{org_id}/license resolves/stores/clears the org's settings_json.license_key via parse_and_verify, falls back to the system license, and is role-gated (GET org.license.view / PUT+DELETE org.license.manage) — BDD: system_admin_orgs.feature"
     feat-system-maps:
         description: Bounded visual authoring of delivery system maps
-        status: covered
+        status: partial
         behaviours:
             - "[x] System Maps list page (/system-maps) with create, view, edit, delete, discover actions"
             - "[x] Map detail page (/system-maps/:id) with bounded visual graph editor for the backend node/relationship vocabularies, connected edges, endpoint selection, and drag/keyboard repositioning"
