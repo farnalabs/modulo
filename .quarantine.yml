@@ -32,6 +32,13 @@ quarantine:
     reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI 2026-11-01)"
     expiry: "2026-11-15"
     owner: "platform-team"
+  # PR #2686 unit run (2026-11-02): the same ambient leak was GC'd during this
+  # test. The trigger_engine package passes clean under the unraisable gate on
+  # its own, so this is another victim, not the leaker.
+  - test_id: "tests/unit/trigger_engine/test_trigger_engine.py::test_handle_webhook_event_value_filter_rejects"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI run 41496943972, 2026-11-02)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
 
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
