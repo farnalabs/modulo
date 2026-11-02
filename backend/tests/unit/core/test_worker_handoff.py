@@ -29,7 +29,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import literal, select
+from sqlalchemy import literal_column, select
 from sqlalchemy.dialects import postgresql
 
 import modulo.core.pipeline_execution as pipeline_execution
@@ -48,7 +48,7 @@ from modulo.core.worker_handoff import (
     handback_inflight_runs,
     track_inflight_run,
 )
-from modulo.db.crud import row_lock
+from modulo.db.crud import row_lock, run_node_outputs
 
 
 def test_registry_register_discard_snapshot() -> None:
@@ -287,8 +287,13 @@ def test_gate_requeues_zero_node_run_even_on_non_idempotent_graph() -> None:
 
 
 def _compiled_evidence_sql() -> tuple[str, list[object]]:
-    """Compile the SQL evidence predicate with a flat telemetry column."""
-    statement = select(wh._engine_evidence_expr(literal("telemetry", wh.JSONB)))
+    """Compile the FAR-2285 evidence clause (it lives in the blob chokepoint)."""
+    statement = select(
+        run_node_outputs.observed_activity_expr(
+            run_id_column=literal_column("run_id"),
+            organisation_id_column=literal_column("organisation_id"),
+        )
+    )
     compiled = statement.compile(dialect=postgresql.dialect())
     return str(compiled), list(compiled.params.values())
 
@@ -791,6 +796,20 @@ async def test_load_handback_row_builds_row_and_graph() -> None:
     assert row.outputs_absent is False
     assert row.checkpoints_absent is True
     assert graph == {"nodes": []}
+
+
+async def test_load_handback_row_reads_evidence_through_the_blob_chokepoint() -> None:
+    """The durable-evidence read is the repo module's clause, never a local one."""
+    conn = MagicMock()
+    conn.execute = AsyncMock(return_value=_row_load_result(None))
+
+    await wh._load_handback_row(conn, run_id=uuid.uuid4(), org_id=uuid.uuid4())
+
+    statement = conn.execute.await_args.args[0]
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+    assert "run_node_outputs" in compiled
+    assert "jsonb_each" in compiled
+    assert "observed_activity" in compiled
 
 
 # ---------------------------------------------------------------------------

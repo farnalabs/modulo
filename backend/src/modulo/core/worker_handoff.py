@@ -91,8 +91,7 @@ from dataclasses import dataclass, replace
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import Integer, and_, case, cast, exists, func, literal, or_, select, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
@@ -127,70 +126,6 @@ WORKER_LOST_NOT_REQUEUED_DETAIL = (
 # RLS set_config helper — same contract as the periodic sweeps (the per-org
 # statement runs inside set_config('app.organisation_id', ...)).
 _SQL_SET_ORG_ID = "SELECT set_config('app.organisation_id', :val, true)"
-
-
-def _engine_evidence_expr(column: Any) -> Any:
-    """Return a PostgreSQL expression for substantial engine-owned activity.
-
-    ``node_telemetry_json`` contains both useful engine observations and routine
-    lifecycle facts.  Status, summary, exit code, wall-clock time, and provider
-    metadata are present even when a sandbox produced no useful activity, so a
-    non-null telemetry envelope is deliberately *not* evidence.  The qualifying
-    fields below are bounded signals that the runtime actually did work: output
-    stream bytes, retained tails/artifacts, or other durable engine artefacts.
-    Agent-return values remain in ``outputs_json`` and are excluded by this
-    expression, preserving their self-reported provenance.
-    """
-
-    def _positive_length(value: Any, field: str) -> Any:
-        field_value = value.op("->>")(literal(field))
-        numeric_value = case(
-            (field_value.op("~")(literal("^[0-9]+$")), cast(field_value, Integer)),
-            else_=literal(0),
-        )
-        return numeric_value > 0
-
-    def _nonempty_text(value: Any, field: str) -> Any:
-        field_value = value.op("->>")(literal(field))
-        return and_(field_value.is_not(None), func.length(field_value) > 0)
-
-    def _nonempty_text_field(value: Any, field: str) -> Any:
-        pointer = value.op("->")(literal(field))
-        return and_(func.jsonb_typeof(pointer) == literal("string"), _nonempty_text(value, field))
-
-    def _nonempty_object(value: Any, field: str) -> Any:
-        pointer = value.op("->")(literal(field))
-        pointer_entries = func.jsonb_each(pointer).table_valued("key", "value")
-        return and_(
-            func.jsonb_typeof(pointer) == literal("object"),
-            exists(select(1).select_from(pointer_entries)),
-        )
-
-    def _has_evidence(value: Any) -> Any:
-        return and_(
-            func.jsonb_typeof(value) == literal("object"),
-            or_(
-                _positive_length(value, "stdout_length"),
-                _positive_length(value, "stderr_length"),
-                _nonempty_text(value, "agent_stdout"),
-                _nonempty_text(value, "agent_stderr"),
-                _nonempty_text(value, "sandbox_log_tail"),
-                _nonempty_text_field(value, "stdout_artifact"),
-                _nonempty_text_field(value, "stderr_artifact"),
-                _nonempty_object(value, "stdout_artifact"),
-                _nonempty_object(value, "stderr_artifact"),
-            ),
-        )
-
-    # P1+ rows store one node's return and telemetry directly in the JSONB
-    # columns. Keep the nested scan as a legacy-compatible read path for rows
-    # written before the split, while evaluating the production flat shape too.
-    flat_value = cast(column, JSONB)
-    node_entries = func.jsonb_each(flat_value).table_valued("node_id", "node_value").render_derived(name="node_entries")
-    return or_(
-        _has_evidence(flat_value),
-        exists(select(1).select_from(node_entries).where(_has_evidence(node_entries.c.node_value))),
-    )
 
 
 # The handback RE-QUEUE arm. Fenced exactly like every other claim-fenced
@@ -388,47 +323,22 @@ async def _load_handback_row(
     ``_should_redispatch_nodeless``), with ``outputs_absent`` /
     ``checkpoints_absent`` built from the ONE shared NOT-EXISTS expressions
     those predicates use — parity by construction, so the zero-node premise
-    rechecked here cannot drift from the reconcile's. Returns ``(row,
-    graph_json)``; ``None`` when the run (or its snapshot) is not visible —
-    fail closed: an entry with no evidence is skipped, never re-queued.
+    rechecked here cannot drift from the reconcile's. The durable-evidence
+    classification comes from the blob chokepoint
+    (``run_node_outputs.observed_activity_expr``), which owns every read of
+    those columns. Returns ``(row, graph_json)``; ``None`` when the run (or
+    its snapshot) is not visible — fail closed: an entry with no evidence is
+    skipped, never re-queued.
     """
     from modulo.core.cron_helpers import _checkpoint_absent_expr, _final_row_absent_expr
+    from modulo.db.crud.run_node_outputs import observed_activity_expr
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.pipeline_snapshot import PipelineSnapshot
     from modulo.db.models.run import Run
-    from modulo.db.models.run_node_outputs import RunNodeOutput
 
-    def _nonempty_json_expr(column: Any) -> Any:
-        """Match a retained JSON blob that contains at least one value."""
-        json_value = cast(column, JSONB)
-        json_type = func.jsonb_typeof(json_value)
-        object_entries = func.jsonb_each(json_value).table_valued("key", "value")
-        array_entries = func.jsonb_array_elements(json_value).table_valued("value")
-        return and_(
-            column.is_not(None),
-            or_(
-                and_(json_type == literal("object"), exists(select(1).select_from(object_entries))),
-                and_(json_type == literal("array"), exists(select(1).select_from(array_entries))),
-                and_(json_type.not_in(("object", "array")), json_type.is_not(None)),
-            ),
-        )
-
-    observed_activity = exists(
-        select(1).where(
-            RunNodeOutput.run_id == Run.id,
-            RunNodeOutput.organisation_id == org_id,
-            or_(
-                _engine_evidence_expr(RunNodeOutput.node_telemetry_json),
-                and_(
-                    RunNodeOutput.node_telemetry_json.is_(None),
-                    _engine_evidence_expr(RunNodeOutput.outputs_json),
-                ),
-                _nonempty_json_expr(RunNodeOutput.raw_output_markers),
-                _nonempty_json_expr(RunNodeOutput.artifacts_json),
-                _nonempty_json_expr(RunNodeOutput.schema_enforcement_json),
-            ),
-        )
-    ).label("observed_activity")
+    observed_activity = observed_activity_expr(run_id_column=Run.id, organisation_id_column=org_id).label(
+        "observed_activity"
+    )
 
     stmt = (
         select(
