@@ -872,6 +872,25 @@ describe('PipelineEditorView — toolbar popover anchoring (FAR-1899 changed-lin
     wrapper.unmount()
   })
 
+  it('moves focus to the first menu item when the save-as-template menu opens', async () => {
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    setViewport(800)
+    stubToggleRect(wrapper, 'pipeline-editor-save-as-template', { top: 60, right: 140, bottom: 100, left: 40 })
+
+    await wrapper.get('[data-testid="pipeline-editor-save-as-template"]').trigger('click')
+    await nextTick()
+
+    // The menu is a plain in-tree popover, not a focus-trapping dialog, so the
+    // keyboard user must land on its first item rather than being left behind
+    // on the toggle while the menu is open.
+    expect(document.activeElement).toBe(
+      wrapper.get('[data-testid="pipeline-editor-save-as-composite"]').element,
+    )
+
+    wrapper.unmount()
+  })
+
   it('closes the save-as-template menu on Escape and returns focus to the toggle', async () => {
     const wrapper = mountEditor(document.body)
     await flushPromises()
