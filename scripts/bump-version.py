@@ -62,7 +62,7 @@ def _extract_version(content: str, path: Path) -> str | None:
 
 
 def read_version(path: Path) -> str | None:
-    """Extract version from pyproject.toml, package.json or Chart.yaml."""
+    """Extract version from pyproject.toml, uv.lock, package.json or Chart.yaml."""
     return _extract_version(path.read_text(encoding="utf-8"), path)
 
 

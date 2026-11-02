@@ -154,8 +154,15 @@ def test_write_version_chart_partial_drift_raises(root_tmp):
 
 
 def test_read_version_uv_lock(root_tmp):
+    """Only the editable project entry carries the project version.
+
+    An unrelated dependency's quoted ``version =`` line sits BEFORE the
+    ``farnalabs-modulo`` block, so a naive first-match reader
+    (``^version = "..."``) returns that dependency's version. The reader must
+    be anchored on the project block.
+    """
     path = root_tmp / "uv.lock"
-    path.write_text(_UV_LOCK_FIXTURE, encoding="utf-8")
+    path.write_text(_UV_LOCK_FIXTURE_WITH_LEADING_DEPENDENCY, encoding="utf-8")
     assert bv.read_version(path) == "1.2.3"
 
 
@@ -245,6 +252,23 @@ dependencies = [
 name = "httpx"
 version = "0.28.1"
 source = { registry = "https://pypi.org/simple" }
+"""
+
+
+#: Same shape as ``_UV_LOCK_FIXTURE``, but an unrelated package's quoted
+#: ``version =`` line comes FIRST. A naive first-match reader returns 4.9.0.
+_UV_LOCK_FIXTURE_WITH_LEADING_DEPENDENCY = """version = 1
+revision = 5
+
+[[package]]
+name = "anyio"
+version = "4.9.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "farnalabs-modulo"
+version = "1.2.3"
+source = { editable = "." }
 """
 
 

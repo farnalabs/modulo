@@ -42,6 +42,11 @@ invariants of the PR-reviewer / Branch-Fixer / merge-queue triangle:
   in a job with no checkout, a no-op ``||`` fallback attached to it, or a
   notification step whose failure cannot fail the job, is a hard failure
   (FAR-2001).
+- **Every product job reaches every notifier** — each notifier's ``needs:`` list
+  must name every product job (every job except the notifiers themselves), so a
+  failing job is never invisible to the Branch Fixer / self-report guard
+  (FAR-2308). The few genuine per-notifier exceptions are an explicit,
+  verified allowlist.
 
 Every lens reports actionable diagnostics instead of a bare failure, mirroring
 the sibling architecture tests.
@@ -1970,4 +1975,81 @@ def test_interpolated_run_scripts_stay_under_the_expression_length_cap() -> None
     assert not violations, (
         "workflow run: scripts exceed GitHub's 21,000-char expression cap, so "
         "the workflow will fail to load and no CI job will run:\n" + "\n".join(violations)
+    )
+
+
+# --- FAR-2308: every product job is in every notifier's `needs` --------------
+
+
+#: Jobs that NOTIFY about a run's outcome rather than produce a product check.
+#: They are deliberately excluded from each other's ``needs``: a notifier cannot
+#: list itself, and ``notify-main-failure`` never runs on a PR.
+NOTIFIER_JOBS = frozenset({"notify-pr-failure", "notify-main-failure", "self-report-ci"})
+
+#: The ``if:`` fragment that makes a job PR-only.
+PR_ONLY_CONDITION = "github.event_name == 'pull_request'"
+
+#: Genuine per-notifier exceptions, with the reason the job can never fail on
+#: that notifier's own events. EVERYTHING ELSE must appear in the list. An
+#: exemption is only honoured while the exempted job's own ``if:`` still carries
+#: ``PR_ONLY_CONDITION``; if that gate is dropped the exemption rots and the job
+#: must be listed, so this allowlist cannot silently suppress a live job.
+NOTIFIER_NEEDS_EXEMPTIONS: dict[str, dict[str, str]] = {
+    "notify-pr-failure": {},
+    "notify-main-failure": {
+        "sonar-new-issues-gate": (
+            "PR-only (`if: github.event_name == 'pull_request'`) - it never runs, so it "
+            "cannot fail, on the push/workflow_dispatch events this notifier handles"
+        ),
+    },
+    "self-report-ci": {},
+}
+
+
+def test_every_product_job_is_in_every_notifier_needs_list() -> None:
+    """Each notifier's ``needs:`` must name every product job (FAR-2308).
+
+    A notifier's guard reads ``needs.*.result``, so a job omitted from ``needs``
+    is invisible: its failure never reaches the Branch Fixer (``notify-*``) and
+    never suppresses the "ci" self-report. The set is DERIVED from ``jobs:``
+    rather than hand-maintained, so adding a job (e.g. ``uv-lock-check``) fails
+    here until all three lists are updated.
+    """
+    workflow = _load_yaml(CI_YML)
+    jobs = workflow.get("jobs") or {}
+    job_ids = set(jobs)
+    assert job_ids, "ci.yml declares no jobs"
+    assert job_ids >= NOTIFIER_JOBS, "ci.yml no longer declares the expected notifier jobs: " + ", ".join(
+        sorted(NOTIFIER_JOBS - job_ids)
+    )
+    product_jobs = job_ids - NOTIFIER_JOBS
+    assert product_jobs, "ci.yml declares no product jobs"
+    violations: list[str] = []
+    for notifier, exemptions in NOTIFIER_NEEDS_EXEMPTIONS.items():
+        needs = jobs[notifier].get("needs") or []
+        if not isinstance(needs, list):
+            violations.append(f"  {notifier}: needs: is not a list")
+            continue
+        needs_set = set(needs)
+        missing = sorted((product_jobs - set(exemptions)) - needs_set)
+        if missing:
+            violations.append(f"  {notifier}: needs: omits product job(s): {', '.join(missing)}")
+        unknown = sorted(needs_set - job_ids)
+        if unknown:
+            violations.append(f"  {notifier}: needs: names job(s) that do not exist: {', '.join(unknown)}")
+        nested_notifiers = sorted(needs_set & NOTIFIER_JOBS)
+        if nested_notifiers:
+            violations.append(
+                f"  {notifier}: needs: lists notifier job(s) {', '.join(nested_notifiers)} — "
+                "a notifier's outcome must never gate another notifier"
+            )
+        for exempted, reason in exemptions.items():
+            condition = str((jobs.get(exempted) or {}).get("if") or "")
+            if PR_ONLY_CONDITION not in condition:
+                violations.append(
+                    f"  {notifier}: exemption {exempted!r} is no longer PR-only "
+                    f"(`if:` = {condition!r}) — it must be listed in needs: ({reason})"
+                )
+    assert not violations, "ci.yml notifier `needs:` lists do not cover every product job (FAR-2308):\n" + "\n".join(
+        violations
     )
