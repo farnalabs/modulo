@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
+import { focusRouteContent } from '../../router'
 
 vi.mock('../../lib/api/client', () => ({
   api: { GET: vi.fn().mockResolvedValue({ data: null, error: undefined }) },
@@ -56,10 +57,73 @@ import { api, getAccessToken } from '../../lib/api/client'
 
 const router = createRouter({
   history: createWebHistory(),
-  routes: [{ path: '/', name: 'dashboard', component: { template: '<div>Dashboard</div>' } }],
+  routes: [
+    { path: '/', name: 'dashboard', component: { template: '<h1 tabindex="-1" data-page-heading>Dashboard</h1>' } },
+    { path: '/next', name: 'next', component: { template: '<h1 tabindex="-1" data-page-heading>Next route</h1>' } },
+  ],
 })
 
 describe('AppLayout', () => {
+  it('focuses the newly entered route heading after out-in navigation', () => {
+    const shellMain = document.createElement('main')
+    shellMain.dataset.mainLandmark = ''
+    const outgoingHeading = document.createElement('h1')
+    outgoingHeading.tabIndex = -1
+    outgoingHeading.dataset.pageHeading = ''
+    outgoingHeading.textContent = 'Outgoing route'
+    const enteredHeading = document.createElement('h1')
+    enteredHeading.tabIndex = -1
+    enteredHeading.dataset.pageHeading = ''
+    enteredHeading.textContent = 'Entered route'
+    document.body.append(shellMain, outgoingHeading, enteredHeading)
+    outgoingHeading.focus()
+
+    outgoingHeading.remove()
+    enteredHeading.remove()
+    document.body.append(enteredHeading)
+    focusRouteContent()
+
+    expect(document.activeElement).toBe(enteredHeading)
+    expect(document.activeElement).not.toBe(shellMain)
+    expect(document.activeElement).not.toBe(outgoingHeading)
+    shellMain.remove()
+    outgoingHeading.remove()
+    enteredHeading.remove()
+  })
+
+  it('falls back to the shell main landmark on a route with no page heading', () => {
+    // A bare route (e.g. /assistant) renders no [data-page-heading]. Without
+    // the fallback, focus would stay on the outgoing view's detached element,
+    // so the shell <main> carries tabindex="-1" for exactly this case.
+    const shellMain = document.createElement('main')
+    shellMain.dataset.mainLandmark = ''
+    shellMain.tabIndex = -1
+    document.body.append(shellMain)
+
+    focusRouteContent()
+
+    expect(document.activeElement).toBe(shellMain)
+    shellMain.remove()
+  })
+
+  it('gives the shell main the programmatic-focus fallback the router focuses', async () => {
+    // `focusRouteContent` falls back to `[data-main-landmark]` on a route with
+    // no page heading (e.g. a bare /assistant). The landmark must be
+    // programmatically focusable but never tab-reachable.
+    const wrapper = mount(AppLayout, {
+      global: {
+        plugins: [createPinia(), router],
+        stubs: { LogoMark: true },
+      },
+    })
+    await nextTick()
+    await nextTick()
+    const main = wrapper.find('main')
+    expect(main.attributes('data-main-landmark')).toBeDefined()
+    expect(main.attributes('tabindex')).toBe('-1')
+    wrapper.unmount()
+  })
+
   it('renders plan badge by default', async () => {
     const wrapper = mount(AppLayout, {
       global: {
