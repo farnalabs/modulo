@@ -5,6 +5,9 @@ Do NOT put connector-specific fixtures here; they belong in
 """
 
 import os
+import warnings
+
+import pytest
 
 # Settings-critical env default (FAR-1751). pytest imports this conftest FIRST
 # for every command-line anchor (ancestor chains load outermost-first), so a
@@ -50,11 +53,9 @@ os.environ.setdefault("FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 # rollback block, so their import is deleted again. Guarded by
 # ``tests/unit/library_sync/test_coverage_source_import_guard.py``.
 import sys
-import warnings
 from pathlib import Path
 
 import pydantic.root_model  # noqa: F401
-import pytest
 
 import modulo.core.ssrf as _ssrf
 
