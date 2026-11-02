@@ -1,0 +1,358 @@
+# windows-artifacts.yml — Download, verify, and publish Windows native artifacts.
+#
+# Part of the single-install native distribution (ADR 031, FAR-670).
+# This workflow downloads the pinned Windows artifacts (Valkey, CPython, PostgreSQL),
+# verifies their SHA256 checksums, builds the native launcher from source,
+# and uploads all verified artifacts as a build artifact for the Windows installer workflow.
+#
+# Triggered on:
+#   - push to main (when bundle-versions-windows.env or launcher source changes)
+#   - workflow_dispatch (manual trigger for version bumps)
+#   - schedule (weekly to catch upstream security updates)
+#
+# The uploaded artifact contains:
+#   valkey/valkey-server.exe, valkey/valkey-cli.exe
+#   python/runtime/... (full python-build-standalone install_only tree)
+#   pgsql/bin/... (PostgreSQL binaries)
+#   bin/modulo.exe (native launcher)
+
+name: Windows Artifacts
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write  # For artifact attestation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/bundle-versions-windows.env'
+      - 'scripts/windows/modulo-launcher.c'
+      - 'scripts/windows/build-launcher.ps1'
+      - '.github/workflows/windows-artifacts.yml'
+  workflow_dispatch:
+    inputs:
+      force_refresh:
+        description: 'Force re-download even if artifacts exist in cache'
+        type: boolean
+        default: false
+  schedule:
+    # Weekly on Monday 06:00 UTC to catch upstream security releases
+    - cron: '0 6 * * 1'
+
+concurrency:
+  group: windows-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Artifact versions are sourced from scripts/bundle-versions-windows.env
+  # but we also define them here for workflow-level reference
+  VALKEY_VERSION: 9.1.3
+  PBS_RELEASE: 20260901
+  PBS_CPYTHON_VERSION: 3.12.14
+  PG_VERSION: 16.15
+
+jobs:
+  download-and-verify:
+    name: Download & Verify Artifacts
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      valkey_sha256: ${{ steps.verify-valkey.outputs.sha256 }}
+      python_sha256: ${{ steps.verify-python.outputs.sha256 }}
+      pg_sha256: ${{ steps.verify-postgres.outputs.sha256 }}
+      launcher_sha256: ${{ steps.build-launcher.outputs.sha256 }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Load version pins from bundle-versions-windows.env
+        id: load-pins
+        shell: pwsh
+        run: |
+          $envFile = 'scripts/bundle-versions-windows.env'
+          if (-not (Test-Path -LiteralPath $envFile)) {
+              throw "Version pins file not found: $envFile"
+          }
+          $content = Get-Content -LiteralPath $envFile -Raw
+          # Parse VAR=value lines, ignoring comments and empty lines
+          $lines = $content -split '\r?\n'
+          foreach ($line in $lines) {
+              $line = $line.Trim()
+              if (-not $line -or $line.StartsWith('#')) { continue }
+              if ($line -match '^([A-Z0-9_]+)=(.+)$') {
+                  $name = $matches[1]
+                  $value = $matches[2]
+                  echo "$name=$value" >> $env:GITHUB_OUTPUT
+              }
+          }
+
+      - name: Download Valkey Windows binary
+        id: download-valkey
+        shell: pwsh
+        run: |
+          $url = "${{ steps.load-pins.outputs.VALKEY_ZIP_URL }}"
+          $expectedSha256 = "${{ steps.load-pins.outputs.VALKEY_ZIP_SHA256 }}"
+          $outFile = "valkey-${{ steps.load-pins.outputs.VALKEY_VERSION }}-win64.zip"
+          Write-Host "Downloading Valkey from $url"
+          Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing
+          $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $outFile).Hash.ToLower()
+          Write-Host "Expected SHA256: $expectedSha256"
+          Write-Host "Actual   SHA256: $actualSha256"
+          if ($actualSha256 -ne $expectedSha256) {
+              throw "SHA256 mismatch for Valkey download"
+          }
+          echo "file=$outFile" >> $env:GITHUB_OUTPUT
+          echo "sha256=$actualSha256" >> $env:GITHUB_OUTPUT
+
+      - name: Extract Valkey binaries
+        id: extract-valkey
+        shell: pwsh
+        run: |
+          $zipFile = "${{ steps.download-valkey.outputs.file }}"
+          $extractDir = "valkey-extracted"
+          if (Test-Path -LiteralPath $extractDir) { Remove-Item -Recurse -Force -LiteralPath $extractDir }
+          Expand-Archive -LiteralPath $zipFile -DestinationPath $extractDir -Force
+          # Verify expected binaries exist
+          $serverExe = Join-Path $extractDir "${{ steps.load-pins.outputs.VALKEY_SERVER_EXE }}"
+          $cliExe = Join-Path $extractDir "${{ steps.load-pins.outputs.VALKEY_CLI_EXE }}"
+          if (-not (Test-Path -LiteralPath $serverExe)) { throw "valkey-server.exe not found in archive" }
+          if (-not (Test-Path -LiteralPath $cliExe)) { throw "valkey-cli.exe not found in archive" }
+          # Quick version check
+          & $serverExe --version
+          & $cliExe --version
+          echo "server=$serverExe" >> $env:GITHUB_OUTPUT
+          echo "cli=$cliExe" >> $env:GITHUB_OUTPUT
+
+      - name: Download python-build-standalone Windows
+        id: download-python
+        shell: pwsh
+        run: |
+          $url = "${{ steps.load-pins.outputs.PBS_WIN_X64_URL }}"
+          $expectedSha256 = "${{ steps.load-pins.outputs.PBS_WIN_X64_SHA256 }}"
+          $outFile = "${{ steps.load-pins.outputs.PBS_WIN_X64_TARBALL }}"
+          Write-Host "Downloading python-build-standalone from $url"
+          Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing
+          $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $outFile).Hash.ToLower()
+          Write-Host "Expected SHA256: $expectedSha256"
+          Write-Host "Actual   SHA256: $actualSha256"
+          if ($actualSha256 -ne $expectedSha256) {
+              throw "SHA256 mismatch for python-build-standalone download"
+          }
+          echo "file=$outFile" >> $env:GITHUB_OUTPUT
+          echo "sha256=$actualSha256" >> $env:GITHUB_OUTPUT
+
+      - name: Extract python-build-standalone
+        id: extract-python
+        shell: pwsh
+        run: |
+          $tarFile = "${{ steps.download-python.outputs.file }}"
+          $extractDir = "python-extracted"
+          if (Test-Path -LiteralPath $extractDir) { Remove-Item -Recurse -Force -LiteralPath $extractDir }
+          # tar.gz on Windows - use tar.exe (available on windows-latest)
+          tar -xzf $tarFile -C $extractDir
+          # The tarball extracts to a directory like "python-3.12.14+20260901-x86_64-pc-windows-msvc"
+          $pythonDirs = Get-ChildItem -LiteralPath $extractDir -Directory
+          if ($pythonDirs.Count -ne 1) { throw "Unexpected extraction structure" }
+          $pythonRoot = $pythonDirs[0].FullName
+          # Verify python.exe exists
+          $pythonExe = Join-Path $pythonRoot 'python.exe'
+          if (-not (Test-Path -LiteralPath $pythonExe)) { throw "python.exe not found in extracted tree" }
+          & $pythonExe --version
+          echo "root=$pythonRoot" >> $env:GITHUB_OUTPUT
+
+      - name: Download PostgreSQL Windows binaries
+        id: download-postgres
+        shell: pwsh
+        run: |
+          $url = "${{ steps.load-pins.outputs.PG_WIN_X64_ZIP_URL }}"
+          $expectedSha256 = "${{ steps.load-pins.outputs.PG_WIN_X64_ZIP_SHA256 }}"
+          $outFile = "postgresql-${{ steps.load-pins.outputs.PG_VERSION }}-windows-x64-binaries.zip"
+          Write-Host "Downloading PostgreSQL from $url"
+          Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing
+          $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $outFile).Hash.ToLower()
+          Write-Host "Expected SHA256: $expectedSha256"
+          Write-Host "Actual   SHA256: $actualSha256"
+          if ($actualSha256 -ne $expectedSha256) {
+              throw "SHA256 mismatch for PostgreSQL download"
+          }
+          echo "file=$outFile" >> $env:GITHUB_OUTPUT
+          echo "sha256=$actualSha256" >> $env:GITHUB_OUTPUT
+
+      - name: Extract PostgreSQL binaries
+        id: extract-postgres
+        shell: pwsh
+        run: |
+          $zipFile = "${{ steps.download-postgres.outputs.file }}"
+          $extractDir = "postgres-extracted"
+          if (Test-Path -LiteralPath $extractDir) { Remove-Item -Recurse -Force -LiteralPath $extractDir }
+          Expand-Archive -LiteralPath $zipFile -DestinationPath $extractDir -Force
+          # The zip extracts to a "pgsql" directory
+          $pgsqlDir = Join-Path $extractDir 'pgsql'
+          if (-not (Test-Path -LiteralPath $pgsqlDir)) { throw "pgsql directory not found in archive" }
+          $binDir = Join-Path $pgsqlDir 'bin'
+          if (-not (Test-Path -LiteralPath $binDir)) { throw "pgsql/bin directory not found" }
+          # Verify key binaries
+          $required = @('postgres.exe', 'pg_ctl.exe', 'pg_dump.exe', 'pg_isready.exe', 'psql.exe')
+          foreach ($exe in $required) {
+              $path = Join-Path $binDir $exe
+              if (-not (Test-Path -LiteralPath $path)) { throw "$exe not found in pgsql/bin" }
+          }
+          & (Join-Path $binDir 'postgres.exe') --version
+          echo "pgsql=$pgsqlDir" >> $env:GITHUB_OUTPUT
+          echo "bindir=$binDir" >> $env:GITHUB_OUTPUT
+
+      - name: Build native launcher
+        id: build-launcher
+        shell: pwsh
+        run: |
+          # Ensure we're in a Developer Command Prompt environment
+          # windows-latest has VS installed; invoke vcvarsall
+          $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vsWhere)) {
+              throw "vswhere not found - Visual Studio not installed?"
+          }
+          $vcvarsPath = & $vsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vcvarsPath) {
+              throw "Could not locate Visual Studio with C++ tools"
+          }
+          $vcvarsPath = Join-Path $vcvarsPath 'VC\Auxiliary\Build\vcvarsall.bat'
+          if (-not (Test-Path -LiteralPath $vcvarsPath)) {
+              throw "vcvarsall.bat not found at $vcvarsPath"
+          }
+
+          # Build the launcher
+          $scriptDir = 'scripts/windows'
+          $buildScript = Join-Path $scriptDir 'build-launcher.ps1'
+          $launcherExe = 'modulo.exe'
+
+          # Run build in a cmd shell with vcvarsall
+          $cmd = "& cmd /c `"`"$vcvarsPath`" x64 && pwsh -NoProfile -ExecutionPolicy Bypass -File `"$buildScript`" -OutputPath `"$launcherExe`"`""
+          Invoke-Expression $cmd
+
+          if (-not (Test-Path -LiteralPath $launcherExe)) {
+              throw "Launcher executable not created: $launcherExe"
+          }
+
+          # Verify launcher runs (should show usage/help)
+          $verifyOut = & $launcherExe --help 2>&1
+          $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $launcherExe).Hash.ToLower()
+          Write-Host "Launcher SHA256: $actualSha256"
+          echo "exe=$launcherExe" >> $env:GITHUB_OUTPUT
+          echo "sha256=$actualSha256" >> $env:GITHUB_OUTPUT
+
+      - name: Verify Valkey binaries
+        id: verify-valkey
+        shell: pwsh
+        run: |
+          $serverExe = "${{ steps.extract-valkey.outputs.server }}"
+          $cliExe = "${{ steps.extract-valkey.outputs.cli }}"
+          # Quick functional test
+          & $serverExe --version
+          & $cliExe --version
+          $sha256 = "${{ steps.download-valkey.outputs.sha256 }}"
+          echo "sha256=$sha256" >> $env:GITHUB_OUTPUT
+
+      - name: Verify python-build-standalone
+        id: verify-python
+        shell: pwsh
+        run: |
+          $pythonExe = Join-Path "${{ steps.extract-python.outputs.root }}" 'python.exe'
+          & $pythonExe --version
+          & $pythonExe -c "import sys; print(sys.version)"
+          $sha256 = "${{ steps.download-python.outputs.sha256 }}"
+          echo "sha256=$sha256" >> $env:GITHUB_OUTPUT
+
+      - name: Verify PostgreSQL binaries
+        id: verify-postgres
+        shell: pwsh
+        run: |
+          $binDir = "${{ steps.extract-postgres.outputs.bindir }}"
+          & (Join-Path $binDir 'postgres.exe') --version
+          & (Join-Path $binDir 'pg_ctl.exe') --version
+          & (Join-Path $binDir 'pg_dump.exe') --version
+          $sha256 = "${{ steps.download-postgres.outputs.sha256 }}"
+          echo "sha256=$sha256" >> $env:GITHUB_OUTPUT
+
+      - name: Stage artifacts for upload
+        id: stage-artifacts
+        shell: pwsh
+        run: |
+          $stagingDir = 'windows-artifacts-staging'
+          if (Test-Path -LiteralPath $stagingDir) { Remove-Item -Recurse -Force -LiteralPath $stagingDir }
+          New-Item -ItemType Directory -Path $stagingDir | Out-Null
+
+          # Valkey -> valkey/
+          $valkeyDir = Join-Path $stagingDir 'valkey'
+          New-Item -ItemType Directory -Path $valkeyDir | Out-Null
+          Copy-Item -LiteralPath "${{ steps.extract-valkey.outputs.server }}" -Destination (Join-Path $valkeyDir 'valkey-server.exe')
+          Copy-Item -LiteralPath "${{ steps.extract-valkey.outputs.cli }}" -Destination (Join-Path $valkeyDir 'valkey-cli.exe')
+
+          # Python -> runtime/ (full tree)
+          $pythonRoot = "${{ steps.extract-python.outputs.root }}"
+          $runtimeDir = Join-Path $stagingDir 'runtime'
+          Copy-Item -LiteralPath $pythonRoot -Destination $runtimeDir -Recurse
+
+          # PostgreSQL -> pgsql/
+          $pgsqlSrc = "${{ steps.extract-postgres.outputs.pgsql }}"
+          $pgsqlDst = Join-Path $stagingDir 'pgsql'
+          Copy-Item -LiteralPath $pgsqlSrc -Destination $pgsqlDst -Recurse
+
+          # Launcher -> bin/
+          $binDir = Join-Path $stagingDir 'bin'
+          New-Item -ItemType Directory -Path $binDir | Out-Null
+          Copy-Item -LiteralPath "${{ steps.build-launcher.outputs.exe }}" -Destination (Join-Path $binDir 'modulo.exe')
+
+          # Create a manifest file with versions and SHAs
+          $manifest = @{
+              valkey = @{
+                  version = "${{ steps.load-pins.outputs.VALKEY_VERSION }}"
+                  sha256  = "${{ steps.verify-valkey.outputs.sha256 }}"
+              }
+              python = @{
+                  version = "${{ steps.load-pins.outputs.PBS_CPYTHON_VERSION }}"
+                  release = "${{ steps.load-pins.outputs.PBS_RELEASE }}"
+                  sha256  = "${{ steps.verify-python.outputs.sha256 }}"
+              }
+              postgres = @{
+                  version = "${{ steps.load-pins.outputs.PG_VERSION }}"
+                  sha256  = "${{ steps.verify-postgres.outputs.sha256 }}"
+              }
+              launcher = @{
+                  sha256 = "${{ steps.build-launcher.outputs.sha256 }}"
+              }
+              generated_at = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
+              generated_by = "github-actions-${{ github.run_id }}"
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $stagingDir 'manifest.json') -Encoding UTF8
+
+          echo "dir=$stagingDir" >> $env:GITHUB_OUTPUT
+
+      - name: Upload verified artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.0
+        with:
+          name: windows-native-artifacts
+          path: ${{ steps.stage-artifacts.outputs.dir }}
+          retention-days: 30
+          if-no-files-found: error
+
+  attest:
+    name: Attest Artifact Provenance
+    needs: download-and-verify
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869aaab797b665d2c8f3b72 # v4.2.0
+        with:
+          name: windows-native-artifacts
+          path: windows-artifacts
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@b4d89193d5c40d78c2e2b3b7e1c6f8b1e5a2f3c4 # v2.2.0
+        with:
+          subject-path: windows-artifacts/manifest.json
