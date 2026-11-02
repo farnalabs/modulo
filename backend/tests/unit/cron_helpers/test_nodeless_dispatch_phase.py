@@ -110,8 +110,11 @@ async def test_elapsed_is_seconds_since_phase_entered() -> None:
     assert isinstance(detail, str)
     assert "dispatch_phase=streaming dispatch_phase_elapsed=" in detail
     elapsed = _elapsed_from(detail)
-    assert 120.0 <= elapsed <= 123.0
-    # The rendered value is derived from the row's own completed_at.
+    # The rendered value is derived from the row's own completed_at, so the
+    # only stable lower bound is the 120s the fixture backdated. A literal
+    # upper bound flakes under CI load (the clock advances between fixture
+    # construction and the terminalisation).
+    assert elapsed >= 120.0
     recomputed = (run.completed_at - entered_at).total_seconds()
     assert abs(recomputed - elapsed) < 0.2
 
@@ -140,7 +143,13 @@ async def test_phase_carried_in_error_log_and_ingested_context(
 
     context = ingest.await_args.kwargs["context"]
     assert context["dispatch_phase"] == "streaming"
-    assert 12.0 <= context["dispatch_phase_elapsed"] <= 15.0
+    # Pin the value to the row's own completed_at rather than a literal upper
+    # bound: the ingested elapsed is the same derived figure rendered into
+    # error_detail, so it must match the clock reading exactly (a hard-coded
+    # ceiling flakes whenever CI load delays the terminalisation).
+    expected_elapsed = (run.completed_at - entered_at).total_seconds()
+    assert context["dispatch_phase_elapsed"] == pytest.approx(expected_elapsed, abs=0.1)
+    assert context["dispatch_phase_elapsed"] >= 12.0
 
     messages = [record.getMessage() for record in caplog.records]
     assert any("dispatch_phase=streaming" in message for message in messages)
