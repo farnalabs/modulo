@@ -87,6 +87,25 @@ describe('AppSelect (real Select)', () => {
     expect(innerSelect(wrapper).props('ariaLabel')).toBe('Select')
   })
 
+  it('maps a consumer id to the inner Select inputId so label[for] resolves', () => {
+    // PrimeVue puts a fallthrough `id` on its root <div> and gives the
+    // focusable combobox `id = labelId || inputId`. A label beside the Select
+    // would therefore point at a div unless the id is re-applied as inputId.
+    const wrapper = mount(AppSelect, {
+      props: { modelValue: '' },
+      attrs: { id: 'queue-filter' },
+    })
+    expect(innerSelect(wrapper).props('inputId')).toBe('queue-filter')
+  })
+
+  it('prefers an explicit input-id over a consumer id', () => {
+    const wrapper = mount(AppSelect, {
+      props: { modelValue: '' },
+      attrs: { id: 'legacy-id', inputId: 'combobox-id' },
+    })
+    expect(innerSelect(wrapper).props('inputId')).toBe('combobox-id')
+  })
+
   it('merges a function-form consumer pt listContainer and adds tabindex', () => {
     const listContainer = (opts: { density?: string }) => ({ class: `density-${opts.density}` })
     const wrapper = mount(AppSelect, {
@@ -163,6 +182,13 @@ describe('AppSelect (stubbed Select)', () => {
   it('uses the generic default aria-label when none is provided', () => {
     const wrapper = mountAppSelect()
     expect(wrapper.find('.p-select').attributes('aria-label')).toBe('Select')
+  })
+
+  it('forwards a consumer id as input-id and not as a root id', () => {
+    const wrapper = mountAppSelect({ attrs: { id: 'org-select' } })
+    const select = wrapper.find('.p-select')
+    expect(select.attributes('input-id')).toBe('org-select')
+    expect(select.attributes('id')).toBeUndefined()
   })
 
   it('renders header and option slots passed through by the wrapper', () => {

@@ -2527,6 +2527,34 @@ describe('SettingsHitlReviewView — matchesSearch by name', () => {
 
     expect(wrapper.text()).toContain('PR Reviewer')
   })
+
+  it('search matches the gate node name shown in the row', async () => {
+    const { api } = await import('../lib/api/client');
+    (api.GET as any).mockImplementation((url: string) => {
+      if (url === GATES_URL) {
+        return Promise.resolve(gatesResponse([
+          { ...pendingGateRow(), pipeline_name: 'PR Reviewer', label: 'Release approval' },
+          { ...pendingGateRow(), review_id: 'deploy-gate-1', pipeline_name: 'Deploy', label: 'Production rollout' },
+        ]))
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // The search placeholder promises "pipeline or node name"; the row renders
+    // the gate's label as the node name, so it must be searchable.
+    const vm = wrapper!.vm as unknown as { searchQuery: string }
+    vm.searchQuery = 'release app'
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Release approval')
+    expect(wrapper.text()).not.toContain('Production rollout')
+  })
 })
 
 // ---- Branch coverage: bulk reject skips an already-decided gate ----

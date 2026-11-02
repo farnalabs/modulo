@@ -11,7 +11,8 @@
   -->
   <label ref="rootEl">
     <Select
-      v-bind="$attrs"
+      v-bind="forwardedAttrs"
+      :input-id="resolvedInputId"
       :options="options"
       :option-label="optionLabel"
       :option-value="optionValue"
@@ -51,7 +52,14 @@
  *   - wraps the inner Select in a `<label>` and binds an explicit `aria-label`
  *     so the rendered `<input>` is never flagged by SonarCloud's
  *     `Web:InputWithoutLabelCheck`;
- *   - forwards all props, events, and slots to PrimeVue's Select.
+ *   - maps a consumer-provided `id` (or `input-id`) to PrimeVue's `inputId`, so
+ *     a `<label for="...">` beside an AppSelect actually points at the focusable
+ *     combobox. PrimeVue renders the combobox with `id = labelId || inputId` and
+ *     puts a fallthrough `id` on its ROOT `<div>` instead, so passing `id`
+ *     straight through leaves `label[for]` pointing at a non-labelable div — the
+ *     visible label does nothing when clicked, and PrimeVue's own label-click
+ *     bridge (which looks up `label[for=inputId]`) never finds it;
+ *   - forwards all other props, events, and slots to PrimeVue's Select.
  *
  * All Select instances across the app should use this wrapper instead of
  * importing `primevue/select` directly (enforced by appselect-guard.spec.ts).
@@ -192,6 +200,13 @@ const props = withDefaults(
      * `$attrs`, then to a generic default.
      */
     label?: string
+    /**
+     * Id for the focusable combobox element. Equivalent to PrimeVue's
+     * `inputId`; a consumer `id` attribute is also honoured (see the mapping
+     * below) because every existing call site pairs `label for="x"` with
+     * `AppSelect id="x"`.
+     */
+    inputId?: string
   }>(),
   {
     label: '',
@@ -199,6 +214,30 @@ const props = withDefaults(
 )
 
 const attrs = useAttrs()
+
+/**
+ * Attributes forwarded to the inner PrimeVue `Select`.
+ *
+ * `id` is deliberately stripped: PrimeVue merges a fallthrough `id` onto its
+ * ROOT `<div>` while the focusable combobox takes `id = labelId || inputId`.
+ * Forwarding it unchanged therefore binds `label[for="x"]` to a div, breaking
+ * the association and PrimeVue's label-click bridge. The id is re-applied as
+ * `inputId` below instead.
+ */
+const forwardedAttrs = computed(() => {
+  const { id: _consumerId, ...rest } = attrs
+  return rest
+})
+
+/**
+ * The id for the focusable combobox: an explicit `input-id` wins, else the
+ * consumer's `id` attribute, else PrimeVue's generated id.
+ */
+const resolvedInputId = computed<string | undefined>(() => {
+  if (props.inputId) return props.inputId
+  const consumerId = attrs.id
+  return typeof consumerId === 'string' && consumerId ? consumerId : undefined
+})
 
 const rootEl = ref<HTMLElement | null>(null)
 const isInClippingAncestor = ref(false)
