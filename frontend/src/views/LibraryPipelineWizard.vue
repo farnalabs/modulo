@@ -15,7 +15,7 @@
       </div>
     </header>
 
-    <main class="max-w-3xl mx-auto px-6 py-8">
+    <section class="max-w-3xl mx-auto px-6 py-8">
       <div v-if="loading" class="space-y-6" data-testid="library-wizard-loading-skeleton">
         <div class="card p-6">
           <SkeletonBlock height-class="h-6 w-64" />
@@ -190,7 +190,7 @@
 
         <ErrorAlert v-if="createError" :message="createError" :on-retry="createPipeline" class="mt-6" />
       </div>
-    </main>
+    </section>
   </div>
 </template>
 

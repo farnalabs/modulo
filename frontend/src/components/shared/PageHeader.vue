@@ -5,7 +5,11 @@
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><polyline points="15 18 9 12 15 6"/></svg>
         Back
       </button>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ title }}</h1>
+      <h1
+        class="text-2xl font-semibold tracking-tight focus:outline-none"
+        tabindex="-1"
+        data-page-heading
+      >{{ title }}</h1>
       <p v-if="subtitle" class="mt-1 text-sm text-muted-foreground">{{ subtitle }}</p>
       <div v-if="$slots.default" class="mt-4">
         <slot />
