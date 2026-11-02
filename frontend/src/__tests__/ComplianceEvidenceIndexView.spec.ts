@@ -100,8 +100,8 @@ describe('ComplianceEvidenceIndexView', () => {
     // formatTimestamp renders through the JS runtime's default locale, so the
     // expectation must be built the same way: a US-format literal fails on any
     // en-GB machine while the component is correct.
-    expect(wrapper.text()).toContain(new Date('2026-10-20T12:00:00Z').toLocaleDateString())
-    expect(wrapper.text()).toContain(new Date('2026-10-22T12:00:00Z').toLocaleDateString())
+    expect(wrapper.text()).toContain(new Date('2026-10-20T12:00:00Z').toLocaleDateString()) // nosemgrep: new-date-without-guard
+    expect(wrapper.text()).toContain(new Date('2026-10-22T12:00:00Z').toLocaleDateString()) // nosemgrep: new-date-without-guard
     expect(wrapper.find('dl').exists()).toBe(true)
     expect(wrapper.findAll('dl dt')).not.toHaveLength(0)
     expect(wrapper.findAll('dl dd')).not.toHaveLength(0)
