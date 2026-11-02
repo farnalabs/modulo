@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
@@ -122,34 +123,74 @@ def test_offline_archive_layout_fixture(tmp_path: Path, windows_pins: dict[str, 
         assert f"{windows_pins['PBS_ARCHIVE_ROOT']}/{windows_pins['PBS_PYTHON_EXE']}" in archive.getnames()
 
 
-def test_offline_staged_payload_contract(tmp_path: Path, launcher_source: str) -> None:
+def test_offline_staged_payload_contract(tmp_path: Path, repo_root: Path) -> None:
+    script = repo_root / "scripts" / "windows" / "build-launcher.ps1"
+    fixture = tmp_path / "fixture"
+    python_root = fixture / "python"
+    backend_source = fixture / "backend-src"
+    site_packages = fixture / "site-packages"
+    frontend_dist = fixture / "frontend-dist"
+    launcher = fixture / "modulo.exe"
+    for directory in (python_root, backend_source / "modulo", site_packages / "modulo_dep", frontend_dist):
+        directory.mkdir(parents=True)
+    (python_root / "python.exe").write_bytes(b"python")
+    (python_root / "python312.dll").write_bytes(b"dll")
+    (backend_source / "modulo" / "__init__.py").write_text("", encoding="utf-8")
+    (site_packages / "modulo_dep" / "__init__.py").write_text("", encoding="utf-8")
+    (frontend_dist / "index.html").write_text("ok", encoding="utf-8")
+    launcher.write_bytes(b"launcher")
     stage = tmp_path / "stage"
-    (stage / "runtime/python").mkdir(parents=True)
-    (stage / "runtime/bin").mkdir(parents=True)
-    (stage / "backend/src/modulo").mkdir(parents=True)
-    (stage / "runtime/python/python.exe").write_bytes(b"python")
-    (stage / "runtime/python/python312.dll").write_bytes(b"dll")
-    (stage / "runtime/bin/python3.exe").write_bytes(b"launcher")
-    (stage / "backend/src/modulo/__init__.py").write_text("", encoding="utf-8")
-    (stage / "frontend-dist").mkdir()
-    (stage / "frontend-dist/index.html").write_text("ok", encoding="utf-8")
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        (
+            f". '{script}'; Invoke-WindowsBundleStaging -StagePath '{stage}' "
+            f"-PythonRoot '{python_root}' -BackendSource '{backend_source}' "
+            f"-SitePackagesSource '{site_packages}' -FrontendDistSource '{frontend_dist}' "
+            f"-LauncherPath '{launcher}'"
+        ),
+    ]
+    result = subprocess.run(  # noqa: S603 - powershell.exe runs a fixed test script with isolated temp paths
+        command, capture_output=True, text=True, check=False, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
+    expected_files = [
+        stage / "runtime/python/python.exe",
+        stage / "runtime/python/python312.dll",
+        stage / "backend/src/modulo/__init__.py",
+        stage / "runtime/python/Lib/site-packages/modulo_dep/__init__.py",
+        stage / "frontend-dist/index.html",
+        stage / "bin/modulo.exe",
+    ]
+    for path in expected_files:
+        assert path.is_file(), path
 
-    assert (stage / "runtime/python/python.exe").is_file()
-    assert (stage / "runtime/python/python312.dll").is_file()
-    assert (stage / "runtime/bin/python3.exe").is_file()
-    assert (stage / "backend/src/modulo").is_dir()
-    assert (stage / "frontend-dist/index.html").is_file()
-    assert 'L"runtime"' in launcher_source
-    assert 'L"python"' in launcher_source
-    assert 'L"bin"' in launcher_source
-    assert 'L"python3.exe"' in launcher_source
+
+def test_launcher_clean_environment_contract(launcher_source: str) -> None:
+    dangerous_names = (
+        "PYTHONUSERBASE",
+        "OPENSSL_CONF",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+    )
+    for name in dangerous_names:
+        assert f'L"{name}"' not in launcher_source
+    assert "build_clean_environment" in launcher_source
+    assert "CREATE_UNICODE_ENVIRONMENT" in launcher_source
+    assert "inherited_allowlist" in launcher_source
 
 
 def test_launcher_contract(launcher_source: str) -> None:
     assert 'L"python3.exe"' in launcher_source
     assert "modulo.cli.main" in launcher_source
     assert "CreateProcessW(python_exe" in launcher_source
-    assert "_wputenv_s" in launcher_source
+    assert "CreateProcessW" in launcher_source
     assert 'L"python"' in launcher_source
     assert "return FALSE" in launcher_source
 
