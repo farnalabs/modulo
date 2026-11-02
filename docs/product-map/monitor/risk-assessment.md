@@ -47,7 +47,7 @@ formatted value columns. All strings are i18n-backed and status regions use
       the facet vocabulary can express and the wire contract parses: the time
       window must be one of the offered `RISK_WINDOW_CHOICES`, the action must
       be in the gate-action list, and `pipeline_id` must be a canonical UUID
-      (`key_prefix` stays free text — the API treats it as a LIKE prefix). An
+      (`key_prefix` stays free text, which the API treats as a LIKE prefix). An
       out-of-contract value is a malformed link and degrades to the default
       rather than being sent, because the backend answers it 422 and the error
       alert's Retry re-applies the same filters, turning a stale or
@@ -89,7 +89,7 @@ formatted value columns. All strings are i18n-backed and status regions use
   deep link carrying an out-of-contract value (`?days=400`, `?days=-5`,
   `?action=nonsense`, `?pipeline_id=not-a-uuid`) was hydrated verbatim and sent
   to the API, which answers 422 (`days` is bounded 1..365, `action` is
-  vocabulary-checked, `pipeline_id` is a `uuid.UUID` query parameter) — and the
+  vocabulary-checked, `pipeline_id` is a `uuid.UUID` query parameter), and the
   error alert's Retry re-applies the same filters, so the error could never
   clear: a permanently stuck error state reachable from a stale bookmark or a
   hand-tampered URL. Hydration now validates every param against the same
