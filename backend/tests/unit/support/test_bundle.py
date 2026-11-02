@@ -38,6 +38,7 @@ from modulo.support.redaction import (
     RedactionCounts,
     RedactionResult,
     RedactionSelfCheckError,
+    assert_redaction_proven,
 )
 
 PG_PASSWORD = "Xk9!pQz7-weird-real-looking-pg-secret"
@@ -440,3 +441,265 @@ def test_cli_refuses_and_emits_json_error_when_gate_fails(
     assert error["ok"] is False
     assert error["member"] == "doctor.txt"
     assert not out_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# FAR-2305 review follow-up: the gate must judge COLLECTED content, not the
+# bundle's own inventory, and a common-word password must not block the
+# documented quickstart.
+# ---------------------------------------------------------------------------
+
+#: The value the repo's own quickstart documents (docs/quickstart.md).
+QUICKSTART_PASSWORD = "modulo"
+QUICKSTART_DATABASE_URL = f"postgresql+asyncpg://modulo_app:{QUICKSTART_PASSWORD}@db:5432/modulo"
+
+
+def test_documented_quickstart_password_builds_a_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: `POSTGRES_PASSWORD=modulo` used to refuse every bundle.
+
+    The word appears throughout the bundle's own inventory boilerplate, so the
+    post-assembly gate reported a surviving secret and wrote no zip.
+    """
+    monkeypatch.setenv("POSTGRES_PASSWORD", QUICKSTART_PASSWORD)
+    monkeypatch.setenv("DATABASE_URL", QUICKSTART_DATABASE_URL)
+    sources = collect_sources(install_shape="container", collect_async=False)
+    assert QUICKSTART_PASSWORD in sources.secret_values
+
+    out_path = tmp_path / "quickstart.zip"
+    result = build_bundle(out_path, sources=sources)
+    assert out_path.is_file()
+    assert "MANIFEST.txt" in result.members
+
+    with zipfile.ZipFile(out_path) as archive:
+        version = archive.read("version.txt").decode()
+        manifest = archive.read("MANIFEST.txt").decode()
+        report = json.loads(archive.read("report.json"))
+    # Resource names are not mangled by a seed value that is also an English word.
+    assert "modulo version:" in version
+    assert "modulo support bundle" in manifest
+    assert report["format"] == FORMAT_ID
+
+
+def test_common_word_password_in_a_credential_context_is_still_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The weak-value tier must not weaken the gate: a real log leak still fails."""
+    sources = BundleSources(
+        install_shape="container",
+        members={
+            "version.txt": "modulo version: test",
+            "logs/redis.log.tail": f"requirepass {QUICKSTART_PASSWORD}",
+        },
+        secret_values={QUICKSTART_PASSWORD: REDACTED},
+    )
+    monkeypatch.setattr(
+        bundle_module,
+        "redact_text",
+        lambda text, _secrets: RedactionResult(text=text, counts=RedactionCounts()),
+    )
+    out_path = tmp_path / "refused.zip"
+    with pytest.raises(RedactionSelfCheckError) as caught:
+        build_bundle(out_path, sources=sources)
+    assert caught.value.member == "logs/redis.log.tail"
+    assert "credential context" in caught.value.reason
+    assert not out_path.exists()
+
+
+def test_common_word_password_is_scrubbed_out_of_a_real_log(tmp_path: Path) -> None:
+    """With the seed layer active, the same leak is removed rather than refused."""
+    sources = BundleSources(
+        install_shape="container",
+        members={"logs/redis.log.tail": f"requirepass {QUICKSTART_PASSWORD}"},
+        secret_values={QUICKSTART_PASSWORD: REDACTED},
+    )
+    result = build_bundle(tmp_path / "ok.zip", sources=sources)
+    with zipfile.ZipFile(result.path) as archive:
+        tail = archive.read("logs/redis.log.tail").decode()
+    assert f"requirepass {QUICKSTART_PASSWORD}" not in tail
+    assert f"requirepass {REDACTED}" in tail
+    assert result.redaction.seed_exact >= 1
+
+
+def test_inventory_is_gated_for_shapes_not_for_seeded_boilerplate() -> None:
+    """The two gate calls have different scopes, on purpose."""
+    seed = {QUICKSTART_PASSWORD: REDACTED}
+    # Collected content: a bait word in boilerplate is not a leak...
+    assert_redaction_proven({"version.txt": "modulo version: 0.3.323"}, seed, member_allowed=_allow_all)
+    # ...but the same word next to a credential key is.
+    with pytest.raises(RedactionSelfCheckError):
+        assert_redaction_proven({"version.txt": "requirepass modulo"}, seed, member_allowed=_allow_all)
+    # The inventory is gated with an empty seed map but keeps the shape checks.
+    with pytest.raises(RedactionSelfCheckError):
+        assert_redaction_proven({"report.json": f'{{"leak": "{GITHUB_PAT}"}}'}, {}, member_allowed=_allow_all)
+
+
+def _allow_all(_name: str) -> bool:
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Remaining format-layer branches
+# ---------------------------------------------------------------------------
+
+
+def test_build_refuses_a_reserved_inventory_member(tmp_path: Path) -> None:
+    sources = BundleSources(install_shape="container", members={"MANIFEST.txt": "hand-written"})
+    with pytest.raises(BundleBuildError) as caught:
+        build_bundle(tmp_path / "refused.zip", sources=sources)
+    assert "reserved for the bundle inventory" in str(caught.value)
+
+
+def test_build_fails_loudly_when_the_archive_cannot_shrink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bundle_module, "MAX_BUNDLE_COMPRESSED_BYTES", 1)
+    sources = BundleSources(install_shape="container", members={"version.txt": "modulo version: test"})
+    with pytest.raises(bundle_module.BundleSizeExceededError):
+        build_bundle(tmp_path / "too-big.zip", sources=sources)
+    assert not (tmp_path / "too-big.zip").exists()
+
+
+def test_failed_write_leaves_no_partial_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fail(_self: Path, _target: Path) -> Path:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "replace", _fail)
+    sources = BundleSources(install_shape="container", members={"version.txt": "modulo version: test"})
+    with pytest.raises(OSError, match="disk full"):
+        build_bundle(tmp_path / "out.zip", sources=sources)
+    assert not (tmp_path / "out.zip").exists()
+    assert not list(tmp_path.glob("*.tmp-*"))
+
+
+def test_build_fails_when_the_inventory_never_stabilises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    counter = iter(range(1000))
+    monkeypatch.setattr(bundle_module, "_manifest_text", lambda *_args, **_kwargs: f"manifest {next(counter)}")
+    sources = BundleSources(install_shape="container", members={"version.txt": "modulo version: test"})
+    with pytest.raises(BundleBuildError) as caught:
+        build_bundle(tmp_path / "unstable.zip", sources=sources)
+    assert "did not reach a stable size" in str(caught.value)
+
+
+def test_unknown_allowlisted_member_has_no_description() -> None:
+    with pytest.raises(BundleBuildError) as caught:
+        bundle_module._description_for("future-member.txt")
+    assert "no support-bundle v1 description" in str(caught.value)
+
+
+def test_show_refuses_a_member_that_is_not_in_the_bundle(tmp_path: Path) -> None:
+    _result, _members = _build(tmp_path)
+    with pytest.raises(BundleBuildError) as caught:
+        show_member(tmp_path / "bundle.zip", "nope.txt")
+    assert "not in" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [],
+        ["--out", "x.zip", "--list", "y.zip"],
+        ["--list"],
+    ],
+)
+def test_cli_argument_errors_exit_two(argv: list[str]) -> None:
+    with pytest.raises(SystemExit) as caught:
+        main(argv)
+    assert caught.value.code == 2
+
+
+def test_cli_list_json_and_read_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sources = _full_sources(tmp_path)
+    monkeypatch.setattr(bundle_module, "collect_sources", lambda **_kwargs: sources)
+    out_path = tmp_path / "cli.zip"
+    assert main(["--out", str(out_path)]) == 0
+    capsys.readouterr()
+
+    assert main(["--list", "--json", str(out_path)]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert isinstance(listed, list)
+    assert all(entry["known"] for entry in listed)
+
+    broken = tmp_path / "broken.zip"
+    broken.write_text("not a zip", encoding="utf-8")
+    assert main(["--list", str(broken)]) == 1
+    plain_error = capsys.readouterr().err
+    assert "zip" in plain_error.lower()
+
+    assert main(["--list", "--json", str(broken)]) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["ok"] is False
+    assert error["error"] == "BadZipFile"
+
+    assert main(["--show", "nope.txt", str(out_path)]) == 1
+    assert "not in" in capsys.readouterr().err
+
+
+def test_cli_reads_doctor_output_and_prints_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sources = BundleSources(install_shape="container", members={"version.txt": "modulo version: test"})
+    sources.missing["db.txt"] = "database inventory unavailable (RuntimeError)"
+    monkeypatch.setattr(bundle_module, "collect_sources", lambda **_kwargs: sources)
+    doctor_file = tmp_path / "doctor.txt"
+    doctor_file.write_text("doctor: ok\n", encoding="utf-8")
+
+    out_path = tmp_path / "cli.zip"
+    assert main(["--out", str(out_path), "--doctor-output", str(doctor_file)]) == 0
+    printed = capsys.readouterr().out
+    assert FORMAT_ID in printed
+    assert "missing: [db.txt]" in printed
+
+
+def test_cli_prints_a_plain_error_when_the_gate_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sources = BundleSources(
+        install_shape="container",
+        members={"doctor.txt": f"leak {PG_PASSWORD}"},
+        secret_values={PG_PASSWORD: REDACTED},
+    )
+    monkeypatch.setattr(bundle_module, "collect_sources", lambda **_kwargs: sources)
+    monkeypatch.setattr(
+        bundle_module,
+        "redact_text",
+        lambda text, _secrets: RedactionResult(text=text, counts=RedactionCounts()),
+    )
+    out_path = tmp_path / "refused.zip"
+    assert main(["--out", str(out_path)]) == 1
+    assert "redaction self-check failed" in capsys.readouterr().err
+
+
+def test_degraded_redaction_layer_is_visible_in_the_artefact(tmp_path: Path) -> None:
+    _result, members = _build(tmp_path)
+    report = json.loads(members["report.json"])
+    assert not report["degraded_layers"]
+    assert "degraded layers: []" in members["MANIFEST.txt"]
+
+
+def test_build_report_records_an_unreadable_secrets_file_as_degraded(tmp_path: Path) -> None:
+    (tmp_path / "secrets.json").write_text("}not json{", encoding="utf-8")
+    out_path = tmp_path / "degraded.zip"
+    build_bundle(
+        out_path,
+        sources=collect_sources(
+            install_shape="native", data_dir=tmp_path, doctor_output="doctor: ok", collect_async=False
+        ),
+    )
+    with zipfile.ZipFile(out_path) as archive:
+        report = json.loads(archive.read("report.json"))
+        manifest = archive.read("MANIFEST.txt").decode()
+    assert "seed_exact" in report["degraded_layers"]
+    assert "unreadable" in report["degraded_layers"]["seed_exact"]
+    assert "degraded layers: [seed_exact]" in manifest
+
+
+def test_cli_prints_no_missing_line_when_nothing_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sources = BundleSources(install_shape="container", members={"version.txt": "modulo version: test"})
+    monkeypatch.setattr(bundle_module, "collect_sources", lambda **_kwargs: sources)
+    out_path = tmp_path / "clean.zip"
+    assert main(["--out", str(out_path)]) == 0
+    printed = capsys.readouterr().out
+    assert FORMAT_ID in printed
+    assert "missing:" not in printed

@@ -83,10 +83,16 @@ def test_redaction_map_scrubs_percent_encoded_values(tmp_path: Path) -> None:
     assert password in mapping
     assert quote(password) in mapping  # percent-encoded variant is also a scrub pattern
     encoded_url = f"redis://:{quote(password)}@127.0.0.1:6379/0"
-    redacted = redact_text(encoded_url, mapping)
+    from modulo.support.redaction import redact_text as redact_with_counts
+
+    result = redact_with_counts(encoded_url, mapping)
+    redacted = result.text
     assert password not in redacted
     assert quote(password) not in redacted
-    assert REDACTED in redacted
+    # The credential is gone whichever layer got there first (the shared URL
+    # userinfo pattern also masks it), so pin the SEED layer's work by count:
+    # without the percent-encoded seed entry seed_exact would be 0.
+    assert result.counts.seed_exact >= 1
 
 
 def test_redact_text_masks_seeded_values_and_sensitive_kv() -> None:

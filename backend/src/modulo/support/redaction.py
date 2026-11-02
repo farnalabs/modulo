@@ -21,10 +21,26 @@ surviving seeded value, a surviving secret-shaped value, or a surviving
 sensitive ``KEY=value`` pair. Any hit raises :class:`RedactionSelfCheckError`
 naming the member; the caller writes no zip and exits non-zero. A support tool
 that silently ships a token is worse than no tool.
+
+Seed-exact matching has two tiers, because a deployment credential can be a
+common English word. A self-hoster following the documented quickstart runs
+Postgres with ``POSTGRES_PASSWORD=modulo`` — and every bundle carries the word
+``modulo`` in its own boilerplate, so a bare substring match would either
+mangle every member or fail the gate on a value that was never a leak.
+*distinctive* values (long, or containing any non-letter) are scrubbed and
+detected as bare substrings; *weak* values (short and alphabetic) are scrubbed
+and detected only inside a structural credential context — a URL userinfo
+position or immediately after a credential-bearing key such as
+``password``/``requirepass``/``token``. The trade-off is explicit: a weak
+credential mentioned in free text with no credential context cannot be
+distinguished from the same English word in boilerplate, so it is not treated
+as a leak. One function decides that (:func:`_scrub_seed`) for BOTH the
+redaction layer and the gate, so the two cannot drift.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Final
@@ -62,6 +78,61 @@ SENSITIVE_FIELD_TOKENS: Final[tuple[str, ...]] = (
     "users",
     "oidc",
 )
+
+#: A seed value at least this long, or containing any non-letter character, is
+#: distinctive enough to scrub as a bare substring: it cannot plausibly be
+#: boilerplate, and the documented quickstart password (``modulo``) is not.
+MIN_DISTINCTIVE_SEED_LENGTH: Final[int] = 12
+
+#: Keys that introduce a credential VALUE. A weak seed value is only scrubbed
+#: (and only detected) where one of these is immediately adjacent.
+_CREDENTIAL_CONTEXT_KEYS: Final[str] = (
+    r"(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|private[_-]?key|"
+    r"access[_-]?key|hmac|requirepass|fernet[_-]?key)"
+)
+
+
+def is_distinctive_seed(value: str) -> bool:
+    """True when *value* can be matched as a bare substring without false positives."""
+    return len(value) >= MIN_DISTINCTIVE_SEED_LENGTH or not value.isalpha()
+
+
+def _seed_pattern(value: str) -> re.Pattern[str]:
+    """Pattern matching every occurrence of *value* that counts as a leak."""
+    escaped = re.escape(value)
+    if is_distinctive_seed(value):
+        return re.compile(escaped)
+    return re.compile(
+        "|".join(
+            (
+                rf"(?i:{_CREDENTIAL_CONTEXT_KEYS})\s*[:=]\s*[\"']?{escaped}",
+                rf"(?i:{_CREDENTIAL_CONTEXT_KEYS})\s+{escaped}",
+                rf":{escaped}@",
+            )
+        )
+    )
+
+
+def _scrub_seed(text: str, value: str, replacement: str) -> tuple[str, int]:
+    """Replace every leak occurrence of *value* in *text*; return (text, count).
+
+    The SAME pattern decides what a leak is here and in
+    :func:`assert_redaction_proven`, so a value the layer scrubbed can never be
+    reported as surviving, and a value the layer left alone is never refused.
+    """
+    pattern = _seed_pattern(value)
+    occurrences = 0
+
+    def _replace(match: re.Match[str]) -> str:
+        nonlocal occurrences
+        chunk = match.group(0)
+        offset = chunk.find(value)
+        if offset < 0:  # pragma: no cover - a match always contains the value
+            return chunk
+        occurrences += 1
+        return chunk[:offset] + replacement + chunk[offset + len(value) :]
+
+    return pattern.sub(_replace, text), occurrences
 
 
 @dataclass(frozen=True)
@@ -151,10 +222,8 @@ def redact_text(text: str, secret_values: Mapping[str, str]) -> RedactionResult:
     for secret, replacement in secret_values.items():
         if not secret:
             continue
-        occurrences = output.count(secret)
-        if occurrences:
-            output = output.replace(secret, replacement)
-            seed_count += occurrences
+        output, occurrences = _scrub_seed(output, secret, replacement)
+        seed_count += occurrences
 
     output, structural_count = redact_kv_lines(output)
 
@@ -199,11 +268,18 @@ def assert_redaction_proven(
 
     * the member name is on the caller's v1 allowlist (a new member cannot
       slip into the bundle without a golden-list update);
-    * no seeded secret value survives (the seed-exact layer ran);
+    * no seeded secret value survives (the seed-exact layer ran) — matched by
+      the same detector the layer uses, so a short common-word credential is
+      only a leak in a credential context, never in boilerplate;
     * no secret-shaped value survives (the pattern layer ran);
     * no sensitive ``KEY=value`` pair survives (the structural layer ran).
 
     The raw ``secrets.json`` file is never a permitted member.
+
+    Callers pass only *collected* content here. Bundle-generated inventory
+    (``MANIFEST.txt`` / ``report.json``) is assembled by the harness from fixed
+    constants, so it is gated with an empty seed map — the pattern and
+    structural layers still apply to it.
     """
     for name, text in members.items():
         if not member_allowed(name):
@@ -213,8 +289,9 @@ def assert_redaction_proven(
 
         scrubbed = _without_markers(text)
         for secret in secret_values:
-            if secret and secret in scrubbed:
-                raise RedactionSelfCheckError(name, "a seeded secret value survived the seed-exact layer")
+            if secret and _seed_pattern(secret).search(scrubbed):
+                layer = "seed-exact layer" if is_distinctive_seed(secret) else "seed-exact layer (credential context)"
+                raise RedactionSelfCheckError(name, f"a seeded secret value survived the {layer}")
 
         if mask_secret_values_in_text(text) != text:
             raise RedactionSelfCheckError(name, "secret-shaped content survived the pattern layer")

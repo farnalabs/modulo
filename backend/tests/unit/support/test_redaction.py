@@ -148,3 +148,73 @@ def test_sensitive_key_classifier_matches_modulo_env() -> None:
     assert is_sensitive_key("MODULO_USERS")
     assert not is_sensitive_key("MODULO_DB")
     assert not is_sensitive_key("PLAN_TIER")
+
+
+# ---------------------------------------------------------------------------
+# FAR-2305 review follow-up: a deployment credential can be a common word.
+# ---------------------------------------------------------------------------
+
+
+def test_weak_seed_value_is_scrubbed_only_in_a_credential_context() -> None:
+    """`POSTGRES_PASSWORD=modulo` (the documented quickstart) must not mangle text."""
+    seed = collect_seed_values("modulo")
+    text = "\n".join(
+        [
+            "modulo version: 0.3.323",
+            "requirepass modulo",
+            "POSTGRES_PASSWORD=modulo",
+            "redis://:modulo@127.0.0.1:6379/0",
+        ]
+    )
+    result = redact_text(text, seed)
+    assert "modulo version: 0.3.323" in result.text
+    assert "requirepass modulo" not in result.text
+    assert "POSTGRES_PASSWORD=modulo" not in result.text
+    assert "modulo@127.0.0.1" not in result.text
+    # Two occurrences came from the seed layer itself (requirepass + userinfo);
+    # the KEY=value pair is handled by the structural layer.
+    assert result.counts.seed_exact >= 2
+    assert result.counts.structural >= 1
+
+
+def test_distinctive_seed_value_is_scrubbed_anywhere() -> None:
+    seed = collect_seed_values("Xk9!pQz7-weird-real-looking-pg-secret")
+    result = redact_text("boot note Xk9!pQz7-weird-real-looking-pg-secret end", seed)
+    assert "Xk9!pQz7-weird-real-looking-pg-secret" not in result.text
+    assert result.text == "boot note <redacted> end"
+
+
+def test_seed_tier_classification() -> None:
+    from modulo.support.redaction import is_distinctive_seed
+
+    assert not is_distinctive_seed("modulo")
+    assert not is_distinctive_seed("changeme")
+    assert is_distinctive_seed("p@ssword")
+    assert is_distinctive_seed("hunter99")
+    assert is_distinctive_seed("a" * 12)
+
+
+def test_gate_accepts_the_same_weak_word_in_boilerplate() -> None:
+    assert_redaction_proven(
+        {"MANIFEST.txt": "modulo support bundle\nformat: modulo-support-bundle/v1"},
+        collect_seed_values("modulo"),
+        member_allowed=_allow,
+    )
+
+
+def test_gate_refuses_the_same_weak_word_behind_a_credential_key() -> None:
+    with pytest.raises(RedactionSelfCheckError) as caught:
+        assert_redaction_proven(
+            {"logs/postgres.log.tail": "FATAL password=modulo rejected"},
+            collect_seed_values("modulo"),
+            member_allowed=_allow,
+        )
+    assert caught.value.member == "logs/postgres.log.tail"
+    assert "credential context" in caught.value.reason
+
+
+def test_empty_seed_value_is_skipped() -> None:
+    """An empty pattern would match everywhere; the layer must ignore it."""
+    result = redact_text("modulo version: 0.3.323", {"": REDACTED})
+    assert result.text == "modulo version: 0.3.323"
+    assert result.counts.seed_exact == 0

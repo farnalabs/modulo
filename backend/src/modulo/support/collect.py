@@ -127,13 +127,21 @@ _CA_BUNDLE_ENV: Final[tuple[str, ...]] = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE",
 
 @dataclass
 class BundleSources:
-    """Everything the format layer needs: raw member text + known omissions."""
+    """Everything the format layer needs: raw member text + known omissions.
+
+    ``degraded`` records a redaction LAYER that could not run (for example an
+    unreadable 0600 secrets file disabling the seed-exact layer). A degraded
+    best-effort layer is allowed to fail open, but the reason is rendered into
+    ``MANIFEST.txt`` / ``report.json`` so the omission is visible in the
+    artefact — never silent.
+    """
 
     install_shape: str
     members: dict[str, str] = field(default_factory=dict)
     missing: dict[str, str] = field(default_factory=dict)
     truncated: dict[str, str] = field(default_factory=dict)
     secret_values: dict[str, str] = field(default_factory=dict)
+    degraded: dict[str, str] = field(default_factory=dict)
     max_log_bytes: int = DEFAULT_MAX_LOG_BYTES
 
 
@@ -180,7 +188,7 @@ def collect_sources(
     """
     sources = BundleSources(install_shape=install_shape, max_log_bytes=max_log_bytes)
     settings = _load_settings(sources)
-    sources.secret_values = _seed_values(data_dir, settings, extra_secret_values)
+    sources.secret_values = _seed_values(data_dir, settings, extra_secret_values, sources.degraded)
 
     if install_shape == "native" and data_dir is not None:
         _collect_native(sources, data_dir, doctor_output)
@@ -250,21 +258,37 @@ def redaction_map_from_data_dir(data_dir: Path) -> dict[str, str]:
 
     The keys are only ever used as scrub patterns; they are never written to
     the bundle. An unreadable/missing secrets file returns an empty map (the
-    structural + pattern layers still apply).
+    structural + pattern layers still apply); :func:`_read_secrets_seed`
+    additionally reports WHY the layer was skipped so the bundle can record it.
+    """
+    seed, _reason = _read_secrets_seed(data_dir)
+    return seed
+
+
+def _read_secrets_seed(data_dir: Path) -> tuple[dict[str, str], str | None]:
+    """Return ``(seed map, degraded reason)`` for the data dir's secrets file.
+
+    A present-but-unreadable file is a DEGRADED seed-exact layer, not a silent
+    empty map: the caller records the reason in the manifest/report. Only the
+    secrets file's own parse/read failures are swallowed — an unexpected error
+    is a programming defect and must surface.
     """
     secrets_path = data_dir / "secrets.json"
     if not secrets_path.is_file():
-        return {}
-    try:
-        from modulo.launcher.secrets_file import _parse
+        return {}, None
+    from modulo.launcher.secrets_file import SecretsFileError, _parse
 
+    try:
         secrets = _parse(secrets_path.read_bytes())
-    except Exception:
-        return {}
-    return collect_seed_values(
-        secrets.postgres_password,
-        secrets.redis_password,
-        secrets.state_hmac_key_hex,
+    except (SecretsFileError, OSError) as exc:
+        return {}, f"seed-exact layer skipped: secrets.json unreadable ({exc})"
+    return (
+        collect_seed_values(
+            secrets.postgres_password,
+            secrets.redis_password,
+            secrets.state_hmac_key_hex,
+        ),
+        None,
     )
 
 
@@ -272,6 +296,7 @@ def _seed_values(
     data_dir: Path | None,
     settings: Settings | None,
     extra: Mapping[str, str] | None,
+    degraded: dict[str, str] | None = None,
 ) -> dict[str, str]:
     environ = os.environ
     direct: list[str | None] = [environ.get(name) for name in _DIRECT_SECRET_ENV]
@@ -296,7 +321,10 @@ def _seed_values(
     if extra:
         seed.update(extra)
     if data_dir is not None:
-        seed.update(redaction_map_from_data_dir(data_dir))
+        secrets_seed, reason = _read_secrets_seed(data_dir)
+        seed.update(secrets_seed)
+        if reason is not None and degraded is not None:
+            degraded["seed_exact"] = reason
     return seed
 
 

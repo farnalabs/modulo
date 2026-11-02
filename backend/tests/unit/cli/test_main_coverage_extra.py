@@ -55,3 +55,45 @@ def test_env_settings_unavailable(monkeypatch: pytest.MonkeyPatch):
     result = CliRunner().invoke(cli_main.cli, ["env"])
     assert result.exit_code == 1
     assert "settings unavailable" in result.output
+
+
+# ---------------------------------------------------------------------------
+# FAR-2305 review follow-up: a refused report archive must not surface as a
+# traceback / exit 1 ("the install is unhealthy").
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_report_refusal_exits_four_with_an_actionable_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from modulo.support.redaction import RedactionSelfCheckError
+
+    def _refuse(*_args: object, **_kwargs: object) -> Path:
+        raise RedactionSelfCheckError("MANIFEST.txt", "a seeded secret value survived the seed-exact layer")
+
+    monkeypatch.setattr("modulo.launcher.doctor_report.build_report", _refuse)
+    report = tmp_path / "report.zip"
+
+    result = CliRunner().invoke(cli_main.cli, ["doctor", "--data-dir", str(tmp_path), "--report", str(report)])
+
+    assert result.exit_code == cli_main.DOCTOR_REPORT_EXIT_CODE
+    assert cli_main.DOCTOR_REPORT_EXIT_CODE == 4
+    assert "MANIFEST.txt" in result.output
+    assert "seed-exact layer" in result.output
+    assert not report.is_file()
+
+
+def test_doctor_report_build_error_exits_four(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from modulo.support.bundle import BundleBuildError
+
+    def _fail(*_args: object, **_kwargs: object) -> Path:
+        raise BundleBuildError("the archive could not be assembled")
+
+    monkeypatch.setattr("modulo.launcher.doctor_report.build_report", _fail)
+    report = tmp_path / "report.zip"
+
+    result = CliRunner().invoke(cli_main.cli, ["doctor", "--data-dir", str(tmp_path), "--report", str(report)])
+
+    assert result.exit_code == 4
+    assert "could not be assembled" in result.output
+    assert not report.is_file()

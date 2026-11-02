@@ -29,7 +29,7 @@ import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import click
 
@@ -370,6 +370,13 @@ def version_cmd() -> None:
     _print_version()
 
 
+#: ``modulo doctor`` exit code when the redacted report archive could not be
+#: written. Distinct from the check outcomes (0 healthy / 1 unhealthy /
+#: 2 degraded / 3 uninitialized) so a caller can tell "the checks ran and the
+#: report was refused" from "the install is unhealthy".
+DOCTOR_REPORT_EXIT_CODE: Final[int] = 4
+
+
 @cli.command("doctor")
 @click.option(
     "--data-dir",
@@ -400,7 +407,12 @@ def doctor(
     report_path: Path | None,
     fix: bool,
 ) -> None:
-    """Doctor: exit 0 healthy, 1 unhealthy, 2 degraded (warnings), 3 uninitialized."""
+    """Doctor: exit 0 healthy, 1 unhealthy, 2 degraded (warnings), 3 uninitialized.
+
+    With ``--report``, a report archive the redaction gate refuses (or that
+    cannot be written) exits :data:`DOCTOR_REPORT_EXIT_CODE` (4) and names the
+    offending member and layer — the failure is never swallowed.
+    """
     _scrub_for_launcher_command()
     import io
 
@@ -426,8 +438,32 @@ def doctor(
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
     if capture is not None and report_path is not None:
-        _build_doctor_report(resolved, report_path, capture.getvalue())
+        _write_doctor_report(ctx, resolved, report_path, capture.getvalue())
     ctx.exit(code)
+
+
+def _write_doctor_report(
+    ctx: click.Context,
+    data_dir: Path,
+    report_path: Path,
+    doctor_output: str,
+) -> None:
+    """Build the report archive, or exit non-zero with an actionable message.
+
+    ``RedactionSelfCheckError`` names the member and the layer that should have
+    caught the content; ``BundleBuildError``/``OSError`` name what could not be
+    assembled or written. All three are surfaced and converted to
+    :data:`DOCTOR_REPORT_EXIT_CODE` — never swallowed into a traceback (which
+    would exit 1 and read as "the install is unhealthy").
+    """
+    from modulo.support.bundle import BundleBuildError
+    from modulo.support.redaction import RedactionSelfCheckError
+
+    try:
+        _build_doctor_report(data_dir, report_path, doctor_output)
+    except (RedactionSelfCheckError, BundleBuildError, OSError) as exc:
+        click.echo(f"error: the redacted report archive was not written: {exc}", err=True)
+        ctx.exit(DOCTOR_REPORT_EXIT_CODE)
 
 
 def _build_doctor_report(data_dir: Path, report_path: Path, doctor_output: str) -> None:

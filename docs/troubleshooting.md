@@ -241,7 +241,8 @@ For the native bundle (`scripts/install.sh`, `modulo start --detach`).
 Run these in order before anything else:
 
 ```bash
-modulo doctor           # exit 0 healthy, 1 unhealthy, 2 degraded (warnings), 3 uninitialized
+modulo doctor           # exit 0 healthy, 1 unhealthy, 2 degraded (warnings),
+                        # 3 uninitialized; with --report, 4 = archive refused/not written
 modulo status           # per-component (postgres/redis/api/workers) pid+port+alive table
 modulo logs app         # launcher/supervisor log (pass -f to follow; postgres/redis also accepted)
 ```
@@ -257,8 +258,12 @@ modulo logs app         # launcher/supervisor log (pass -f to follow; postgres/r
   `python -m modulo.support.bundle --list report.zip` and
   `python -m modulo.support.bundle --show MANIFEST.txt report.zip`. A
   post-assembly gate refuses to write the archive if any secret-shaped content
-  survives redaction. `python -m modulo.support.bundle --out report.zip` builds
-  the same bundle inside an app container (no launcher data dir required).
+  survives redaction — in that case `doctor --report` prints which member and
+  which redaction layer failed and exits **4** (distinct from the check
+  outcomes above, so it is never read as "the install is unhealthy").
+  `python -m modulo.support.bundle --out report.zip` builds the same bundle
+  inside an app container (no launcher data dir required); it exits 1 on a
+  refusal.
 
 Where things live: install root `~/.local/opt/modulo/` (versions under
 `versions/<version>/`, the `current` symlink), data dir
