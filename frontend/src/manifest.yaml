@@ -1107,6 +1107,28 @@ elements:
       - testid: page-header-right
         type: element
         dynamic_testid: false
+    /governance:
+      - testid: governance-stack
+        type: element
+        dynamic_testid: false
+      - testid: governance-levels
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-disabled
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
+      - testid: lock-icon
+        type: element
+        dynamic_testid: false
     /library/collections/:id:
       - testid: collection-install
         type: button
