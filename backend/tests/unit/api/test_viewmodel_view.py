@@ -126,7 +126,10 @@ def _make_mock_session() -> AsyncMock:
     scalars_mock = MagicMock()
     scalars_mock.all = MagicMock(return_value=[])
     execute_result.scalars.return_value = scalars_mock
-    execute_result.scalar_one_or_none = AsyncMock(return_value=None)
+    # ``scalar_one_or_none`` is a SYNC ``Result`` method — an AsyncMock child
+    # would leave a never-awaited coroutine behind when callers read it without
+    # awaiting (the FAR-2674 ambient-leak class).
+    execute_result.scalar_one_or_none.return_value = None
     session.execute = AsyncMock(return_value=execute_result)
     return session
 
