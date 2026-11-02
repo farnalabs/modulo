@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException as FastAPIHTTPException
+from sqlalchemy.exc import ProgrammingError
 
 import modulo.api.mcp_server as ms
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
@@ -191,6 +192,51 @@ class TestPipeline(_ToolBase):
             outcome = await ms._apply_owner_team_pipeline(MagicMock(), principal, _RESOURCE_ID, None, _ORG_ID)
         assert outcome is None
 
+    async def test_helper_reraises_non_404_gate_error(self) -> None:
+        principal = SimpleNamespace(organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+        boom = FastAPIHTTPException(status_code=403, detail="denied")
+        with (
+            patch(
+                "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new=AsyncMock(side_effect=boom)
+            ),
+            pytest.raises(FastAPIHTTPException),
+        ):
+            await ms._apply_owner_team_pipeline(MagicMock(), principal, _RESOURCE_ID, None, _ORG_ID)
+
+    async def test_helper_clear_skips_team_validation(self) -> None:
+        principal = SimpleNamespace(organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+        locked = _row(owner=_TEAM_A)
+        update = AsyncMock(return_value=_row(owner=None))
+        team_check = AsyncMock()
+        with (
+            patch(
+                "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+                new=AsyncMock(return_value=locked),
+            ),
+            patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+            patch("modulo.api.routes.pipelines._enforce_stored_bindings_on_team_change", new=AsyncMock()),
+            patch("modulo.api.team_scope.validate_owner_team_for_create", new=team_check),
+            patch("modulo.db.crud.pipeline.update_pipeline", new=update),
+        ):
+            outcome = await ms._apply_owner_team_pipeline(MagicMock(), principal, _RESOURCE_ID, None, _ORG_ID)
+        assert outcome == (_TEAM_A, None)
+        team_check.assert_not_awaited()
+
+    async def test_helper_update_returns_none_after_gate(self) -> None:
+        principal = SimpleNamespace(organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+        with (
+            patch(
+                "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+                new=AsyncMock(return_value=_row(owner=None)),
+            ),
+            patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+            patch("modulo.api.routes.pipelines._enforce_stored_bindings_on_team_change", new=AsyncMock()),
+            patch("modulo.api.team_scope.validate_owner_team_for_create", new=AsyncMock()),
+            patch("modulo.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=None)),
+        ):
+            outcome = await ms._apply_owner_team_pipeline(MagicMock(), principal, _RESOURCE_ID, _TEAM_A, _ORG_ID)
+        assert outcome is None
+
 
 @pytest.mark.parametrize(
     ("resource_type", "get_target", "update_target"),
@@ -312,6 +358,33 @@ class TestSimpleResources(_ToolBase):
             ms._ctx_team_id.set(None)
         assert result["error"] == "team_boundary_violation"
 
+    async def test_helper_update_returns_none(self, resource_type: str, get_target: str, update_target: str) -> None:
+        principal = SimpleNamespace(organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+        with (
+            patch(get_target, new=AsyncMock(return_value=_row(owner=_TEAM_A))),
+            patch(update_target, new=AsyncMock(return_value=None)),
+            patch(_REBIND_GUARD, new=AsyncMock()),
+        ):
+            outcome = await ms._apply_owner_team_simple(
+                _mock_session(), principal, resource_type, _RESOURCE_ID, None, _ORG_ID
+            )
+        assert outcome is None
+
+    async def test_same_team_change_writes_no_audit(
+        self, resource_type: str, get_target: str, update_target: str
+    ) -> None:
+        ms._ctx_role.set("admin")
+        self._use_session()
+        with (
+            patch(get_target, new=AsyncMock(return_value=_row(owner=_TEAM_A))),
+            patch(update_target, new=AsyncMock(return_value=_row(owner=_TEAM_A))),
+            patch(_REBIND_GUARD, new=AsyncMock()),
+            patch(_AUDIT, new=AsyncMock()) as audit,
+        ):
+            result = await ms.set_resource_owner_team(resource_type, str(_RESOURCE_ID), str(_TEAM_A))
+        assert result["owner_team_id"] == str(_TEAM_A)
+        audit.assert_not_awaited()
+
 
 class TestConnectorRebindGuard(_ToolBase):
     async def test_strand_guard_rejection_is_validation_failed(self) -> None:
@@ -328,3 +401,15 @@ class TestConnectorRebindGuard(_ToolBase):
         assert result["error"] == "validation_failed"
         assert "connector_team_mismatch" in result["detail"]
         update.assert_not_awaited()
+
+
+class TestUnexpectedErrors(_ToolBase):
+    async def test_programming_error_maps_to_migration_required(self) -> None:
+        with patch(_MB_GET, new=AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("boom")))):
+            result = await ms.set_resource_owner_team("model_backend", str(_RESOURCE_ID), None)
+        assert result["error"] == "migration_required"
+
+    async def test_unexpected_exception_maps_to_server_error(self) -> None:
+        with patch(_MB_GET, new=AsyncMock(side_effect=RuntimeError("boom"))):
+            result = await ms.set_resource_owner_team("model_backend", str(_RESOURCE_ID), None)
+        assert result["error"] == "server_error"

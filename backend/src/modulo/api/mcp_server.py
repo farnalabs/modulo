@@ -3490,8 +3490,10 @@ async def set_resource_owner_team(
         rid, rid_err = _parse_uuid_param(resource_id, "resource_id")
         if rid_err:
             return rid_err
-        if rid is None:
-            return {"error": "invalid_id", "detail": _MSG_UUID_PARSE_FAILED}
+        # _parse_uuid_param returns (None, error) only on failure, already handled
+        # above; cast narrows for mypy without a dead branch or an assert inside
+        # the except-Exception block (SonarCloud S5779).
+        rid = cast(uuid.UUID, rid)
         new_team, team_err = _parse_optional_uuid(owner_team_id, "owner_team_id")
         if team_err is not None:
             return team_err
