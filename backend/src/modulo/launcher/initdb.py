@@ -34,6 +34,8 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from modulo.launcher.platform import binary_name, initdb_locale, is_windows
+
 BOOTSTRAP_USERNAME = "modulo"
 INITDB_LOCALE = "C.UTF-8"
 PG_VERSION_FILE = "PG_VERSION"
@@ -71,10 +73,8 @@ class InitdbError(RuntimeError):
 
 
 def _binary(bin_dir: Path, name: str) -> str:
-    """Resolve a bundled binary path (TODO(P3): Windows needs ``.exe`` + ACL work)."""
-    if sys.platform == "win32":
-        name = f"{name}.exe"
-    return str(bin_dir / name)
+    """Resolve a bundled binary path using the platform executable suffix."""
+    return str(bin_dir / binary_name(name))
 
 
 def _run_command(argv: list[str]) -> None:
@@ -148,7 +148,7 @@ def initdb_argv(tmp_pgdata: Path, bin_dir: Path, username: str, pwfile: Path) ->
         "--username",
         username,
         "--locale",
-        INITDB_LOCALE,
+        initdb_locale(),
         "--auth=scram-sha-256",
         "--pwfile",
         str(pwfile),
@@ -214,15 +214,16 @@ def _validate_pause_env() -> None:
 
 
 def assert_supported_platform() -> None:
-    """Refuse Windows until the P3 delivery (locale/ACL/binary seams).
+    """Validate the platform contract before touching a bundled cluster.
 
-    Extracted as a seam so logic tests can bypass it on any platform — the
-    fake-runner tests validate orchestration logic, not the OS.
+    The command and locale seams are testable on Linux, but actual Windows
+    bundled-Postgres bootstrap still requires installer-host validation.
     """
-    if sys.platform == "win32":
-        # Deferred P3: Windows initdb (locale, ACLs, .exe resolution) lands with
-        # the P3 delivery; refuse loudly instead of mis-initialising.
-        raise InitdbError("Bundled Postgres bootstrap is not supported on Windows yet (TODO(P3))")
+    if is_windows():
+        raise InitdbError(
+            "Bundled Postgres bootstrap on Windows requires validation with the shipped Windows binary "
+            "and installer test environment (FAR-2229); refusing unvalidated runtime bootstrap"
+        )
 
 
 def bootstrap_pgdata(
