@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { setActivePinia, createPinia } from 'pinia'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const getMock = vi.fn().mockResolvedValue({ items: [], total: 0 })
 
@@ -119,6 +121,20 @@ function mountWithLongMessageGroup() {
     return { items: [], total: 0 }
   })
   return mountView()
+}
+
+/** One error-group row in the shape the dashboard renders. */
+function errorGroupRow(id: string) {
+  return {
+    id,
+    level_peak: 'error',
+    sample_message: `sample message for ${id}`,
+    count: 1,
+    first_seen: new Date().toISOString(),
+    last_seen: new Date().toISOString(),
+    status: 'new',
+    assigned_to: null,
+  }
 }
 
 describe('AdminErrorsView', () => {
@@ -345,9 +361,65 @@ describe('AdminErrorsView', () => {
     const [details, url] = writeText.mock.calls[0][0].split('\n')
     expect(details).toBe('error eg-long-1 · status new · level error · count 3')
     expect(url).toBe(`url ${window.location.origin}/admin/errors/eg-long-1`)
-    expect(wrapper.find('[data-testid="admin-errors-copy-reference-feedback"]').text()).toBe('Copied')
+    // The visible confirmation must sit in the row the user clicked (the shared
+    // live region is below an ~880px table, i.e. off-screen from a mid-table
+    // row), and the shared region stays the single announcement path.
+    const status = wrapper.find('[data-testid="admin-errors-copy-reference-status-eg-long-1"]')
+    expect(status.text()).toBe('Copied')
+    expect(copy.element.closest('td')?.contains(status.element)).toBe(true)
+    const announcement = wrapper.find('[data-testid="admin-errors-copy-reference-feedback"]')
+    expect(announcement.text()).toBe('Copied')
+    expect(announcement.classes()).toContain('sr-only')
     expect(routerMocks.push).not.toHaveBeenCalled()
     wrapper.unmount()
+  })
+
+  it('confirms the copy in the clicked row only, not in every row', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    getMock.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/errors') {
+        return {
+          items: [errorGroupRow('eg-one'), errorGroupRow('eg-two')],
+          total: 2,
+        }
+      }
+      return { items: [], total: 0 }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-errors-copy-reference-eg-one"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="admin-errors-copy-reference-status-eg-one"]').text()).toBe('Copied')
+    expect(wrapper.find('[data-testid="admin-errors-copy-reference-status-eg-two"]').text()).toBe('')
+    wrapper.unmount()
+  })
+
+  it('reserves the text-xs line box for the per-row confirmation so copying cannot shift the table', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mountWithLongMessageGroup()
+    await flushPromises()
+    await nextTick()
+
+    const status = wrapper.find('[data-testid="admin-errors-copy-reference-status-eg-long-1"]')
+    // min-h-4 (16px) is exactly the text-xs line box; the previous status
+    // element reserved 1em (12px) and shifted the layout by 4-6px per copy.
+    expect(status.classes()).toEqual(expect.arrayContaining(['min-h-4', 'text-xs']))
+    // The reserved box exists before any copy, so appearing text cannot resize
+    // the auto-laid-out column.
+    expect(status.text()).toBe('')
+    wrapper.unmount()
+  })
+
+  it('uses no 1em-based min-height on any support-reference status element', () => {
+    for (const file of ['AdminErrorsView.vue', 'AdminErrorDetailView.vue', 'RunDetailView.vue']) {
+      const source = readFileSync(resolve(process.cwd(), 'src/views', file), 'utf8')
+      expect(source).not.toContain('min-h-[1em]')
+    }
   })
 
   it('does not trigger row navigation when pressing a key on the copy button', async () => {

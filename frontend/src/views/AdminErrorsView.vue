@@ -165,26 +165,50 @@
           </template>
           <!-- Support reference (FAR-2304): one click copies the canonical
                reference for this error group. `.stop` on click/keydown keeps
-               the row's own navigation from firing alongside it. -->
+               the row's own navigation from firing alongside it. The visible
+               confirmation sits next to the button (see the span below) because
+               the shared live region is below an ~880px table and is off-screen
+               from a mid-table row — a confirmation the user cannot see reads
+               as a silent no-op. -->
           <template #cell-support_reference="{ row }">
-            <button
-              type="button"
-              class="rounded-md px-2 py-1 text-xs font-medium text-primary-text hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              :aria-label="$t('common.support_reference.copy')"
-              :data-testid="'admin-errors-copy-reference-' + errorGroupRowId(row)"
-              @click.stop="copyGroupSupportReference(row)"
-              @keydown.stop
-            >
-              {{ $t('views.AdminErrorsView.copy') }}
-            </button>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="rounded-md px-2 py-1 text-xs font-medium text-primary-text hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :aria-label="$t('common.support_reference.copy')"
+                :data-testid="'admin-errors-copy-reference-' + errorGroupRowId(row)"
+                @click.stop="copyGroupSupportReference(row)"
+                @keydown.stop
+              >
+                {{ $t('views.AdminErrorsView.copy') }}
+              </button>
+              <!-- Per-row confirmation: reserves the `text-xs` line box
+                   (`min-h-4`) AND a fixed width, so the cell keeps the same
+                   geometry whether the message is present or not — the table
+                   is auto-laid-out, so un-reserved text would resize the column
+                   on every copy. `aria-hidden` keeps the single shared live
+                   region below as the only announcement path; this span is the
+                   visual half of it. -->
+              <span
+                class="inline-flex min-h-4 w-20 items-center whitespace-nowrap text-xs text-muted-foreground"
+                :data-testid="'admin-errors-copy-reference-status-' + errorGroupRowId(row)"
+                aria-hidden="true"
+              >{{ feedbackRowId === errorGroupRowId(row) ? supportReferenceFeedback : '' }}</span>
+            </div>
           </template>
         </DataTable>
       </div>
 
+      <!-- Single announcement path for the copy feedback (FAR-2304 review).
+           Visually hidden on purpose: the confirmation the user sees is the
+           per-row span in the row they clicked, so rendering the text here too
+           would duplicate it. `aria-live` announces an off-screen region, which
+           is the whole point of keeping this element. No height reservation is
+           needed for a region that never takes part in layout. -->
       <output
         data-testid="admin-errors-copy-reference-feedback"
         aria-live="polite"
-        class="block min-h-[1em] text-sm text-muted-foreground"
+        class="sr-only"
       >{{ supportReferenceFeedback }}</output>
 
       <div class="flex items-center justify-between">
@@ -499,7 +523,14 @@ const supportReferenceFeedback = computed(() => {
   return ''
 })
 
+// Which row the current feedback belongs to. `useSupportReference` reports ONE
+// success/failure state for the whole view (and clears success after ~2s), so
+// the row id is what places that state next to the row that produced it. When
+// the state clears, the per-row span renders empty and the id is harmless.
+const feedbackRowId = ref<string | null>(null)
+
 async function copyGroupSupportReference(row: Record<string, unknown>) {
+  feedbackRowId.value = errorGroupRowId(row)
   await copyReference(buildErrorGroupSupportReference(toSupportReferenceSource(row), {
     t,
     scope: isInstanceScope.value ? 'instance' : 'organisation',

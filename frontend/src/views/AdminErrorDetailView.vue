@@ -32,7 +32,7 @@
         <output
           data-testid="admin-error-detail-copy-reference-feedback"
           aria-live="polite"
-          class="min-h-[1em] text-xs text-muted-foreground"
+          class="min-h-4 text-xs text-muted-foreground"
         >{{ supportReferenceFeedback }}</output>
       </div>
     </header>

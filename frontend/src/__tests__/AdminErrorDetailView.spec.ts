@@ -169,7 +169,11 @@ describe('AdminErrorDetailView', () => {
     const [details, url] = writeText.mock.calls[0][0].split('\n')
     expect(details).toBe('error err-1 · fingerprint abcdef1234567890 · status new · level error · count 3')
     expect(url).toBe(`url ${window.location.origin}/admin/errors/err-1`)
-    expect(wrapper.find('[data-testid="admin-error-detail-copy-reference-feedback"]').text()).toBe('Copied')
+    const feedback = wrapper.find('[data-testid="admin-error-detail-copy-reference-feedback"]')
+    expect(feedback.text()).toBe('Copied')
+    // min-h-4 (16px) is exactly the text-xs line box, so the message appearing
+    // reserves its own space instead of shifting the header by 4px.
+    expect(feedback.classes()).toEqual(expect.arrayContaining(['min-h-4', 'text-xs']))
   })
 
   it('copies an instance-scope reference with the scope in its url', async () => {

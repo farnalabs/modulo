@@ -68,7 +68,7 @@
             <output
               data-testid="run-detail-share-summary-feedback"
               aria-live="polite"
-              class="min-h-[1em]"
+              class="min-h-4 text-xs"
             >{{ supportReferenceFeedback }}</output>
           </div>
         </div>

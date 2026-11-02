@@ -111,6 +111,9 @@ describe('RunDetailShare', () => {
 
     const feedback = wrapper.find('[data-testid="run-detail-share-summary-feedback"]')
     expect(feedback.attributes('aria-live')).toBe('polite')
+    // min-h-4 (16px) matches the text-xs line box; 1em under-reserved it by 4px
+    // and shifted the header every time the message appeared.
+    expect(feedback.classes()).toEqual(expect.arrayContaining(['min-h-4', 'text-xs']))
     expect(feedback.text()).toBe('')
 
     await wrapper.find('[data-testid="run-detail-share-summary"]').trigger('click')
