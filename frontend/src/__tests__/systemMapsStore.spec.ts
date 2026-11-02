@@ -448,6 +448,28 @@ describe('useSystemMapsStore discovery', () => {
     expect(store.discovering).toBe(false)
   })
 
+  it('discards a discovery failure that a reset has already superseded', async () => {
+    let rejectRequest: ((reason?: unknown) => void) | undefined
+    mockPost.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRequest = reject
+        }),
+    )
+    const store = useSystemMapsStore()
+
+    const request = store.fetchDiscovery({ name: 'Discovered System Map' })
+    await vi.waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1))
+
+    store.reset()
+    rejectRequest?.(new Error('late discovery failure'))
+    await request
+
+    expect(store.discoveryReport).toBeNull()
+    expect(store.discoveryError).toBeNull()
+    expect(store.discovering).toBe(false)
+  })
+
   it('clears discovery state on reset', async () => {
     mockPost.mockResolvedValue({ data: discoveryReport() })
     const store = useSystemMapsStore()

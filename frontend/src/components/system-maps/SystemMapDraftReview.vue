@@ -11,18 +11,18 @@
       <p class="mt-1 text-sm" data-testid="system-map-discovery-report">
         {{
           $t('views.DashboardView.system_maps_discovery_summary', {
-            nodes: store.discoveryReport?.node_count ?? 0,
-            edges: store.discoveryReport?.edge_count ?? 0,
-            sources: store.discoveryReport?.sources_inspected.length ?? 0,
-            revision: store.discoveryReport?.draft_revision_number ?? 0,
+            nodes: store.discoveryReport.node_count,
+            edges: store.discoveryReport.edge_count,
+            sources: store.discoveryReport.sources_inspected.length,
+            revision: store.discoveryReport.draft_revision_number,
           })
         }}
       </p>
-      <p v-if="store.discoveryReport?.warnings.length" class="mt-2 text-xs text-muted-foreground">
-        {{ $t('views.DashboardView.system_maps_discovery_warnings', { count: store.discoveryReport?.warnings.length ?? 0 }) }}
+      <p v-if="store.discoveryReport.warnings.length" class="mt-2 text-xs text-muted-foreground">
+        {{ $t('views.DashboardView.system_maps_discovery_warnings', { count: store.discoveryReport.warnings.length }) }}
       </p>
-      <p v-if="store.discoveryReport?.skipped.length" class="mt-2 text-xs text-muted-foreground">
-        {{ $t('views.DashboardView.system_maps_discovery_skipped', { count: store.discoveryReport?.skipped.length ?? 0 }) }}
+      <p v-if="store.discoveryReport.skipped.length" class="mt-2 text-xs text-muted-foreground">
+        {{ $t('views.DashboardView.system_maps_discovery_skipped', { count: store.discoveryReport.skipped.length }) }}
       </p>
       <p class="mt-2 text-xs text-muted-foreground">{{ $t('views.DashboardView.system_maps_no_publish_note') }}</p>
     </template>
