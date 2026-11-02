@@ -1221,15 +1221,15 @@ class TestRevisionDiff:
         )
         diff = await repo.diff_revisions(db, organisation_id=_ORG, base_revision_id=_REV, target_revision_id=_REV)
         assert diff is not None
-        assert diff["nodes_added"] == []
-        assert diff["nodes_removed"] == []
-        assert diff["nodes_modified"] == []
-        assert diff["relationships_added"] == []
-        assert diff["relationships_removed"] == []
-        assert diff["relationships_modified"] == []
-        assert diff["loop_configs_added"] == []
-        assert diff["loop_configs_removed"] == []
-        assert diff["loop_configs_modified"] == []
+        assert not diff["nodes_added"]
+        assert not diff["nodes_removed"]
+        assert not diff["nodes_modified"]
+        assert not diff["relationships_added"]
+        assert not diff["relationships_removed"]
+        assert not diff["relationships_modified"]
+        assert not diff["loop_configs_added"]
+        assert not diff["loop_configs_removed"]
+        assert not diff["loop_configs_modified"]
         assert diff["content_json_changed"] is False
 
     async def test_diff_reports_added_removed_and_modified(self, repo: SystemMapRepository) -> None:

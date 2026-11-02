@@ -1028,5 +1028,5 @@ class TestSystemMapFetch:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             current = executor.fetch_current(config)
         assert route.called
-        assert current["system_map"] == {}
+        assert not current["system_map"]
         assert current["ambiguous_system_map_names"] == {"alpha": 2}
