@@ -32,6 +32,14 @@ quarantine:
     reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI 2026-11-01)"
     expiry: "2026-11-15"
     owner: "platform-team"
+  # Merge-queue run 41412369122 (2026-11-02) hit the same GC attribution on the
+  # SCIM parametrization below; it passes in isolation with the unraisable gate
+  # enabled. Same leak, new victim — listed so the merge queue stops tripping on
+  # whichever item the GC happens to land in.
+  - test_id: "tests/unit/scim/test_scim_provisioning_programming_error.py::TestScimDatabaseErrors::test_error_returns_expected_status[get_user_500]"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI 2026-11-02)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
 
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
