@@ -1267,6 +1267,173 @@ def is_sensitive_key(key: str) -> bool:
 # the twin surface explicit the way ``is_sensitive_key`` does.
 from modulo.core.secret_patterns import is_sensitive_env_key  # noqa: E402
 
+# ─── System Maps (FAR-2288) ───
+
+
+class SystemMapNodeEntity(BaseModel):
+    """A declarative system map node (mirrors SystemMapNodeCreate)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_key: str = Field(min_length=1, max_length=100)
+    node_type: str = Field(pattern=r"^(pipeline|agent|connector|improvement_loop|data_store|external_system)$")
+    display_name: str = Field(min_length=1, max_length=255)
+    config_json: dict[str, Any] = Field(default_factory=dict)
+    pipeline_id: uuid.UUID | None = None
+    connector_instance_id: uuid.UUID | None = None
+    owner_team_id: uuid.UUID | None = None
+    eval_id: uuid.UUID | None = None
+    position_x: float = Field(default=0.0)
+    position_y: float = Field(default=0.0)
+
+
+class SystemMapRelationshipEntity(BaseModel):
+    """A declarative system map relationship (mirrors SystemMapRelationshipCreate)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_node_key: str = Field(min_length=1, max_length=100)
+    target_node_key: str = Field(min_length=1, max_length=100)
+    relationship_type: str = Field(pattern=r"^(flow|data|trigger|loop_back)$")
+    config_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class SystemMapLoopConfigEntity(BaseModel):
+    """A declarative system map loop config (mirrors SystemMapLoopConfigCreate)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_key: str = Field(min_length=1, max_length=100)
+    target_signal: str = Field(min_length=1, max_length=100)
+    observation_window_seconds: int = Field(ge=1)
+    action_pipeline_id: uuid.UUID
+    budget_limit_usd: float = Field(ge=0)
+    cooldown_seconds: int = Field(ge=0)
+    outcome_metric: str = Field(min_length=1, max_length=100)
+
+
+class SystemMapRevisionEntity(BaseModel):
+    """A declarative system map revision (mirrors SystemMapRevisionCreate)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    revision_number: int | None = None  # When omitted, auto-assign next number
+    status: str = "draft"  # Only "draft" is valid for apply (publish is explicit action)
+    nodes: list[SystemMapNodeEntity] = Field(default_factory=list)
+    relationships: list[SystemMapRelationshipEntity] = Field(default_factory=list)
+    loop_configs: list[SystemMapLoopConfigEntity] = Field(default_factory=list)
+    notes: str = Field(default="", max_length=4000)
+
+    @model_validator(mode="after")
+    def validate_graph_references(self) -> SystemMapRevisionEntity:
+        node_keys = [node.node_key for node in self.nodes]
+        node_key_set = set(node_keys)
+        if len(node_keys) != len(node_key_set):
+            raise ValueError("node_key values must be unique within a revision")
+        relationship_keys = {
+            (rel.source_node_key, rel.target_node_key, rel.relationship_type) for rel in self.relationships
+        }
+        if len(relationship_keys) != len(self.relationships):
+            raise ValueError("relationships must be unique within a revision")
+        missing_relationship_nodes = sorted(
+            {
+                key
+                for rel in self.relationships
+                for key in (rel.source_node_key, rel.target_node_key)
+                if key not in node_key_set
+            }
+        )
+        if missing_relationship_nodes:
+            raise ValueError(f"relationships reference missing nodes: {', '.join(missing_relationship_nodes)}")
+        loop_keys = [loop.node_key for loop in self.loop_configs]
+        if len(loop_keys) != len(set(loop_keys)):
+            raise ValueError("loop_configs must be unique by node_key within a revision")
+        missing_loop_nodes = sorted(key for key in loop_keys if key not in node_key_set)
+        if missing_loop_nodes:
+            raise ValueError(f"loop_configs reference missing nodes: {', '.join(missing_loop_nodes)}")
+        wrong_loop_types = sorted(
+            loop.node_key
+            for loop in self.loop_configs
+            if next(node for node in self.nodes if node.node_key == loop.node_key).node_type != "improvement_loop"
+        )
+        if wrong_loop_types:
+            raise ValueError(f"loop_configs require improvement_loop nodes: {', '.join(wrong_loop_types)}")
+        return self
+
+    def managed_view(self) -> dict[str, Any]:
+        """Canonical managed-field view used for hashing."""
+        return {
+            "status": self.status,
+            "nodes": [n.model_dump(mode="json") for n in self.nodes],
+            "relationships": [r.model_dump(mode="json") for r in self.relationships],
+            "loop_configs": [lc.model_dump(mode="json") for lc in self.loop_configs],
+            "notes": self.notes,
+        }
+
+
+class SystemMapEntity(BaseModel):
+    """A declarative system map (FAR-2288).
+
+    Identity is by name (unique per org). The revision content is managed
+    declaratively: the revision_number is optional (auto-assigned if omitted),
+    and only "draft" status is managed by apply (publish is an explicit action
+    via the API, not an implicit state transition).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    owner_team_id: uuid.UUID | None = None
+    visibility: str = "org"  # "org" or "team"
+    default_map: bool = False
+    revision: SystemMapRevisionEntity | None = None  # When omitted, map metadata only
+
+    @field_validator("visibility")
+    @classmethod
+    def _validate_visibility(cls, v: str) -> str:
+        if v not in ("org", "team"):
+            raise ValueError("visibility must be 'org' or 'team'")
+        return v
+
+    @model_validator(mode="after")
+    def _team_visibility_requires_owner(self) -> SystemMapEntity:
+        if self.visibility == "team" and self.owner_team_id is None:
+            raise ValueError("team visibility requires owner_team_id")
+        return self
+
+    def managed_view(self) -> dict[str, Any]:
+        """Canonical managed-field view used for hashing."""
+        view: dict[str, Any] = {
+            "description": self.description,
+            "owner_team_id": str(self.owner_team_id) if self.owner_team_id else None,
+            "visibility": self.visibility,
+            "default_map": self.default_map,
+        }
+        if self.revision is not None:
+            view["revision"] = self.revision.managed_view()
+        return view
+
+    def create_payload(self) -> dict[str, Any]:
+        """POST /api/v1/system-maps body (SystemMapCreate shape)."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "owner_team_id": str(self.owner_team_id) if self.owner_team_id else None,
+            "visibility": self.visibility,
+            "default_map": self.default_map,
+        }
+
+    def update_payload(self) -> dict[str, Any]:
+        """PUT /api/v1/system-maps/{id} body (SystemMapUpdate shape)."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "owner_team_id": str(self.owner_team_id) if self.owner_team_id else None,
+            "visibility": self.visibility,
+            "default_map": self.default_map,
+        }
+
 
 def _is_secret_shaped(key: str, value: str) -> bool:
     """True when a config value is treated as a secret by the masking policy.
@@ -1659,6 +1826,7 @@ class EntitySet(BaseModel):
     model_backends: list[ModelBackendEntity] = Field(default_factory=list)
     pipelines: list[PipelineEntity] = Field(default_factory=list)
     triggers: list[TriggerEntity] = Field(default_factory=list)
+    system_maps: list[SystemMapEntity] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _unique_policy_gate_evals(self) -> EntitySet:
@@ -1709,6 +1877,7 @@ class ApplyConfig(BaseModel):
         schema_names = [s.name for s in self.entities.schemas]
         backend_names = [b.name for b in self.entities.model_backends]
         pipeline_names = [p.name for p in self.entities.pipelines]
+        system_map_names = [m.name for m in self.entities.system_maps]
         # Trigger identity is (pipeline, name) — the pipeline name is part of
         # the entity key, so duplicates are detected on the pair.
         trigger_keys = [f"{t.pipeline}/{t.name}" for t in self.entities.triggers]
@@ -1716,6 +1885,7 @@ class ApplyConfig(BaseModel):
             ("schemas", schema_names),
             ("model_backends", backend_names),
             ("pipelines", pipeline_names),
+            ("system_maps", system_map_names),
             ("triggers", trigger_keys),
         ):
             seen: set[str] = set()
@@ -1760,6 +1930,7 @@ class ApplyConfig(BaseModel):
             ],
             pipelines=[*self.entities.pipelines, *other.entities.pipelines],
             triggers=[*self.entities.triggers, *other.entities.triggers],
+            system_maps=[*self.entities.system_maps, *other.entities.system_maps],
         )
         # Collect duplicate names across the merged set up front (the model
         # validators only check single documents at construction time).
@@ -1767,6 +1938,7 @@ class ApplyConfig(BaseModel):
             ("schemas", [s.name for s in merged_entities.schemas]),
             ("model_backends", [b.name for b in merged_entities.model_backends]),
             ("pipelines", [p.name for p in merged_entities.pipelines]),
+            ("system_maps", [m.name for m in merged_entities.system_maps]),
             ("triggers", [f"{t.pipeline}/{t.name}" for t in merged_entities.triggers]),
         ):
             if len(names) != len(set(names)):

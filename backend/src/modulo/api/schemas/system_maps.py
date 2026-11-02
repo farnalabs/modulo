@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ─── Centralised vocabularies (mirror ORM CHECK constraints) ───
 
@@ -364,6 +364,59 @@ class PublishResponse(BaseModel):
     validation_errors: list[PublishValidationError] = Field(default_factory=list)
 
 
+# ─── Revision Lifecycle (FAR-2288) ───
+
+
+class SystemMapRevisionDiffRequest(BaseModel):
+    """Request to diff a revision against another revision or the current draft."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    against_revision_id: uuid.UUID | None = Field(
+        default=None,
+        description="Revision to diff against. If omitted, diffs against the current draft revision (if any).",
+    )
+
+
+class SystemMapRevisionDiffResponse(BaseModel):
+    """Diff result between two revisions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_revision_id: uuid.UUID
+    base_revision_number: int
+    target_revision_id: uuid.UUID
+    target_revision_number: int
+    nodes_added: list[str] = Field(default_factory=list)
+    nodes_removed: list[str] = Field(default_factory=list)
+    nodes_modified: list[str] = Field(default_factory=list)
+    relationships_added: list[str] = Field(default_factory=list)
+    relationships_removed: list[str] = Field(default_factory=list)
+    relationships_modified: list[str] = Field(default_factory=list)
+    loop_configs_added: list[str] = Field(default_factory=list)
+    loop_configs_removed: list[str] = Field(default_factory=list)
+    loop_configs_modified: list[str] = Field(default_factory=list)
+    content_json_changed: bool = False
+
+
+class SystemMapRevisionRestoreAsNewRequest(BaseModel):
+    """Request to restore a published/archived revision as a new draft revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    notes: str = Field(default="Restored from revision {revision_number}", max_length=4000)
+
+
+class SystemMapRevisionRestoreAsNewResponse(BaseModel):
+    """Response for restore-as-new operation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    new_revision: SystemMapRevisionResponse
+    source_revision_id: uuid.UUID
+    source_revision_number: int
+
+
 # Forward references for recursive types
 SystemMapRevisionCreate.model_rebuild()
 
@@ -401,7 +454,12 @@ __all__ = [
     "SystemMapResponse",
     "SystemMapRevisionCreate",
     "SystemMapRevisionDetailResponse",
+    # Revision Lifecycle (FAR-2288)
+    "SystemMapRevisionDiffRequest",
+    "SystemMapRevisionDiffResponse",
     "SystemMapRevisionResponse",
+    "SystemMapRevisionRestoreAsNewRequest",
+    "SystemMapRevisionRestoreAsNewResponse",
     "SystemMapUpdate",
 ]
 

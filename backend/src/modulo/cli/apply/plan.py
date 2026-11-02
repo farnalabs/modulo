@@ -49,6 +49,7 @@ KIND_SCHEMA = "schema"
 KIND_BACKEND = "model_backend"
 KIND_PIPELINE = "pipeline"
 KIND_TRIGGER = "trigger"
+KIND_SYSTEM_MAP = "system_map"
 
 
 def _schema_current_view(current: dict[str, Any]) -> dict[str, Any]:
@@ -176,9 +177,33 @@ def _trigger_current_view(current: dict[str, Any], desired_view: dict[str, Any])
     return view
 
 
+def _system_map_current_view(current: dict[str, Any]) -> dict[str, Any]:
+    """Current view for system maps - managed fields only.
+
+    The revision content is managed when declared. The revision_number is
+    auto-assigned by the server, so it's not part of the managed view.
+    Only "draft" status is managed by apply (publish is explicit action).
+    """
+    view: dict[str, Any] = {}
+    for key in ("description", "owner_team_id", "visibility", "default_map"):
+        view[key] = current.get(key)
+    # Revision content is managed when the config declares a revision
+    if "revision" in current and current["revision"] is not None:
+        revision = current["revision"]
+        view["revision"] = {
+            "status": revision.get("status"),
+            "nodes": revision.get("nodes"),
+            "relationships": revision.get("relationships"),
+            "loop_configs": revision.get("loop_configs"),
+            "notes": revision.get("notes"),
+        }
+    return view
+
+
 _CURRENT_VIEWS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     KIND_SCHEMA: _schema_current_view,
     KIND_BACKEND: _backend_current_view,
+    KIND_SYSTEM_MAP: _system_map_current_view,
 }
 
 
@@ -220,6 +245,8 @@ def _current_view(kind: str, current: dict[str, Any], desired_view: dict[str, An
         return _pipeline_current_view(current, desired_view)
     if kind == KIND_TRIGGER:
         return _trigger_current_view(current, desired_view)
+    if kind == KIND_SYSTEM_MAP:
+        return _system_map_current_view(current)
     return _CURRENT_VIEWS[kind](current)
 
 

@@ -30,6 +30,7 @@ from modulo.cli.apply.plan import (
     KIND_BACKEND,
     KIND_PIPELINE,
     KIND_SCHEMA,
+    KIND_SYSTEM_MAP,
     KIND_TRIGGER,
     _trigger_current_view,
 )
@@ -280,6 +281,8 @@ def _managed_current_view(
         return None
     if kind == KIND_TRIGGER:
         return _trigger_current_view(current, desired_view)
+    if kind == KIND_SYSTEM_MAP:
+        return _CURRENT_VIEWS[kind](current)
     if kind == KIND_BACKEND:
         # FAR-2105: the endpoint fields are managed only when declared, so the
         # current view must be restricted to the desired key set exactly as
@@ -311,14 +314,14 @@ def build_drift_detail(
       ``{node, field, desired, current}`` entries naming the actual commit
       move; a graph-less or top-level-only updated pipeline gets no entry
       (legacy shape, unchanged);
-    - a drifted schema / model backend / trigger gets a managed-field
+    - a drifted schema / model backend / trigger / system map gets a managed-field
       breakdown (``{"fields": {added/removed/modified}}``) keyed
       ``"<kind>:<name>"`` so a schema or trigger named like a pipeline can
       never collide with the bare-name pipeline key.
     """
     updated = {
         kind: {e["name"] for e in (report.get("updated") or []) if e.get("kind") == kind}
-        for kind in (KIND_SCHEMA, KIND_BACKEND, KIND_PIPELINE, KIND_TRIGGER)
+        for kind in (KIND_SCHEMA, KIND_BACKEND, KIND_PIPELINE, KIND_TRIGGER, KIND_SYSTEM_MAP)
     }
     detail: dict[str, dict[str, Any]] = {}
     _add_pipeline_drift(detail, updated[KIND_PIPELINE], desired, current_entities)

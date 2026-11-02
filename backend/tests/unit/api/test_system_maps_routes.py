@@ -7,7 +7,7 @@ dev mode, operator/admin role, and the `system_maps_access` grant.
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Self
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -194,6 +194,83 @@ def _binding_row(
     row.created_at = datetime.now(UTC)
     row.updated_at = datetime.now(UTC)
     return row
+
+
+# ─── Test helpers for diff/restore (FAR-2288) ───
+
+
+def _diff_revision_row(
+    *,
+    rev_id: uuid.UUID = uuid.uuid4(),
+    map_id: uuid.UUID = _MAP_ID,
+    org_id: uuid.UUID = _ORG_ID,
+    revision_number: int = 2,
+    status: str = "published",
+) -> MagicMock:
+    row = MagicMock()
+    row.id = rev_id
+    row.system_map_id = map_id
+    row.organisation_id = org_id
+    row.revision_number = revision_number
+    row.status = status
+    row.content_json = {}
+    row.published_at = datetime.now(UTC) if status == "published" else None
+    row.deleted_at = None
+    row.deleted_by = None
+    row.created_at = datetime.now(UTC)
+    row.updated_at = datetime.now(UTC)
+    return row
+
+
+def _graph_with_nodes(
+    nodes: list[MagicMock],
+    relationships: list[MagicMock] | None = None,
+    loop_configs: list[MagicMock] | None = None,
+    revision: MagicMock | None = None,
+) -> dict[str, Any]:
+    if revision is None:
+        revision = _revision_row()
+    return {
+        "revision": revision,
+        "nodes": nodes,
+        "relationships": relationships or [],
+        "loop_configs": loop_configs or [],
+    }
+
+
+def _diff_response(
+    *,
+    base_revision_id: uuid.UUID = _REV_ID,
+    base_revision_number: int = 1,
+    target_revision_id: uuid.UUID = uuid.uuid4(),
+    target_revision_number: int = 2,
+    nodes_added: list[str] | None = None,
+    nodes_removed: list[str] | None = None,
+    nodes_modified: list[str] | None = None,
+    relationships_added: list[str] | None = None,
+    relationships_removed: list[str] | None = None,
+    relationships_modified: list[str] | None = None,
+    loop_configs_added: list[str] | None = None,
+    loop_configs_removed: list[str] | None = None,
+    loop_configs_modified: list[str] | None = None,
+    content_json_changed: bool = False,
+) -> dict[str, Any]:
+    return {
+        "base_revision_id": base_revision_id,
+        "base_revision_number": base_revision_number,
+        "target_revision_id": target_revision_id,
+        "target_revision_number": target_revision_number,
+        "nodes_added": nodes_added or [],
+        "nodes_removed": nodes_removed or [],
+        "nodes_modified": nodes_modified or [],
+        "relationships_added": relationships_added or [],
+        "relationships_removed": relationships_removed or [],
+        "relationships_modified": relationships_modified or [],
+        "loop_configs_added": loop_configs_added or [],
+        "loop_configs_removed": loop_configs_removed or [],
+        "loop_configs_modified": loop_configs_modified or [],
+        "content_json_changed": content_json_changed,
+    }
 
 
 class _Harness:
@@ -1389,6 +1466,18 @@ _ENDPOINT_PAYLOADS = {
     "publish_revision": ("POST", f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/publish", None, "get_map_by_id"),
     "archive_revision": ("POST", f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/archive", None, "get_map_by_id"),
     "delete_revision": ("DELETE", f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}", None, "get_map_by_id"),
+    "diff_revision": (
+        "POST",
+        f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff",
+        {"against_revision_id": str(uuid.uuid4())},
+        "get_map_by_id",
+    ),
+    "restore_revision": (
+        "POST",
+        f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/restore-as-new",
+        {"notes": "Restored"},
+        "get_map_by_id",
+    ),
     "overview": ("GET", f"{_BASE}/{_MAP_ID}/overview", None, "get_map_by_id"),
     "create_binding": (
         "POST",
@@ -1924,6 +2013,140 @@ def test_archive_revision_keeps_unrelated_published_pointer(client: tuple[TestCl
     resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/archive")
 
     assert resp.status_code == 200, resp.text
+
+
+# ─── Revision Diff tests (FAR-2288) ───
+
+
+def test_diff_revision_against_draft_returns_200(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row()))
+    draft_rev = _diff_revision_row(revision_number=3, status="draft")
+    harness.stub("list_revisions", AsyncMock(return_value=[draft_rev]))
+    harness.stub(
+        "diff_revisions",
+        AsyncMock(return_value=_diff_response(target_revision_id=draft_rev.id, target_revision_number=3)),
+    )
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff", json={})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["base_revision_number"] == 1
+    assert body["target_revision_number"] == 3
+
+
+def test_diff_revision_against_specific_revision_returns_200(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    target_rev_id = uuid.uuid4()
+    target_rev = _diff_revision_row(rev_id=target_rev_id, revision_number=2, status="published")
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(side_effect=[_revision_row(), target_rev]))
+    harness.stub(
+        "diff_revisions",
+        AsyncMock(return_value=_diff_response(target_revision_id=target_rev_id, target_revision_number=2)),
+    )
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff", json={"against_revision_id": str(target_rev_id)})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["target_revision_id"] == str(target_rev_id)
+
+
+def test_diff_revision_no_draft_and_no_target_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row()))
+    harness.stub("list_revisions", AsyncMock(return_value=[]))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff", json={})
+
+    assert resp.status_code == 404
+    assert "No draft revision found" in resp.json()["detail"]
+
+
+def test_diff_revision_missing_map_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff", json={})
+
+    assert resp.status_code == 404
+
+
+def test_diff_revision_missing_base_revision_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff", json={})
+
+    assert resp.status_code == 404
+
+
+def test_diff_revision_missing_target_revision_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row()))
+    target_rev_id = uuid.uuid4()
+    harness.stub("get_revision_by_id", AsyncMock(side_effect=[_revision_row(), None]))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff", json={"against_revision_id": str(target_rev_id)})
+
+    assert resp.status_code == 404
+
+
+# ─── Revision Restore-as-New tests (FAR-2288) ───
+
+
+def test_restore_revision_as_new_returns_201(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    published_rev = _revision_row(status="published", revision_number=2)
+    new_rev = _diff_revision_row(revision_number=3, status="draft")
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=published_rev))
+    harness.stub("restore_revision_as_new_draft", AsyncMock(return_value=new_rev))
+
+    resp = http.post(
+        f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/restore-as-new", json={"notes": "Restored from revision 2"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["new_revision"]["revision_number"] == 3
+    assert body["source_revision_number"] == 2
+
+
+def test_restore_draft_revision_rejected_409(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="draft")))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/restore-as-new", json={"notes": "Restored"})
+
+    assert resp.status_code == 409
+    assert "Cannot restore a draft revision" in resp.json()["detail"]
+
+
+def test_restore_revision_missing_map_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/restore-as-new", json={})
+
+    assert resp.status_code == 404
+
+
+def test_restore_revision_missing_source_revision_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/restore-as-new", json={})
+
+    assert resp.status_code == 404
 
 
 def test_delete_revision_missing_map_returns_404(client: tuple[TestClient, _Harness]) -> None:
