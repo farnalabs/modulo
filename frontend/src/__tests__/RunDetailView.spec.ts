@@ -2883,6 +2883,23 @@ describe('RunDetailView rendering extras', () => {
     wrapper.unmount()
   })
 
+  it('warns when the support reference cannot be written to the clipboard', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    Object.assign(navigator, { clipboard: { writeText } })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const wrapper = await mountWith(
+      { ...baseDetail(), status: 'failed', error_code: 'node_deadline_exceeded' },
+      { outputs_json: null },
+    )
+    const btn = wrapper.find('[data-testid="run-detail-share-summary"]')
+    await btn.trigger('click')
+    await flushPromises()
+
+    expect(warn).toHaveBeenCalledWith('Failed to copy support reference', expect.any(Error))
+    warn.mockRestore()
+    wrapper.unmount()
+  })
+
   it('copies the final output for a complete run', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
