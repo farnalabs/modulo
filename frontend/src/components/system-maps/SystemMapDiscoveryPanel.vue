@@ -18,14 +18,19 @@
           <section class="rounded-lg border bg-muted/30 p-3">
             <h3 class="text-sm font-medium">{{ $t('views.SystemMapDetailView.inferred_nodes') }} ({{ discovery.inferred_nodes?.length ?? 0 }})</h3>
             <ul class="mt-2 space-y-2 max-h-64 overflow-y-auto">
-              <li v-for="(node, index) in discovery.inferred_nodes" :key="index" class="rounded border bg-background p-3 flex items-center justify-between">
+              <li
+                v-for="(node, index) in discovery.inferred_nodes"
+                :key="index"
+                class="rounded border bg-background p-3 flex items-center justify-between"
+                :class="decisionClass(`node:${index}`)"
+              >
                 <div>
                   <p class="font-medium">{{ node.node_type }}: {{ node.display_name }}</p>
                   <p class="text-xs text-muted-foreground">Key: {{ node.node_key }}</p>
                 </div>
                 <div class="flex gap-1">
-                  <button type="button" class="rounded border px-2 py-1 text-xs" @click="onAccept(String(node.node_key))" :data-testid="`system-map-accept-node-${node.node_key}`">{{ $t('views.SystemMapDetailView.accept') }}</button>
-                  <button type="button" class="rounded border px-2 py-1 text-xs text-destructive" @click="onReject(String(node.node_key))" :data-testid="`system-map-reject-node-${node.node_key}`">{{ $t('views.SystemMapDetailView.reject') }}</button>
+                  <button type="button" class="rounded border px-2 py-1 text-xs" :class="activeClass(`node:${index}`, 'accepted')" :aria-pressed="decisions[`node:${index}`] === 'accepted'" @click="onAccept(`node:${index}`)" :data-testid="`system-map-accept-node-${node.node_key}`">{{ $t('views.SystemMapDetailView.accept') }}</button>
+                  <button type="button" class="rounded border px-2 py-1 text-xs text-destructive" :class="activeClass(`node:${index}`, 'rejected')" :aria-pressed="decisions[`node:${index}`] === 'rejected'" @click="onReject(`node:${index}`)" :data-testid="`system-map-reject-node-${node.node_key}`">{{ $t('views.SystemMapDetailView.reject') }}</button>
                 </div>
               </li>
             </ul>
@@ -34,11 +39,16 @@
           <section class="rounded-lg border bg-muted/30 p-3">
             <h3 class="text-sm font-medium">{{ $t('views.SystemMapDetailView.inferred_relationships') }} ({{ discovery.inferred_edges?.length ?? 0 }})</h3>
             <ul class="mt-2 space-y-2 max-h-64 overflow-y-auto">
-              <li v-for="(edge, index) in discovery.inferred_edges" :key="index" class="rounded border bg-background p-3 flex items-center justify-between">
+              <li
+                v-for="(edge, index) in discovery.inferred_edges"
+                :key="index"
+                class="rounded border bg-background p-3 flex items-center justify-between"
+                :class="decisionClass(`edge:${index}`)"
+              >
                 <div class="text-sm">{{ edge.source_node_key }} → {{ edge.target_node_key }} <span class="text-muted-foreground">({{ edge.relationship_type }})</span></div>
                 <div class="flex gap-1">
-                  <button type="button" class="rounded border px-2 py-1 text-xs" @click="onAccept(`edge-${index}`)" :data-testid="`system-map-accept-edge-${index}`">{{ $t('views.SystemMapDetailView.accept') }}</button>
-                  <button type="button" class="rounded border px-2 py-1 text-xs text-destructive" @click="onReject(`edge-${index}`)" :data-testid="`system-map-reject-edge-${index}`">{{ $t('views.SystemMapDetailView.reject') }}</button>
+                  <button type="button" class="rounded border px-2 py-1 text-xs" :class="activeClass(`edge:${index}`, 'accepted')" :aria-pressed="decisions[`edge:${index}`] === 'accepted'" @click="onAccept(`edge:${index}`)" :data-testid="`system-map-accept-edge-${index}`">{{ $t('views.SystemMapDetailView.accept') }}</button>
+                  <button type="button" class="rounded border px-2 py-1 text-xs text-destructive" :class="activeClass(`edge:${index}`, 'rejected')" :aria-pressed="decisions[`edge:${index}`] === 'rejected'" @click="onReject(`edge:${index}`)" :data-testid="`system-map-reject-edge-${index}`">{{ $t('views.SystemMapDetailView.reject') }}</button>
                 </div>
               </li>
             </ul>
@@ -60,15 +70,47 @@
       </div>
       <footer class="border-t px-4 py-3 flex justify-end gap-2">
         <button type="button" class="rounded border px-3 py-1.5 text-sm" @click="$emit('close')" data-testid="system-map-discovery-cancel">{{ $t('common.cancel') }}</button>
-        <button type="button" class="rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground" @click="$emit('save')" :data-testid="`system-map-discovery-save`">{{ $t('views.SystemMapDetailView.apply_changes') }}</button>
+        <button type="button" class="rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground" @click="onSave" :data-testid="`system-map-discovery-save`">{{ $t('views.SystemMapDetailView.apply_changes') }}</button>
       </footer>
     </aside>
   </div>
 </template>
 <script setup lang="ts">
-import type { DiscoveryReport } from '../../stores/systemMaps'
+import { ref } from 'vue'
+import type { DiscoveryReport, DiscoverySelection } from '../../stores/systemMaps'
+
 defineProps<{ discovery: DiscoveryReport | null; graph: unknown; dataTestId?: string }>()
-const emit = defineEmits<{ (e: 'close'): void; (e: 'accept', nodeKey: string): void; (e: 'reject', nodeKey: string): void; (e: 'save'): void }>()
-function onAccept(key: string): void { emit('accept', key) }
-function onReject(key: string): void { emit('reject', key) }
+const emit = defineEmits<{ (e: 'close'): void; (e: 'save', selections: DiscoverySelection): void }>()
+
+type Decision = 'accepted' | 'rejected'
+const decisions = ref<Record<string, Decision>>({})
+
+function toggle(key: string, decision: Decision): void {
+  const next = { ...decisions.value }
+  if (next[key] === decision) delete next[key]
+  else next[key] = decision
+  decisions.value = next
+}
+function onAccept(key: string): void { toggle(key, 'accepted') }
+function onReject(key: string): void { toggle(key, 'rejected') }
+function decisionClass(key: string): string {
+  return decisions.value[key] === 'accepted' ? 'border-success bg-success/5' : decisions.value[key] === 'rejected' ? 'border-destructive bg-destructive/5 opacity-70' : ''
+}
+function activeClass(key: string, decision: Decision): string {
+  return decisions.value[key] === decision ? (decision === 'accepted' ? 'border-success text-success-text' : 'border-destructive text-destructive') : ''
+}
+function onSave(): void {
+  const acceptedNodes: number[] = []
+  const acceptedEdges: number[] = []
+  const rejectedNodes: number[] = []
+  const rejectedEdges: number[] = []
+  for (const [key, decision] of Object.entries(decisions.value)) {
+    const [kind, index] = key.split(':')
+    const parsed = Number(index)
+    if (Number.isNaN(parsed)) continue
+    if (kind === 'node') (decision === 'accepted' ? acceptedNodes : rejectedNodes).push(parsed)
+    else if (kind === 'edge') (decision === 'accepted' ? acceptedEdges : rejectedEdges).push(parsed)
+  }
+  emit('save', { acceptedNodes, acceptedEdges, rejectedNodes, rejectedEdges })
+}
 </script>

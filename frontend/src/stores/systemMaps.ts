@@ -14,8 +14,18 @@ export type SystemMapRelationship = components['schemas']['SystemMapRelationship
 export type SystemMapGraph = components['schemas']['SystemMapRevisionDetailResponse']
 export type DiscoveryReport = components['schemas']['SystemMapDiscoveryReport']
 
-export const NODE_TYPES = ['pipeline', 'connector', 'model_backend', 'schema', 'trigger', 'eval', 'manual'] as const
-export const RELATIONSHIP_TYPES = ['triggers', 'data_flow', 'depends_on', 'references'] as const
+export interface DiscoverySelection {
+  acceptedNodes: number[]
+  acceptedEdges: number[]
+  rejectedNodes: number[]
+  rejectedEdges: number[]
+}
+
+// These vocabularies MUST mirror the backend CHECK constraints in
+// backend/src/modulo/api/schemas/system_maps.py (VALID_NODE_TYPES / VALID_REL_TYPES).
+// A mismatch makes every authored payload fail validation with a 422.
+export const NODE_TYPES = ['pipeline', 'agent', 'connector', 'improvement_loop', 'data_store', 'external_system'] as const
+export const RELATIONSHIP_TYPES = ['flow', 'data', 'trigger', 'loop_back'] as const
 export type NodeType = (typeof NODE_TYPES)[number]
 export type RelationshipType = (typeof RELATIONSHIP_TYPES)[number]
 
@@ -175,6 +185,17 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     if (response.error || !response.data) throw new Error('Could not discover system map')
     discovery.value = response.data
     await loadMap(response.data.draft_map_id)
+    // The map read model only exposes the published revision, so load the
+    // freshly-created draft explicitly; otherwise a discovery result would
+    // land on the empty-state screen until the draft was saved again.
+    if (response.data.draft_revision_id) {
+      try {
+        await loadRevision(response.data.draft_map_id, response.data.draft_revision_id)
+      } catch (err: unknown) {
+        // Discovery succeeded; surface the draft-fetch failure without discarding the report.
+        error.value = err instanceof Error ? err.message : 'Could not load the discovered draft'
+      }
+    }
     return response.data
   }
 

@@ -4,7 +4,6 @@
       <PageHeader
         :title="$t('views.SystemMapsView.title')"
         :subtitle="$t('views.SystemMapsView.subtitle')"
-
       >
         <template #right>
           <button type="button" class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" @click="openCreateDialog" data-testid="system-maps-create">{{ $t('views.SystemMapsView.create_map') }}</button>
@@ -14,34 +13,23 @@
 
     <div class="flex flex-1 min-h-0">
       <main class="flex-1 page-wide min-w-0 overflow-y-auto">
+        <ErrorAlert
+          v-if="actionError"
+          :message="actionError"
+          :on-dismiss="clearActionError"
+          dismiss-label="Dismiss"
+          class="mb-3"
+        />
+
         <ErrorAlert v-if="error" :message="error" :on-retry="loadMaps" />
 
-        <template v-else-if="loading">
-          <div class="overflow-x-auto rounded-lg border" aria-hidden="true">
-            <table class="w-full text-left text-sm">
-              <thead class="bg-muted/50">
-                <tr>
-                  <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.name') }}</th>
-                  <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.description') }}</th>
-                  <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.status') }}</th>
-                  <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.revisions') }}</th>
-                  <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.last_updated') }}</th>
-                  <th class="px-4 py-3 font-medium text-right">{{ $t('views.SystemMapsView.actions') }}</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y">
-                <tr v-for="row in 5" :key="row">
-                  <td class="px-4 py-3"><div class="h-4 w-48 rounded bg-muted/50" /></td>
-                  <td class="px-4 py-3"><div class="h-4 w-full max-w-md rounded bg-muted/50" /></td>
-                  <td class="px-4 py-3"><div class="h-4 w-20 rounded bg-muted/50" /></td>
-                  <td class="px-4 py-3"><div class="h-4 w-12 rounded bg-muted/50" /></td>
-                  <td class="px-4 py-3"><div class="h-4 w-28 rounded bg-muted/50" /></td>
-                  <td class="px-4 py-3"><div class="ml-auto h-4 w-20 rounded bg-muted/50" /></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </template>
+        <TableSkeleton
+          v-else-if="loading"
+          :columns="5"
+          :rows="5"
+          :aria-label="$t('common.loading')"
+          data-testid="system-maps-loading"
+        />
 
         <template v-else>
           <EmptyState v-if="maps.length === 0" :title="$t('views.SystemMapsView.no_maps')" :description="$t('views.SystemMapsView.empty_hint')" />
@@ -54,7 +42,6 @@
                     <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.name') }}</th>
                     <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.description') }}</th>
                     <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.status') }}</th>
-                    <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.revisions') }}</th>
                     <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.last_updated') }}</th>
                     <th class="px-4 py-3 font-medium text-right">{{ $t('views.SystemMapsView.actions') }}</th>
                   </tr>
@@ -78,9 +65,6 @@
                         {{ $t('views.SystemMapsView.' + (map.published_revision_id ? 'published' : 'draft')) }}
                       </span>
                     </td>
-                    <td class="px-4 py-3 text-muted-foreground">
-                      {{ $t('views.SystemMapsView.updated_at') }}
-                    </td>
                     <td class="px-4 py-3 text-muted-foreground">{{ formatDate(map.updated_at) }}</td>
                     <td class="px-4 py-3 text-right">
                       <button
@@ -88,6 +72,7 @@
                         class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
                         :data-testid="`system-map-action-${map.id}`"
                         :aria-label="$t('views.SystemMapsView.actions', { name: map.name })"
+                        aria-haspopup="menu"
                         @click.stop="openActionMenu($event, map)"
                       >
                         <MoreVertical class="h-3.5 w-3.5" aria-hidden="true" />
@@ -110,6 +95,8 @@
       </main>
     </div>
 
+    <Menu ref="actionMenuRef" :key="actionMenuKey" :model="actionMenuItems" popup />
+
     <!-- Create Map Dialog -->
     <Dialog v-model:visible="createDialogOpen" :modal="true" :dismissable-mask="true" :style="{ width: '28rem' }" :header="$t('views.SystemMapsView.create_map')" data-testid="system-map-create-dialog">
       <form @submit.prevent="submitCreate" class="space-y-4">
@@ -128,44 +115,33 @@
       </form>
     </Dialog>
 
-    <!-- Action Menu -->
-    <Transition name="fade">
-      <div v-if="actionMenu.map" class="fixed z-50 rounded border bg-card shadow-lg" :data-testid="`system-map-action-menu`">
-        <ul class="py-1">
-          <li @click="openMap(actionMenu.map!); actionMenu = { map: null, target: null }" class="px-3 py-2 text-sm hover:bg-accent cursor-pointer" data-testid="system-map-action-view">{{ $t('views.SystemMapsView.view') }}</li>
-          <li @click="openMap(actionMenu.map!); actionMenu = { map: null, target: null }" class="px-3 py-2 text-sm hover:bg-accent cursor-pointer" data-testid="system-map-action-edit">{{ $t('views.SystemMapsView.edit') }}</li>
-          <li @click="runDiscovery(actionMenu.map!); actionMenu = { map: null, target: null }" class="px-3 py-2 text-sm hover:bg-accent cursor-pointer" data-testid="system-map-action-discover">{{ $t('views.SystemMapsView.discover') }}</li>
-          <li class="border-t my-1" />
-          <li @click="confirmDelete(actionMenu.map!); actionMenu = { map: null, target: null }" class="px-3 py-2 text-sm text-destructive hover:bg-accent cursor-pointer" data-testid="system-map-action-delete">{{ $t('views.SystemMapsView.delete') }}</li>
-        </ul>
-      </div>
-    </Transition>
-
     <!-- Delete Confirmation -->
-    <Transition name="fade">
-      <div v-if="deleteDialog.map" class="fixed inset-0 z-50 flex items-center justify-center" :data-testid="`system-map-delete-confirm`">
-        <div class="absolute inset-0 bg-black/50" @click="deleteDialog = { map: null }" />
-        <div class="relative z-10 rounded-lg bg-card p-6 w-full max-w-md">
-          <h3 class="font-semibold">{{ $t('views.SystemMapsView.delete') }}</h3>
-          <p class="mt-2 text-sm text-muted-foreground">{{ $t('views.SystemMapsView.delete_confirm', { name: deleteDialog.map.name }) }}</p>
-          <div class="mt-4 flex justify-end gap-2">
-            <button type="button" class="rounded border px-3 py-1.5 text-sm" @click="deleteDialog = { map: null }" data-testid="system-map-delete-cancel">{{ $t('common.cancel') }}</button>
-            <button type="button" class="rounded bg-destructive px-3 py-1.5 text-sm text-destructive-foreground" @click="executeDelete(deleteDialog.map!); deleteDialog = { map: null }" data-testid="system-map-delete-confirm-btn">{{ $t('common.delete') }}</button>
-          </div>
-        </div>
-      </div>
-    </Transition>
+    <FormDialog
+      v-model:open="deleteDialogOpen"
+      :title="$t('views.SystemMapsView.delete')"
+      :description="deleteDialog.map ? $t('views.SystemMapsView.delete_confirm', { name: deleteDialog.map.name }) : ''"
+      :confirmText="$t('common.delete')"
+      confirmSeverity="danger"
+      :loading="deleting"
+      cancelTestId="system-map-delete-cancel"
+      confirmTestId="system-map-delete-confirm-btn"
+      @confirm="executeDelete"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useSystemMapsStore } from '../stores/systemMaps'
 import PageHeader from '../components/shared/PageHeader.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
+import FormDialog from '../components/shared/FormDialog.vue'
 import Dialog from 'primevue/dialog'
+import Menu from 'primevue/menu'
 import InputText from 'primevue/inputtext'
 import Textarea from 'primevue/textarea'
 import { MoreVertical } from '@lucide/vue'
@@ -173,14 +149,20 @@ import type { SystemMap } from '../stores/systemMaps'
 
 const router = useRouter()
 const store = useSystemMapsStore()
+const { t } = useI18n()
 
 const createDialogOpen = ref(false)
 const createForm = ref({ name: '', description: '' })
 const creating = ref(false)
 const nameId = 'system-map-create-name'
 const descId = 'system-map-create-description'
-const actionMenu = ref<{ map: SystemMap | null; target: EventTarget | null }>({ map: null, target: null })
+const actionMenuRef = ref<InstanceType<typeof Menu> | null>(null)
+const actionMenuKey = ref(0)
+const actionMenuMap = ref<SystemMap | null>(null)
+const deleteDialogOpen = ref(false)
 const deleteDialog = ref<{ map: SystemMap | null }>({ map: null })
+const deleting = ref(false)
+const actionError = ref<string | null>(null)
 
 const maps = computed(() => store.maps)
 const total = computed(() => store.total)
@@ -189,6 +171,19 @@ const pageSize = computed(() => store.pageSize)
 const loading = computed(() => store.loading)
 const error = computed(() => store.error)
 
+const actionMenuItems = computed(() => {
+  const map = actionMenuMap.value
+  if (!map) return []
+  return [
+    { label: t('views.SystemMapsView.view'), command: () => openMap(map) },
+    { label: t('views.SystemMapsView.edit'), command: () => openMap(map) },
+    { label: t('views.SystemMapsView.discover'), command: () => runDiscovery(map) },
+    { separator: true },
+    { label: t('views.SystemMapsView.delete'), class: 'text-destructive', command: () => confirmDelete(map) },
+  ]
+})
+
+function clearActionError(): void { actionError.value = null }
 function formatDate(iso: string): string { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) }
 
 async function loadMaps(nextPage = 1): Promise<void> {
@@ -205,31 +200,48 @@ async function openCreateDialog(): Promise<void> {
 async function submitCreate(): Promise<void> {
   if (!createForm.value.name.trim()) return
   creating.value = true
+  actionError.value = null
   try {
     await store.createMap(createForm.value.name.trim(), createForm.value.description.trim())
     createDialogOpen.value = false
   } catch (err) {
-    console.error('Create map failed:', err)
+    actionError.value = err instanceof Error ? err.message : t('views.SystemMapsView.create_failed')
   } finally { creating.value = false }
 }
 
 function openActionMenu(event: Event, map: SystemMap): void {
-  actionMenu.value = { map, target: event.currentTarget }
+  actionMenuMap.value = map
+  actionMenuKey.value += 1
+  actionMenuRef.value?.toggle(event)
 }
 
 async function runDiscovery(map: SystemMap): Promise<void> {
+  actionError.value = null
   try {
     await store.discover(`Discovered ${map.name}`, `Discovery from ${new Date().toISOString()}`)
     await router.push(`/system-maps/${store.activeMap?.id ?? map.id}`)
   } catch (err) {
-    console.error('Discovery failed:', err)
+    actionError.value = err instanceof Error ? err.message : t('views.SystemMapsView.discover')
   }
 }
 
-function confirmDelete(map: SystemMap): void { deleteDialog.value = { map } }
+function confirmDelete(map: SystemMap): void {
+  deleteDialog.value = { map }
+  deleteDialogOpen.value = true
+}
 
-async function executeDelete(map: SystemMap): Promise<void> {
-  try { await store.deleteMap(map.id) } catch (err) { console.error('Delete failed:', err) }
+async function executeDelete(): Promise<void> {
+  const map = deleteDialog.value.map
+  if (!map) return
+  deleting.value = true
+  actionError.value = null
+  try {
+    await store.deleteMap(map.id)
+    deleteDialogOpen.value = false
+    deleteDialog.value = { map: null }
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('views.SystemMapsView.delete_failed')
+  } finally { deleting.value = false }
 }
 
 onMounted(async () => { await store.fetchAccess(); await loadMaps() })

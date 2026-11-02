@@ -15,9 +15,6 @@
       <button type="button" class="rounded border px-2.5 py-1.5 text-sm" :disabled="readOnly || saving" @click="$emit('save')" data-testid="system-map-save-draft">
         {{ saving ? $t('views.SystemMapDetailView.saving') : $t('views.SystemMapDetailView.save_draft') }}
       </button>
-      <button type="button" class="rounded border px-2.5 py-1.5 text-sm" :disabled="readOnly" @click="$emit('rescan')" data-testid="system-map-rescan">
-        {{ $t('views.SystemMapDetailView.rescan') }}
-      </button>
       <button type="button" class="rounded border px-2.5 py-1.5 text-sm" @click="$emit('discover')" data-testid="system-map-discover">
         {{ $t('views.SystemMapDetailView.discover') }}
       </button>
@@ -34,6 +31,6 @@
 import { computed } from 'vue'
 import type { SystemMap, SystemMapRevision, SystemMapGraph } from '../../stores/systemMaps'
 const props = defineProps<{ map: SystemMap | null; revision: SystemMapRevision | null; graph: SystemMapGraph | null; loading?: boolean; saving?: boolean; showSidebar?: boolean; dataTestId?: string }>()
-defineEmits<{ (e: 'toggle-sidebar'): void; (e: 'save'): void; (e: 'publish'): void; (e: 'archive'): void; (e: 'discover'): void; (e: 'rescan'): void }>()
+defineEmits<{ (e: 'toggle-sidebar'): void; (e: 'save'): void; (e: 'publish'): void; (e: 'archive'): void; (e: 'discover'): void }>()
 const readOnly = computed(() => props.revision?.status === 'published' || props.revision?.status === 'archived')
 </script>
