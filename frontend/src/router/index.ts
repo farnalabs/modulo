@@ -138,6 +138,8 @@ const OAuthConsentView = () => import('../views/OAuthConsentView.vue')
 const DemoView = () => import('../views/DemoView.vue')
 const AcceptInviteView = () => import('../views/AcceptInviteView.vue')
 const AssistantOnlyView = () => import('../views/AssistantOnlyView.vue')
+const SystemMapsView = () => import('../views/SystemMapsView.vue')
+const SystemMapDetailView = () => import('../views/SystemMapDetailView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -591,12 +593,23 @@ const router = createRouter({
       component: ModelBackendSetupView,
       meta: { breadcrumb: 'Complete Setup' },
     },
-    {
-      path: '/lifecycle-maps',
-      name: 'lifecycle-maps',
-      component: () => import('../views/lifecycle-map/LifecycleMapList.vue'),
-      meta: { visibility: 'in_dev' },
-    },
+     {
+       path: '/system-maps',
+       name: 'system-maps',
+       component: SystemMapsView,
+     },
+     {
+       path: '/system-maps/:id',
+       name: 'system-map-detail',
+       component: SystemMapDetailView,
+       props: true,
+     },
+     {
+       path: '/lifecycle-maps',
+       name: 'lifecycle-maps',
+       component: () => import('../views/lifecycle-map/LifecycleMapList.vue'),
+       meta: { visibility: 'in_dev' },
+     },
     {
       path: '/lifecycle-maps/:id',
       name: 'lifecycle-map-detail',

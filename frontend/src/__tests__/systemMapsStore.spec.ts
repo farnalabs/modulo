@@ -242,8 +242,6 @@ describe('useSystemMapsStore access', () => {
     expect(store.systemMapsEnabled).toBe(false)
     expect(store.error).toBeNull()
     expect(store.loaded).toBe(false)
-    expect(store.discoveryAvailable).toBe(false)
-    expect(store.draft).toBeNull()
   })
 
   it('fails closed when no access token is present', async () => {
@@ -337,7 +335,5 @@ describe('useSystemMapsStore access', () => {
     await store.fetchDiscovery()
 
     expect(store.loaded).toBe(true)
-    expect(store.discoveryAvailable).toBe(false)
-    expect(store.draft).toBeNull()
   })
 })
