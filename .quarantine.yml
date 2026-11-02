@@ -14,6 +14,16 @@
 #   owner: "GitHub username or team" (optional)
 
 quarantine:
+  # Non-deterministic GC victim (FAR-2674): an unrelated unit test leaks an
+  # un-awaited AsyncMock coroutine that CPython collects while this bash-heavy
+  # test is running, so pytest's unraisable gate wrongly attributes the
+  # failure here. The test passes in isolation. Remove once the leaking test
+  # is located (tracked by PR #2684).
+  - test_id: "tests/unit/test_deploy_workflow_rehearsal.py::test_release_publication_hold_establishment_handles_absent_and_remote_error[2-Establish release publication hold (cut only)]"
+    reason: "GC victim of an unrelated leaked AsyncMock coroutine (FAR-2674); passes in isolation"
+    expiry: "2026-11-16"
+    owner: "farnalabs/branch-fixer"
+
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
   #   reason: "Flaky due to GitHub API rate limit window — fails ~15% of CI runs"
