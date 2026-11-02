@@ -172,7 +172,6 @@
               type="button"
               class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium text-primary-text hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               :data-testid="`admin-errors-copy-support-${errorGroupRowId(row)}`"
-              :aria-label="$t('views.AdminErrorsView.copy_support_reference')"
               @click.stop="copyGroupSupport(row)"
               @keydown.stop
             >
