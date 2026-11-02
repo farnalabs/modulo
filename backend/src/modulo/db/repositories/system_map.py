@@ -300,6 +300,72 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         result = await session.execute(stmt)
         return result.scalars().all()
 
+    async def get_revision_by_time(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        system_map_id: uuid.UUID,
+        at: datetime,
+    ) -> SystemMapRevision | None:
+        """Get the revision active at a specific timestamp.
+
+        Returns the revision where effective_from <= at < effective_to
+        (or effective_to IS NULL for the current revision).
+        """
+        stmt = (
+            select(SystemMapRevision)
+            .where(
+                SystemMapRevision.system_map_id == system_map_id,
+                SystemMapRevision.organisation_id == organisation_id,
+                SystemMapRevision.status == "published",
+                SystemMapRevision.deleted_at.is_(None),
+                SystemMapRevision.effective_from <= at,
+                (SystemMapRevision.effective_to.is_(None)) | (SystemMapRevision.effective_to > at),
+            )
+            .order_by(SystemMapRevision.effective_from.desc())
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_current_revision(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        system_map_id: uuid.UUID,
+    ) -> SystemMapRevision | None:
+        """Get the currently active (published) revision.
+
+        This is an alias for get_published_revision for semantic clarity
+        in version-aware endpoints.
+        """
+        return await self.get_published_revision(session, organisation_id=organisation_id, system_map_id=system_map_id)
+
+    async def list_revisions_history(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        system_map_id: uuid.UUID,
+    ) -> Sequence[SystemMapRevision]:
+        """List all revisions for a system map with their effective time ranges.
+
+        Returns all revisions (published, draft, archived) ordered by revision_number
+        so the caller can see the full history with effective_from/effective_to.
+        """
+        stmt = (
+            select(SystemMapRevision)
+            .where(
+                SystemMapRevision.system_map_id == system_map_id,
+                SystemMapRevision.organisation_id == organisation_id,
+                SystemMapRevision.deleted_at.is_(None),
+            )
+            .order_by(SystemMapRevision.revision_number.asc())
+        )
+        result = await session.execute(stmt)
+        return result.scalars().all()
+
     async def publish_revision(
         self,
         session: AsyncSession,
@@ -308,13 +374,19 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         system_map_id: uuid.UUID,
         revision_id: uuid.UUID,
     ) -> SystemMapRevision | None:
-        """Publish a revision (marks as published, updates map's published_revision_id)."""
+        """Publish a revision (marks as published, updates map's published_revision_id).
+
+        Also sets effective_from on the new revision and effective_to on the
+        previously published revision (FAR-2288 version-aware read model).
+        """
         # Verify revision belongs to map and org
         revision = await self.get_revision_by_id(session, organisation_id=organisation_id, revision_id=revision_id)
         if not revision or revision.system_map_id != system_map_id:
             return None
 
         # Archive any currently published revision for this map
+        # and set its effective_to to now
+        now = datetime.now(UTC)
         await session.execute(
             update(SystemMapRevision)
             .where(
@@ -322,13 +394,14 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
                 SystemMapRevision.status == "published",
                 SystemMapRevision.organisation_id == organisation_id,
             )
-            .values(status="archived")
+            .values(status="archived", effective_to=now)
         )
 
         # Publish the new revision
-        now = datetime.now(UTC)
         revision.status = "published"
         revision.published_at = now
+        revision.effective_from = now
+        revision.effective_to = None  # Current revision has no end
         revision.updated_at = now  # Explicitly set updated_at since onupdate is server-side
         await session.flush()
 

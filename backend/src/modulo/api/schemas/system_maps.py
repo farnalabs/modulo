@@ -182,12 +182,43 @@ class SystemMapRevisionResponse(BaseModel):
     status: str
     content_json: dict[str, Any]
     published_at: datetime | None
+    # Version-aware fields (FAR-2288)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
     deleted_at: datetime | None
     deleted_by: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class SystemMapRevisionHistoryEntry(BaseModel):
+    """Single entry in the revision history with its effective time range."""
+
+    revision: SystemMapRevisionResponse
+    is_current: bool = False
+
+
+class SystemMapRevisionHistoryResponse(BaseModel):
+    """List of all revisions for a system map with their effective time ranges."""
+
+    system_map_id: uuid.UUID
+    revisions: list[SystemMapRevisionHistoryEntry]
+
+
+class SystemMapRevisionByTimeResponse(BaseModel):
+    """The revision active at a specific timestamp."""
+
+    revision: SystemMapRevisionResponse
+    requested_at: datetime
+    matched: bool = True
+
+
+class SystemMapCurrentRevisionResponse(BaseModel):
+    """Currently active (published) revision - alias for the published revision."""
+
+    revision: SystemMapRevisionResponse
 
 
 class SystemMapNodeResponse(BaseModel):
@@ -382,6 +413,7 @@ __all__ = [
     "PublishValidationErrorHTTP",
     # Requests
     "SystemMapCreate",
+    "SystemMapCurrentRevisionResponse",
     "SystemMapDiscoveryReport",
     "SystemMapDiscoveryRequest",
     "SystemMapDiscoverySkipped",
@@ -399,8 +431,11 @@ __all__ = [
     "SystemMapRelationshipResponse",
     # Responses
     "SystemMapResponse",
+    "SystemMapRevisionByTimeResponse",
     "SystemMapRevisionCreate",
     "SystemMapRevisionDetailResponse",
+    "SystemMapRevisionHistoryEntry",
+    "SystemMapRevisionHistoryResponse",
     "SystemMapRevisionResponse",
     "SystemMapUpdate",
 ]

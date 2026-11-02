@@ -89,12 +89,17 @@ def _map(map_id: uuid.UUID = _MAP, **kwargs: object) -> SystemMap:
     return obj
 
 
-def _revision(rev_id: uuid.UUID = _REV, map_id: uuid.UUID = _MAP) -> SystemMapRevision:
+def _revision(
+    rev_id: uuid.UUID = _REV,
+    map_id: uuid.UUID = _MAP,
+    revision_number: int = 1,
+    status: str = "draft",
+) -> SystemMapRevision:
     obj = SystemMapRevision(
         organisation_id=_ORG,
         system_map_id=map_id,
-        revision_number=1,
-        status="draft",
+        revision_number=revision_number,
+        status=status,
         content_json={},
     )
     obj.id = rev_id
@@ -1170,3 +1175,89 @@ class TestFullRevisionGraph:
             "relationships": [rel],
             "loop_configs": [loop],
         }
+
+
+class TestVersionAwareRevisionMethods:
+    """Tests for FAR-2288 version-aware revision methods."""
+
+    def _revision_with_effective(
+        self,
+        *,
+        rev_id: uuid.UUID = _REV,
+        revision_number: int = 1,
+        status: str = "published",
+        effective_from: datetime | None = None,
+        effective_to: datetime | None = None,
+    ) -> SystemMapRevision:
+        rev = _revision(rev_id=rev_id, revision_number=revision_number, status=status)
+        rev.effective_from = effective_from
+        rev.effective_to = effective_to
+        return rev
+
+    async def test_get_revision_by_time_found(self, repo: SystemMapRepository) -> None:
+        at = datetime(2026, 1, 15, tzinfo=UTC)
+        rev = self._revision_with_effective(
+            effective_from=datetime(2026, 1, 1, tzinfo=UTC),
+            effective_to=None,
+        )
+        db = _session(_result(one=rev))
+        result = await repo.get_revision_by_time(db, organisation_id=_ORG, system_map_id=_MAP, at=at)
+        assert result is rev
+
+    async def test_get_revision_by_time_not_found(self, repo: SystemMapRepository) -> None:
+        at = datetime(2026, 1, 15, tzinfo=UTC)
+        db = _session(_result(one=None))
+        result = await repo.get_revision_by_time(db, organisation_id=_ORG, system_map_id=_MAP, at=at)
+        assert result is None
+
+    async def test_get_current_revision_alias(self, repo: SystemMapRepository) -> None:
+        rev = self._revision_with_effective(status="published", effective_from=datetime.now(UTC), effective_to=None)
+        db = _session(_result(one=rev))
+        result = await repo.get_current_revision(db, organisation_id=_ORG, system_map_id=_MAP)
+        assert result is rev
+
+    async def test_list_revisions_history(self, repo: SystemMapRepository) -> None:
+        rev1 = self._revision_with_effective(
+            rev_id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            revision_number=1,
+            status="archived",
+            effective_from=datetime(2026, 1, 1, tzinfo=UTC),
+            effective_to=datetime(2026, 2, 1, tzinfo=UTC),
+        )
+        rev2 = self._revision_with_effective(
+            rev_id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+            revision_number=2,
+            status="published",
+            effective_from=datetime(2026, 2, 1, tzinfo=UTC),
+            effective_to=None,
+        )
+        db = _session(_result(rows=[rev1, rev2]))
+        result = await repo.list_revisions_history(db, organisation_id=_ORG, system_map_id=_MAP)
+        assert result == [rev1, rev2]
+        # Verify order is ascending by revision_number
+        assert result[0].revision_number == 1
+        assert result[1].revision_number == 2
+
+    async def test_publish_revision_sets_effective_dates(self, repo: SystemMapRepository) -> None:
+        """Test that publish_revision sets effective_from on new and effective_to on old."""
+        revision = _revision()
+        old_revision = _revision(rev_id=uuid.uuid4(), revision_number=1)
+        old_revision.status = "published"
+        old_revision.published_at = datetime(2026, 1, 1, tzinfo=UTC)
+        old_revision.effective_from = datetime(2026, 1, 1, tzinfo=UTC)
+        old_revision.effective_to = None
+        map_obj = _map()
+
+        # First call returns old published revision, second returns new revision to publish
+        db = _session(_result(one=old_revision), _result(), _result(one=revision), _result(one=map_obj))
+        result = await repo.publish_revision(db, organisation_id=_ORG, system_map_id=_MAP, revision_id=revision.id)
+
+        assert result is not None
+        assert result.status == "published"
+        assert result.published_at is not None
+        assert result.effective_from is not None
+        assert result.effective_to is None  # Current revision has no end
+        # Note: The mock doesn't actually apply the update statement to old_revision,
+        # so we can't verify old_revision changes here. The important thing is that
+        # the new revision gets effective_from set and effective_to=None.
+        assert db.flush.await_count >= 2
