@@ -327,16 +327,19 @@ def _derive_principal_kind(principal: TenantPrincipal) -> str | None:
     """The honest principal kind for a RESOLVED principal, or ``None`` (FAR-1385).
 
     ``human`` is stamped only for an account-backed browser-JWT credential —
-    the one credential class that authenticates a human account in this slice.
-    A programmatic credential resolves to ``None``, leaving the stamp ABSENT
-    rather than attributing a machine credential to a human: that is the exact
-    fiction ADR 056 forbids. ``via_api_key`` marks an org ``mk_`` API key; a
-    non-browser ``client_kind`` marks any other automation-minted token. Both
-    are machine credentials, so neither may carry ``principal_kind="human"``
-    (mirrors ``_system_payload``'s honest no-account behaviour).
+    the one credential class that authenticates a human account in this slice —
+    OR for a user-scoped ``mk_`` key owned by a live human (FAR-2281: the key
+    acts as its owner, so the audit trail must show the human, not a generic
+    ``api_key`` principal). Every other programmatic credential resolves to
+    ``None``, leaving the stamp ABSENT rather than attributing a machine
+    credential to a human: that is the exact fiction ADR 056 forbids.
+    ``via_api_key`` marks an org ``mk_`` API key; a non-browser ``client_kind``
+    marks any other automation-minted token.
     """
     if principal.via_api_key:
-        return None
+        # Only an auth path that verified the key's user scope AND its owner's
+        # live human kind sets this; every other key leaves it None.
+        return principal.principal_kind if principal.principal_kind in (KIND_HUMAN, KIND_SERVICE) else None
     if principal.client_kind != CLIENT_KIND_BROWSER:
         return None
     return KIND_HUMAN

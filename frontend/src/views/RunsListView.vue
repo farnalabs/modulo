@@ -50,7 +50,11 @@
       data-testid="runs-list-loading"
     />
 
-    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadRuns" />
+    <ErrorAlert
+      v-else-if="error"
+      :message="loadErrorMessage"
+      :on-retry="loadRuns"
+    />
 
     <template v-else>
       <!-- An emptied cursor page still renders the footer when the user can
@@ -392,6 +396,10 @@ const { data: runsData, loading, error, load: loadRuns } = useDataFetch<{ items:
   ),
   { initialValue: { items: [] as RunListItem[], total: 0, next_cursor: null, has_more: false } },
 )
+
+const loadErrorMessage = computed(() => error.value
+  ? `${formatApiError(error.value)} ${t('views.RunsListView.load_error_recovery')}`
+  : '')
 
 const runs = computed(() => runsData.value?.items ?? [])
 const total = computed(() => runsData.value?.total ?? 0)

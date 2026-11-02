@@ -341,3 +341,479 @@ describe('useSystemMapsStore access', () => {
     expect(store.draft).toBeNull()
   })
 })
+
+function overviewPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    system_map_id: 'map',
+    revision_id: 'revision',
+    revision_number: 1,
+    generated_at: '2026-01-08T00:00:00Z',
+    window_days: 7,
+    window_start: '2026-01-01T00:00:00Z',
+    window_end: '2026-01-08T00:00:00Z',
+    nodes: [],
+    loop_configs: [],
+    bottlenecks: [],
+    ...overrides,
+  }
+}
+
+function mapItem(id: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    organisation_id: 'org',
+    name: id,
+    description: null,
+    owner_team_id: null,
+    visibility: 'org',
+    default_map: false,
+    published_revision_id: null,
+    account_id: 'account',
+    updated_by: null,
+    deleted_at: null,
+    deleted_by: null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+function listPayload(
+  items: ReturnType<typeof mapItem>[],
+  overrides: { total?: number; page?: number; page_size?: number } = {},
+) {
+  return { items, total: items.length, page: 1, page_size: 20, ...overrides }
+}
+
+describe('useSystemMapsStore overview', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-1'))
+  })
+
+  it('loads the published default map, never a draft', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/system-maps') {
+        return Promise.resolve({
+          data: listPayload([
+            mapItem('draft-default', { default_map: true, published_revision_id: null }),
+            mapItem('published-plain', { published_revision_id: 'rev-plain' }),
+            mapItem('published-default', { default_map: true, published_revision_id: 'rev-default' }),
+          ]),
+        })
+      }
+      return Promise.resolve({ data: overviewPayload({ system_map_id: 'published-default' }) })
+    })
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/v1/system-maps/{map_id}/overview',
+      expect.objectContaining({ params: { path: { map_id: 'published-default' } } }),
+    )
+    expect(store.overview?.system_map_id).toBe('published-default')
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewEmpty).toBe(false)
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('finds a published map after the first page', async () => {
+    const firstPage = Array.from({ length: 20 }, (_, index) => mapItem(`draft-${index}`))
+    const published = mapItem('published-late', { published_revision_id: 'rev-late' })
+    mockGet.mockImplementation((url: string, init?: { params?: { query?: { page?: number } } }) => {
+      if (url === '/api/v1/system-maps') {
+        const page = init?.params?.query?.page
+        return Promise.resolve({
+          data:
+            page === 1
+              ? listPayload(firstPage, { total: 21 })
+              : listPayload([published], { total: 21, page: 2 }),
+        })
+      }
+      return Promise.resolve({ data: overviewPayload({ system_map_id: 'published-late' }) })
+    })
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/v1/system-maps',
+      expect.objectContaining({ params: { query: { page: 2, page_size: 20 } } }),
+    )
+    expect(store.overview?.system_map_id).toBe('published-late')
+  })
+
+  it('falls back to any published map when no published map is the default', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/system-maps') {
+        return Promise.resolve({
+          data: listPayload([
+            mapItem('draft-default', { default_map: true }),
+            mapItem('published-plain', { published_revision_id: 'rev-plain' }),
+          ]),
+        })
+      }
+      return Promise.resolve({ data: overviewPayload({ system_map_id: 'published-plain' }) })
+    })
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    expect(store.overview?.system_map_id).toBe('published-plain')
+  })
+
+  it('settles to the empty state when nothing is published', async () => {
+    mockGet.mockResolvedValue({
+      data: listPayload([mapItem('draft', { default_map: true })]),
+    })
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewEmpty).toBe(true)
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewLoading).toBe(false)
+    expect(mockGet).toHaveBeenCalledTimes(1)
+  })
+
+  it('settles to the empty state for an empty map list', async () => {
+    mockGet.mockResolvedValue({ data: listPayload([]) })
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    expect(store.overviewEmpty).toBe(true)
+    expect(store.overviewError).toBeNull()
+  })
+
+  it('uses the fallback for an empty API error detail', async () => {
+    mockGet.mockResolvedValue({ error: { detail: '' }, data: undefined })
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    expect(store.overviewError).toBe('System map list request failed')
+  })
+
+  it('ignores a stale map-list response after the token changes', async () => {
+    let resolveOldRequest: ((value: unknown) => void) | undefined
+    mockGet.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOldRequest = resolve
+        }),
+    )
+    const store = useSystemMapsStore()
+
+    const request = store.fetchDefaultOverview()
+    await vi.waitFor(() => expect(mockGet).toHaveBeenCalledTimes(1))
+
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-2'))
+    resolveOldRequest?.({ data: listPayload([mapItem('stale', { published_revision_id: 'rev' })]) })
+    await request
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewLoading).toBe(true)
+  })
+
+  it('ignores a stale map-list error after the token changes', async () => {
+    let rejectOldRequest: ((reason?: unknown) => void) | undefined
+    mockGet.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectOldRequest = reject
+        }),
+    )
+    const store = useSystemMapsStore()
+
+    const request = store.fetchDefaultOverview()
+    await vi.waitFor(() => expect(mockGet).toHaveBeenCalledTimes(1))
+
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-2'))
+    rejectOldRequest?.(new Error('stale map-list failure'))
+    await request
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewLoading).toBe(true)
+  })
+
+  it('reports a list failure as an error, not an empty state', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'map list exploded' }, data: undefined })
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    expect(store.overviewEmpty).toBe(false)
+    expect(store.overviewError).toBe('map list exploded')
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('reports access denial on the map list', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'Forbidden' }, data: undefined })
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    expect(store.overviewError).toBe('Forbidden')
+    expect(store.overview).toBeNull()
+  })
+
+  it('uses a stable message for a non-Error overview rejection', async () => {
+    mockGet.mockRejectedValue('not an Error instance')
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    expect(store.overviewError).toBe('System map list request failed')
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('sends an abort signal with the list and overview requests', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/system-maps') {
+        return Promise.resolve({
+          data: listPayload([mapItem('published', { published_revision_id: 'rev' })]),
+        })
+      }
+      return Promise.resolve({ data: overviewPayload() })
+    })
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    const listInit = mockGet.mock.calls[0][1] as { signal?: unknown }
+    const overviewInit = mockGet.mock.calls[1][1] as { signal?: unknown }
+    expect(listInit.signal).toBeInstanceOf(AbortSignal)
+    expect(overviewInit.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('loads an overview for an explicit map id', async () => {
+    mockGet.mockResolvedValue({ data: overviewPayload({ system_map_id: 'map-x' }) })
+    const store = useSystemMapsStore()
+
+    await store.fetchOverview('map-x')
+
+    expect(store.overview?.system_map_id).toBe('map-x')
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('reports an overview failure response', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'overview denied' }, data: undefined })
+    const store = useSystemMapsStore()
+
+    await store.fetchOverview('map-x')
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewError).toBe('overview denied')
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('reports an unknown/null overview payload as an error', async () => {
+    mockGet.mockResolvedValue({ data: undefined })
+    const store = useSystemMapsStore()
+
+    await store.fetchOverview('map-x')
+
+    expect(store.overviewError).toBe('System overview request failed')
+    expect(store.overview).toBeNull()
+  })
+
+  it('reports an overview access denial without dropping the loading flag', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'Forbidden' }, data: undefined })
+    const store = useSystemMapsStore()
+
+    await store.fetchOverview('map-x')
+
+    expect(store.overviewError).toBe('Forbidden')
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('replaces the overview on refresh', async () => {
+    mockGet
+      .mockResolvedValueOnce({ data: overviewPayload({ revision_number: 1 }) })
+      .mockResolvedValueOnce({ data: overviewPayload({ revision_number: 2 }) })
+    const store = useSystemMapsStore()
+
+    await store.fetchOverview('map-x')
+    await store.fetchOverview('map-x')
+
+    expect(store.overview?.revision_number).toBe(2)
+  })
+
+  it('clears a previous error on a successful refresh', async () => {
+    mockGet
+      .mockResolvedValueOnce({ error: { detail: 'temporary' }, data: undefined })
+      .mockResolvedValueOnce({ data: overviewPayload() })
+    const store = useSystemMapsStore()
+
+    await store.fetchOverview('map-x')
+    expect(store.overviewError).toBe('temporary')
+
+    await store.fetchOverview('map-x')
+    expect(store.overviewError).toBeNull()
+    expect(store.overview).not.toBeNull()
+  })
+
+  it('rejects a response when the token changes without an explicit reset', async () => {
+    let resolveOldRequest: ((value: unknown) => void) | undefined
+    mockGet.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOldRequest = resolve
+        }),
+    )
+    const store = useSystemMapsStore()
+
+    const request = store.fetchOverview('map-x')
+    await vi.waitFor(() => expect(mockGet).toHaveBeenCalledTimes(1))
+
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-2'))
+    resolveOldRequest?.({ data: overviewPayload({ system_map_id: 'stale-principal' }) })
+    await request
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewLoading).toBe(true)
+  })
+
+  it('rejects an error when the token changes without an explicit reset', async () => {
+    let rejectOldRequest: ((reason?: unknown) => void) | undefined
+    mockGet.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectOldRequest = reject
+        }),
+    )
+    const store = useSystemMapsStore()
+
+    const request = store.fetchOverview('map-x')
+    await vi.waitFor(() => expect(mockGet).toHaveBeenCalledTimes(1))
+
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-2'))
+    rejectOldRequest?.(new Error('stale principal failed'))
+    await request
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewLoading).toBe(true)
+  })
+
+  it('reports a pagination safety-limit failure', async () => {
+    mockGet.mockImplementation((_url: string, init?: { params?: { query?: { page?: number } } }) => {
+      const page = init?.params?.query?.page ?? 1
+      return Promise.resolve({
+        data: listPayload(
+          Array.from({ length: 20 }, (_, index) => mapItem(`draft-${page}-${index}`)),
+          { total: 20001, page },
+        ),
+      })
+    })
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewError).toBe('System map list pagination exceeded its safety limit')
+    expect(mockGet).toHaveBeenCalledTimes(1000)
+  })
+
+  it('rejects a stale principal response after reset', async () => {
+    let resolveOldRequest: ((value: unknown) => void) | undefined
+    mockGet.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOldRequest = resolve
+        }),
+    )
+    const store = useSystemMapsStore()
+
+    const request = store.fetchOverview('map-x')
+    await vi.waitFor(() => expect(mockGet).toHaveBeenCalledTimes(1))
+
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-2'))
+    store.reset()
+    resolveOldRequest?.({ data: overviewPayload({ system_map_id: 'leaked' }) })
+    await request
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('lets the newest request win over an older in-flight response', async () => {
+    let resolveOldRequest: ((value: unknown) => void) | undefined
+    mockGet
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOldRequest = resolve
+          }),
+      )
+      .mockResolvedValueOnce({ data: overviewPayload({ system_map_id: 'newer' }) })
+    const store = useSystemMapsStore()
+
+    const oldRequest = store.fetchOverview('map-old')
+    await vi.waitFor(() => expect(mockGet).toHaveBeenCalledTimes(1))
+    await store.fetchOverview('map-new')
+
+    resolveOldRequest?.({ data: overviewPayload({ system_map_id: 'older' }) })
+    await oldRequest
+
+    expect(store.overview?.system_map_id).toBe('newer')
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('times out a stalled overview request instead of loading forever', async () => {
+    vi.useFakeTimers()
+    try {
+      mockGet.mockImplementation(() => new Promise(() => {}))
+      const store = useSystemMapsStore()
+
+      const request = store.fetchOverview('map-x')
+      await vi.advanceTimersByTimeAsync(15000)
+      await request
+
+      expect(store.overview).toBeNull()
+      expect(store.overviewError).toBe('Request timed out after 15000ms')
+      expect(store.overviewLoading).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('times out a stalled map-list request instead of loading forever', async () => {
+    vi.useFakeTimers()
+    try {
+      mockGet.mockImplementation(() => new Promise(() => {}))
+      const store = useSystemMapsStore()
+
+      const request = store.fetchDefaultOverview()
+      await vi.advanceTimersByTimeAsync(15000)
+      await request
+
+      expect(store.overviewError).toBe('Request timed out after 15000ms')
+      expect(store.overviewLoading).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears overview state on reset', async () => {
+    mockGet.mockResolvedValue({ data: overviewPayload() })
+    const store = useSystemMapsStore()
+
+    await store.fetchOverview('map-x')
+    store.reset()
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewEmpty).toBe(false)
+    expect(store.overviewLoading).toBe(false)
+  })
+})

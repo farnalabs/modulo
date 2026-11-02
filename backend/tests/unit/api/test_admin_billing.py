@@ -60,7 +60,10 @@ def _session() -> AsyncMock:
     # never-awaited coroutine (truthy, so the transaction guard passes for the
     # wrong reason); the second returns a coroutine that is awaited.
     session = configure_rls_preamble(AsyncMock())
-    session.begin = MagicMock(return_value=AsyncMock())
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
     result = MagicMock()
     result.scalar.return_value = None
     session.execute.return_value = result

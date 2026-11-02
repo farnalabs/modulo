@@ -619,7 +619,7 @@ Every run records the work items it serves as canonical refs (`kind` + `ref`, e.
 
 Provenance is ENGINE-ASSIGNED per supply channel; the wire `source` value is never trusted. `caller` for authenticated channels (manual REST/MCP triggers, operator reruns), `derived` for extraction-driven channels (webhook, cron, polling, agent_signal, replay), `agent` for a node's own emission. The legacy `reported` alias was dropped (FAR-795): the persisted vocabulary is exactly `caller` / `derived` / `agent`, migration 0222 rewrote stored rows to `agent`, and any entry still declaring `source: reported` (e.g. an old snapshot or replay payload) is rejected/dropped by the validator. ONE shape validator (`modulo.db.lifecycle_refs.validate_ref_entry`) owns kind/ref canonicalisation, the source vocabulary, and status (`done`/`attempted`) for every surface.
 
-Minting is owned by provenance: `caller`/`derived` refs mint journey rows at run creation and again at terminal finalise via a rank-guarded upsert (`agent(0) < derived(1) < caller(2)`: provenance only ever upgrades, never downgrades; `first_seen_source` is immutable after mint; `latest_*`/`run_count` stay owned by the finalise evidence CAS). `agent`-sourced refs are collected and stored on the run and confirmed against EXISTING journey rows (advisory, match-only), but never mint: agent minting is deferred pending its safety substrate (FAR-795). Coalesced deliveries merge refs into the surviving run with the same rank-guarded union and re-mint newly-seen entries.
+Minting is owned by provenance: `caller`/`derived` refs mint journey rows at run creation and again at terminal finalise via a rank-guarded upsert (`agent(0) < derived(1) < caller(2)`: provenance only ever upgrades, never downgrades; `first_seen_source` is immutable after mint; `latest_*`/`run_count` stay owned by the finalise evidence CAS). `agent`-sourced refs are collected and stored on the run. With the org setting `work_item_agent_minting_enabled` off (the default), they are only confirmed against EXISTING journey rows (advisory, match-only) and never mint. With it on, a missing journey row mints an `agent`-provenance row subject to the per-org rolling budget (`MODULO_AGENT_MINT_BUDGET_LIMIT`, default 500 per `MODULO_AGENT_MINT_BUDGET_WINDOW_MINUTES`, default 60); a dismissed tombstone still suppresses the mint, and an existing row only receives a rank-0 no-op write, so agent provenance can never upgrade or downgrade it. Suppressed agent mints are counted. Coalesced deliveries merge refs into the surviving run with the same rank-guarded union and re-mint newly-seen entries.
 
 Completeness over precision: the unified cap (`modulo_work_item_refs_cap`, env `MODULO_WORK_ITEM_REFS_CAP`, default 100, clamped to [1, 100000]) bounds self-report normalisation, the finalise merge, and node-input injection with one value; cap drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. Pipelines declaring `work_item_refs_required: true` in `run_context_defaults` refuse a delivery that supplied no refs: HTTP 422 with a `work_item_refs_required` error on the MCP and webhook paths, and a 422 whose detail is prose on the REST path (reject-and-retry for webhooks, not acked-as-accepted).
 
@@ -696,7 +696,7 @@ The posture for injected values (distinguish from the FAR-296 per-run minted key
 | Method | Status | Use case |
 |--------|--------|----------|
 | JWT (access + refresh) | Alpha | Browser UI sessions – 15-min access, sliding 24-h refresh (idle-logout window; configurable 1–168h via `MODULO_REFRESH_TOKEN_TTL_HOURS`) |
-| API key (bearer token) | Alpha | CI/CD, MCP clients – role-scoped (operator/runner) + caller-scoped (`org`/`user` scope axis, ADR 030) |
+| API key (bearer token) | Alpha | CI/CD, MCP clients – scope-aware role ceiling (`org` keys: operator/runner; `user` keys: the owner's live role, including admin) + caller-scoped (`org`/`user` scope axis, ADR 030) |
 | Basic Auth | Alpha | Multi-user alpha (`MODULO_USERS` env var) |
 | OAuth 2.0 (authlib) | V1 | MCP clients (PKCE, exact redirect_uri) |
 | OIDC / SAML 2.0 | V1 (team) | SSO with JIT provisioning |
@@ -712,14 +712,15 @@ The posture for injected values (distinguish from the FAR-296 per-run minted key
 
 ### API keys
 
-Format: `mk_<lookup_prefix>_<random_secret>`. Stored as SHA-256 hash. Role set: `operator` (trigger runs, approve HITL) and `runner` (trigger runs, read-only). Admin actions require human session. Keys shown once at creation. Listing API keys requires an operator or admin role because the response includes account attribution (`account_kind` and `account_display_name`) and the account email for human owners only; service-account email is always `null`. List and MCP responses never include the raw key value, hashed secret, or any other secret material.
+Format: `mk_<lookup_prefix>_<random_secret>`. Stored as SHA-256 hash. The role ceiling is split by credential **provenance**, not transport: an **org-scoped** key (org-wide, team-scoped, service-owned or per-run — an unattributed machine identity) is capped at `operator` (trigger runs, approve HITL) and `runner` (trigger runs, read-only); a **user-scoped** key is human-linked and carries its owner's **live** org role, including `admin` (ADR 047 re-reads the role on every call, so a demotion or removal degrades/revokes the key). An admin action taken with a user-scoped key is audited against the human owner, not a generic `api_key` principal. Keys shown once at creation. Listing API keys requires an operator or admin role because the response includes account attribution (`account_kind` and `account_display_name`) and the account email for human owners only; service-account email is always `null`. List and MCP responses never include the raw key value, hashed secret, or any other secret material.
 
 Every key carries a **caller scope** (`scope` column, immutable post-mint):
 `org` (org-level machine identity, the historical default; includes
 team-scoped and per-run sandbox keys) or `user` (a per-user key that acts as
 its creator's identity and is quota'd to 10 active per account). User-scoped
-minting is REST-JWT-only, gated by the org `user_scoped_mcp_keys` flag
-(ADR 030). MCP tools whose permission key ends in `.self` (e.g.
+minting is REST-JWT-only (Settings > MCP create dialog or
+`POST /api/v1/api-keys`), gated by the org `user_scoped_mcp_keys` flag
+(ADR 030); the MCP `create_api_key` tool mints org-scoped keys only. MCP tools whose permission key ends in `.self` (e.g.
 `get_hitl_email_alerts`) are caller-scoped: they target the caller's own
 account and are denied under org-wide/run-scoped keys. Key lifecycle events
 are audited (`api_key_created` / `api_key_revoked`) on both the REST and MCP
@@ -765,9 +766,11 @@ the grant leg only ever narrows and is not lifted by the authz kill switch.
 Minting (`POST /api/v1/api-keys` with `grants`) caps requested grants to the
 caller's LIVE capability and rejects non-delegable keys. Delegability is a
 single registry-level flag, `modulo.auth.permissions.is_delegable`, read live
-at enforcement and mint time (never-grantable: human_only HITL, `api_key.*`,
-`oauth.client.*`, `system.*`, `org.delete`, break-glass controls); OAuth
-scopes and principals must consume it rather than keep a second list. With the
+at enforcement and mint time (never-grantable: `api_key.*`, `oauth.client.*`,
+`system.*`, `org.delete`, break-glass controls; HITL decision permissions are
+registry-delegable, while the gate's `human_only` policy and the MCP
+human-linked-authority flag control whether a credential may act); OAuth scopes
+and principals must consume it rather than keep a second list. With the
 flag OFF a grant-bearing key is denied (401), never widened to its role, and
 `grants` on mint is rejected (422). With the flag ON, user-scoped keys default
 to and are capped at 90 days. Grants are immutable after mint. The MCP

@@ -12,10 +12,10 @@ import pytest
 from modulo.auth.api_key import (
     _UNSET,
     ApiKeyInvalidError,
+    ApiKeyScopeError,
     _hash_key,
     _serialize_key,
     _serialize_key_with_account,
-    _validate_team_key_role,
     create_api_key,
     generate_api_key,
     list_api_keys,
@@ -137,32 +137,6 @@ async def test_validate_api_key_expired_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _validate_team_key_role
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("role", "team_id", "should_raise"),
-    [
-        ("admin", uuid.uuid4(), True),
-        ("operator", uuid.uuid4(), False),
-        ("runner", uuid.uuid4(), False),
-        ("admin", None, False),
-    ],
-)
-def test_validate_team_key_role(role: str, team_id: uuid.UUID | None, should_raise: bool) -> None:
-    key = MagicMock()
-    key.team_id = team_id
-    key.role = role
-
-    if should_raise:
-        with pytest.raises(ApiKeyInvalidError, match="team-scoped API keys cannot have admin role"):
-            _validate_team_key_role(key)
-    else:
-        _validate_team_key_role(key)
-
-
-# ---------------------------------------------------------------------------
 # create_api_key
 # ---------------------------------------------------------------------------
 
@@ -212,6 +186,10 @@ async def test_create_api_key_with_team_id() -> None:
 
 @pytest.mark.asyncio
 async def test_create_api_key_with_team_id_rejects_admin() -> None:
+    """FAR-2281: the role ceiling is scope- and team-aware, so a team-scoped
+    key carrying ``admin`` is refused at mint by the shared predicate. The REST
+    layer maps ``ApiKeyScopeError`` to 422 — the shipped contract for a
+    scope-shape refusal — never an unhandled 500."""
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
@@ -219,7 +197,7 @@ async def test_create_api_key_with_team_id_rejects_admin() -> None:
     user_id = uuid.uuid4()
     team_id = uuid.uuid4()
 
-    with pytest.raises(ApiKeyInvalidError):
+    with pytest.raises(ApiKeyScopeError):
         await create_api_key(
             session,
             org_id=org_id,
@@ -542,7 +520,7 @@ async def test_update_api_key_with_team_id_rejects_admin() -> None:
     session.execute = AsyncMock(return_value=result)
     session.flush = AsyncMock()
 
-    with pytest.raises(ApiKeyInvalidError):
+    with pytest.raises(ApiKeyScopeError, match="team-scoped API keys cannot have admin role"):
         await update_api_key(session, key_id, org_id, team_id=team_id)
 
 
@@ -1138,12 +1116,13 @@ async def test_update_api_key_team_id_unset_leaves_scope_unchanged() -> None:
 
 @pytest.mark.asyncio
 async def test_update_api_key_clear_team_id_allowed_for_admin_role_key() -> None:
-    """Clearing the team scope is valid even for a legacy admin-role key — the
+    """Clearing the team scope is valid for a user-scoped admin-role key — the
     admin-role restriction applies to team-SCOPED keys only."""
     key = MagicMock(spec=OrgApiKey)
     key.id = uuid.uuid4()
     key.name = "Original"
     key.role = "admin"
+    key.scope = "user"
     key.team_id = uuid.uuid4()
 
     result = MagicMock()

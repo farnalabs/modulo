@@ -5,7 +5,7 @@ dev mode, operator/admin role, and the `system_maps_access` grant.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Self
 from unittest.mock import AsyncMock, MagicMock
@@ -201,6 +201,8 @@ class _Harness:
 
     def __init__(self) -> None:
         self.repository = MagicMock(spec=SystemMapRepository)
+        self.repository.get_overview_pipeline_metrics = AsyncMock(return_value={})
+        self.repository.get_overview_loop_metrics = AsyncMock(return_value={})
         self._stubs: dict[str, AsyncMock] = {}
 
     def stub(self, method: str, mock: AsyncMock) -> None:
@@ -219,6 +221,8 @@ def _install_overrides(
     *,
     org_role: str = "operator",
     dev_mode: bool = True,
+    org_id: uuid.UUID = _ORG_ID,
+    account_id: uuid.UUID = _USER_ID,
 ) -> None:
     """Install FastAPI dependency overrides for testing."""
     from modulo.api.dependencies import get_current_tenant_user, get_db_session, get_settings
@@ -227,8 +231,8 @@ def _install_overrides(
 
     principal = TenantPrincipal(
         username="test",
-        organisation_id=_ORG_ID,
-        account_id=_USER_ID,
+        organisation_id=org_id,
+        account_id=account_id,
         org_role=org_role,
         is_system_admin=False,
         via_api_key=False,
@@ -1148,6 +1152,8 @@ def test_get_overview_returns_aggregate(client: tuple[TestClient, _Harness]) -> 
             }
         ),
     )
+    harness.stub("get_overview_pipeline_metrics", AsyncMock(return_value={}))
+    harness.stub("get_overview_loop_metrics", AsyncMock(return_value={}))
 
     resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
 
@@ -1181,6 +1187,56 @@ def test_get_overview_no_published_revision_returns_404(client: tuple[TestClient
     assert "No published revision found" in resp.json()["detail"]
 
 
+def test_overview_uses_observed_metrics_and_loop_facts(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    pipeline_id = uuid.uuid4()
+    loop = _loop_config_row(node_key="loop-1")
+    node = _node_row(node_key="node-1", node_type="pipeline")
+    node.pipeline_id = pipeline_id
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub(
+        "get_full_revision_graph",
+        AsyncMock(
+            return_value={
+                "revision": _revision_row(status="published"),
+                "nodes": [node],
+                "relationships": [],
+                "loop_configs": [loop],
+            }
+        ),
+    )
+    harness.stub(
+        "get_overview_pipeline_metrics",
+        AsyncMock(return_value={pipeline_id: {"run_count": 2, "failure_rate": 0.5, "telemetry_coverage": 1.0}}),
+    )
+    admission_at = datetime.now(UTC)
+    harness.stub(
+        "get_overview_loop_metrics",
+        AsyncMock(
+            return_value={
+                loop.id: {
+                    "last_admission_at": admission_at,
+                    "last_admission_status": "admitted",
+                    "cooldown_active": True,
+                    "cooldown_until": admission_at,
+                    "budget_used_usd": Decimal("2.50"),
+                    "budget_period_start": admission_at,
+                }
+            }
+        ),
+    )
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["nodes"][0]["health"] == "unhealthy"
+    assert body["nodes"][0]["failure_rate"] == 0.5
+    assert body["loop_configs"][0]["last_admission_status"] == "admitted"
+    assert body["loop_configs"][0]["budget_used_usd"] == "2.50"
+
+
 def test_overview_detects_missing_loop_config_bottleneck(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
@@ -1196,6 +1252,8 @@ def test_overview_detects_missing_loop_config_bottleneck(client: tuple[TestClien
             }
         ),
     )
+    harness.stub("get_overview_pipeline_metrics", AsyncMock(return_value={}))
+    harness.stub("get_overview_loop_metrics", AsyncMock(return_value={}))
 
     resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
 
@@ -1204,6 +1262,186 @@ def test_overview_detects_missing_loop_config_bottleneck(client: tuple[TestClien
     assert len(body["bottlenecks"]) == 1
     assert body["bottlenecks"][0]["kind"] == "unobserved"
     assert "missing loop configuration" in body["bottlenecks"][0]["detail"]
+
+
+def test_overview_passes_window_and_graph_ids_to_the_repository(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    pipeline_id = uuid.uuid4()
+    node = _node_row(node_key="node-1")
+    node.pipeline_id = pipeline_id
+    loop = _loop_config_row(node_key="loop-1")
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub(
+        "get_full_revision_graph",
+        AsyncMock(
+            return_value={
+                "revision": _revision_row(status="published"),
+                "nodes": [node, _node_row(node_key="unbound")],
+                "relationships": [],
+                "loop_configs": [loop],
+            }
+        ),
+    )
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
+
+    assert resp.status_code == 200, resp.text
+    pipeline_call = harness.repository.get_overview_pipeline_metrics.await_args
+    assert pipeline_call is not None
+    assert pipeline_call.kwargs["pipeline_ids"] == {pipeline_id}
+    assert pipeline_call.kwargs["organisation_id"] == _ORG_ID
+    loop_call = harness.repository.get_overview_loop_metrics.await_args
+    assert loop_call is not None
+    assert loop_call.kwargs["loop_config_ids"] == {loop.id}
+    assert loop_call.kwargs["organisation_id"] == _ORG_ID
+    window_start = pipeline_call.kwargs["window_start"]
+    window_end = pipeline_call.kwargs["window_end"]
+    assert window_end - window_start == timedelta(days=7)
+    body = resp.json()
+    assert body["window_days"] == 7
+    assert body["window_start"] == window_start.isoformat().replace("+00:00", "Z")
+    assert body["window_end"] == window_end.isoformat().replace("+00:00", "Z")
+    assert body["generated_at"] == body["window_end"]
+
+
+def test_overview_health_classification_matrix(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    nodes = []
+    metrics: dict[uuid.UUID, dict[str, object]] = {}
+    cases = {
+        "healthy": {"run_count": 3, "failure_rate": 0.0},
+        "degraded": {"run_count": 3, "failure_rate": 0.34},
+        "unhealthy": {"run_count": 3, "failure_rate": 0.5},
+        "unknown-no-runs": {"run_count": 0, "failure_rate": None},
+        "unknown-no-countable": {"run_count": 2, "failure_rate": None},
+    }
+    for node_key, item in cases.items():
+        pipeline_id = uuid.uuid4()
+        node = _node_row(node_key=node_key)
+        node.pipeline_id = pipeline_id
+        nodes.append(node)
+        metrics[pipeline_id] = item
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub(
+        "get_full_revision_graph",
+        AsyncMock(
+            return_value={
+                "revision": _revision_row(status="published"),
+                "nodes": nodes,
+                "relationships": [],
+                "loop_configs": [],
+            }
+        ),
+    )
+    harness.stub("get_overview_pipeline_metrics", AsyncMock(return_value=metrics))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
+
+    assert resp.status_code == 200, resp.text
+    health = {row["node_key"]: row["health"] for row in resp.json()["nodes"]}
+    assert health == {
+        "healthy": "healthy",
+        "degraded": "degraded",
+        "unhealthy": "unhealthy",
+        "unknown-no-runs": "unknown",
+        "unknown-no-countable": "unknown",
+    }
+
+
+def test_overview_node_without_a_pipeline_is_unknown(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub(
+        "get_full_revision_graph",
+        AsyncMock(
+            return_value={
+                "revision": _revision_row(status="published"),
+                "nodes": [_node_row(node_key="unbound")],
+                "relationships": [],
+                "loop_configs": [],
+            }
+        ),
+    )
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
+
+    assert resp.status_code == 200, resp.text
+    node = resp.json()["nodes"][0]
+    assert node["health"] == "unknown"
+    assert node["failure_rate"] is None
+
+
+def test_overview_unknown_loop_facts_stay_null(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub(
+        "get_full_revision_graph",
+        AsyncMock(
+            return_value={
+                "revision": _revision_row(status="published"),
+                "nodes": [],
+                "relationships": [],
+                "loop_configs": [_loop_config_row(node_key="loop-1")],
+            }
+        ),
+    )
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
+
+    assert resp.status_code == 200, resp.text
+    loop = resp.json()["loop_configs"][0]
+    assert loop["cooldown_active"] is None
+    assert loop["cooldown_until"] is None
+    assert loop["budget_used_usd"] is None
+    assert loop["budget_period_start"] is None
+    assert loop["last_admission_at"] is None
+
+
+def test_overview_non_published_revision_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    # A repository that leaks a draft row must never be aggregated as published.
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="draft")))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
+
+    assert resp.status_code == 404
+    assert "No published revision found" in resp.json()["detail"]
+    harness.repository.get_overview_pipeline_metrics.assert_not_awaited()
+
+
+def test_overview_malformed_map_id_returns_422(client: tuple[TestClient, _Harness]) -> None:
+    http, _harness = client
+
+    resp = http.get(f"{_BASE}/not-a-uuid/overview")
+
+    assert resp.status_code == 422
+
+
+def test_overview_cannot_read_another_organisations_map() -> None:
+    """A caller only ever queries its own organisation's map."""
+    other_org = uuid.uuid4()
+    harness = _Harness()
+    # The repository is org-scoped: a foreign map simply does not resolve.
+    harness.stub("get_map_by_id", AsyncMock(return_value=None))
+    _install_overrides(harness, org_id=other_org)
+    try:
+        resp = TestClient(app).get(f"{_BASE}/{_MAP_ID}/overview")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 404
+    call = harness.repository.get_map_by_id.await_args
+    assert call is not None
+    assert call.kwargs["organisation_id"] == other_org
+    assert call.kwargs["map_id"] == _MAP_ID
+    harness.repository.get_published_revision.assert_not_awaited()
 
 
 # ─── Attribution Binding tests ───
@@ -1548,6 +1786,9 @@ def test_system_map_overview_response_includes_bottlenecks() -> None:
         revision_id=_REV_ID,
         revision_number=1,
         generated_at=datetime.now(UTC),
+        window_days=7,
+        window_start=datetime.now(UTC),
+        window_end=datetime.now(UTC),
         nodes=[
             SystemMapOverviewNodeHealth(
                 node_key="node-1",
@@ -1963,6 +2204,8 @@ def test_overview_with_matching_loop_config_has_no_bottleneck(
             }
         ),
     )
+    harness.stub("get_overview_pipeline_metrics", AsyncMock(return_value={}))
+    harness.stub("get_overview_loop_metrics", AsyncMock(return_value={}))
 
     resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
 

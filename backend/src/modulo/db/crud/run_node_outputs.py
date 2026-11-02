@@ -36,6 +36,10 @@ module. It provides:
   ``json.dumps`` bytes (PG jsonb orders keys length-then-bytewise; the
   server-side ``ORDER BY length(key), key COLLATE "C"`` is PG-only, so the
   ordering happens in Python — dialect-neutral);
+* the durable-evidence clause the reclaim / shutdown-handback gate needs
+  (``observed_activity_expr``, FAR-2285): whether a run's rows carry
+  engine-observed activity, as distinct from a self-reported-only agent
+  return or a lifecycle-only telemetry envelope;
 * Reads are NEW-TABLE-ONLY (B2c, FAR-583): the readers never consulted the
   legacy ``runs`` blob columns (the EMPTY/MISMATCH fallback machinery was
   removed in code) and migration 0215 has now DROPPED those columns — the
@@ -86,20 +90,25 @@ from sqlalchemy import (
     JSON,
     Column,
     DateTime,
+    Integer,
     MetaData,
     Table,
     Text,
     Uuid,
     and_,
+    case,
     cast,
     delete,
+    exists,
     false,
     func,
+    literal,
     null,
     or_,
     select,
     update,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -126,6 +135,7 @@ __all__ = [
     "dialect_insert",
     "has_completed_nodes_in_attempt",
     "marker_attempt_suffix",
+    "observed_activity_expr",
     "parse_marker_node_id",
     "persist_schema_enforcement_record",
     "read_audit_row_outputs_json",
@@ -1023,6 +1033,139 @@ async def write_run_markers(
     if markers:
         marker_delete = marker_delete.where(RunNodeOutput.attempt_key.not_in(set(markers)))
     await session.execute(marker_delete)
+
+
+# ---------------------------------------------------------------------------
+# Durable-evidence classification (FAR-2285)
+#
+# The reclaim / shutdown-handback gate asks the blob store one question: did
+# the sandbox produce DURABLE, engine-observed activity for this run? The
+# answer decides whether re-executing the run is safe (it is not) or merely
+# idempotent, so the classification lives here, beside the columns it reads —
+# every read of these columns belongs to this module (FAR-583).
+# ---------------------------------------------------------------------------
+
+
+def _engine_evidence_expr(column: Any) -> Any:
+    """Return a PostgreSQL expression for substantial engine-owned activity.
+
+    ``node_telemetry_json`` contains both useful engine observations and routine
+    lifecycle facts.  Status, summary, exit code, wall-clock time, and provider
+    metadata are present even when a sandbox produced no useful activity, so a
+    non-null telemetry envelope is deliberately *not* evidence.  The qualifying
+    fields below are bounded signals that the runtime actually did work: output
+    stream bytes, retained tails/artifacts, or other durable engine artefacts.
+    Agent-return values remain in ``outputs_json`` and are excluded by this
+    expression, preserving their self-reported provenance.
+    """
+
+    def _positive_length(value: Any, field: str) -> Any:
+        field_value = value.op("->>")(literal(field))
+        numeric_value = case(
+            (field_value.op("~")(literal("^[0-9]+$")), cast(field_value, Integer)),
+            else_=literal(0),
+        )
+        return numeric_value > 0
+
+    def _nonempty_text(value: Any, field: str) -> Any:
+        field_value = value.op("->>")(literal(field))
+        return and_(field_value.is_not(None), func.length(field_value) > 0)
+
+    def _nonempty_text_field(value: Any, field: str) -> Any:
+        pointer = value.op("->")(literal(field))
+        return and_(func.jsonb_typeof(pointer) == literal("string"), _nonempty_text(value, field))
+
+    def _nonempty_object(value: Any, field: str) -> Any:
+        pointer = value.op("->")(literal(field))
+        pointer_entries = func.jsonb_each(pointer).table_valued("key", "value")
+        return and_(
+            func.jsonb_typeof(pointer) == literal("object"),
+            exists(select(1).select_from(pointer_entries)),
+        )
+
+    def _has_evidence(value: Any) -> Any:
+        return and_(
+            func.jsonb_typeof(value) == literal("object"),
+            or_(
+                _positive_length(value, "stdout_length"),
+                _positive_length(value, "stderr_length"),
+                _nonempty_text(value, "agent_stdout"),
+                _nonempty_text(value, "agent_stderr"),
+                _nonempty_text(value, "sandbox_log_tail"),
+                _nonempty_text_field(value, "stdout_artifact"),
+                _nonempty_text_field(value, "stderr_artifact"),
+                _nonempty_object(value, "stdout_artifact"),
+                _nonempty_object(value, "stderr_artifact"),
+            ),
+        )
+
+    # P1+ rows store one node's return and telemetry directly in the JSONB
+    # columns. Keep the nested scan as a legacy-compatible read path for rows
+    # written before the split, while evaluating the production flat shape too.
+    flat_value = cast(column, JSONB)
+    node_entries = func.jsonb_each(flat_value).table_valued("node_id", "node_value").render_derived(name="node_entries")
+    return or_(
+        _has_evidence(flat_value),
+        exists(select(1).select_from(node_entries).where(_has_evidence(node_entries.c.node_value))),
+    )
+
+
+def _nonempty_json_expr(column: Any) -> Any:
+    """Match a retained JSON blob that contains at least one value."""
+    json_value = cast(column, JSONB)
+    json_type = func.jsonb_typeof(json_value)
+    object_entries = func.jsonb_each(json_value).table_valued("key", "value")
+    array_entries = func.jsonb_array_elements(json_value).table_valued("value")
+    return and_(
+        column.is_not(None),
+        or_(
+            and_(json_type == literal("object"), exists(select(1).select_from(object_entries))),
+            and_(json_type == literal("array"), exists(select(1).select_from(array_entries))),
+            and_(json_type.not_in(("object", "array")), json_type.is_not(None)),
+        ),
+    )
+
+
+def observed_activity_expr(*, run_id_column: Any, organisation_id_column: Any) -> Any:
+    """A correlated EXISTS clause: this run carries durable engine evidence.
+
+    ``run_id_column`` / ``organisation_id_column`` are the correlated outer
+    columns (the caller selects it alongside its own run row). The provenance
+    rules are the reclaim gate's contract:
+
+    * engine evidence in ``node_telemetry_json`` counts — output stream
+      lengths, retained tails, artifact pointers, or any other durable engine
+      artefact;
+    * a telemetry envelope carrying only lifecycle facts (status, summary,
+      exit code, timings, provider metadata) does NOT count;
+    * when telemetry is absent, ``outputs_json`` is scanned with the SAME
+      evidence expression, so a row written before the split — whose observed
+      fields landed on the outputs side — still counts;
+    * a SELF-REPORTED agent return never counts on its own: the expression
+      looks only for engine-observed fields, never the agent-return shape;
+    * non-empty ``raw_output_markers`` / ``artifacts_json`` /
+      ``schema_enforcement_json`` count.
+
+    Nested legacy shapes are tolerated: the expression evaluates the flat
+    per-node shape AND a ``jsonb_each`` scan for rows written before the
+    per-node split.
+    """
+    return exists(
+        select(1).where(
+            RunNodeOutput.run_id == run_id_column,
+            RunNodeOutput.organisation_id == organisation_id_column,
+            or_(
+                _engine_evidence_expr(RunNodeOutput.node_telemetry_json),
+                and_(
+                    RunNodeOutput.node_telemetry_json.is_(None),
+                    _engine_evidence_expr(RunNodeOutput.outputs_json),
+                ),
+                _nonempty_json_expr(RunNodeOutput.raw_output_markers),
+                _nonempty_json_expr(RunNodeOutput.artifacts_json),
+                _nonempty_json_expr(RunNodeOutput.schema_enforcement_json),
+            ),
+        )
+    )
 
 
 _ROW_COLUMNS: tuple[Any, ...] = (

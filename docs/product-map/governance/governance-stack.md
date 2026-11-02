@@ -96,6 +96,21 @@ change**, so `pnpm run generate:api` is not required.
 
 ## QA History
 
+- 2026-11-02 (improve-architecture). Fixed MINOR (product-map completeness and
+  structural blind spot): `/governance` shipped with NO `elements:` inventory in
+  the manifest and was absent from `OWNED_PAGES` in
+  `backend/tests/architecture/test_product_map_consistency.py`, so both halves
+  of the element guard exempted it - its controls were invisible to Assistant's
+  `search_documentation` indexer and `/api/v1/manifest`, and a future control
+  could not be caught. Registered the page root (`governance-stack`) and level
+  list (`governance-levels`) testids plus the shared plan-gate surface
+  (`feature-gate*`, `lock-icon`) that the four gated levels render, added
+  `/governance` to `OWNED_PAGES`, and added
+  `test_every_mapped_route_owns_a_component_closure` so a mapped route can no
+  longer be silently omitted (deprecated compatibility URLs are recorded as
+  aliases of the route that owns their component). The dynamic per-level
+  testids (`governance-level-<id>`, `governance-level-<state>-<id>`) remain
+  template-composed and are exercised by the Vitest spec.
 - 2026-10-14 (improve-architecture, first pass on this entry; the entry had
   never been through one). Fixed MAJOR: level 6 read a single 100-item page of
   `/api/v1/pipelines` and reported the rung distribution from it while taking

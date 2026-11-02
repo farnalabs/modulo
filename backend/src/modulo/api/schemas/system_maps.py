@@ -285,9 +285,15 @@ class SystemMapOverviewLoopConfig(BaseModel):
     outcome_metric: str
     last_admission_at: datetime | None = None
     last_admission_status: str | None = None
-    cooldown_active: bool = False
+    # True/False when reservation evidence exists; null only when no
+    # reservation was ever recorded for this loop.
+    cooldown_active: bool | None = None
     cooldown_until: datetime | None = None
-    budget_used_usd: Decimal = Decimal(0)
+    # Sum of reservations that genuinely hold budget (active/consumed) in the
+    # window; null when a contributing run's cost was never observed.
+    budget_used_usd: Decimal | None = None
+    # Null unless the deployment records a real budget period; the metrics
+    # window is NOT reported as one.
     budget_period_start: datetime | None = None
 
 
@@ -303,12 +309,22 @@ class SystemMapOverviewBottleneck(BaseModel):
 
 
 class SystemMapOverviewResponse(BaseModel):
-    """Aggregate read model for a published system map."""
+    """Aggregate read model for a published system map.
+
+    Metrics cover the half-open UTC interval ``[window_start, window_end)``.
+    ``window_end`` is the generation instant and facts without an observed
+    timestamp remain null rather than being inferred. Failure rates use the
+    canonical analytics definition: only non-benign ``failed``/``stalled`` runs
+    count as failures, so a deliberate cancel or reject is not a fault.
+    """
 
     system_map_id: uuid.UUID
     revision_id: uuid.UUID
     revision_number: int
     generated_at: datetime
+    window_days: int
+    window_start: datetime
+    window_end: datetime
     nodes: list[SystemMapOverviewNodeHealth]
     loop_configs: list[SystemMapOverviewLoopConfig]
     bottlenecks: list[SystemMapOverviewBottleneck]

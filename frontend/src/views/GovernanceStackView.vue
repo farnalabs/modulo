@@ -1,5 +1,5 @@
 <template>
-  <div class="page-wide">
+  <div class="page-wide" data-testid="governance-stack">
     <PageHeader
       :title="$t('views.GovernanceStackView.title')"
       :subtitle="$t('views.GovernanceStackView.subtitle')"
@@ -9,7 +9,7 @@
       {{ $t('views.GovernanceStackView.intro') }}
     </p>
 
-    <div class="mt-6 space-y-4">
+    <div class="mt-6 space-y-4" data-testid="governance-levels">
       <article
         v-for="level in levels"
         :key="level.id"

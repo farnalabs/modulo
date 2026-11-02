@@ -455,10 +455,16 @@ OWNED_PAGES = {
         "frontend/src/components/onboarding/OnboardingBanner.vue",
         "frontend/src/components/onboarding/SpotlightOverlay.vue",
         "frontend/src/components/DashboardNotificationsPanel.vue",
+        "frontend/src/components/dashboard/DashboardSystemOverview.vue",
     ),
     "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
     "/oauth/authorize": "frontend/src/views/OAuthConsentView.vue",
     "/evidence": "frontend/src/views/EvidenceView.vue",
+    "/governance": (
+        "frontend/src/views/GovernanceStackView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
     "/risk-assessment": (
         "frontend/src/views/RiskAssessmentView.vue",
         "frontend/src/components/risk-assessment/RiskAssessmentFacets.vue",
@@ -865,6 +871,44 @@ def test_registered_elements_render_on_their_route():
         "advertises a surface the page does not ship; drop or re-home the element):\n"
         + "\n".join(f"  {route} -> {', '.join(testids)}" for route, testids in sorted(missing.items()))
     )
+
+
+def test_every_mapped_route_owns_a_component_closure():
+    """Every mapped product route is in ``OWNED_PAGES`` (or a documented alias).
+
+    ``test_mapped_route_elements_cover_owning_view_testids`` and
+    ``test_registered_elements_render_on_their_route`` both iterate
+    ``OWNED_PAGES``, so a route missing from that map is silently exempt from
+    BOTH halves of the element guard: its shipped controls need not be
+    documented, and its documented controls need not render. ``/governance``
+    shipped exactly that way - a whole page (and its seven-level surface) with
+    no element inventory and no reverse-coverage guard.
+
+    A deprecated compatibility URL that mounts a component already owned by
+    another route is an alias, not a second surface; it is recorded in
+    ``_ROUTE_ALIAS_OWNERS`` and inherits the owner's coverage instead of
+    duplicating the inventory.
+    """
+    owned = set(OWNED_PAGES)
+    aliases = set(_ROUTE_ALIAS_OWNERS)
+    uncovered = sorted(path for path in _load_manifest()["routes"] if path not in owned and path not in aliases)
+    assert not uncovered, (
+        "mapped product routes with no OWNED_PAGES entry (exempt from both element-coverage "
+        "guards - register the owning view(s), or record a documented alias):\n"
+        + "\n".join(f"  {path}" for path in uncovered)
+    )
+    stale_aliases = sorted(alias for alias, owner in _ROUTE_ALIAS_OWNERS.items() if owner not in owned)
+    assert not stale_aliases, "aliases point at routes that are themselves unowned:\n" + "\n".join(
+        f"  {alias} -> {_ROUTE_ALIAS_OWNERS[alias]}" for alias in stale_aliases
+    )
+
+
+#: Deprecated compatibility URLs that render a component already owned by the
+#: route named in the value. They are not separate surfaces, so they inherit the
+#: owner's element inventory rather than duplicating it.
+_ROUTE_ALIAS_OWNERS: dict[str, str] = {
+    "/admin/evidence": "/admin/compliance/evidence-index",
+}
 
 
 def test_every_non_auth_router_route_is_mapped():
