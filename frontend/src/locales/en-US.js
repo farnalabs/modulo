@@ -4577,6 +4577,25 @@ export default {
       "telemetry_unavailable": "unavailable"
     }
   },
+  "systemMaps": {
+    "errors": {
+      "load_maps": "Could not load system maps",
+      "load_map": "Could not load system map",
+      "create_map": "Could not create system map",
+      "delete_map": "Could not delete system map",
+      "load_map_revision": "Could not load map revision",
+      "save_draft_revision": "Could not save draft revision",
+      "publish_revision": "Could not publish revision",
+      "archive_revision": "Could not archive revision",
+      "discover_map": "Could not discover system map",
+      "load_discovered_draft": "Could not load the discovered draft",
+      "feature_flags": "Internal feature flags request failed",
+      "load_revision": "Could not load revision",
+      "create_draft": "Could not create draft",
+      "save_draft": "Could not save draft",
+      "discovery_failed": "Discovery failed"
+    }
+  },
   "components": {
     "LicenceRenewalNotice": {
       "renewal_due_auto_title": "Your Team license renews on {date}",
