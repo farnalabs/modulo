@@ -37,7 +37,6 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   library: { icon: 'BookOpen', labelKey: 'components.SidebarNav.item_library' },
   'system-maps': { icon: 'Map', labelKey: 'components.SidebarNav.item_system_maps' },
   'pipeline-list': { icon: 'GitFork', labelKey: 'components.SidebarNav.item_my_pipelines' },
-  'system-maps': { icon: 'Map', labelKey: 'views.SystemMapsView.title' },
 
   'pipeline-copy': { icon: 'Copy', labelKey: 'components.SidebarNav.item_copy_pipeline' },
   'runs-list': { icon: 'CirclePlay', labelKey: 'components.SidebarNav.item_runs_list' },
