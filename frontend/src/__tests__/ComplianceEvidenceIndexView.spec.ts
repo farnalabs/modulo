@@ -97,8 +97,11 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(wrapper.text()).toContain('1')
     expect(wrapper.text()).toContain('Present')
     expect(wrapper.text()).toContain('Observed')
-    expect(wrapper.text()).toContain('10/20/2026')
-    expect(wrapper.text()).toContain('10/22/2026')
+    // formatTimestamp renders host-locale output, so pin the instant via the
+    // same derivation instead of a locale-specific literal (CI runs en-US;
+    // other hosts format the same instant differently).
+    expect(wrapper.text()).toContain(new Date('2026-10-20T12:00:00Z').toLocaleString())
+    expect(wrapper.text()).toContain(new Date('2026-10-22T12:00:00Z').toLocaleString())
     expect(wrapper.find('dl').exists()).toBe(true)
     expect(wrapper.findAll('dl dt')).not.toHaveLength(0)
     expect(wrapper.findAll('dl dd')).not.toHaveLength(0)
@@ -193,6 +196,16 @@ describe('ComplianceEvidenceIndexView', () => {
 
     expect(wrapper.text()).toContain('No evidence index available')
     expect(wrapper.find('[data-testid="compliance-evidence-index-coverage"]').exists()).toBe(false)
+    // With no index loaded every summary count defaults to zero rather than
+    // throwing on an absent payload.
+    const summary = wrapper.vm as unknown as {
+      totalArtifactCount: number
+      presentArtifactCount: number
+      compliancePercentage: number
+    }
+    expect(summary.totalArtifactCount).toBe(0)
+    expect(summary.presentArtifactCount).toBe(0)
+    expect(summary.compliancePercentage).toBe(0)
   })
 
   it('shows absence reasons and treats missing record counts and mapping rows as unavailable', async () => {

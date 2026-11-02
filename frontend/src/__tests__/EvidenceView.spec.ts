@@ -164,6 +164,47 @@ describe('EvidenceView', () => {
     expect(wrapper.find('[data-testid="evidence-recent-runs-error"]').text()).toContain('Failed to fetch runs')
   })
 
+  it('stringifies a non-Error rejection while loading recent runs', async () => {
+    mockFetchRuns.mockRejectedValue('runs unavailable')
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="evidence-recent-runs-error"]').text()).toContain('runs unavailable')
+  })
+
+  it('falls back to the unknown-pipeline label and filters a run whose pipeline name is null', async () => {
+    mockFetchRuns.mockResolvedValue({
+      items: [
+        {
+          run_id: 'run-null-pipeline',
+          pipeline_id: 'pipe-9',
+          pipeline_name: null,
+          status: 'running',
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 50,
+      next_cursor: null,
+      has_more: false,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const options = wrapper.findAll('[data-testid="evidence-recent-run"] option')
+    expect(options.some((opt) => opt.text().includes('Unknown pipeline'))).toBe(true)
+
+    // A query matching neither the run id nor the (absent) pipeline name keeps
+    // the run out of the list rather than throwing on a null pipeline name.
+    await wrapper.find('[data-testid="evidence-run-search"]').setValue('nothing-matches')
+    await nextTick()
+
+    const filtered = wrapper.findAll('[data-testid="evidence-recent-run"] option')
+    expect(filtered).toHaveLength(1)
+    expect(filtered[0].text()).toContain('Select a run')
+  })
+
   it('rejects a submit with no run id before calling the API', async () => {
     const wrapper = mountView()
 
