@@ -26,7 +26,7 @@
         @move-pipeline="onMoveSchema"
       />
 
-      <main class="flex-1 page-wide min-w-0 overflow-y-auto">
+      <section class="flex-1 page-wide min-w-0 overflow-y-auto">
         <!-- Folder-list load failure. The <md owner of the folder-error live
              region (FolderTree's sidebar owns >=md), hence `gated`. The shared
              contract — single live region, non-dismissible, retry re-fetches —
@@ -173,7 +173,7 @@
             </div>
           </template>
         </template>
-      </main>
+      </section>
     </div>
 
     <!-- Deprecation Confirmation Dialog -->

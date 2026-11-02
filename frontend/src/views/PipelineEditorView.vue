@@ -7,8 +7,27 @@
        desktop (FAR-1851). The `h-[calc(100vh-3.5rem)]` class is only the
        pre-measurement fallback. -->
   <div ref="editorRootRef" data-testid="pipeline-editor-root" class="relative flex h-[calc(100vh-3.5rem)] overflow-hidden" :style="editorFitStyle">
-    <div v-if="loading || historicResolving" class="flex flex-1 items-center justify-center">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+    <!-- ux-conformance STATE-3: the live region announces ONLY the loading
+         status text, and `aria-busy` sits on the placeholder spinner it
+         actually describes - never on the live region's ancestor. A busy
+         ancestor defers the announcement until it clears, and this wrapper
+         UNMOUNTS rather than clearing, so a busy ancestor would suppress the
+         announcement forever (the same rule codified by `TableSkeleton.vue`).
+         `aria-live` alone, with no explicit `role="status"`: <output> already
+         carries the status role implicitly, and FAR-1812 codifies that an
+         explicit status role is never combined with aria-live. -->
+    <div
+      v-if="loading || historicResolving"
+      class="flex flex-1 flex-col items-center justify-center gap-3"
+    >
+      <output
+        class="text-sm text-muted-foreground"
+        aria-live="polite"
+      >{{ $t('views.PipelineEditorView.loading_editor') }}</output>
+      <div
+        class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"
+        aria-busy="true"
+      />
     </div>
     <!-- FAR-1812: graceful miss — an unknown/deleted version never renders a
          raw error or a dead page; it offers the route back to the latest
@@ -42,7 +61,7 @@
            the pinned box and out of reach. Scrolling this column instead of
            the page keeps every control reachable while holding the
            no-page-scroll invariant for the whole band. -->
-      <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto" data-testid="pipeline-editor-content">
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain" data-testid="pipeline-editor-content">
         <!-- Docked toolbar: in-flow above the canvas so it never covers node details.
              `shrink-0`: when the content column is shorter than the wrapped
              toolbar, the toolbar must keep its min-content height (scroll the
@@ -113,6 +132,9 @@
               </button>
               <div
                 v-if="showSaveAsDropdown"
+                ref="saveAsDropdownRef"
+                role="menu"
+                tabindex="-1"
                 :class="[
                   'fixed z-30 max-h-[calc(100vh-1rem)] overflow-y-auto overscroll-contain rounded-lg border bg-card py-1 shadow-lg',
                   SAVE_AS_DROPDOWN_METRICS.className,
@@ -123,6 +145,7 @@
                 <button
                   type="button"
                   class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent"
+                  role="menuitem"
                   data-testid="pipeline-editor-save-as-composite"
                   @click="openSaveAsComposite"
                 >
@@ -141,7 +164,8 @@
             <span :class="groupDividerClass" />
             <!-- Group: run -->
             <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-run">
-              <button type="button" :class="btnToolbarPrimary" :disabled="running || flowNodes.length === 0" :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''" data-testid="pipeline-editor-run" @click="openRunDialog">
+              <button type="button" :class="btnToolbarPrimary" :disabled="running || flowNodes.length === 0" :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''" ref="runDialogTriggerRef"
+                data-testid="pipeline-editor-run" @click="openRunDialog">
                 <PlayIcon class="h-3 w-3" aria-hidden="true" />
                 {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
               </button>
@@ -296,6 +320,47 @@
                   </button>
                 </div>
               </dialog>
+            </div>
+            <!-- FAR-2279: owner team. "None (org-wide)" clears the owner team
+                 (explicit null on the wire); choosing a team sends its id.
+                 Visibility is NOT changed by this control. The server enforces
+                 membership of the old/new team and the environment-profile
+                 binding, and a refusal is surfaced as an alert. -->
+            <div
+              class="flex items-center gap-1"
+              v-tooltip.bottom="$t('views.PipelineEditorView.owner_team_hint')"
+            >
+              <label
+                for="pipeline-owner-team"
+                class="whitespace-nowrap text-[10px] text-muted-foreground"
+                :title="$t('views.PipelineEditorView.owner_team_hint')"
+              >{{ $t('views.PipelineEditorView.owner_team_label') }}:</label>
+              <select
+                id="pipeline-owner-team"
+                :value="ownerTeamInput"
+                class="w-44 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                :title="$t('views.PipelineEditorView.owner_team_hint')"
+                aria-describedby="pipeline-owner-team-help"
+                @change="updateOwnerTeam"
+                data-testid="pipeline-editor-owner-team"
+              >
+                <option value="">{{ $t('views.PipelineEditorView.owner_team_none') }}</option>
+                <option v-for="tm in ownerTeamOptions" :key="tm.id" :value="tm.id">{{ tm.label }}</option>
+              </select>
+              <span id="pipeline-owner-team-help" class="sr-only">{{ $t('views.PipelineEditorView.owner_team_hint') }}</span>
+              <span
+                v-if="ownerTeamError"
+                role="alert"
+                class="max-w-56 truncate text-xs text-destructive"
+                :title="ownerTeamError"
+                data-testid="pipeline-editor-owner-team-error"
+              >{{ ownerTeamError }}</span>
+              <output
+                v-else-if="ownerTeamStatus"
+                class="max-w-56 truncate text-[10px] text-muted-foreground"
+                :title="ownerTeamStatus"
+                data-testid="pipeline-editor-owner-team-status"
+              >{{ ownerTeamStatus }}</output>
             </div>
             <!-- FAR-1558: per-pipeline environment profile - the runtime provider
                  this pipeline's runs dispatch on. Gated on the
@@ -815,8 +880,11 @@
           data-testid="pipeline-editor-run-dialog-backdrop"
         >
           <dialog
+            ref="runDialogRef"
             open
             aria-modal="true"
+            tabindex="-1"
+            @keydown="onRunDialogKeydown"
             :aria-label="$t('views.PipelineEditorView.run_dialog_title')"
             class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4"
             style="position: static"
@@ -955,7 +1023,7 @@
              canvas slot (the canvas above is hidden) so the presentation has
              room; the pair pickers keep the route query authoritative, which is
              what makes the view deep-linkable for sharing. -->
-        <div v-if="compareMode" class="min-h-0 flex-1 overflow-y-auto">
+        <div v-if="compareMode" class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <PipelineSnapshotCompare
             :pipeline-id="pipelineId"
             :base-snapshot-id="resolvedSnapshotId ?? ''"
@@ -981,7 +1049,7 @@
         v-if="selectedNodeData && !selectedEdgeData"
         ref="nodePanelRef"
         v-bind="sheetDialogAttrs(NODE_SHEET_TITLE_ID)"
-        class="w-96 overflow-y-auto border-l bg-card p-4 max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-auto max-md:border-l-0"
+        class="w-96 overflow-y-auto overscroll-contain border-l bg-card p-4 max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-auto max-md:border-l-0"
         @keydown="onSheetKeydown"
       >
         <div class="mb-4 flex items-center justify-between">
@@ -1438,7 +1506,7 @@
         v-if="selectedEdgeData"
         ref="edgePanelRef"
         v-bind="sheetDialogAttrs(EDGE_SHEET_TITLE_ID)"
-        class="w-96 overflow-y-auto border-l bg-card p-4 max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-auto max-md:border-l-0"
+        class="w-96 overflow-y-auto overscroll-contain border-l bg-card p-4 max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-auto max-md:border-l-0"
         @keydown="onSheetKeydown"
       >
         <div class="mb-4 flex items-center justify-between">
@@ -2120,6 +2188,7 @@ const singlePrPerRun = computed<boolean>({
 const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
 const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
+const saveAsDropdownRef = ref<HTMLElement | null>(null)
 const saveAsDropdownStyle = ref<Record<string, string>>({})
 const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch', connector: 'connector' }
 const { fitView, onPaneReady } = useVueFlow()
@@ -2223,6 +2292,8 @@ const deleteError = ref<string | null>(null)
 const savingGraph = ref(false)
 const saveGraphError = ref<string | null>(null)
 const showRunDialog = ref(false)
+const runDialogTriggerRef = ref<HTMLButtonElement | null>(null)
+const runDialogRef = ref<HTMLDialogElement | null>(null)
 const runPrompt = ref('')
 const running = ref(false)
 const runError = ref<string | null>(null)
@@ -2727,6 +2798,10 @@ function onRetryPolicyKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && retryPolicyOpen.value) {
     event.preventDefault()
     closeRetryPolicy()
+    return
+  }
+  if (retryPolicyOpen.value && event.key === 'Tab') {
+    trapTabInElement(event, retryPolicyPanelRef.value)
   }
 }
 
@@ -2798,6 +2873,10 @@ function onAutonomyPanelKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && autonomyPanelOpen.value) {
     event.preventDefault()
     closeAutonomyPanel()
+    return
+  }
+  if (autonomyPanelOpen.value && event.key === 'Tab') {
+    trapTabInElement(event, autonomyPanelDialogRef.value)
   }
 }
 
@@ -2852,6 +2931,7 @@ function toggleSaveAsDropdown() {
   // position for a frame (same FAR-1899 anchor-before-paint as the panels).
   positionSaveAsDropdown()
   showSaveAsDropdown.value = true
+  nextTick(() => saveAsDropdownRef.value?.querySelector<HTMLElement>('[role="menuitem"]')?.focus())
 }
 
 // FAR-1899 review note: the save-as menu was the only toolbar popover without
@@ -4078,6 +4158,7 @@ async function loadPipeline() {
     syncHitlReviewWindowFromPipeline()
     syncQueueTimeoutFromPipeline()
     syncEnvironmentProfileFromPipeline()
+    syncOwnerTeamFromPipeline()
     syncRetryPolicyFromPipeline()
   } catch (e) {
     pageError.value = t('views.PipelineEditorView.failed_to_load_pipeline', { error: formatApiError(e) })
@@ -4257,6 +4338,91 @@ async function updateMaxAutonomyLevel(event: Event) {
   }
 }
 
+// FAR-2279: owner team. The select is the only send site: "" sends an
+// explicit null (org-wide), a team id assigns it. The server re-validates team
+// membership and the environment-profile binding, so a refusal reverts the
+// control and shows an alert rather than failing silently.
+const ownerTeamInput = ref('')
+const ownerTeams = ref<Array<{ id: string; name: string }>>([])
+const ownerTeamLoadError = ref<string | null>(null)
+const ownerTeamUpdateError = ref<string | null>(null)
+const ownerTeamStatus = ref<string | null>(null)
+
+const ownerTeamOptions = computed(() => {
+  const rows = ownerTeams.value.map((tm) => ({ id: tm.id, label: tm.name }))
+  const current = ownerTeamInput.value
+  if (current && !rows.some((row) => row.id === current)) {
+    rows.unshift({ id: current, label: t('views.PipelineEditorView.owner_team_unavailable') })
+  }
+  return rows
+})
+
+const ownerTeamError = computed(() => {
+  if (ownerTeamUpdateError.value) return ownerTeamUpdateError.value
+  if (ownerTeamLoadError.value) {
+    return t('views.PipelineEditorView.owner_team_load_failed', { error: ownerTeamLoadError.value })
+  }
+  return null
+})
+
+function syncOwnerTeamFromPipeline() {
+  const stored = (pipeline.value as { owner_team_id?: string | null } | null)?.owner_team_id
+  ownerTeamInput.value = stored ?? ''
+}
+
+async function loadOwnerTeams() {
+  try {
+    const { data, error } = await api.GET('/api/v1/teams', { params: { query: { page_size: 100 } } })
+    if (error) {
+      ownerTeamLoadError.value = formatApiError(error)
+      return
+    }
+    ownerTeams.value = (data?.items ?? []).map((tm) => ({ id: tm.id, name: tm.name }))
+  } catch (e: unknown) {
+    ownerTeamLoadError.value = formatApiError(e)
+  }
+}
+void loadOwnerTeams()
+
+function ownerTeamLabelForId(id: string): string {
+  return ownerTeams.value.find((tm) => tm.id === id)?.name ?? id
+}
+
+async function updateOwnerTeam(event: Event) {
+  const raw = (event.target as HTMLSelectElement).value
+  const val = raw === '' ? null : raw
+  ownerTeamInput.value = raw
+  ownerTeamUpdateError.value = null
+  ownerTeamStatus.value = null
+  try {
+    const { data, error } = await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: { owner_team_id: val },
+      signal,
+    }))
+    if (error) {
+      ownerTeamUpdateError.value = t('views.PipelineEditorView.owner_team_update_failed', {
+        error: formatApiError(error),
+      })
+      syncOwnerTeamFromPipeline()
+      return
+    }
+    if (pipeline.value) (pipeline.value as { owner_team_id?: string | null }).owner_team_id = val
+    const rebind = Boolean((data as { connector_rebind_required?: boolean } | undefined)?.connector_rebind_required)
+    ownerTeamStatus.value = val
+      ? t('views.PipelineEditorView.owner_team_set', { label: ownerTeamLabelForId(val) })
+      : t('views.PipelineEditorView.owner_team_cleared')
+    if (rebind) {
+      ownerTeamStatus.value += ' ' + t('views.PipelineEditorView.owner_team_rebind_required')
+    }
+  } catch (e: unknown) {
+    ownerTeamUpdateError.value = t('views.PipelineEditorView.owner_team_update_failed', {
+      error: formatApiError(e),
+    })
+    syncOwnerTeamFromPipeline()
+  }
+}
+
 // FAR-1558 slice 2: per-pipeline environment profile - the runtime provider
 // this pipeline's runs dispatch on. The select is the ONLY send site, which
 // is what makes omit-vs-null unambiguous: an untouched control fires no
@@ -4376,6 +4542,7 @@ function openRunDialog() {
   confirmEmptyRun.value = false
   emptyRunWarning.value = null
   showRunDialog.value = true
+  nextTick(() => runDialogRef.value?.focus())
 }
 
 function closeRunDialog() {
@@ -4384,12 +4551,17 @@ function closeRunDialog() {
   runError.value = null
   confirmEmptyRun.value = false
   emptyRunWarning.value = null
+  runDialogTriggerRef.value?.focus()
 }
 
 function onRunDialogKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && showRunDialog.value) {
     event.preventDefault()
     closeRunDialog()
+    return
+  }
+  if (showRunDialog.value && event.key === 'Tab') {
+    trapTabInElement(event, runDialogRef.value)
   }
 }
 

@@ -146,6 +146,11 @@ def _api_key_patches(key: MagicMock, live_role: str | None) -> list[Any]:
         patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
         patch.object(ms, "validate_api_key", new=AsyncMock(return_value=key)),
         patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value=live_role)),
+        patch.object(
+            ms,
+            "resolve_live_role_and_kind",
+            new=AsyncMock(return_value=None if live_role is None else (live_role, "human")),
+        ),
     ]
 
 
@@ -153,7 +158,7 @@ class TestApiKeyAuthScopeStamping:
     @pytest.mark.asyncio
     async def test_org_key_sets_key_scope_org(self) -> None:
         patches = _api_key_patches(_mock_api_key(scope="org"), "operator")
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
         assert handled is True
         assert err is None
@@ -175,6 +180,7 @@ class TestApiKeyAuthScopeStamping:
             patches[3],
             patches[4],
             patches[5],
+            patches[6],
             patch.object(ms, "get_registry", return_value=registry),
         ):
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
@@ -199,6 +205,7 @@ class TestApiKeyAuthScopeStamping:
             patches[3],
             patches[4],
             patches[5],
+            patches[6],
             patch.object(ms, "get_registry", return_value=registry),
         ):
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
@@ -217,6 +224,7 @@ class TestApiKeyAuthScopeStamping:
             patches[3],
             patches[4],
             patches[5],
+            patches[6],
             patch.object(ms, "get_registry", side_effect=RuntimeError("flag read exploded")),
         ):
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
@@ -237,6 +245,7 @@ class TestApiKeyAuthScopeStamping:
             patches[3],
             patches[4],
             patches[5],
+            patches[6],
             patch.object(ms, "_set_user_keys_flag", new=flag_reader),
         ):
             handled, _err = await _authenticate_api_key(_mock_request(), _API_KEY)
@@ -260,6 +269,7 @@ class TestUserKeyLiveRoleClamp:
             patches[3],
             patches[4],
             patches[5],
+            patches[6],
             patch.object(ms, "get_registry", return_value=registry),
         ):
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
@@ -284,6 +294,7 @@ class TestUserKeyLiveRoleClamp:
                 patches[3],
                 patches[4],
                 patches[5],
+                patches[6],
                 patch.object(ms, "get_registry", return_value=registry),
             ):
                 handled, _err = await _authenticate_api_key(_mock_request(), _API_KEY)
@@ -305,6 +316,7 @@ class TestUserKeyLiveRoleClamp:
             patches[3],
             patches[4],
             patches[5],
+            patches[6],
             patch.object(ms, "get_registry", return_value=registry),
         ):
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
@@ -596,6 +608,7 @@ class TestFlagPolarityContractAcrossPaths:
             patches[3],
             patches[4],
             patches[5],
+            patches[6],
             patch.object(ms, "get_registry", return_value=cls._registry(resolved)),
         ):
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
