@@ -45,6 +45,10 @@ quarantine:
       41523847563, 2026-11-02).
     expiry: "2026-11-17"
     owner: "platform-team"
+  - test_id: "tests/unit/test_dispatch.py::TestGetOrgRunConcurrencyLimit::test_clamps_out_of_range"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125556884614, run 41526232230, PR #2720)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
 
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
