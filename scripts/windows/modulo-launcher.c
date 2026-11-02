@@ -56,7 +56,7 @@ static BOOL build_pythonpath(const wchar_t *bundle_root) {
     if (!path_append(component, MAX_PATH_LEN, L"backend") || !path_append(component, MAX_PATH_LEN, L"src")) return FALSE;
     wcscpy(pythonpath, component);
     wcscpy(component, bundle_root);
-    if (!path_append(component, MAX_PATH_LEN, L"runtime") || !path_append(component, MAX_PATH_LEN, L"Lib") || !path_append(component, MAX_PATH_LEN, L"site-packages")) return FALSE;
+    if (!path_append(component, MAX_PATH_LEN, L"runtime") || !path_append(component, MAX_PATH_LEN, L"python") || !path_append(component, MAX_PATH_LEN, L"Lib") || !path_append(component, MAX_PATH_LEN, L"site-packages")) return FALSE;
     if (wcslen(pythonpath) + 1 + wcslen(component) + 1 > sizeof(pythonpath) / sizeof(pythonpath[0])) return FALSE;
     wcscat(pythonpath, L";");
     wcscat(pythonpath, component);
@@ -171,7 +171,7 @@ int wmain(int argc, wchar_t *argv[]) {
         return 1;
     }
     if (!build_path(python_exe, MAX_PATH_LEN, bundle_root, L"runtime", L"bin") || !path_append(python_exe, MAX_PATH_LEN, L"python3.exe") || GetFileAttributesW(python_exe) == INVALID_FILE_ATTRIBUTES) {
-        fwprintf(stderr, L"Python executable not found at runtime\\bin\\python3.exe\n");
+        fwprintf(stderr, L"Python executable not found at runtime\\bin\\python3.exe (runtime/python must contain the complete PBS tree)\n");
         return 1;
     }
     command_line = build_command_line(python_exe, argc, argv);
