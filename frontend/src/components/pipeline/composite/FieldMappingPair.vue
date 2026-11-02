@@ -19,12 +19,13 @@ const showPicker = ref(false)
 const selectedSource = ref('')
 const selectedTarget = ref('')
 
-// Per-instance id prefix. SchemaMappingPanel renders one pair per direction
-// (`input` and `output`) and PrimeVue renders every TabPanel's content, so
-// both copies exist in the document at once - a hardcoded control id would
-// appear twice and `label[for]` would resolve to the other copy's control.
-let instanceSeq = 0
-const idPrefix = `fieldmappingpair-${(instanceSeq += 1)}`
+// Per-instance id prefix derived from the `direction` prop. A counter declared
+// in `<script setup>` re-executes for every instance, so it always yielded
+// `fieldmappingpair-1`; SchemaMappingPanel renders exactly one pair per
+// direction (`input` and `output`) and PrimeVue renders every TabPanel's
+// content, so both copies exist in the document at once. Direction is unique
+// per rendered copy, so `label[for]` resolves to the right control.
+const idPrefix = `fieldmappingpair-${props.direction}`
 
 const isPassthrough = computed(() => {
   if (props.sourceFields.length !== props.targetFields.length) return false
