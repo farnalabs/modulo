@@ -3345,6 +3345,200 @@ async def set_pipeline_owners(
         return _tool_exception_error("Failed to set pipeline owners", exc, "mcp.set_pipeline_owners")
 
 
+_OWNER_TEAM_RESOURCE_TYPES = ("pipeline", "model_backend", "connector")
+
+
+class _OwnerTeamScopeDeniedError(Exception):
+    """A team-scoped credential tried to move another team's resource (raised before any write)."""
+
+
+async def _apply_owner_team_pipeline(
+    s: AsyncSession, principal: Any, resource_id: uuid.UUID, new_team: uuid.UUID | None, org_id: uuid.UUID
+) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:
+    """Move a pipeline to *new_team* through the REST PATCH gates; None when not found."""
+    from modulo.api.routes.pipelines import (
+        _assert_team_transition_allowed,
+        _enforce_stored_bindings_on_team_change,
+        _reapply_team_gate_inside_mutation_txn,
+    )
+    from modulo.db.crud.pipeline import update_pipeline as update_pipeline_row
+
+    try:
+        locked = await _reapply_team_gate_inside_mutation_txn(s, principal, resource_id)
+    except FastAPIHTTPException as exc:
+        if exc.status_code == 404:
+            return None
+        raise
+    previous = locked.owner_team_id
+    updates: dict[str, Any] = {"owner_team_id": new_team}
+    if new_team is not None and new_team != previous:
+        from modulo.api.team_scope import validate_owner_team_for_create
+
+        await validate_owner_team_for_create(s, principal, new_team)
+    await _assert_team_transition_allowed(s, principal, locked, updates)
+    await _enforce_stored_bindings_on_team_change(
+        s, principal, locked, updates, ownership_changed=new_team != previous, graph_replaced=False
+    )
+    pipeline = await update_pipeline_row(s, resource_id, updates, org_id=org_id, account_id=principal.account_id)
+    if pipeline is None:
+        return None
+    return previous, pipeline.owner_team_id
+
+
+async def _apply_owner_team_simple(
+    s: AsyncSession,
+    principal: Any,
+    resource_type: str,
+    resource_id: uuid.UUID,
+    new_team: uuid.UUID | None,
+    org_id: uuid.UUID,
+) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:
+    """Move a model backend or connector to *new_team*; None when not found in this org."""
+    from modulo.api.team_scope import validate_owner_team_for_create, validate_team_transition_for_update
+    from modulo.core.audit_logger import append_audit_event
+
+    get_row: Any
+    update_row: Any
+    if resource_type == "model_backend":
+        from modulo.db.crud import model_backend as _mb_crud
+
+        get_row, update_row = _mb_crud.get_model_backend, _mb_crud.update_model_backend
+    else:
+        from modulo.db.crud import connector_instance as _ci_crud
+
+        get_row, update_row = _ci_crud.get_connector_instance, _ci_crud.update_connector_instance
+
+    row = await get_row(s, resource_id)
+    if row is None or row.organisation_id != org_id:
+        return None
+    previous = row.owner_team_id
+    if _team_scoped_key_mismatch(previous):
+        raise _OwnerTeamScopeDeniedError
+    if new_team is not None and new_team != previous:
+        await validate_owner_team_for_create(s, principal, new_team)
+    await validate_team_transition_for_update(
+        s,
+        principal,
+        current_owner_team_id=previous,
+        current_visibility=row.visibility,
+        new_owner_team_id=new_team,
+        new_visibility=row.visibility,
+    )
+    updates: dict[str, Any] = {"owner_team_id": new_team}
+    if resource_type == "connector":
+        from modulo.api.routes.connectors import _reject_re_scope_that_breaks_a_bound_pipeline
+
+        await _reject_re_scope_that_breaks_a_bound_pipeline(s, org_id=org_id, connector=row, updates=updates)
+    updated = await update_row(s, resource_id, updates)
+    if updated is None:
+        return None
+    if new_team != previous:
+        await append_audit_event(
+            s,
+            org_id=org_id,
+            event_type="resource_team_ownership_changed",
+            actor_user_id=principal.account_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            payload_json={
+                "resource_type": resource_type,
+                "resource_id": str(resource_id),
+                "old_team_id": str(previous) if previous is not None else None,
+                "new_team_id": str(new_team) if new_team is not None else None,
+                "changed_by": str(principal.account_id),
+            },
+        )
+    return previous, updated.owner_team_id
+
+
+@mcp.tool(
+    description=(
+        "Set (or clear) the owner team of a team-owned resource (FAR-2298). resource_type is "
+        "one of 'pipeline', 'model_backend' or 'connector'; resource_id is that resource's UUID. "
+        "owner_team_id is REQUIRED and nullable: pass a team UUID to assign, or null to clear the "
+        "owner team (there is no leave-unchanged state). The same gates as the REST PATCH apply: "
+        "the team must exist in this organisation, a non-admin caller must be a member of the "
+        "current and the new team, a team-visibility resource cannot lose its owner team, a "
+        "pipeline with active runs cannot change team, and a re-scope that would strand a bound "
+        "connector/pipeline is refused. Any rejection returns validation_failed with the detail "
+        "(never silently dropped). Returns the previous and stored owner team. Requires the "
+        "update permission of the resource type (operator role). Audited "
+        "(resource_team_ownership_changed)."
+    ),
+)
+@mcp_audited("resource_owner_team_updated", "resource", fail_closed=False)
+@_RETRY_DB
+async def set_resource_owner_team(
+    resource_type: str,
+    resource_id: str,
+    owner_team_id: str | None,
+) -> dict[str, Any]:
+    from types import SimpleNamespace
+
+    from modulo.db.crud.pipeline import PipelineHasActiveRunsError
+
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        if resource_type not in _OWNER_TEAM_RESOURCE_TYPES:
+            return {
+                "error": "validation_failed",
+                "detail": f"resource_type must be one of {', '.join(_OWNER_TEAM_RESOURCE_TYPES)}",
+            }
+        _check_agent_tool_scope("set_resource_owner_team", action=resource_type)
+
+        rid, rid_err = _parse_uuid_param(resource_id, "resource_id")
+        if rid_err:
+            return rid_err
+        # _parse_uuid_param returns (None, error) only on failure, already handled
+        # above; cast narrows for mypy without a dead branch or an assert inside
+        # the except-Exception block (SonarCloud S5779).
+        rid = cast(uuid.UUID, rid)
+        new_team, team_err = _parse_optional_uuid(owner_team_id, "owner_team_id")
+        if team_err is not None:
+            return team_err
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+        principal = SimpleNamespace(organisation_id=org_id, account_id=account_id, org_role=_ctx_role_val())
+        async with _session(org_id) as s:
+            if resource_type == "pipeline":
+                current_owner = await _pipeline_owner_team_id(s, rid)
+                if _team_scoped_key_mismatch(current_owner):
+                    return _team_scope_error("pipeline", resource_id)
+                outcome = await _apply_owner_team_pipeline(s, principal, rid, new_team, org_id)
+            else:
+                outcome = await _apply_owner_team_simple(s, principal, resource_type, rid, new_team, org_id)
+            if outcome is None:
+                return {"error": f"{resource_type}_not_found", "resource_id": resource_id}
+            previous, stored = outcome
+            return {
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "previous_owner_team_id": _owner_id_str(previous),
+                "owner_team_id": _owner_id_str(stored),
+            }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except _OwnerTeamScopeDeniedError:
+        return _team_scope_error(resource_type, resource_id)
+    except PipelineHasActiveRunsError as exc:
+        return {
+            "error": "pipeline_has_active_runs",
+            "detail": (
+                f"{exc.active_run_count} run(s) still in progress; cannot change ownership while any run is active"
+            ),
+        }
+    except FastAPIHTTPException as exc:
+        return {"error": "validation_failed", "detail": str(exc.detail)}
+    except ProgrammingError:
+        _log.exception("set_resource_owner_team failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("set_resource_owner_team failed")
+        return _tool_exception_error("Failed to set owner team", exc, "mcp.set_resource_owner_team")
+
+
 @mcp.tool(
     description=(
         "Update a pipeline's environment_profile_id binding (FAR-1599) — the environment "

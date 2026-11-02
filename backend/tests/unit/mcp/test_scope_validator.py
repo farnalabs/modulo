@@ -592,6 +592,10 @@ class TestConstants:
             "bind_connector_to_node",
             "set_pipeline_circuit_breaker",
             "set_pipeline_owners",
+            "set_resource_owner_team",
+            "set_resource_owner_team:pipeline",
+            "set_resource_owner_team:model_backend",
+            "set_resource_owner_team:connector",
             # FAR-1175: manual autonomy demote/promote share the pipeline
             # update permission key (admin/owner gate enforced in-handler).
             "demote_pipeline_autonomy",

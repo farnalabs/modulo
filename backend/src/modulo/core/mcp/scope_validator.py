@@ -152,6 +152,13 @@ _TOOL_REQUIREMENTS: dict[str, ToolRequirement] = {
     # PATCH /pipelines/{id} that also sets them (eligibility runs in the
     # shared CRUD layer, identical to the REST path).
     "set_pipeline_owners": ToolRequirement(_SCOPE_PIPELINE_UPDATE),
+    # FAR-2298: owner-team setter. The base key is the pipeline permission; the
+    # handler always passes the resource type as the action, which selects the
+    # matching REST update permission (all operator-level today).
+    "set_resource_owner_team": ToolRequirement(_SCOPE_PIPELINE_UPDATE),
+    "set_resource_owner_team:pipeline": ToolRequirement(_SCOPE_PIPELINE_UPDATE),
+    "set_resource_owner_team:model_backend": ToolRequirement("model_backend.update"),
+    "set_resource_owner_team:connector": ToolRequirement("connector.update"),
     # FAR-1175 (ADR 043 S1): manual autonomy demote/promote - same permission
     # key as the REST POST /pipelines/{id}/autonomy/{demote,promote}; the
     # admin/owner gate is enforced in-handler on both surfaces.
