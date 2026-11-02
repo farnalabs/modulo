@@ -994,6 +994,9 @@ class TestReviewHitl(_AuthContext):
                 _make_run_lookup_result(),
                 _make_run_lookup_result(),
                 _make_run_lookup_result(None),
+                _make_run_lookup_result(),
+                _make_run_lookup_result(),
+                _make_run_lookup_result(None),
             ]
         )
         mock_session.return_value = _make_session_context(mock_sesh)
@@ -1502,16 +1505,16 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
-    async def test_reject_allowed_on_human_only_gate(
+    async def test_reject_denied_on_human_only_gate_without_human_linkage(
         self,
         mock_session: AsyncMock,
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        """FAR-610: reject has no human_only guard of its own — it passes for
-        a claim-holder even when the gate is human_only. A non-browser MCP
-        client can no longer CLAIM a default-human_only gate (FAR-609), so
-        it can never claim/decide/reject one going forward."""
+        """FAR-609/FAR-2281: an unlinked MCP caller cannot reject a
+        human_only gate. Reject is intercepted by the shared human_only gate
+        check and also requires a claim token; human-linked authority is the
+        explicit exception when the org flag is enabled."""
         self._set_role_operator()
         manager = MagicMock()
         manager.reject = AsyncMock()
@@ -1550,8 +1553,8 @@ class TestReviewHitl(_AuthContext):
             reason="not good",
         )
 
-        assert result == {"status": "rejected", "review_id": review_id}
-        manager.reject.assert_awaited_once()
+        assert result["error"] == "human_only_gate"
+        manager.reject.assert_not_awaited()
 
     @patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
