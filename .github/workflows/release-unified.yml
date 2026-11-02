@@ -448,10 +448,8 @@ jobs:
                 echo "::error::Release PR #${PR_NUMBER} closed without merging; refusing to continue."
                 exit 1
               fi
-              JQ_FILTER=.reviewDecision // "unknown"
-              REVIEW_DECISION="$(jq -r "$JQ_FILTER" <<<"$PR_JSON")"
-              JQ_FILTER=.mergeStateStatus // "unknown"
-              MERGE_STATUS="$(jq -r "$JQ_FILTER" <<<"$PR_JSON")"
+              REVIEW_DECISION="$(jq -r '.reviewDecision // "unknown"' <<<"$PR_JSON")"
+              MERGE_STATUS="$(jq -r '.mergeStateStatus // "unknown"' <<<"$PR_JSON")"
               echo "Release PR #${PR_NUMBER} is ${PR_STATE} (review=${REVIEW_DECISION}, merge=${MERGE_STATUS}); waiting (${poll}/${MAX_POLLS})."
               sleep 15
             done
@@ -921,10 +919,8 @@ jobs:
               echo "::error::Promote PR #${PR_NUMBER} closed without merging; refusing to publish."
               exit 1
             fi
-            JQ_FILTER=.reviewDecision // "unknown"
-            REVIEW_DECISION="$(jq -r "$JQ_FILTER" <<<"$PR_JSON")"
-            JQ_FILTER2=.mergeStateStatus // "unknown"
-            MERGE_STATUS="$(jq -r "$JQ_FILTER2" <<<"$PR_JSON")"
+            REVIEW_DECISION="$(jq -r '.reviewDecision // "unknown"' <<<"$PR_JSON")"
+            MERGE_STATUS="$(jq -r '.mergeStateStatus // "unknown"' <<<"$PR_JSON")"
             echo "Promote PR #${PR_NUMBER} is ${PR_STATE} (review=${REVIEW_DECISION}, merge=${MERGE_STATUS}); waiting (${poll}/${MAX_POLLS})."
             sleep 15
           done
