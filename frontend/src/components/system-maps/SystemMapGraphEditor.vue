@@ -120,12 +120,21 @@ const MOVE_STEP = 16
 const uid = useId()
 const localNodes = ref<Array<SystemMapNode & { config_json: Record<string, unknown> }>>([])
 const localRelationships = ref<SystemMapRelationship[]>([])
+const nodeCounters = new Map<NodeType, number>()
 const relationshipType = ref<RelationshipType>(props.relationshipTypes[0])
 const relationshipSource = ref<string>('')
 const relationshipTarget = ref<string>('')
 const readOnly = computed(() => props.readOnly === true)
 
-watch(() => props.nodes, (nodes) => { localNodes.value = nodes.map((node) => ({ ...node, config_json: { ...node.config_json } })) }, { immediate: true, deep: true })
+watch(() => props.nodes, (nodes) => {
+  localNodes.value = nodes.map((node) => ({ ...node, config_json: { ...node.config_json } }))
+  for (const node of nodes) {
+    const nodeType = node.node_type as NodeType
+    const match = node.node_key.match(new RegExp(`^${nodeType}-(\\d+)$`))
+    const index = match ? Number(match[1]) : 0
+    nodeCounters.set(nodeType, Math.max(nodeCounters.get(nodeType) ?? 0, index))
+  }
+}, { immediate: true, deep: true })
 watch(() => props.relationships, (relationships) => { localRelationships.value = relationships.map((relationship) => ({ ...relationship, config_json: { ...relationship.config_json } })) }, { immediate: true, deep: true })
 
 watch(localNodes, (nodes) => {
@@ -156,9 +165,10 @@ function emitNodes(): void { emit('nodes-change', localNodes.value as unknown as
 function emitRelationships(): void { emit('relationships-change', localRelationships.value as unknown as Array<Record<string, unknown>>) }
 
 function addNode(nodeType: NodeType): void {
-  const index = localNodes.value.length + 1
+  const index = (nodeCounters.get(nodeType) ?? 0) + 1
+  nodeCounters.set(nodeType, index)
   localNodes.value.push({
-    id: `local-${Date.now()}`,
+    id: `local-${Date.now()}-${nodeType}-${index}`,
     organisation_id: '',
     revision_id: '',
     node_key: `${nodeType}-${index}`,
