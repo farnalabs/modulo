@@ -228,6 +228,12 @@ rate-limited by the `TriggerEngine`.
       (MODULO_CRON_STREAK_MIN_WINDOW_HOURS override), and cron audit records
       use `cron_trigger.*` event types, never the `ongoing_trigger.*` stream
       (`core/trigger_streak.py`, `test_trigger_streak_engine.py`)
+- [x] The streak walk treats a `no_delivery` run with reason `no_work` (a
+      poller that had nothing to do) as NEUTRAL (FAR-2276): it is not counted
+      toward the streak, the cron alert or auto-deactivation, and it does not
+      reset an existing streak of real failures. Any other no_delivery reason
+      still counts
+      (`core/trigger_streak.py`, `test_trigger_streak_engine_sql.py`)
 - [x] The streak badge in `SettingsTriggersView` renders for every trigger type
       the engine covers - ongoing AND cron - via ONE mirrored constant
       (`STREAK_COVERED_TRIGGER_TYPES`, pointing at the backend
