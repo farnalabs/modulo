@@ -75,6 +75,8 @@ def main() -> int:
         "uv",
         "run",
         "--no-sync",
+        # FAR-2308: never let a test hook rewrite backend/uv.lock mid-gate.
+        "--frozen",
         "python",
         "-m",
         "pytest",

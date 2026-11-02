@@ -414,6 +414,34 @@ jobs:
           format: 'table'
           skip-dirs: '**/.venv,**/node_modules,**/.git,**/.agents,**/.pytest_cache,**/dist,**/build'
 
+  uv-lock-check:
+    # FAR-2308: backend/uv.lock records the project version and the resolved
+    # dependency set. `uv sync --frozen` (used by every other job) installs from
+    # the lock as-is and cannot see that it has drifted from
+    # backend/pyproject.toml, so a stale lock reached main unnoticed and every
+    # `uv run` in a local commit gate rewrote the lock mid-run, colliding with
+    # pre-commit's stash/restore and aborting pushes from any branch based on
+    # the stale tree. This job is deliberately NOT path-gated: a stale lock on
+    # main must fail an unrelated PR too, because that is exactly how the drift
+    # propagates. `uv lock --check` never writes the lockfile, and the gate
+    # fails closed if it cannot run.
+    name: UV lockfile freshness
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Check backend/uv.lock is in sync with backend/pyproject.toml
+        run: uv lock --check
+
   backend-test:
     name: Test (Backend)
     # FAR-1427 (cheap-first): wait for Lint (Backend) (~2.4 min) so a push that

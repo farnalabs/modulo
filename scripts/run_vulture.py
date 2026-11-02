@@ -119,6 +119,8 @@ def main() -> int:
         "--project",
         "backend",
         "--no-sync",
+        # FAR-2308: never let a hook rewrite backend/uv.lock mid-gate.
+        "--frozen",
         "vulture",
         src,
         whitelist,
