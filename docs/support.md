@@ -224,7 +224,7 @@ anything, which is why you should read it first.
    long ones.
 3. If the Modulo package is available where you are, `--list` and `--show`
    inspect a bundle without unpacking it. In a Compose install the app
-   container already has it:
+   container already has it once the bundle module lands in this milestone:
 
    ```bash
    docker compose exec -T backend python -m modulo.support.bundle --out /tmp/modulo-support.zip
