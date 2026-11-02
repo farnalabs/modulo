@@ -1745,9 +1745,12 @@ class TestSaqWorkerSettings:
         #   records one system-audit fact per run.
         # + legacy_agent_return_sweep (FAR-132) — daily read-only sweep of
         #   legacy-shape agent-return rows in the system worker.
+        # + demo_daily_refresh — daily refresh of the configured demo org's
+        #   rolling sample window (disabled unless the demo flag is set).
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
             "analytics_facts_maintenance",
+            "demo_daily_refresh",
             "fire_due_triggers",
             "dispatcher_reconcile",
             "decision_record_reconcile",

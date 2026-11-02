@@ -77,6 +77,30 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 - [x] `GET /api/v1/runs` lists org-scoped runs with actor/trigger labels and
       pagination; `GET /stats` and `GET /stats/heatmap` power the run stats/heatmap
       views
+- [x] Viewer run reads are team-membership bounded (PR #2552): `run.list` floors at
+      `viewer`, but a caller whose org role is `viewer` is clamped to the teams its
+      account belongs to. The effective owner is
+      `COALESCE(runs.owner_team_id, pipelines.owner_team_id)`, so an org-level run
+      stays visible to every viewer and a team-private run is visible only to a
+      member of the owning team (never an unscoped read). The same predicate applies
+      to `GET /runs`, `GET /stats` (on both the Postgres and the portable path) and
+      `GET /stats/heatmap`; higher org roles keep the org-wide read
+      (`backend/src/modulo/db/crud/run.py` `list_runs` / `get_run_stats` /
+      `get_run_heatmap`, `db/crud/team_scope.account_team_scope_clause`,
+      `backend/tests/unit/test_runs_stats.py`,
+      `backend/tests/unit/api/test_runs_endpoint.py`)
+- [x] A connector node that reports failure is a failed RUN, not a completed run with
+      a failed node (FAR-2090): a `connector` or `dispatch` node envelope whose
+      artifact has `status: failed` (or the legacy `connector_failure: true` marker)
+      is latched, and finalisation downgrades an otherwise-`complete` run to
+      `failed` with error code `connector.failed` – or
+      `connector.side_effect_unknown` when any observed failure is a cancelled or
+      raised write whose upstream effect is unknowable – joining the distinct
+      reasons into `error_detail`. Only `connector`/`dispatch` nodes are inspected,
+      so an agent output that merely embeds a failed artifact never downgrades a run
+      (`backend/src/modulo/core/pipeline_engine/executor.py`
+      `_downgrade_connector_failures`,
+      `backend/tests/unit/pipeline_engine/test_executor.py`)
 - [x] `GET /runs/{id}` returns run detail including current status, blocked partial
       summaries (with `null` for non-dicts), guardrail summaries (absent/malformed →
       `null`), `gate_fired` (idempotency gate, email classification, marker delivery

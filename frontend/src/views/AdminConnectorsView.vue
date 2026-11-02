@@ -23,8 +23,12 @@
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadConnectors" />
 
     <template v-else>
-      <div v-if="formMode === 'add'" class="card p-6">
-        <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminConnectorsView.new_connector') }}</h2>
+      <DataCard
+        v-if="formMode === 'add'"
+        heading-level="h2"
+        padding="lg"
+        :title="$t('views.AdminConnectorsView.new_connector')"
+      >
         <form @submit.prevent="createConnector">
           <div class="space-y-4">
             <div>
@@ -125,7 +129,7 @@
             </div>
           </div>
         </form>
-      </div>
+      </DataCard>
 
       <EmptyState
         v-if="nativeConnectors.length === 0"
@@ -224,8 +228,13 @@
            inherits A's stale onMounted baselines (credsDirty, credsIdentityDirty,
            baselineAuthMode) — spurious modeChanged then forces B's secret re-entry
            or silently overwrites B's stored credential (FAR-466 QA fix 4). -->
-      <div v-if="editConnectorId" :key="editConnectorId" class="card p-6">
-        <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminConnectorsView.edit_connector') }}</h2>
+      <DataCard
+        v-if="editConnectorId"
+        :key="editConnectorId"
+        heading-level="h2"
+        padding="lg"
+        :title="$t('views.AdminConnectorsView.edit_connector')"
+      >
         <form @submit.prevent="updateConnector">
           <div class="space-y-4">
             <div>
@@ -299,7 +308,7 @@
             </div>
           </div>
         </form>
-      </div>
+      </DataCard>
 
       <div v-if="deleteConfirmConnectorId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
         <p class="text-sm font-medium text-destructive-text">{{ $t('views.AdminConnectorsView.delete_confirm', { name: deleteConfirmName }) }}</p>
@@ -336,6 +345,7 @@ import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import Button from 'primevue/button'

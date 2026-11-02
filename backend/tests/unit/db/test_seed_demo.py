@@ -27,7 +27,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -41,10 +41,14 @@ from modulo.db.crud.run_node_outputs import read_run_node_outputs_raw, replace_r
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.base import Base
+from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
+from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.notification import Notification
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -56,6 +60,7 @@ from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
+from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
 from modulo.db.seed_demo import seed_demo, seed_demo_runtime
 from modulo.db.soft_delete import include_soft_deleted
@@ -79,6 +84,11 @@ _SEED_TABLES = {
     "teams",
     "team_memberships",
     "agents",
+    "model_backends",
+    "connector_instances",
+    "notifications",
+    "hitl_claims",
+    "trigger_events",
     "triggers",
     "run_daily_facts",
     "evals",
@@ -186,6 +196,15 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert await _count(session, Agent) == 6
     # FAR-977: 2 triggers (webhook + cron); FAR-1248: + "Ticket ready".
     assert await _count(session, Trigger) == 3
+    assert await _count(session, HitlClaim) == 3
+    assert await _count(session, Notification) == 4
+    assert await _count(session, ModelBackend) == 2
+    assert await _count(session, ConnectorInstance) == 2
+    assert await _count(session, TriggerEvent) == 3
+
+    claims = list((await session.execute(select(HitlClaim))).scalars())
+    assert {claim.decision for claim in claims} == {None, "approved", "rejected"}
+    assert all(claim.gate_config_json and claim.gate_config_json["label"] == "Human review" for claim in claims)
 
     org = (await _orgs(session))[0]
     assert org.slug == DEMO_ORG_SLUG
@@ -293,6 +312,11 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "team_memberships": await _count(session, TeamMembership),
         "agents": await _count(session, Agent),
         "triggers": await _count(session, Trigger),
+        "hitl_claims": await _count(session, HitlClaim),
+        "notifications": await _count(session, Notification),
+        "model_backends": await _count(session, ModelBackend),
+        "connectors": await _count(session, ConnectorInstance),
+        "trigger_events": await _count(session, TriggerEvent),
         "run_daily_facts": await _count(session, RunDailyFact),
     }
 
@@ -311,11 +335,159 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "team_memberships": await _count(session, TeamMembership),
         "agents": await _count(session, Agent),
         "triggers": await _count(session, Trigger),
+        "hitl_claims": await _count(session, HitlClaim),
+        "notifications": await _count(session, Notification),
+        "model_backends": await _count(session, ModelBackend),
+        "connectors": await _count(session, ConnectorInstance),
+        "trigger_events": await _count(session, TriggerEvent),
         "run_daily_facts": await _count(session, RunDailyFact),
     }
     assert counts_second == counts_first
     # FAR-977: 20 runs in the expanded seed.
     assert counts_second["runs"] == 20
+
+
+async def test_seed_fixture_ids_are_deterministic_and_org_scoped(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Demo integration rows use stable ids derived from their org and fixture key."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    org = (await session.execute(select(Organisation))).scalar_one()
+
+    backends = list((await session.execute(select(ModelBackend).order_by(ModelBackend.name))).scalars())
+    connectors = list((await session.execute(select(ConnectorInstance).order_by(ConnectorInstance.name))).scalars())
+    notifications = list((await session.execute(select(Notification).order_by(Notification.category))).scalars())
+
+    assert [row.id for row in backends] == [
+        seed_demo_module.demo_fixture_id(org.id, f"model-backend:{row.name}") for row in backends
+    ]
+    assert [row.id for row in connectors] == [
+        seed_demo_module.demo_fixture_id(org.id, f"connector:{row.name}") for row in connectors
+    ]
+    assert [row.id for row in notifications] == [
+        seed_demo_module.demo_fixture_id(org.id, f"notification:{row.category}") for row in notifications
+    ]
+    assert seed_demo_module.demo_fixture_id(org.id, "model-backend:Demo Stub Fast") != seed_demo_module.demo_fixture_id(
+        uuid.uuid4(), "model-backend:Demo Stub Fast"
+    )
+
+
+@pytest.mark.parametrize(
+    ("entity", "recovery_message"),
+    [
+        pytest.param(ModelBackend, "demo_seed.model_backend_recovered_after_conflict", id="model-backend"),
+        pytest.param(ConnectorInstance, "demo_seed.connector_recovered_after_conflict", id="connector"),
+        pytest.param(Notification, "demo_seed.notification_recovered_after_conflict", id="notification"),
+    ],
+)
+async def test_seed_fixture_primary_key_conflict_adopts_existing_row(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    entity: type,
+    recovery_message: str,
+) -> None:
+    """A deterministic-id collision takes the nested savepoint recovery path."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    counts_before = await _count(session, entity)
+    hide = _HideCheckOnce(session, entity)
+    flaky = _FlakyFlush(session, entity)
+    hide.install()
+    flaky.install()
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+        hide.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, entity) == counts_before
+    assert any(record.getMessage() == recovery_message for record in caplog.records)
+
+
+async def test_seed_hitl_claim_recovers_after_conflict(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A concurrent HITL claim insert is adopted by its deterministic identity.
+
+    The awaiting/deapproved/approved claims are inserted one by one; hiding the
+    first existence check and forcing its flush into a unique violation drives
+    the savepoint recovery path inside the HITL claim seeder.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+    counts_before = await _count(session, HitlClaim)
+    hide = _HideCheckOnce(session, HitlClaim)
+    flaky = _FlakyFlush(session, HitlClaim)
+    hide.install()
+    flaky.install()
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            caplog.clear()
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+        hide.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, HitlClaim) == counts_before
+    assert any(record.getMessage() == "demo_seed.hitl_claim_recovered_after_conflict" for record in caplog.records)
+
+
+async def test_seed_hitl_claims_skip_runs_missing_from_the_seed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A governance run absent from the seed is skipped, not fatal.
+
+    The HITL seeder looks up each governance run by number; a refresh whose
+    run row has not been created yet must skip that claim rather than raise.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+    org = (await session.execute(select(Organisation).where(Organisation.slug == DEMO_ORG_SLUG))).scalar_one()
+    account = (await session.execute(select(Account))).scalar_one()
+    pipeline = (
+        await session.execute(select(Pipeline).where(Pipeline.name == seed_demo_module.DEMO_PIPELINE_NAME))
+    ).scalar_one()
+    snapshot = (
+        await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pipeline.id))
+    ).scalar_one()
+    claims_before = await _count(session, HitlClaim)
+
+    async def _missing_run(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(seed_demo_module, "_find_demo_run", _missing_run)
+    await seed_demo_module._seed_demo_hitl_claims(
+        session,
+        org,
+        account,
+        {seed_demo_module.DEMO_PIPELINE_NAME: (pipeline, snapshot)},
+        datetime.now(UTC),
+    )
+
+    assert await _count(session, HitlClaim) == claims_before
+
+
+async def test_seed_trigger_event_recovers_after_conflict(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A lost trigger-event insert race is logged and swallowed."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    await session.execute(delete(TriggerEvent))
+    await session.commit()
+
+    flaky = _FlakyFlush(session, TriggerEvent)
+    flaky.install()
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            caplog.clear()
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, TriggerEvent) == 0
+    assert any(record.getMessage() == "demo_seed.trigger_event_recovered_after_conflict" for record in caplog.records)
 
 
 async def test_seed_restamps_password_on_rotation(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -744,6 +916,9 @@ async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(
         pytest.param(TeamMembership, TeamMembership, id="team-membership"),
         pytest.param(Eval, Eval, id="eval"),
         pytest.param(EvalResult, EvalResult, id="eval-result"),
+        pytest.param(ModelBackend, ModelBackend, id="model-backend"),
+        pytest.param(ConnectorInstance, ConnectorInstance, id="connector-instance"),
+        pytest.param(Notification, Notification, id="notification"),
     ],
 )
 async def test_seed_sample_data_inserts_recover_after_conflict(
@@ -789,6 +964,9 @@ async def test_seed_sample_data_inserts_recover_after_conflict(
         pytest.param(Team, id="team"),
         pytest.param(Eval, id="eval"),
         pytest.param(EvalResult, id="eval-result"),
+        pytest.param(ModelBackend, id="model-backend"),
+        pytest.param(ConnectorInstance, id="connector-instance"),
+        pytest.param(Notification, id="notification"),
     ],
 )
 async def test_seed_reraises_when_recovery_finds_no_winner(
@@ -1217,6 +1395,46 @@ async def test_seed_converges_schema_description_and_definition(
     }
 
 
+async def test_seed_preserves_governance_surface_provenance_on_refresh(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refreshes converge fixture fields without overwriting provenance fields."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    backend = (await session.execute(select(ModelBackend).where(ModelBackend.name == "Demo Stub Fast"))).scalar_one()
+    connector = (
+        await session.execute(select(ConnectorInstance).where(ConnectorInstance.name == "Demo GitHub (read-only)"))
+    ).scalar_one()
+    notification = (
+        await session.execute(select(Notification).where(Notification.category == "run_completed"))
+    ).scalar_one()
+    backend.credentials_ciphertext = b"operator-managed-backend-secret"
+    connector.credentials_ciphertext = b"operator-managed-connector-secret"
+    backend.display_name = "stale backend display"
+    connector.status = "disabled"
+    notification.title = "stale title"
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    refreshed_backend = (
+        await session.execute(select(ModelBackend).where(ModelBackend.name == "Demo Stub Fast"))
+    ).scalar_one()
+    refreshed_connector = (
+        await session.execute(select(ConnectorInstance).where(ConnectorInstance.name == "Demo GitHub (read-only)"))
+    ).scalar_one()
+    refreshed_notification = (
+        await session.execute(select(Notification).where(Notification.category == "run_completed"))
+    ).scalar_one()
+    assert refreshed_backend.credentials_ciphertext == b"operator-managed-backend-secret"
+    assert refreshed_connector.credentials_ciphertext == b"operator-managed-connector-secret"
+    assert refreshed_backend.display_name == "Demo Stub Fast"
+    assert refreshed_connector.status == "active"
+    assert refreshed_backend.account_id == backend.account_id
+    assert refreshed_connector.account_id == connector.account_id
+    assert refreshed_notification.title == "Run completed"
+
+
 async def test_seed_converges_agent_description_and_prompt(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1239,7 +1457,7 @@ async def test_seed_converges_trigger_config_json(session: AsyncSession, monkeyp
     """Trigger config_json is converged to the current spec."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
-    pr_webhook = select(Trigger).where(Trigger.trigger_type == "webhook", Trigger.name.is_(None))
+    pr_webhook = select(Trigger).where(Trigger.trigger_type == "webhook", Trigger.name == "PR opened")
     webhook_trigger = (await session.execute(pr_webhook)).scalar_one()
     webhook_trigger.config_json = {"stale": True}
     await session.commit()
@@ -1287,6 +1505,144 @@ async def test_seed_converges_ticket_ready_trigger(
     assert converged.trigger_type == "webhook"
     assert converged.active is True
     assert any(record.getMessage() == "demo_seed.ticket_ready_trigger_converged" for record in caplog.records)
+
+
+async def test_seed_refreshes_awaiting_hitl_claim_deadlines_on_refresh(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refresh rolls an awaiting claim's deadlines forward without touching its briefing.
+
+    The awaiting claim is the live "review required" demo surface.  If the daily
+    refresh preserved its original ``terminalize_at`` the claim-expiry sweep
+    would retire it ~2 days after the first seed, silently emptying the surface.
+    Its deadlines must therefore move forward, while the historical briefing and
+    captured gate config stay exactly as they were.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+    claim = (
+        await session.execute(select(HitlClaim).join(Run, Run.id == HitlClaim.run_id).where(Run.run_number == 6))
+    ).scalar_one()
+    claim.expires_at = claim.expires_at - timedelta(days=3)
+    claim.terminalize_at = claim.terminalize_at - timedelta(days=3)
+    claim.context_json = {"description": "historical briefing"}
+    claim.gate_config_json = {"label": "Historical gate"}
+    await session.commit()
+    stale_expires_at = claim.expires_at
+    stale_terminalize_at = claim.terminalize_at
+    preserved = {
+        attr: getattr(claim, attr)
+        for attr in (
+            "decision",
+            "decided_by",
+            "decision_at",
+            "decision_payload",
+            "context_json",
+            "gate_config_json",
+        )
+    }
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    refreshed = (await session.execute(select(HitlClaim).where(HitlClaim.id == claim.id))).scalar_one()
+    assert refreshed.decision is None
+    # SQLite returns naive datetimes; strip tzinfo so the comparison holds on
+    # both the SQLite and Postgres test backends.
+    assert refreshed.expires_at.replace(tzinfo=None) > stale_expires_at.replace(tzinfo=None)
+    assert refreshed.terminalize_at.replace(tzinfo=None) > stale_terminalize_at.replace(tzinfo=None)
+    assert {attr: getattr(refreshed, attr) for attr in preserved} == preserved
+
+
+async def test_seed_preserves_decided_hitl_claim_provenance_on_refresh(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Approved/rejected claims remain immutable evidence across daily refresh."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    claims_before = {
+        claim.run_id: {
+            attr: getattr(claim, attr)
+            for attr in (
+                "decision",
+                "decided_by",
+                "decision_at",
+                "expires_at",
+                "terminalize_at",
+                "decision_payload",
+                "context_json",
+                "gate_config_json",
+            )
+        }
+        for claim in (await session.execute(select(HitlClaim))).scalars()
+        if claim.decision is not None
+    }
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    claims_after = {
+        claim.run_id: {
+            attr: getattr(claim, attr)
+            for attr in (
+                "decision",
+                "decided_by",
+                "decision_at",
+                "expires_at",
+                "terminalize_at",
+                "decision_payload",
+                "context_json",
+                "gate_config_json",
+            )
+        }
+        for claim in (await session.execute(select(HitlClaim))).scalars()
+        if claim.decision is not None
+    }
+    assert claims_after == claims_before
+
+
+async def test_seed_trigger_event_identity_and_history_are_stable(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Trigger events use durable trigger identity and retain historical fields."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    org = (await session.execute(select(Organisation).where(Organisation.slug == DEMO_ORG_SLUG))).scalar_one()
+    events_before = {
+        event.trigger_id: {
+            "id": event.id,
+            "raw_payload_hash": event.raw_payload_hash,
+            "received_at": event.received_at,
+            "validation_result": event.validation_result,
+            "trigger_type": event.trigger_type,
+        }
+        for event in (await session.execute(select(TriggerEvent))).scalars()
+    }
+    first_event = next(iter(events_before.values()))
+    first_event_id = first_event["id"]
+    event = (await session.execute(select(TriggerEvent).where(TriggerEvent.id == first_event_id))).scalar_one()
+    event.validation_result = "test"
+    event.error_detail = "historical event"
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    events_after = {
+        event.trigger_id: {
+            "id": event.id,
+            "raw_payload_hash": event.raw_payload_hash,
+            "received_at": event.received_at,
+            "validation_result": event.validation_result,
+            "trigger_type": event.trigger_type,
+        }
+        for event in (await session.execute(select(TriggerEvent))).scalars()
+    }
+    assert events_after == {
+        trigger_id: {
+            **values,
+            "validation_result": "test" if values["id"] == first_event_id else values["validation_result"],
+        }
+        for trigger_id, values in events_before.items()
+    }
+    assert all(
+        values["id"] == seed_demo_module.demo_trigger_event_id(org.id, trigger_id)
+        for trigger_id, values in events_after.items()
+    )
 
 
 async def test_seed_converges_daily_fact(

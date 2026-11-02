@@ -21,6 +21,7 @@ so the profile list stays broadly readable while this capacity read does not
 (FAR-1955). Apply-template requires ``environment_profile.update``.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -48,6 +49,7 @@ from modulo.core.bundled_runner.health_probe import (
     PER_CONTAINER_MEM_MB,
     StripState,
     aggregate_strip_state,
+    docker_engine_configured,
     strip_state_for_row,
 )
 from modulo.db.crud.environment_profile import (
@@ -145,6 +147,11 @@ class ProfileHealthResponse(BaseModel):
 
 class RunnersStatusResponse(BaseModel):
     aggregate_state: StripState
+    #: False when this deployment has no Docker engine endpoint at all (no
+    #: ``MODULO_DOCKER_HOST``/``DOCKER_HOST`` and no local socket). The UI
+    #: shows a neutral "not available" state instead of "engine unreachable"
+    #: (FAR-2239); a configured-but-failing engine keeps ``True``.
+    engine_configured: bool = True
     probe_interval_seconds: int
     staleness_threshold_seconds: int
     machines: list[MachineProbeResponse] = Field(default_factory=list)
@@ -337,8 +344,16 @@ async def get_runners_status(
         preflight=_preflight(contract.cap, engine_infos),
     )
 
+    # FAR-2239 audit: docker_engine_configured() resolves the Docker endpoint
+    # synchronously (docker-context config.json read + json parse, local
+    # socket is_socket() checks) — the same FAR-1439/FAR-1771 class the
+    # health checks off-thread. Move it off the event loop; behaviour is
+    # identical, only no longer a potential stall source.
+    engine_configured = await asyncio.to_thread(docker_engine_configured)
+
     return RunnersStatusResponse(
         aggregate_state=aggregate,
+        engine_configured=engine_configured,
         probe_interval_seconds=PROBE_INTERVAL_SECONDS,
         staleness_threshold_seconds=PROBE_STALENESS_THRESHOLD_SECONDS,
         machines=machines,

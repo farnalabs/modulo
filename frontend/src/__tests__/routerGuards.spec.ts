@@ -25,13 +25,77 @@ vi.mock('../lib/jwt', () => ({ decodeJwtPayload }))
 vi.mock('../stores/planStore', () => ({ usePlanStore }))
 
 import router, {
+  documentTitleFor,
   enforceRoleTierVisibility,
+  focusRouteContent,
   hydrateManifestMeta,
 } from '../router'
 import { clearAccessToken, setAccessToken } from '../lib/api/auth'
 
 it('registers the risk assessment route in the real router', () => {
   expect(router.getRoutes().some((route) => route.name === 'risk-assessment' && route.path === '/risk-assessment')).toBe(true)
+})
+
+describe('document title', () => {
+  it('prefixes the manifest title with the product name', () => {
+    expect(documentTitleFor({ title: 'Pipelines' })).toBe('Pipelines | Modulo')
+  })
+
+  it('uses the manifest breadcrumb when the route carries no title', () => {
+    expect(documentTitleFor({ breadcrumb: 'Runs' })).toBe('Runs | Modulo')
+  })
+
+  it('falls back to the bare product name rather than "Modulo | Modulo"', () => {
+    // A bare route (e.g. /assistant) has neither meta.title nor a manifest
+    // breadcrumb; the old template produced "Modulo | Modulo".
+    expect(documentTitleFor({})).toBe('Modulo')
+  })
+})
+
+describe('route content focus', () => {
+  it('does nothing when the entered route renders neither a heading nor the shell landmark', () => {
+    // A route whose content is still resolving has neither `[data-page-heading]`
+    // nor the shell `<main data-main-landmark>`; there is no target to move
+    // focus to, and guessing one would steal it from wherever it belongs.
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus')
+    focusRouteContent()
+    expect(focusSpy).not.toHaveBeenCalled()
+    focusSpy.mockRestore()
+  })
+
+  it('does not re-focus a heading that already holds focus', () => {
+    const heading = document.createElement('h1')
+    heading.tabIndex = -1
+    heading.dataset.pageHeading = ''
+    document.body.append(heading)
+    heading.focus()
+    const focusSpy = vi.spyOn(heading, 'focus')
+
+    focusRouteContent()
+
+    expect(focusSpy).not.toHaveBeenCalled()
+    heading.remove()
+    focusSpy.mockRestore()
+  })
+
+  it('leaves focus alone when it is already inside the page heading container', () => {
+    // A composite page header renders its own focusable controls; a user who
+    // has tabbed into one of them must not be yanked back to the container.
+    const header = document.createElement('div')
+    header.dataset.pageHeading = ''
+    const control = document.createElement('a')
+    control.href = '#'
+    header.append(control)
+    document.body.append(header)
+    control.focus()
+    const focusSpy = vi.spyOn(header, 'focus')
+
+    focusRouteContent()
+
+    expect(focusSpy).not.toHaveBeenCalled()
+    header.remove()
+    focusSpy.mockRestore()
+  })
 })
 
 it('keeps organisation email settings reachable for a team org admin', async () => {
@@ -307,6 +371,46 @@ describe('enforceRoleTierVisibility', () => {
       }),
       'tok',
     )
+    expect(result).toBe(true)
+  })
+})
+
+describe('/runs/diff private_preview gate (FAR-2248)', () => {
+  function hydratedRunsDiff(): any {
+    const resolved = router.resolve('/runs/diff')
+    const route = {
+      name: resolved.name,
+      matched: resolved.matched,
+      path: resolved.path,
+      meta: {} as Record<string, unknown>,
+    }
+    hydrateManifestMeta(route as never)
+    return route
+  }
+
+  it('hydrates the runs-diff manifest entry as private_preview, not the run-detail entry', () => {
+    const route = hydratedRunsDiff()
+
+    expect(route.name).toBe('runs-diff')
+    expect(route.meta.visibility).toBe('private_preview')
+  })
+
+  it('bounces to the dashboard and names the cause in the console when dev mode is off', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    planStore.devMode = false
+
+    const result = await enforceRoleTierVisibility(hydratedRunsDiff(), adminToken())
+
+    expect(result).toEqual({ name: 'dashboard' })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('runs-diff is a private_preview surface'))
+    warn.mockRestore()
+  })
+
+  it('lets an admin through when dev mode is on', async () => {
+    planStore.devMode = true
+
+    const result = await enforceRoleTierVisibility(hydratedRunsDiff(), adminToken())
+
     expect(result).toBe(true)
   })
 })

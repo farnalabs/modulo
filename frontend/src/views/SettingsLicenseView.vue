@@ -14,7 +14,7 @@
       -->
 
       <!-- Current Tier Card -->
-      <div class="rounded-lg border bg-card p-6 shadow-sm">
+      <DataCard variant="bordered" padding="lg" elevation="sm">
         <div v-if="licenseInfo.tier === 'team'" class="flex items-start justify-between">
           <div>
             <div class="flex items-center gap-2">
@@ -42,7 +42,7 @@
             <ExternalLink class="h-3.5 w-3.5" />
           </Button>
         </div>
-      </div>
+      </DataCard>
 
       <!--
         FAR-2104: two scopes, two audiences. The licence is an org-level object
@@ -53,81 +53,93 @@
       -->
 
       <!-- Organisation licence (org admin) -->
-      <div v-if="canManageOrgLicence && orgId" data-testid="licence-org-controls" class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="text-base font-semibold">{{ $t('views.SettingsLicenseView.org_license_title') }}</h2>
-        <p class="mt-1 text-sm text-muted-foreground">
-          {{ $t('views.SettingsLicenseView.org_license_scope') }}
-        </p>
-
-        <div v-if="licenseInfo.has_license" class="mt-4 rounded-lg bg-muted/50 p-4">
-          <p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">{{ $t('views.SettingsLicenseView.current_key') }}</p>
-          <p class="mt-1 font-mono text-sm">{{ maskedKey }}</p>
-        </div>
-
-        <div class="mt-4 space-y-3">
-          <label for="settingslicenseview-org-key" class="block text-sm font-medium text-muted-foreground">{{ $t('views.SettingsLicenseView.new_license_key') }}</label>
-          <textarea id="settingslicenseview-org-key"
-            v-model="newLicenseKey"
-            rows="4"
-            data-testid="license-key-input"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono placeholder:text-muted-foreground/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none transition-all"
-            :placeholder="$t('views.SettingsLicenseView.paste_your_modulolicensekey_value_here')"
-          />
-
-          <div class="flex flex-wrap items-center gap-3">
-            <Button data-testid="license-apply-btn" :disabled="!newLicenseKey.trim() || applying" @click="openApplyDialog">
-              {{ applying ? $t('views.SettingsLicenseView.applying') : $t('views.SettingsLicenseView.apply_key') }}
-            </Button>
-            <Button v-if="licenseInfo.has_license" data-testid="license-remove-btn" severity="danger" :disabled="removing" @click="openRemoveDialog('org')">
-              {{ removing ? $t('views.SettingsLicenseView.removing') : $t('views.SettingsLicenseView.remove_license') }}
-            </Button>
+      <DataCard
+        v-if="canManageOrgLicence && orgId"
+        data-testid="licence-org-controls"
+        variant="bordered"
+        padding="lg"
+        elevation="sm"
+        heading-level="h2"
+        :title="$t('views.SettingsLicenseView.org_license_title')"
+        :description="$t('views.SettingsLicenseView.org_license_scope')"
+      >
+        <div class="space-y-4">
+          <div v-if="licenseInfo.has_license" class="rounded-lg bg-muted/50 p-4">
+            <p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">{{ $t('views.SettingsLicenseView.current_key') }}</p>
+            <p class="mt-1 font-mono text-sm">{{ maskedKey }}</p>
           </div>
-          <p class="text-xs text-muted-foreground">
-            {{ $t('views.SettingsLicenseView.org_license_note') }}
-          </p>
+
+          <div class="space-y-3">
+            <label for="settingslicenseview-org-key" class="block text-sm font-medium text-muted-foreground">{{ $t('views.SettingsLicenseView.new_license_key') }}</label>
+            <textarea id="settingslicenseview-org-key"
+              v-model="newLicenseKey"
+              rows="4"
+              data-testid="license-key-input"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono placeholder:text-muted-foreground/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none transition-all"
+              :placeholder="$t('views.SettingsLicenseView.paste_your_modulolicensekey_value_here')"
+            />
+
+            <div class="flex flex-wrap items-center gap-3">
+              <Button data-testid="license-apply-btn" :disabled="!newLicenseKey.trim() || applying" @click="openApplyDialog">
+                {{ applying ? $t('views.SettingsLicenseView.applying') : $t('views.SettingsLicenseView.apply_key') }}
+              </Button>
+              <Button v-if="licenseInfo.has_license" data-testid="license-remove-btn" severity="danger" :disabled="removing" @click="openRemoveDialog('org')">
+                {{ removing ? $t('views.SettingsLicenseView.removing') : $t('views.SettingsLicenseView.remove_license') }}
+              </Button>
+            </div>
+            <p class="text-xs text-muted-foreground">
+              {{ $t('views.SettingsLicenseView.org_license_note') }}
+            </p>
+          </div>
         </div>
-      </div>
+      </DataCard>
 
       <!-- System licence (system admin only) -->
-      <div v-if="canManageSystemLicence" data-testid="licence-system-controls" class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="text-base font-semibold">{{ $t('views.SettingsLicenseView.system_license_title') }}</h2>
-        <p class="mt-1 text-sm text-muted-foreground">
-          {{ $t('views.SettingsLicenseView.system_license_scope') }}
-        </p>
+      <DataCard
+        v-if="canManageSystemLicence"
+        data-testid="licence-system-controls"
+        variant="bordered"
+        padding="lg"
+        elevation="sm"
+        heading-level="h2"
+        :title="$t('views.SettingsLicenseView.system_license_title')"
+        :description="$t('views.SettingsLicenseView.system_license_scope')"
+      >
+        <div class="space-y-4">
+          <div class="space-y-3">
+            <label for="settingslicenseview-system-key" class="block text-sm font-medium text-muted-foreground">{{ $t('views.SettingsLicenseView.new_license_key') }}</label>
+            <textarea id="settingslicenseview-system-key"
+              v-model="newSystemLicenseKey"
+              rows="4"
+              data-testid="license-key-input-system"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono placeholder:text-muted-foreground/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none transition-all"
+              :placeholder="$t('views.SettingsLicenseView.paste_your_modulolicensekey_value_here')"
+            />
 
-        <div class="mt-4 space-y-3">
-          <label for="settingslicenseview-system-key" class="block text-sm font-medium text-muted-foreground">{{ $t('views.SettingsLicenseView.new_license_key') }}</label>
-          <textarea id="settingslicenseview-system-key"
-            v-model="newSystemLicenseKey"
-            rows="4"
-            data-testid="license-key-input-system"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono placeholder:text-muted-foreground/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none transition-all"
-            :placeholder="$t('views.SettingsLicenseView.paste_your_modulolicensekey_value_here')"
-          />
-
-          <div class="flex flex-wrap items-center gap-3">
-            <!--
-              FAR-2154: there is ONE licence action per scope. The removed
-              "Verify Key" button called the same POST /api/v1/admin/license
-              that installs the key, so "verify" silently installed it and
-              busted the status cache — a verification that mutated live state.
-              Installing is the only meaningful operation, so the confirm
-              dialog is the review step (it shows the key's own claims before
-              committing) and no separate verify control exists.
-            -->
-            <Button data-testid="license-apply-btn-system" :disabled="!newSystemLicenseKey.trim() || applying" @click="openSystemApplyDialog">
-              {{ applying ? $t('views.SettingsLicenseView.applying') : $t('views.SettingsLicenseView.install_system_license') }}
-            </Button>
-            <!-- FAR-2110: remove the INSTANCE-WIDE licence (system scope). -->
-            <Button v-if="licenseInfo.has_license" data-testid="license-remove-btn-system" severity="danger" :disabled="removing" @click="openRemoveDialog('system')">
-              {{ removing ? $t('views.SettingsLicenseView.removing') : $t('views.SettingsLicenseView.remove_license') }}
-            </Button>
+            <div class="flex flex-wrap items-center gap-3">
+              <!--
+                FAR-2154: there is ONE licence action per scope. The removed
+                "Verify Key" button called the same POST /api/v1/admin/license
+                that installs the key, so "verify" silently installed it and
+                busted the status cache — a verification that mutated live state.
+                Installing is the only meaningful operation, so the confirm
+                dialog is the review step (it shows the key's own claims before
+                committing) and no separate verify control exists.
+              -->
+              <Button data-testid="license-apply-btn-system" :disabled="!newSystemLicenseKey.trim() || applying" @click="openSystemApplyDialog">
+                {{ applying ? $t('views.SettingsLicenseView.applying') : $t('views.SettingsLicenseView.install_system_license') }}
+              </Button>
+              <!-- FAR-2110: remove the INSTANCE-WIDE licence (system scope). -->
+              <Button v-if="licenseInfo.has_license" data-testid="license-remove-btn-system" severity="danger" :disabled="removing" @click="openRemoveDialog('system')">
+                {{ removing ? $t('views.SettingsLicenseView.removing') : $t('views.SettingsLicenseView.remove_license') }}
+              </Button>
+            </div>
+            <p class="text-xs text-muted-foreground">
+              {{ $t('views.SettingsLicenseView.system_license_note') }}
+            </p>
           </div>
-          <p class="text-xs text-muted-foreground">
-            {{ $t('views.SettingsLicenseView.system_license_note') }}
-          </p>
         </div>
-      </div>
+      </DataCard>
 
       <p v-if="licenceError" class="text-sm text-destructive" aria-live="polite">
         {{ licenceError }}
@@ -196,6 +208,7 @@ import { usePlanStore } from '../stores/planStore'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import Badge from 'primevue/badge'
 import FormDialog from '../components/shared/FormDialog.vue'
 import { ExternalLink } from '@lucide/vue'

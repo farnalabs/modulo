@@ -260,11 +260,22 @@ def _fresh_client(begin_exc: Exception | None = None) -> Generator[TestClient, N
 def test_run_stats_returns_crud_payload(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     stats = {"total_runs": 3, "by_status": {"complete": 3}}
-    with patch("modulo.api.routes.runs.get_run_stats", new_callable=AsyncMock, return_value=stats):
+    with patch("modulo.api.routes.runs.get_run_stats", new_callable=AsyncMock, return_value=stats) as get_stats:
         resp = http.get("/api/v1/runs/stats", params={"period": "30d"})
 
     assert resp.status_code == 200, resp.text
     assert resp.json() == stats
+    assert get_stats.await_args.kwargs["account_id"] is None
+
+
+def test_viewer_run_stats_passes_account_scope(client: tuple[TestClient, AsyncMock]) -> None:
+    http, _session = client
+    _install_overrides(_session, org_role="viewer")
+    with patch("modulo.api.routes.runs.get_run_stats", new_callable=AsyncMock, return_value={}) as get_stats:
+        resp = http.get("/api/v1/runs/stats")
+
+    assert resp.status_code == 200, resp.text
+    assert get_stats.await_args.kwargs["account_id"] == _USER_ID
 
 
 def test_run_stats_rejects_bad_period(client: tuple[TestClient, AsyncMock]) -> None:
@@ -289,11 +300,22 @@ def test_run_stats_error_mapping(exc: Exception, expected: int) -> None:
 def test_run_heatmap_returns_crud_payload(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     heatmap = [{"date": "2026-09-01", "count": 2}]
-    with patch("modulo.api.routes.runs.get_run_heatmap", new_callable=AsyncMock, return_value=heatmap):
+    with patch("modulo.api.routes.runs.get_run_heatmap", new_callable=AsyncMock, return_value=heatmap) as get_heatmap:
         resp = http.get("/api/v1/runs/stats/heatmap", params={"year": 2026})
 
     assert resp.status_code == 200, resp.text
     assert resp.json() == heatmap
+    assert get_heatmap.await_args.kwargs["account_id"] is None
+
+
+def test_viewer_run_heatmap_passes_account_scope(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    _install_overrides(session, org_role="viewer")
+    with patch("modulo.api.routes.runs.get_run_heatmap", new_callable=AsyncMock, return_value=[]) as get_heatmap:
+        resp = http.get("/api/v1/runs/stats/heatmap")
+
+    assert resp.status_code == 200, resp.text
+    assert get_heatmap.await_args.kwargs["account_id"] == _USER_ID
 
 
 @pytest.mark.parametrize(("exc", "expected"), [(_PROG, 501), (_SQL, 503), (_RUNTIME, 500)])

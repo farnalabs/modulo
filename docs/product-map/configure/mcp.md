@@ -144,6 +144,19 @@ applications. Built on the auth + model-backend core.
       list-run/cost and other sensitive tools are role-gated, HITL-gated tools
       route through human review, and the suite guards structural tool
       coverage so new tools cannot ship unscoped
+- [x] Viewer-level MCP reads are team-membership bounded (PR #2552): `run.list`,
+      `trigger.list`, `trigger.events.list` and `hitl.list` floor at `viewer`, so
+      `list_runs`, `list_triggers`, `get_trigger`, `list_trigger_events`,
+      `list_pending_hitl`, `list_hitl_reviews` and `get_hitl_review` apply
+      `account_team_scope_clause` against the row's effective owner (a trigger uses
+      its owning pipeline; runs and HITL use the stamped run owner with the pipeline
+      owner as fallback) for a viewer. Org-level rows stay visible and a
+      team-private row is visible only to a member of the owning team; a viewer read
+      whose account context is unset fails closed with `McpAuthContextError` rather
+      than degrading to an org-wide read
+      (`backend/src/modulo/api/mcp_server.py`,
+      `backend/tests/unit/mcp/test_team_scope_enforcement.py`,
+      `backend/tests/unit/mcp/test_get_trigger_events.py`)
 
 
 - [x] MCP trigger dispatch (2026-09-22): the `trigger_pipeline` tool drives the
@@ -164,7 +177,9 @@ applications. Built on the auth + model-backend core.
       shape, and a successful decision reports
       `{"status": "approved"|"rejected", "review_id": ...}` through the real
       HITLManager; `list_pending_hitl` returns the org's undecided gates with the
-      shared description resolver. Five `mcp/review_hitl.feature` scenarios
+      shared description resolver (clamped to the caller's team memberships for a
+      viewer-level key, see the viewer-read bullet below). Five
+      `mcp/review_hitl.feature` scenarios
       execute in CI against these real handler seams (auth re-validation + DB /
       HITLManager seams patched), closing the last legacy `/mcp/tools/call`
       `@awaiting-implementation` draft under the review surface
@@ -328,14 +343,17 @@ applications. Built on the auth + model-backend core.
       (`SCOPE_ALIASES`: `trigger:run` → `run.trigger`, `hitl:review` →
       `hitl.review`, `library:browse` → `resource.read_only`). The five
       `hitl.*` decision keys were removed from `NON_DELEGABLE_PERMISSIONS` on
-      the 2026-10-09 decision record: a human-linked credential (a human's
+      the 2026-10-09 decision record: a human-linked       credential (a human's
       OAuth connection) may hold them, and the boundary is the gate's runtime
       `human_only` policy - the MCP surface (`_check_human_only_gate`) denies
-      a `human_only` gate outright regardless of credential class and REST
-      (`routes/hitl._enforce_human_only_gate`) denies a non-browser
-      credential - so a token holding `hitl.*` CAN decide an explicitly
-      opted-out gate and is denied on a `human_only` one with the RUNTIME
-      `human_only_gate` error rather than `insufficient_scope`. The
+      an unlinked credential; a verified human-linked OAuth credential or
+      user-scoped human-linked API key is admitted only when the default-OFF
+      `mcp_human_linked_hitl_authority` flag is enabled, and `deliver_manual`
+      remains browser-only. REST (`routes/hitl._enforce_human_only_gate`)
+      denies every non-browser credential because its principals are
+      browser-login JWTs only - so a token holding `hitl.*` CAN decide an
+      explicitly opted-out gate and is denied on a `human_only` one with the
+      RUNTIME `human_only_gate` error rather than `insufficient_scope`. The
       registration picker is backend-driven: `GET /api/v1/mcp/oauth/scopes`
       serves the delegable keys + role floors filtered to the caller's role,
       and the card renders them grouped by namespace and searchable with no

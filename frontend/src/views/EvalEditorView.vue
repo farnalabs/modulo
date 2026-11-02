@@ -53,9 +53,12 @@
 
       <div class="grid gap-8 lg:grid-cols-5">
         <div class="lg:col-span-3">
-          <div class="rounded-lg border bg-card p-6 shadow-sm">
-            <h2 class="mb-4 text-base font-semibold">{{ editingEvalId ? $t('views.EvalEditorView.edit_eval') : $t('views.EvalEditorView.new_eval') }}</h2>
-
+          <DataCard
+            :title="editingEvalId ? $t('views.EvalEditorView.edit_eval') : $t('views.EvalEditorView.new_eval')"
+            heading-level="h2"
+            padding="lg"
+            elevation="sm"
+          >
             <div class="space-y-4">
               <div>
                 <label for="evaleditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.name') }}</label>
@@ -71,9 +74,11 @@
               <!-- ADR 066 D19: a two-axis Judging control — mechanism first,
                    then the backing. Never one flat list mixing a deterministic
                    eval_type with a backend. -->
-              <div class="rounded-lg border bg-card p-4" data-testid="eval-editor-judging">
-                <h3 class="mb-3 text-sm font-semibold">{{ $t('views.EvalEditorView.judging.heading') }}</h3>
-
+              <DataCard
+                :title="$t('views.EvalEditorView.judging.heading')"
+                heading-level="h3"
+                data-testid="eval-editor-judging"
+              >
                 <div>
                   <label for="evaleditorview-mechanism" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.mechanism') }}</label>
                   <Select
@@ -580,7 +585,7 @@
                   <p class="font-medium">{{ serverConfigErrorHeading }}</p>
                   <p class="mt-1">{{ serverConfigError.message }}</p>
                 </div>
-              </div>
+              </DataCard>
 
               <div>
                 <label for="evaleditorview-field-3" class="mb-1 block text-sm font-medium">
@@ -818,7 +823,7 @@
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
               <div v-if="formSuccess" class="text-sm text-success-text">{{ formSuccess }}</div>
             </div>
-          </div>
+          </DataCard>
         </div>
 
         <div class="lg:col-span-2">
@@ -940,6 +945,7 @@ import { useProductAnalytics } from '../composables/useProductAnalytics'
 import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import EmptyState from '../components/shared/EmptyState.vue'
 import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'

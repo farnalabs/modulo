@@ -46,7 +46,9 @@ from modulo.db.models.journey import Journey
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
+from modulo.db.models.team_membership import TeamMembership
 from modulo.settings import get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -68,6 +70,8 @@ _TABLES: list[Table] = cast(
         LifecycleMapStage.__table__,
         Journey.__table__,
         Run.__table__,
+        Pipeline.__table__,
+        TeamMembership.__table__,
     ],
 )
 
@@ -676,6 +680,25 @@ class TestJourneyRunHistory:
         assert "NULLS LAST" in sql.upper()
         assert "LIMIT" in sql
 
+    async def test_postgres_query_carries_the_viewer_membership_clamp(self, session: AsyncSession) -> None:
+        """The Postgres path must carry the SAME viewer clamp as the portable
+        fallback — a clamp only on the SQLite path would be a production-only
+        leak."""
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        journey = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
+
+        sql = str(
+            _journey_runs_postgres_query(journey, limit=20, viewer_account_id=_ACCOUNT).compile(
+                dialect=pg_dialect.dialect()
+            )
+        )
+
+        assert "@>" in sql
+        assert "team_memberships" in sql
+        assert "COALESCE" in sql.upper()
+
     async def test_dismissed_journey_is_excluded_entirely_via_detail_gate(self, session: AsyncSession) -> None:
         """Slice C dismissed-run exclusion still holds on the run-history path:
         dismissing removes the journey from detail (the 404 gate that guards
@@ -693,6 +716,132 @@ class TestJourneyRunHistory:
         assert await dismiss_journey(session, _ORG, kind=journey.kind, ref=journey.ref, dismissed_by=_ACCOUNT)
         await session.flush()
         assert await get_map_journey(session, map_id=_MAP, kind=journey.kind, ref=journey.ref) is None
+
+
+# ---------------------------------------------------------------------------
+# Viewer account-team membership clamp on the run reads these reads expose
+#
+# ``runs`` carries only the org-isolation RLS policy, and the journey endpoints
+# gate on ``run.list`` (viewer floor). A viewer with no team-scoped credential
+# must therefore be bounded by its account-team memberships — otherwise it can
+# read the run history / work-item refs of a team-private pipeline through an
+# org-visible lifecycle map.
+# ---------------------------------------------------------------------------
+
+
+async def _seed_pipeline(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    owner_team_id: uuid.UUID | None,
+) -> None:
+    session.add(
+        Pipeline(
+            id=pipeline_id,
+            organisation_id=_ORG,
+            name=f"pipeline-{pipeline_id}",
+            account_id=_ACCOUNT,
+            owner_team_id=owner_team_id,
+        )
+    )
+    await session.flush()
+
+
+async def _seed_membership(session: AsyncSession, *, team_id: uuid.UUID, account_id: uuid.UUID = _ACCOUNT) -> None:
+    session.add(TeamMembership(organisation_id=_ORG, team_id=team_id, account_id=account_id, role="viewer"))
+    await session.flush()
+
+
+async def _seed_team_run(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    owner_team_id: uuid.UUID | None = None,
+    kind: str = "github_issue",
+    ref: str = "a/b#5",
+) -> Run:
+    run = await _seed_run(
+        session,
+        pipeline_id=pipeline_id,
+        kind=kind,
+        ref=ref,
+        completed_at=datetime(2026, 1, 3, tzinfo=UTC),
+        work_item_refs=[{"kind": kind, "ref": ref, "source": "derived"}],
+    )
+    run.owner_team_id = owner_team_id
+    await session.flush()
+    return run
+
+
+class TestViewerAccountTeamScope:
+    async def test_run_history_clamps_the_viewer_to_its_team_memberships(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_membership(session, team_id=_TEAM_A)
+        await _seed_pipeline(session, pipeline_id=_STAGE_PIPELINE, owner_team_id=_TEAM_A)
+        await _seed_pipeline(session, pipeline_id=_OTHER_PIPELINE, owner_team_id=_TEAM_B)
+        journey = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
+        visible = await _seed_team_run(session, pipeline_id=_STAGE_PIPELINE)
+        await _seed_team_run(session, pipeline_id=_OTHER_PIPELINE)
+
+        runs = await list_journey_runs(session, journey=journey, viewer_account_id=_ACCOUNT)
+
+        assert [r.id for r in runs] == [visible.id]
+
+    async def test_run_history_without_a_viewer_scope_keeps_every_team(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_membership(session, team_id=_TEAM_A)
+        await _seed_pipeline(session, pipeline_id=_STAGE_PIPELINE, owner_team_id=_TEAM_A)
+        await _seed_pipeline(session, pipeline_id=_OTHER_PIPELINE, owner_team_id=_TEAM_B)
+        journey = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
+        first = await _seed_team_run(session, pipeline_id=_STAGE_PIPELINE)
+        second = await _seed_team_run(session, pipeline_id=_OTHER_PIPELINE)
+
+        runs = await list_journey_runs(session, journey=journey)
+
+        assert {r.id for r in runs} == {first.id, second.id}
+
+    async def test_run_history_stamped_owner_takes_precedence_over_the_pipeline(self, session: AsyncSession) -> None:
+        """The run's stamped owner is authoritative: a run stamped team-A is
+        visible to a team-A member even when it ran on a team-B pipeline."""
+        await _seed_org(session)
+        await _seed_membership(session, team_id=_TEAM_A)
+        await _seed_pipeline(session, pipeline_id=_OTHER_PIPELINE, owner_team_id=_TEAM_B)
+        journey = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
+        stamped = await _seed_team_run(session, pipeline_id=_OTHER_PIPELINE, owner_team_id=_TEAM_A)
+
+        runs = await list_journey_runs(session, journey=journey, viewer_account_id=_ACCOUNT)
+
+        assert [r.id for r in runs] == [stamped.id]
+
+    async def test_list_hides_unattributed_refs_from_foreign_team_pipelines(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_membership(session, team_id=_TEAM_A)
+        await _seed_map(session)
+        await _seed_stage(session, pipeline_id=_OTHER_PIPELINE)
+        await _seed_pipeline(session, pipeline_id=_OTHER_PIPELINE, owner_team_id=_TEAM_B)
+        orphan = await _seed_journey(session, kind="github_issue", ref="a/b#5")
+        await _seed_team_run(session, pipeline_id=_OTHER_PIPELINE)
+
+        visible_to_viewer, _ = await list_map_journeys(session, map_id=_MAP, viewer_account_id=_ACCOUNT)
+        unscoped, _ = await list_map_journeys(session, map_id=_MAP)
+
+        assert not visible_to_viewer
+        assert [j.id for j, _ in unscoped] == [orphan.id]
+
+    async def test_get_journey_hides_unattributed_refs_from_foreign_team_pipelines(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_membership(session, team_id=_TEAM_A)
+        await _seed_map(session)
+        await _seed_stage(session, pipeline_id=_OTHER_PIPELINE)
+        await _seed_pipeline(session, pipeline_id=_OTHER_PIPELINE, owner_team_id=_TEAM_B)
+        await _seed_journey(session, kind="github_issue", ref="a/b#5")
+        await _seed_team_run(session, pipeline_id=_OTHER_PIPELINE)
+
+        assert (
+            await get_map_journey(session, map_id=_MAP, kind="github_issue", ref="a/b#5", viewer_account_id=_ACCOUNT)
+            is None
+        )
+        assert await get_map_journey(session, map_id=_MAP, kind="github_issue", ref="a/b#5") is not None
 
 
 # ---------------------------------------------------------------------------

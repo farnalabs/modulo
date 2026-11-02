@@ -11,8 +11,16 @@
       @open-command-palette="openCommandPalette"
     />
 
+    <!-- Single main landmark for the shell. `tabindex="-1"` + the landmark
+         marker make this the fallback focus target for `focusRouteContent`
+         (router/index.ts) on a route with no `[data-page-heading]` - the
+         landmark is programmatically focusable, never tab-reachable. Do not
+         drop the tabindex without moving that fallback: an unfocusable
+         landmark would leave route focus on the outgoing view. -->
     <main
-      class="flex-1 min-w-0 overflow-auto bg-background relative"
+      class="flex-1 min-w-0 overflow-auto overscroll-contain bg-background relative"
+      data-main-landmark
+      tabindex="-1"
       :class="mainPaddingClass"
     >
       <div class="relative z-10 space-y-2">
@@ -40,18 +48,11 @@
       </div>
       <Breadcrumb class="px-6 pt-4 pb-3" />
       <router-view v-slot="{ Component, route }">
-        <transition name="page" mode="out-in">
+        <transition name="page" mode="out-in" @after-enter="focusRouteContent">
           <component :is="Component" :key="route.fullPath" />
         </transition>
       </router-view>
     </main>
-
-    <div v-if="planStore.devMode && assistantStore.isExecutingUi" class="assistant-execution-overlay">
-      <div class="assistant-execution-banner">
-        <span>{{ $t('components.AppLayout.assistant_performing_actions') }}</span>
-        <button type="button" class="assistant-stop-btn" @click="abortUiCommands">{{ $t('components.AppLayout.assistant_stop') }}</button>
-      </div>
-    </div>
 
     <SpotlightOverlay />
     <CommandPalette ref="commandPaletteRef" />
@@ -61,6 +62,7 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, provide, watch } from "vue";
+import { focusRouteContent } from "../router";
 import { useRoute, useRouter } from "vue-router";
 import { api, clearAccessTokenForLogout } from "../lib/api/client";
 import { useCurrentUser } from "../composables/useCurrentUser";
@@ -70,9 +72,7 @@ import { usePlanStore } from "../stores/planStore";
 import Breadcrumb from "./Breadcrumb.vue";
 import AssistantPanel from "./assistant/AssistantPanel.vue";
 import AppSidebar from "./AppSidebar.vue";
-import { useAssistantStore } from "../composables/useAssistantStore";
 import { useSidebarMode } from "../composables/useSidebarMode";
-import { abortUiCommands } from "../composables/useUiCommandExecutor";
 import { applyPrimeVueTokenBridge } from "../lib/primevue-theme";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
 import DbCapacityBanner from "./DbCapacityBanner.vue";
@@ -84,8 +84,6 @@ import LicenceRenewalNotice from "./licence/LicenceRenewalNotice.vue";
 import type { components } from "../lib/api/schema";
 
 const planStore = usePlanStore();
-const assistantStore = useAssistantStore();
-
 const commandPaletteRef = ref<InstanceType<typeof CommandPalette> | null>(null);
 
 const isLight = ref(document.documentElement.classList.contains("light"));
@@ -294,34 +292,3 @@ onMounted(() => {
   planStore.fetchPlan().catch(() => {});
 });
 </script>
-
-<style scoped>
-.assistant-execution-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  pointer-events: none;
-}
-.assistant-execution-banner {
-  position: fixed;
-  inset: 0 0 auto;
-  z-index: 41;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  background: hsl(var(--warning) / 0.95);
-  color: hsl(var(--warning-foreground));
-  font-size: 13px;
-  pointer-events: auto;
-}
-.assistant-stop-btn {
-  background: hsl(var(--destructive-fill));
-  color: hsl(var(--destructive-foreground));
-  border: none;
-  border-radius: 6px;
-  padding: 4px 12px;
-  font-size: 12px;
-  cursor: pointer;
-}
-</style>

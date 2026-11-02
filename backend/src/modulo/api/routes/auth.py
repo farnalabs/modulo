@@ -24,7 +24,6 @@ from modulo.api.db_error_handling import (
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.csrf import CsrfMiddleware
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
-from modulo.api.routes.assistant import clear_session_approvals_for_account
 from modulo.auth.dependencies import (
     OrganisationMembershipNotFound,
     get_current_tenant_user,
@@ -1344,13 +1343,6 @@ async def _blacklist_refresh_family(session: AsyncSession, claims: dict[str, obj
         _log.warning("logout.invalid_token_family", extra={"token_family": truncate_token_family(family_id_val)})
 
 
-def _clear_account_session_approvals(claims: dict[str, object]) -> None:
-    """Scope the approval clear to the caller's account only (FAR-1470)."""
-    account_id_val = claims.get("account_id") or claims.get("user_id")
-    if isinstance(account_id_val, str):
-        clear_session_approvals_for_account(account_id_val)
-
-
 # FAR-1516: PRE-AUTH route — the refresh-cookie identity is established inside
 # the handler, so audited() has no principal to resolve. Actor-less variant:
 # SYSTEM actor, sentinel org until the cookie names one. Session end is a
@@ -1390,8 +1382,6 @@ async def logout(
     bind_audit_org(request, org_claim if isinstance(org_claim, str) else None)
 
     await _blacklist_refresh_family(session, claims)
-    _clear_account_session_approvals(claims)
-
     content = LogoutResponse(detail="Logged out").model_dump()
     response = JSONResponse(content=content)
     _clear_auth_cookies(response, settings)

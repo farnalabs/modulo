@@ -51,6 +51,10 @@ def authz_enforce_enabled() -> bool:
     return _authz_enforce_ctx.get() is not False
 
 
+# Single source of truth for the System Maps grant name. REST and MCP gates
+# import this rather than re-declaring the literal.
+SYSTEM_MAPS_ACCESS_PERMISSION = "system_maps_access"
+
 PERMISSIONS: dict[str, str] = {
     # pipelines
     "pipeline.create": "operator",
@@ -70,7 +74,7 @@ PERMISSIONS: dict[str, str] = {
     # runs
     "run.trigger": "runner",
     "run.cancel": "runner",
-    "run.list": "runner",
+    "run.list": "viewer",
     "run.output": "runner",
     "run.evals": "runner",
     "run.status": "viewer",
@@ -105,14 +109,31 @@ PERMISSIONS: dict[str, str] = {
     "connector.list.in_dev": "operator",
     "model_backend.list.in_dev": "operator",
     "library.search.in_dev": "operator",
+    SYSTEM_MAPS_ACCESS_PERMISSION: "operator",
+    # system_maps
+    "system_map.list": "viewer",
+    "system_map.create": "operator",
+    "system_map.update": "operator",
+    "system_map.delete": "operator",
+    "system_map.revision.create": "operator",
+    "system_map.revision.get": "viewer",
+    "system_map.revision.publish": "operator",
+    "system_map.revision.archive": "operator",
+    "system_map.revision.delete": "operator",
+    "system_map.overview": "viewer",
+    "system_map.node.create": "operator",
+    "system_map.relationship.create": "operator",
+    "system_map.loop_config.create": "operator",
+    "system_map.binding.create": "operator",
+    "system_map.binding.delete": "operator",
     # secrets
     "secret.manage": "operator",
     # triggers
     "trigger.create": "operator",
     "trigger.update": "operator",
     "trigger.delete": "operator",
-    "trigger.list": "runner",
-    "trigger.events.list": "runner",
+    "trigger.list": "viewer",
+    "trigger.events.list": "viewer",
     "trigger.cleanup": "runner",
     # api keys
     "api_key.create": "runner",
@@ -177,7 +198,7 @@ PERMISSIONS: dict[str, str] = {
     "hitl.reject": "operator",
     "hitl.deliver_manual": "operator",
     "hitl.review": "operator",
-    "hitl.list": "runner",
+    "hitl.list": "viewer",
     # library
     "library.copy": "runner",
     "library.search": "viewer",
@@ -384,16 +405,20 @@ NON_DELEGABLE_PERMISSIONS: frozenset[str] = frozenset(
         #
         # The boundary is the gate's ``human_only`` POLICY, enforced at
         # RUNTIME — not a registry bar:
-        #   * MCP (``api/mcp_server._check_human_only_gate``) denies a
-        #     ``human_only`` gate outright regardless of credential class, so
-        #     a machine token can never answer one;
-        #   * REST (``api/routes/hitl._enforce_human_only_gate``) denies a
-        #     non-browser credential on a ``human_only`` gate.
+        #   * MCP (``api/mcp_server._check_human_only_gate``) denies every
+        #     unlinked credential outright. Only when an org admin enables the
+        #     default-OFF ``mcp_human_linked_hitl_authority`` flag may a
+        #     verified human-linked credential (consent-derived OAuth or a
+        #     user-scoped key) claim, approve or reject one; ``deliver_manual``
+        #     stays browser-only (ADR 035).
+        #   * REST (``api/routes/hitl._enforce_human_only_gate``) denies every
+        #     non-browser credential on a ``human_only`` gate — its principals
+        #     are browser-login JWTs only.
         # A human-linked connection may therefore answer NON-``human_only``
         # gates (an explicit ``human_only: false`` opt-out) while ``human_only``
-        # gates stay browser-human-only. Removing the registry bar does not
-        # widen that policy — it only stops the bar from masking which layer
-        # did the denying (pinned by
+        # gates stay browser-human-only unless that MCP flag is enabled.
+        # Removing the registry bar does not widen that policy — it only stops
+        # the bar from masking which layer did the denying (pinned by
         # ``tests/unit/mcp/test_hitl_delegation_boundary.py``).
         #
         # org destruction.

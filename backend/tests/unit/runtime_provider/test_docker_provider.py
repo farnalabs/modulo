@@ -3,6 +3,8 @@
 import asyncio
 import time
 import uuid
+from collections.abc import Iterator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,12 +12,41 @@ import pytest
 from modulo.core.runtime_provider import ExecResult, WorkspaceSpec
 from modulo.core.runtime_provider.docker import (
     _DEFAULT_HARDENING_MEMORY_MB,
+    _DEFAULT_WORKSPACE_NETWORK,
     DockerRuntimeProvider,
 )
+from modulo.util import WorkspaceNetworkValidationError
 
 
 class _FakeDockerError(Exception):
     """Stand-in for aiodocker.exceptions.DockerError used in error paths."""
+
+    status: int | None = None
+
+
+def _make_spec(**overrides: Any) -> WorkspaceSpec:
+    """Build a minimal valid spec, overriding only the fields a test exercises."""
+    fields: dict[str, Any] = {
+        "environment_profile_id": uuid.uuid4(),
+        "organisation_id": uuid.uuid4(),
+    }
+    fields.update(overrides)
+    return WorkspaceSpec(**fields)
+
+
+@pytest.fixture(autouse=True)
+def fake_docker_error() -> Iterator[type[_FakeDockerError]]:
+    """Map aiodocker's DockerError onto the module stand-in for every test.
+
+    The provider branches on ``aiodocker.exceptions.DockerError``; patching it
+    once here keeps each error-path test to the behaviour it asserts instead of
+    repeating the same ``patch()`` wrapper ten times.
+    """
+    with patch(
+        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        _FakeDockerError,
+    ):
+        yield _FakeDockerError
 
 
 @pytest.fixture
@@ -43,6 +74,7 @@ def mock_docker_client(mock_container: MagicMock) -> MagicMock:
     client = MagicMock()
     client.ping = AsyncMock()
     client.close = AsyncMock()
+    client.images.pull = AsyncMock()
     containers = MagicMock()
     containers.create = AsyncMock(return_value=mock_container)
     containers.get = AsyncMock(return_value=mock_container)
@@ -64,9 +96,7 @@ def provider(mock_docker_client: MagicMock) -> DockerRuntimeProvider:
 
 @pytest.fixture
 def spec() -> WorkspaceSpec:
-    return WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
+    return _make_spec(
         image_ref="python:3.13-slim",
         resource_limits={"memory_mb": 256},
     )
@@ -77,29 +107,25 @@ def spec() -> WorkspaceSpec:
 # ------------------------------------------------------------------
 
 
-def test_supports_docker_hint(provider: DockerRuntimeProvider) -> None:
-    profile = MagicMock(provider_hint="docker")
-    assert provider.supports(profile) is True
-
-
-def test_supports_image_ref(provider: DockerRuntimeProvider) -> None:
-    profile = MagicMock(provider_hint="", image_ref="my-docker-image:latest")
-    assert provider.supports(profile) is True
-
-
-def test_supports_other_hint(provider: DockerRuntimeProvider) -> None:
-    profile = MagicMock(provider_hint="e2b", image_ref="")
-    assert provider.supports(profile) is False
-
-
-def test_supports_docker_hint_case_insensitive(provider: DockerRuntimeProvider) -> None:
-    profile = MagicMock(provider_hint="Docker")
-    assert provider.supports(profile) is True
-
-
-def test_supports_image_ref_case_insensitive(provider: DockerRuntimeProvider) -> None:
-    profile = MagicMock(provider_hint="", image_ref="My-Docker-Image:latest")
-    assert provider.supports(profile) is True
+@pytest.mark.parametrize(
+    ("profile_hint", "image_ref", "expected"),
+    [
+        ("docker", "", True),
+        ("Docker", "", True),
+        ("", "my-docker-image:latest", True),
+        ("", "My-Docker-Image:latest", True),
+        ("e2b", "", False),
+    ],
+    ids=["hint", "hint-case-insensitive", "image-ref", "image-ref-case-insensitive", "other-hint"],
+)
+def test_supports_matches_docker_hint_or_image_ref(
+    provider: DockerRuntimeProvider,
+    profile_hint: str,
+    image_ref: str,
+    expected: bool,
+) -> None:
+    profile = MagicMock(provider_hint=profile_hint, image_ref=image_ref)
+    assert provider.supports(profile) is expected
 
 
 # ------------------------------------------------------------------
@@ -132,9 +158,7 @@ async def test_create_workspace_with_env_labels(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
 ) -> None:
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
+    spec = _make_spec(
         labels={"FOO": "bar", "MY_VAR": "value"},
     )
     await provider.create_workspace(spec)
@@ -153,9 +177,7 @@ async def test_create_workspace_repo_fields_are_ignored_no_clone(
     (code sync is the bundled runner image's job), and repo-ish labels keys
     are injected as plain env vars exactly like any other label.
     """
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
+    spec = _make_spec(
         labels={"REPO_URL": "https://github.com/user/repo.git"},
         repo_url="https://github.com/user/repo.git",
         repo_ref="develop",
@@ -178,9 +200,7 @@ async def test_create_workspace_default_image(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
 ) -> None:
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
+    spec = _make_spec(
         image_ref="",
     )
     await provider.create_workspace(spec)
@@ -193,9 +213,7 @@ async def test_create_workspace_strips_image_ref_whitespace(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
 ) -> None:
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
+    spec = _make_spec(
         image_ref="  python:3.13-slim  ",
     )
     await provider.create_workspace(spec)
@@ -208,9 +226,7 @@ async def test_create_workspace_invalid_memory_falls_back_to_default(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
 ) -> None:
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
+    spec = _make_spec(
         resource_limits={"memory_mb": "lots"},
     )
     await provider.create_workspace(spec)
@@ -233,9 +249,7 @@ async def test_create_workspace_clamps_memory(
     memory_mb: int,
     expected_mb: int,
 ) -> None:
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
+    spec = _make_spec(
         resource_limits={"memory_mb": memory_mb},
     )
     await provider.create_workspace(spec)
@@ -248,9 +262,7 @@ async def test_create_workspace_skips_env_control_characters(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
 ) -> None:
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
+    spec = _make_spec(
         labels={"OK": "fine", "BAD": "bad\nvalue", "CARRIAGE": "x\ry", "NUL": "z\0w"},
     )
     await provider.create_workspace(spec)
@@ -266,12 +278,7 @@ async def test_create_workspace_propagates_container_failure(
     mock_docker_client.containers.create.side_effect = RuntimeError("docker down")
 
     with pytest.raises(RuntimeError, match="docker down"):
-        await provider.create_workspace(
-            WorkspaceSpec(
-                environment_profile_id=uuid.uuid4(),
-                organisation_id=uuid.uuid4(),
-            )
-        )
+        await provider.create_workspace(_make_spec())
 
     assert not provider._workspaces
 
@@ -284,12 +291,90 @@ async def test_create_workspace_daemon_unreachable_raises_structured_error(
     mock_docker_client.containers.create.side_effect = ConnectionError("Cannot connect to the Docker daemon")
 
     with pytest.raises(RuntimeError, match="Unable to reach the Docker daemon"):
-        await provider.create_workspace(
-            WorkspaceSpec(
-                environment_profile_id=uuid.uuid4(),
-                organisation_id=uuid.uuid4(),
-            )
-        )
+        await provider.create_workspace(_make_spec())
+
+    assert not provider._workspaces
+
+
+async def test_create_workspace_uses_dedicated_workspace_network_by_default(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """The default is the dedicated workspace bridge, never the compose network."""
+    await provider.create_workspace(_make_spec())
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    assert config["HostConfig"]["NetworkMode"] == _DEFAULT_WORKSPACE_NETWORK
+
+
+async def test_create_workspace_honours_spec_workspace_network(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """A profile-selected, deployment-owned bridge network overrides the default."""
+    await provider.create_workspace(_make_spec(workspace_network="custom-workspace-net"))
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    assert config["HostConfig"]["NetworkMode"] == "custom-workspace-net"
+
+
+async def test_create_workspace_egress_none_disables_networking(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """An explicit ``egress_policy="none"`` profile runs with no network at all."""
+    await provider.create_workspace(_make_spec(egress_policy="none", workspace_network="custom-workspace-net"))
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    assert config["HostConfig"]["NetworkMode"] == "none"
+
+
+@pytest.mark.parametrize("dangerous_network", ["host", "bridge", "container:abc123"])
+async def test_create_workspace_rejects_dangerous_network_mode(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+    dangerous_network: str,
+) -> None:
+    """FAR-1020: an isolation-defeating network is rejected at the provider boundary."""
+    with pytest.raises(WorkspaceNetworkValidationError):
+        await provider.create_workspace(_make_spec(workspace_network=dangerous_network))
+
+    mock_docker_client.containers.create.assert_not_called()
+    assert not provider._workspaces
+
+
+async def test_create_workspace_pulls_image_before_create(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """Provisioning pulls the image first so an absent local image is not fatal."""
+    await provider.create_workspace(_make_spec(image_ref="python:3.13-slim"))
+
+    mock_docker_client.images.pull.assert_awaited_once_with("python:3.13-slim")
+    mock_docker_client.containers.create.assert_called_once()
+
+
+async def test_create_workspace_swallows_image_pull_failure(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """The pull is best-effort: a failure falls through to create (which reports it)."""
+    mock_docker_client.images.pull.side_effect = RuntimeError("registry unreachable")
+
+    ref = await provider.create_workspace(_make_spec())
+
+    assert provider._workspaces[ref] == "cntnr-12345"
+
+
+async def test_create_workspace_propagates_image_pull_cancellation(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """Cancellation must not be swallowed by the best-effort pull."""
+    mock_docker_client.images.pull.side_effect = asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.create_workspace(_make_spec())
 
     assert not provider._workspaces
 
@@ -304,12 +389,7 @@ async def test_exec_command(
     mock_docker_client: MagicMock,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
 
     result = await provider.exec_command(ref, ["echo", "hi"])
 
@@ -332,12 +412,7 @@ async def test_exec_command_captures_stderr_and_exit_code(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     stream = mock_docker_client.containers.get.return_value.exec.return_value.start.return_value
     stream.read_out = AsyncMock(side_effect=[(None, b"boom"), None])
     mock_docker_client.containers.get.return_value.exec.return_value.inspect = AsyncMock(return_value={"ExitCode": 1})
@@ -349,16 +424,25 @@ async def test_exec_command_captures_stderr_and_exit_code(
     assert not result.stdout
 
 
+async def test_exec_command_reports_missing_exit_code_as_minus_one(
+    provider: DockerRuntimeProvider,
+    mock_container: MagicMock,
+) -> None:
+    """An inspect payload without ``ExitCode`` must not fabricate a success."""
+    ref = await provider.create_workspace(_make_spec())
+    mock_container.exec.return_value.inspect = AsyncMock(return_value={})
+
+    result = await provider.exec_command(ref, ["echo", "hi"])
+
+    assert result.exit_code == -1
+    assert result.stdout == "Hello, Docker!"
+
+
 async def test_exec_command_timeout_returns_timeout_result(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
 
     async def _hang() -> None:
         await asyncio.Event().wait()
@@ -379,12 +463,7 @@ async def test_exec_command_decodes_invalid_utf8_with_replacement(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     stream = mock_docker_client.containers.get.return_value.exec.return_value.start.return_value
     stream.read_out = AsyncMock(side_effect=[(b"\xff\xfe\xff", None), None])
 
@@ -402,12 +481,7 @@ async def test_destroy_workspace(
     provider: DockerRuntimeProvider,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
 
     await provider.destroy_workspace(ref)
 
@@ -419,8 +493,9 @@ async def test_destroy_workspace(
 async def test_destroy_workspace_unknown(
     provider: DockerRuntimeProvider,
 ) -> None:
-    result = await provider.destroy_workspace("nonexistent")
-    assert result is None
+    await provider.destroy_workspace("nonexistent")
+
+    assert not provider._workspaces
 
 
 async def test_destroy_workspace_swallows_delete_error(
@@ -428,12 +503,7 @@ async def test_destroy_workspace_swallows_delete_error(
     mock_docker_client: MagicMock,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     delete_error = _FakeDockerError("removal already in progress")
     delete_error.status = 409
     gone_error = _FakeDockerError("gone")
@@ -443,11 +513,7 @@ async def test_destroy_workspace_swallows_delete_error(
     # then sees it already gone.
     mock_docker_client.containers.get.side_effect = [mock_container, gone_error]
 
-    with patch(
-        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
-        _FakeDockerError,
-    ):
-        await provider.destroy_workspace(ref)
+    await provider.destroy_workspace(ref)
 
     assert ref not in provider._workspaces
 
@@ -456,19 +522,10 @@ async def test_destroy_workspace_swallows_docker_error(
     provider: DockerRuntimeProvider,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     mock_container.stop.side_effect = _FakeDockerError("no such container")
 
-    with patch(
-        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
-        _FakeDockerError,
-    ):
-        await provider.destroy_workspace(ref)
+    await provider.destroy_workspace(ref)
 
     assert ref not in provider._workspaces
 
@@ -477,12 +534,7 @@ async def test_destroy_workspace_removes_ref_on_generic_error(
     provider: DockerRuntimeProvider,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     mock_container.stop.side_effect = RuntimeError("connection reset")
 
     await provider.destroy_workspace(ref)
@@ -494,21 +546,12 @@ async def test_destroy_workspace_container_already_gone(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     gone_error = _FakeDockerError("no such container")
     gone_error.status = 404
     mock_docker_client.containers.get.side_effect = gone_error
 
-    with patch(
-        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
-        _FakeDockerError,
-    ):
-        await provider.destroy_workspace(ref)
+    await provider.destroy_workspace(ref)
 
     assert ref not in provider._workspaces
 
@@ -517,21 +560,12 @@ async def test_destroy_workspace_resolve_non_404_error(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     daemon_error = _FakeDockerError("daemon unavailable")
     daemon_error.status = 500
     mock_docker_client.containers.get.side_effect = daemon_error
 
-    with patch(
-        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
-        _FakeDockerError,
-    ):
-        await provider.destroy_workspace(ref)
+    await provider.destroy_workspace(ref)
 
     assert ref not in provider._workspaces
 
@@ -540,12 +574,7 @@ async def test_destroy_workspace_resolve_generic_error(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     mock_docker_client.containers.get.side_effect = RuntimeError("connection reset")
 
     await provider.destroy_workspace(ref)
@@ -557,12 +586,7 @@ async def test_destroy_workspace_propagates_resolve_cancellation(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     mock_docker_client.containers.get.side_effect = asyncio.CancelledError()
 
     with pytest.raises(asyncio.CancelledError):
@@ -573,12 +597,7 @@ async def test_destroy_workspace_propagates_stop_cancellation(
     provider: DockerRuntimeProvider,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     mock_container.stop.side_effect = asyncio.CancelledError()
 
     with pytest.raises(asyncio.CancelledError):
@@ -589,12 +608,7 @@ async def test_destroy_workspace_propagates_delete_cancellation(
     provider: DockerRuntimeProvider,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     mock_container.delete.side_effect = asyncio.CancelledError()
 
     with pytest.raises(asyncio.CancelledError):
@@ -606,12 +620,7 @@ async def test_destroy_workspace_delete_non_404_error_confirms_removal(
     mock_docker_client: MagicMock,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     daemon_error = _FakeDockerError("server error")
     daemon_error.status = 500
     gone_error = _FakeDockerError("gone")
@@ -619,11 +628,7 @@ async def test_destroy_workspace_delete_non_404_error_confirms_removal(
     mock_container.delete.side_effect = daemon_error
     mock_docker_client.containers.get.side_effect = [mock_container, gone_error]
 
-    with patch(
-        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
-        _FakeDockerError,
-    ):
-        await provider.destroy_workspace(ref)
+    await provider.destroy_workspace(ref)
 
     assert ref not in provider._workspaces
 
@@ -633,22 +638,13 @@ async def test_destroy_workspace_delete_generic_error_confirms_removal(
     mock_docker_client: MagicMock,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     gone_error = _FakeDockerError("gone")
     gone_error.status = 404
     mock_container.delete.side_effect = RuntimeError("connection reset")
     mock_docker_client.containers.get.side_effect = [mock_container, gone_error]
 
-    with patch(
-        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
-        _FakeDockerError,
-    ):
-        await provider.destroy_workspace(ref)
+    await provider.destroy_workspace(ref)
 
     assert ref not in provider._workspaces
 
@@ -662,11 +658,7 @@ async def test_await_container_removed_polls_until_gone(
     gone_error.status = 404
     mock_docker_client.containers.get.side_effect = [mock_container, mock_container, gone_error]
 
-    with patch(
-        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
-        _FakeDockerError,
-    ):
-        removed = await provider._await_container_removed(mock_docker_client, "cntnr-12345")
+    removed = await provider._await_container_removed(mock_docker_client, "cntnr-12345")
 
     assert removed is True
 
@@ -689,11 +681,7 @@ async def test_await_container_removed_returns_false_on_non_404_error(
     daemon_error.status = 500
     mock_docker_client.containers.get.side_effect = daemon_error
 
-    with patch(
-        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
-        _FakeDockerError,
-    ):
-        removed = await provider._await_container_removed(mock_docker_client, "cntnr-12345")
+    removed = await provider._await_container_removed(mock_docker_client, "cntnr-12345")
 
     assert removed is False
 
@@ -726,28 +714,21 @@ async def test_destroy_workspace_warns_when_container_survives(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
     mock_container: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    """When removal cannot be confirmed, destroy still drops the ref and warns."""
+    ref = await provider.create_workspace(_make_spec())
     delete_error = _FakeDockerError("removal already in progress")
     delete_error.status = 409
     mock_container.delete.side_effect = delete_error
     mock_docker_client.containers.get.return_value = mock_container
+    monkeypatch.setattr("modulo.core.runtime_provider.docker._REMOVE_CONFIRM_TIMEOUT_S", 0.0)
 
-    with (
-        patch(
-            "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
-            _FakeDockerError,
-        ),
-        patch("modulo.core.runtime_provider.docker._REMOVE_CONFIRM_TIMEOUT_S", 0.0),
-    ):
-        await provider.destroy_workspace(ref)
+    await provider.destroy_workspace(ref)
 
     assert ref not in provider._workspaces
+    assert "still present after destroy" in caplog.text
 
 
 # ------------------------------------------------------------------
@@ -759,12 +740,7 @@ async def test_get_workspace_status_running(
     provider: DockerRuntimeProvider,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
 
     status = await provider.get_workspace_status(ref)
 
@@ -783,12 +759,7 @@ async def test_get_workspace_status_fallback_on_error(
     provider: DockerRuntimeProvider,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     mock_container.show.side_effect = RuntimeError("connection lost")
 
     status = await provider.get_workspace_status(ref)
@@ -799,12 +770,7 @@ async def test_get_workspace_status_docker_error_returns_terminated(
     provider: DockerRuntimeProvider,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     mock_container.show.side_effect = _FakeDockerError("no such container")
 
     with patch(
@@ -835,27 +801,31 @@ async def test_close_idempotent(provider: DockerRuntimeProvider) -> None:
 
 async def test_close_destroys_all_workspaces(
     provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
     mock_container: MagicMock,
 ) -> None:
-    await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
-    await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
-    assert len(provider._workspaces) == 2
+    second_container = MagicMock()
+    second_container.id = "cntnr-67890"
+    second_container.start = AsyncMock()
+    second_container.stop = AsyncMock()
+    second_container.delete = AsyncMock()
+    containers_by_id = {mock_container.id: mock_container, second_container.id: second_container}
+    mock_docker_client.containers.create.side_effect = [mock_container, second_container]
+    mock_docker_client.containers.get.side_effect = lambda container_id: containers_by_id[container_id]
+
+    await provider.create_workspace(_make_spec())
+    await provider.create_workspace(_make_spec())
+    assert len(set(provider._workspaces.values())) == 2
 
     await provider.close()
 
     assert provider._client is None
     assert not provider._workspaces
-    assert mock_container.stop.await_count == 2
+    # Both distinct containers are stopped and force-deleted, not just tracked.
+    mock_container.stop.assert_awaited_once()
+    second_container.stop.assert_awaited_once()
+    mock_container.delete.assert_awaited_once_with(force=True)
+    second_container.delete.assert_awaited_once_with(force=True)
 
 
 async def test_get_client_lazily_initializes_once(mock_docker_client: MagicMock) -> None:
@@ -887,12 +857,7 @@ async def test_create_workspace_cancellation_propagates(
     mock_docker_client.containers.create.side_effect = asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
-        await provider.create_workspace(
-            WorkspaceSpec(
-                environment_profile_id=uuid.uuid4(),
-                organisation_id=uuid.uuid4(),
-            )
-        )
+        await provider.create_workspace(_make_spec())
 
     assert not provider._workspaces
 
@@ -902,12 +867,7 @@ async def test_exec_command_failure_propagates(
     mock_container: MagicMock,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     stream = mock_container.exec.return_value.start.return_value
     stream.read_out = AsyncMock(side_effect=RuntimeError("exec exploded"))
 
@@ -921,29 +881,19 @@ async def test_exec_command_cancellation_propagates(
     provider: DockerRuntimeProvider,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     mock_container.exec.side_effect = asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
         await provider.exec_command(ref, ["echo", "hi"])
 
 
-async def test_exec_command_stream_cancellation_propagates(
+async def test_exec_command_read_cancellation_propagates(
     provider: DockerRuntimeProvider,
     mock_container: MagicMock,
 ) -> None:
-    """Cancellation raised mid-stream must propagate through exec_command."""
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    """Cancellation raised while reading exec output must propagate through exec_command."""
+    ref = await provider.create_workspace(_make_spec())
     stream = mock_container.exec.return_value.start.return_value
     stream.read_out = AsyncMock(side_effect=asyncio.CancelledError)
 
@@ -951,32 +901,11 @@ async def test_exec_command_stream_cancellation_propagates(
         await provider.exec_command(ref, ["echo", "hi"])
 
 
-async def test_destroy_workspace_cancellation_propagates(
-    provider: DockerRuntimeProvider,
-    mock_container: MagicMock,
-) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
-    mock_container.stop.side_effect = asyncio.CancelledError
-
-    with pytest.raises(asyncio.CancelledError):
-        await provider.destroy_workspace(ref)
-
-
 async def test_get_workspace_status_cancellation_propagates(
     provider: DockerRuntimeProvider,
     mock_container: MagicMock,
 ) -> None:
-    ref = await provider.create_workspace(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
-        )
-    )
+    ref = await provider.create_workspace(_make_spec())
     mock_container.show.side_effect = asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
@@ -988,31 +917,15 @@ async def test_get_workspace_status_cancellation_propagates(
 # ------------------------------------------------------------------
 
 
-async def test_create_workspace_non_root_user_for_non_runner_image(
+@pytest.mark.parametrize("image_ref", ["python:3.13-slim", "modulo-runner:opencode", ""])
+async def test_create_workspace_stamps_non_root_user_for_every_image(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
+    image_ref: str,
 ) -> None:
-    """FAR-1036: a NON-modulo-runner image must get the non-root user stamp."""
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
-        image_ref="python:3.13-slim",
-    )
-    await provider.create_workspace(spec)
-
-    config = mock_docker_client.containers.create.call_args[1]["config"]
-    assert config["User"] == "1001:1001"
-
-
-async def test_create_workspace_non_root_user_for_runner_image(
-    provider: DockerRuntimeProvider,
-    mock_docker_client: MagicMock,
-) -> None:
-    """FAR-1036: the modulo-runner image must still get the non-root user stamp."""
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
-        image_ref="modulo-runner:opencode",
+    """FAR-1036: every image — including the default and modulo-runner — runs non-root."""
+    spec = _make_spec(
+        image_ref=image_ref,
     )
     await provider.create_workspace(spec)
 
@@ -1026,9 +939,7 @@ async def test_create_workspace_root_user_opt_in(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """FAR-1036: allow_root_user=True skips the non-root stamp and logs a warning."""
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
+    spec = _make_spec(
         image_ref="custom-base:latest",
         allow_root_user=True,
     )
@@ -1039,77 +950,37 @@ async def test_create_workspace_root_user_opt_in(
     assert "running as root (allow_root_user=True)" in caplog.text
 
 
-async def test_create_workspace_default_image_gets_non_root_user(
-    provider: DockerRuntimeProvider,
-    mock_docker_client: MagicMock,
-) -> None:
-    """FAR-1036: even the default python:3.13-slim image gets the non-root user."""
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
-        image_ref="",
-    )
-    await provider.create_workspace(spec)
-
-    config = mock_docker_client.containers.create.call_args[1]["config"]
-    assert config["User"] == "1001:1001"
-
-
 # ------------------------------------------------------------------
 # FAR-1037: explicit seccomp + AppArmor profiles
 # ------------------------------------------------------------------
 
 
-async def test_create_workspace_has_seccomp_profile(
+@pytest.mark.parametrize(
+    ("required_entry", "description"),
+    [
+        ("no-new-privileges:true", "no-new-privileges"),
+        ("seccomp=", "seccomp profile"),
+        ("apparmor=", "AppArmor profile"),
+    ],
+)
+async def test_create_workspace_applies_hardening_security_options(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,
+    required_entry: str,
+    description: str,
 ) -> None:
-    """FAR-1037: every workspace container must have an explicit seccomp profile."""
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
-    )
+    """FAR-1037: every workspace must carry no-new-privileges, seccomp and AppArmor."""
+    spec = _make_spec()
     await provider.create_workspace(spec)
 
     config = mock_docker_client.containers.create.call_args[1]["config"]
     security_opt = config["HostConfig"]["SecurityOpt"]
-    assert any(entry.startswith("seccomp=") for entry in security_opt), (
-        f"Expected a seccomp= entry in SecurityOpt, got: {security_opt}"
-    )
-
-
-async def test_create_workspace_has_apparmor_profile(
-    provider: DockerRuntimeProvider,
-    mock_docker_client: MagicMock,
-) -> None:
-    """FAR-1037: every workspace container must have an explicit AppArmor profile."""
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
-    )
-    await provider.create_workspace(spec)
-
-    config = mock_docker_client.containers.create.call_args[1]["config"]
-    security_opt = config["HostConfig"]["SecurityOpt"]
-    assert any(entry.startswith("apparmor=") for entry in security_opt), (
-        f"Expected an apparmor= entry in SecurityOpt, got: {security_opt}"
-    )
-
-
-async def test_create_workspace_no_new_privileges_preserved(
-    provider: DockerRuntimeProvider,
-    mock_docker_client: MagicMock,
-) -> None:
-    """FAR-1037: no-new-privileges must remain in SecurityOpt."""
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
-    )
-    await provider.create_workspace(spec)
-
-    config = mock_docker_client.containers.create.call_args[1]["config"]
-    security_opt = config["HostConfig"]["SecurityOpt"]
-    assert "no-new-privileges:true" in security_opt
+    if required_entry.endswith("="):
+        assert any(entry.startswith(required_entry) for entry in security_opt), (
+            f"Expected a {description} entry in SecurityOpt, got: {security_opt}"
+        )
+    else:
+        assert required_entry in security_opt, f"Expected {description} in SecurityOpt, got: {security_opt}"
 
 
 # ------------------------------------------------------------------
@@ -1135,9 +1006,7 @@ async def test_create_workspace_reserved_identity_labels_cannot_be_restamped(
 
     Non-reserved attribution keys still flow through unchanged.
     """
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
+    spec = _make_spec(
         workspace_metadata={
             "modulo.machine.id": "evil-deployment",
             "modulo.created_at": "1",
@@ -1167,9 +1036,7 @@ def test_build_workspace_labels_identity_is_authoritative(
     provider's own deployment identity and a current (non-backdated) epoch.
     """
     labels = provider._build_workspace_labels(
-        WorkspaceSpec(
-            environment_profile_id=uuid.uuid4(),
-            organisation_id=uuid.uuid4(),
+        _make_spec(
             workspace_metadata={
                 "modulo.machine.id": "someone-else",
                 "modulo.created_at": "1",

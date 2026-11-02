@@ -46,8 +46,13 @@
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadSettings" />
 
       <form v-else @submit.prevent="saveSettings" class="space-y-6">
-        <div class="rounded-lg border bg-card p-6 shadow-sm">
-          <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsObservabilityView.otlp_endpoint') }}</h2>
+        <DataCard
+          variant="bordered"
+          padding="lg"
+          elevation="sm"
+          heading-level="h2"
+          :title="$t('views.SettingsObservabilityView.otlp_endpoint')"
+        >
           <div>
             <label for="settingsobservabilityview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.endpoint_url') }}</label>
             <input id="settingsobservabilityview-field-3"
@@ -58,15 +63,20 @@
               placeholder="https://otlp.example.com:4318"
             />
           </div>
-        </div>
+        </DataCard>
 
-        <div class="rounded-lg border bg-card p-6 shadow-sm">
-          <div class="mb-4 flex items-center justify-between">
-            <h2 class="text-base font-semibold">{{ $t('views.SettingsObservabilityView.otlp_headers') }}</h2>
+        <DataCard
+          variant="bordered"
+          padding="lg"
+          elevation="sm"
+          heading-level="h2"
+          :title="$t('views.SettingsObservabilityView.otlp_headers')"
+        >
+          <template #headerActions>
             <Button v-if="canManage" size="small" type="button" data-testid="settings-observability-add-header" @click="addHeader">
               {{ $t('views.SettingsObservabilityView.add_header') }}
             </Button>
-          </div>
+          </template>
           <div v-if="otlpHeaders.length === 0" data-testid="settings-observability-no-headers" class="text-sm text-muted-foreground">
             {{ $t('views.SettingsObservabilityView.no_custom_headers_configured') }}
           </div>
@@ -99,10 +109,15 @@
               <X class="h-4 w-4" aria-hidden="true" />
             </button>
           </div>
-        </div>
+        </DataCard>
 
-        <div class="rounded-lg border bg-card p-6 shadow-sm">
-          <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsObservabilityView.export_interval') }}</h2>
+        <DataCard
+          variant="bordered"
+          padding="lg"
+          elevation="sm"
+          heading-level="h2"
+          :title="$t('views.SettingsObservabilityView.export_interval')"
+        >
           <div>
             <label for="settingsobservabilityview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.interval_seconds') }}</label>
             <input id="settingsobservabilityview-field-2"
@@ -114,10 +129,15 @@
             />
             <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.SettingsObservabilityView.export_interval_description') }}</p>
           </div>
-        </div>
+        </DataCard>
 
-        <div class="rounded-lg border bg-card p-6 shadow-sm">
-          <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsObservabilityView.langsmith') }}</h2>
+        <DataCard
+          variant="bordered"
+          padding="lg"
+          elevation="sm"
+          heading-level="h2"
+          :title="$t('views.SettingsObservabilityView.langsmith')"
+        >
           <div class="space-y-4">
             <div class="flex items-center gap-3">
               <button
@@ -162,7 +182,7 @@
               </div>
             </div>
           </div>
-        </div>
+        </DataCard>
 
         <!-- Save action error: no refetch loader; the Save button is the
              retry path. -->
@@ -229,6 +249,7 @@ import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import FeatureGate from '../components/FeatureGate.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import Button from 'primevue/button'
 import { X } from '@lucide/vue'
 

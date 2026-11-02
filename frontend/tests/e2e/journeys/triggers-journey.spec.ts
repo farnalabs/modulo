@@ -41,8 +41,10 @@ test.describe('Real-stack journeys: trigger lifecycle', { tag: '@regression' }, 
     const pipeline = await createPipeline(apiBase, token, pipelineName)
     let triggerId: string | null = null
     let deletedThroughApi = false
+    const triggerName = uniqueName('e2e-journey-cron-trigger')
     try {
       const trigger = await createTrigger(apiBase, token, pipeline.id, {
+        name: triggerName,
         trigger_type: 'cron',
         cron_expression: '30 3 * * 0',
         cron_timezone: 'UTC',
@@ -62,6 +64,8 @@ test.describe('Real-stack journeys: trigger lifecycle', { tag: '@regression' }, 
       const row = page.locator('tr').filter({ hasText: pipelineName }).first()
       await expect(row).toBeVisible({ timeout: 30_000 })
       await expect(row).toContainText(/cron/i)
+      // FAR-2227: the trigger's name is its human identifier in the table.
+      await expect(row.getByTestId('settings-triggers-name')).toHaveText(triggerName)
       await expect(row.getByTestId('settings-triggers-toggle')).toContainText('Active')
 
       // Operator seam: pause it from the table.

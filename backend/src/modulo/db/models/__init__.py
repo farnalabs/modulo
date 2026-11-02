@@ -93,6 +93,16 @@ from modulo.db.models.spend_anomaly import SpendAnomaly
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.models.system_audit_event import SystemAuditEvent
 from modulo.db.models.system_config import SystemConfig
+from modulo.db.models.system_map import (
+    SystemMap,
+    SystemMapAttributionBinding,
+    SystemMapLoopAdmissionAttempt,
+    SystemMapLoopConfig,
+    SystemMapLoopReservation,
+    SystemMapNode,
+    SystemMapRelationship,
+    SystemMapRevision,
+)
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
@@ -202,6 +212,14 @@ __all__ = [
     "SuiteRunState",
     "SystemAuditEvent",
     "SystemConfig",
+    "SystemMap",
+    "SystemMapAttributionBinding",
+    "SystemMapLoopAdmissionAttempt",
+    "SystemMapLoopConfig",
+    "SystemMapLoopReservation",
+    "SystemMapNode",
+    "SystemMapRelationship",
+    "SystemMapRevision",
     "Team",
     "TeamMembership",
     "TierCatalog",

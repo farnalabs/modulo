@@ -12,6 +12,28 @@ from tests.unit._e2b_sandbox_bridge import install_bridge
 
 
 @pytest.fixture(autouse=True)
+def _restore_app_dependency_overrides() -> Generator[None, None, None]:
+    """Restore FastAPI dependency overrides after every unit test.
+
+    API tests often install overrides directly on the process-global app. A
+    forgotten cleanup can leave an ``AsyncMock`` session factory active for a
+    later test in the same xdist worker, so the later test observes another
+    test's mock lifecycle and may leave its coroutines unawaited. This fixture
+    is declared before the other autouse fixtures so its teardown runs last,
+    after the test-specific fixture finalizers have finished.
+    """
+    app_module = sys.modules.get("modulo.api.main")
+    app = getattr(app_module, "app", None)
+    baseline = dict(app.dependency_overrides) if app is not None else {}
+    yield
+    app_module = sys.modules.get("modulo.api.main")
+    app = getattr(app_module, "app", None)
+    if app is not None:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(baseline)
+
+
+@pytest.fixture(autouse=True)
 def _isolated_audit_session(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> Generator[None, None, None]:

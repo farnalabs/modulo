@@ -126,7 +126,7 @@
         {{ $t('views.EvidenceView.row_count', { count: rows.length }) }}
       </p>
       <p class="text-xs text-muted-foreground">{{ $t('views.EvidenceView.redaction_note') }}</p>
-      <div class="overflow-x-auto rounded-lg border bg-card shadow-sm">
+      <DataCard padding="none" elevation="sm" card-class="overflow-x-auto">
         <table class="w-full text-left text-sm">
           <thead>
             <tr class="border-b bg-muted/50">
@@ -150,7 +150,7 @@
             </tr>
           </tbody>
         </table>
-      </div>
+      </DataCard>
     </div>
   </div>
 </template>
@@ -163,6 +163,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import { fetchRuns, type RunListItem } from '../lib/api/runs'

@@ -36,9 +36,11 @@ vi.mock('../lib/api/client', () => ({
     GET: mockGet,
     PUT: mockPut,
   },
+  getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
 
 import MyProfileView from '../views/MyProfileView.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 import { usePlanStore } from '../stores/planStore'
 
 describe('MyProfileView', () => {
@@ -361,10 +363,10 @@ describe('MyProfileView HITL email alerts', () => {
     expect(
       (wrapper.find('[data-testid="my-profile-hitl-email-default"]').element as HTMLInputElement).checked
     ).toBe(true)
-    const selects = wrapper.findAll('[data-testid="my-profile-hitl-email-pipeline-select"]')
+    const selects = wrapper.findAllComponents(AppSelect)
     expect(selects.length).toBe(2)
-    expect((selects[0].element as HTMLSelectElement).value).toBe('on')
-    expect((selects[1].element as HTMLSelectElement).value).toBe('default')
+    expect(selects[0].props('modelValue')).toBe('on')
+    expect(selects[1].props('modelValue')).toBe('default')
   })
 
   it('renders defaults when no preference is stored', async () => {
@@ -379,10 +381,27 @@ describe('MyProfileView HITL email alerts', () => {
     expect(
       (wrapper.find('[data-testid="my-profile-hitl-email-default"]').element as HTMLInputElement).checked
     ).toBe(false)
-    const selects = wrapper.findAll('[data-testid="my-profile-hitl-email-pipeline-select"]')
+    const selects = wrapper.findAllComponents(AppSelect)
     expect(selects.length).toBe(2)
-    expect((selects[0].element as HTMLSelectElement).value).toBe('default')
-    expect((selects[1].element as HTMLSelectElement).value).toBe('default')
+    expect(selects[0].props('modelValue')).toBe('default')
+    expect(selects[1].props('modelValue')).toBe('default')
+  })
+
+  it('ignores a non-string override value', async () => {
+    mockPrefsGet({ default: false, pipeline_overrides: {} })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="my-profile-hitl-email-default"]').exists()).toBe(true)
+    })
+    await nextTick()
+
+    const selects = wrapper.findAllComponents(AppSelect)
+    await selects[0].vm.$emit('update:modelValue', undefined)
+    await nextTick()
+
+    // A non-string event value is ignored; the stored choice is unchanged.
+    expect(selects[0].props('modelValue')).toBe('default')
   })
 
   it('round-trips the saved preferences, sending only explicit overrides', async () => {
@@ -407,8 +426,8 @@ describe('MyProfileView HITL email alerts', () => {
     })
     expect(wrapper.text()).toContain('HITL email preferences saved.')
 
-    const selects = wrapper.findAll('[data-testid="my-profile-hitl-email-pipeline-select"]')
-    await selects[1].setValue('off')
+    const selects = wrapper.findAllComponents(AppSelect)
+    await selects[1].vm.$emit('update:modelValue', 'off')
     await wrapper.find('[data-testid="my-profile-hitl-email-save"]').trigger('click')
     await nextTick()
 
@@ -430,8 +449,8 @@ describe('MyProfileView HITL email alerts', () => {
     })
     await nextTick()
 
-    const selects = wrapper.findAll('[data-testid="my-profile-hitl-email-pipeline-select"]')
-    await selects[0].setValue('default')
+    const selects = wrapper.findAllComponents(AppSelect)
+    await selects[0].vm.$emit('update:modelValue', 'default')
     await wrapper.find('[data-testid="my-profile-hitl-email-save"]').trigger('click')
     await nextTick()
 

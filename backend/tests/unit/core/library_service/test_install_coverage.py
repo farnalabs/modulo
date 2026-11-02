@@ -32,7 +32,6 @@ from modulo.core.library_service.install import (
     _build_bundle_from_pins,
     _build_connector_checklist,
     _clone_builtin,
-    _connector_ref_type_id,
     _definition_from_field_spec,
     _definition_from_fields,
     _persist_collection_row,
@@ -151,25 +150,6 @@ class TestSchemaDefinitionFromContent:
 # ---------------------------------------------------------------------------
 # Connector checklist helpers
 # ---------------------------------------------------------------------------
-
-
-class TestConnectorRefType:
-    def test_plain_string(self) -> None:
-        assert _connector_ref_type_id("github") == "github"
-
-    def test_dict_connector_type_id(self) -> None:
-        assert _connector_ref_type_id({"connector_type_id": "slack"}) == "slack"
-
-    def test_dict_connector_type(self) -> None:
-        assert _connector_ref_type_id({"connector_type": "email"}) == "email"
-
-    def test_dict_type_fallback(self) -> None:
-        assert _connector_ref_type_id({"type": "fs"}) == "fs"
-
-    def test_empty_or_missing(self) -> None:
-        assert not _connector_ref_type_id({})
-        assert not _connector_ref_type_id(None)
-        assert not _connector_ref_type_id(5)
 
 
 class TestConnectorChecklist:

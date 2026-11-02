@@ -74,6 +74,7 @@ vi.mock('../lib/api/client', () => ({
 
 vi.mock('../lib/jwt', () => ({
   decodeJwtPayload: () => ({ org_role: 'operator' }),
+  principalSubject: () => null,
 }))
 
 import RunDetailView from '../views/RunDetailView.vue'

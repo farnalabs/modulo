@@ -104,7 +104,7 @@ async def _read_sse(response: object) -> list[tuple[str, dict[str, Any]]]:
                 _tool_call("get_manifest", "ui-1", 0),
                 _tool_call("list_pipelines", "mcp-1", 1),
             ],
-            [("list_pipelines", False), ("get_manifest", True)],
+            [("get_manifest", True), ("list_pipelines", False)],
             2,
         ),
         ([], [], 1),
@@ -155,7 +155,6 @@ async def test_stream_without_api_keys_preserves_tool_control_flow(
         patch("modulo.api.routes.assistant.SkillLoader", return_value=loader),
         patch("modulo.api.routes.assistant._reconstruct_messages", new_callable=AsyncMock, return_value=[]),
         patch("modulo.api.routes.assistant.build_tool_registry", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant._is_ui_driving_enabled", new_callable=AsyncMock, return_value=True),
         patch("modulo.api.routes.assistant._get_all_tool_definitions", return_value=[]),
         patch("modulo.api.routes.assistant._call_mcp_tool", call_mcp_tool),
         patch(

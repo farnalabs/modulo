@@ -23,7 +23,7 @@ The application refuses to start if any required variable is absent or invalid.
 | `DATABASE_URL` | **Yes** | – | `postgresql+asyncpg://user:pass@host:port/db` |
 | `DATABASE_ADMIN_URL` | No | – | Privileged owner-role connection string read directly by Alembic from the process environment, the launcher-pinned config, or the `.env` file in `backend/` (not a `Settings` field). When set it wins over `DATABASE_URL` for migrations, so `uv run alembic upgrade heads` runs as the table owner rather than the RLS-bound app role. It is also the privileged connection for the role bootstrap (`python -m modulo.db.bootstrap_role` requires it) and the URL `modulo restore --db-url` points at. If neither it nor `DATABASE_URL` is set, migrations refuse to run instead of defaulting to a local database (FAR-2183). |
 | `MODULO_DB` | No | `postgres` | Database backend: `postgres`, `sqlite`, `mariadb`, or `mysql` |
-| `MODULO_SYSTEM_DATABASE_URL` | No | `""` | Dedicated connection string for cross-org system cron jobs (`modulo_system` role). When set, system crons use this instead of `DATABASE_URL`. |
+| `MODULO_SYSTEM_DATABASE_URL` | No | `""` | Dedicated connection string for cross-org system cron jobs (`modulo_system` role). The system worker's cross-org crons (including `dispatcher_reconcile`, which gates `/healthz/ready`) **require** a value and fail closed without one: there is no silent fallback to the RLS-bound `DATABASE_URL`, which would read zero rows. The shipped compose files and the native launcher supply it; a plain-process deployment must set it explicitly (in SQLite dev mode, point it at the same SQLite file). |
 
 `MODULO_DB=sqlite` switches to SQLite for local development (no RLS, no advisory locks, no flood protection).
 `MODULO_DB=mariadb` or `mysql` uses the aiomysql driver. Both values are accepted by
@@ -267,6 +267,7 @@ Team-tier feature (requires valid `MODULO_LICENSE_KEY`). Configurable via env va
 |----------|----------|---------|-------------|
 | `MODULO_PUBLIC_URL` | For SSO | `http://localhost:8000` | Public-facing URL for OAuth redirects, webhook callbacks, email links |
 | `MODULO_FRONTEND_URL` | No | `""` | Browser-facing SPA base URL for SSO post-login redirects and MCP OAuth authorize links. Set only for a split-origin deployment (SPA and API on different origins); empty falls back to `MODULO_PUBLIC_URL`, then `http://localhost:5173`. CORS origins are not used for post-login routing. |
+| `MODULO_LAN_ORIGINS` | No | `""` | Comma-separated LAN hostnames added to the loopback Host/Origin allowlist. Only consulted when the API serves the SPA itself (`MODULO_SERVE_SPA=1`, the native single-port path): a Host or Origin outside loopback plus this list is rejected with 403. An empty value keeps the allowlist loopback-only. Docker and Fly deployments are unaffected because nginx terminates the public Host there. |
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed CORS origins |
 | `CORS_MAX_AGE` | No | `600` | Preflight cache max-age in seconds |
 | `MODULO_LOG_LEVEL` | No | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
@@ -395,6 +396,7 @@ Client sync for the hosted community library of pipeline primitives.
 | `DISPATCHER_RECONCILE_TERMINALIZE_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile terminalizer SQL (min 1, max 1000) |
 | `DISPATCHER_RECONCILE_FACTS_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile daily-facts compensator SQL (min 1, max 1000) |
 | `DISPATCHER_RECONCILE_MAX_ROWS_PER_TICK` | No | `500` | Cross-org row budget per reconcile tick (min 50, max 10000): the TOTAL rows processed across all orgs (terminalisers + the reconcile scan) so one tick always finishes inside `DISPATCHER_RECONCILE_BUDGET_SECONDS`; overflow drains on subsequent ticks |
+| `DISPATCHER_RECONCILE_NODE_OUTPUT_PROGRESS_SECONDS` | No | `900` | Recency window (min 60, max 86400) in which a `run_node_outputs` write counts as live progress for the mid-graph age gate (FAR-2122): a node output inside this window is durable evidence the executor is still advancing, so the age gate does not stamp the run `no_progress`. Bound as a parameter into the age-gate SQL, not a literal, and threaded through the reconcile tuning |
 | `HITL_PARK_GRACE_SECONDS` | No | `86400` | Park-on-expiry grace (min 60, max 604800): seconds after the HITL review deadline before the run moves `awaiting_human` → `hitl_parked` (non-terminal, releases pipeline capacity; the gate stays open and claimable, park is not decide). Since FAR-1257 the park sweep anchors on the review deadline (`hitl_claims.terminalize_at`) plus one full park-grace window, floored at a 300s margin, so the terminalizing (cancel) sweep always acts first; legacy unstamped rows keep the `expires_at + grace` arithmetic |
 
 `SAQ_HARD_GATE` replaces the removed `SAQ_ENABLED` flag: post-cutover SAQ is the
@@ -524,6 +526,8 @@ LOAD.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_WORK_ITEM_REFS_CAP` | No | `100` | Unified cap (clamped to `[1, 100000]`) on work-item references carried through the refs pipeline: self-report normalisation, the finalise merge, and node-input injection all read this one value. When more refs are supplied, drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. A pipeline declaring `work_item_refs_required: true` in its `run_context_defaults` refuses a delivery that supplied no refs: HTTP 422 with a `work_item_refs_required` error on the MCP and webhook paths, and a 422 with a prose detail (`This pipeline requires work_item_refs but none were supplied`) on the REST path. |
+| `MODULO_AGENT_MINT_BUDGET_LIMIT` | No | `500` | Maximum agent-sourced work items that may mint journey rows per organisation in one rolling budget window. Read per call, so a change applies without a restart. Only consulted when the org setting `work_item_agent_minting_enabled` is on. Malformed or out-of-range values fall back to the default; the budget guard itself fails open (an error allows the mint and logs) so a cost cap never blocks run finalisation. |
+| `MODULO_AGENT_MINT_BUDGET_WINDOW_MINUTES` | No | `60` | Length in minutes of the rolling agent-mint budget window. Read per call alongside `MODULO_AGENT_MINT_BUDGET_LIMIT`; malformed or out-of-range values fall back to the default. |
 
 ---
 
@@ -612,6 +616,7 @@ via the admin API. Unknown/absent keys default to safe values.
 |-----|------|---------|-------------|
 | `sandbox_concurrency_limit` | `int` (0–100) or `null` | `4` when the key is absent | Max concurrently `running` sandbox-agent runs for the org across all pipelines. An absent key resolves to the Docker-tier default of `4`, not unlimited; only an explicit `null` means unlimited. `0` is meaningful (deny-all), so the clamp range is `[0, 100]`. Runs beyond the cap stay `pending` with `error_code='org_capacity_limited'` and are retried by the background accelerator. Managed via `GET`/`PUT /api/v1/admin/org/sandbox-concurrency`. |
 | `run_concurrency_limit` | `int` (1–100) or `null` | `null` (unlimited) | Max concurrently executing/claimed runs for the org across ALL pipelines (sandbox-agent and otherwise). Runs dispatched while the org is at this cap are deferred back to `pending` with `error_code='org_capacity_limited'` and retried by the background accelerator. Independent of `sandbox_concurrency_limit` – both are org-wide caps, and both produce the same `org_capacity_limited` marker on deferred runs. Managed via `GET`/`PUT /api/v1/admin/org/run-concurrency`. |
+| `work_item_agent_minting_enabled` | `bool` | `false` (fail-closed) | Allow agent-sourced work-item refs to mint journey rows at run finalise. When off, agent refs are only confirmed against existing journey rows and never mint; a missing row is counted as a suppressed mint. When on, a missing row mints with `provenance='agent'` while the per-org budget (`MODULO_AGENT_MINT_BUDGET_LIMIT` / `MODULO_AGENT_MINT_BUDGET_WINDOW_MINUTES`) allows it. Any read error resolves to off. Managed via `GET`/`PUT /api/v1/admin/org/work-item-agent-minting`. |
 | `hitl_review_window_seconds` | `int` (60–604800) or `null` | `null` (instance default) | Org default HITL review window: how long a fired review may sit unclaimed/undecided before the run is terminalised `cancelled` / `hitl_review_expired`. A pipeline-level `hitl_review_window_seconds` wins over this; `null` clears the key and inherits the instance default. The terminaliser itself has no per-org opt-out and no "0 = disabled". Managed via `GET`/`PUT /api/v1/admin/org/hitl-review-window`, where an omitted field is a 422 and only an explicit `null` clears the org default |
 
 ---
@@ -892,7 +897,7 @@ CORS_ORIGINS=https://app.modulo.example.com,https://admin.modulo.example.com
 CORS_MAX_AGE=3600
 MODULO_LOG_LEVEL=INFO
 
-# Redis (required for multi-replica)
+# Redis (required for run dispatch and cron firing)
 REDIS_URL=redis://redis:6379/0
 
 # Observability (optional)

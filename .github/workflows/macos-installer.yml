@@ -1,30 +1,67 @@
 name: "macOS: Build Installer (.dmg + notarization)"
 
-# FAR-678: native macOS packaging is deliberately fail-closed until a real
-# macOS-native runtime is available. The Linux bundle is never relabeled as
-# macOS, and dry-run only validates the workflow contract.
-
 on:
   workflow_call:
     inputs:
       version:
-        description: "Release version in X.Y.Z form"
         type: string
         required: true
       rc_tag:
-        description: "RC tag being released"
         type: string
         required: true
       ref:
-        description: "Git ref to validate"
         type: string
         required: true
       mode:
-        description: "Build mode: dry-run, cut, recut, promote"
         type: string
         default: dry-run
+    secrets:
+      MACOS_DEVELOPER_ID_CERTIFICATE_P12:
+        required: false
+      MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD:
+        required: false
+      MACOS_NOTARY_API_KEY_P8:
+        required: false
+      MACOS_NOTARY_KEY_ID:
+        required: false
+      MACOS_NOTARY_ISSUER_ID:
+        required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build in X.Y.Z form"
+        type: string
+        required: true
+      rc_tag:
+        description: "Release-candidate tag label for this validation run"
+        type: string
+        required: false
+        default: manual
+      ref:
+        description: "Git ref to build; blank uses the dispatch ref"
+        type: string
+        required: false
+        default: ""
+      mode:
+        description: "Manual dispatch mode"
+        type: choice
+        required: true
+        default: dry-run
+        options:
+          - dry-run
+      build_native:
+        description: "Run the real native build/signing/smoke rehearsal (dry-run only)"
+        type: boolean
+        required: true
+        default: false
+
+# A manual dispatch is an independent rehearsal, so it gets its own group
+# (run id). Release callers keep the per-version group so a cut/recut for the
+# same version cannot double-publish. Without this, back-to-back manual
+# dispatches collapse into one pending run and the newer one is cancelled
+# before any job executes.
 concurrency:
-  group: macos-installer-${{ github.workflow }}-${{ inputs.version }}
+  group: macos-installer-${{ github.event_name == 'workflow_dispatch' && github.run_id || inputs.version }}
   cancel-in-progress: false
 
 defaults:
@@ -35,79 +72,1277 @@ permissions:
   contents: read
 
 jobs:
-  version-parity:
-    name: Assert bundle versions match
-    runs-on: macos-latest
-    timeout-minutes: 10
+  normalize-inputs:
+    name: Normalize installer inputs
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.normalize.outputs.version }}
+      rc_tag: ${{ steps.normalize.outputs.rc_tag }}
+      ref: ${{ steps.normalize.outputs.ref }}
+      mode: ${{ steps.normalize.outputs.mode }}
+      run_native_build: ${{ steps.normalize.outputs.run_native_build }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref }}
-      - name: Validate shared bundle pins
+      - id: normalize
+        env:
+          CALL_VERSION: ${{ inputs.version }}
+          CALL_RC_TAG: ${{ inputs.rc_tag }}
+          CALL_REF: ${{ inputs.ref }}
+          CALL_MODE: ${{ inputs.mode }}
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          DISPATCH_RC_TAG: ${{ github.event.inputs.rc_tag }}
+          DISPATCH_REF: ${{ github.event.inputs.ref }}
+          DISPATCH_MODE: ${{ github.event.inputs.mode }}
+          DISPATCH_BUILD_NATIVE: ${{ github.event.inputs.build_native }}
         run: |
           set -euo pipefail
-          test -s scripts/bundle-versions.env
-          echo "bundle-versions.env loaded; no native macOS pins are currently available."
-
-  build:
-    name: Validate macOS installer prerequisite
-    needs: version-parity
-    runs-on: macos-latest
-    timeout-minutes: 15
-    env:
-      VERSION_NUM: ${{ inputs.version }}
-      MODE: ${{ inputs.mode }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref }}
-      - name: Validate native macOS runtime prerequisite
-        run: |
-          set -euo pipefail
-          echo "Native macOS runtime/binaries are not yet available."
-          echo "The current bundle artifact is Linux-only and must not be relabeled as macOS."
-          if [ "$MODE" != "dry-run" ]; then
-            echo "::error::Cannot publish macOS installer: no real macOS-native runtime/binaries exist."
+          version="$CALL_VERSION"
+          rc_tag="$CALL_RC_TAG"
+          ref="$CALL_REF"
+          mode="$CALL_MODE"
+          run_native_build=false
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$DISPATCH_VERSION"
+            rc_tag="$DISPATCH_RC_TAG"
+            ref="$DISPATCH_REF"
+            mode="$DISPATCH_MODE"
+            run_native_build="${DISPATCH_BUILD_NATIVE:-false}"
+            [[ -n "$ref" ]] || ref="$GITHUB_REF"
+          else
+            [[ "$mode" != "dry-run" ]] && run_native_build=true
+          fi
+          [[ -n "$version" ]] || { echo '::error::version input is required' >&2; exit 1; }
+          [[ -n "$rc_tag" ]] || { echo '::error::rc_tag input is required' >&2; exit 1; }
+          [[ -n "$ref" ]] || { echo '::error::ref input is required' >&2; exit 1; }
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$mode" != "dry-run" ]]; then
+            echo "::error::unsupported manual dispatch mode: $mode" >&2
             exit 1
           fi
-          scripts/create-macos-info-plist.sh "$VERSION_NUM" "INFO.plist"
-      - name: Dry-run summary
-        if: ${{ inputs.mode == 'dry-run' }}
-        run: |
+          case "$run_native_build" in
+            true|false) ;;
+            *) echo "::error::build_native must normalize to true or false, got: $run_native_build" >&2; exit 1 ;;
+          esac
+          if [[ "$mode" != "dry-run" && "$run_native_build" != true ]]; then
+            echo '::error::reusable non-dry-run calls must enable the native build' >&2
+            exit 1
+          fi
           {
-            echo "## macOS installer dry-run"
-            echo ""
-            echo "Native macOS artifacts are not yet available. No placeholder or Linux-derived installer was created or published."
+            printf 'version=%s\n' "$version"
+            printf 'rc_tag=%s\n' "$rc_tag"
+            printf 'ref=%s\n' "$ref"
+            printf 'mode=%s\n' "$mode"
+            printf 'run_native_build=%s\n' "$run_native_build"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and smoke-test macOS arm64 bundle
+    needs: normalize-inputs
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      VERSION_NUM: ${{ needs.normalize-inputs.outputs.version }}
+      MODE: ${{ needs.normalize-inputs.outputs.mode }}
+      RC_TAG: ${{ needs.normalize-inputs.outputs.rc_tag }}
+      RUN_NATIVE_BUILD: ${{ needs.normalize-inputs.outputs.run_native_build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.normalize-inputs.outputs.ref }}
+
+      - name: Install build tools
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
+        run: |
+          set -euo pipefail
+          brew update
+          brew install shellcheck
+          shellcheck --version
+          clang --version
+          sw_vers
+          uname -m
+          test "$(uname -m)" = arm64
+
+      - name: Validate workflow contract
+        if: ${{ env.RUN_NATIVE_BUILD == 'false' }}
+        run: |
+          set -euo pipefail
+          test -x scripts/macos/build-native-bundle.sh
+          test -x scripts/macos/install.sh
+          shellcheck scripts/macos/build-native-bundle.sh
+          shellcheck scripts/macos/install.sh
+          bash -n scripts/macos/build-native-bundle.sh
+          bash -n scripts/macos/install.sh
+          grep -q 'macos-15' .github/workflows/macos-installer.yml
+          {
+            echo '## macOS native installer dry-run (contract-only)'
+            echo ''
+            echo "This run is \`dry-run/build_native=false\`: contract-only validation. No native build, signing, notarization, upload or publication was attempted."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  attest:
-    name: Attest macOS installer
-    needs: build
-    if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-    steps:
-      - name: Refuse incomplete native artifact
+      - name: Summarize native artifact rehearsal
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         run: |
-          set -euo pipefail
-          echo "::error::Native macOS artifact publication is disabled until a real macOS build exists."
-          exit 1
+          {
+            echo '## macOS native installer dry-run (artifact rehearsal)'
+            echo ''
+            echo "This run is \`dry-run/build_native=true\`: the real arm64 build, signing, notarization, stapling and smoke suite will run."
+            echo 'The DMG is uploaded only as a workflow artifact. No release publication or tag creation is performed.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-  publish:
-    name: Publish macOS installer
-    needs: [build, attest]
-    if: ${{ inputs.mode == 'promote' && needs.build.result == 'success' && needs.attest.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - name: Refuse incomplete native artifact
+      - name: Set up Node + pnpm (pinned frontend toolchain)
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11.28.9
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Set up uv
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: latest
+          python-version: '3.12'
+          enable-cache: true
+
+      - name: Build genuine native bundle
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         run: |
           set -euo pipefail
-          echo "::error::Cannot publish macOS installer: native artifact is unavailable."
-          exit 1
+          rm -rf build
+          scripts/macos/build-native-bundle.sh "$VERSION_NUM" "$PWD/build"
+          APP="build/Modulo-${VERSION_NUM}.app"
+          test -x "$APP/Contents/MacOS/modulo"
+          file "$APP/Contents/MacOS/modulo" | grep -E 'Mach-O 64-bit executable arm64'
+          otool -L "$APP/Contents/MacOS/modulo"
+          RUNTIME="$APP/Contents/Resources/bundle/runtime/bin/python3"
+          echo '::group::Verify bundled Python runtime artifact contract'
+          RUNTIME_FILE_OUTPUT="$(file "$RUNTIME")"
+          printf '%s\n' "$RUNTIME_FILE_OUTPUT"
+          [[ "$RUNTIME_FILE_OUTPUT" == *'Mach-O 64-bit executable arm64'* ]] || {
+            echo '::error::bundled Python runtime is not a native arm64 Mach-O executable' >&2
+            exit 1
+          }
+          RUNTIME_LINK_OUTPUT="$(otool -L "$RUNTIME")"
+          printf '%s\n' "$RUNTIME_LINK_OUTPUT"
+          [[ "$RUNTIME_LINK_OUTPUT" == *'/usr/lib/libSystem.B.dylib'* ]] || {
+            echo '::error::bundled Python runtime does not link against libSystem.B.dylib' >&2
+            exit 1
+          }
+          echo '::endgroup::'
+          RUNTIME_VERSION_OUTPUT_RAW="$("$RUNTIME" --version 2>&1)"
+          RUNTIME_VERSION_OUTPUT="$(RUNTIME_VERSION_OUTPUT_RAW="$RUNTIME_VERSION_OUTPUT_RAW" python3 -c 'import os; text = os.environ["RUNTIME_VERSION_OUTPUT_RAW"].rstrip(" \\t\\r\\n"); print(text.replace("\\\\ ", " "), end="")')"
+          RUNTIME_VERSION_CASE='Python\ 3.12.14'
+          RUNTIME_CASE_SEMVER="$(RUNTIME_VERSION_CASE="$RUNTIME_VERSION_CASE" python3 -c 'import os, re; text = os.environ["RUNTIME_VERSION_CASE"].rstrip(" \\t\\r\\n"); text = text.replace("\\ ", " "); match = re.fullmatch(r"Python[ \t]+([0-9]+\.[0-9]+\.[0-9]+)(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", text); print(match.group(1) if match else "")')"
+          [[ "$RUNTIME_CASE_SEMVER" == '3.12.14' ]] || { printf '::error::Python version parser case test failed: raw=%q extracted=%q\n' "$RUNTIME_VERSION_CASE" "$RUNTIME_CASE_SEMVER" >&2; exit 1; }
+          RUNTIME_SEMVER="$(RUNTIME_VERSION_OUTPUT="$RUNTIME_VERSION_OUTPUT" python3 -c 'import os, re; text = os.environ["RUNTIME_VERSION_OUTPUT"].rstrip(" \\t\\r\\n"); text = text.replace("\\ ", " "); match = re.fullmatch(r"Python[ \t]+([0-9]+\.[0-9]+\.[0-9]+)(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", text); print(match.group(1) if match else "")')"
+          printf 'Bundled Python runtime version raw=%q normalized=%q extracted=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" "$RUNTIME_SEMVER"
+          if [[ -z "$RUNTIME_SEMVER" ]]; then
+            printf '::error::bundled Python runtime did not report a recognizable semantic version; raw=%q normalized=%q extracted=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" "$RUNTIME_SEMVER" >&2
+            exit 1
+          fi
+          if [[ "$RUNTIME_SEMVER" != '3.12.14' ]]; then
+            printf '::error::bundled Python runtime must report exactly Python 3.12.14; raw=%q normalized=%q extracted=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" "$RUNTIME_SEMVER" >&2
+            exit 1
+          fi
+
+           "$APP/Contents/Resources/bundle/pg/bin/postgres" --version | grep -Eq 'PostgreSQL[)]?[[:space:]]+16[.]'
+           "$APP/Contents/Resources/bundle/redis/redis-server" --version | grep -Eq 'v=8[.]'
+           "$APP/Contents/MacOS/modulo" --help >/dev/null
+           echo '::group::Verify bundle symlinks stay inside the app'
+           APP_REALPATH="$(cd "$APP" && pwd -P)"
+           while IFS= read -r -d '' link; do
+             target="$(readlink "$link")"
+             if [[ "$target" = /* ]]; then
+               resolved="$target"
+             else
+               resolved="$(dirname "$link")/$target"
+             fi
+             resolved="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$resolved")"
+             case "$resolved/" in
+               "$APP_REALPATH/"*) printf 'bundle symlink: link=%s target=%s resolved=%s\n' "$link" "$target" "$resolved" ;;
+               *)
+                 printf '::error::symlink escapes app bundle: link=%s target=%s resolved=%s\n' "$link" "$target" "$resolved" >&2
+                 exit 1
+                 ;;
+             esac
+           done < <(find "$APP/Contents" -type l -print0)
+           echo '::endgroup::'
+
+
+      - name: Sign, notarize and smoke-test native installer
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
+        env:
+          CERTIFICATE_B64: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          NOTARY_KEY_B64: ${{ secrets.MACOS_NOTARY_API_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          SIGNING_IDENTITY: ${{ vars.MACOS_DEVELOPER_IDENTITY }}
+        run: |
+          # shellcheck disable=SC2016
+          set -euo pipefail
+          # Nested bash -c scripts intentionally defer expansion to their child shell.
+          [[ -n "$CERTIFICATE_B64" && -n "$CERTIFICATE_PASSWORD" ]] || { echo '::error::Developer ID certificate secrets are required for a real macOS release.'; exit 1; }
+          [[ -n "$NOTARY_KEY_B64" && -n "$NOTARY_KEY_ID" && -n "$NOTARY_ISSUER" ]] || { echo '::error::Apple notarytool API-key secrets are required for a real macOS release.'; exit 1; }
+          [[ -n "$SIGNING_IDENTITY" ]] || { echo '::error::MACOS_DEVELOPER_IDENTITY repository variable is required.'; exit 1; }
+
+          KEYCHAIN="$RUNNER_TEMP/modulo-signing.keychain-db"
+          CERT="$RUNNER_TEMP/modulo-developer-id.p12"
+          IDENTITY_PEM_PATH="$RUNNER_TEMP/modulo-signing-identity.pem"
+          NOTARY_KEY="$RUNNER_TEMP/modulo-notary.p8"
+          MOUNT="$RUNNER_TEMP/modulo-mount"
+          MOUNT_ATTACHED=0
+          DATA="$RUNNER_TEMP/modulo-native-smoke-data"
+          DMG_TEMP=''
+
+          # The macOS runner volume is small (single-digit GB free after a
+          # Postgres + Redis + venv build) and the launcher's first boot writes
+          # initdb, WAL, migrations and __pycache__ into the data dir. Keep the
+          # headroom visible at each phase boundary so a full volume is a
+          # readable fact instead of an inferred one.
+          report_disk_usage() {
+            local label="$1" path
+            printf 'disk usage: %s\n' "$label"
+            df -h / "$GITHUB_WORKSPACE" "$RUNNER_TEMP" 2>&1 | sed -E 's/[[:space:]]+/ /g' || true
+            for path in "$GITHUB_WORKSPACE/build" "$RUNNER_TEMP/modulo install" "$DATA"; do
+              [[ -e "$path" ]] || continue
+              printf 'du: %s=%s\n' "$path" "$(du -sh "$path" 2>/dev/null | cut -f1)"
+            done
+          }
+
+          # Bounded, non-destructive reclaim. The build source trees, object
+          # files and downloaded tarballs are not needed once the .app exists:
+          # signing, DMG creation and the smoke suite all read the bundle only.
+          # Removing them here is worth roughly a gigabyte before the largest
+          # copies in the job (DMG, DMG-with-spaces duplicate, installed app).
+          reclaim_build_sources() {
+            local path free_before free_after
+            free_before="$(df -k "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}' || true)"
+            for path in \
+              "$GITHUB_WORKSPACE/build/src" \
+              "$GITHUB_WORKSPACE/build/pg-build" \
+              "$GITHUB_WORKSPACE/build/downloads"; do
+              [[ -e "$path" ]] || continue
+              rm -rf "$path"
+              printf 'reclaim: removed %s\n' "$path"
+            done
+            free_after="$(df -k "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}' || true)"
+            printf 'reclaim: free_kb_before=%s free_kb_after=%s\n' "$free_before" "$free_after"
+          }
+
+          report_disk_usage "before reclaim"
+          reclaim_build_sources
+          report_disk_usage "before signing"
+
+            prepare_data_directory() {
+              local data_uid data_mode mkdir_error current_uid
+              current_uid="$(id -u)"
+              # Early return for symlink
+              if [[ -L "$DATA" ]]; then
+                printf '::error::smoke data path is an unexpected symlink: path=%q\n' "$DATA" >&2
+                return 1
+              fi
+
+              # Check if exists and validate it's a directory
+              if [[ -e "$DATA" ]]; then
+                if [[ ! -d "$DATA" ]]; then
+                  printf '::error::smoke data path is not a directory: path=%q\n' "$DATA" >&2
+                  stat -f '%Sp %Su:%Sg' "$DATA" >&2
+                  return 1
+                fi
+              else
+                # Create directory if it doesn't exist
+                if ! mkdir_error="$(mkdir -p "$DATA" 2>&1)"; then
+                  printf '::error::could not create smoke data directory: path=%q error=%s\n' "$DATA" "$mkdir_error" >&2
+                  return 1
+                fi
+              fi
+
+              # Verify it didn't become a symlink
+              if [[ -L "$DATA" ]]; then
+                printf '::error::smoke data path became a symlink during setup: path=%q\n' "$DATA" >&2
+                return 1
+              fi
+
+              # Check ownership and permissions
+              data_uid="$(stat -f '%u' "$DATA" 2>&1)" || {
+                printf '::error::could not inspect smoke data directory ownership: path=%q error=%s\n' "$DATA" "$data_uid" >&2
+                return 1
+              }
+              data_mode="$(stat -f '%Sp' "$DATA" 2>&1)" || {
+                printf '::error::could not inspect smoke data directory permissions: path=%q error=%s\n' "$DATA" "$data_mode" >&2
+                return 1
+              }
+              if [[ "$data_uid" != "$current_uid" ]]; then
+                printf '::error::smoke data directory has foreign ownership: path=%q owner_uid=%s expected_uid=%s mode=%s\n' "$DATA" "$data_uid" "$current_uid" "$data_mode" >&2
+                stat -f '%Sp %Su:%Sg' "$DATA" >&2
+                return 1
+              fi
+              if [[ ! -w "$DATA" ]]; then
+                printf '::error::smoke data directory is not writable: path=%q owner_uid=%s expected_uid=%s mode=%s\n' "$DATA" "$data_uid" "$current_uid" "$data_mode" >&2
+                stat -f '%Sp %Su:%Sg' "$DATA" >&2
+                return 1
+              fi
+          }
+
+          prepare_data_directory
+
+          prepare_owned_pid_file() {
+            local owned_pids="$DATA/owned-pids"
+            if [[ -L "$owned_pids" ]]; then
+              printf '::error::owned PID path is an unexpected symlink: path=%q\n' "$owned_pids" >&2
+              return 1
+            fi
+            if [[ -e "$owned_pids" && ! -f "$owned_pids" ]]; then
+              printf '::error::owned PID path is not a regular file: path=%q\n' "$owned_pids" >&2
+              stat -f '%Sp %Su:%Sg' "$owned_pids" >&2
+              return 1
+            fi
+            if ! : > "$owned_pids"; then
+              printf '::error::could not initialize owned PID file: path=%q\n' "$owned_pids" >&2
+              return 1
+            fi
+          }
+
+          OWNED_PIDS="$DATA/owned-pids"
+
+          cleanup() {
+
+            local original_status="${1:-0}"
+            local final_status="$original_status"
+            set +e
+            cleanup_result() {
+              local name="$1" result="$2" detail="${3:-}"
+              if [[ "$result" == ok ]]; then
+                printf 'cleanup result: %s=ok' "$name"
+              else
+                printf 'cleanup result: %s=failed' "$name" >&2
+                [[ "$final_status" -eq 0 ]] && final_status=1
+              fi
+              [[ -n "$detail" ]] && printf ' (%s)' "$detail"
+              printf '\n'
+            }
+
+            # Disable the LaunchAgent job first (prevents KeepAlive from restarting)
+            launchctl disable "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
+
+            # Stop the LaunchAgent service (ignore failure if not running)
+            launchctl stop "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
+
+            # Unload the LaunchAgent with retry loop (up to 3 attempts, 1s delay)
+            PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
+            unload_ok=0
+            for _attempt in 1 2 3; do
+                if launchctl unload -w "$PLIST" 2>/dev/null; then
+                  unload_ok=1
+                  break
+                fi
+                sleep 1
+              done
+              if [[ "$unload_ok" -eq 0 ]]; then
+                cleanup_result launchagent_unload failed "unload retries exhausted"
+              else
+                # Verify it's gone (should fail if successfully removed)
+                if ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1; then
+                  cleanup_result launchagent_unload ok
+                else
+                  cleanup_result launchagent_unload failed "service still loaded after unload"
+                fi
+              fi
+
+              # Remove the plist file to prevent future loads
+              rm -f "$PLIST" 2>/dev/null || true
+
+              owned_processes_ok=1
+              if [[ -s "$OWNED_PIDS" ]]; then
+                while IFS= read -r owned_pid; do
+                  if [[ ! "$owned_pid" =~ ^[0-9]+$ ]]; then
+                    echo "::error::cleanup found invalid owned process PID: $owned_pid" >&2
+                    owned_processes_ok=0
+                    continue
+                  fi
+                  kill -TERM "$owned_pid" >/dev/null 2>&1 || true
+                done < "$OWNED_PIDS"
+                for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+                  still_running=0
+                  while IFS= read -r owned_pid; do
+                    [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
+                    if kill -0 "$owned_pid" >/dev/null 2>&1; then still_running=1; fi
+                  done < "$OWNED_PIDS"
+                  [[ "$still_running" -eq 0 ]] && break
+                  sleep 1
+                done
+                while IFS= read -r owned_pid; do
+                  [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
+                  if kill -0 "$owned_pid" >/dev/null 2>&1; then
+                    echo "::error::cleanup could not stop owned Modulo child PID $owned_pid" >&2
+                    owned_processes_ok=0
+                  fi
+                done < "$OWNED_PIDS"
+              fi
+              if [[ "$owned_processes_ok" -eq 1 ]]; then
+                cleanup_result owned_processes ok
+              else
+                cleanup_result owned_processes failed
+              fi
+
+              mount_info=''
+              mount_info_ok=1
+              if ! mount_info="$(hdiutil info 2>&1)"; then
+                mount_info_ok=0
+                echo "::error::cleanup could not inspect mounted volumes for $MOUNT: $mount_info" >&2
+              fi
+              mount_present=0
+              if [[ "$mount_info_ok" -eq 1 ]] && grep -Fq "$MOUNT" <<< "$mount_info"; then
+                mount_present=1
+              fi
+
+              # Early exit if inspection failed
+              if [[ "$mount_info_ok" -eq 0 ]]; then
+                cleanup_result mount_inspection failed
+                cleanup_result mount_detached failed "inspection unavailable"
+              else
+                # Inspection succeeded - check mount state
+                if [[ "$MOUNT_ATTACHED" -eq 0 && "$mount_present" -eq 0 ]]; then
+                  echo "cleanup: mount already detached: $MOUNT"
+                  cleanup_result mount_inspection ok
+                  cleanup_result mount_detached ok "already detached"
+                else
+                  # Mount needs detaching - attempt up to 3 times
+                  if [[ "$MOUNT_ATTACHED" -eq 0 ]]; then
+                    echo "cleanup: mount state was detached, but an owned mount remains; retrying detach: $MOUNT" >&2
+                  else
+                    echo "cleanup: mount state is attached; retrying detach: $MOUNT" >&2
+                  fi
+                  detach_succeeded=0
+                  for _attempt in 1 2 3; do
+                    if hdiutil detach "$MOUNT" >/dev/null 2>&1; then
+                      detach_succeeded=1
+                    fi
+                    mount_info_ok=1
+                    if ! mount_info="$(hdiutil info 2>&1)"; then
+                      mount_info_ok=0
+                      echo "::error::cleanup could not inspect mounted volumes after detach attempt $_attempt for $MOUNT: $mount_info" >&2
+                    fi
+                    mount_present=0
+                    if [[ "$mount_info_ok" -eq 1 ]] && grep -Fq "$MOUNT" <<< "$mount_info"; then
+                      mount_present=1
+                    fi
+                    # Check if detach succeeded (mount no longer present)
+                    if [[ "$mount_info_ok" -eq 1 && "$mount_present" -eq 0 ]]; then
+                      if [[ "$detach_succeeded" -eq 1 ]]; then
+                        echo "cleanup: detached mount: $MOUNT"
+                      else
+                        echo "cleanup: mount already detached: $MOUNT"
+                      fi
+                      break
+                    fi
+                    sleep 1
+                  done
+                  # Final result after retry loop
+                  if [[ "$mount_info_ok" -eq 1 && "$mount_present" -eq 0 ]]; then
+                    cleanup_result mount_inspection ok
+                    cleanup_result mount_detached ok
+                  else
+                    cleanup_result mount_inspection failed
+                    cleanup_result mount_detached failed
+                  fi
+                fi
+              fi
+
+              if [[ -n "$DMG_TEMP" ]]; then
+                rm -f "$DMG_TEMP"
+              fi
+              rm -rf "$MOUNT" "$CERT" "$NOTARY_KEY" "$IDENTITY_PEM_PATH" "$RUNNER_TEMP/modulo-install"
+              rm_status=$?
+
+              if [[ -L "$DATA" || -L "$OWNED_PIDS" ]]; then
+                echo "::error::cleanup refused to remove unexpected symlink under smoke data path: data=$DATA owned_pids=$OWNED_PIDS" >&2
+                cleanup_result temporary_paths failed "unexpected symlink; data directory preserved"
+              elif ! rm -rf "$DATA"; then
+                cleanup_result temporary_paths failed "data directory removal failed"
+              elif [[ "$rm_status" -ne 0 ]]; then
+                cleanup_result temporary_paths failed "rm exit=$rm_status"
+              elif [[ -e "$MOUNT" || -e "$CERT" || -e "$NOTARY_KEY" || -e "$IDENTITY_PEM_PATH" || -e "$DATA" || -e "$RUNNER_TEMP/modulo-install" ]]; then
+                cleanup_result temporary_paths failed "path remains on disk"
+              else
+                cleanup_result temporary_paths ok
+              fi
+
+              security delete-keychain "$KEYCHAIN" >/dev/null 2>&1
+              delete_keychain_status=$?
+              keychain_list=''
+              if keychain_list="$(security list-keychains -d user 2>&1)"; then
+                keychain_list_status=0
+              else
+                keychain_list_status=$?
+                echo "::error::cleanup could not inspect registered keychains: $keychain_list" >&2
+              fi
+
+              # Handle keychain inspection failure first
+              if [[ "$keychain_list_status" -ne 0 ]]; then
+                cleanup_result keychain_registration failed "inspection exit=$keychain_list_status"
+              else
+                # Inspection succeeded - check if keychain still registered
+                if grep -Fq "$KEYCHAIN" <<< "$keychain_list"; then
+                  echo "::error::cleanup left temporary keychain registered: $KEYCHAIN" >&2
+                  cleanup_result keychain_registration failed
+                else
+                  # Keychain not registered - check delete status
+                  if [[ "$delete_keychain_status" -eq 0 ]]; then
+                    cleanup_result keychain_delete ok
+                  else
+                    cleanup_result keychain_delete ok "already absent or already deleted (exit=$delete_keychain_status)"
+                  fi
+                  cleanup_result keychain_registration ok
+                fi
+              fi
+
+              # Check if keychain file remains on disk
+              if [[ -e "$KEYCHAIN" ]]; then
+                echo "::error::cleanup left temporary keychain on disk: $KEYCHAIN" >&2
+                cleanup_result keychain_disk failed
+              else
+                cleanup_result keychain_disk ok
+              fi
+               if [[ "$final_status" -eq 0 ]]; then
+                 cleanup_overall=ok
+               else
+                 cleanup_overall=failed
+               fi
+               printf 'cleanup result: overall=%s original_status=%s final_status=%s\n' "$cleanup_overall" "$original_status" "$final_status"
+               exit "$final_status"
+             }
+
+            trap 'cleanup "$?"' EXIT
+
+            # Diagnostic capture helpers for every command before post-install smoke assertions.
+            redact_pre_smoke_output() {
+              sed -E 's/(password|token|secret|api[_-]?key|certificate|issuer|key-id)[^[:space:]]*/\1=[REDACTED]/Ig; s#-----BEGIN [^-]+-----#-----BEGIN REDACTED-----#g; s#-----END [^-]+-----#-----END REDACTED-----#g'
+            }
+
+            # Keep OpenSSL's ordinary error words visible. The generic smoke
+            # redactor is intentionally broader and can consume useful text
+            # such as "certificate" from an OpenSSL diagnostic.
+            redact_pkcs12_stderr() {
+              awk '
+                /-----BEGIN [^-]+-----/ {
+                  if (!in_pem) print "-----BEGIN REDACTED-----"
+                  in_pem = 1
+                  next
+                }
+                in_pem && /-----END [^-]+-----/ {
+                  print "-----END REDACTED-----"
+                  in_pem = 0
+                  next
+                }
+                in_pem { next }
+                { print }
+                END {
+                  if (in_pem) print "-----END REDACTED-----"
+                }
+              ' \
+                | sed -E \
+                  -e 's#/(private/)?tmp/[^[:space:]]*#[TEMP_PATH]#g' \
+                  -e 's#/var/folders/[^[:space:]]*#[TEMP_PATH]#g' \
+                  -e 's#/(Users|private/var)/[^[:space:]]*(tmp|_temp|TemporaryItems)[^[:space:]]*#[TEMP_PATH]#Ig' \
+                  -e 's#([[:alnum:]_.-]*(password|token|secret|api[_-]?key|passphrase|credential)[[:space:]]*=[[:space:]]*)[^[:space:]]+#\1[REDACTED]#Ig' \
+                | awk 'NR <= 10 { remaining = 500 - used; if (remaining <= 0) exit; line = substr($0, 1, remaining); print line; used += length(line) + 1 }'
+            }
+
+            run_pre_smoke() {
+              local name="$1"; shift
+              local output_file="$DATA/pre-smoke-${name}.log"
+              local exit_code
+              rm -f "$output_file"
+              set +e
+              "$@" >"$output_file" 2>&1
+              exit_code=$?
+              set -e
+              printf 'run_pre_smoke: %s command_exit=%d\n' "$name" "$exit_code"
+              if [[ "$exit_code" -eq 0 ]]; then
+                printf 'pre_smoke: %s=ok (exit=%d)\n' "$name" "$exit_code"
+                return 0
+              fi
+              printf 'pre_smoke: %s=FAILED (exit=%d)\n' "$name" "$exit_code" >&2
+              if [[ -s "$output_file" ]]; then
+                printf 'pre_smoke output: %s\n' "$name" >&2
+                redact_pre_smoke_output < "$output_file" >&2
+              fi
+              return "$exit_code"
+            }
+
+            # Diagnostic capture helper for post-install smoke assertions
+            run_assertion() {
+              local name="$1"; shift
+              local output_file="$DATA/assertion-${name}.log"
+              local exit_code
+              rm -f "$output_file"
+              set +e
+              "$@" >"$output_file" 2>&1
+              exit_code=$?
+              set -e
+              printf 'assertion: %s=%s (exit=%d)\n' "$name" "$([[ $exit_code -eq 0 ]] && printf ok || printf FAILED)" "$exit_code"
+              if [[ -s "$output_file" ]]; then
+                printf 'assertion output: %s\n' "$name"
+                redact_pre_smoke_output < "$output_file"
+              fi
+              if [[ $exit_code -ne 0 ]]; then
+                return "$exit_code"
+              fi
+            }
+
+          # shellcheck disable=SC2016
+          run_pre_smoke data_directory_create prepare_data_directory
+          run_pre_smoke owned_pid_file_prepare prepare_owned_pid_file
+          # The vault normally stores the PKCS#12 as base64 text, but accept a
+          # PEM value too. Keep the secret in files/stdin rather than passing it
+          # as an argument, and avoid a pipeline so macOS base64 failures cannot
+          # be hidden by a later command's exit status.
+          # shellcheck disable=SC2016
+          run_pre_smoke certificate_decode bash -c '
+            set -euo pipefail
+            certificate_path="$1"
+            raw_path="${certificate_path}.raw"
+            normalized_path="${certificate_path}.normalized"
+            temporary_path="${certificate_path}.decode"
+            rm -f "$raw_path" "$normalized_path" "$temporary_path" "$certificate_path"
+            printf "%s" "${CERTIFICATE_B64:-}" > "$raw_path"
+            raw_byte_count="$(LC_ALL=C wc -c < "$raw_path" | tr -d "[:space:]")"
+            printf "certificate decode: raw_bytes=%s\\n" "$raw_byte_count"
+            if [[ "$raw_byte_count" -eq 0 ]]; then
+              printf "certificate decode: input_class=empty exit=1 class=empty-input\\n" >&2
+              rm -f "$raw_path"
+              exit 1
+            fi
+            if LC_ALL=C head -c 11 "$raw_path" | LC_ALL=C grep -Fqx -- "-----BEGIN "; then
+              cp "$raw_path" "$temporary_path"
+              input_class=pem
+            else
+              LC_ALL=C tr -d "\\r\\n \\t" < "$raw_path" > "$normalized_path"
+              if ! base64 -D < "$normalized_path" > "$temporary_path"; then
+                printf "certificate decode: input_class=base64 exit=1 class=invalid-base64\\n" >&2
+                rm -f "$raw_path" "$normalized_path" "$temporary_path"
+                exit 1
+              fi
+              input_class=base64
+            fi
+            rm -f "$raw_path" "$normalized_path"
+            if [[ ! -s "$temporary_path" ]]; then
+              printf "certificate decode: input_class=%s exit=1 class=empty-output\\n" "$input_class" >&2
+              rm -f "$temporary_path"
+              exit 1
+            fi
+            byte_length="$(LC_ALL=C wc -c < "$temporary_path" | tr -d "[:space:]")"
+            header_bytes="$(od -An -tx1 -N8 "$temporary_path" | tr -d "[:space:]")"
+            if [[ "$input_class" == pem ]]; then
+              header_class=pem
+            elif [[ "$header_bytes" == 30* ]]; then
+              header_class=asn1-der
+            else
+              header_class=unknown
+            fi
+            printf "certificate decode: input_class=%s bytes=%s header=%s\\n" "$input_class" "$byte_length" "$header_class"
+            if [[ "$header_class" == unknown ]]; then
+              printf "certificate decode: exit=1 class=unknown-header\\n" >&2
+              rm -f "$temporary_path"
+              exit 1
+            fi
+            mv "$temporary_path" "$certificate_path"
+          ' bash "$CERT"
+          # Set up an empty keychain password so no generated password is leaked in argv.
+          # OpenSSL consumes the PKCS#12 password from the child environment;
+          # this keeps the real vault-backed password out of argv and logs.
+          # The extracted PEM is then imported without any certificate password
+          # argument. OpenSSL 3 may need its legacy provider for older PKCS#12
+          # encryption, but retry only when its diagnostic identifies that case.
+          # The password is deliberately preserved byte-for-byte: vault values may
+          # contain meaningful whitespace, so this workflow does not trim or decode it.
+          [[ -n "$CERTIFICATE_PASSWORD" ]] || { echo '::error::certificate password is required for identity PEM extraction' >&2; exit 1; }
+          export CERTIFICATE_PASSWORD
+          P12_SCRIPT="$DATA/extract-p12.sh"
+          cat > "$P12_SCRIPT" <<'P12_SCRIPT'
+           #!/usr/bin/env bash
+           set -euo pipefail
+
+           CERT="$1"
+           OUTPUT="$2"
+           ERROR_FILE="${OUTPUT}.openssl.stderr"
+           VALIDATION_ERROR_FILE="${OUTPUT}.openssl-validation.stderr"
+           PASSWORD_LENGTH="$(LC_ALL=C printf '%s' "${CERTIFICATE_PASSWORD-}" | wc -c | tr -d '[:space:]')"
+
+           [[ -n "${CERTIFICATE_PASSWORD:-}" ]] || {
+             printf 'openssl pkcs12 diagnostic: attempt=validation exit=1 class=missing-password\n' >&2
+             exit 1
+           }
+           printf 'openssl pkcs12 diagnostic: password_bytes=%s\n' "$PASSWORD_LENGTH"
+           [[ -s "$CERT" ]] || {
+             printf 'openssl pkcs12 diagnostic: attempt=input-validation exit=1 class=empty-input\n' >&2
+             exit 1
+           }
+
+           validate_input() {
+             local validation_exit structure_seen
+             rm -f "$VALIDATION_ERROR_FILE"
+             set +e
+             openssl pkcs12 -info -nokeys -in "$CERT" -passin env:CERTIFICATE_PASSWORD \
+               >/dev/null 2>"$VALIDATION_ERROR_FILE"
+             validation_exit=$?
+             set -e
+             if [[ "$validation_exit" -ne 0 ]]; then
+               printf 'openssl pkcs12 diagnostic: attempt=input-validation exit=%d class=invalid-input\n' "$validation_exit" >&2
+               return "$validation_exit"
+             fi
+             structure_seen=0
+             if grep -Eiq 'certificate bag|shrouded keybag|key bag' "$VALIDATION_ERROR_FILE"; then
+               structure_seen=1
+             fi
+             if [[ "$structure_seen" -ne 1 ]]; then
+               printf 'openssl pkcs12 diagnostic: attempt=input-validation exit=1 class=missing-structure\n' >&2
+               return 1
+             fi
+             printf 'openssl pkcs12 diagnostic: attempt=input-validation exit=0 class=ok\n'
+           }
+
+           classify_error() {
+             if grep -Eiq 'legacy provider|unsupported.*(legacy|algorithm|cipher)|unknown cipher|inner_evp_generic_fetch|rc2-[0-9]+-cbc' "$ERROR_FILE"; then
+               printf 'legacy-algorithm'
+             else
+               printf 'non-legacy-failure'
+             fi
+           }
+
+           run_openssl() {
+             local attempt="$1"
+             shift
+             local exit_code error_class temporary_output
+             temporary_output="${OUTPUT}.tmp-${attempt}"
+             rm -f "$OUTPUT" "$ERROR_FILE" "$temporary_output"
+             set +e
+             openssl pkcs12 "$@" -out "$temporary_output" 2>"$ERROR_FILE"
+             exit_code=$?
+             set -e
+             if [[ "$exit_code" -ne 0 ]]; then
+               error_class="$(classify_error)"
+               printf 'openssl pkcs12 diagnostic: attempt=%s exit=%d class=%s\n' "$attempt" "$exit_code" "$error_class" >&2
+               rm -f "$temporary_output"
+               return "$exit_code"
+             fi
+             if [[ ! -s "$temporary_output" ]]; then
+               printf 'openssl pkcs12 diagnostic: attempt=%s exit=0 class=empty-output\n' "$attempt" >&2
+               rm -f "$temporary_output"
+               return 1
+             fi
+             mv "$temporary_output" "$OUTPUT"
+             printf 'openssl pkcs12 diagnostic: attempt=%s exit=0 class=ok\n' "$attempt"
+           }
+
+           validate_input
+           if run_openssl normal -in "$CERT" -passin env:CERTIFICATE_PASSWORD -nodes; then
+             mode=normal
+           else
+             if [[ "$(classify_error)" == legacy-algorithm ]]; then
+               if run_openssl legacy -legacy -in "$CERT" -passin env:CERTIFICATE_PASSWORD -nodes; then
+                 mode=legacy
+               else
+                 rm -f "$OUTPUT"
+                 exit 1
+               fi
+             else
+               rm -f "$OUTPUT"
+               exit 1
+             fi
+           fi
+
+           if [[ ! -s "$OUTPUT" ]]; then
+             printf 'openssl pkcs12 diagnostic: class=empty-output\n' >&2
+             rm -f "$OUTPUT"
+             exit 1
+           fi
+
+           rm -f "$ERROR_FILE" "$VALIDATION_ERROR_FILE"
+           printf 'openssl pkcs12 extraction: mode=%s status=ok\n' "$mode"
+          P12_SCRIPT
+          chmod 700 "$P12_SCRIPT"
+          export CERTIFICATE_PASSWORD
+          run_pre_smoke identity_pem_extract bash "$P12_SCRIPT" "$CERT" "$IDENTITY_PEM_PATH"
+
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_create security create-keychain -p "" "$KEYCHAIN"
+
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_settings security set-keychain-settings -lut 900 "$KEYCHAIN"
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_unlock security unlock-keychain -p "" "$KEYCHAIN"
+          # Validate both private-key and certificate material without printing either.
+          # Do not add a password fallback: the real PKCS#12 is password-protected.
+          # shellcheck disable=SC2016
+          run_pre_smoke identity_pem_validate bash -c 'grep -Eq "^-----BEGIN (ENCRYPTED )?PRIVATE KEY-----$" "$1" && openssl pkey -in "$1" -noout && openssl x509 -in "$1" -noout' bash "$IDENTITY_PEM_PATH"
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_import security import "$IDENTITY_PEM_PATH" -k "$KEYCHAIN" -T /usr/bin/codesign
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_partition_list security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN"
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_select security list-keychains -d user -s "$KEYCHAIN"
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_find_identity security find-identity -v -p codesigning "$KEYCHAIN"
+
+          APP="build/Modulo-${VERSION_NUM}.app"
+          # shellcheck disable=SC2016
+          # Discover only genuine Mach-O files. A bundled Python runtime ships
+          # executable-bit files that are not binaries (empty .py modules, shell
+          # script wrappers such as bin/pip3); those must not be signed or be
+          # required to be Mach-O. Any Mach-O that is not arm64 still fails in
+          # the per-binary check below, so this stays strict.
+          # shellcheck disable=SC2016
+          run_pre_smoke nested_binary_discovery bash -c '
+            set -euo pipefail
+            app="$1"
+            find "$app/Contents" -type f -perm -111 -print0 |
+              while IFS= read -r -d "" candidate; do
+                if file -b "$candidate" | grep -q "Mach-O"; then
+                  printf "%s\n" "$candidate"
+                fi
+              done
+          ' bash "$APP"
+
+          # Negative guard: a foreign binary format (ELF) must never ship inside
+          # a macOS bundle. Scanning only the executable-bit set keeps this
+          # bounded while still catching a mis-packaged Linux binary.
+          # shellcheck disable=SC2016
+          run_pre_smoke foreign_binary_scan bash -c '
+            set -euo pipefail
+            app="$1"
+            found=0
+            while IFS= read -r -d "" candidate; do
+              kind="$(file -b "$candidate")"
+              case "$kind" in
+                *ELF*)
+                  printf "foreign ELF binary inside macOS bundle: %s (%s)\n" "$candidate" "$kind" >&2
+                  found=1
+                  ;;
+              esac
+            done < <(find "$app/Contents" -type f -perm -111 -print0)
+            exit "$found"
+          ' bash "$APP"
+          # macOS ships bash 3.2, which has no `mapfile`/`readarray`.
+          NESTED_BINARIES=()
+          while IFS= read -r nested_binary_line; do
+            [[ -n "$nested_binary_line" ]] && NESTED_BINARIES+=("$nested_binary_line")
+          done < "$DATA/pre-smoke-nested_binary_discovery.log"
+          binary_index=0
+          for binary in "${NESTED_BINARIES[@]}"; do
+            [[ -n "$binary" ]] || continue
+            # Classify and sign each existing executable. A bundled runtime may
+            # legitimately ship shell-script wrappers (e.g. python-build-standalone's
+            # bin/pip3); those are not Mach-O and must not be codesigned. Any
+            # wrong-architecture Mach-O, ELF, or unknown executable still fails
+            # closed, so this stays strict without rejecting valid wrappers.
+            # shellcheck disable=SC2016
+            run_pre_smoke "nested_binary_${binary_index}" bash -c '
+              set -euo pipefail
+              binary="$1"
+              identity="$2"
+              kind="$(file -b "$binary")"
+              case "$kind" in
+                *"Mach-O 64-bit executable arm64"*|*"Mach-O 64-bit bundle arm64"*|*"Mach-O 64-bit dynamically linked shared library arm64"*)
+                  codesign --force --options runtime --timestamp --sign "$identity" "$binary" >/dev/null
+                  printf "signed Mach-O arm64: %s\n" "$binary"
+                  ;;
+                *Mach-O*)
+                  printf "unexpected Mach-O architecture: %s (%s)\n" "$binary" "$kind" >&2
+                  exit 1
+                  ;;
+                *script*|*text*)
+                  printf "skipped non-Mach-O executable: %s (%s)\n" "$binary" "$kind"
+                  ;;
+                *)
+                  printf "unexpected executable type: %s (%s)\n" "$binary" "$kind" >&2
+                  exit 1
+                  ;;
+              esac
+            ' bash "$binary" "$SIGNING_IDENTITY"
+            binary_index=$((binary_index + 1))
+          done
+          # shellcheck disable=SC2016
+          run_pre_smoke app_codesign codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP"
+          # shellcheck disable=SC2016
+          run_pre_smoke app_codesign_verify codesign --verify --deep --strict --verbose=2 "$APP"
+
+
+          DMG="build/Modulo-${VERSION_NUM}-macos-arm64.dmg"
+          DMG_TEMP="$RUNNER_TEMP/Modulo-${VERSION_NUM}-macos-arm64-$$.dmg"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_create bash -c '
+            set -euo pipefail
+            hdiutil create -volname "Modulo $1" -srcfolder "$2" -ov -format UDZO "$3"
+            mv -f "$3" "$4"
+          ' bash "$VERSION_NUM" "$APP" "$DMG_TEMP" "$DMG"
+
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_codesign codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
+          # shellcheck disable=SC2016
+          run_pre_smoke notary_key_decode bash -c 'printf "%s" "$1" | tr -d "[:space:]" | base64 -D > "$2"' bash "$NOTARY_KEY_B64" "$NOTARY_KEY"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_notary_submit xcrun notarytool submit "$DMG" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --timeout 30m
+          # Apple's notarization ticket can take time to propagate to CloudKit after
+          # notarytool accepts the submission. Run 41127149139 observed "Record not found"
+          # and "Could not find base64 encoded ticket in response" from stapler (exit 65).
+          # DMG stapling is best-effort: up to 6 retries, 20s delay. Failure is logged but
+          # does not fail the build when stapler reports only ticket propagation/network trouble.
+          staple_dmg_with_retry() {
+            local attempt
+            for attempt in 1 2 3 4 5 6; do
+              if xcrun stapler staple "$DMG"; then
+                return 0
+              fi
+              if [[ "$attempt" -lt 6 ]]; then
+                sleep 20
+              fi
+            done
+            return 1
+          }
+          dmg_staple_output_file="$DATA/pre-smoke-dmg_staple.log"
+          dmg_staple_ticket_unavailable=0
+          rm -f "$dmg_staple_output_file"
+          set +e
+          staple_dmg_with_retry >"$dmg_staple_output_file" 2>&1
+          dmg_staple_exit=$?
+          set -e
+          printf 'run_pre_smoke: dmg_staple command_exit=%d\n' "$dmg_staple_exit"
+          if [[ "$dmg_staple_exit" -eq 0 ]]; then
+            printf 'pre_smoke: dmg_staple=ok (exit=%d)\n' "$dmg_staple_exit"
+            # A stapled DMG must pass both ticket validation and the DMG-level
+            # Gatekeeper assessment. These remain hard gates in the success path.
+            run_pre_smoke dmg_staple_validate xcrun stapler validate "$DMG"
+            run_pre_smoke dmg_spctl spctl --assess --type open --context context:primary-signature "$DMG"
+          else
+            printf 'pre_smoke: dmg_staple=FAILED (exit=%d)\n' "$dmg_staple_exit" >&2
+            if [[ -s "$dmg_staple_output_file" ]]; then
+              printf 'pre_smoke output: dmg_staple\n' >&2
+              redact_pre_smoke_output < "$dmg_staple_output_file" >&2
+            fi
+            # An accepted notarization can briefly lack a CloudKit ticket, or
+            # CloudKit can lose the connection while stapler fetches it. Only
+            # those explicit propagation/network diagnostics may defer the DMG
+            # ticket gates; every other stapler failure remains fail-closed.
+            if grep -Eiq 'NSURLErrorDomain.*-1005|network connection was lost|CloudKit.*(Record not found|response is inconsistent)|Could not find base64 encoded ticket' "$dmg_staple_output_file"; then
+              dmg_staple_ticket_unavailable=1
+              echo '::warning::DMG stapling failed because the notarization ticket could not be fetched from Apple CloudKit; DMG stapler validation and DMG-specific spctl assessment are deferred. Mounted-app codesign and Gatekeeper checks remain hard gates.'
+            else
+              echo '::error::DMG stapling failed for a non-propagation/non-network reason; refusing to defer DMG ticket verification.' >&2
+              exit 1
+            fi
+          fi
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_codesign_verify codesign --verify --verbose=2 "$DMG"
+          # hdiutil verification is independent of notarization ticket stapling.
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_verify hdiutil verify "$DMG"
+
+          DMG_WITH_SPACES="$RUNNER_TEMP/Modulo ${VERSION_NUM} macos arm64.dmg"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_copy cp "$DMG" "$DMG_WITH_SPACES"
+
+          # shellcheck disable=SC2016
+          run_pre_smoke mount_directory_create mkdir -p "$MOUNT"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_attach hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -readonly
+          MOUNT_ATTACHED=1
+          MOUNTED_APP="$MOUNT/Modulo-${VERSION_NUM}.app"
+          RUNTIME="$MOUNTED_APP/Contents/Resources/bundle/runtime/bin/python3"
+          # shellcheck disable=SC2016
+          run_pre_smoke mounted_runtime_contract bash -c '[[ -x "$1" ]]' bash "$RUNTIME"
+          # shellcheck disable=SC2016
+          run_pre_smoke mounted_app_file bash -c 'file "$1" | grep -E "Mach-O 64-bit executable arm64"' bash "$MOUNTED_APP/Contents/MacOS/modulo"
+          # shellcheck disable=SC2016
+          run_pre_smoke mounted_app_codesign codesign --verify --deep --strict "$MOUNTED_APP"
+          if [[ "$dmg_staple_ticket_unavailable" -eq 1 ]]; then
+            echo '::warning::Mounted-app Gatekeeper assessment deferred because the DMG notarization ticket was unavailable from Apple CloudKit; mounted-app codesign remains a hard gate.'
+          else
+            # shellcheck disable=SC2016
+            run_pre_smoke mounted_app_spctl spctl --assess --type execute "$MOUNTED_APP"
+          fi
+          # shellcheck disable=SC2016
+          run_pre_smoke mounted_app_help "$MOUNTED_APP/Contents/MacOS/modulo" --help
+          # shellcheck disable=SC2016
+          run_pre_smoke runtime_file bash -c 'file "$1" | grep -F "Mach-O 64-bit executable arm64"' bash "$RUNTIME"
+          # shellcheck disable=SC2016
+          run_pre_smoke runtime_link bash -c 'otool -L "$1" | grep -F "/usr/lib/libSystem.B.dylib"' bash "$RUNTIME"
+          # shellcheck disable=SC2016
+          run_pre_smoke runtime_version "$RUNTIME" --version
+          # shellcheck disable=SC2016
+          run_pre_smoke runtime_version_parser bash -c '
+            runtime_version_output="$(<"$1")"
+            runtime_version="$(printf "%s" "$runtime_version_output" | python3 -c '\''import sys; print(sys.stdin.read().rstrip(" \t\r\n").replace("\\\\ ", " "), end="")'\'')"
+            runtime_semver="$(printf "%s" "$runtime_version" | python3 -c '\''import re, sys; match = re.fullmatch(r"Python[ \t]+([0-9]+\.[0-9]+\.[0-9]+)(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", sys.stdin.read().rstrip(" \t\r\n")); print(match.group(1) if match else "")'\'')"
+            printf "runtime version raw=%q normalized=%q extracted=%q\\n" "$runtime_version_output" "$runtime_version" "$runtime_semver"
+            [[ "$runtime_semver" == "3.12.14" ]]
+          ' bash "$DATA/pre-smoke-runtime_version.log"
+          PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
+          # shellcheck disable=SC2016
+          run_pre_smoke pre_install_detach hdiutil detach "$MOUNT"
+          # shellcheck disable=SC2016
+          run_pre_smoke pre_install_mount_absent bash -c '! hdiutil info | grep -Fq "$1"' bash "$MOUNT"
+          MOUNT_ATTACHED=0
+          # shellcheck disable=SC2016
+          run_pre_smoke mount_attached_transition bash -c '[[ "$1" -eq 0 ]]' bash "$MOUNT_ATTACHED"
+          echo "pre-install: detached mount: $MOUNT"
+          INSTALL_ROOT="$RUNNER_TEMP/modulo install"
+          INSTALL_ENV=()
+          if [[ "$dmg_staple_ticket_unavailable" -eq 1 ]]; then
+            INSTALL_ENV=(
+              env
+              MODULO_MACOS_REHEARSAL_ALLOW_UNSTAPLED_TICKET=1
+              MODULO_MACOS_REHEARSAL_ALLOW_UNSTAPLED_TICKET_REASON=apple_cloudkit_ticket_unavailable
+            )
+          fi
+
+
+          # Post-install smoke assertions with diagnostic capture
+          # shellcheck disable=SC2016
+          run_assertion "install_sh" \
+            "${INSTALL_ENV[@]}" \
+            bash -c 'MODULO_INSTALL_ROOT="$1" MODULO_DATA_DIR="$2" scripts/macos/install.sh "$3"' \
+            bash "$INSTALL_ROOT" "$DATA" "$DMG_WITH_SPACES" || exit 1
+
+          # The spaces-path copy exists only to prove the installer tolerates a
+          # DMG path containing spaces. Once installed it is dead weight, and the
+          # launcher's first boot is about to need the room.
+          rm -f "$DMG_WITH_SPACES"
+          report_disk_usage "after install"
+
+
+          run_assertion "launchctl_print_post_install" \
+            launchctl print "gui/$(id -u)/run.modulo.launcher" || exit 1
+
+           # state.json on disk is the HMAC envelope
+           # {"payload": {"api_port": ...}, "mac": "..."}. Reading a top-level
+           # "api_port" always raised KeyError, which silently turned this gate
+           # into a fixed sleep and failed it without ever issuing a request.
+           # shellcheck disable=SC2016
+           run_assertion "state_json_api_port_healthz" bash -c '
+             DATA_DIR="$1"
+             TEMP_DIR="${2:-${RUNNER_TEMP:-}}"
+             STATE="$DATA_DIR/state.json"
+             ATTEMPTS=150
+             API_PORT=""
+             LAST_CURL_ERROR=""
+             read_api_port() {
+               python3 -c '\''import json,sys; d=json.load(open(sys.argv[1])); p=d.get("payload") if isinstance(d,dict) else None; port=p.get("api_port") if isinstance(p,dict) else None; print(port) if isinstance(port,int) and not isinstance(port,bool) else None'\'' "$1" 2>/dev/null
+             }
+             # First boot may run initdb and migrations before the API serves.
+             # This is a wait-budget change only; /healthz remains a hard gate.
+             for _attempt in $(seq 1 "$ATTEMPTS"); do
+               if [[ -s "$STATE" ]]; then
+                 parsed_port="$(read_api_port "$STATE" || true)"
+                 if [[ -n "$parsed_port" ]]; then
+                   API_PORT="$parsed_port"
+                   if curl_err="$(curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" 2>&1 >/dev/null)"; then
+                     echo "$API_PORT"
+                     exit 0
+                   else
+                     LAST_CURL_ERROR="$curl_err"
+                   fi
+                 fi
+               fi
+               sleep 2
+             done
+
+             # Bounded failure diagnostics. Everything goes to a scratch file
+             # first and only the first 200 lines are printed, so a mid-dump
+             # failure (a full volume included) cannot flood the step log. The
+             # pre-smoke-*.log set is deliberately never dumped: it is signing
+             # chatter with no bearing on the launcher.
+             diag_tail() {
+               local lines="$1" path="$2"
+               if [[ -f "$path" ]]; then
+                 printf -- "--- %s (tail %s) ---\n" "$path" "$lines"
+                 tail -n "$lines" "$path" 2>&1 || true
+               else
+                 printf -- "--- %s (absent) ---\n" "$path"
+               fi
+             }
+             DIAG_FILE="$TEMP_DIR/modulo-healthz-diagnostics.log"
+             : > "$DIAG_FILE" 2>/dev/null || DIAG_FILE=/dev/null
+             {
+               printf "=== healthz gate failed after %s attempts ===\n" "$ATTEMPTS"
+               printf "observed api_port: %s\n" "${API_PORT:-none}"
+               printf "last curl error: %s\n" "${LAST_CURL_ERROR:-none recorded}"
+               printf "\n=== disk ===\n"
+               df -h / "${GITHUB_WORKSPACE:-/}" "$TEMP_DIR" 2>&1 | sed -E "s/[[:space:]]+/ /g" || true
+               for diag_path in "${GITHUB_WORKSPACE:-}/build" "$TEMP_DIR/modulo install" "$DATA_DIR"; do
+                 [[ -e "$diag_path" ]] || continue
+                 printf "du %s=%s\n" "$diag_path" "$(du -sh "$diag_path" 2>/dev/null | cut -f1)"
+               done
+               printf "\n=== boot artifacts ===\n"
+               if [[ -s "$STATE" ]]; then
+                 state_port="$(read_api_port "$STATE" || true)"
+                 printf "state.json: present (%s bytes) payload.api_port=%s\n" "$(wc -c < "$STATE" | tr -d " ")" "${state_port:-UNREADABLE}"
+               elif [[ -e "$STATE" ]]; then
+                 printf "state.json: present but not a regular file\n"
+               else
+                 printf "state.json: absent\n"
+               fi
+               if [[ -f "$DATA_DIR/pgdata/PG_VERSION" ]]; then
+                 printf "pgdata: initialized (PG_VERSION present)\n"
+               else
+                 printf "pgdata: not initialized (initdb did not complete)\n"
+               fi
+               diag_tail 20 "$DATA_DIR/degraded.json"
+               printf "\n=== launcher and child logs ===\n"
+               diag_tail 40 "$DATA_DIR/launcher.log"
+               diag_tail 40 "$DATA_DIR/logs/app.log"
+               diag_tail 40 "$DATA_DIR/logs/postgres.log"
+               diag_tail 40 "$DATA_DIR/logs/redis.log"
+               printf "\n=== data dir ===\n"
+               ls -la "$DATA_DIR" 2>&1 || true
+               ls -la "$DATA_DIR/logs" 2>&1 || true
+               printf "\n=== launchctl ===\n"
+               launchctl print "gui/$(id -u)/run.modulo.launcher" 2>&1 \
+                 | grep -E "state =|pid =|runs =|last exit code|program =|immediate reason" \
+                 | head -n 12 || true
+               printf "\n=== processes ===\n"
+               pgrep -fl "modulo|postgres|redis" 2>&1 | head -n 20 || true
+             } >> "$DIAG_FILE" 2>&1 || true
+
+             diag_lines="$(wc -l < "$DIAG_FILE" 2>/dev/null | tr -d " " || true)"
+             if [[ -s "$DIAG_FILE" ]]; then
+               head -n 200 "$DIAG_FILE"
+               if [[ "${diag_lines:-0}" -gt 200 ]]; then
+                 printf "diagnostics truncated: 200 of %s lines shown\n" "$diag_lines"
+               fi
+             else
+               printf "no diagnostics captured (unwritable/size-0 scratch file: %s)\n" "$DIAG_FILE"
+             fi
+             exit 1
+           ' bash "$DATA" "$RUNNER_TEMP"
+           API_PORT="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); p=d.get("payload") if isinstance(d,dict) else None; port=p.get("api_port") if isinstance(p,dict) else None; print(port) if isinstance(port,int) and not isinstance(port,bool) else None' "$DATA/state.json" 2>/dev/null || true)"
+           [[ -n "$API_PORT" ]] || { echo '::error::native launcher state.json has no usable payload.api_port' >&2; exit 1; }
+
+           run_assertion "healthz_endpoint" \
+             curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" || exit 1
+
+           run_assertion "spa_root_html" \
+             bash -c 'curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:'"$API_PORT"'/" | grep -q '\''<div id="app">'\''' || exit 1
+
+           # Service PID / binary identity
+           # shellcheck disable=SC2016
+           run_assertion "service_pid" bash -c '
+             SERVICE_PID="$(launchctl print "gui/$(id -u)/run.modulo.launcher" | awk '\''/pid =/ {print $3; exit}'\'')"
+             [[ "$SERVICE_PID" =~ ^[0-9]+$ ]] || exit 1
+             echo "$SERVICE_PID"
+           ' || exit 1
+           SERVICE_PID="$(launchctl print "gui/$(id -u)/run.modulo.launcher" | awk '/pid =/ {print $3; exit}')"
+
+           # Resolve the process text executable without shell globbing.  Bash 3.2
+           # parses an unquoted glob in [[ ]] as syntax, and command= + awk '{print
+           # $1}' also loses spaces in an executable path. Expansion is deferred to
+           # the child shell on purpose, so SC2016 does not apply here.
+           #
+           # The installed launcher (Contents/MacOS/modulo) is a Mach-O shim that
+           # execv's the bundled interpreter, so after exec the process's actual
+           # text executable is Contents/Resources/bundle/runtime/bin/python3*.
+           # Accept exactly those two, and nothing else: a host python, a temp
+           # copy or any outside-bundle binary still fails closed.
+           # shellcheck disable=SC2016
+           run_assertion "service_binary" bash -c '
+             SERVICE_PID="$1"
+             INSTALL_ROOT="$2"
+             SERVICE_BINARY=""
+             fail() {
+               printf "service_binary check failed: %s\n" "$1" >&2
+               printf "INSTALL_ROOT=%s\n" "${INSTALL_ROOT:-<unset>}" >&2
+               printf "SERVICE_BINARY=%s\n" "${SERVICE_BINARY:-<empty>}" >&2
+               exit 1
+             }
+             # sed needs the p flag: with -n a substitution prints nothing without
+             # it, which silently yielded an empty value and made this check fail
+             # before the path was ever inspected.
+             SERVICE_BINARY="$(lsof -p "$SERVICE_PID" -a -d txt -Fn 2>/dev/null | sed -n '\''s/^n//p'\'' | head -n 1)"
+             [ -n "$SERVICE_BINARY" ] || fail "lsof reported no text executable for pid $SERVICE_PID"
+             # Containment: the running code must live inside the installed app
+             # bundle, i.e. $INSTALL_ROOT/<app>.app/Contents/... .  case patterns
+             # keep this Bash 3.2 safe and preserve spaces in path segments.
+             case "$SERVICE_BINARY" in
+               "$INSTALL_ROOT"/*/Contents/*) : ;;
+               *) fail "text executable is not inside the installed app bundle" ;;
+             esac
+             [ -f "$SERVICE_BINARY" ] || fail "text executable does not exist"
+             [ -x "$SERVICE_BINARY" ] || fail "text executable is not executable"
+             # Known-good executables only: the launcher shim itself, or the
+             # bundled interpreter that shim execs.
+             case "$SERVICE_BINARY" in
+               "$INSTALL_ROOT"/*/Contents/MacOS/modulo) : ;;
+               "$INSTALL_ROOT"/*/Contents/Resources/bundle/runtime/bin/python3*) : ;;
+               *) fail "text executable is neither the launcher nor the bundled interpreter" ;;
+             esac
+             printf "SERVICE_BINARY=%s\n" "$SERVICE_BINARY"
+             printf "INSTALL_ROOT=%s\n" "$INSTALL_ROOT"
+           ' bash "$SERVICE_PID" "$INSTALL_ROOT" || exit 1
+           SERVICE_BINARY="$(lsof -p "$SERVICE_PID" -a -d txt -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
+
+
+           run_assertion "service_binary_macho" \
+             file "$SERVICE_BINARY" | grep -E 'Mach-O 64-bit executable arm64' || exit 1
+
+           # Owned PID tree collection
+           # shellcheck disable=SC2016
+           run_assertion "owned_pid_tree" bash -c '
+             collect_children() {
+               local parent="$1" child
+               printf "%s\n" "$parent" >> "'"$OWNED_PIDS"'"
+               while IFS= read -r child; do
+                 [[ "$child" =~ ^[0-9]+$ ]] || continue
+                 collect_children "$child"
+               done < <(pgrep -P "$parent" || true)
+             }
+             : > "'"$OWNED_PIDS"'"
+             collect_children '"$SERVICE_PID"'
+             grep -qE "^[0-9]+$" "'"$OWNED_PIDS"'" || exit 1
+           ' || exit 1
+
+           # Invalid bundled binary negative test
+           INSTALLED_APP="$INSTALL_ROOT/Modulo-${VERSION_NUM}.app"
+           run_assertion "invalid_bundled_binary_negative" bash -c '
+             if "'"$INSTALLED_APP"'/Contents/MacOS/modulo" start --data-dir "'"$DATA"'/failure" --bin-dir "'"$DATA"'/missing-bin" >"'"$DATA"'/invalid-bin.stderr" 2>&1; then
+               exit 1
+             fi
+             grep -Eiq "bundled binaries not found|missing:.*(initdb|postgres|redis-server)" "'"$DATA"'/invalid-bin.stderr" || exit 1
+           ' || exit 1
+
+           # Launchctl unload / cleanup path
+           run_assertion "launchctl_unload" \
+             launchctl unload -w "$PLIST" || exit 1
+
+           # shellcheck disable=SC2016
+           run_assertion "launchagent_gone_after_unload" bash -c '
+             ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
+           ' || exit 1
+
+           # shellcheck disable=SC2016
+           run_assertion "launchagent_gone_after_cleanup" bash -c '
+             ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
+           ' || exit 1
+
+           run_assertion "no_owned_modulo_processes" bash -c '
+             ! pgrep -f "'"$INSTALL_ROOT"'/.*/Contents/MacOS/modulo" >/dev/null 2>&1
+           ' || exit 1
+
+           run_assertion "no_owned_postgres_redis" bash -c '
+             ! pgrep -f "'"$DATA"'/pgdata" >/dev/null 2>&1 && ! pgrep -f "'"$DATA"'/.*redis" >/dev/null 2>&1
+           ' || exit 1
+
+
+      - name: Upload real macOS installer
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer-${{ needs.normalize-inputs.outputs.version }}
+          path: build/Modulo-${{ needs.normalize-inputs.outputs.version }}-macos-arm64.dmg
+          if-no-files-found: error
+          retention-days: 30

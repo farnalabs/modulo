@@ -1221,7 +1221,12 @@ def _v2_session(fakes: dict[str, Any], *, trigger_error: bool = False, no_creato
     else:
         triggers_result = MagicMock()
         triggers_result.scalars.return_value.all.return_value = [
-            SimpleNamespace(trigger_type="cron", config_json={"schedule": "* * * * *"}, active=True)
+            SimpleNamespace(
+                name="Nightly sync",
+                trigger_type="cron",
+                config_json={"schedule": "* * * * *"},
+                active=True,
+            )
         ]
     team_result = MagicMock()
     team_result.scalar_one_or_none.return_value = SimpleNamespace(name="Team X")
@@ -1269,7 +1274,9 @@ async def test_export_pipeline_bundle_v2_yaml_shape(monkeypatch: pytest.MonkeyPa
     assert workflow["partial"] is False
     assert workflow["requires"]["connector_types"] == ["github"]
     assert workflow["requires"]["abstract_schemas"] == ["abs"]
-    assert workflow["triggers"] == [{"trigger_type": "cron", "config": {"schedule": "* * * * *"}, "active": True}]
+    assert workflow["triggers"] == [
+        {"name": "Nightly sync", "trigger_type": "cron", "config": {"schedule": "* * * * *"}, "active": True}
+    ]
     assert workflow["agents"][0]["name"] == "Agent A"
     assert workflow["edges"][0]["edge_type"] == "normal"
 

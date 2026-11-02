@@ -60,6 +60,7 @@ test.describe('Real-stack journeys: webhook trigger delivery', { tag: '@regressi
     let runId: string | null = null
     try {
       const trigger = await createTrigger(apiBase, token, created.pipeline.id, {
+        name: uniqueName('e2e-webhook-trigger'),
         trigger_type: 'webhook',
         active: true,
       })

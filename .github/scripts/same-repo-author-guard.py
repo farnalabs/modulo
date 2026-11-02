@@ -58,17 +58,21 @@ def _resolve_head(pr: dict, base_repo: str) -> tuple[str, str]:
     return head_full, ""
 
 
-def _is_dependabot(pr: dict) -> bool:
-    """True for a PR authored by the Dependabot app.
+# Dependency-update GitHub Apps the repo runs (renovate.json; Dependabot).
+TRUSTED_BOT_LOGINS = frozenset({"dependabot[bot]", "renovate[bot]"})
 
-    Dependabot is a GitHub App, so its PRs carry ``author_association`` NONE
+
+def _is_trusted_bot(pr: dict) -> bool:
+    """True for a PR authored by one of the dependency-update apps.
+
+    These are GitHub Apps, so their PRs carry ``author_association`` NONE
     even though its branches live on the base repository. The ``[bot]`` login
     suffix is reserved for GitHub Apps and cannot be claimed by a user account;
     the ``type`` check is belt and braces. Callers must already have verified
     the head is same-repo.
     """
     user = pr.get("user") or {}
-    return user.get("login") == "dependabot[bot]" and user.get("type") == "Bot"
+    return user.get("login") in TRUSTED_BOT_LOGINS and user.get("type") == "Bot"
 
 
 def _resolve_association(pr: dict) -> tuple[str, str]:
@@ -100,8 +104,9 @@ def decide(pr: dict, base_repo: str) -> tuple[str, str]:
             f"PR head is from {head_full}, not {base_repo} (fork / external contributor) - fail closed",
         )
 
-    if _is_dependabot(pr):
-        return "ok", f"same-repo dependabot app (head={head_full})"
+    if _is_trusted_bot(pr):
+        author = (pr.get("user") or {}).get("login")
+        return "ok", f"same-repo dependency bot '{author}' (head={head_full})"
 
     association, association_err = _resolve_association(pr)
     if association_err:

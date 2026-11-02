@@ -414,9 +414,9 @@ class TestMaxConcurrentRunsEnforcement:
             )
             await session.execute(
                 text(
-                    "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
                     "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                    "VALUES (:id, :oid, :pid, 'webhook', true, :mcr, '{}'::json, :uid)",
+                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, :mcr, '{}'::json, :uid)",
                 ),
                 {
                     "id": str(trigger_id),

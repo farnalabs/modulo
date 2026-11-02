@@ -6,10 +6,17 @@
        run with no recorded attempts (older runs) says so plainly, and a failed
        / 404 fetch shows an inline unavailable state rather than breaking the
        rest of the run page. -->
-  <section data-testid="run-attempt-history" class="mb-6 rounded-lg border bg-card p-6">
-    <h2 class="text-base font-semibold tracking-tight">{{ $t('components.RunAttemptHistory.title') }}</h2>
-    <p class="mt-1 text-xs text-muted-foreground">{{ $t('components.RunAttemptHistory.help') }}</p>
-
+  <DataCard
+    class="mb-6"
+    data-testid="run-attempt-history"
+    :title="$t('components.RunAttemptHistory.title')"
+    :description="$t('components.RunAttemptHistory.help')"
+    heading-level="h2"
+    title-class="text-base font-semibold tracking-tight"
+    description-class="text-xs text-muted-foreground"
+    padding="lg"
+    elevation="sm"
+  >
     <p v-if="loading" data-testid="run-attempt-history-loading" class="mt-3 text-sm text-muted-foreground">
       {{ $t('components.RunAttemptHistory.loading') }}
     </p>
@@ -71,10 +78,11 @@
         {{ $t('components.RunAttemptHistory.truncated', { shown: attempts.length, total }) }}
       </p>
     </template>
-  </section>
+  </DataCard>
 </template>
 
 <script setup lang="ts">
+import DataCard from '@/components/ui/DataCard.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@/lib/api/client'

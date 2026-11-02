@@ -28,6 +28,7 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.connector_refs import connector_ref_type_id
 from modulo.core.library_service import get_primitive, get_primitive_by_slug
 from modulo.core.library_service._seed_data import MODULO_ORG_ID
 from modulo.core.workflow_import_export import BUNDLE_FORMAT_VERSION, materialize_import
@@ -899,21 +900,6 @@ def _map_pin_entity_ids(
     return out
 
 
-def _connector_ref_type_id(ref: Any) -> str:
-    """Extract the connector type id from a single connector_type_refs entry.
-
-    Entries are either plain strings (Native library built-ins like
-    ``["github"]``) or dicts (``{"connector_type_id": ...}`` /
-    ``{"connector_type": ...}``).
-    """
-    if isinstance(ref, str):
-        return ref
-    if isinstance(ref, dict):
-        value = ref.get("connector_type_id") or ref.get("connector_type") or ref.get("type", "")
-        return str(value) if value is not None else ""
-    return ""
-
-
 def _build_connector_checklist(
     resolved_pins: list[LibraryPrimitive],
 ) -> list[dict[str, Any]]:
@@ -929,7 +915,7 @@ def _build_connector_checklist(
             continue
         content = pin.content_json or {}
         for ref in content.get("connector_type_refs", []):
-            ctid = _connector_ref_type_id(ref)
+            ctid = connector_ref_type_id(ref)
             if ctid and ctid not in seen:
                 seen[ctid] = {
                     "connector_type_id": ctid,

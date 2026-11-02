@@ -157,6 +157,7 @@ def seed_triggers(client: SeedClient, pipelines: list[dict[str, Any]]) -> list[d
         manual = client.post(
             f"/pipelines/{pipeline_id}/triggers",
             json_data={
+                "name": "load-test-manual",
                 "trigger_type": "manual",
                 "active": True,
                 "max_concurrent_runs": 5,
@@ -173,6 +174,7 @@ def seed_triggers(client: SeedClient, pipelines: list[dict[str, Any]]) -> list[d
         cron = client.post(
             f"/pipelines/{pipeline_id}/triggers",
             json_data={
+                "name": "load-test-cron",
                 "trigger_type": "cron",
                 "active": False,
                 "cron_expression": "0 */6 * * *",
