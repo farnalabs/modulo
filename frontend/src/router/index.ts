@@ -1,7 +1,6 @@
 import { formatApiError } from '../lib/api/formatError'
 import { decodeJwtPayload } from '../lib/jwt'
-
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, type RouteMeta } from 'vue-router'
 import { getAccessToken } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import manifest from '@/manifest.yaml'
@@ -23,6 +22,7 @@ declare module 'vue-router' {
     visibility?: 'public' | 'public_preview' | 'private_preview' | 'in_dev'
     public?: boolean
     bare?: boolean
+    title?: string
   }
 }
 
@@ -138,6 +138,36 @@ const OAuthConsentView = () => import('../views/OAuthConsentView.vue')
 const DemoView = () => import('../views/DemoView.vue')
 const AcceptInviteView = () => import('../views/AcceptInviteView.vue')
 const AssistantOnlyView = () => import('../views/AssistantOnlyView.vue')
+
+/**
+ * Move focus to the newly entered route's content.
+ *
+ * The page heading is the preferred target. A route that renders no
+ * `[data-page-heading]` (a bare `/assistant`, for example) otherwise leaves
+ * focus on the outgoing view's detached element, so the shell `<main>` carries
+ * `tabindex="-1"` as the deterministic fallback: programmatically focusable,
+ * never tab-reachable. Focusing a landmark rather than the heading is also
+ * what keeps a skip-link target honest.
+ */
+export function focusRouteContent() {
+  const target =
+    document.querySelector<HTMLElement>('[data-page-heading]') ??
+    document.querySelector<HTMLElement>('[data-main-landmark]')
+  if (target && document.activeElement !== target && !target.contains(document.activeElement)) {
+    target.focus({ preventScroll: true })
+  }
+}
+
+/**
+ * The `document.title` for a navigated route.
+ *
+ * A route with neither a manifest `title` nor a breadcrumb label used to render
+ * "Modulo | Modulo"; it now falls back to the bare product name.
+ */
+export function documentTitleFor(meta: RouteMeta): string {
+  const pageTitle = meta.title ?? meta.breadcrumb
+  return pageTitle ? `${pageTitle} | Modulo` : 'Modulo'
+}
 
 const router = createRouter({
   history: createWebHistory(),
@@ -1079,8 +1109,9 @@ router.beforeEach(async (to) => {
 })
 
 let _chunkRetryCount = 0
-router.afterEach(() => {
+router.afterEach((to) => {
   _chunkRetryCount = 0
+  document.title = documentTitleFor(to.meta)
 })
 router.onError((err) => {
   console.error('[router] navigation error:', err)
