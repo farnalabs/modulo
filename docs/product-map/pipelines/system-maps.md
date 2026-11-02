@@ -11,6 +11,9 @@ code:
   - backend/src/modulo/core/system_map_persistence.py
   - backend/src/modulo/core/feature_flags.py
   - backend/src/modulo/api/mcp_server.py
+  - backend/src/modulo/db/models/system_map.py
+  - backend/src/modulo/db/repositories/system_map.py
+  - backend/src/modulo/db/migrations/versions/0346_system_maps_version_aware.py
   - frontend/src/stores/systemMaps.ts
   - frontend/src/components/dashboard/DashboardSystemOverview.vue
   - frontend/src/components/system-maps/SystemMapDraftReview.vue
@@ -20,7 +23,9 @@ unit-tests:
   - backend/tests/unit/api/test_system_maps_routes.py
   - backend/tests/unit/core/test_system_maps_discovery.py
   - backend/tests/unit/core/test_system_map_persistence.py
+  - backend/tests/unit/db/test_system_map_repository.py
   - backend/tests/integration/test_system_maps_discovery.py
+  - backend/tests/integration/test_system_maps_version_aware.py
   - frontend/src/__tests__/systemMapsStore.spec.ts
   - frontend/src/__tests__/DashboardSystemOverview.spec.ts
   - frontend/src/__tests__/SystemMapDraftReview.spec.ts
@@ -132,6 +137,28 @@ automatically.
       token, a malformed flag payload or a probe error
       (`frontend/src/stores/systemMaps.ts`, `frontend/src/views/DashboardView.vue`;
       `systemMapsStore.spec.ts`, `DashboardSystemOverview.spec.ts`)
+- [x] Version-aware revision endpoints (FAR-2288) allow runs and metrics to be
+      interpreted against the map revision active at a point in time:
+      - `GET /api/v1/system-maps/{map_id}/revisions/by-time?at=<ISO8601>` returns
+        the revision whose window covers the instant, including a superseded
+        (archived) revision after a re-publish, where
+        `effective_from <= at < effective_to` (or `effective_to IS NULL` for the
+        current revision)
+      - `GET /api/v1/system-maps/{map_id}/revisions/current` returns the
+        currently active (published) revision as a semantic alias
+      - `GET /api/v1/system-maps/{map_id}/revisions/history` lists all revisions
+        with their effective time ranges, marking the current revision with
+        `is_current=true`
+      - `GET /api/v1/system-maps/{map_id}/overview` accepts optional
+        `revision_id` or `at` timestamp parameters to show metrics for a specific
+        historical revision's time window
+      All endpoints preserve the internal access gate (system_maps feature +
+      developer mode + operator/admin + system_maps_access), tenant/RLS
+      isolation, and use canonical failure vocabulary
+      (`api/routes/system_maps.py`, `api/schemas/system_maps.py`,
+      `db/models/system_map.py`, `db/repositories/system_map.py`,
+      `test_system_maps_routes.py`, `test_system_map_repository.py`,
+      `test_system_maps_version_aware.py`)
 - [ ] The draft-review UI is still a placeholder: `fetchDiscovery()` is a
       deliberate no-op, the "Discover My System" button is disabled, and the
       review panel renders explanatory copy only. No page ever calls the
