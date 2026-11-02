@@ -24,8 +24,8 @@ function node(nodeKey: string): SystemMapNode {
     position_y: '0',
     deleted_at: null,
     deleted_by: null,
-    created_at: new Date(0).toISOString(),
-    updated_at: new Date(0).toISOString(),
+    created_at: '1970-01-01T00:00:00.000Z',
+    updated_at: '1970-01-01T00:00:00.000Z',
   }
 }
 
