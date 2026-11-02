@@ -14,6 +14,7 @@ from modulo.auth.human_linkage import (
     HITL_ACTION_DEFAULT_PERMISSION,
     LINKAGE_NONE,
     LINKAGE_OAUTH_CONSENT,
+    LINKAGE_USER_SCOPED_KEY,
     required_permission_for_action,
     resolve_human_linkage,
 )
@@ -36,6 +37,7 @@ async def _resolve(
     token_family: str | None = _FAMILY,
     grants: frozenset[str] | None = _CLAIM_GRANT,
     permission: str = "hitl.claim",
+    key_scope: str | None = None,
 ):
     return await resolve_human_linkage(
         _session(),
@@ -45,6 +47,7 @@ async def _resolve(
         token_family=token_family,
         grants=grants,
         required_permission=permission,
+        key_scope=key_scope,
     )
 
 
@@ -147,6 +150,75 @@ class TestHumanLinkageNegative:
         assert linkage.linked is False
         assert linkage.linkage == LINKAGE_NONE
         mock_membership.assert_not_awaited()
+
+
+class TestUserScopedApiKeyLinkage:
+    """FAR-2281: a user-scoped mk_ key owned by a live human is human-linked."""
+
+    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    async def test_user_scoped_human_key_is_human_linked(self, mock_membership: AsyncMock) -> None:
+        mock_membership.return_value = ("admin", KIND_HUMAN)
+
+        linkage = await _resolve(auth_type="api_key", token_family=None, key_scope="user")
+
+        assert linkage.linked is True
+        assert linkage.linkage == LINKAGE_USER_SCOPED_KEY
+        assert linkage.principal_kind == KIND_HUMAN
+        assert linkage.account_id == _ACCOUNT_ID
+        assert linkage.token_family is None
+        # The key's authority is its live-clamped role, not an OAuth consent set.
+        mock_membership.assert_awaited_once()
+
+    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    async def test_user_scoped_service_owned_key_is_not_linked(self, mock_membership: AsyncMock) -> None:
+        """A user-scoped key OWNED by a service principal is still a machine identity."""
+        mock_membership.return_value = ("operator", KIND_SERVICE)
+
+        linkage = await _resolve(auth_type="api_key", token_family=None, key_scope="user")
+
+        assert linkage.linked is False
+        assert linkage.linkage == LINKAGE_NONE
+        assert linkage.principal_kind == KIND_SERVICE
+
+    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    async def test_org_scoped_key_is_excluded_without_a_db_read(self, mock_membership: AsyncMock) -> None:
+        linkage = await _resolve(auth_type="api_key", token_family=None, key_scope="org")
+
+        assert linkage.linked is False
+        assert linkage.linkage == LINKAGE_NONE
+        mock_membership.assert_not_awaited()
+
+    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    async def test_user_scoped_key_without_account_is_not_linked(self, mock_membership: AsyncMock) -> None:
+        linkage = await _resolve(
+            auth_type="api_key",
+            account_id=None,
+            token_family=None,
+            key_scope="user",
+        )
+
+        assert linkage.linked is False
+        mock_membership.assert_not_awaited()
+
+    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    async def test_user_scoped_key_with_dead_membership_is_not_linked(self, mock_membership: AsyncMock) -> None:
+        mock_membership.return_value = None
+
+        linkage = await _resolve(auth_type="api_key", token_family=None, key_scope="user")
+
+        assert linkage.linked is False
+        assert linkage.linkage == LINKAGE_NONE
+
+    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    async def test_verification_error_fails_closed(self, mock_membership: AsyncMock) -> None:
+        """FAR-2281: any verification error resolves to NOT human-linked."""
+        mock_membership.side_effect = RuntimeError("db down")
+
+        linkage = await _resolve(auth_type="api_key", token_family=None, key_scope="user")
+
+        assert linkage.linked is False
+        assert linkage.linkage == LINKAGE_NONE
+        assert linkage.principal_kind is None
 
 
 class TestActionPermissionMapping:

@@ -242,6 +242,14 @@ async def _record(
     org_id, actor_user_id, org_role = actor
 
     payload: dict[str, Any] = {"tool": tool_name, "outcome": outcome}
+    # FAR-2281: a human-linked user-scoped key is attributed to the human
+    # (principal kind) BESIDE the credential class, never collapsed into a
+    # generic ``api_key`` principal. Absent for every other credential, so the
+    # coarse payload is byte-identical for org keys / JWTs / OAuth callers.
+    principal_kind = _mcp._ctx_principal_kind.get(None)
+    if principal_kind is not None:
+        payload["principal_kind"] = principal_kind
+        payload["credential_class"] = _mcp._ctx_auth_type.get(None)
     #: Only a SUCCESSFUL call can be failed by its own missing audit record;
     #: when the tool already failed its own error must survive unchanged.
     apply_fail_closed = fail_closed and outcome == "success"
