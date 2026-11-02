@@ -5053,6 +5053,7 @@ export default {
       "item_my_pipelines": "Pipelines",
       "item_library": "Library",
       "item_lifecycle_maps": "Lifecycle Maps",
+      "item_system_maps": "System Maps",
       "item_templates": "Templates",
       "item_copy_pipeline": "Copy Pipeline",
       "item_runs_list": "Runs",
