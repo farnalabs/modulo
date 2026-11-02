@@ -302,9 +302,9 @@ Deprecation is a schema-level operation:
 and stamps `deprecated_at`.
 
 - The `SchemaVersion` model carries a `deprecated` flag, but no endpoint or
-  validator reads it today.
+  validator currently uses that flag to reject a version.
 - Deprecation is advisory: neither the graph validator nor snapshot schema
-  pinning blocks pipelines that reference a deprecated schema.
+  pinning blocks pipelines that reference a deprecated schema or version.
 
 ## See also
 
