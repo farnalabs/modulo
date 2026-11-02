@@ -1,10 +1,5 @@
 name: Windows Artifacts
 
-permissions:
-  contents: read
-  actions: read
-  id-token: write
-
 on:
   push:
     branches: [main]
@@ -31,6 +26,11 @@ jobs:
   download-and-verify:
     runs-on: windows-latest
     timeout-minutes: 30
+    # contents: read covers actions/checkout. actions/upload-artifact authenticates
+    # with the run's runtime token, so it needs no actions: scope, and this job has
+    # no OIDC or attestation step, so it must not request id-token/attestations.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Load and validate version pins
@@ -205,8 +205,10 @@ jobs:
   attest:
     needs: download-and-verify
     runs-on: ubuntu-latest
+    # attest-build-provenance signs through OIDC and writes the attestation.
+    # actions/download-artifact reads same-run artifacts with the runtime token,
+    # so no actions: scope is required; this job does not check out the repo.
     permissions:
-      actions: read
       id-token: write
       attestations: write
     steps:
