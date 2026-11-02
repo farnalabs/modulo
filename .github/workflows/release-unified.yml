@@ -1055,8 +1055,10 @@ jobs:
 
             echo "Building and pushing $img with tag $TAG..."
 
+            # The build context is positional; `--context` is a docker global
+            # flag, not a `buildx build` option (it failed with exit 125).
             docker buildx build \
-              --context "$context" \
+              "$context" \
               --file "$dockerfile" \
               --platform linux/amd64 \
               --push \
