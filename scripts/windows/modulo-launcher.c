@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <wchar.h>
 
 #define MAX_PATH_LEN 32767
@@ -105,19 +106,32 @@ static BOOL build_clean_environment(const wchar_t *bundle_root, const wchar_t *b
     return TRUE;
 }
 
-static size_t quoted_arg_length(const wchar_t *arg) {
-    size_t length = 2;
+static BOOL checked_add_size(size_t *total, size_t value) {
+    if (value > SIZE_MAX - *total) return FALSE;
+    *total += value;
+    return TRUE;
+}
+
+static BOOL quoted_arg_length(const wchar_t *arg, size_t *length) {
+    size_t result = 2;
     const wchar_t *cursor;
     size_t backslashes = 0;
     for (cursor = arg; *cursor != L'\0'; cursor++) {
-        if (*cursor == L'\\') backslashes++;
-        else {
-            if (*cursor == L'"') length += backslashes + 1;
-            length += backslashes + 1;
+        if (*cursor == L'\\') {
+            if (backslashes == SIZE_MAX) return FALSE;
+            backslashes++;
+        } else {
+            size_t escaped_segment;
+            if (backslashes == SIZE_MAX) return FALSE;
+            escaped_segment = backslashes + 1;
+            if (*cursor == L'"' && !checked_add_size(&result, escaped_segment)) return FALSE;
+            if (!checked_add_size(&result, escaped_segment)) return FALSE;
             backslashes = 0;
         }
     }
-    return length + backslashes * 2;
+    if (backslashes > (SIZE_MAX - result) / 2) return FALSE;
+    *length = result + backslashes * 2;
+    return TRUE;
 }
 
 static wchar_t *append_quoted_arg(wchar_t *cursor, const wchar_t *arg) {
@@ -152,16 +166,32 @@ static wchar_t *append_quoted_arg(wchar_t *cursor, const wchar_t *arg) {
 }
 
 static wchar_t *build_command_line(const wchar_t *python_exe, int argc, wchar_t *argv[]) {
-    size_t total = quoted_arg_length(python_exe) + 1;
+    static const wchar_t module_invocation[] = L" -m modulo.cli.main";
+    size_t total = 0;
+    size_t argument_length;
     int index;
     wchar_t *command_line;
     wchar_t *cursor;
-    for (index = 1; index < argc; index++) total += 1 + quoted_arg_length(argv[index]);
+
+    if (!quoted_arg_length(python_exe, &argument_length) ||
+        !checked_add_size(&total, argument_length) ||
+        !checked_add_size(&total, wcslen(module_invocation)) ||
+        !checked_add_size(&total, 1)) {
+        return NULL;
+    }
+    for (index = 1; index < argc; index++) {
+        if (!quoted_arg_length(argv[index], &argument_length) ||
+            !checked_add_size(&total, argument_length) ||
+            !checked_add_size(&total, 1)) {
+            return NULL;
+        }
+    }
+    if (total > SIZE_MAX / sizeof(wchar_t)) return NULL;
     command_line = (wchar_t *)malloc(total * sizeof(wchar_t));
     if (command_line == NULL) return NULL;
     cursor = append_quoted_arg(command_line, python_exe);
-    wcscpy(cursor, L" -m modulo.cli.main");
-    cursor += wcslen(L" -m modulo.cli.main");
+    wcscpy(cursor, module_invocation);
+    cursor += wcslen(module_invocation);
     for (index = 1; index < argc; index++) {
         *cursor++ = L' ';
         cursor = append_quoted_arg(cursor, argv[index]);

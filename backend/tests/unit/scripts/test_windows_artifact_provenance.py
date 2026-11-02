@@ -195,6 +195,36 @@ def test_launcher_contract(launcher_source: str) -> None:
     assert "return FALSE" in launcher_source
 
 
+def test_launcher_command_line_size_includes_fixed_invocation(launcher_source: str) -> None:
+    build_start = launcher_source.index("static wchar_t *build_command_line")
+    build_end = launcher_source.index("static BOOL build_pythonpath", build_start)
+    builder = launcher_source[build_start:build_end]
+
+    assert 'static const wchar_t module_invocation[] = L" -m modulo.cli.main";' in builder
+    assert "checked_add_size(&total, wcslen(module_invocation))" in builder
+    assert "if (total > SIZE_MAX / sizeof(wchar_t)) return NULL;" in builder
+    assert "malloc(total * sizeof(wchar_t))" in builder
+    assert "wcscpy(cursor, module_invocation)" in builder
+    assert "size_t total = quoted_arg_length(python_exe) + 1" not in builder
+
+
+def test_launcher_command_line_size_covers_zero_and_quoted_arguments(launcher_source: str) -> None:
+    quoted_start = launcher_source.index("static BOOL quoted_arg_length")
+    quoted_end = launcher_source.index("static wchar_t *append_quoted_arg", quoted_start)
+    quoted_length = launcher_source[quoted_start:quoted_end]
+    build_start = launcher_source.index("static wchar_t *build_command_line")
+    build_end = launcher_source.index("static BOOL build_pythonpath", build_start)
+    builder = launcher_source[build_start:build_end]
+
+    assert "size_t result = 2;" in quoted_length
+    assert "if (*cursor == L'\"' && !checked_add_size" in quoted_length
+    assert "backslashes > (SIZE_MAX - result) / 2" in quoted_length
+    assert "for (index = 1; index < argc; index++)" in builder
+    assert "checked_add_size(&total, argument_length)" in builder
+    assert "checked_add_size(&total, 1)" in builder
+    assert "while (backslashes > 0)" in launcher_source
+
+
 def test_workflow_contract(workflow_source: str) -> None:
     assert "d3f86a106a0bac45b974a628896c90dbdf5c8093" in workflow_source
     assert "520d128f165991a6c774bcb264f323e3d70747f4" in workflow_source
