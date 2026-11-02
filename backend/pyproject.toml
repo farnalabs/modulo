@@ -15,7 +15,7 @@ name = "farnalabs-modulo"
 # scripts/bump-version.py into frontend/package.json and
 # deploy/helm/modulo/Chart.yaml (version + appVersion). Files carry X.Y.Z only;
 # -rcN prerelease suffixes live in git tags only. See docs/upgrade-process.md.
-version = "0.3.323"
+version = "0.3.324"
 description = "Agent governance for your agentic SDLC"
 license = "BUSL-1.1"
 license-files = ["LICENSE"]

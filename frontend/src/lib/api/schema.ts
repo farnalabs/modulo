@@ -7381,6 +7381,7 @@ export interface paths {
          *
          *     Can optionally specify a revision_id or 'at' timestamp to get the overview
          *     for a specific historical revision (FAR-2288 version-aware read model).
+         *     Metrics cover the trailing seven UTC days.
          */
         get: operations["get_system_map_overview_endpoint_api_v1_system_maps__map_id__overview_get"];
         put?: never;
@@ -22593,18 +22594,12 @@ export interface components {
             last_admission_at?: string | null;
             /** Last Admission Status */
             last_admission_status?: string | null;
-            /**
-             * Cooldown Active
-             * @default false
-             */
-            cooldown_active: boolean;
+            /** Cooldown Active */
+            cooldown_active?: boolean | null;
             /** Cooldown Until */
             cooldown_until?: string | null;
-            /**
-             * Budget Used Usd
-             * @default 0
-             */
-            budget_used_usd: string;
+            /** Budget Used Usd */
+            budget_used_usd?: string | null;
             /** Budget Period Start */
             budget_period_start?: string | null;
         };
@@ -22644,6 +22639,12 @@ export interface components {
         /**
          * SystemMapOverviewResponse
          * @description Aggregate read model for a published system map.
+         *
+         *     Metrics cover the half-open UTC interval ``[window_start, window_end)``.
+         *     ``window_end`` is the generation instant and facts without an observed
+         *     timestamp remain null rather than being inferred. Failure rates use the
+         *     canonical analytics definition: only non-benign ``failed``/``stalled`` runs
+         *     count as failures, so a deliberate cancel or reject is not a fault.
          */
         SystemMapOverviewResponse: {
             /**
@@ -22663,6 +22664,18 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+            /** Window Days */
+            window_days: number;
+            /**
+             * Window Start
+             * Format: date-time
+             */
+            window_start: string;
+            /**
+             * Window End
+             * Format: date-time
+             */
+            window_end: string;
             /** Nodes */
             nodes: components["schemas"]["SystemMapOverviewNodeHealth"][];
             /** Loop Configs */
