@@ -1,6 +1,6 @@
 /**
  * AppSelect is the single wrapper around PrimeVue's Select (see
- * appselect-guard.spec.ts). Two behaviours matter and are easy to regress:
+ * appselect-guard.spec.ts). Three behaviours matter and are easy to regress:
  *
  * 1. Event forwarding — the wrapper declares the Select events in
  *    `defineEmits`, which removes their listeners from `$attrs`, so it MUST
@@ -10,6 +10,12 @@
  *    is invisible to SonarCloud's Web:InputWithoutLabelCheck, so the binding
  *    is written out and resolved from the consumer's `$attrs` (or a default).
  *    The inner Select is also wrapped in a `<label>` for the same reason.
+ * 3. Label association — a non-editable PrimeVue Select renders a
+ *    `<span role="combobox">`, which is NOT labelable, so `label[for]` alone
+ *    never associates or focuses it. The spec asserts the RENDERED DOM: the
+ *    combobox carries the consumer's id, its `aria-labelledby` resolves to the
+ *    visible label's text, the wrapper carries no duplicate id, and clicking
+ *    the label focuses the combobox. All four fail on the pre-fix component.
  */
 import { describe, it, expect } from 'vitest'
 import { defineComponent, nextTick } from 'vue'
@@ -106,6 +112,17 @@ describe('AppSelect (real Select)', () => {
     expect(innerSelect(wrapper).props('inputId')).toBe('combobox-id')
   })
 
+  it('passes the resolved control id as labelId so PrimeVue can find label[for]', () => {
+    // PrimeVue's own click bridge queries `label[for=<labelId>]`; leaving
+    // labelId unset makes that query `label[for="undefined"]` and the bridge
+    // binds nothing, which is the inert association this pins.
+    const wrapper = mount(AppSelect, {
+      props: { modelValue: '' },
+      attrs: { id: 'queue-filter' },
+    })
+    expect(innerSelect(wrapper).props('labelId')).toBe('queue-filter')
+  })
+
   it('merges a function-form consumer pt listContainer and adds tabindex', () => {
     const listContainer = (opts: { density?: string }) => ({ class: `density-${opts.density}` })
     const wrapper = mount(AppSelect, {
@@ -200,5 +217,108 @@ describe('AppSelect (stubbed Select)', () => {
     })
     expect(wrapper.find('.hdr').text()).toBe('Filters')
     expect(wrapper.find('.opt').text()).toBe('Running')
+  })
+})
+
+/**
+ * The label association, asserted against the RENDERED DOM rather than the
+ * props handed to PrimeVue. `props('inputId')` being set proves only that a
+ * prop was passed: it is satisfied by the pre-fix component, whose combobox
+ * is a `<span role="combobox">` that a `label[for]` can neither associate with
+ * nor focus (a span is not labelable).
+ */
+const LabelHost = defineComponent({
+  components: { AppSelect },
+  props: { controlId: { type: String, required: true } },
+  template: `
+    <div>
+      <label :for="controlId">Level</label>
+      <AppSelect :id="controlId" :options="[]" aria-label="Level" />
+    </div>
+  `,
+})
+
+function mountWithLabel(controlId: string) {
+  return mount(LabelHost, { props: { controlId }, attachTo: document.body })
+}
+
+describe('AppSelect label association (rendered DOM)', () => {
+  it('puts the consumer id on the combobox, not on the wrapper label', async () => {
+    const wrapper = mountWithLabel('appselect-id-test')
+    await nextTick()
+
+    const combobox = wrapper.find('[role="combobox"]')
+    expect(combobox.exists()).toBe(true)
+    expect(combobox.attributes('id')).toBe('appselect-id-test')
+
+    // Exactly one element in the document carries the id: with attribute
+    // inheritance left on, the wrapper <label> would share it and
+    // `label[for]` would resolve to the wrapper instead of the control.
+    expect(document.querySelectorAll('#appselect-id-test')).toHaveLength(1)
+    expect(document.querySelector('#appselect-id-test')?.tagName).toBe('SPAN')
+
+    wrapper.unmount()
+  })
+
+  it('exposes the visible label as the combobox accessible name', async () => {
+    const wrapper = mountWithLabel('appselect-name-test')
+    await nextTick()
+
+    const combobox = wrapper.find('[role="combobox"]')
+    const labelledBy = combobox.attributes('aria-labelledby')
+    expect(labelledBy).toBeTruthy()
+
+    const labelEl = document.getElementById(labelledBy as string)
+    expect(labelEl?.tagName).toBe('LABEL')
+    expect(labelEl?.textContent?.trim()).toBe('Level')
+    // The label is the consumer's own element, not a copy.
+    expect(labelEl).toBe(wrapper.find('label[for="appselect-name-test"]').element)
+
+    wrapper.unmount()
+  })
+
+  it('focuses the combobox when the visible label is clicked', async () => {
+    const wrapper = mountWithLabel('appselect-click-test')
+    await nextTick()
+
+    const combobox = wrapper.find('[role="combobox"]')
+    // A <span role="combobox"> is not labelable, so jsdom's native label
+    // activation reaches no control - the click bridge is what makes the
+    // label work.
+    const labelEl = wrapper.find('label[for="appselect-click-test"]')
+      .element as HTMLLabelElement
+    expect(labelEl.control).toBeNull()
+    expect(document.activeElement).not.toBe(combobox.element)
+
+    await labelEl.click()
+    await nextTick()
+
+    expect(document.activeElement).toBe(combobox.element)
+
+    wrapper.unmount()
+  })
+
+  it('keeps a consumer aria-labelledby and never overwrites an existing label id', async () => {
+    const wrapper = mount(
+      defineComponent({
+        components: { AppSelect },
+        template: `
+          <div>
+            <label id="explicit-label-id" for="appselect-explicit-test">Owner</label>
+            <AppSelect id="appselect-explicit-test" aria-labelledby="explicit-label-id" />
+          </div>
+        `,
+      }),
+      { attachTo: document.body },
+    )
+    await nextTick()
+
+    const combobox = wrapper.find('[role="combobox"]')
+    expect(combobox.attributes('aria-labelledby')).toBe('explicit-label-id')
+    expect(wrapper.find('label[for="appselect-explicit-test"]').attributes('id')).toBe(
+      'explicit-label-id',
+    )
+
+    wrapper.unmount()
   })
 })

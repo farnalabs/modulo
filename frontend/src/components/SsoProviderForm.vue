@@ -53,10 +53,14 @@
 
     <!-- SSO Preset selector (OIDC only) -->
     <div v-if="data.provider_type === 'oidc' && presets.length > 0">
-      <label for="sso-preset-select" class="mb-1 block text-sm font-medium">
+      <span class="mb-1 block text-sm font-medium" id="sso-preset-heading">
         {{ $t('components.SsoProviderForm.sso_preset') }}
-      </label>
-      <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      </span>
+      <div
+        class="grid grid-cols-2 gap-2 sm:grid-cols-3"
+        role="group"
+        aria-labelledby="sso-preset-heading"
+      >
         <button
           v-for="p in presets"
           :key="p.id"
@@ -411,6 +415,7 @@
     <div>
       <label for="ssoproviderform-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.default_role') }}</label>
       <Select
+  id="ssoproviderform-field-1"
   :aria-label="$t('components.SsoProviderForm.default_role')"
   :model-value="data.default_role"
   @update:model-value="(val) => emitUpdate({...data, default_role: val as string})"
