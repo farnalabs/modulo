@@ -4,9 +4,11 @@ Decision record (2026-10-09, Duncan): the five ``hitl.*`` decision keys were
 removed from ``NON_DELEGABLE_PERMISSIONS``. A human-linked credential (a
 human's OAuth connection) MAY hold them — the registry no longer blocks the
 grant. The real boundary is the gate's ``human_only`` policy, enforced at
-RUNTIME: the MCP surface denies a ``human_only`` gate outright regardless of
-credential class (``mcp_server._check_human_only_gate``) and REST denies a
-non-browser credential (``routes/hitl._enforce_human_only_gate``).
+RUNTIME: the MCP surface denies every unlinked credential
+(``mcp_server._check_human_only_gate``) — a verified human-linked credential is
+admitted only when the default-OFF ``mcp_human_linked_hitl_authority`` flag is
+enabled — and REST denies every non-browser credential
+(``routes/hitl._enforce_human_only_gate``).
 
 This module pins BOTH halves of that split with ONE token through the REAL
 ``review_hitl`` tool path (only the auth re-validation, the DB session seam
@@ -187,11 +189,11 @@ class TestHitlDelegationTokenBoundary(_DelegatedTokenContext):
         """The SAME token is DENIED on a ``human_only`` gate — by the policy.
 
         The denial shape must be the runtime ``human_only_gate`` verdict from
-        ``_check_human_only_gate`` (MCP denies ``human_only`` gates outright,
-        regardless of credential class), NOT the scope chokepoint's
-        ``insufficient_scope`` — that is the distinction the registry bar used
-        to blur: removing it must open non-``human_only`` gates while leaving
-        ``human_only`` gates exactly as closed.
+        ``_check_human_only_gate`` (MCP denies an unlinked credential outright;
+        this token has no token_family, so it is not human-linked), NOT the
+        scope chokepoint's ``insufficient_scope`` — that is the distinction the
+        registry bar used to blur: removing it must open non-``human_only``
+        gates while leaving ``human_only`` gates exactly as closed.
         """
         run, snapshot, review_id = _run_and_snapshot(human_only=True)
 
