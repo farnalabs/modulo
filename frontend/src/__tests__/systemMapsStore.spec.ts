@@ -936,6 +936,29 @@ describe('useSystemMapsStore discovery', () => {
     expect(store.discoveryAvailable).toBe(false)
   })
 
+  it('discards a discovery failure that arrives after the token changed', async () => {
+    let rejectOldRequest: ((reason?: unknown) => void) | undefined
+    mockPost.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectOldRequest = reject
+        }),
+    )
+    const store = useSystemMapsStore()
+
+    const request = store.fetchDiscovery()
+    await vi.waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1))
+
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-2'))
+    rejectOldRequest?.(new Error('late discovery failure'))
+    await request
+
+    // A superseded principal's failure must not surface an error for the new one.
+    expect(store.discoveryError).toBeNull()
+    expect(store.draft).toBeNull()
+    expect(store.discoveryAvailable).toBe(false)
+  })
+
   it('clears discovery state on reset', async () => {
     mockPost.mockResolvedValue({ data: discoveryPayload() })
     const store = useSystemMapsStore()

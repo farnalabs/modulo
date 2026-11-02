@@ -99,6 +99,16 @@ describe('DashboardSystemOverview', () => {
     )
   })
 
+  it('disables discovery and shows progress while a discovery request is running', async () => {
+    const { wrapper, store } = mountOverview()
+    store.discoveryLoading = true
+    await wrapper.vm.$nextTick()
+
+    const button = wrapper.get('[data-testid="dashboard-system-discover"]')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(button.text()).toContain('Discovering...')
+  })
+
   it('runs discovery and refreshes the overview when the operator clicks Discover', async () => {
     const { wrapper, store, fetchDiscovery, fetchDefaultOverview } = mountOverview()
     await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(1))
