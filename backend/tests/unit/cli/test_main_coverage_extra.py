@@ -24,7 +24,7 @@ def test_doctor_report_builds_archive(tmp_path: Path):
     with zipfile.ZipFile(report) as archive:
         names = archive.namelist()
     assert "report.json" in names
-    assert "doctor-output.txt" in names
+    assert "doctor.txt" in names
 
 
 def test_logs_rotate_child_refused(tmp_path: Path):

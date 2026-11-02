@@ -53,24 +53,16 @@ def _init_once_scrub_os_environment() -> None:
 _init_once_scrub_os_environment()
 
 from modulo.cli.backup import cli as _legacy_backup_cli  # noqa: E402 — must follow the scrub
+from modulo.core.secret_patterns import WHOLESALE_REDACT_FIELDS, is_sensitive_field_name  # noqa: E402
 
 _DEFAULT_COMMAND = "backup"
 _PACKAGE_NAME = "farnalabs-modulo"
 
-# Fallback when the canonical sensitive-field classifier cannot be imported
-# (never expected on a normal install): a weaker but nonzero token list.
-_SENSITIVE_FIELD_TOKENS = ("password", "secret", "token", "api_key", "private_key", "webhook", "users", "oidc")
-_SENSITIVE_FIELD_NAMES = frozenset({"secret_key", "fernet_key", "fernet_key_old"})
-# Whole-value redaction regardless of the canonical classifier: structured
-# values that embed credentials the token/classifier match cannot see.
-_WHOLESALE_REDACT_FIELDS = frozenset(
-    {
-        "modulo_oidc_providers",  # JSON array with client_secret values
-        "modulo_users",  # "email:password" list
-        "alert_webhook_url",  # token embedded in the URL PATH, not userinfo
-        "alert_teams_webhook_url",
-    }
-)
+# Canonical sensitive-field vocabulary (single source of truth: FAR-2305).
+# ``modulo env``, ``modulo doctor --report`` and the support bundle all
+# classify through ``modulo.core.secret_patterns`` so a credential carrier can
+# never be redacted in one surface and leaked in another.
+_WHOLESALE_REDACT_FIELDS = WHOLESALE_REDACT_FIELDS
 _URL_FIELD_SUFFIX = "_url"
 _REDACTED = "<redacted>"
 _CREDENTIAL_IN_URL_RE = re.compile(r"(//)([^@/\s]+)@")
@@ -202,19 +194,11 @@ def _is_sensitive_field(name: str) -> bool:
     The ad-hoc token list missed real credential carriers (``modulo_users``
     is an email:password list, ``modulo_oidc_providers`` embeds OIDC client
     secrets, webhook URLs carry their token in the URL path) — delegation to
-    ``modulo.api.middleware.sensitive_mask`` keeps the CLI's redaction in
-    lockstep with the API's.
+    ``modulo.core.secret_patterns.is_sensitive_field_name`` keeps the CLI's
+    redaction in lockstep with the API's, the doctor report's and the support
+    bundle's.
     """
-    if name in _WHOLESALE_REDACT_FIELDS:
-        return True
-    try:
-        from modulo.api.middleware.sensitive_mask import is_sensitive_env_key
-    except Exception:
-        lowered = name.lower()
-        if name in _SENSITIVE_FIELD_NAMES:
-            return True
-        return any(token in lowered for token in _SENSITIVE_FIELD_TOKENS)
-    return is_sensitive_env_key(name.upper())
+    return is_sensitive_field_name(name)
 
 
 def _redacted_settings_dump(settings: Any) -> dict[str, str]:
