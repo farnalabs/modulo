@@ -239,24 +239,21 @@ async def clear_org_feature_flag(
 ) -> OrgFeatureFlagItem:
     """Clear this org's override for an org-settable flag (revert to default).
 
-    The ``feature_overrides`` map has no per-entry delete in the atomic patch
-    helper, so this reads the map, removes the key and writes the map back
-    through the same patch helper the other org-settings writers use — the
-    existing clear path's shape. Only the one map is rewritten; no other
-    settings key is touched.
+    FAR-2309: the clear is atomic. ``nested_delete`` removes ONLY this flag's
+    entry from the stored ``feature_overrides`` object inside the same UPDATE
+    that composes the settings patch, so two concurrent clears of different
+    flags both persist and a concurrent SET of another flag can never be
+    clobbered by a stale map. (The earlier shape read the map, popped the key
+    and wrote the whole map back — a lost update between the read and the
+    write.) Only the one map is touched; no other settings key is rewritten.
     """
     flag = await _resolve_settable_flag(settings, session, current_user, flag_name)
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
-        org = await get_organisation(session, current_user.organisation_id)
-        if org is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
-        overrides = dict((getattr(org, "settings_json", None) or {}).get("feature_overrides", {}))
-        overrides.pop(flag_name, None)
         await apply_org_settings_patch_or_404(
             session,
             current_user.organisation_id,
-            patch={"feature_overrides": overrides},
+            nested_delete={"feature_overrides": [flag_name]},
         )
     await _invalidate_cache(settings, current_user.organisation_id)
     await _emit_org_flag_override_audit(
