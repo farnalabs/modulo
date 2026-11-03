@@ -224,27 +224,38 @@ try {
         throw "Free Pascal fpc is required by -RequireFpc but was not found on this host. The Redact()/[Code] proofs would otherwise be skipped."
     }
 
-    # --- Proof 0: the ISPP preprocessor can read every line ----------------
-    # ISPP treats a line whose first non-blank character is "#" as a directive
-    # (Projects/ISPP/IsppPreprocessor.pas: ParsePreprocCommand), and an unknown
-    # directive aborts the compile. A Pascal character-code literal at the start
-    # of a line therefore aborts compilation - the failure ISCC reports only as
-    # a bare exit code. No ISPP directive begins with a digit or "$", so this
-    # check has no false positives and needs no compiler.
-    Write-Output "=== Proof 0: the preprocessor can read every line ==="
+    # --- Proof 0: the preprocessor can read these lines --------------------
+    # Two preprocessor traps, neither of which needs a compiler to detect:
+    #   a) ISPP treats a line whose first non-blank character is "#" as a
+    #      directive (Projects/ISPP/IsppPreprocessor.pas: ParsePreprocCommand),
+    #      and an unknown directive aborts the compile. A Pascal character-code
+    #      literal at the start of a line is therefore a fatal error. No ISPP
+    #      directive begins with a digit or "$", so this has no false positives.
+    #   b) {#name} substitution only happens on ordinary lines. A directive's
+    #      argument is parsed as an ISPP expression, so `#ifexist "{#DIR}\x"`
+    #      tests for a file literally named "{#DIR}\x" and is always false.
+    #      #error is exempt: its text is documented as not parsed.
+    Write-Output "=== Proof 0: the preprocessor can read these lines ==="
     $issPreprocText = Get-Content -LiteralPath $issPath -Raw
     $directiveViolations = @()
+    $inlineViolations = @()
     $lineNumber = 0
     foreach ($line in ($issPreprocText -split "`r?`n")) {
         $lineNumber++
         if ($line -match '^\s*#[0-9$]') {
             $directiveViolations += "line ${lineNumber}: $($line.Trim())"
         }
+        if (($line -match '^\s*#') -and ($line -notmatch '^\s*#error\b') -and ($line -match '\{#')) {
+            $inlineViolations += "line ${lineNumber}: $($line.Trim())"
+        }
     }
     if ($directiveViolations.Count -gt 0) {
         throw ("A line starts with a character-code literal, which ISPP parses as an unknown preprocessor directive: " + ($directiveViolations -join '; ') + ". Move the '#' escape away from the start of the line.")
     }
-    Write-Output "PASS: no line starts with a character-code literal."
+    if ($inlineViolations.Count -gt 0) {
+        throw ("A preprocessor directive uses inline {#name} substitution, which ISPP does not expand inside a directive - use the name as an expression instead: " + ($inlineViolations -join '; '))
+    }
+    Write-Output "PASS: no line starts with a character-code literal, and no directive relies on inline substitution."
     Write-Output ""
 
     # --- Proof 1: the script compiles, and fails closed on a broken bundle ---

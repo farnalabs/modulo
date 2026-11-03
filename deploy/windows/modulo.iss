@@ -46,13 +46,17 @@
   #error Unsupported BUNDLE_ARCH: only amd64 Windows installers are supported
 #endif
 
-#ifexist "{#BUNDLE_DIR}\modulo.exe"
+; A line that begins with "#" is an ISPP directive, and a directive's argument is
+; an ISPP expression - inline {#name} substitution only happens on ordinary
+; lines. So the bundle checks below use BUNDLE_DIR as an expression rather than
+; "{#BUNDLE_DIR}", which would test for a file literally named {#BUNDLE_DIR}.
+#ifexist BUNDLE_DIR + "\modulo.exe"
 #else
-  #error Required native runtime executable is missing: {#BUNDLE_DIR}\modulo.exe
+  #error Required native runtime executable is missing from the bundle (BUNDLE_DIR\modulo.exe)
 #endif
-#ifexist "{#BUNDLE_DIR}\modulo-runtime.json"
+#ifexist BUNDLE_DIR + "\modulo-runtime.json"
 #else
-  #error Required native runtime marker is missing: {#BUNDLE_DIR}\modulo-runtime.json
+  #error Required native runtime marker is missing from the bundle (BUNDLE_DIR\modulo-runtime.json)
 #endif
 
 [Setup]
