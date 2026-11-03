@@ -1118,14 +1118,11 @@
             <div>
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.agent') }}</dt>
               <dd class="font-medium">{{ agentName(selectedNodeData.agent_id) || shortId(selectedNodeData.agent_id) }}</dd>
-              <router-link
-                v-if="selectedNodeData.agent_id"
-                :to="`/admin/agents/${selectedNodeData.agent_id}`"
-                class="mt-0.5 inline-flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-400"
-              >
-                {{ $t('views.PipelineEditorView.view_agent') }}
-                <ExternalLinkIcon class="h-2.5 w-2.5" aria-hidden="true" />
-              </router-link>
+              <!-- No agent-detail route exists: /admin/agents/:id is not
+                   registered, so the catch-all redirect silently sent the
+                   operator to the dashboard. The agent is shown as text above;
+                   no navigation affordance is promised for a route that cannot
+                   resolve. -->
             </div>
             <div v-if="agentModelBackendId(selectedNodeData.agent_id)">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.model_backend') }}</dt>
@@ -1669,6 +1666,7 @@
           <div>
             <label for="pipelineeditorview-field-11" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.condition_type') }}</label>
             <Select
+  id="pipelineeditorview-field-11"
   :aria-label="$t('views.PipelineEditorView.condition_type')"
   v-model="edgeForm.condition_type"
   :disabled="isViewing"
@@ -1722,6 +1720,7 @@
               <div class="flex-1">
                 <label for="pipelineeditorview-field-7" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.operator') }}</label>
                 <Select
+  id="pipelineeditorview-field-7"
   :aria-label="$t('views.PipelineEditorView.operator')"
   v-model="edgeForm.eval_operator"
   :disabled="isViewing"
@@ -1764,6 +1763,7 @@
           <div>
             <label for="pipelineeditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent_select_label') }}</label>
             <Select
+  id="pipelineeditorview-field-6"
   :aria-label="$t('views.PipelineEditorView.agent_select_label')"
   :title="$t('views.PipelineEditorView.agent_select_hint')"
   v-model="pickerAgentId"
@@ -1783,6 +1783,7 @@
           <div v-if="selectedAgent">
             <label for="pipelineeditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.connector') }}</label>
             <Select
+  id="pipelineeditorview-field-5"
   :aria-label="$t('views.PipelineEditorView.connector')"
   v-model="pickerConnectorId"
   :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')"
@@ -1830,6 +1831,7 @@
         <div>
           <label for="pipelineeditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.snapshot_label') }}</label>
           <Select
+  id="pipelineeditorview-field-4"
   :aria-label="$t('views.PipelineEditorView.snapshot_label')"
   v-model="revertSnapshotId"
   :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')"
@@ -2131,7 +2133,7 @@ import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
 import { currentSubstantiveVersion, NON_VERSION_CREATED_KINDS, SNAPSHOT_PAGE_SIZE } from '../lib/pipelineVersion'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
-import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon, ExternalLink as ExternalLinkIcon } from '@lucide/vue'
+import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon } from '@lucide/vue'
 
 // The legacy useApi `post` helper aborted every request after 30s; the typed
 // client has no deadline of its own, so the archive/pause toggles keep the

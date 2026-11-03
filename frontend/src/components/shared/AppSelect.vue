@@ -1,17 +1,25 @@
 <template>
   <!--
-    Wrap the PrimeVue Select in a <label> so the rendered <input> is
-    statically associated with a label.  PrimeVue's Select renders an
-    <input> internally; without an explicit label association SonarCloud's
-    Web:InputWithoutLabelCheck flags it as an unlabelled field (this is the
-    reliability-rating gate failure on PR #596).  The wrapper itself never
-    renders visible label text, so consumer layout is unchanged - it only
-    satisfies the accessibility/static-analysis requirement.  See
+    Wrap the PrimeVue Select in a <label> so the rendered combobox is
+    accompanied by a label element.  A non-editable PrimeVue Select renders a
+    `<span role="combobox">`, not an <input>, and a span is NOT a labelable
+    element - so `<label for>` can never natively associate with it.  The
+    association is therefore made explicitly, once, here:
+      * the combobox takes the consumer's id (`labelId || inputId`);
+      * the visible `label[for]` that points at that id is given an id of its
+        own and referenced from the combobox via `aria-labelledby`, so the
+        label text is the control's accessible name;
+      * a click on that label focuses the combobox, bridging the behaviour a
+        native `label[for]` would have provided.
+    Consumer layout is unchanged - the wrapper renders no visible text.  See
     AgentRunnerBindings.vue for the same pattern.
   -->
   <label ref="rootEl">
     <Select
-      v-bind="$attrs"
+      v-bind="forwardedAttrs"
+      :input-id="resolvedInputId"
+      :label-id="resolvedInputId"
+      :aria-labelledby="resolvedLabelledBy"
       :options="options"
       :option-label="optionLabel"
       :option-value="optionValue"
@@ -49,9 +57,20 @@
  *     (FAR-1908 dialogs, FAR-1920 the general case — Drawer, sidebar, custom
  *     `overflow` box);
  *   - wraps the inner Select in a `<label>` and binds an explicit `aria-label`
- *     so the rendered `<input>` is never flagged by SonarCloud's
+ *     so the rendered combobox is never flagged by SonarCloud's
  *     `Web:InputWithoutLabelCheck`;
- *   - forwards all props, events, and slots to PrimeVue's Select.
+ *   - associates the consumer's visible `<label for="...">` with the focusable
+ *     combobox. PrimeVue renders the combobox with `id = labelId || inputId`
+ *     and puts a fallthrough `id` on its ROOT element instead, so passing `id`
+ *     straight through leaves `label[for]` pointing at a non-labelable element
+ *     and clicking the label does nothing. A consumer `id` (or `input-id`) is
+ *     therefore re-applied as BOTH `inputId` and `labelId`, the visible label
+ *     is given an id and referenced by the combobox's `aria-labelledby`, and a
+ *     click on that label is bridged to focus the combobox. PrimeVue's own
+ *     bridge (`bindLabelClickListener`) cannot do this on its own: it queries
+ *     `label[for=<labelId>]` (null until `labelId` is set) and only binds when
+ *     the label's `offsetParent` is non-null, which is never true under jsdom;
+ *   - forwards all other props, events, and slots to PrimeVue's Select.
  *
  * All Select instances across the app should use this wrapper instead of
  * importing `primevue/select` directly (enforced by appselect-guard.spec.ts).
@@ -80,7 +99,7 @@
  * `Select` would never propagate `update:modelValue` back to the parent and
  * `v-model` would silently break. Re-emitting here restores the passthrough.
  */
-import { computed, onMounted, ref, useAttrs } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, watch } from 'vue'
 import Select from 'primevue/select'
 
 // FAR-1920: the append-target decision is "does this Select sit inside a
@@ -160,10 +179,11 @@ function hasClippingAncestor(el: HTMLElement | null): boolean {
   return false
 }
 
-// Keep $attrs (e.g. data-testid) on the inner PrimeVue <Select> only.
-// With default inheritance the wrapper <label> would also receive them,
-// producing duplicate attributes (e.g. two elements sharing the same
-// data-testid) and breaking strict-mode selectors.
+// Keep $attrs (e.g. data-testid) on the inner PrimeVue <Select> only. With
+// default inheritance the wrapper <label> would also receive them, producing
+// duplicate attributes - in particular a duplicate `id`, which would make
+// `label[for]` resolve to the wrapper instead of the control, and two elements
+// sharing the same data-testid, which breaks strict-mode selectors.
 defineOptions({ inheritAttrs: false })
 
 const emit = defineEmits<{
@@ -187,11 +207,19 @@ const props = withDefaults(
     placeholder?: string
     appendTo?: string
     /**
-     * Accessible label for the underlying PrimeVue `Select` (which renders an
-     * `<input>` internally). Falls back to an `aria-label` passed through
-     * `$attrs`, then to a generic default.
+     * Accessible label for the underlying PrimeVue `Select`. A visible
+     * `<label for>` pointing at this control wins over it (it becomes the
+     * combobox's `aria-labelledby`); otherwise this falls back to an
+     * `aria-label` passed through `$attrs`, then to a generic default.
      */
     label?: string
+    /**
+     * Id for the focusable combobox element. Equivalent to PrimeVue's
+     * `inputId`; a consumer `id` attribute is also honoured (see the mapping
+     * below) because every existing call site pairs `label for="x"` with
+     * `AppSelect id="x"`.
+     */
+    inputId?: string
   }>(),
   {
     label: '',
@@ -200,15 +228,106 @@ const props = withDefaults(
 
 const attrs = useAttrs()
 
+/**
+ * Attributes forwarded to the inner PrimeVue `Select`.
+ *
+ * `id` is deliberately stripped: PrimeVue merges a fallthrough `id` onto its
+ * ROOT element while the focusable combobox takes `id = labelId || inputId`.
+ * Forwarding it unchanged therefore binds `label[for="x"]` to a non-labelable
+ * root div, breaking the association. The id is re-applied as both `inputId`
+ * and `labelId` below instead.
+ */
+const forwardedAttrs = computed(() => {
+  const { id: _consumerId, ...rest } = attrs
+  return rest
+})
+
+/**
+ * The id for the focusable combobox: an explicit `input-id` wins, else the
+ * consumer's `id` attribute, else PrimeVue's generated id.
+ */
+const resolvedInputId = computed<string | undefined>(() => {
+  if (props.inputId) return props.inputId
+  const consumerId = attrs.id
+  return typeof consumerId === 'string' && consumerId ? consumerId : undefined
+})
+
 const rootEl = ref<HTMLElement | null>(null)
 const isInClippingAncestor = ref(false)
+
+/**
+ * The visible `<label for>` that points at this control, if any.
+ *
+ * PrimeVue renders a non-editable Select as `<span role="combobox">`, which is
+ * NOT a labelable element, so the native `label[for]` association cannot reach
+ * it. The element is resolved here so the association can be made explicitly:
+ * the label is given an id (only when it has none - an existing id is never
+ * overwritten) and referenced from the combobox's `aria-labelledby`.
+ */
+function findConsumerLabel(controlId: string | undefined): HTMLLabelElement | null {
+  if (!controlId) return null
+  const escaped =
+    typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+      ? CSS.escape(controlId)
+      : controlId.replace(/["\\]/g, '\\$&')
+  return document.querySelector<HTMLLabelElement>(`label[for="${escaped}"]`)
+}
+
+/**
+ * A click on the visible label focuses the combobox, which is what a native
+ * `<label for>` pairing would do for a labelable control. Bound here rather
+ * than relying on PrimeVue's `bindLabelClickListener`: that bridge only binds
+ * when the label's `offsetParent` is non-null (never true in jsdom) and only
+ * once `labelId` is set, so it cannot be the guarantee.
+ */
+function focusCombobox(): void {
+  rootEl.value?.querySelector<HTMLElement>('[role="combobox"]')?.focus()
+}
+
+const labelEl = ref<HTMLLabelElement | null>(null)
+const derivedLabelledBy = ref<string | undefined>(undefined)
+
+function syncLabelAssociation(): void {
+  const label = findConsumerLabel(resolvedInputId.value)
+  if (labelEl.value && labelEl.value !== label) {
+    labelEl.value.removeEventListener('click', focusCombobox)
+  }
+  labelEl.value = label
+  if (!label) {
+    derivedLabelledBy.value = undefined
+    return
+  }
+  if (!label.id && resolvedInputId.value) label.id = `${resolvedInputId.value}__label`
+  // A label is only returned when `resolvedInputId` is set, so the line above
+  // has already given it an id - the association is never empty here.
+  derivedLabelledBy.value = label.id
+  label.addEventListener('click', focusCombobox)
+}
+
+// A consumer-supplied `aria-labelledby` always wins over the derived one.
+const resolvedLabelledBy = computed<string | undefined>(
+  () => (attrs['aria-labelledby'] as string | undefined) || derivedLabelledBy.value,
+)
 
 // Detect the clipping ancestor from the rendered DOM (measurement is only
 // possible after mount) so the safe append target is structural rather than
 // opted into by the host — a new dialog/drawer/panel that forgets a flag would
-// silently reintroduce the clipping bug (FAR-1908 review).
+// silently reintroduce the clipping bug (FAR-1908 review). The label
+// association is resolved here too: the whole tree (including a sibling
+// `<label>`) has been mounted by the time a child's `onMounted` runs.
 onMounted(() => {
   isInClippingAncestor.value = hasClippingAncestor(rootEl.value)
+  syncLabelAssociation()
+})
+
+// An input id that arrives after mount (a prop bound to async data) must
+// re-resolve, or the control stays associated with the wrong/absent label.
+watch(resolvedInputId, () => {
+  void nextTick(syncLabelAssociation)
+})
+
+onBeforeUnmount(() => {
+  labelEl.value?.removeEventListener('click', focusCombobox)
 })
 
 // Decision (FAR-1946, accepting FAR-1920): the general predicate below sends
