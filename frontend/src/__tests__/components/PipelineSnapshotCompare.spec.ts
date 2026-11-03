@@ -267,7 +267,10 @@ describe('PipelineSnapshotCompare', () => {
     const wrapper = await flushCompare()
     const error = wrapper.find('[data-testid="pipeline-compare-error"]')
     expect(error.exists()).toBe(true)
-    expect(error.attributes('role')).toBe('alert')
+    // The wrapper is only the BDD-pinned testid hook; the live region is
+    // ErrorAlert's own root (see the oneness pin below).
+    expect(error.attributes('role')).toBeUndefined()
+    expect(error.find('[role="alert"]').exists()).toBe(true)
     expect(error.text()).toContain('node is missing an id')
     // VIS-3: the region is the shared ErrorAlert (compact), not a bespoke box.
     const alert = wrapper.findComponent(ErrorAlert)
@@ -280,6 +283,36 @@ describe('PipelineSnapshotCompare', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="pipeline-compare-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="pipeline-compare-summary"]').exists()).toBe(true)
+  })
+
+  // VIS-3 oneness pin: the shared ErrorAlert's root IS the live region, so the
+  // compare error must announce exactly ONCE. A wrapper that also carries
+  // role="alert" (or aria-live) renders two live regions for one message and
+  // the screen reader reads it twice — the defect this test discriminates.
+  it('announces the compare error exactly once: one live region, no wrapper role', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: undefined,
+      error: { type: 'urn:problem:modulo:internal_error', title: 'Internal Error', status: 500, detail: 'node is missing an id' },
+    })
+    const wrapper = await flushCompare()
+    const error = wrapper.find('[data-testid="pipeline-compare-error"]')
+    expect(error.exists()).toBe(true)
+
+    // The wrapper carries no live semantics of its own.
+    expect(error.attributes('role')).toBeUndefined()
+    expect(error.attributes('aria-live')).toBeUndefined()
+
+    // Exactly one live-region ELEMENT inside this error subtree — ErrorAlert's
+    // root. The shared alert now carries role="alert" AND an explicit
+    // aria-live="assertive" on the same element; role="alert" already implies
+    // assertive, so that is still ONE region. What this pins is that no OTHER
+    // element adds a live region (which would announce the message twice).
+    const liveRegions = error.findAll('[role="alert"]')
+    expect(liveRegions).toHaveLength(1)
+    const ariaLiveRegions = error.findAll('[aria-live]')
+    expect(ariaLiveRegions).toHaveLength(1)
+    expect(ariaLiveRegions[0].element).toBe(liveRegions[0].element)
+    expect(liveRegions[0].text()).toContain('node is missing an id')
   })
 
   it.each([

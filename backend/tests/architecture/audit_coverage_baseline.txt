@@ -3,8 +3,6 @@
 # regenerate with:  uv run python scripts/audit_coverage.py --update
 # Delete a line as soon as the route/tool is annotated; the architecture test
 # fails on a stale entry so this list can only shrink.
-admin.py:confirm_org_deletion
-admin.py:delete_org_immediate
 admin.py:release_pipeline_snapshot_lock
 admin_email.py:admin_test_email_settings
 admin_notifications.py:test_webhook

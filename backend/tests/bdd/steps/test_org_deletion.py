@@ -1,8 +1,12 @@
-"""BDD step definitions: Organisation deletion workflow."""
+"""BDD step definitions: Organisation deletion workflow.
+
+Self-service deletion of the caller's own organisation is refused (FAR-2225);
+only the cancel and export legs of the old workflow remain reachable.
+"""
 
 import contextlib
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -13,7 +17,7 @@ with contextlib.suppress(FileNotFoundError, OSError):
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _DELETION_TOKEN = "test-deletion-token-1234567890abcdef"
-_TOKEN_EXPIRES = (datetime.now(UTC) + timedelta(hours=24)).isoformat()
+_REFUSAL_DETAIL = "Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}"
 
 
 # ===========================================================================
@@ -25,18 +29,6 @@ _TOKEN_EXPIRES = (datetime.now(UTC) + timedelta(hours=24)).isoformat()
 def org_pending_deletion(request):
     request.node._deletion_pending = True
     request.node._deletion_token = _DELETION_TOKEN
-
-
-@given(parsers.parse('the org has a pending deletion with token "{token}"'))
-def org_pending_deletion_with_token(token: str, request):
-    request.node._deletion_pending = True
-    request.node._deletion_token = token
-
-
-@given(parsers.parse("the org has {pipelines:d} pipelines and {runs:d} runs"))
-def org_has_pipelines_and_runs(pipelines: int, runs: int, request):
-    request.node._pipeline_count = pipelines
-    request.node._run_count = runs
 
 
 # ===========================================================================
@@ -58,28 +50,7 @@ def post_deletion_request(client, request):
             org_role="viewer",
         )
 
-    with (
-        patch("modulo.api.routes.admin.set_rls_org"),
-        patch(
-            "modulo.db.crud.org_deletion.request_org_deletion",
-            return_value={
-                "token": _DELETION_TOKEN,
-                "token_expires_at": _TOKEN_EXPIRES,
-                "export": {
-                    "organisation": [{"id": str(_ORG_ID), "name": "Test Org", "slug": "test-org", "status": "active"}],
-                    "users": [{"id": str(_USER_ID), "email": "admin@test.com"}],
-                    "pipelines": [],
-                    "runs": [],
-                    "audit_events": [],
-                    "library_primitives": [],
-                    "connector_instances": [],
-                    "model_backends": [],
-                },
-            },
-        ),
-        patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock),
-    ):
-        resp = client.post("/api/v1/admin/org/deletion-request")
+    resp = client.post("/api/v1/admin/org/deletion-request")
     request.node._resp = resp
 
 
@@ -89,13 +60,14 @@ def get_org_export(client, request):
         patch("modulo.api.routes.admin.set_rls_org"),
         patch(
             "modulo.db.crud.org_deletion.export_org_data",
+            new_callable=AsyncMock,
             return_value={
                 "organisation": [
                     {
                         "id": str(_ORG_ID),
                         "name": "Test Org",
                         "slug": "test-org",
-                        "status": "deleted",
+                        "status": "active",
                         "created_at": "2025-01-01T00:00:00+00:00",
                     }
                 ],
@@ -126,38 +98,7 @@ def patch_deletion_cancel(client, request):
 
 @when(parsers.parse('I POST /api/v1/admin/org/deletion-confirm with token "{token}"'))
 def post_deletion_confirm(token: str, client, request):
-    with (
-        patch("modulo.api.routes.admin.set_rls_org"),
-        patch(
-            "modulo.db.crud.org_deletion.confirm_org_deletion",
-            return_value={"deleted_organisation_id": str(_ORG_ID), "hard_deleted_runs": 5},
-        ),
-    ):
-        resp = client.post("/api/v1/admin/org/deletion-confirm", json={"token": token})
-    request.node._resp = resp
-
-
-@when("I POST /api/v1/admin/org/deletion-confirm with a valid token")
-def post_deletion_confirm_valid(client, request):
-    token = getattr(request.node, "_deletion_token", _DELETION_TOKEN)
-    with (
-        patch("modulo.api.routes.admin.set_rls_org"),
-        patch(
-            "modulo.db.crud.org_deletion.confirm_org_deletion",
-            return_value={"deleted_organisation_id": str(_ORG_ID), "hard_deleted_runs": 5},
-        ),
-    ):
-        resp = client.post("/api/v1/admin/org/deletion-confirm", json={"token": token})
-    request.node._resp = resp
-
-
-@when("I GET /api/v1/pipelines")
-def get_pipelines(client, request):
-    with patch(
-        "modulo.api.routes.pipelines.list_pipelines",
-        side_effect=__import__("fastapi").HTTPException(status_code=403, detail="Organisation is deleted"),
-    ):
-        resp = client.get("/api/v1/pipelines")
+    resp = client.post("/api/v1/admin/org/deletion-confirm", json={"token": token})
     request.node._resp = resp
 
 
@@ -166,19 +107,10 @@ def get_pipelines(client, request):
 # ===========================================================================
 
 
-@then("a deletion token is returned")
-def deletion_token_returned(request):
-    resp = request.node._resp
-    data = resp.json()
-    assert "token" in data, f"Expected token in response: {data}"
-    assert data["token"] == _DELETION_TOKEN
-
-
-@then("the token expires in 24 hours")
-def token_expires_24h(request):
-    resp = request.node._resp
-    data = resp.json()
-    assert "token_expires_at" in data, f"Expected token_expires_at in response: {data}"
+@then("the deletion refusal names the system-admin route")
+def deletion_refusal_names_system_admin_route(request):
+    detail = request.node._resp.json()["detail"]
+    assert detail == _REFUSAL_DETAIL, f"Unexpected refusal detail: {detail}"
 
 
 @then("the export bundle contains organisation info")
@@ -201,39 +133,3 @@ def org_status_restored(request):
     resp = request.node._resp
     data = resp.json()
     assert data.get("status") == "active", f"Expected status active, got: {data}"
-
-
-@then("the organisation is permanently deleted")
-def org_permanently_deleted(request):
-    resp = request.node._resp
-    data = resp.json()
-    assert data.get("deleted_organisation_id") == str(_ORG_ID)
-    assert "permanently deleted" in data.get("message", "")
-
-
-@then(parsers.parse('an audit event "{event_type}" is recorded'))
-def audit_event_recorded(event_type: str, request):
-    resp = request.node._resp
-    data = resp.json()
-    assert "export_summary" in data or "message" in data
-
-
-@then("all associated pipelines are removed")
-def pipelines_removed(request):
-    resp = request.node._resp
-    data = resp.json()
-    assert data.get("deleted_organisation_id") == str(_ORG_ID)
-
-
-@then("all runs are removed")
-def runs_removed(request):
-    resp = request.node._resp
-    data = resp.json()
-    assert "hard_deleted_runs" in data
-
-
-@then("all users are removed from the org")
-def users_removed(request):
-    resp = request.node._resp
-    data = resp.json()
-    assert data.get("deleted_organisation_id") == str(_ORG_ID)

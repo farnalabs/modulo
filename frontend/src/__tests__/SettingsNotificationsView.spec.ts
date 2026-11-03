@@ -213,7 +213,9 @@ describe('SettingsNotificationsView', () => {
 
     const errorRegion = wrapper.find('[data-testid="settings-notifications-error"]')
     expect(errorRegion.exists()).toBe(true)
-    expect(errorRegion.attributes('aria-live')).toBe('assertive')
+    // One live region: ErrorAlert's root. The wrapper must not duplicate it.
+    expect(errorRegion.attributes('aria-live')).toBeUndefined()
+    expect(errorRegion.findAll('[role="alert"]')).toHaveLength(1)
     expect(errorRegion.text()).toContain('backend down')
     expect(errorRegion.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
 
@@ -239,7 +241,8 @@ describe('SettingsNotificationsView', () => {
 
     const saveError = wrapper.find('[data-testid="settings-notifications-save-error"]')
     expect(saveError.exists()).toBe(true)
-    expect(saveError.attributes('aria-live')).toBe('assertive')
+    expect(saveError.attributes('aria-live')).toBeUndefined()
+    expect(saveError.findAll('[role="alert"]')).toHaveLength(1)
     expect(saveError.text()).toContain('save rejected')
     // The optimistic state was NOT applied: the category is still enabled.
     expect(switchByCategory(wrapper, 'run.failed').attributes('aria-checked')).toBe('true')

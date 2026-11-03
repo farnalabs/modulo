@@ -6,6 +6,7 @@ direct unit coverage.
 """
 
 import asyncio
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -19,6 +20,14 @@ from modulo.model_backends.base import (
     _parse_server_time,
     openai_compatible_health_check,
 )
+
+
+@contextmanager
+def _patched_http_client(handler):
+    """Patch ``httpx.AsyncClient`` so ``.get`` dispatches to ``handler``."""
+    with patch("httpx.AsyncClient") as mock_client:
+        mock_client.return_value.__aenter__.return_value.get = handler
+        yield
 
 
 class _StubBackend(ModelBackendBase):
@@ -45,8 +54,7 @@ class TestOpenAICompatibleHealthCheck:
             assert kwargs["headers"]["Authorization"] == "Bearer sk-test"
             return httpx.Response(200)
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get = _handler
+        with _patched_http_client(_handler):
             result = await openai_compatible_health_check(
                 base_url="https://api.example.com/v1/",
                 api_key="sk-test",
@@ -61,8 +69,7 @@ class TestOpenAICompatibleHealthCheck:
             captured["headers"] = kwargs.get("headers", {})
             return httpx.Response(200)
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get = _handler
+        with _patched_http_client(_handler):
             result = await openai_compatible_health_check(
                 base_url="https://api.example.com/v1",
                 api_key=None,
@@ -77,8 +84,7 @@ class TestOpenAICompatibleHealthCheck:
         async def _handler(url, **kwargs):
             return httpx.Response(401, text="Unauthorized credentials")
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get = _handler
+        with _patched_http_client(_handler):
             result = await openai_compatible_health_check(
                 base_url="https://api.example.com/v1",
                 api_key="sk-test",
@@ -90,8 +96,7 @@ class TestOpenAICompatibleHealthCheck:
         def _handler(url, **kwargs):
             raise httpx.TimeoutException("timed out")
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get = _handler
+        with _patched_http_client(_handler):
             result = await openai_compatible_health_check(
                 base_url="https://api.example.com/v1",
                 api_key="sk-test",
@@ -103,8 +108,7 @@ class TestOpenAICompatibleHealthCheck:
         def _handler(url, **kwargs):
             raise httpx.ConnectError("connection refused")
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get = _handler
+        with _patched_http_client(_handler):
             result = await openai_compatible_health_check(
                 base_url="https://api.example.com/v1",
                 api_key="sk-test",
@@ -118,8 +122,7 @@ class TestOpenAICompatibleHealthCheck:
         async def _handler(request, **kwargs):
             return httpx.Response(500, text=long_detail)
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get = _handler
+        with _patched_http_client(_handler):
             result = await openai_compatible_health_check(
                 base_url="https://api.example.com/v1",
                 api_key="sk-test",
@@ -149,8 +152,7 @@ class TestOpenAICompatibleHealthCheck:
             requested_urls.append(url)
             return httpx.Response(200)
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get = _handler
+        with _patched_http_client(_handler):
             await openai_compatible_health_check(
                 base_url="https://api.example.com/v1///",
                 api_key=None,

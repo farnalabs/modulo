@@ -28,7 +28,11 @@ The workflow defaults to workflow-level `permissions: contents: read`, with writ
 
 ### The freeze
 
-`cut` first pushes a temporary `release-publication-hold` marker before its version-bump push; `publish-images.yml` observes that marker and refuses stable `latest` while allowing the immutable SHA publication to proceed. It then pushes the authoritative `release-freeze` branch, which the merge queue checks and does not merge while it is present, and removes the temporary hold. A cut chooses the first free `vX.Y.Z-rcN`; a recut always chooses the next free RC number and tags the current `main` commit, so it cannot accidentally republish an older RC after a fix has landed. The freeze stops merges, not deploys: the release workflow force-dispatches `Deploy: Staging + Prod` from `main` with `force_deploy=true` and the RC tag as `release_ref`/`release_sha`; dispatching from the RC tag would give each RC its own `deploy-pipeline-${{ github.ref_name }}` concurrency group and allow two forced deploys to race the same Fly apps. The deploy workflow checks out the RC commit explicitly from `release_ref`. The deploy workflow's normal staging, E2E and production gates remain in force. `promote` deletes the authoritative freeze branch, which lets the merge queue resume on its next tick. Do not add release-freeze awareness to `deploy.yml`.
+`cut` first pushes a temporary `release-publication-hold` marker branch before its version-bump push; `publish-images.yml` observes that marker and refuses stable `latest` while allowing the immutable SHA publication to proceed. It then pushes the authoritative `release-freeze` branch, which the merge queue checks and does not merge while it is present, and removes the temporary hold. A cut chooses the first free `vX.Y.Z-rcN`; a recut always chooses the next free RC number and tags the current `main` commit, so it cannot accidentally republish an older RC after a fix has landed. The freeze stops merges, not deploys: the release workflow force-dispatches `Deploy: Staging + Prod` from `main` with `force_deploy=true` and the RC tag as `release_ref`/`release_sha`; dispatching from the RC tag would give each RC its own `deploy-pipeline-${{ github.ref_name }}` concurrency group and allow two forced deploys to race the same Fly apps. The deploy workflow checks out the RC commit explicitly from `release_ref`. The deploy workflow's normal staging, E2E and production gates remain in force. `promote` deletes the authoritative freeze branch, which lets the merge queue resume on its next tick. Do not add release-freeze awareness to `deploy.yml`.
+
+Both markers are branches under `refs/heads/`, not tags, so the protected-tag ruleset no longer covers them. The repository must carry a branch ruleset protecting `release-freeze` and `release-publication-hold` that restricts force-push and deletion to the release-bot identity (and admins); without it any write collaborator could move or delete the freeze. A repository ruleset is GitHub configuration, not workflow code, so it has to be applied with the repository settings before a real cut - the workflows cannot create it.
+
+If a `cut` or `recut` fails, a dedicated finalizer job clears `release-freeze` automatically so the merge queue does not remain stranded. The finalizer checks live ref state rather than upstream step outcomes: it confirms `bundle-v<VERSION>` is unpublished, proves the freeze points to one of this release's RC commits before touching it, and leaves any freeze belonging to another version alone.
 
 ### Recut runbook
 
@@ -71,7 +75,7 @@ The GA tag is the release identity, so it is created and pushed before anything 
 
 It does **not** publish anything. It does not create a tag or marker branch of any kind - not the RC, not `release-freeze`, not `release-publication-hold`, not `validated/*`, not GA - does not push to any registry, and does not create a Release, commit a CHANGELOG, publish a package, create an attestation, or deploy. It is therefore safe to run during an active freeze.
 
-### Why the "no tag at all" guarantee is structural, not a convention
+### Why the "no marker at all" guarantee is structural, not a convention
 
 A tag push is not a private act: a separate tag-triggered publication path could publish images if one were configured. The current `publish-images.yml` trigger is limited to `main` pushes and manual dispatch, while Release: Unified Pipeline publishes release images explicitly. So the dry-run path takes no tag action whatsoever rather than "a harmless local tag".
 
@@ -107,7 +111,7 @@ git ls-remote --exit-code origin refs/heads/release-publication-hold   # confirm
 git push origin --delete refs/heads/release-publication-hold            # release the suppression
 ```
 
-The dry-run's no-publication guarantee stays structural: it performs no tag action, registry push, Release creation, commit, attestation, or deploy. A human or another credential pushing a tag is a separate event and is outside the dry-run path.
+The dry-run's no-publication guarantee stays structural: it performs no marker action, registry push, Release creation, commit, attestation, or deploy. A human or another credential pushing a tag or branch marker is a separate event and is outside the dry-run path.
 
 ## Legacy workflow migration
 

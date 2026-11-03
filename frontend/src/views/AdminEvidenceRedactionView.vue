@@ -38,7 +38,7 @@
       <span>{{ $t('views.AdminEvidenceRedaction.loading') }}</span>
     </div>
 
-    <div v-else-if="initialLoadError" aria-live="assertive" data-testid="admin-evidence-redaction-load-error">
+    <div v-else-if="initialLoadError" data-testid="admin-evidence-redaction-load-error">
       <ErrorAlert :message="initialLoadError" :on-retry="loadRules" />
     </div>
 
@@ -48,7 +48,6 @@
            the failure surfaces here as a non-fatal, retry-able banner. -->
       <div
         v-if="refetchLoadError"
-        aria-live="assertive"
         class="mb-4"
         data-testid="admin-evidence-redaction-refetch-error"
       >
@@ -169,7 +168,7 @@
       <p
         v-if="statusMessage"
         aria-live="polite"
-        class="mb-4 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success"
+          class="mb-4 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success-text"
         data-testid="admin-evidence-redaction-status"
       >
         {{ statusMessage }}
@@ -212,7 +211,7 @@
                   <code class="font-mono text-xs">{{ rule.key_pattern }}</code>
                   <span
                     v-if="isCatchAll(rule)"
-                    class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+                    class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary-text"
                     data-testid="admin-evidence-redaction-catch-all"
                   >
                     {{ $t('views.AdminEvidenceRedaction.mandatory') }}

@@ -196,7 +196,10 @@ describe('AdminUsersView', () => {
 
     const errorWrapper = wrapper.find('[data-testid="admin-invitations-error"]')
     expect(errorWrapper.exists()).toBe(true)
-    expect(errorWrapper.attributes('aria-live')).toBe('assertive')
+    // Exactly one live region for the message: ErrorAlert's root owns
+    // role="alert", and the wrapper must not announce it a second time.
+    expect(errorWrapper.attributes('aria-live')).toBeUndefined()
+    expect(errorWrapper.findAll('[role="alert"]')).toHaveLength(1)
     expect(errorWrapper.text()).toContain('invitations unavailable')
     const retry = errorWrapper.find('[data-testid="error-alert-retry"]')
     expect(retry.exists()).toBe(true)
@@ -241,7 +244,8 @@ describe('AdminUsersView', () => {
     expect(callCount).toBe(2)
     const afterRetryError = wrapper.find('[data-testid="admin-invitations-error"]')
     expect(afterRetryError.exists()).toBe(true)
-    expect(afterRetryError.attributes('aria-live')).toBe('assertive')
+    expect(afterRetryError.attributes('aria-live')).toBeUndefined()
+    expect(afterRetryError.findAll('[role="alert"]')).toHaveLength(1)
     expect(afterRetryError.text()).toContain('invitations failed attempt 2')
     expect(wrapper.find('[data-testid="admin-invitations-row"]').exists()).toBe(false)
   })

@@ -1,9 +1,11 @@
 """Global fixtures for all unit tests."""
 
+import linecache
+import os
 import sys
 from collections.abc import Generator
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, AsyncMockMixin
 
 import pytest
 
@@ -536,3 +538,195 @@ def _far681_any_credential_default(request: pytest.FixtureRequest) -> None:
         )
 
     app.dependency_overrides.setdefault(get_current_tenant_user_or_api_key, _default_any_credential)
+
+
+# ---------------------------------------------------------------------------
+# AsyncMock coroutine leaks: attribute them to the test that CREATED them
+# ---------------------------------------------------------------------------
+#
+# WHY
+# ---
+# ``AsyncMock`` auto-creates every attribute as an ``AsyncMock``. When production
+# code calls one of those members SYNCHRONOUSLY (``session.add(...)``,
+# ``result.scalar_one_or_none()``, ``session.in_transaction()``) it receives a
+# coroutine that nothing ever awaits. CPython only reports it when the object is
+# finalised - and the object routinely outlives its test (here: it was held in a
+# request frame's locals, and that frame was kept alive by the exception
+# traceback). The report therefore lands on an arbitrary LATER test on the same
+# xdist worker: the 2026-11-01 flake that failed ``test_run_admission``,
+# ``trigger_engine``, ``scim``, ``deploy_workflow_rehearsal`` and
+# ``test_run_validate_nav_config``, while the actual leak lived in
+# ``tests/unit/api/test_self_lockout.py``.
+#
+# HOW
+# ---
+# 1. ``AsyncMockMixin._execute_mock_call`` is wrapped ONCE per process. Every
+#    coroutine an ``AsyncMock`` call produces is recorded - one list append per
+#    mock call. Measured on the 9,783-test ``tests/unit/api`` subset under
+#    ``-n auto``: 257.7 s with the guard off vs 258.6 s with it on (+0.3%).
+# 2. ``sys.set_coroutine_origin_tracking_depth`` makes CPython record each
+#    coroutine's creation stack, so a leaked object can name its creator with
+#    no tracemalloc. (``PYTHONTRACEMALLOC=25`` is the usual recipe, but it
+#    slowed the 44k-test unit suite past a 40-minute bound; origin tracking
+#    costs a bounded stack walk per coroutine instead.)
+# 3. At each unit test's teardown, the coroutines recorded since the previous
+#    teardown are inspected. One that never started (live ``cr_frame``, unset
+#    ``cr_await``, not running) is a never-awaited coroutine, and the test that
+#    created it FAILS BY NAME with the creation stack.
+#
+# NO SILENT SUPPRESSION
+# ---------------------
+# ``coro.close()`` is never called and no warning is filtered: the leak is
+# reported as a hard failure. Reported objects are RETAINED for the rest of the
+# session on purpose - dropping the last reference would let the standard
+# ``RuntimeWarning`` fire later and fail an innocent test, which is the exact
+# mis-attribution this hook exists to remove.
+#
+# ``MODULO_TEST_COROUTINE_ATTRIBUTION=0`` disables the instrumentation for a
+# local debugging session. It is ON by default, so the CI unit run (``pytest
+# tests/unit/``) always has it without extra wiring.
+_ATTRIBUTION_ENV = "MODULO_TEST_COROUTINE_ATTRIBUTION"
+_ATTRIBUTION_ENABLED = os.environ.get(_ATTRIBUTION_ENV, "1").strip().lower() not in {"0", "false", "no", "off"}
+
+#: ``sys.set_coroutine_origin_tracking_depth`` frames per coroutine. Deep enough
+#: to walk out of unittest.mock -> the production frame -> the test/fixture that
+#: built the double; shallow enough to stay cheap.
+_COROUTINE_ORIGIN_DEPTH = 20
+
+#: Coroutines produced by ``AsyncMock`` calls, in creation order.
+_RECORDED_COROUTINES: list[object] = []
+#: Index into ``_RECORDED_COROUTINES`` already inspected (index-based instead of
+#: clearing at setup, so a coroutine created by a fixture that is set up BEFORE
+#: this fixture is still attributed rather than silently dropped).
+_INSPECTED_UPTO = 0
+#: Leaks already reported, retained so the same object cannot fail a later test.
+_ATTRIBUTED_LEAKS: list[object] = []
+#: Upper bound on retention; a pathological leak loop must not grow the session
+#: memory without bound. Past the cap the standard warning may fire again (the
+#: originating test has already failed by then).
+_ATTRIBUTED_LEAKS_CAP = 256
+#: Trim the already-inspected prefix once it grows this large.
+_RECORDED_TRIM_THRESHOLD = 8192
+
+_WRAPPER_MARKER = "_modulo_coroutine_attribution_wrapper"
+
+
+def _executes_recorded(fn: object) -> bool:
+    return getattr(fn, _WRAPPER_MARKER, False) is True
+
+
+def _install_coroutine_recorder() -> None:
+    """Wrap ``AsyncMockMixin._execute_mock_call`` once per process."""
+    if _executes_recorded(AsyncMockMixin._execute_mock_call):
+        return
+    original = AsyncMockMixin._execute_mock_call
+
+    def _record_asyncmock_coroutine(self: object, /, *args: object, **kwargs: object) -> object:
+        coroutine = original(self, *args, **kwargs)  # type: ignore[misc]
+        _RECORDED_COROUTINES.append(coroutine)
+        return coroutine
+
+    setattr(_record_asyncmock_coroutine, _WRAPPER_MARKER, True)
+    AsyncMockMixin._execute_mock_call = _record_asyncmock_coroutine  # type: ignore[method-assign]
+
+
+def _is_never_awaited(coroutine: object) -> bool:
+    """True for a coroutine that was created and never started.
+
+    A completed coroutine has no frame; a suspended one has ``cr_await`` set
+    (the object it is currently awaiting). Neither is the "never awaited"
+    defect, so both are excluded.
+    """
+    if getattr(coroutine, "cr_frame", None) is None:
+        return False
+    if getattr(coroutine, "cr_running", False):
+        return False
+    return getattr(coroutine, "cr_await", None) is None
+
+
+def _format_creation_stack(coroutine: object) -> str:
+    """Render the creation stack CPython recorded for *coroutine*.
+
+    Frames inside pytest/pluggy and this module's wrapper are the test harness
+    calling the test - they are identical for every leak and never the cause,
+    so they are dropped to keep the message pointed at the guilty code. If the
+    whole stack is harness frames the raw list is rendered instead, so a
+    documented "no stack" never hides real information.
+    """
+    origin = getattr(coroutine, "cr_origin", None)
+    if not origin:
+        return "  (no creation stack was recorded for this object)"
+    frames = [
+        (filename, lineno, funcname)
+        for filename, lineno, funcname in reversed(origin)
+        if funcname != "_record_asyncmock_coroutine"
+        and "/site-packages/_pytest/" not in filename
+        and "/site-packages/pluggy/" not in filename
+    ]
+    if not frames:
+        frames = [(filename, lineno, funcname) for filename, lineno, funcname in reversed(origin)]
+    lines = ["  Coroutine created at (most recent call last):"]
+    for filename, lineno, funcname in frames:
+        lines.append(f'    File "{filename}", line {lineno}, in {funcname}')
+        source = linecache.getline(filename, lineno).strip()
+        if source:
+            lines.append(f"      {source}")
+    return "\n".join(lines)
+
+
+def _report_leaks(nodeid: str, leaks: list[object]) -> None:
+    """Fail *nodeid* for every never-awaited AsyncMock coroutine it created."""
+    details = "\n\n".join(
+        f"[{index}] {_format_creation_stack(coroutine)}" for index, coroutine in enumerate(leaks, start=1)
+    )
+    pytest.fail(
+        f"{len(leaks)} never-awaited AsyncMock coroutine(s) created during {nodeid}.\n\n"
+        "A synchronous call on an AsyncMock - or a synchronous read of an AsyncMock's\n"
+        "result - returns a coroutine that nothing awaits. Type the double to match the\n"
+        "real contract: MagicMock for synchronous members (session.add / in_transaction /\n"
+        "get_bind) and a plain MagicMock result for `await session.execute(...)` whose\n"
+        "readers (scalar_one_or_none / first / scalars / all) are called synchronously.\n"
+        "See tests/unit/api/mock_session.py.\n\n"
+        f"{details}",
+        pytrace=False,
+    )
+
+
+if _ATTRIBUTION_ENABLED:
+    # Enabled before any test module is imported, so every coroutine created in
+    # this session carries its creation stack.
+    sys.set_coroutine_origin_tracking_depth(_COROUTINE_ORIGIN_DEPTH)
+    _install_coroutine_recorder()
+
+
+@pytest.fixture(autouse=True)
+def _attribute_leaked_asyncmock_coroutines(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    """Fail the test that created a never-awaited AsyncMock coroutine.
+
+    Index-based rather than "clear at setup": a coroutine created by a fixture
+    that runs before this one is still inside the window, so nothing is silently
+    dropped. The scan is a list slice plus a cheap predicate per object - it
+    costs nothing measurable when no leak exists, and it only builds a creation
+    stack (``cr_origin``) for the object already known to be leaking.
+    """
+    yield
+    if not _ATTRIBUTION_ENABLED:
+        return
+
+    global _INSPECTED_UPTO
+    pending = _RECORDED_COROUTINES[_INSPECTED_UPTO:]
+    _INSPECTED_UPTO = len(_RECORDED_COROUTINES)
+    if _INSPECTED_UPTO > _RECORDED_TRIM_THRESHOLD:
+        del _RECORDED_COROUTINES[:_INSPECTED_UPTO]
+        _INSPECTED_UPTO = 0
+
+    leaks = [coroutine for coroutine in pending if _is_never_awaited(coroutine)]
+    if not leaks:
+        return
+
+    # Retain the reported objects so their RuntimeWarning cannot be re-emitted
+    # against a later, innocent test. The leak itself is a hard failure below.
+    if len(_ATTRIBUTED_LEAKS) < _ATTRIBUTED_LEAKS_CAP:
+        _ATTRIBUTED_LEAKS.extend(leaks)
+
+    _report_leaks(request.node.nodeid, leaks)

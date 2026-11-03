@@ -193,6 +193,22 @@ function mountViewWithRealErrorAlert() {
   })
 }
 
+// Failure/retry coverage mounts the REAL ErrorAlert: the announcement
+// (role="alert"), the rendered message and the retry wiring are the surface
+// under test, so a stub would assert nothing about them.
+function mountViewWithRealErrors() {
+  return mount(RunsListView, {
+    global: {
+      stubs: {
+        'router-link': {
+          props: ['to'],
+          template: '<a :href="typeof to === \'string\' ? to : to.path" :data-to="typeof to === \'string\' ? to : to.path"><slot /></a>',
+        },
+      },
+    },
+  })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
@@ -1095,6 +1111,94 @@ describe('RunsListView load failure recovery', () => {
     expect(vm.loadErrorMessage).toBe('')
     expect(wrapper.text()).not.toContain(t('views.RunsListView.load_error_recovery'))
     wrapper.unmount()
+  })
+})
+
+describe('RunsListView failure and retry', () => {
+  it('announces a load failure and retry re-fetches the same filtered request', async () => {
+    routeMocks.query = { status: 'running' }
+    let fail = true
+    const getMock = api.GET as any
+    const original = getMock.getMockImplementation()
+    getMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/runs') {
+        return fail
+          ? Promise.reject(new Error('runs down'))
+          : Promise.resolve({ data: listWith([{ ...baseRun, status: 'running' }]), error: undefined })
+      }
+      return Promise.resolve({ data: mockResponses.default, error: undefined })
+    })
+    try {
+      const wrapper = mountViewWithRealErrors()
+      await flushPromises()
+      await nextTick()
+
+      // The API failure is an announced inline alert, not a blank table.
+      const alert = wrapper.find('[role="alert"]')
+      expect(alert.exists()).toBe(true)
+      expect(alert.text()).toContain('Failed to load runs: runs down')
+      expect(wrapper.text()).not.toContain('No runs found')
+
+      fail = false
+      await alert.find('[data-testid="error-alert-retry"]').trigger('click')
+      await flushPromises()
+      await nextTick()
+
+      // Recovery: the alert clears and the row for the retried page renders.
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+      expect(wrapper.text()).toContain('Test Pipeline')
+      // Retry kept the active filter rather than silently widening the list.
+      const lastCall = getMock.mock.calls[getMock.mock.calls.length - 1]
+      expect(lastCall[1].params.query.status).toBe('running')
+      wrapper.unmount()
+    } finally {
+      getMock.mockImplementation(original)
+    }
+  })
+
+  it('offers a retry that re-requests the same cursor page after a next-page failure', async () => {
+    mockResponses['/api/v1/runs'] = listWith(manyRuns.slice(0, 20), { next_cursor: 'cursor-1', has_more: true, total: 25 })
+    const getMock = api.GET as any
+    const original = getMock.getMockImplementation()
+    const wrapper = mountViewWithRealErrors()
+    await flushPromises()
+    await nextTick()
+
+    try {
+      // Page 2 never settles until the test rejects it, so the failure lands
+      // inside the click's own request rather than racing the initial load.
+      let rejectPageTwo: ((reason?: unknown) => void) | undefined
+      getMock.mockImplementation((url: string) => {
+        if (url === '/api/v1/runs') {
+          return new Promise((_, reject) => { rejectPageTwo = reject })
+        }
+        return Promise.resolve({ data: mockResponses.default, error: undefined })
+      })
+      await wrapper.find('[data-testid="runs-list-next-page"]').trigger('click')
+      await flushPromises()
+      rejectPageTwo?.(new Error('page two down'))
+      await flushPromises()
+      await nextTick()
+
+      const retry = wrapper.find('[data-testid="error-alert-retry"]')
+      expect(retry.exists()).toBe(true)
+
+      getMock.mockImplementation(original)
+      await retry.trigger('click')
+      await flushPromises()
+      await nextTick()
+
+      // The retried request is the SAME cursor page — not a silent jump back
+      // to page 1, which would strand the user on the wrong page.
+      const cursorCalls = getMock.mock.calls.filter(
+        (call: any[]) => call[1]?.params?.query?.cursor === 'cursor-1',
+      )
+      expect(cursorCalls.length).toBeGreaterThanOrEqual(2)
+      expect(wrapper.text()).toContain('Test Pipeline')
+      wrapper.unmount()
+    } finally {
+      getMock.mockImplementation(original)
+    }
   })
 })
 
