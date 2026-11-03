@@ -26,6 +26,13 @@ class FeatureFlag:
     tier: str
     currently_active: bool = False
     depends_on: list[str] | None = None
+    # FAR-2302: whether an ORGANISATION ADMIN may set this flag for their own
+    # org. Fail-closed default: a flag that does not explicitly opt in is
+    # system-administrator-only, so a new sensitive flag can never be opened to
+    # org admins by omission. Only community-tier flags are eligible; the route
+    # (``api/routes/admin_org_feature_flags.py``) refuses team-tier flags
+    # regardless of this value.
+    org_admin_settable: bool = False
 
 
 _KNOWN_FLAGS: list[FeatureFlag] = [
@@ -49,11 +56,13 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         name="saved_views",
         description="Persistent saved views for run and pipeline lists",
         tier="community",
+        org_admin_settable=True,
     ),
     FeatureFlag(
         name="dashboard_charts",
         description="Dashboard trend charts (run activity sparklines)",
         tier="community",
+        org_admin_settable=True,
     ),
     FeatureFlag(
         name="web_vitals_analytics",
@@ -179,24 +188,28 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         name="analytics_page",
         description="Run analytics dashboard (rolling-window run/cost/quality series)",
         tier="community",
+        org_admin_settable=True,
     ),
     # ── Community tier — mobile icon-rail experiment (default OFF) ──────────
     FeatureFlag(
         name="mobile_sidebar_rail",
         description="Mobile icon-rail sidebar (experimental)",
         tier="community",
+        org_admin_settable=True,
     ),
     # ── Community tier — user-scoped MCP keys (default OFF, FAR-620) ────────
     FeatureFlag(
         name="user_scoped_mcp_keys",
         description="Per-user MCP API keys (keys operate as their creator's identity)",
         tier="community",
+        org_admin_settable=True,
     ),
     # ── Community tier — API-key grant-sets (default OFF, FAR-1477 / ADR 058) ──
     FeatureFlag(
         name="api_key_grants",
         description="Explicit capability grant-sets on API keys (role becomes a bundle over grants)",
         tier="community",
+        org_admin_settable=True,
     ),
     # ── Community tier - SSO unrestricted JIT provisioning (default OFF, FAR-855) ──
     FeatureFlag(
@@ -227,12 +240,14 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         name="webhook_notification_log",
         description="Webhook notification delivery log (admin delivery-log UI)",
         tier="community",
+        org_admin_settable=True,
     ),
     # ── Community tier — library collections (FAR-760, default OFF) ───────
     FeatureFlag(
         name="library_collection",
         description="Library collections — pin multiple primitives into a browsable bundle",
         tier="community",
+        org_admin_settable=True,
     ),
     # ── Community tier — evidence-driven autonomy gating (FAR-1175, default OFF) ──
     FeatureFlag(
@@ -243,6 +258,7 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
             "runs at the next gate; promotion applies only to new runs)"
         ),
         tier="community",
+        org_admin_settable=True,
     ),
     # ── Community tier — human-linked MCP authority for human_only HITL gates
     # (ADR 063 step 1, FAR-1957; FAR-2281; default OFF). NOT a plan-tier
@@ -304,6 +320,18 @@ DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
         "system_maps",
     }
 )
+
+
+# FAR-2302: the curated set of flags an ORGANISATION ADMIN may set for their
+# own organisation. Derived from ``_KNOWN_FLAGS`` so the classification is
+# declared once, on the flag itself, and cannot drift from a second hand-
+# maintained list. Every other flag — including every team-tier flag and the
+# sensitive community-tier flags (SSO unrestricted provisioning, web vitals,
+# observability, SCIM, error forwarders, runtime config, rate limits, assistant
+# UI driving) — stays system-administrator-only. A future sensitive org-scoped
+# flag (community-library access, telemetry/metrics export) must be left
+# ``org_admin_settable=False`` (the default) until it is deliberately opened.
+ORG_ADMIN_SETTABLE_FLAGS: frozenset[str] = frozenset(flag.name for flag in _KNOWN_FLAGS if flag.org_admin_settable)
 
 
 class CommunityTier:
@@ -740,6 +768,13 @@ class FeatureFlagRegistry:
                     description=f["description"],
                     tier=f["tier_id"],
                     depends_on=f["depends_on"],
+                    # FAR-2302: settability is a CODE-level classification (it
+                    # is not a DB catalog column), so carry it from
+                    # ``_KNOWN_FLAGS`` when the catalog row replaces the
+                    # hardcoded entry. A catalog-only flag is not in
+                    # ``ORG_ADMIN_SETTABLE_FLAGS`` and therefore defaults to
+                    # system-admin-only (fail closed).
+                    org_admin_settable=f["name"] in ORG_ADMIN_SETTABLE_FLAGS,
                 )
                 for f in db_flags
             ]

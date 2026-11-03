@@ -2862,6 +2862,44 @@ describe('RunDetailView rendering extras', () => {
     wrapper.unmount()
   })
 
+  it('copies a support reference containing the full run id and error code', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const fullRunId = '1f0c0d6e-6a0b-4f1e-9d1a-0c9b8a7f6e5d'
+    const wrapper = await mountWith(
+      { ...baseDetail(), run_id: fullRunId, status: 'failed', error_code: 'node_deadline_exceeded' },
+      { outputs_json: null },
+    )
+    const btn = wrapper.find('[data-testid="run-detail-share-summary"]')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await flushPromises()
+    const text = writeText.mock.calls[0][0]
+    // A failed run must hand support the WHOLE uuid and the error code — the
+    // exact fields the old share summary dropped or truncated.
+    expect(text).toContain(fullRunId)
+    expect(text).toContain('status failed')
+    expect(text).toContain('error node_deadline_exceeded')
+    wrapper.unmount()
+  })
+
+  it('warns when the support reference cannot be written to the clipboard', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    Object.assign(navigator, { clipboard: { writeText } })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const wrapper = await mountWith(
+      { ...baseDetail(), status: 'failed', error_code: 'node_deadline_exceeded' },
+      { outputs_json: null },
+    )
+    const btn = wrapper.find('[data-testid="run-detail-share-summary"]')
+    await btn.trigger('click')
+    await flushPromises()
+
+    expect(warn).toHaveBeenCalledWith('Failed to copy support reference', expect.any(Error))
+    warn.mockRestore()
+    wrapper.unmount()
+  })
+
   it('copies the final output for a complete run', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })

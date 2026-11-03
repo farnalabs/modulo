@@ -157,6 +157,75 @@
       </template>
     </SectionCard>
 
+    <!-- Organisation feature flags (FAR-2302): community-tier flags an org
+         admin may set for their OWN org. Like the HITL review window and the
+         MCP authority card, this renders OUTSIDE the team-tier FeatureGate —
+         the endpoint is not plan-gated (team-tier flags are refused
+         server-side), so an admin on any plan can manage their own usage. -->
+    <SectionCard
+      :title="$t('views.AdminOrgSettingsView.org_feature_flags_title')"
+      :description="$t('views.AdminOrgSettingsView.org_feature_flags_description')"
+    >
+      <LoadingSpinner v-if="orgFeatureFlagsLoading" data-testid="org-feature-flags-loading" />
+
+      <ErrorAlert
+        v-else-if="orgFeatureFlagsLoadError"
+        :message="orgFeatureFlagsLoadError"
+        :on-retry="loadOrgFeatureFlags"
+        data-testid="org-feature-flags-load-error"
+      />
+
+      <template v-else>
+        <div class="space-y-4" data-testid="org-feature-flags-list">
+          <div
+            v-for="flag in orgFeatureFlags"
+            :key="flag.name"
+            class="flex min-h-10 items-center justify-between gap-4"
+            data-testid="org-feature-flag-row"
+          >
+            <div>
+              <p class="text-sm font-medium">{{ flag.description }}</p>
+              <p class="text-xs text-muted-foreground" data-testid="org-feature-flag-status">
+                {{ flag.overridden
+                  ? $t('views.AdminOrgSettingsView.org_feature_flags_status_overridden')
+                  : $t('views.AdminOrgSettingsView.org_feature_flags_status_default') }}
+              </p>
+            </div>
+            <ToggleSwitch
+              :checked="flag.enabled"
+              :disabled="orgFeatureFlagsSaving === flag.name"
+              :toggling="orgFeatureFlagsSaving === flag.name"
+              :label="flag.description"
+              :data-testid="`org-feature-flag-toggle-${flag.name}`"
+              @toggle="(next: boolean) => toggleOrgFeatureFlag(flag, next)"
+            />
+          </div>
+          <p
+            v-if="orgFeatureFlags.length === 0"
+            class="text-sm text-muted-foreground"
+            data-testid="org-feature-flags-empty"
+          >{{ $t('views.AdminOrgSettingsView.org_feature_flags_empty') }}</p>
+        </div>
+
+        <p class="mt-3 text-xs text-muted-foreground" data-testid="org-feature-flags-note">
+          {{ $t('views.AdminOrgSettingsView.org_feature_flags_system_admin_note') }}
+        </p>
+
+        <p
+          v-if="orgFeatureFlagsError"
+          class="mt-2 text-sm text-destructive"
+          role="alert"
+          data-testid="org-feature-flags-error"
+        >{{ orgFeatureFlagsError }}</p>
+        <p
+          v-else-if="orgFeatureFlagsSaved"
+          class="mt-2 text-sm text-success"
+          aria-live="polite"
+          data-testid="org-feature-flags-saved"
+        >{{ $t('views.AdminOrgSettingsView.org_feature_flags_saved') }}</p>
+      </template>
+    </SectionCard>
+
     <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
 
     <LoadingSpinner v-if="loading" />
@@ -660,6 +729,72 @@ async function toggleMcpAuthority(next: boolean) {
   }
 }
 
+interface OrgFeatureFlag {
+  name: string
+  description: string
+  enabled: boolean
+  overridden: boolean
+  default: boolean
+}
+
+const orgFeatureFlags = ref<OrgFeatureFlag[]>([])
+const orgFeatureFlagsLoading = ref(true)
+const orgFeatureFlagsLoadError = ref<string | null>(null)
+const orgFeatureFlagsSaving = ref<string | null>(null)
+const orgFeatureFlagsError = ref<string | null>(null)
+const orgFeatureFlagsSaved = ref(false)
+
+async function loadOrgFeatureFlags() {
+  orgFeatureFlagsLoading.value = true
+  orgFeatureFlagsLoadError.value = null
+  try {
+    const resp = await api.GET('/api/v1/admin/org/feature-flags')
+    if (resp.error) {
+      orgFeatureFlagsLoadError.value = t('views.AdminOrgSettingsView.org_feature_flags_load_failed', {
+        error: formatApiError(resp.error),
+      })
+      return
+    }
+    const data = resp.data as { flags?: OrgFeatureFlag[] } | undefined
+    orgFeatureFlags.value = data?.flags ?? []
+  } catch (e: unknown) {
+    orgFeatureFlagsLoadError.value = t('views.AdminOrgSettingsView.org_feature_flags_load_failed', {
+      error: formatApiError(e),
+    })
+  } finally {
+    orgFeatureFlagsLoading.value = false
+  }
+}
+
+async function toggleOrgFeatureFlag(flag: OrgFeatureFlag, next: boolean) {
+  if (orgFeatureFlagsSaving.value) return
+  orgFeatureFlagsSaving.value = flag.name
+  orgFeatureFlagsError.value = null
+  orgFeatureFlagsSaved.value = false
+  try {
+    const resp = await api.PUT('/api/v1/admin/org/feature-flags/{flag_name}', {
+      params: { path: { flag_name: flag.name } },
+      body: { enabled: next },
+    })
+    if (resp.error) {
+      orgFeatureFlagsError.value = t('views.AdminOrgSettingsView.org_feature_flags_save_failed', {
+        error: formatApiError(resp.error),
+      })
+      return
+    }
+    const updated = resp.data as OrgFeatureFlag | undefined
+    flag.enabled = updated?.enabled ?? next
+    flag.overridden = updated?.overridden ?? true
+    orgFeatureFlagsSaved.value = true
+  } catch (e: unknown) {
+    orgFeatureFlagsError.value = t('views.AdminOrgSettingsView.org_feature_flags_save_failed', {
+      error: formatApiError(e),
+    })
+  } finally {
+    orgFeatureFlagsSaving.value = null
+  }
+}
+
 function formatDate(dateStr: string): string {
   if (!dateStr) return t('views.AdminOrgSettingsView.unknown_date')
   const d = new Date(dateStr)
@@ -732,4 +867,5 @@ planStore.fetchPlan()
 loadCommunityObjects()
 loadHitlReviewWindow()
 loadMcpAuthority()
+loadOrgFeatureFlags()
 </script>
