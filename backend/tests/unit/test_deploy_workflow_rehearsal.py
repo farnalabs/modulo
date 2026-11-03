@@ -514,6 +514,65 @@ def test_final_release_manifest_verification_step_precedes_github_release() -> N
     assert "sha256sum --check SHA256SUMS" not in verify_script
 
 
+def test_alpha_bundle_scopes_windows_out_of_the_release_path() -> None:
+    """Alpha native targets are Linux and macOS; Windows is Beta scope.
+
+    ``windows-installer.yml`` is a deliberate fail-closed placeholder, so any
+    alpha publication job whose ``needs`` includes ``windows-installer`` is
+    SKIPPED on every cut/recut and no release is ever published. The Windows
+    artefact must therefore stay out of the final manifest (SHA256SUMS,
+    ``names`` and ``components``) until Windows returns to scope — this gate
+    fails if it is re-added without re-scoping the job graph.
+    """
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+
+    for job_id in ("final-release-manifest", "publish-release"):
+        assert "windows-installer" not in workflow["jobs"][job_id]["needs"]
+
+    final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
+    final_names = _step_names(final_steps)
+    build_script = final_steps[final_names.index("Build final signed manifest after every platform artifact")]["run"]
+
+    assert "windows" not in build_script
+    assert "-windows-amd64.exe" not in build_script
+    assert '"linux": "amd64"' in build_script
+    assert '"macos": "arm64"' in build_script
+    assert "modulo-${VERSION}-linux-amd64.tar.gz" in build_script
+    assert "Modulo-${VERSION}-macos-arm64.dmg" in build_script
+
+
+def test_alpha_bundle_still_requires_the_macos_installer() -> None:
+    """Guard the converse: dropping Windows must not silently drop macOS."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+
+    assert "macos-installer" in workflow["jobs"]["final-release-manifest"]["needs"]
+    assert "macos-installer" in workflow["jobs"]["publish-release"]["needs"]
+
+    final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
+    downloads = [
+        step.get("with", {}).get("name") for step in final_steps if "download-artifact" in str(step.get("uses", ""))
+    ]
+    assert "macos-installer-${{ inputs.version }}" in downloads
+
+
+def test_publish_release_assets_match_the_alpha_bundle() -> None:
+    """The published asset list must contain exactly what the bundle produces.
+
+    The manifest job no longer downloads the Windows exe, so a stale Windows
+    entry in either the presence check or the upload list would fail the
+    publication step it is meant to guard.
+    """
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["publish-release"]["steps"]
+    names = _step_names(steps)
+
+    for step_name in ("Verify portable release artefacts", "Create GitHub Release with assets"):
+        script = steps[names.index(step_name)]["run"]
+        assert "windows" not in script
+        assert "linux" in script
+        assert "macos" in script
+
+
 def test_portable_artifact_presence_check_is_not_signature_gate() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["publish-release"]["steps"]
