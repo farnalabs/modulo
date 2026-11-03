@@ -9,6 +9,7 @@ becomes a failed check), and the documented exit-code table (0 healthy,
 per code.
 """
 
+import asyncio
 import contextlib
 import json
 import subprocess
@@ -61,7 +62,7 @@ from modulo.launcher.doctor import (
 from modulo.launcher.entry import PGDATA_DIRNAME
 from modulo.launcher.secrets_file import LauncherSecrets, _parse
 from modulo.launcher.state import LauncherState, load_state, save_state
-from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.base import HealthResult, ModelBackendBase
 from tests.unit.launcher.test_launcher_shared import all_pass_probes
 
 
@@ -990,6 +991,27 @@ async def test_clock_drift_is_read_from_the_date_header() -> None:
     assert doctor_module._summarise_provider_results([result]).warning is True
 
 
+async def test_small_clock_drift_is_reported_without_a_warning() -> None:
+    server_time = datetime.now(UTC) - timedelta(seconds=1)
+
+    def _handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"date": format_datetime(server_time, usegmt=True)})
+
+    with _mock_provider_clients(_handler):
+        result = await doctor_module._probe_backend_row(
+            _provider_row("openai"),
+            _FakeSecretsBackend(json.dumps({"api_key": "sk-live"})),
+        )
+
+    assert result["ok"] is True
+    assert result["drift"] is not None
+    assert result["drift"] < doctor_module.PROVIDER_CLOCK_DRIFT_WARNING_SECONDS
+    summary = doctor_module._summarise_provider_results([result])
+    assert summary.ok is True
+    assert summary.warning is False
+    assert "(drift " in summary.detail
+
+
 async def test_missing_date_header_does_not_fail_the_check() -> None:
     with _mock_provider_clients(lambda _request: httpx.Response(200, headers={})):
         result = await doctor_module._probe_backend_row(
@@ -1072,6 +1094,320 @@ async def test_engine_is_disposed_when_the_database_query_fails(monkeypatch: pyt
         await doctor_module._probe_provider_reachability(Path("/data"), _state())
 
     assert engine.disposed is True
+
+
+# ---------------------------------------------------------------------------
+# provider reachability (FAR-2316): DB path, secrets fallback, probe errors
+# ---------------------------------------------------------------------------
+
+
+def test_provider_reachability_propagates_cancellation(tmp_path: Path) -> None:
+    """A cancelled probe must cancel the doctor, never be reported as a check."""
+    _write_state_secrets(tmp_path)
+
+    def _cancel() -> list[dict[str, object]]:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        check_provider_reachability(tmp_path, _state(), _probes(provider_reachability=_cancel))
+
+
+def test_provider_reachability_returns_the_folded_probe_results(tmp_path: Path) -> None:
+    _write_state_secrets(tmp_path)
+    rows = [doctor_module._provider_result("openai/gpt", status="ok", ok=True)]
+
+    result = check_provider_reachability(tmp_path, _state(), _probes(provider_reachability=lambda: rows))
+
+    assert result.ok is True
+    assert result.detail == "openai/gpt: ok"
+
+
+def test_sync_probe_runs_the_async_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = _state()
+    seen: list[tuple[Path, object]] = []
+
+    async def _fake(data_dir: Path, probe_state: object) -> list[dict[str, object]]:
+        seen.append((data_dir, probe_state))
+        return [{"name": "openai/gpt", "ok": True, "status": "ok", "skipped": False}]
+
+    monkeypatch.setattr(doctor_module, "_probe_provider_reachability", _fake)
+
+    results = doctor_module._provider_reachability_probe(Path("/data"), state)
+
+    assert results == [{"name": "openai/gpt", "ok": True, "status": "ok", "skipped": False}]
+    assert seen == [(Path("/data"), state)]
+
+
+class _QueryRows:
+    """A session result: iterable rows for a raw query, ``.scalars()`` for an ORM one."""
+
+    def __init__(self, rows: list[object]) -> None:
+        self._rows = rows
+
+    def __iter__(self) -> Iterator[object]:
+        return iter(self._rows)
+
+    def scalars(self) -> list[object]:
+        return self._rows
+
+
+class _ScriptedSession:
+    """Yields one canned result per ``execute`` call, in order."""
+
+    def __init__(self, results: list[_QueryRows]) -> None:
+        self._results = list(results)
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_args: object) -> bool:
+        return False
+
+    async def execute(self, *_args: object, **_kwargs: object) -> _QueryRows:
+        return self._results.pop(0)
+
+
+def _wire_probe_db(monkeypatch: pytest.MonkeyPatch, session: _ScriptedSession) -> _FakeEngine:
+    engine = _FakeEngine()
+    monkeypatch.setattr("sqlalchemy.ext.asyncio.create_async_engine", lambda *_a, **_k: engine)
+    monkeypatch.setattr("sqlalchemy.ext.asyncio.async_sessionmaker", lambda *_a, **_k: lambda: session)
+    monkeypatch.setattr(
+        doctor_module,
+        "_build_composed_config",
+        lambda *_a, **_k: {
+            "DATABASE_ADMIN_URL": "postgresql+asyncpg://u:p@h/db",
+            "FERNET_KEY": "fernet-key",
+        },
+    )
+    return engine
+
+
+async def test_probe_requires_a_composed_admin_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(doctor_module, "_build_composed_config", lambda *_a, **_k: {})
+
+    with pytest.raises(RuntimeError, match="DATABASE_ADMIN_URL"):
+        await doctor_module._probe_provider_reachability(Path("/data"), _state())
+
+
+async def test_probe_requires_a_composed_fernet_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        doctor_module,
+        "_build_composed_config",
+        lambda *_a, **_k: {"DATABASE_ADMIN_URL": "postgresql+asyncpg://u:p@h/db"},
+    )
+
+    with pytest.raises(RuntimeError, match="FERNET_KEY"):
+        await doctor_module._probe_provider_reachability(Path("/data"), _state())
+
+
+async def test_probe_returns_empty_when_no_organisation_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _ScriptedSession([_QueryRows([])])
+    engine = _wire_probe_db(monkeypatch, session)
+
+    results = await doctor_module._probe_provider_reachability(Path("/data"), _state())
+
+    assert not results
+    assert engine.disposed is True
+
+
+async def test_probe_reads_every_org_and_probes_its_backends(monkeypatch: pytest.MonkeyPatch) -> None:
+    org_a, org_b = uuid.uuid4(), uuid.uuid4()
+    row_a = _provider_row("openai", name="a")
+    row_b = _provider_row("openai", name="b")
+    session = _ScriptedSession([_QueryRows([(org_a,), (org_b,)]), _QueryRows([row_a]), _QueryRows([row_b])])
+    engine = _wire_probe_db(monkeypatch, session)
+
+    rls_orgs: list[uuid.UUID] = []
+
+    async def _set_rls(_session: object, org_id: uuid.UUID) -> None:
+        rls_orgs.append(org_id)
+
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", _set_rls)
+
+    secrets_backend = object()
+    built_with: list[tuple[str, object]] = []
+
+    def _build_secrets(fernet_key: str, sess: object) -> object:
+        built_with.append((fernet_key, sess))
+        return secrets_backend
+
+    monkeypatch.setattr(doctor_module, "_build_doctor_secrets_backend", _build_secrets)
+
+    probed: list[tuple[str, object]] = []
+
+    async def _probe(row: object, backend: object) -> dict[str, object]:
+        probed.append((row.name, backend))
+        return doctor_module._provider_result(f"openai/{row.name}", status="ok", ok=True)
+
+    monkeypatch.setattr(doctor_module, "_probe_backend_row", _probe)
+
+    results = await doctor_module._probe_provider_reachability(Path("/data"), _state())
+
+    assert [result["name"] for result in results] == ["openai/a", "openai/b"]
+    assert rls_orgs == [org_a, org_b]
+    assert built_with == [("fernet-key", session)]
+    assert probed == [("a", secrets_backend), ("b", secrets_backend)]
+    assert engine.disposed is True
+
+
+def test_build_doctor_secrets_backend_returns_the_configured_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    sentinel = object()
+    calls: list[tuple[str, object]] = []
+
+    def _create(*, fernet_key: str, session: object) -> object:
+        calls.append((fernet_key, session))
+        return sentinel
+
+    monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", _create)
+    session = MagicMock()
+
+    assert doctor_module._build_doctor_secrets_backend("fernet-key", session) is sentinel
+    assert calls == [("fernet-key", session)]
+
+
+def test_build_doctor_secrets_backend_falls_back_to_the_db_fernet_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A configured external backend that cannot initialise must not blank credentials."""
+    from cryptography.fernet import Fernet
+
+    from modulo.core.secrets_backend.fernet import FernetSecretsBackend
+
+    def _broken(*, fernet_key: str, session: object) -> object:
+        raise RuntimeError("vault unavailable")
+
+    monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", _broken)
+    session = MagicMock()
+
+    backend = doctor_module._build_doctor_secrets_backend(Fernet.generate_key().decode(), session)
+
+    assert isinstance(backend, FernetSecretsBackend)
+
+
+async def test_probe_backend_row_skips_a_provider_with_no_probe() -> None:
+    result = await doctor_module._probe_backend_row(
+        _provider_row("custom"), _FakeSecretsBackend(json.dumps({"api_key": "k"}))
+    )
+
+    assert result["skipped"] is True
+    assert result["status"] == doctor_module.SKIPPED_NO_PROBE
+
+
+async def test_probe_backend_row_propagates_credential_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _cancel(*_args: object, **_kwargs: object) -> object:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("modulo.core.model_backend_hub._resolve_backend_credentials", _cancel)
+
+    with pytest.raises(asyncio.CancelledError):
+        await doctor_module._probe_backend_row(_provider_row("openai"), _FakeSecretsBackend("{}"))
+
+
+async def test_probe_backend_row_propagates_build_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _creds(*_args: object, **_kwargs: object) -> dict[str, str]:
+        return {"api_key": "k"}
+
+    def _cancel(*_args: object, **_kwargs: object) -> object:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("modulo.core.model_backend_hub._resolve_backend_credentials", _creds)
+    monkeypatch.setattr("modulo.core.model_backend_hub._instantiate_backend", _cancel)
+
+    with pytest.raises(asyncio.CancelledError):
+        await doctor_module._probe_backend_row(_provider_row("openai"), _FakeSecretsBackend("{}"))
+
+
+async def test_probe_backend_row_reports_an_unresolvable_endpoint_as_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _creds(*_args: object, **_kwargs: object) -> dict[str, str]:
+        return {"api_key": "k"}
+
+    def _unresolvable(*_args: object, **_kwargs: object) -> object:
+        raise ValueError("DNS resolution failed for api.example.com")
+
+    monkeypatch.setattr("modulo.core.model_backend_hub._resolve_backend_credentials", _creds)
+    monkeypatch.setattr("modulo.core.model_backend_hub._instantiate_backend", _unresolvable)
+
+    result = await doctor_module._probe_backend_row(_provider_row("openai"), _FakeSecretsBackend("{}"))
+
+    assert result["ok"] is False
+    assert result["skipped"] is False
+    assert result["status"] == "unreachable (ValueError)"
+
+
+class _ProbeBackend(ModelBackendBase):
+    """A backend whose own health check is overridden (so it is probed, not skipped)."""
+
+    backend_id = "test/probe"
+
+    def __init__(
+        self,
+        *,
+        raises: BaseException | None = None,
+        result: HealthResult | None = None,
+        close_error: BaseException | None = None,
+    ) -> None:
+        self._raises = raises
+        self._result = result
+        self._close_error = close_error
+        self.closed = False
+
+    async def invoke(self, messages: list[object], output_schema: object = None, **kwargs: object) -> object:
+        raise NotImplementedError
+
+    def stream(self, messages: list[object], tools: object = None, **kwargs: object) -> object:
+        raise NotImplementedError
+
+    async def health_check(self) -> HealthResult:
+        if self._raises is not None:
+            raise self._raises
+        assert self._result is not None
+        return self._result
+
+    async def aclose(self) -> None:
+        self.closed = True
+        if self._close_error is not None:
+            raise self._close_error
+
+
+async def test_health_check_maps_an_immediate_timeout() -> None:
+    backend = _ProbeBackend(raises=TimeoutError("slow"))
+
+    result = await doctor_module._run_backend_health_check(backend, "openai/gpt")
+
+    assert result["ok"] is False
+    assert result["status"] == "timeout"
+    assert backend.closed is True
+
+
+async def test_health_check_maps_a_raising_probe_to_unreachable() -> None:
+    backend = _ProbeBackend(raises=RuntimeError("boom"))
+
+    result = await doctor_module._run_backend_health_check(backend, "openai/gpt")
+
+    assert result["ok"] is False
+    assert result["status"] == "unreachable (RuntimeError)"
+    assert backend.closed is True
+
+
+async def test_health_check_propagates_cancellation() -> None:
+    backend = _ProbeBackend(raises=asyncio.CancelledError)
+
+    with pytest.raises(asyncio.CancelledError):
+        await doctor_module._run_backend_health_check(backend, "openai/gpt")
+
+    assert backend.closed is True
+
+
+async def test_health_check_close_failure_does_not_fail_the_result() -> None:
+    backend = _ProbeBackend(result=HealthResult(ok=True), close_error=RuntimeError("close boom"))
+
+    result = await doctor_module._run_backend_health_check(backend, "openai/gpt")
+
+    assert result["ok"] is True
+    assert result["status"] == "ok"
+    assert backend.closed is True
 
 
 # ---------------------------------------------------------------------------
