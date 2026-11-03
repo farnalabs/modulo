@@ -302,17 +302,27 @@ def test_the_support_block_distinguishes_a_limitation_from_a_failure() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _windows_module(name: str) -> Any:
+    """Import a Windows-only stdlib module without tripping the Linux mypy run.
+
+    ``backend/pyproject.toml`` pins ``platform = "linux"``, so ``ctypes.windll``
+    and ``winreg`` do not exist as far as the type checker is concerned. These
+    helpers are only reached on Windows, behind a skip guard.
+    """
+    import importlib
+
+    return importlib.import_module(name)
+
+
 def _is_elevated() -> bool:
     """True when this process can open the Service Control Manager."""
-    import ctypes
-
-    return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    shell32: Any = _windows_module("ctypes").windll.shell32
+    return bool(shell32.IsUserAnAdmin())
 
 
 def _service_image_path(name: str) -> str | None:
     """The ``ImagePath`` the SCM persisted for ``name``, or None if absent."""
-    import winreg
-
+    winreg: Any = _windows_module("winreg")
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, rf"SYSTEM\CurrentControlSet\Services\{name}") as key:
             value: Any = winreg.QueryValueEx(key, "ImagePath")[0]
