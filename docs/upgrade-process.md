@@ -55,8 +55,9 @@ The script fails loudly (non-zero exit, nothing written) if any mirror has drift
 ### Native single-install (Linux and macOS arm64)
 
 The native single-install path supports the published Linux bundle and the
-signed, notarized macOS arm64 `.dmg`. Windows is in Alpha scope, but no native Windows installer is published yet, so
-there is no native Windows upgrade path today. Linux uses
+signed, notarized macOS arm64 `.dmg`. Windows native support is Beta scope, planned
+after Alpha: no native Windows installer is published yet, so there is no native
+Windows upgrade path today. Linux uses
 `scripts/install.sh`; macOS uses `scripts/macos/install.sh` and installs the
 LaunchAgent seam from the app bundle. See the platform support matrix in
 [`docs/system-requirements.md`](./system-requirements.md).
