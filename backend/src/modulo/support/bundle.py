@@ -399,18 +399,13 @@ def build_deployment_text(
     settings: object | None,
 ) -> str:
     """``deployment.txt``: shape, services, image, restarts, proxy NAMES, CA path."""
-    in_container = Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
-    install_shape = "container" if in_container else ("native" if data_dir is not None else "unknown")
-    services = ["modulo-api", "modulo-worker"]
-    if data_dir is not None:
-        services.extend(_launcher_child_names(data_dir))
+    install_shape = _determine_install_shape(data_dir)
+    services = _collect_service_names(data_dir)
     image = _env_first(environ, _IMAGE_ENV_NAMES) or "unknown"
     image_digest = _env_first(environ, ("IMAGE_DIGEST", "IMAGE_ID")) or "unknown"
     restart_counts = _restart_counts(data_dir)
-    proxy_names = sorted(name for name in environ if _is_proxy_name(name))
-    ca_bundle = _env_first(environ, _CA_BUNDLE_ENV_NAMES) or str(
-        getattr(settings, "ssl_cert_file", "") or "system default"
-    )
+    proxy_names = _collect_proxy_names(environ)
+    ca_bundle = _resolve_ca_bundle(environ, settings)
     lines = [
         f"install shape: {install_shape}",
         f"service names: {', '.join(services)}",
@@ -421,6 +416,37 @@ def build_deployment_text(
         f"ca bundle path: {ca_bundle}",
     ]
     return "\n".join(lines)
+
+
+def _determine_install_shape(data_dir: Path | None) -> str:
+    """Determine the installation shape from the runtime environment."""
+    in_container = Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+    if in_container:
+        return "container"
+    if data_dir is not None:
+        return "native"
+    return "unknown"
+
+
+def _collect_service_names(data_dir: Path | None) -> list[str]:
+    """Collect all service names for the deployment."""
+    services = ["modulo-api", "modulo-worker"]
+    if data_dir is not None:
+        services.extend(_launcher_child_names(data_dir))
+    return services
+
+
+def _collect_proxy_names(environ: Mapping[str, str]) -> list[str]:
+    """Collect proxy-related environment variable names."""
+    return sorted(name for name in environ if _is_proxy_name(name))
+
+
+def _resolve_ca_bundle(environ: Mapping[str, str], settings: object | None) -> str:
+    """Resolve the CA bundle path from environment or settings."""
+    env_value = _env_first(environ, _CA_BUNDLE_ENV_NAMES)
+    if env_value:
+        return env_value
+    return str(getattr(settings, "ssl_cert_file", "") or "system default")
 
 
 def _is_proxy_name(name: str) -> bool:
@@ -995,61 +1021,12 @@ async def build_bundle_async(
     bundle_ref = ref or generate_ref()
     resolved = sources if sources is not None else BundleSources()
     environ = resolved.resolved_environ()
-    settings = resolved.settings
-    if settings is None:
-        try:
-            from modulo.settings import get_settings
-
-            settings = get_settings()
-        except Exception:
-            settings = None
+    settings = _resolve_settings(resolved)
 
     missing: list[dict[str, str]] = []
 
     licence = resolve_licence(settings)
-    raw_members: dict[str, str] = {
-        VERSION_MEMBER: build_version_text(environ),
-        DOCTOR_MEMBER: resolved.doctor_output
-        if resolved.doctor_output is not None
-        else "doctor output unavailable: no launcher data dir (container install)",
-        HEALTH_MEMBER: await build_health_json(),
-        SETTINGS_MEMBER: build_settings_text(settings, licence),
-        DEPLOYMENT_MEMBER: build_deployment_text(data_dir=resolved.data_dir, environ=environ, settings=settings),
-        LICENCE_MEMBER: build_licence_text(settings),
-    }
-    if resolved.doctor_output is None:
-        missing.append(
-            {
-                "member": DOCTOR_MEMBER,
-                "reason": (
-                    "no launcher data dir; doctor checks are native-install only"
-                    if resolved.data_dir is None
-                    else "doctor output was not captured by this entry point"
-                ),
-            }
-        )
-
-    degraded = build_degraded_json(resolved.data_dir)
-    if degraded is None:
-        missing.append({"member": DEGRADED_MEMBER, "reason": "native launcher only; not applicable in a container"})
-    else:
-        raw_members[DEGRADED_MEMBER] = degraded
-
-    db_members = await _read_db_members(_session_factory(resolved))
-    missing.extend(db_members.missing)
-    if db_members.db_text is not None:
-        raw_members[DB_MEMBER] = db_members.db_text
-    if db_members.errors_json is not None:
-        raw_members[ERRORS_MEMBER] = db_members.errors_json
-    if db_members.runs_json is not None:
-        raw_members[RUNS_MEMBER] = db_members.runs_json
-
-    log_members = _read_log_members(resolved.data_dir, resolved.max_log_bytes)
-    if not log_members:
-        missing.append(
-            {"member": f"{LOG_MEMBER_PREFIX}*{LOG_MEMBER_SUFFIX}", "reason": "no launcher data dir (container install)"}
-        )
-    raw_members.update(log_members)
+    raw_members = await _collect_raw_members(resolved, environ, settings, licence, missing)
 
     _assert_allowlist(raw_members)
 
@@ -1060,45 +1037,20 @@ async def build_bundle_async(
     )
     redactor = Redactor(seeds)
 
-    redacted: dict[str, str] = {}
-    counts: dict[str, int] = {LAYER_EXACT: 0, LAYER_STRUCTURAL: 0, LAYER_PATTERNS: 0}
-    for name in sorted(raw_members):
-        outcome = redactor.redact(raw_members[name])
-        redacted[name] = outcome.text
-        for layer, count in outcome.counts.items():
-            counts[layer] = counts.get(layer, 0) + count
+    redacted, counts = _redact_all_members(raw_members, redactor)
 
     # The ref is a token THIS build minted, so the entropy heuristic must not
     # refuse our own report/MANIFEST text. Only that exact token is exempt.
     allowed_tokens = frozenset({bundle_ref})
-    final, archive = _assemble(
+    final, archive, truncated = _assemble_and_gate(
         redacted,
-        ref=bundle_ref,
-        redaction_counts=counts,
-        missing=missing,
-        truncated=(),
+        bundle_ref,
+        counts,
+        missing,
+        resolved.max_bundle_bytes,
+        redactor,
+        allowed_tokens,
     )
-
-    truncated: list[str] = []
-    for name in final:
-        redactor.gate(name, final[name], allowed_tokens=allowed_tokens)
-    while len(archive) > resolved.max_bundle_bytes and _has_shrinkable_log(redacted):
-        with_shrunk = _shrink_logs(redacted)
-        redacted = with_shrunk
-        truncated = [name for name in redacted if name.startswith(LOG_MEMBER_PREFIX)]
-        final, archive = _assemble(
-            redacted,
-            ref=bundle_ref,
-            redaction_counts=counts,
-            missing=missing,
-            truncated=truncated,
-        )
-        for name in final:
-            redactor.gate(name, final[name], allowed_tokens=allowed_tokens)
-    if len(archive) > resolved.max_bundle_bytes:
-        raise BundleTooLargeError(
-            f"bundle is {len(archive)} bytes after truncating every log member (cap {resolved.max_bundle_bytes})"
-        )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     _write_atomically(out_path, archive)
@@ -1114,6 +1066,162 @@ async def build_bundle_async(
         truncated_log_members=tuple(truncated),
         ref=bundle_ref,
     )
+
+
+def _resolve_settings(resolved: BundleSources) -> object | None:
+    """Resolve the Settings object from sources or the global getter."""
+    settings: object | None = resolved.settings
+    if settings is None:
+        try:
+            from modulo.settings import get_settings
+
+            settings = get_settings()
+        except Exception:
+            settings = None
+    return settings
+
+
+async def _collect_raw_members(
+    resolved: BundleSources,
+    environ: Mapping[str, str],
+    settings: object | None,
+    licence: dict[str, Any],
+    missing: list[dict[str, str]],
+) -> dict[str, str]:
+    """Collect all raw (pre-redaction) bundle members."""
+    raw_members: dict[str, str] = {
+        VERSION_MEMBER: build_version_text(environ),
+        DOCTOR_MEMBER: _doctor_member_text(resolved),
+        HEALTH_MEMBER: await build_health_json(),
+        SETTINGS_MEMBER: build_settings_text(settings, licence),
+        DEPLOYMENT_MEMBER: build_deployment_text(data_dir=resolved.data_dir, environ=environ, settings=settings),
+        LICENCE_MEMBER: build_licence_text(settings),
+    }
+    _maybe_add_doctor_missing(resolved, missing)
+
+    degraded = build_degraded_json(resolved.data_dir)
+    _handle_degraded_member(degraded, raw_members, missing)
+
+    await _add_db_members(resolved, raw_members, missing)
+
+    log_members = _read_log_members(resolved.data_dir, resolved.max_log_bytes)
+    _handle_log_members(log_members, raw_members, missing)
+
+    return raw_members
+
+
+def _doctor_member_text(resolved: BundleSources) -> str:
+    """Return the doctor member text or a placeholder."""
+    if resolved.doctor_output is not None:
+        return resolved.doctor_output
+    return "doctor output unavailable: no launcher data dir (container install)"
+
+
+def _maybe_add_doctor_missing(resolved: BundleSources, missing: list[dict[str, str]]) -> None:
+    """Add doctor member to missing list if no output was captured."""
+    if resolved.doctor_output is None:
+        reason = (
+            "no launcher data dir; doctor checks are native-install only"
+            if resolved.data_dir is None
+            else "doctor output was not captured by this entry point"
+        )
+        missing.append({"member": DOCTOR_MEMBER, "reason": reason})
+
+
+def _handle_degraded_member(
+    degraded: str | None,
+    raw_members: dict[str, str],
+    missing: list[dict[str, str]],
+) -> None:
+    """Add degraded member to raw_members or missing list."""
+    if degraded is None:
+        missing.append({"member": DEGRADED_MEMBER, "reason": "native launcher only; not applicable in a container"})
+    else:
+        raw_members[DEGRADED_MEMBER] = degraded
+
+
+async def _add_db_members(
+    resolved: BundleSources,
+    raw_members: dict[str, str],
+    missing: list[dict[str, str]],
+) -> None:
+    """Add database-backed members to raw_members and missing list."""
+    db_members = await _read_db_members(_session_factory(resolved))
+    missing.extend(db_members.missing)
+    if db_members.db_text is not None:
+        raw_members[DB_MEMBER] = db_members.db_text
+    if db_members.errors_json is not None:
+        raw_members[ERRORS_MEMBER] = db_members.errors_json
+    if db_members.runs_json is not None:
+        raw_members[RUNS_MEMBER] = db_members.runs_json
+
+
+def _handle_log_members(
+    log_members: dict[str, str],
+    raw_members: dict[str, str],
+    missing: list[dict[str, str]],
+) -> None:
+    """Add log members to raw_members or record as missing."""
+    if not log_members:
+        missing.append(
+            {"member": f"{LOG_MEMBER_PREFIX}*{LOG_MEMBER_SUFFIX}", "reason": "no launcher data dir (container install)"}
+        )
+    raw_members.update(log_members)
+
+
+def _redact_all_members(raw_members: dict[str, str], redactor: Redactor) -> tuple[dict[str, str], dict[str, int]]:
+    """Redact all members and aggregate per-layer counts."""
+    redacted: dict[str, str] = {}
+    counts: dict[str, int] = {LAYER_EXACT: 0, LAYER_STRUCTURAL: 0, LAYER_PATTERNS: 0}
+    for name in sorted(raw_members):
+        outcome = redactor.redact(raw_members[name])
+        redacted[name] = outcome.text
+        for layer, count in outcome.counts.items():
+            counts[layer] = counts.get(layer, 0) + count
+    return redacted, counts
+
+
+def _assemble_and_gate(
+    redacted: dict[str, str],
+    bundle_ref: str,
+    counts: dict[str, int],
+    missing: list[dict[str, str]],
+    max_bundle_bytes: int,
+    redactor: Redactor,
+    allowed_tokens: frozenset[str],
+) -> tuple[dict[str, str], bytes, list[str]]:
+    """Assemble the bundle, run the gate, and shrink logs until under budget."""
+    truncated: list[str] = []
+    final, archive = _assemble(
+        redacted,
+        ref=bundle_ref,
+        redaction_counts=counts,
+        missing=missing,
+        truncated=(),
+    )
+
+    for name in final:
+        redactor.gate(name, final[name], allowed_tokens=allowed_tokens)
+
+    while len(archive) > max_bundle_bytes and _has_shrinkable_log(redacted):
+        redacted = _shrink_logs(redacted)
+        truncated = [name for name in redacted if name.startswith(LOG_MEMBER_PREFIX)]
+        final, archive = _assemble(
+            redacted,
+            ref=bundle_ref,
+            redaction_counts=counts,
+            missing=missing,
+            truncated=truncated,
+        )
+        for name in final:
+            redactor.gate(name, final[name], allowed_tokens=allowed_tokens)
+
+    if len(archive) > max_bundle_bytes:
+        raise BundleTooLargeError(
+            f"bundle is {len(archive)} bytes after truncating every log member (cap {max_bundle_bytes})"
+        )
+
+    return final, archive, truncated
 
 
 def _session_factory(sources: BundleSources) -> Callable[[], Any] | None:
@@ -1287,48 +1395,24 @@ def _redact_stdin() -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.redact_stdin:
-        if args.out is not None or args.list or args.show or args.json or args.data_dir is not None:
-            _emit(
-                "error: --redact-stdin cannot be combined with --out/--list/--show/--json/--data-dir",
-                stream=sys.stderr,
-            )
+        validation_error = _validate_redact_stdin_args(args)
+        if validation_error is not None:
+            _emit(validation_error, stream=sys.stderr)
             return 2
         return _redact_stdin()
 
-    if args.out is None:
-        _emit("error: --out is required unless --redact-stdin is given", stream=sys.stderr)
-        return 2
-    if args.list and args.show:
-        _emit("error: --list and --show are mutually exclusive", stream=sys.stderr)
+    validation_error = _validate_build_args(args)
+    if validation_error is not None:
+        _emit(validation_error, stream=sys.stderr)
         return 2
 
-    read_mode = (args.list or args.show) and args.out.is_file()
-    if not read_mode:
-        try:
-            result = asyncio.run(
-                build_bundle_async(
-                    args.out,
-                    sources=BundleSources(data_dir=args.data_dir),
-                )
-            )
-        except RedactionGateError as exc:
-            _emit(
-                f"refused: redaction gate refused member {exc.member!r}: {'; '.join(exc.reasons)}",
-                stream=sys.stderr,
-            )
-            _emit("no bundle written", stream=sys.stderr)
-            return 2
-        except (BundleTooLargeError, OSError) as exc:
-            _emit(f"error: could not write bundle: {exc}", stream=sys.stderr)
-            return 1
-    else:
-        result = inspect_bundle(args.out)
+    build_result = _run_build_or_inspect(args)
+    if isinstance(build_result, int):
+        return build_result
+    result = build_result
 
     if args.list:
-        _emit(f"bundle_format_version: {result.bundle_format_version}")
-        for name, size in result.members:
-            _emit(f"{name}\t{size} bytes")
-        return 0
+        return _print_member_list(result)
 
     if args.show:
         return _show_member(args.out, args.show)
@@ -1338,6 +1422,50 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         for line in summary_lines(result):
             _emit(line)
+    return 0
+
+
+def _validate_redact_stdin_args(args: Any) -> str | None:
+    if args.out is not None or args.list or args.show or args.json or args.data_dir is not None:
+        return "error: --redact-stdin cannot be combined with --out/--list/--show/--json/--data-dir"
+    return None
+
+
+def _validate_build_args(args: Any) -> str | None:
+    if args.out is None:
+        return "error: --out is required unless --redact-stdin is given"
+    if args.list and args.show:
+        return "error: --list and --show are mutually exclusive"
+    return None
+
+
+def _run_build_or_inspect(args: Any) -> BundleResult | int:
+    read_mode = (args.list or args.show) and args.out.is_file()
+    if read_mode:
+        return inspect_bundle(args.out)
+    try:
+        return asyncio.run(
+            build_bundle_async(
+                args.out,
+                sources=BundleSources(data_dir=args.data_dir),
+            )
+        )
+    except RedactionGateError as exc:
+        _emit(
+            f"refused: redaction gate refused member {exc.member!r}: {'; '.join(exc.reasons)}",
+            stream=sys.stderr,
+        )
+        _emit("no bundle written", stream=sys.stderr)
+        return 2
+    except (BundleTooLargeError, OSError) as exc:
+        _emit(f"error: could not write bundle: {exc}", stream=sys.stderr)
+        return 1
+
+
+def _print_member_list(result: BundleResult) -> int:
+    _emit(f"bundle_format_version: {result.bundle_format_version}")
+    for name, size in result.members:
+        _emit(f"{name}\t{size} bytes")
     return 0
 
 

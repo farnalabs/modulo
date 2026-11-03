@@ -264,15 +264,27 @@ def _gate_reasons(
     allowed_tokens: frozenset[str] = frozenset(),
 ) -> list[str]:
     reasons: list[str] = []
+    _check_seeded_secrets(text, seeds, reasons)
+    _check_shared_patterns(text, reasons)
+    _check_structured_lines(text, reasons)
+    _check_entropy_tokens(text, allowed_tokens, reasons)
+    return reasons
+
+
+def _check_seeded_secrets(text: str, seeds: list[str], reasons: list[str]) -> None:
     for secret in seeds:
         if secret and secret in text:
             reasons.append("seeded secret value still present")
             break
 
+
+def _check_shared_patterns(text: str, reasons: list[str]) -> None:
     mask_probe = mask_secret_values_in_text(text)
     if mask_probe != text:
         reasons.append("shared secret-value pattern still matches")
 
+
+def _check_structured_lines(text: str, reasons: list[str]) -> None:
     for line in text.splitlines():
         match = _EXPORT_PREFIX.match(line)
         if match is None or not is_sensitive_field_name(match.group("key")):
@@ -282,13 +294,14 @@ def _gate_reasons(
             reasons.append(f"sensitive key {match.group('key')!r} has an unredacted value")
             break
 
+
+def _check_entropy_tokens(text: str, allowed_tokens: frozenset[str], reasons: list[str]) -> None:
     for token in _ENTROPY_TOKEN.findall(text):
         if token in allowed_tokens:
             continue
         if _looks_like_unclassified_secret(token):
             reasons.append("unclassified high-entropy token present")
             break
-    return reasons
 
 
 def _looks_like_unclassified_secret(token: str) -> bool:
