@@ -48,10 +48,59 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Release Preflight Discovery Gate (FAR-2344)
+  # Aggregates all known release preconditions into an independent, non-failing
+  # discovery gate so that every check is evaluated in a single pass.
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Release Preflight Discovery Gate
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Set up Python 3.12
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Run release preflight discovery gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REGISTRY_USER: ${{ github.actor }}
+          RELEASE_MODE: ${{ inputs.mode }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_FREEZE: ${{ inputs.freeze }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          BUNDLE_MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
+          MODULO_RELEASE_PR_TOKEN: ${{ secrets.MODULO_RELEASE_PR_TOKEN }}
+        run: |
+          freeze_arg=""
+          if [ "${RELEASE_FREEZE}" = "true" ]; then
+            freeze_arg="--freeze"
+          fi
+          uv run --no-project --no-sync --no-build python scripts/run_release_preflight.py \
+            --mode "${RELEASE_MODE}" \
+            --version "${RELEASE_VERSION}" \
+            $freeze_arg
+
+  # ---------------------------------------------------------------------------
   # Dry-run rehearsal
   # ---------------------------------------------------------------------------
   dry-run:
     name: Dry-run rehearsal (${{ inputs.version || 'auto' }})
+    needs: [preflight]
     if: inputs.mode == 'dry-run'
     runs-on: ubicloud-standard-2
     timeout-minutes: 60
@@ -170,6 +219,7 @@ jobs:
 
   dry-run-bundle:
     name: Rehearse bundle build (no publish)
+    needs: [preflight]
     if: inputs.mode == 'dry-run'
     uses: ./.github/workflows/bundle-release.yml
     with:
@@ -187,6 +237,7 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     name: Release (${{ inputs.mode }})
+    needs: [preflight]
     if: inputs.mode != 'dry-run'
     runs-on: ubicloud-standard-2
     # Covers the bounded 90-minute merge-queue wait plus the bounded 45-minute
@@ -1843,6 +1894,7 @@ jobs:
   # ---------------------------------------------------------------------------
   produce-sbom:
     name: Produce CycloneDX SBOM
+    needs: [preflight]
     runs-on: ubicloud-standard-2
     timeout-minutes: 10
     permissions:
@@ -2031,10 +2083,13 @@ jobs:
   # ---------------------------------------------------------------------------
   freeze-cleanup:
     name: Clear release freeze after a failed cut or recut
-    needs: [release, bundle, windows-installer, macos-installer, final-release-manifest, attest-artefacts, publish-release]
+    needs: [preflight, release, bundle, windows-installer, macos-installer, final-release-manifest, attest-artefacts, publish-release]
     # `always()` lets this run after a failed publication chain; `failure()`
     # keeps it out of a successful release (where the freeze is deliberate).
-    if: always() && (inputs.mode == 'cut' || inputs.mode == 'recut') && failure()
+    # `needs.preflight.result == 'success'` keeps it out of a run whose
+    # discovery gate never passed: such a run created no freeze of its own, so
+    # clearing anything here could only touch another release's state.
+    if: always() && (inputs.mode == 'cut' || inputs.mode == 'recut') && needs.preflight.result == 'success' && failure()
     runs-on: ubicloud-standard-2
     timeout-minutes: 10
     permissions:
