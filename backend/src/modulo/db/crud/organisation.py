@@ -403,8 +403,9 @@ def _validate_json_patch_args(
     ``delete_keys``) may name a key at most once: the compose order between
     overlapping mechanisms was never a documented contract, so an overlap is
     refused rather than resolved implicitly. Also bounds each nested mechanism
-    to one top-level key per call and refuses an empty ``nested_delete`` list
-    (a no-op that would still create/heal the parent object).
+    to one top-level key per call, refuses an empty ``nested_delete`` list
+    (a no-op that would still create/heal the parent object), and refuses a
+    call that combines ``nested_patch`` with ``nested_delete`` at all.
     """
     nested = dict(nested_patch or {})
     sub_delete = dict(nested_delete or {})
@@ -442,6 +443,16 @@ def _validate_json_patch_args(
         raise ValueError(
             f"nested_patch key(s) {sorted(nested_overlap)!r} also appear in nested_delete — "
             "the compose order would be ambiguous"
+        )
+    # FAR-2309 review: the two nested mechanisms are mutually exclusive even
+    # when they name DIFFERENT top-level keys. The Postgres statement composes
+    # a single nested key (``_nested_parts`` picks one), while the generic
+    # path honours both, so a cross-key combo would silently drop the merge on
+    # Postgres only. No caller needs a merge and a delete in one call, so the
+    # combination is refused rather than made dialect-dependent.
+    if nested and sub_delete:
+        raise ValueError(
+            "nested_patch and nested_delete cannot be combined in one call — only one nested key is composed per write"
         )
     patch_overlap = set(patch) & set(sub_delete)
     if patch_overlap:
@@ -791,9 +802,10 @@ def _nested_parts(
     """Unpack the single-key nested merge/delete pair into statement params.
 
     ``update_org_json_column_patch`` has already refused more than one top-level
-    key per mechanism and any key named by both, so at most one of the two
-    mappings is non-empty here. The merge defaults to an empty sub-object and
-    the delete to an empty array, which lets the ONE nested statement serve
+    key per mechanism and any call combining the two mechanisms, so exactly one
+    of the two mappings is non-empty here. The merge defaults to an empty
+    sub-object and the delete to an empty array, which lets the ONE nested
+    statement serve
     both mechanisms (``jsonb || '{}'`` and ``jsonb - '{}'::text[]`` are both
     no-ops).
     """

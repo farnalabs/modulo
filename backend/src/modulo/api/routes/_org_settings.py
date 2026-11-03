@@ -31,7 +31,8 @@ patch-helper call sites, not a universal one for every org-settings writer.
 
 Patch contract (mirrors :func:`update_org_json_column_patch`): at most ONE
 ``nested_patch`` key per call and at most ONE ``nested_delete`` key per call,
-and no key may appear in more than one of ``patch``, ``nested_patch``,
+``nested_patch`` and ``nested_delete`` may not be combined in one call, and no
+key may appear in more than one of ``patch``, ``nested_patch``,
 ``nested_delete`` and ``delete_keys`` — the compose order would be ambiguous,
 so the crud entry point refuses it rather than silently resolving delete-wins.
 ``nested_delete`` (FAR-2309) removes named SUB-keys from a single top-level

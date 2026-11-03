@@ -440,6 +440,21 @@ async def test_nested_delete_rejects_overlap_with_nested_patch(monkeypatch: pyte
         )
 
 
+async def test_nested_patch_and_nested_delete_reject_different_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A merge and a delete are refused even when they name DIFFERENT top-level
+    keys: the Postgres statement composes only ONE nested key, so a cross-key
+    combo would silently drop the merge there while the generic path applied
+    both (dialect-diverging lost write)."""
+    _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
+    with pytest.raises(ValueError, match="cannot be combined in one call"):
+        await update_org_settings_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            nested_patch={"block": {"sub": 1}},
+            nested_delete={"other": ["x"]},
+        )
+
+
 async def test_nested_delete_rejects_overlap_with_delete_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     """Removing the whole top-level key AND a sub-key of it is ambiguous."""
     _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
