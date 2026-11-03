@@ -41,6 +41,14 @@ _RESTORE_MANIFEST_NAME = "backup-info.json"
 
 _HMAC_KEY = bytes(range(32))
 
+#: This module runs the shipped Linux installer/upgrade shell scripts under a
+#: real POSIX shell, so it needs executable-bit semantics, a POSIX PATH and
+#: ``jq``, none of which a Windows host provides (the installer refuses to run
+#: on a non-Linux host at all). The platform requirement is declared once, as a
+#: marker; the gate that skips it on Windows lives in ``backend/tests/conftest.py``
+#: (``POSIX_ONLY_MARKER``) and Linux CI executes this suite for real.
+pytestmark = pytest.mark.posix_only
+
 
 def _seed_data_dir(tmp_path: Path) -> Path:
     """A bootstrapped-looking data dir (state.json + secrets + pgdata)."""

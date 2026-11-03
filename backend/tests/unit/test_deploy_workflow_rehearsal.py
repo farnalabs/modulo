@@ -40,6 +40,15 @@ _LEGS = (
     ("deploy-production", "app-modulo", "prod"),
 )
 
+#: This module executes the shipped deploy/release shell scripts for real in a
+#: subprocess, with stubbed binaries placed first on PATH - so it needs
+#: executable-bit semantics, a POSIX PATH the shell can read, and ``jq``, none
+#: of which a Windows host provides (``bash`` resolves to the WSL stub and the
+#: stubs are unreadable to it). The platform requirement is declared once, as a
+#: marker; the gate that skips it on Windows lives in ``backend/tests/conftest.py``
+#: (``POSIX_ONLY_MARKER``) and Linux CI executes this suite for real.
+pytestmark = pytest.mark.posix_only
+
 
 def _workflow() -> dict[str, Any]:
     return cast(dict[str, Any], yaml.safe_load(DEPLOY_WORKFLOW.read_text(encoding="utf-8")))

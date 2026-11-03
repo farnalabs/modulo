@@ -75,6 +75,18 @@ jobs:
         # Mapped through the env block (S7630): GitHub expressions inside a
         # run block are interpolated before the shell parses the script, so
         # values are data, never code.
+        #
+        # The `github` context is the CALLER's inside a reusable workflow, so
+        # these two resolve to the real triggering event, NOT to
+        # `workflow_call`. Verified from this workflow's own job logs on
+        # 2026-11-03 across every event type it is called with - pull_request
+        # (runs 41655545471, 41655389515, 41654739024, 41652621398,
+        # 41652387278, 41651370459), push (41649749348, EVENT_BEFORE =
+        # 70c3e43f...) and workflow_dispatch (41655604088) - and each run
+        # path-filtered correctly. Do NOT "fix" this by threading the caller's
+        # event facts through `workflow_call` inputs: that is the
+        # caller-payload class of bug PR #2775 removed from the macOS
+        # installer, and it would replace a working filter with a guess.
         env:
           HARNESS_FORCE: ${{ inputs.force }}
           EVENT_NAME: ${{ github.event_name }}
@@ -114,10 +126,17 @@ jobs:
               exit 0
             fi
             BASE="$EVENT_BEFORE"
-          else
-            # workflow_dispatch (manual validation) - run unconditionally.
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # Manual validation of main - run unconditionally.
             echo "$CHANGED_TRUE" >> "$GITHUB_OUTPUT"
             echo "Manual dispatch - running harness unconditionally."
+            exit 0
+          else
+            # Any event this filter does not model. Fail OPEN, loudly: an
+            # unrecognised caller event must never silently skip the harness
+            # (and must never masquerade as a manual dispatch in the log).
+            echo "$CHANGED_TRUE" >> "$GITHUB_OUTPUT"
+            echo "::warning::unrecognised caller event '${EVENT_NAME}' - running Bundled Runner harness unconditionally (fail open)"
             exit 0
           fi
           PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/executor.py backend/src/modulo/core/pipeline_engine/node_runner.py backend/src/modulo/core/cron_helpers.py backend/src/modulo/core/runner_capacity.py deploy/compose/ backend/tests/docker/test_bundled_runner_harness.py backend/tests/docker/test_runners_strip_e2e.py backend/tests/docker/test_runner_bundled.py backend/tests/docker/test_watchdog_container.py .github/workflows/runner-ci-harness.yml"
