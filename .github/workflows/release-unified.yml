@@ -1659,6 +1659,36 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+      # FAR-2345 - the self-hosted compose stack as a downloadable asset.
+      #
+      # The bundle hard-pins the IMMUTABLE tag that exists at this point in the
+      # release: the RC tag. The stable `vX.Y.Z` image tag is created only by
+      # `promote`, which runs AFTER this release is published - pinning it here
+      # would ship a compose file whose image cannot be pulled, which is exactly
+      # the silent failure this asset exists to prevent. `:latest` and any git
+      # SHA are rejected outright by scripts/package_compose_release.py.
+      #
+      # The packaged compose is made standalone: the repo copy builds the health
+      # watchdog from `../watchdog`, which a downloaded tarball does not contain.
+      - name: Package self-hosted compose release bundle
+        env:
+          VERSION: ${{ inputs.version }}
+          RC_TAG: ${{ needs.release.outputs.rc_tag }}
+        run: |
+          set -euo pipefail
+          case "$RC_TAG" in
+            v"${VERSION}"-rc[0-9]*) ;;
+            *) echo "::error::rc_tag '${RC_TAG}' is not an immutable v${VERSION}-rcN tag; refusing to package a compose bundle"; exit 1 ;;
+          esac
+          # --no-build + an exact pin (S8541/S8544): no dependency build scripts
+          # run and the one dependency is a verified version.
+          uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 \
+            python scripts/package_compose_release.py \
+            --version "$VERSION" \
+            --tag "$RC_TAG" \
+            --output-dir release-artefacts
+          test -s "release-artefacts/modulo-${VERSION}-compose.tar.gz"
+          tar -tzf "release-artefacts/modulo-${VERSION}-compose.tar.gz"
       # Alpha bundle = Linux + macOS only. Windows native packaging is BETA
       # scope: windows-installer.yml still fails closed, so the Windows .exe is
       # deliberately absent here and must not be re-added to SHA256SUMS, the
@@ -1679,9 +1709,9 @@ jobs:
               echo "::error::include_windows=true but windows-installer-${VERSION} artifact is missing"
               exit 1
             fi
-            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "modulo-${VERSION}-windows-amd64.exe" > SHA256SUMS
+            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "modulo-${VERSION}-windows-amd64.exe" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
           else
-            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
           fi
           cd ..
           uv run --no-project --no-sync --no-build python - <<'PY'
@@ -1697,6 +1727,9 @@ jobs:
           if include_windows:
             names.append(f"modulo-{version}-windows-amd64.exe")
             components["windows"] = "amd64"
+          # FAR-2345: the self-hosted compose stack is packaged on every release,
+          # so it is always covered by the manifest.
+          names.append(f"modulo-{version}-compose.tar.gz")
           body = m.build_release_manifest(release=f"bundle-v{version}", platform="multi-platform", generated_at=os.environ.get("GITHUB_SHA", ""), components=components, artifacts=[{"name": n, "sha256": hashlib.sha256((root / n).read_bytes()).hexdigest(), "version": version} for n in names])
           payload = json.dumps(body, indent=2, sort_keys=True).encode()
           signing_key = os.environ["MANIFEST_SIGNING_KEY"]
@@ -1765,6 +1798,7 @@ jobs:
           for artifact in \
             "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz" \
             "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg" \
+            "release-artefacts/modulo-${VERSION}-compose.tar.gz" \
             release-artefacts/SHA256SUMS \
             release-artefacts/RELEASE_MANIFEST.json \
             release-artefacts/RELEASE_MANIFEST.json.sig; do
@@ -1775,9 +1809,9 @@ jobs:
           fi
           (cd release-artefacts && sha256sum --check SHA256SUMS)
           if [ "$INCLUDE_WINDOWS" = "true" ]; then
-            echo "Final signed manifest and SHA256SUMS cover Linux amd64, macOS arm64, and Windows amd64 artifacts."
+            echo "Final signed manifest and SHA256SUMS cover Linux amd64, macOS arm64, Windows amd64 artifacts and the self-hosted compose bundle."
           else
-            echo "Final signed manifest and SHA256SUMS cover Linux amd64 and macOS arm64 artifacts."
+            echo "Final signed manifest and SHA256SUMS cover Linux amd64 and macOS arm64 artifacts and the self-hosted compose bundle."
           fi
 
       - name: Set up Python 3.12 for OpenAPI dump
@@ -1874,6 +1908,7 @@ jobs:
           ASSETS=(
             "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz"
             "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg"
+            "release-artefacts/modulo-${VERSION}-compose.tar.gz"
             "release-artefacts/SHA256SUMS"
             "release-artefacts/RELEASE_MANIFEST.json"
             "release-artefacts/RELEASE_MANIFEST.json.sig"
