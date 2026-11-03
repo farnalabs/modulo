@@ -1293,7 +1293,6 @@ export default {
       "run_prompt_placeholder": "Enter a prompt for this run... (optional)",
       "no_nodes_to_run": "Add nodes to the pipeline before running",
       "webhook_triggered_info": "This pipeline is triggered by webhook events. It cannot be run manually.",
-      "view_agent": "View Agent",
       "input_schema": "Input Schema",
       "model_backend": "Model Backend",
       "param_schema": "Parameter Schema",
