@@ -19,6 +19,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -1583,6 +1584,76 @@ def test_installer_uses_portable_commands_and_fails_closed_for_darwin():
     assert "scripts/macos/install.sh" in source
 
 
+def _usable_bash_or_skip() -> str:
+    """Return an executable bash, not Windows' WSL launcher stub."""
+    bash_bin = shutil.which("bash")
+    if bash_bin is None:
+        pytest.skip("bash is required for installer shell-verifier tests")
+    try:
+        probe = subprocess.run(  # noqa: S603 - resolved bash executable and fixed command
+            [bash_bin, "-c", "true"],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except OSError as exc:
+        pytest.skip(f"bash is not usable for installer shell-verifier tests: {exc}")
+    except subprocess.TimeoutExpired:
+        pytest.skip("bash is not usable for installer shell-verifier tests: trivial command timed out")
+    if probe.returncode != 0:
+        pytest.skip(f"bash is not usable for installer shell-verifier tests: `bash -c true` exited {probe.returncode}")
+    return bash_bin
+
+
+def _usable_tar_or_skip() -> str:
+    """Return a tar that can read host-absolute paths.
+
+    The installer is a POSIX shell script, so these probes need a working
+    ``tar``. Git for Windows puts its MSYS ``tar`` first on ``PATH`` inside a
+    git hook, and that tar reads ``C:\\...`` as ``host:path`` ("Cannot connect
+    to C") — so probe the round trip rather than trusting ``shutil.which``.
+    """
+    tar_bin = shutil.which("tar")
+    if tar_bin is None:
+        pytest.skip("tar is required for installer shell-verifier tests")
+    with tempfile.TemporaryDirectory() as scratch:
+        scratch_path = Path(scratch)
+        payload = scratch_path / "payload"
+        payload.mkdir()
+        (payload / "probe.txt").write_text("probe", encoding="utf-8")
+        archive = scratch_path / "probe.tar.gz"
+        try:
+            created = subprocess.run(  # noqa: S603 - resolved tar executable and test-owned paths
+                [tar_bin, "-czf", str(archive), "-C", str(scratch_path), "payload"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            if created.returncode != 0:
+                pytest.skip(
+                    "tar is not usable for installer shell-verifier tests: creating an archive "
+                    f"at a host-absolute path failed: {created.stderr.strip()}"
+                )
+            extract_root = scratch_path / "extract"
+            extract_root.mkdir()
+            extracted = subprocess.run(  # noqa: S603 - resolved tar executable and test-owned paths
+                [tar_bin, "-xzf", str(archive), "-C", str(extract_root)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            pytest.skip(f"tar is not usable for installer shell-verifier tests: {exc}")
+        if extracted.returncode != 0 or not (extract_root / "payload" / "probe.txt").is_file():
+            pytest.skip(
+                "tar is not usable for installer shell-verifier tests: extracting an archive "
+                f"at a host-absolute path failed: {extracted.stderr.strip()}"
+            )
+    return tar_bin
+
+
 def _installer_probe(
     tmp_path: Path,
     archive_name: str,
@@ -1621,10 +1692,8 @@ def _installer_probe(
         (source_root / "SHA256SUMS").write_text(f"{digest}  nested/artifact.txt\n", encoding="utf-8")
     else:
         (source_root / "SHA256SUMS").write_text("", encoding="utf-8")
-    tar_bin = shutil.which("tar")
-    bash_bin = shutil.which("bash")
-    assert tar_bin is not None
-    assert bash_bin is not None
+    tar_bin = _usable_tar_or_skip()
+    bash_bin = _usable_bash_or_skip()
     archive_entries = [root_name]
     if extra_top_level is not None:
         extra = tmp_path / extra_top_level
@@ -1742,8 +1811,7 @@ def test_shell_checksum_verifier_rejects_windows_manifest_paths_before_filesyste
         encoding="utf-8",
     )
     harness.chmod(0o755)
-    bash_bin = shutil.which("bash")
-    assert bash_bin is not None
+    bash_bin = _usable_bash_or_skip()
     result = subprocess.run(  # noqa: S603 - resolved bash and test-owned harness
         [bash_bin, str(harness)], capture_output=True, text=True, timeout=30, check=False
     )
