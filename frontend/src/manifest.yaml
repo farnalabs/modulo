@@ -1876,6 +1876,9 @@ elements:
       - testid: admin-error-detail-back
         type: button
         dynamic_testid: false
+      - testid: admin-error-detail-copy-support
+        type: button
+        dynamic_testid: false
       - testid: admin-error-detail-events-loading
         type: element
         dynamic_testid: false

@@ -563,7 +563,9 @@ export default {
       "events_of": "{count} of {total} events",
       "previous": "Previous",
       "next": "Next",
-      "instance_scope_readonly": "Instance scope — this error group is not attributed to any organisation. Read-only."
+      "instance_scope_readonly": "Instance scope — this error group is not attributed to any organisation. Read-only.",
+      "copy_support_reference": "Copy support reference",
+      "support_reference_copied": "Copied"
     },
     "AdminProductAnalyticsView": {
       "title": "Product Analytics",
@@ -1232,6 +1234,9 @@ export default {
       "source_saq": "SAQ",
       "source_celery": "Celery (legacy)",
       "assignee": "Assignee",
+      "support_reference": "Support reference",
+      "copy_support_reference": "Copy support reference",
+      "support_reference_copied": "Copied",
       "group_count": "{count} group | {count} groups",
       "failed_to_load_scheduler_starvation": "Failed to load scheduler starvation:"
     },
@@ -2392,7 +2397,7 @@ export default {
       "total_tokens": "{count} total tokens",
       "total_tokens_node_reported": "{count} tokens reported by nodes",
       "total_tokens_not_reported_by_nodes": "{count} tokens reported in cost basis (nodes did not report per-node totals)",
-      "share_summary": "Share Summary",
+      "support_reference": "Copy support reference",
       "copy_node_trace_id": "Copy node trace ID",
       "copy_node_span_id": "Copy node span ID",
       "copy_review_id": "Copy gate ID",
