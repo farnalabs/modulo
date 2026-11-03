@@ -460,7 +460,7 @@ def deterministic_signal_group(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda _pid: (_ for _ in ()).throw(OSError("no such process")),
         raising=False,
     )
-    monkeypatch.setattr(supervisor_module.os, "kill", lambda _pid, _signum: None, raising=False)
+    monkeypatch.setattr(supervisor_module.os, "kill", lambda _pid, _signum: None)
     monkeypatch.setattr(supervisor_module.os, "killpg", lambda _pgid, _signum: None, raising=False)
 
 
@@ -552,6 +552,7 @@ def test_signal_group_non_group_leader(monkeypatch: pytest.MonkeyPatch) -> None:
         supervisor_module.os,
         "getpgid",
         lambda _pid: (_ for _ in ()).throw(OSError("no such process")),
+        raising=False,
     )
     monkeypatch.setattr(
         supervisor_module.os,

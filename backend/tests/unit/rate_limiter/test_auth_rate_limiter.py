@@ -9,7 +9,6 @@ Covers:
 """
 
 import asyncio
-import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -337,15 +336,14 @@ class TestAuthRateLimiterCore:
         assert lockout_key == "auth_ratelimit:lockout:203.0.113.5"
         assert backoff == 60
 
-    async def test_check_login_prunes_old_failures(self, auth_redis):
+    async def test_check_login_prunes_old_failures(self, auth_redis, frozen_time):
         limiter = make_auth_limiter(auth_redis, window_s=90)
         await limiter.check_login("203.0.113.5")
         pipe = auth_redis.pipeline.return_value
         pipe.zremrangebyscore.assert_called_once()
         _, lower_bound, cutoff = pipe.zremrangebyscore.call_args[0]
         assert lower_bound == 0
-        now = time.time()
-        assert abs(cutoff - (now - 90)) < 2
+        assert cutoff == frozen_time - 90
 
     async def test_check_login_within_max_does_not_set_lockout(self, auth_redis):
         auth_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, 3))
@@ -385,15 +383,14 @@ class TestAuthRateLimiterCore:
         assert retry_after == 60
         auth_redis.setex.assert_awaited_once()
 
-    async def test_record_failure_adds_timestamp_and_expiry(self, auth_redis):
+    async def test_record_failure_adds_timestamp_and_expiry(self, auth_redis, frozen_time):
         limiter = make_auth_limiter(auth_redis, max_attempts=10)
         await limiter.record_failure("203.0.113.5")
         auth_redis.zadd.assert_awaited_once()
         redis_key, member = auth_redis.zadd.await_args.args
         assert redis_key == "auth_ratelimit:203.0.113.5"
         ((ts, score),) = member.items()
-        now = time.time()
-        assert abs(score - now) < 2
+        assert score == frozen_time
         ts_str, sep, suffix = ts.partition(":")
         assert sep == ":"
         assert ts_str == str(score)
