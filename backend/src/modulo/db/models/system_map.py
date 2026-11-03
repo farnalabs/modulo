@@ -12,7 +12,7 @@ Eight org-scoped, soft-delete models:
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +20,7 @@ import sqlalchemy as sa
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -64,6 +65,32 @@ _admission_status_sql = ", ".join(f"'{v}'" for v in _VALID_ADMISSION_STATUSES)
 
 _VALID_RESERVATION_STATUSES = ("active", "consumed", "released", "expired")
 _reservation_status_sql = ", ".join(f"'{v}'" for v in _VALID_RESERVATION_STATUSES)
+
+# Closed rejection vocabulary for a rejected-before-run admission decision
+# (migration 0348). Must stay in step with
+# ``core.system_map_loop_admission.REJECTION_REASONS`` and the CHECK in 0348.
+_VALID_REJECTION_REASONS = (
+    "attribution",
+    "autonomy",
+    "budget",
+    "concurrency",
+    "cooldown",
+    "inactive_pipeline",
+    "unattributed",
+    "unpublished_revision",
+)
+_rejection_reason_sql = ", ".join(f"'{v}'" for v in _VALID_REJECTION_REASONS)
+
+
+def _utc_month_start_default() -> date:
+    """Client-side default for the budget month (the DB default is in 0348).
+
+    Kept in Python rather than as a server default because the production
+    expression (``date_trunc('month', CURRENT_TIMESTAMP)``) is Postgres-only and
+    the in-memory SQLite unit schema has to render this column.
+    """
+    return datetime.now(UTC).date().replace(day=1)
+
 
 _ONDELETE_RESTRICT = "RESTRICT"
 _ONDELETE_CASCADE = "CASCADE"
@@ -301,6 +328,7 @@ class SystemMapLoopConfig(SoftDeleteMixin, OrgScoped):
         CheckConstraint("observation_window_seconds > 0", name="ck_loop_configs_obs_window"),
         CheckConstraint("budget_limit_usd >= 0", name="ck_loop_configs_budget"),
         CheckConstraint("cooldown_seconds >= 0", name="ck_loop_configs_cooldown"),
+        CheckConstraint("max_concurrent_runs >= 1", name="ck_loop_configs_max_concurrent_runs"),
         UniqueConstraint("id", "organisation_id", name="uq_system_map_loop_configs_id_organisation_id"),
         ForeignKeyConstraint(
             ["revision_id", "organisation_id"],
@@ -318,6 +346,10 @@ class SystemMapLoopConfig(SoftDeleteMixin, OrgScoped):
         Uuid(), ForeignKey(_FK_PIPELINES_ID, ondelete=_ONDELETE_RESTRICT), nullable=False, index=True
     )
     budget_limit_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
+    # FAR-2349: the per-loop concurrency ceiling the documented loop contract
+    # requires ("Maximum Concurrent Runs"); migration 0348. The schema default
+    # is 1 (conservative), never unbounded.
+    max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     outcome_metric: Mapped[str] = mapped_column(String(100), nullable=False)
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(
@@ -401,6 +433,20 @@ class SystemMapLoopAdmissionAttempt(SoftDeleteMixin, OrgScoped):
     __tablename__ = "system_map_loop_admission_attempts"
     __table_args__ = (
         CheckConstraint(f"status IN ({_admission_status_sql})", name="ck_loop_admission_attempts_status"),
+        # FAR-2349 (migration 0348): a decision row can never be ambiguous. A
+        # rejected-before-run decision carries no run and one closed reason; an
+        # admitted one carries its run and no reason. ``pending``/``duplicate``
+        # stay representable for the legacy CAS-helper shape.
+        CheckConstraint(
+            f"rejection_reason IS NULL OR rejection_reason IN ({_rejection_reason_sql})",
+            name="ck_loop_admission_attempts_reason",
+        ),
+        CheckConstraint(
+            "(status = 'rejected' AND run_id IS NULL AND rejection_reason IS NOT NULL) "
+            "OR (status = 'admitted' AND run_id IS NOT NULL AND rejection_reason IS NULL) "
+            "OR (status IN ('pending', 'duplicate'))",
+            name="ck_loop_admission_attempts_outcome",
+        ),
         UniqueConstraint("loop_config_id", "idempotency_key", name="uq_loop_admission_attempts_config_key"),
         UniqueConstraint("id", "organisation_id", name="uq_system_map_loop_admission_attempts_id_organisation_id"),
         ForeignKeyConstraint(
@@ -414,6 +460,15 @@ class SystemMapLoopAdmissionAttempt(SoftDeleteMixin, OrgScoped):
     loop_config_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
+    # FAR-2349: the admitted run (NULL on a rejected-before-run decision) and
+    # the closed rejection vocabulary. No cross-table FK: the runs table has no
+    # organisation-owned composite key, so the same-organisation predicate is
+    # enforced by the admission transaction (and for reservations by the 0342
+    # tenant trigger).
+    run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, index=True)
+    rejection_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # The UTC calendar month the decision is accounted against.
+    month_start: Mapped[date] = mapped_column(Date(), nullable=False, default=_utc_month_start_default)
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
@@ -425,6 +480,11 @@ class SystemMapLoopReservation(SoftDeleteMixin, OrgScoped):
     __tablename__ = "system_map_loop_reservations"
     __table_args__ = (
         CheckConstraint(f"status IN ({_reservation_status_sql})", name="ck_loop_reservations_status"),
+        CheckConstraint("reserved_budget_usd >= 0", name="ck_loop_reservations_reserved_budget"),
+        CheckConstraint(
+            "actual_spend_usd IS NULL OR actual_spend_usd >= 0",
+            name="ck_loop_reservations_actual_spend",
+        ),
         UniqueConstraint("loop_config_id", "idempotency_key", name="uq_loop_reservations_config_key"),
         UniqueConstraint("id", "organisation_id", name="uq_system_map_loop_reservations_id_organisation_id"),
         ForeignKeyConstraint(
@@ -433,17 +493,54 @@ class SystemMapLoopReservation(SoftDeleteMixin, OrgScoped):
             ondelete=_ONDELETE_CASCADE,
             name="fk_system_map_loop_reservations_config",
         ),
+        # FAR-2349 (migration 0348): one reservation per admission decision.
+        ForeignKeyConstraint(
+            ["admission_attempt_id", "organisation_id"],
+            [
+                "system_map_loop_admission_attempts.id",
+                "system_map_loop_admission_attempts.organisation_id",
+            ],
+            ondelete=_ONDELETE_RESTRICT,
+            name="fk_loop_reservations_attempt",
+        ),
+        # The month-scoped budget sum runs every due-loop tick; this is its
+        # supporting index (migration 0348).
+        Index(
+            "ix_loop_reservations_month",
+            "organisation_id",
+            "loop_config_id",
+            "month_start",
+            "status",
+        ),
+        Index(
+            "uq_loop_reservations_attempt",
+            "admission_attempt_id",
+            unique=True,
+            postgresql_where=text("admission_attempt_id IS NOT NULL"),
+            sqlite_where=text("admission_attempt_id IS NOT NULL"),
+        ),
     )
 
     loop_config_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
-    run_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("runs.id", ondelete=_ONDELETE_RESTRICT), nullable=False, index=True
-    )
+    # FAR-2349: the run reference is a denormalized column, NOT a foreign key.
+    # The runs table exposes no organisation-owned composite key, and a plain FK
+    # would block the retention sweep's run deletes; the same-organisation
+    # predicate is enforced by the 0342 tenant trigger
+    # (trg_system_map_loop_reservations_run_id_tenant) and by the admission
+    # transaction that creates the run.
+    run_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
+    admission_attempt_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     reserved_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
     )
     cooldown_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    month_start: Mapped[date] = mapped_column(Date(), nullable=False, default=_utc_month_start_default)
+    # The budget this admission commits for the month. ``actual_spend_usd`` is
+    # the observed cost on terminalisation and stays NULL when the run's cost was
+    # never observed — an unknown cost must never be recorded as zero.
+    reserved_budget_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False, server_default="0")
+    actual_spend_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="active")
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

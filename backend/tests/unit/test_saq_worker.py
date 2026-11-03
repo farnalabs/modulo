@@ -141,6 +141,7 @@ class TestFunctionsWiring:
         assert "library_sync" in names
         assert "connector_health_checks" in names
         assert "health_readiness_alert" in names
+        assert "system_map_loop_dispatch" in names
 
     def test_health_readiness_alert_delegates_to_core_check(self) -> None:
         """The cron wrapper is a thin delegate — all logic lives in
@@ -188,7 +189,16 @@ class TestFunctionsWiring:
             "memory_monitor_cron",
             "run_kill_switch_drill",
             "legacy_agent_return_sweep",
+            "system_map_loop_dispatch",
         }
+        # system_map_loop_dispatch: every 5 min, timeout=300, retries=2 (FAR-2349).
+        loop_dispatch = jobs["system_map_loop_dispatch"]
+        assert loop_dispatch.cron == "*/5 * * * *"
+        assert loop_dispatch.timeout == 300
+        assert loop_dispatch.retries == 2
+        assert loop_dispatch.heartbeat == 30
+        assert loop_dispatch.ttl == 600
+        assert loop_dispatch.unique is True
         # fire_due_triggers: every 60s (croniter parses 5-field cron), timeout=300, retries=3 (F1).
         fdt = jobs["fire_due_triggers"]
         assert fdt.cron == "* * * * *"

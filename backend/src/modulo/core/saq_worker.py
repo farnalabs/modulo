@@ -1282,6 +1282,25 @@ async def legacy_agent_return_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
     return stats
 
 
+async def system_map_loop_dispatch(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — admit and dispatch due System Maps improvement loops (FAR-2349).
+
+    Runs the admission runtime in ``core.system_map_loop_admission``: every five
+    minutes it selects loops on the currently published revision whose
+    observation window has elapsed, admits them (cooldown / concurrency /
+    monthly budget / declared autonomy are enforced in one locked transaction),
+    dispatches the created run through the existing ``dispatch_run`` path, and
+    reconciles reservations whose runs already terminated.
+
+    ``unique=True`` so overlapping fleet ticks cannot double-dispatch; the
+    per-window admission key makes a replayed tick return the original decision
+    instead of admitting a second run.
+    """
+    from modulo.core.system_map_loop_admission import dispatch_due_loops
+
+    return await dispatch_due_loops()
+
+
 async def claim_expiry(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — expire stale HITL claims (SAQ SOLE writer/notifier, F1)."""
     from modulo.core.hitl_manager.expiry_job import expire_stale_claims
@@ -2718,6 +2737,7 @@ def _system_functions() -> list[Any]:
         memory_monitor_cron,
         run_kill_switch_drill,
         legacy_agent_return_sweep,
+        system_map_loop_dispatch,
     ]
 
 
@@ -3114,6 +3134,23 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             heartbeat=30,
             retries=1,
             ttl=900,
+        ),
+        # system_map_loop_dispatch: every 5 min (FAR-2349) — admits and dispatches
+        # due improvement loops. A loop's own observation_window_seconds (>= 60)
+        # is the real rate limit; the per-window admission key makes an
+        # overlapping/retried tick replay its decision instead of admitting a
+        # second run. unique=True so fleet ticks cannot double-dispatch; the
+        # tick also reconciles reservations whose runs terminated out-of-band.
+        # Failures RAISE (retries=2 engages) after the per-org pass isolates
+        # each organisation, so one org cannot starve the others.
+        CronJob(
+            system_map_loop_dispatch,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=600,
         ),
     ]
 

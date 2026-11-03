@@ -16,7 +16,7 @@ predicate-level repository coverage.
 
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Self, cast
@@ -609,7 +609,9 @@ class TestAdmissionAttemptCrud:
         )
         db = _session(_result(one=existing))
         assert (
-            await repo.create_admission_attempt(db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k")
+            await repo.create_admission_attempt(
+                db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k", month_start=date(2026, 11, 1)
+            )
             is existing
         )
         db.add.assert_not_called()
@@ -617,7 +619,12 @@ class TestAdmissionAttemptCrud:
     async def test_create_attempt_inserts(self, repo: SystemMapRepository) -> None:
         db = _session(_result(one=None))
         attempt = await repo.create_admission_attempt(
-            db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k", status="admitted"
+            db,
+            organisation_id=_ORG,
+            loop_config_id=_NODE,
+            idempotency_key="k",
+            month_start=date(2026, 11, 1),
+            status="admitted",
         )
         assert attempt.status == "admitted"
         db.add.assert_called_once_with(attempt)
@@ -628,14 +635,18 @@ class TestAdmissionAttemptCrud:
         )
         db = _session(_result(one=None), _result(one=winner), add_error=IntegrityError("s", {}, Exception("dup")))
         assert (
-            await repo.create_admission_attempt(db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k")
+            await repo.create_admission_attempt(
+                db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k", month_start=date(2026, 11, 1)
+            )
             is winner
         )
 
     async def test_create_attempt_integrity_race_without_winner_reraises(self, repo: SystemMapRepository) -> None:
         db = _session(_result(one=None), _result(one=None), add_error=IntegrityError("s", {}, Exception("dup")))
         with pytest.raises(IntegrityError):
-            await repo.create_admission_attempt(db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k")
+            await repo.create_admission_attempt(
+                db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k", month_start=date(2026, 11, 1)
+            )
 
     async def test_update_attempt_status(self, repo: SystemMapRepository) -> None:
         assert (
@@ -675,6 +686,8 @@ class TestReservationCrud:
                 run_id=_REV,
                 idempotency_key="k",
                 cooldown_until=datetime.now(UTC),
+                month_start=date(2026, 11, 1),
+                reserved_budget_usd=Decimal(1),
             )
             is existing
         )
@@ -689,6 +702,8 @@ class TestReservationCrud:
             run_id=_REV,
             idempotency_key="k",
             cooldown_until=datetime.now(UTC),
+            month_start=date(2026, 11, 1),
+            reserved_budget_usd=Decimal(1),
         )
         assert reservation.status == "active"
         db.add.assert_called_once_with(reservation)
@@ -710,6 +725,8 @@ class TestReservationCrud:
                 run_id=_REV,
                 idempotency_key="k",
                 cooldown_until=datetime.now(UTC),
+                month_start=date(2026, 11, 1),
+                reserved_budget_usd=Decimal(1),
             )
             is winner
         )
@@ -724,6 +741,8 @@ class TestReservationCrud:
                 run_id=_REV,
                 idempotency_key="k",
                 cooldown_until=datetime.now(UTC),
+                month_start=date(2026, 11, 1),
+                reserved_budget_usd=Decimal(1),
             )
 
     async def test_get_reservation_by_id_variants(self, repo: SystemMapRepository) -> None:
@@ -1413,12 +1432,17 @@ def _add_admission(
     status: str,
     created_at: datetime,
 ) -> None:
+    # FAR-2349's outcome CHECK makes an ``admitted`` attempt carry its run and
+    # a ``rejected`` one carry its reason; the overview only reads status +
+    # created_at, so the companion column is a synthetic value here.
     session.add(
         SystemMapLoopAdmissionAttempt(
             organisation_id=_ORG,
             loop_config_id=loop_config_id,
             idempotency_key=f"key-{uuid.uuid4().hex}",
             status=status,
+            run_id=uuid.uuid4() if status == "admitted" else None,
+            rejection_reason="cooldown" if status == "rejected" else None,
             created_at=created_at,
         )
     )

@@ -257,6 +257,17 @@ INVENTORY: dict[str, PathRecord] = {
         ("src/modulo/core/guardrails/kill_switch_drill.py", "append_system_audit_event("),
         ("src/modulo/core/guardrails/kill_switch_drill.py", '_KILL_SWITCH_DRILL_EVENT_TYPE = "kill_switch_drill"'),
     ),
+    # FAR-2349: every improvement-loop admission decision appends exactly one
+    # ``system_map_loop_admission`` audit event (admitted or rejected) inside a
+    # savepoint of the admission transaction; the dispatched run is then audited
+    # on the ordinary run chain.
+    "system_map_loop_dispatch": _audited(
+        ("src/modulo/core/system_map_loop_admission.py", "event_type=AUDIT_EVENT_ADMISSION"),
+        (
+            "src/modulo/core/system_map_loop_admission.py",
+            'AUDIT_EVENT_ADMISSION = "system_map_loop_admission"',
+        ),
+    ),
     # --- reconcilers / sweep helpers declared under core/ -----------------
     "reconcile_facts": _exempt("derived_analytics"),
     "reconcile_runner_workspaces": _exempt("infra_container_gc"),
@@ -265,6 +276,11 @@ INVENTORY: dict[str, PathRecord] = {
     "reconcile_decision_records": _exempt("read_only_detection"),
     "reconcile_missing_classifications": _exempt("derived_state"),
     "reconcile_noop_evidence": _exempt("derived_state"),
+    # FAR-2349: settles an admission reservation from its run's ALREADY-RECORDED
+    # terminal status (consumed/released, idempotent guarded UPDATE). The
+    # consequential event — the run reaching a terminal state — is audited on
+    # the run chain; the reservation row is derived bookkeeping for it.
+    "reconcile_loop_reservations": _exempt("derived_state"),
     "reconcile_pipeline_slots": _audited(
         ("src/modulo/core/run_admission.py", 'source="slot_reconciliation"'),
         _TERMINAL_ADVANCE,

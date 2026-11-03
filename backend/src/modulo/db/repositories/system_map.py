@@ -6,18 +6,18 @@ organisation scoping and RLS-compatible patterns.
 
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Select, case, func, select, update
+from sqlalchemy import Select, and_, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval import Eval
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import Run
+from modulo.db.models.run import SUCCESS_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.system_map import (
     SystemMap,
@@ -100,7 +100,9 @@ def _apply_active_cooldown(
 ) -> None:
     """Report the latest cooldown deadline across still-active reservations."""
     for row in reservation_rows:
-        if row.status != "active" or _as_utc(row.cooldown_until) <= window_end:
+        # Every status counts: a released reservation cannot delete its
+        # boundary, and its quiet period must still suppress admission.
+        if _as_utc(row.cooldown_until) <= window_end:
             continue
         item = observed[row.loop_config_id]
         item["cooldown_active"] = True
@@ -122,6 +124,49 @@ def _apply_budget_observations(
             observed[loop_id]["budget_used_usd"] = None
         else:
             observed[loop_id]["budget_used_usd"] = sum((cost for cost in costs if cost is not None), Decimal(0))
+
+
+async def settle_loop_reservation_for_run(
+    session: AsyncSession,
+    *,
+    organisation_id: uuid.UUID,
+    run_id: uuid.UUID,
+    run_status: str,
+    actual_spend_usd: Decimal | None,
+) -> bool:
+    """Settle a loop reservation from its run's terminal status (FAR-2349).
+
+    ``complete`` consumes the reservation (recording the observed cost, or NULL
+    when the cost was never observed); every other terminal status releases it —
+    a failed or cancelled run gives its capacity back. The cooldown boundary is
+    never touched, so a released reservation still suppresses admission until
+    ``cooldown_until`` passes (the documented "cooldown survives cancellation"
+    guarantee).
+
+    Idempotent: only an ``active`` row is transitioned, so a duplicate
+    terminalisation (or the reconciliation sweep) is a no-op. Returns True when
+    this call settled a reservation.
+    """
+    if run_status not in TERMINAL_STATUSES:
+        return False
+    now = datetime.now(UTC)
+    consumed = run_status in SUCCESS_STATUSES
+    stmt = (
+        update(SystemMapLoopReservation)
+        .where(
+            SystemMapLoopReservation.organisation_id == organisation_id,
+            SystemMapLoopReservation.run_id == run_id,
+            SystemMapLoopReservation.status == "active",
+        )
+        .values(
+            status="consumed" if consumed else "released",
+            consumed_at=now if consumed else None,
+            released_at=None if consumed else now,
+            actual_spend_usd=actual_spend_usd,
+        )
+    )
+    result = await session.execute(stmt)
+    return bool(getattr(result, "rowcount", 0) or 0)
 
 
 class SystemMapRepository(BaseRepository):  # vulture: ignore
@@ -993,6 +1038,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         organisation_id: uuid.UUID,
         loop_config_id: uuid.UUID,
         idempotency_key: str,
+        month_start: date,
         status: str = "pending",
     ) -> SystemMapLoopAdmissionAttempt:
         """Create or get an admission attempt (idempotent on idempotency_key).
@@ -1016,6 +1062,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             organisation_id=organisation_id,
             loop_config_id=loop_config_id,
             idempotency_key=idempotency_key,
+            month_start=month_start,
             status=status,
         )
         try:
@@ -1083,6 +1130,9 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         run_id: uuid.UUID,
         idempotency_key: str,
         cooldown_until: datetime,
+        month_start: date,
+        reserved_budget_usd: Decimal,
+        admission_attempt_id: uuid.UUID | None = None,
         status: str = "active",
     ) -> SystemMapLoopReservation:
         """Create or get a reservation (idempotent on idempotency_key).
@@ -1091,6 +1141,10 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         insert is wrapped in a savepoint and an ``IntegrityError`` re-reads the
         winning row. Soft-deleted reservations still occupy the unique key, so
         the reads opt out of the global soft-delete filter.
+
+        ``month_start`` and ``reserved_budget_usd`` are the monthly-budget
+        accounting the admission transaction commits (FAR-2349); the admission
+        attempt is the decision this reservation settles.
         """
         existing_reservation = await self._get_reservation_by_key(
             session,
@@ -1105,8 +1159,11 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             organisation_id=organisation_id,
             loop_config_id=loop_config_id,
             run_id=run_id,
+            admission_attempt_id=admission_attempt_id,
             idempotency_key=idempotency_key,
             cooldown_until=cooldown_until,
+            month_start=month_start,
+            reserved_budget_usd=reserved_budget_usd,
             status=status,
         )
         try:
@@ -1225,6 +1282,191 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             reservation.released_at = released_at
         await session.flush()
         return reservation
+
+    async def update_admission_attempt_decision(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        attempt_id: uuid.UUID,
+        status: str,
+        run_id: uuid.UUID | None = None,
+        rejection_reason: str | None = None,
+    ) -> SystemMapLoopAdmissionAttempt | None:
+        """Record the final decision on an admission attempt (FAR-2349).
+
+        The caller holds the canonical loop lock, so the decision is the single
+        writer for this row. An ``admitted`` decision must carry its run; a
+        ``rejected`` one must carry a closed reason and no run — the outcome
+        CHECK in migration 0348 makes the half-decided row unrepresentable.
+        """
+        stmt = select(SystemMapLoopAdmissionAttempt).where(
+            SystemMapLoopAdmissionAttempt.id == attempt_id,
+            SystemMapLoopAdmissionAttempt.organisation_id == organisation_id,
+        )
+        attempt = (await session.execute(stmt)).scalar_one_or_none()
+        if attempt is None:
+            return None
+        attempt.status = status
+        attempt.run_id = run_id
+        attempt.rejection_reason = rejection_reason
+        await session.flush()
+        return attempt
+
+    async def list_published_loop_configs(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+    ) -> Sequence[SystemMapLoopConfig]:
+        """Return every loop config on an org's currently published revision.
+
+        This is the due-loop sweep's selection set: only a loop whose revision
+        is the map's published pointer is dispatchable (the admission
+        transaction re-verifies the same predicate under lock).
+        """
+        stmt = (
+            select(SystemMapLoopConfig)
+            .join(
+                SystemMapRevision,
+                and_(
+                    SystemMapRevision.id == SystemMapLoopConfig.revision_id,
+                    SystemMapRevision.organisation_id == SystemMapLoopConfig.organisation_id,
+                ),
+            )
+            .join(
+                SystemMap,
+                and_(
+                    SystemMap.id == SystemMapRevision.system_map_id,
+                    SystemMap.organisation_id == SystemMapRevision.organisation_id,
+                ),
+            )
+            .where(
+                SystemMapLoopConfig.organisation_id == organisation_id,
+                SystemMapLoopConfig.deleted_at.is_(None),
+                SystemMapRevision.deleted_at.is_(None),
+                SystemMap.deleted_at.is_(None),
+                SystemMapRevision.status == "published",
+                SystemMap.published_revision_id == SystemMapRevision.id,
+            )
+            .order_by(SystemMapLoopConfig.id)
+        )
+        return (await session.execute(stmt)).scalars().all()
+
+    async def get_loop_month_usage(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        loop_config_id: uuid.UUID,
+        month_start: date,
+    ) -> Decimal:
+        """Sum the loop's committed monthly budget (FAR-2349).
+
+        ``active`` and ``consumed`` reservations hold budget; a released or
+        expired one does not. A consumed reservation whose observed cost is
+        still unknown contributes its reserved amount — never zero.
+        """
+        cost = func.coalesce(
+            SystemMapLoopReservation.actual_spend_usd,
+            SystemMapLoopReservation.reserved_budget_usd,
+        )
+        stmt = select(func.coalesce(func.sum(cost), 0)).where(
+            SystemMapLoopReservation.organisation_id == organisation_id,
+            SystemMapLoopReservation.loop_config_id == loop_config_id,
+            SystemMapLoopReservation.month_start == month_start,
+            SystemMapLoopReservation.status.in_(("active", "consumed")),
+            SystemMapLoopReservation.deleted_at.is_(None),
+        )
+        return Decimal((await session.execute(stmt)).scalar_one())
+
+    async def count_active_loop_reservations(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        loop_config_id: uuid.UUID,
+    ) -> int:
+        """Count the loop's live capacity: active reservations on live runs."""
+        stmt = (
+            select(func.count())
+            .select_from(SystemMapLoopReservation)
+            .join(Run, Run.id == SystemMapLoopReservation.run_id)
+            .where(
+                SystemMapLoopReservation.organisation_id == organisation_id,
+                SystemMapLoopReservation.loop_config_id == loop_config_id,
+                SystemMapLoopReservation.status == "active",
+                SystemMapLoopReservation.deleted_at.is_(None),
+                Run.status.not_in(TERMINAL_STATUSES),
+            )
+        )
+        return int((await session.execute(stmt)).scalar_one())
+
+    async def get_loop_cooldown_deadline(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        loop_config_id: uuid.UUID,
+        now: datetime,
+    ) -> datetime | None:
+        """Return the newest still-running cooldown boundary for a loop.
+
+        Deliberately ALL reservation statuses (including ``released``): the
+        quiet period is tied to the last admitted reservation, not to whether it
+        still consumes capacity, so cancelling a run cannot bypass it.
+        """
+        stmt = select(func.max(SystemMapLoopReservation.cooldown_until)).where(
+            SystemMapLoopReservation.organisation_id == organisation_id,
+            SystemMapLoopReservation.loop_config_id == loop_config_id,
+            SystemMapLoopReservation.deleted_at.is_(None),
+            SystemMapLoopReservation.cooldown_until > now,
+        )
+        return (await session.execute(stmt)).scalar_one_or_none()
+
+    async def get_last_loop_attempt_at(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        loop_config_id: uuid.UUID,
+    ) -> datetime | None:
+        """Return the most recent admission attempt time for a loop."""
+        stmt = select(func.max(SystemMapLoopAdmissionAttempt.created_at)).where(
+            SystemMapLoopAdmissionAttempt.organisation_id == organisation_id,
+            SystemMapLoopAdmissionAttempt.loop_config_id == loop_config_id,
+            SystemMapLoopAdmissionAttempt.deleted_at.is_(None),
+        )
+        return (await session.execute(stmt)).scalar_one_or_none()
+
+    async def list_terminal_reservations(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+    ) -> Sequence[Any]:
+        """Return active reservations whose runs have already terminated.
+
+        The reconciliation backstop: a terminal write that could not settle its
+        reservation (a crash between the run write and the settlement, a direct
+        SQL terminaliser) is settled by the due-loop sweep from this set.
+        """
+        stmt = (
+            select(
+                SystemMapLoopReservation.id,
+                SystemMapLoopReservation.run_id,
+                Run.status,
+                Run.total_cost_usd,
+            )
+            .join(Run, Run.id == SystemMapLoopReservation.run_id)
+            .where(
+                SystemMapLoopReservation.organisation_id == organisation_id,
+                SystemMapLoopReservation.status == "active",
+                SystemMapLoopReservation.deleted_at.is_(None),
+                Run.status.in_(TERMINAL_STATUSES),
+            )
+        )
+        return (await session.execute(stmt)).all()
 
     # ─── Validation Helpers ───
 

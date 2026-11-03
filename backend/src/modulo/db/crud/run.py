@@ -3155,6 +3155,44 @@ async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
         _log.exception("classification.import_or_call_failed run=%s", run.id)
         await _write_unclassified_classification(session, run)
     await _enforce_one_pr_per_run(session, run)
+    await _settle_loop_reservation(session, run)
+
+
+async def _settle_loop_reservation(session: AsyncSession, run: Run) -> None:
+    """Settle a System Maps improvement-loop reservation for a terminal run.
+
+    FAR-2349: a loop admits a run by reserving concurrency + monthly budget.
+    That reservation must follow the run to its terminal state — a ``complete``
+    run consumes it (recording the observed cost), every other terminal status
+    releases the capacity. The cooldown boundary is never touched, so the loop's
+    quiet period survives a cancelled run (``docs/system-maps.md`` §4.4).
+
+    Rides the existing terminal-hook function rather than each of the four
+    terminal writers, so every terminalizer that funnels through
+    ``db.crud.run`` gets the guarantee. Best-effort in a SAVEPOINT: a run for a
+    pipeline that has no loop reservation (the overwhelming majority) is a
+    single indexed no-op, and a settlement failure must never roll back the
+    terminal status write — the due-loop sweep reconciles it from the run's
+    terminal state.
+    """
+    organisation_id = getattr(run, "organisation_id", None)
+    if organisation_id is None:
+        return
+    try:
+        async with session.begin_nested():
+            from modulo.db.repositories.system_map import settle_loop_reservation_for_run
+
+            await settle_loop_reservation_for_run(
+                session,
+                organisation_id=organisation_id,
+                run_id=run.id,
+                run_status=run.status,
+                actual_spend_usd=run.total_cost_usd,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("loop_reservation.settle_failed run=%s", run.id)
 
 
 # ---------------------------------------------------------------------------
