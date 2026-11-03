@@ -31,3 +31,15 @@ def make_scalar_result(items: list[Any]) -> MagicMock:
     result = MagicMock()
     result.scalars.return_value.__iter__ = lambda self: iter(items)
     return result
+
+
+def begin_context() -> AsyncMock:
+    """Build an ``AsyncSession.begin()``-shaped async context manager mock.
+
+    Assign the result to ``session.begin``; the notifier opens the RLS
+    transaction and the delivery-bookkeeping transaction through it.
+    """
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    return begin_cm

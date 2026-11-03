@@ -18,7 +18,7 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy.exc import SQLAlchemyError
 from tests.unit.api.mock_session import configure_mock_session
-from tests.unit.notifier.conftest import make_scalar_result, session_factory_for
+from tests.unit.notifier.conftest import begin_context, make_scalar_result, session_factory_for
 
 from modulo.core.notifier import DispatchResult, Notifier
 from modulo.db.models.account import Account
@@ -59,10 +59,7 @@ def _session_factory(owners: list[Account], *, raise_on_execute: bool = False) -
         session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
     else:
         session.execute = AsyncMock(return_value=make_scalar_result(owners))
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
+    session.begin = MagicMock(return_value=begin_context())
     return session_factory_for(session)
 
 
