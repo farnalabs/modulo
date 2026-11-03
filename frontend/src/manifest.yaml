@@ -1242,6 +1242,18 @@ elements:
       - testid: system-map-sidebar-discover
         type: button
         dynamic_testid: false
+      - testid: system-map-revision-current
+        type: button
+        dynamic_testid: false
+      - testid: system-map-revision-at
+        type: input
+        dynamic_testid: false
+      - testid: system-map-revision-by-time
+        type: button
+        dynamic_testid: false
+      - testid: system-map-revision-current-badge
+        type: element
+        dynamic_testid: false
       - testid: system-map-discovery-panel
         type: dialog
         dynamic_testid: false
