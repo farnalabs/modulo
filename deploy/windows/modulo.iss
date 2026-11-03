@@ -73,8 +73,17 @@ OutputBaseFilename=modulo-{#VERSION_NUM}-windows-{#BUNDLE_ARCH}
 Compression=lzma2/ultra64
 SolidCompression=yes
 PrivilegesRequired=admin
+; x64compatible was introduced by Inno Setup 6.3, which deprecated x64. The
+; release workflow still pins 6.2.2, which only knows x64, so the identifier is
+; version-gated rather than swapped: the newer compiler then emits no
+; deprecation warning and the older one still compiles.
+#if VER >= EncodeVer(6,3,0)
+ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed=x64compatible
+#else
 ArchitecturesInstallIn64BitMode=x64
 ArchitecturesAllowed=x64
+#endif
 DisableProgramGroupPage=yes
 DisableDirPage=auto
 DisableReadyMemo=yes
@@ -119,8 +128,8 @@ Name: "{commondesktop}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}
 Filename: "{#MODULO_URL}"; Description: "Open Modulo in your browser"; Flags: postinstall shellexec unchecked; Check: ShouldOpenModulo
 
 [UninstallRun]
-Filename: "sc.exe"; Parameters: "stop Modulo"; StatusMsg: "Stopping Modulo service..."; Flags: runhidden waituntilterminated
-Filename: "sc.exe"; Parameters: "delete Modulo"; StatusMsg: "Removing Modulo service..."; Flags: runhidden waituntilterminated
+Filename: "sc.exe"; Parameters: "stop Modulo"; StatusMsg: "Stopping Modulo service..."; Flags: runhidden waituntilterminated; RunOnceId: "StopModuloService"
+Filename: "sc.exe"; Parameters: "delete Modulo"; StatusMsg: "Removing Modulo service..."; Flags: runhidden waituntilterminated; RunOnceId: "DeleteModuloService"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -453,8 +462,11 @@ begin
   ServiceExe := ExpandConstant('{app}') + '\modulo.exe';
 
   SetStage('service registration (create)');
+  { Only the executable path is quoted. The launcher argument must sit OUTSIDE
+    those quotes so sc.exe stores ImagePath as the executable, not as
+    "<path> service" - a path that does not exist. }
   if not Exec('sc.exe',
-    'create Modulo binPath= "' + ServiceExe + ' service" start= auto',
+    'create Modulo binPath= "' + ServiceExe + '" service start= auto',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
     WriteInstallLog('sc.exe create could not be started');
