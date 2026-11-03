@@ -173,6 +173,7 @@
                 <label for="admincostcontrolsview-field-2" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.currency') }}</label>
                 <Select
   :aria-label="$t('views.AdminCostControlsView.currency')"
+  input-id="admincostcontrolsview-field-2"
   :model-value="settings.currency"
   @update:model-value="onCurrencyChange"
   :placeholder="$t('views.AdminCostControlsView.currency_usd')"
@@ -192,6 +193,7 @@
                 <label for="admincostcontrolsview-field-1" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.billing_period') }}</label>
                 <Select
   :aria-label="$t('views.AdminCostControlsView.billing_period')"
+  input-id="admincostcontrolsview-field-1"
   :model-value="settings.billingPeriod"
   @update:model-value="onBillingPeriodChange"
   :placeholder="$t('views.AdminCostControlsView.monthly')"

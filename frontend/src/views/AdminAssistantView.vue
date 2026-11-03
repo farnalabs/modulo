@@ -189,6 +189,7 @@
             <label for="adminassistantview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminAssistantView.default_provider') }}</label>
             <Select
                 :aria-label="$t('views.AdminAssistantView.default_provider')"
+                input-id="adminassistantview-field-12"
                 v-model="modelConfig.defaultProvider"
                 data-testid="assistant-model-provider"
                 class="w-full"

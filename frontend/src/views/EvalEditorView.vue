@@ -13,6 +13,7 @@
         <div>
           <label for="evaleditorview-field-8" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.pipeline') }}</label>
           <Select
+  id="evaleditorview-field-8"
   :aria-label="$t('views.EvalEditorView.pipeline_aria')"
   v-model="selectedPipelineId"
   @update:model-value="onPipelineChange"
@@ -32,6 +33,7 @@
         <div>
           <label for="evaleditorview-field-7" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.node') }} <span class="text-muted-foreground">({{ $t('views.EvalEditorView.node_optional') }})</span></label>
           <Select
+  id="evaleditorview-field-7"
   :aria-label="$t('views.EvalEditorView.node_aria')"
   v-model="form.node_id"
   :disabled="!selectedPipelineId || nodesLoading"
@@ -82,6 +84,7 @@
                 <div>
                   <label for="evaleditorview-mechanism" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.mechanism') }}</label>
                   <Select
+                    id="evaleditorview-mechanism"
                     :aria-label="$t('views.EvalEditorView.judging.mechanismAria')"
                     :model-value="isTyped ? 'typed_questions' : 'deterministic'"
                     :placeholder="$t('views.EvalEditorView.judging.mechanism')"
@@ -117,6 +120,7 @@
                     <div>
                       <label for="evaleditorview-backing-kind" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.backing') }}</label>
                       <Select
+                        id="evaleditorview-backing-kind"
                         :aria-label="$t('views.EvalEditorView.judging.backingAria')"
                         v-model="typedDraft.backingKind"
                         data-testid="eval-editor-backing-kind"
@@ -134,6 +138,7 @@
                     <div v-if="typedDraft.backingKind === 'model_backend'">
                       <label for="evaleditorview-backing-model" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.modelBackend') }}</label>
                       <Select
+                        id="evaleditorview-backing-model"
                         :aria-label="$t('views.EvalEditorView.judging.modelBackendAria')"
                         v-model="typedDraft.modelBackendId"
                         data-testid="eval-editor-backing-model"
@@ -179,6 +184,7 @@
                     <div>
                       <label for="evaleditorview-verdict-kind" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.verdictKind') }}</label>
                       <Select
+                        id="evaleditorview-verdict-kind"
                         :aria-label="$t('views.EvalEditorView.judging.verdictKindAria')"
                         v-model="typedDraft.verdictKind"
                         data-testid="eval-editor-verdict-kind"
@@ -547,6 +553,7 @@
                   <div class="mt-3">
                     <label for="evaleditorview-deterministic-type" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.deterministicType') }}</label>
                     <Select
+                      id="evaleditorview-deterministic-type"
                       :aria-label="$t('views.EvalEditorView.judging.deterministicTypeAria')"
                       :model-value="deterministicType"
                       data-testid="eval-editor-deterministic-type"
