@@ -32,6 +32,8 @@ The workflow defaults to workflow-level `permissions: contents: read`, with writ
 
 Both markers are branches under `refs/heads/`, not tags, so the protected-tag ruleset no longer covers them. The repository must carry a branch ruleset protecting `release-freeze` and `release-publication-hold` that restricts force-push and deletion to the release-bot identity (and admins); without it any write collaborator could move or delete the freeze. A repository ruleset is GitHub configuration, not workflow code, so it has to be applied with the repository settings before a real cut - the workflows cannot create it.
 
+If a `cut` or `recut` fails, a dedicated finalizer job clears `release-freeze` automatically so the merge queue does not remain stranded. The finalizer checks live ref state rather than upstream step outcomes: it confirms `bundle-v<VERSION>` is unpublished, proves the freeze points to one of this release's RC commits before touching it, and leaves any freeze belonging to another version alone.
+
 ### Recut runbook
 
 The unified workflow is the canonical entry point. Its `recut` mode publishes from the new RC tag created at current `main`; it never checks out or reuses the previous RC tag.
