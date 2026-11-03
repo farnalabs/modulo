@@ -3,7 +3,7 @@
 ``deploy/windows/modulo.iss`` registers the service from ``[Code]`` with an
 ``sc.exe create`` call. The launcher argument (``service``) must sit OUTSIDE the
 quotes that delimit the executable path. With it inside, sc.exe stores
-``ImagePath`` as the literal string ``C:\\Program Files\\Modulo\\modulo.exe
+``ImagePath`` as the literal string ``C:\\Program Files\\Modulo\\bin\\modulo.exe
 service`` - a path that does not exist - so the Service Control Manager cannot
 start the service, and the installer fails only on the operator's machine.
 
@@ -30,7 +30,7 @@ _ISS = _REPO_ROOT / "deploy" / "windows" / "modulo.iss"
 # The installer's default directory is {autopf}\Modulo, so the service image
 # path contains spaces on a stock install. That is exactly the shape that makes
 # the quote positions matter.
-_SERVICE_EXE = r"C:\Program Files\Modulo\modulo.exe"
+_SERVICE_EXE = r"C:\Program Files\Modulo\bin\modulo.exe"
 
 
 def _source() -> str:
@@ -123,7 +123,7 @@ def _service_exe(source: str) -> str:
     match = _SERVICE_EXE_ASSIGNMENT.search(body)
     assert match is not None, "RegisterService no longer assigns ServiceExe"
     assignment = match.group("expr").strip()
-    assert assignment == "ExpandConstant('{app}') + '\\modulo.exe'", (
+    assert assignment == "ExpandConstant('{app}') + '\\bin\\modulo.exe'", (
         f"ServiceExe is no longer the installed launcher: {assignment}"
     )
     return _SERVICE_EXE

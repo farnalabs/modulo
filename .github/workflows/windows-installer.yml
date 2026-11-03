@@ -33,6 +33,7 @@ on:
     paths:
       - 'deploy/windows/**'
       - 'scripts/create-windows-launcher.ps1'
+      - 'scripts/windows/build-launcher.ps1'
       - 'scripts/test-windows-installer.ps1'
       - '.github/workflows/windows-installer.yml'
 

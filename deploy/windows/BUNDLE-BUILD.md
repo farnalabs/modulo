@@ -19,8 +19,8 @@ Windows runner:
    (MSVC by default, `-Compiler clang-cl` also supported).
 3. Stages the layout with `Invoke-WindowsBundleStaging` (defined in
    `scripts/windows/build-launcher.ps1`): `runtime/python`, `runtime/bin`,
-   `backend/src`, `frontend-dist` and `bin/modulo.exe`, then adds `redis/` and
-   `pg/bin/`.
+   `backend/src`, `frontend-dist` and `bin/modulo.exe`, writes the root
+   `modulo-runtime.json` marker, then adds `redis/` and `pg/bin/`.
 4. Verifies the staged binaries, writes `manifest.json`, and uploads the
    payload archive as the `windows-native-artifacts` artifact.
 
@@ -29,12 +29,17 @@ validates an existing native `modulo.exe` (`-RequireBinary` makes an absent
 binary a hard failure and executes it to check the commands the installer
 depends on).
 
-Not yet reconciled: the installer contract below expects `modulo.exe` and
-`modulo-runtime.json` at the root of `BUNDLE_DIR`, but the staging function
-places the launcher at `bin/modulo.exe` and nothing in the repository writes
-`modulo-runtime.json`. Producing a bundle directory that satisfies the
-installer is therefore still a separate step, which is why the release workflow
-(`.github/workflows/windows-installer.yml`, job `build`) refuses to package.
+The staged directory satisfies the installer contract below directly: the
+launcher is at `bin/modulo.exe` and `modulo-runtime.json` is at the root. The
+launcher resolves the bundle root as the parent of its own directory
+(`runtime/`, `backend/`, `pg/` and `redis/` are siblings of `bin/`), which is why
+the installer places it at `{app}\bin\modulo.exe` and not at the install root.
+The marker holds `contract` (`native-windows-v1`), `arch` and, when the caller
+passes `-Version`, `version`.
+
+The release workflow (`.github/workflows/windows-installer.yml`, job `build`)
+still refuses to package: it does not yet consume the `windows-native-artifacts`
+payload. That wiring, plus signing, is separate from the bundle contract.
 
 ## Installer bundle contract
 
@@ -42,7 +47,7 @@ installer is therefore still a separate step, which is why the release workflow
 
 | Bundle path | Input |
 |---|---|
-| `<BUNDLE_DIR>\modulo.exe` | Native Windows Modulo launcher |
+| `<BUNDLE_DIR>\bin\modulo.exe` | Native Windows Modulo launcher |
 | `<BUNDLE_DIR>\modulo-runtime.json` | Native runtime marker |
 
 Everything else under `BUNDLE_DIR` is copied into the install directory.
@@ -64,9 +69,12 @@ pull requests that touch `deploy/windows/**`, `scripts/create-windows-launcher.p
 
 - Job `compile-check` (Windows runner, Inno Setup 6.2.2 via Chocolatey) runs
   `./scripts/test-windows-installer.ps1 -RequireIscc`. It compiles `modulo.iss`
-  against fixture bundles: a bundle missing `modulo.exe` **must fail**, a bundle
-  missing `modulo-runtime.json` **must fail**, and a complete bundle **must
-  compile** and produce an installer. On a non-zero exit ISCC's own output is
+  against fixture bundles: a bundle missing `bin\modulo.exe` (or with the
+  launcher at the bundle root) **must fail**, a bundle missing
+  `modulo-runtime.json` **must fail**, and a complete bundle **must compile** and
+  produce an installer. It then compiles against a bundle produced by the real
+  `Invoke-WindowsBundleStaging` (placeholder payload, no signing secret), so the
+  contract is proven against the producer too. On a non-zero exit ISCC's own output is
   printed and written to `iscc-<case>.log`, uploaded as the `iscc-output`
   artifact.
 - Job `redaction-unit` (Ubuntu, Free Pascal) runs the script with `-RequireFpc`:
@@ -79,6 +87,6 @@ without them (`pwsh scripts/test-windows-installer.ps1`), the script runs
 whichever proofs the host supports and warns that the ISCC compile was not
 verified if Inno Setup is not found.
 
-This is a compile-level gate only: the fixture bundle is a placeholder, so it
-proves the installer script is valid and fail-closed, not that a runnable bundle
-exists.
+This is a compile-level gate only: the payload is a placeholder, so it proves
+the installer script and the staging layout agree and are fail-closed, not that
+a runnable bundle exists.
