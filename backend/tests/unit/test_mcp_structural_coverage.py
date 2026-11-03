@@ -123,6 +123,9 @@ _EXPECTED_TOOLS = frozenset(
         "get_eval_suite",
         "get_schema_versions",
         "get_pipeline_diff",
+        # FAR-2288: internal-preview System Maps discovery (gated by the
+        # system_maps feature + dev mode + operator/admin + system_maps_access).
+        "discover_system_map",
     }
 )
 
@@ -185,8 +188,9 @@ def test_scope_requirements_only_reference_registered_tools() -> None:
 
 _CALLER_SCOPED = "caller-scoped"
 _ORG_ONLY = "org-only"
+_ORG_CREDENTIAL = "org-credential"
 _ANY = "any"
-_VALID_CLASSIFICATIONS = {_ORG_ONLY, _CALLER_SCOPED, _ANY}
+_VALID_CLASSIFICATIONS = {_ORG_ONLY, _ORG_CREDENTIAL, _CALLER_SCOPED, _ANY}
 
 
 def _classified_caller_scope(tool: str) -> str:
