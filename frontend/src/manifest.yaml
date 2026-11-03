@@ -1212,6 +1212,9 @@ elements:
       - testid: system-map-graph-editor
         type: element
         dynamic_testid: false
+      - testid: system-map-detail-loading
+        type: element
+        dynamic_testid: false
       - testid: system-map-graph-canvas
         type: element
         dynamic_testid: false

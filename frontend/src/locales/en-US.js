@@ -1975,6 +1975,7 @@ export default {
     },
     "SystemMapDetailView": {
       "title": "System Map",
+      "loading": "Loading system map…",
       "draft": "Draft",
       "revision": "Revision {number}",
       "read_only": "Read only",
