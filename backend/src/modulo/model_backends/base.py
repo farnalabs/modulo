@@ -4,6 +4,8 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, ClassVar
 
 import httpx
@@ -70,8 +72,54 @@ def serialize_structured_output(result: Any) -> AIMessage:
 
 @dataclass(frozen=True)
 class HealthResult:
+    """Outcome of one backend's health check.
+
+    ``detail`` carries the provider error text for the caller's own log or
+    status column. The remaining fields are transport facts the diagnostics
+    surface (``modulo doctor``) needs WITHOUT re-deriving the endpoint or
+    re-reading the response body — in particular ``server_time`` and
+    ``proxy_via`` let the doctor report clock drift and an intercepting proxy
+    from the health check's own response.
+    """
+
     ok: bool
     detail: str = ""
+    #: HTTP status the provider answered with, or ``None`` if it never answered.
+    status_code: int | None = None
+    #: The provider's ``Date`` response header in UTC, when it sent a valid one.
+    server_time: datetime | None = None
+    #: ``Via`` / ``X-Forwarded-For`` from the response, when present.
+    proxy_via: str | None = None
+    #: Failure class when no response was received: ``"timeout"`` or
+    #: ``"connection"``. ``None`` when the provider answered.
+    error_kind: str | None = None
+
+
+def _parse_server_time(headers: httpx.Headers) -> datetime | None:
+    """Return the response's ``Date`` header as an aware UTC datetime, or None.
+
+    An absent or malformed header yields ``None`` — clock drift is a bonus
+    reading, never a reason for the check itself to fail.
+    """
+    raw = headers.get("date")
+    if not raw:
+        return None
+    try:
+        parsed = parsedate_to_datetime(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _proxy_via(headers: httpx.Headers) -> str | None:
+    """The response's ``Via`` / ``X-Forwarded-For`` value, if it carries one."""
+    via = headers.get("via")
+    if via:
+        return str(via)
+    forwarded_for = headers.get("x-forwarded-for")
+    return str(forwarded_for) if forwarded_for else None
 
 
 async def openai_compatible_health_check(
@@ -99,17 +147,38 @@ async def openai_compatible_health_check(
     try:
         async with pinned_async_client_sync(base_url, trust_env=False, timeout=HEALTH_CHECK_TIMEOUT) as client:
             response = await client.get(url, headers=headers)
+            server_time = _parse_server_time(response.headers)
+            proxy_via = _proxy_via(response.headers)
             if response.is_success:
-                return HealthResult(ok=True)
-            return HealthResult(ok=False, detail=response.text[:HEALTH_DETAIL_MAX_LENGTH])
+                return HealthResult(
+                    ok=True,
+                    status_code=response.status_code,
+                    server_time=server_time,
+                    proxy_via=proxy_via,
+                )
+            return HealthResult(
+                ok=False,
+                detail=response.text[:HEALTH_DETAIL_MAX_LENGTH],
+                status_code=response.status_code,
+                server_time=server_time,
+                proxy_via=proxy_via,
+            )
     except ValueError as exc:
-        return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
+        return HealthResult(
+            ok=False,
+            detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH],
+            error_kind="connection",
+        )
     except httpx.TimeoutException:
         logger.warning("Health check timed out for %s", url)
-        return HealthResult(ok=False, detail="Health check timed out")
+        return HealthResult(ok=False, detail="Health check timed out", error_kind="timeout")
     except httpx.HTTPError as exc:
         logger.warning("Health check failed for %s: %s", url, exc)
-        return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
+        return HealthResult(
+            ok=False,
+            detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH],
+            error_kind="connection",
+        )
 
 
 # ---------------------------------------------------------------------------
