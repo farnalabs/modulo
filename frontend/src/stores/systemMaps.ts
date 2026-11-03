@@ -1,19 +1,40 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api, getAccessToken } from '../lib/api/client'
+import type { components } from '../lib/api/schema'
 import { withTimeout } from '../lib/asyncUtils'
 import { withTimeout as withRequestDeadline } from '../lib/requestTimeout'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { usePlanStore } from './planStore'
 import { SYSTEM_CONFIG_MANAGE_PERMISSION } from '../composables/useLicenceAccess'
-import type { components } from '../lib/api/schema'
+import i18n from '../i18n'
 
 type SystemMapOverview = components['schemas']['SystemMapOverviewResponse']
 type SystemMapList = components['schemas']['SystemMapListResponse']
 
-interface InternalFeatureFlagsPayload {
-  flags?: Array<{ name: string; currently_active: boolean }>
+export type SystemMap = components['schemas']['SystemMapResponse']
+export type SystemMapRevision = components['schemas']['SystemMapRevisionResponse']
+export type SystemMapNode = components['schemas']['SystemMapNodeResponse']
+export type SystemMapRelationship = components['schemas']['SystemMapRelationshipResponse']
+export type SystemMapGraph = components['schemas']['SystemMapRevisionDetailResponse']
+export type DiscoveryReport = components['schemas']['SystemMapDiscoveryReport']
+
+export interface DiscoverySelection {
+  acceptedNodes: number[]
+  acceptedEdges: number[]
+  rejectedNodes: number[]
+  rejectedEdges: number[]
 }
+
+// These vocabularies MUST mirror the backend CHECK constraints in
+// backend/src/modulo/api/schemas/system_maps.py (VALID_NODE_TYPES / VALID_REL_TYPES).
+// A mismatch makes every authored payload fail validation with a 422.
+export const NODE_TYPES = ['pipeline', 'agent', 'connector', 'improvement_loop', 'data_store', 'external_system'] as const
+export const RELATIONSHIP_TYPES = ['flow', 'data', 'trigger', 'loop_back'] as const
+export type NodeType = (typeof NODE_TYPES)[number]
+export type RelationshipType = (typeof RELATIONSHIP_TYPES)[number]
+
+interface InternalFeatureFlagsPayload { flags?: Array<{ name: string; currently_active: boolean }> }
 
 /** The overview aggregate is a read model; a stalled request must not hang it. */
 const OVERVIEW_REQUEST_TIMEOUT_MS = 15000
@@ -33,18 +54,23 @@ function thrownMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
 }
 
-/**
- * System Maps is intentionally fail-closed while its discovery/review API is
- * not part of the current generated contract. The internal flag probe is
- * separate from the ordinary plan payload because the backend deliberately
- * omits this flag from ordinary callers.
- */
+// The store is not a component, so it cannot call useI18n(). Use the shared
+// i18n instance directly so error strings stay translatable and consistent.
+function tr(key: string): string { return i18n.global.t(key) }
+
 export const useSystemMapsStore = defineStore('systemMaps', () => {
   const loaded = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
-  const discoveryAvailable = ref(false)
-  const draft = ref<null>(null)
+  const maps = ref<SystemMap[]>([])
+  const total = ref(0)
+  const page = ref(1)
+  const pageSize = ref(20)
+  const activeMap = ref<SystemMap | null>(null)
+  const activeRevision = ref<SystemMapRevision | null>(null)
+  const graph = ref<SystemMapGraph | null>(null)
+  const revisions = ref<SystemMapRevision[]>([])
+  const discovery = ref<DiscoveryReport | null>(null)
   const overview = ref<SystemMapOverview | null>(null)
   const overviewLoading = ref(false)
   const overviewError = ref<string | null>(null)
@@ -59,20 +85,13 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   // never repopulate state (a stale principal's response after a logout, or an
   // older fetch resolving after a newer one).
   let overviewGeneration = 0
-  // A subject is stable across token refreshes, including refreshes that carry
-  // demoted roles or capabilities. Cache against the complete token value so
-  // every access-token change revalidates the authorization decision.
   let accessTokenKey: string | null = null
 
   const planStore = usePlanStore()
   const { isOperator, isSystemAdmin } = useCurrentUser()
-  const hasSystemMapsAccess = computed(() =>
-    planStore.userPermissions.includes('system_maps_access'),
-  )
-  const canProbeInternalFlags = computed(
-    () => planStore.userPermissions.includes(SYSTEM_CONFIG_MANAGE_PERMISSION),
-  )
-  const hasDraft = computed(() => draft.value !== null)
+  const hasSystemMapsAccess = computed(() => planStore.userPermissions.includes('system_maps_access'))
+  const canProbeInternalFlags = computed(() => planStore.userPermissions.includes(SYSTEM_CONFIG_MANAGE_PERMISSION))
+  const hasAccess = computed(() => systemMapsEnabled.value && (isOperator.value || isSystemAdmin.value) && hasSystemMapsAccess.value)
 
   function reset(): void {
     accessGeneration += 1
@@ -80,8 +99,12 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     loaded.value = false
     loading.value = false
     error.value = null
-    discoveryAvailable.value = false
-    draft.value = null
+    maps.value = []
+    activeMap.value = null
+    activeRevision.value = null
+    graph.value = null
+    revisions.value = []
+    discovery.value = null
     overview.value = null
     overviewLoading.value = false
     overviewError.value = null
@@ -109,67 +132,35 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     return generation === overviewGeneration && token === getAccessToken()
   }
 
-  /**
-   * Resolve the internal flag only for an already-authorized internal caller.
-   * Ordinary users never call the instance feature-flag endpoint. A failed or
-   * unexpected response settles to disabled and never reuses a stale value.
-   */
   async function fetchAccess(): Promise<void> {
-    const currentAccessToken = getAccessToken()
-    if (currentAccessToken !== accessTokenKey) reset()
-    accessTokenKey = currentAccessToken
+    const token = getAccessToken()
+    if (token !== accessTokenKey) reset()
+    accessTokenKey = token
     if (accessLoaded.value) return
     if (accessPromise) return accessPromise
-
-    const requestGeneration = accessGeneration
-    const requestToken = currentAccessToken
-    const requestPromise = resolveAccess(requestGeneration, requestToken)
-    accessPromise = requestPromise
-    try {
-      await requestPromise
-    } finally {
-      if (accessPromise === requestPromise) accessPromise = null
-    }
+    const generation = accessGeneration
+    const request = resolveAccess(generation, token)
+    accessPromise = request
+    try { await request } finally { if (accessPromise === request) accessPromise = null }
   }
 
-  async function resolveAccess(requestGeneration: number, requestToken: string | null): Promise<void> {
-    const isCurrent = (): boolean => isCurrentAccessRequest(requestGeneration, requestToken)
+  async function resolveAccess(generation: number, token: string | null): Promise<void> {
+    const current = () => isCurrentAccessRequest(generation, token)
     loading.value = true
     error.value = null
     systemMapsEnabled.value = false
     try {
-      // The role is available locally from the access token. System admins are
-      // instance-scoped and may have no org_role at all, so their capability
-      // must be accepted independently of the org operator role.
       if (!isOperator.value && !isSystemAdmin.value) return
-      const planRequest =
-        planStore.loaded || planStore.currentTier !== 'community'
-          ? Promise.resolve()
-          : planStore.fetchPlan()
+      const planRequest = planStore.loaded || planStore.currentTier !== 'community' ? Promise.resolve() : planStore.fetchPlan()
       await Promise.all([planRequest, planStore.fetchPermissions()])
       if (!planStore.devMode || !hasSystemMapsAccess.value || !canProbeInternalFlags.value) return
-
-      const response = await withTimeout(
-        api.GET('/api/v1/admin/feature-flags'),
-        15000,
-        'Internal feature flags request',
-      )
+      const response = await withTimeout(api.GET('/api/v1/admin/feature-flags'), 15000, 'Internal feature flags request')
       const flags = (response.data as InternalFeatureFlagsPayload | undefined)?.flags
-      if (isCurrent()) {
-        systemMapsEnabled.value =
-          Array.isArray(flags) &&
-          flags.some((flag) => flag.name === 'system_maps' && flag.currently_active === true)
-      }
+      if (current()) systemMapsEnabled.value = Array.isArray(flags) && flags.some((flag) => flag.name === 'system_maps' && flag.currently_active)
     } catch (err: unknown) {
-      if (isCurrent()) {
-        error.value = err instanceof Error ? err.message : 'Internal feature flags request failed'
-        systemMapsEnabled.value = false
-      }
+      if (current()) error.value = err instanceof Error ? err.message : tr('systemMaps.errors.feature_flags')
     } finally {
-      if (isCurrent()) {
-        accessLoaded.value = true
-        loading.value = false
-      }
+      if (current()) { accessLoaded.value = true; loading.value = false }
     }
   }
 
@@ -184,14 +175,14 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     const request = beginOverviewRequest()
     try {
       const publishedItems: SystemMapList['items'] = []
-      let page = 1
-      let total = Number.POSITIVE_INFINITY
+      let nextPage = 1
+      let listTotal = Number.POSITIVE_INFINITY
 
-      while (publishedItems.length < total && page <= MAX_SYSTEM_MAP_PAGES) {
+      while (publishedItems.length < listTotal && nextPage <= MAX_SYSTEM_MAP_PAGES) {
         const response = await withRequestDeadline(
           (signal) =>
             api.GET('/api/v1/system-maps', {
-              params: { query: { page, page_size: SYSTEM_MAP_PAGE_SIZE } },
+              params: { query: { page: nextPage, page_size: SYSTEM_MAP_PAGE_SIZE } },
               signal,
             }),
           OVERVIEW_REQUEST_TIMEOUT_MS,
@@ -203,12 +194,12 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
 
         const pageData = response.data as SystemMapList
         publishedItems.push(...pageData.items.filter((item) => item.published_revision_id != null))
-        total = pageData.total
+        listTotal = pageData.total
         if (pageData.items.length === 0 || pageData.items.length < pageData.page_size) break
-        page += 1
+        nextPage += 1
       }
 
-      if (page > MAX_SYSTEM_MAP_PAGES) {
+      if (nextPage > MAX_SYSTEM_MAP_PAGES) {
         throw new Error('System map list pagination exceeded its safety limit')
       }
       const map = publishedItems.find((item) => item.default_map) ?? publishedItems[0]
@@ -257,30 +248,100 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     }
   }
 
-  /** No request is made until the discovery endpoint exists in schema.ts. */
-  async function fetchDiscovery(): Promise<void> {
-    loaded.value = true
-    discoveryAvailable.value = false
-    draft.value = null
+  async function fetchMaps(nextPage = page.value): Promise<void> {
+    loading.value = true
+    error.value = null
+    try {
+      const response = await api.GET('/api/v1/system-maps', { params: { query: { page: nextPage, page_size: pageSize.value } } })
+      if (response.error) throw new Error(tr('systemMaps.errors.load_maps'))
+      const payload = response.data
+      maps.value = payload?.items ?? []
+      total.value = payload?.total ?? 0
+      page.value = payload?.page ?? nextPage
+      loaded.value = true
+    } catch (err: unknown) { error.value = err instanceof Error ? err.message : tr('systemMaps.errors.load_maps') }
+    finally { loading.value = false }
   }
 
-  return {
-    loaded,
-    loading,
-    error,
-    discoveryAvailable,
-    draft,
-    overview,
-    overviewLoading,
-    overviewError,
-    overviewEmpty,
-    hasDraft,
-    accessLoaded,
-    systemMapsEnabled,
-    reset,
-    fetchAccess,
-    fetchOverview,
-    fetchDefaultOverview,
-    fetchDiscovery,
+  async function createMap(name: string, description = ''): Promise<SystemMap | null> {
+    const response = await api.POST('/api/v1/system-maps', { body: { name, description, visibility: 'org', default_map: false } })
+    if (response.error || !response.data) throw new Error(tr('systemMaps.errors.create_map'))
+    await fetchMaps(1)
+    return response.data
   }
+
+  async function deleteMap(mapId: string): Promise<void> {
+    const response = await api.DELETE('/api/v1/system-maps/{map_id}', { params: { path: { map_id: mapId } } })
+    if (response.error) throw new Error(tr('systemMaps.errors.delete_map'))
+    if (activeMap.value?.id === mapId) clearActive()
+    await fetchMaps()
+  }
+
+  async function loadMap(mapId: string): Promise<void> {
+    loading.value = true
+    error.value = null
+    try {
+      const response = await api.GET('/api/v1/system-maps/{map_id}', { params: { path: { map_id: mapId } } })
+      if (response.error || !response.data) throw new Error(tr('systemMaps.errors.load_map'))
+      activeMap.value = response.data
+      if (response.data.published_revision_id) await loadRevision(mapId, response.data.published_revision_id)
+    } catch (err: unknown) { error.value = err instanceof Error ? err.message : tr('systemMaps.errors.load_map') }
+    finally { loading.value = false }
+  }
+
+  async function loadRevision(mapId: string, revisionId: string): Promise<void> {
+    const response = await api.GET('/api/v1/system-maps/{map_id}/revisions/{rev_id}', { params: { path: { map_id: mapId, rev_id: revisionId }, query: { include_graph: true } } })
+    if (response.error || !response.data) throw new Error(tr('systemMaps.errors.load_map_revision'))
+    const value = response.data as SystemMapGraph
+    activeRevision.value = 'revision' in value ? value.revision : value as SystemMapRevision
+    graph.value = 'revision' in value ? value : null
+    if (activeRevision.value && !revisions.value.some((revision) => revision.id === activeRevision.value?.id)) revisions.value = [...revisions.value, activeRevision.value]
+  }
+
+  async function saveDraft(mapId: string, nodes: Array<{ node_key: string; node_type: string; display_name: string; config_json?: Record<string, unknown>; pipeline_id?: string | null; connector_instance_id?: string | null; owner_team_id?: string | null; eval_id?: string | null; position_x: string | number; position_y: string | number }>, relationships: Array<{ source_node_key: string; target_node_key: string; relationship_type: string; config_json?: Record<string, unknown> }>, notes: string): Promise<SystemMapRevision> {
+    const response = await api.POST('/api/v1/system-maps/{map_id}/revisions', { params: { path: { map_id: mapId } }, body: { nodes, relationships, loop_configs: [], notes } })
+    if (response.error || !response.data) throw new Error(tr('systemMaps.errors.save_draft_revision'))
+    activeRevision.value = response.data
+    revisions.value = [...revisions.value, response.data]
+    await loadRevision(mapId, response.data.id)
+    return response.data
+  }
+
+  async function publish(mapId: string, revisionId: string): Promise<void> {
+    const response = await api.POST('/api/v1/system-maps/{map_id}/revisions/{rev_id}/publish', { params: { path: { map_id: mapId, rev_id: revisionId } } })
+    if (response.error) throw new Error(tr('systemMaps.errors.publish_revision'))
+    await loadMap(mapId)
+  }
+
+  async function archive(mapId: string, revisionId: string): Promise<void> {
+    const response = await api.POST('/api/v1/system-maps/{map_id}/revisions/{rev_id}/archive', { params: { path: { map_id: mapId, rev_id: revisionId } } })
+    if (response.error) throw new Error(tr('systemMaps.errors.archive_revision'))
+    await loadMap(mapId)
+  }
+
+  async function discover(name = 'Discovered System Map', description?: string): Promise<DiscoveryReport> {
+    const response = await api.POST('/api/v1/system-maps/discover', { body: { name, description } })
+    if (response.error || !response.data) throw new Error(tr('systemMaps.errors.discover_map'))
+    discovery.value = response.data
+    await loadMap(response.data.draft_map_id)
+    // The map read model only exposes the published revision, so load the
+    // freshly-created draft explicitly; otherwise a discovery result would
+    // land on the empty-state screen until the draft was saved again.
+    if (response.data.draft_revision_id) {
+      try {
+        await loadRevision(response.data.draft_map_id, response.data.draft_revision_id)
+      } catch (err: unknown) {
+        // Discovery succeeded; surface the draft-fetch failure without discarding the report.
+        error.value = err instanceof Error ? err.message : tr('systemMaps.errors.load_discovered_draft')
+      }
+    }
+    return response.data
+  }
+
+  function clearActive(): void { activeMap.value = null; activeRevision.value = null; graph.value = null; discovery.value = null }
+
+  // Kept for the dashboard's preview card; discovery is now a real operation.
+  async function fetchDiscovery(): Promise<void> { loaded.value = true }
+
+  return { loaded, loading, error, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, saveDraft, publish, archive, discover, clearActive, fetchDiscovery }
 })
