@@ -60,14 +60,8 @@ on:
 # same version cannot double-publish. Without this, back-to-back manual
 # dispatches collapse into one pending run and the newer one is cancelled
 # before any job executes.
-#
-# The discriminator is `inputs.mode`, NOT `github.event_name`: inside a
-# reusable workflow the event context belongs to the CALLER, so a cut/recut
-# called from release-unified.yml (itself a workflow_dispatch) would have taken
-# the manual branch and lost the per-version group. `mode` means the same thing
-# on both paths, and it is the only declared value that distinguishes them.
 concurrency:
-  group: macos-installer-${{ inputs.mode != 'dry-run' && inputs.version || github.run_id }}
+  group: macos-installer-${{ github.event_name == 'workflow_dispatch' && github.run_id || inputs.version }}
   cancel-in-progress: false
 
 defaults:
@@ -98,7 +92,8 @@ jobs:
           # payload belongs to the CALLER, and release-unified.yml is itself a
           # workflow_dispatch that declares neither rc_tag nor ref - so reading
           # it blanked both, failed with "rc_tag input is required", and would
-          # otherwise have built from refs/heads/main instead of the RC tag.
+          # otherwise have built from refs/heads/main instead of the RC tag
+          # (observed in run 41616355636).
           CALL_VERSION: ${{ inputs.version }}
           CALL_RC_TAG: ${{ inputs.rc_tag }}
           CALL_REF: ${{ inputs.ref }}
@@ -128,9 +123,11 @@ jobs:
           [[ -n "$rc_tag" ]] || { echo '::error::rc_tag input is required' >&2; exit 1; }
           [[ -n "$ref" ]] || { echo '::error::ref input is required' >&2; exit 1; }
           # No "unsupported manual dispatch mode" check: `mode` is a choice list
-          # whose only option is dry-run, and the discriminator it used
-          # (github.event_name) is the caller's inside a reusable workflow, so it
-          # rejected every cut/recut as though it were a manual dispatch.
+          # whose only option is dry-run, so it could only ever fire on a
+          # reusable cut/recut call. It also keyed on the GITHUB_EVENT_NAME
+          # environment variable, which carries the CALLER's event name (still
+          # workflow_dispatch here), so it rejected every cut/recut as though it
+          # were a manual dispatch.
           case "$run_native_build" in
             true|false) ;;
             *) echo "::error::build_native must normalize to true or false, got: $run_native_build" >&2; exit 1 ;;

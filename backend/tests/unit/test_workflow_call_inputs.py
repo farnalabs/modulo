@@ -219,7 +219,7 @@ _BASH = shutil.which("bash")
 _NEEDS_BASH = pytest.mark.skipif(_BASH is None, reason="bash is required to execute the normalize step")
 
 
-def _normalize_script() -> str:
+def _normalize_step() -> dict[str, Any]:
     jobs = _load(MACOS_WORKFLOW).get("jobs")
     assert isinstance(jobs, dict), "macos-installer.yml has no jobs mapping"
     for job in jobs.values():
@@ -230,10 +230,41 @@ def _normalize_script() -> str:
             continue
         for step in steps:
             if isinstance(step, dict) and step.get("id") == "normalize":
-                script = step.get("run")
-                assert isinstance(script, str), "normalize step has no run script"
-                return script
+                return step
     raise AssertionError("macos-installer.yml has no step with id 'normalize'")
+
+
+def _normalize_script() -> str:
+    script = _normalize_step().get("run")
+    assert isinstance(script, str), "normalize step has no run script"
+    return script
+
+
+def test_macos_normalize_env_reads_only_its_own_inputs() -> None:
+    """The normalize step must not source anything from ``github.event``.
+
+    Inside a called workflow that payload is the CALLER's: release-unified.yml
+    declares only mode/version/freeze, so run 41616355636 saw
+    ``DISPATCH_RC_TAG`` empty next to a correctly-supplied
+    ``CALL_RC_TAG: v0.3.324-rc5`` and failed with "rc_tag input is required".
+    """
+    env = _normalize_step().get("env")
+    assert isinstance(env, dict), "normalize step has no env mapping"
+    offenders = sorted(key for key, value in env.items() if isinstance(value, str) and "github.event.inputs" in value)
+    assert not offenders, f"normalize env reads the caller's event payload: {offenders}"
+
+
+def test_macos_normalize_does_not_branch_on_the_caller_event_name() -> None:
+    """``GITHUB_EVENT_NAME`` the environment variable carries the CALLER's event
+    inside a called workflow, so it cannot distinguish a manual dispatch from a
+    reusable call: run 41616355636 took the dispatch branch for a cut/recut.
+    """
+    live_lines = [
+        line
+        for line in _normalize_script().splitlines()
+        if "GITHUB_EVENT_NAME" in line and not line.lstrip().startswith("#")
+    ]
+    assert not live_lines, f"normalize branches on the caller's event name: {live_lines}"
 
 
 def _invoke_normalize(tmp_path: Path, overrides: dict[str, str]) -> "subprocess.CompletedProcess[str]":
