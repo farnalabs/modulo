@@ -83,6 +83,14 @@ def _stage_probe(directory: Path, content: str) -> Path:
     return probe
 
 
+def _assert_no_new_source_files(before: set[Path]) -> None:
+    """Assert the gate run did not create any Python file under the measured tree."""
+    after = set(SRC.rglob("*.py"))
+    assert after == before, (
+        f"a gate test created a file inside the measured source tree: {sorted(str(path) for path in after - before)}"
+    )
+
+
 def _run_gate(extra_targets: list[Path] | None = None) -> subprocess.CompletedProcess[str]:
     """Run the gate wrapper exactly as pre-commit / CI invoke it.
 
@@ -129,11 +137,7 @@ def test_gate_blocks_new_dead_function(tmp_path: Path) -> None:
     finally:
         probe.unlink(missing_ok=True)
 
-    source_after = set(SRC.rglob("*.py"))
-    assert source_after == source_before, (
-        "the gate test created a file inside the measured source tree: "
-        f"{sorted(str(path) for path in source_after - source_before)}"
-    )
+    _assert_no_new_source_files(source_before)
     assert result.returncode != 0, (
         f"vulture gate exited 0 despite a dead function in the scanned probe:\n{result.stdout}"
     )
@@ -148,11 +152,13 @@ def test_gate_blocks_new_dead_function(tmp_path: Path) -> None:
 def test_gate_blocks_unused_import_and_unreachable(tmp_path: Path) -> None:
     """The legacy detection levels (import at 90%, unreachable at 100%) still block."""
     probe = _stage_probe(tmp_path, DEAD_IMPORT_AND_UNREACHABLE_PROBE)
+    source_before = set(SRC.rglob("*.py"))
     try:
         result = _run_gate([probe])
     finally:
         probe.unlink(missing_ok=True)
 
+    _assert_no_new_source_files(source_before)
     assert result.returncode != 0, (
         f"vulture gate exited 0 despite a dead import + unreachable code in the scanned probe:\n{result.stdout}"
     )
