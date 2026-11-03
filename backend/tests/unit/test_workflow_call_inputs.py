@@ -1,49 +1,47 @@
 """Structural gate: local reusable-workflow call sites must match the callee's
 ``workflow_call`` contract, and a called workflow must not read
-``github.event.inputs`` at all.
+caller-owned ``github.event.inputs``.
 
 Inside a called workflow the ``github.event`` context belongs to the CALLER, so
 ``github.event.inputs`` is the caller's payload and never the callee's inputs.
-``release-unified.yml`` is itself a ``workflow_dispatch`` that declares only
-``mode``/``version``/``freeze``, so ``macos-installer.yml`` reading
-``github.event.inputs.rc_tag`` blanked the correctly-supplied ``rc_tag`` on every
-cut/recut and failed the run with "rc_tag input is required" (observed in run
-41616355636); the same override also blanked ``ref`` (falling back to
-``refs/heads/main``, i.e. building from main instead of the RC tag).
+If a callee reads a field from ``github.event.inputs`` that the caller does not
+declare in its own ``workflow_dispatch``, that read evaluates to an empty string
+and silently blanks the callee's input.
 
-Nothing in CI exercises these call boundaries - the macOS and Windows legs only
-run on a real release - so this test is the only gate that keeps the contract
-honest. For every ``uses: ./.github/workflows/<x>.yml`` call site it asserts:
-
+This module owns repo-wide call-site contracts:
 * every ``with:`` key the caller passes is declared in the callee's
   ``workflow_call.inputs``;
 * every REQUIRED ``workflow_call`` input is supplied by the caller;
-* the callee reads no ``github.event.inputs`` (by name or as a whole object),
-  because that payload belongs to the caller.
+* called workflows do not read caller-owned ``github.event.inputs`` fields;
+* release installer call sites are verified to remain covered.
 
-It also executes the macOS ``normalize-inputs`` script with both entry points'
-environments, so the cut/recut path is proven to resolve ``rc_tag``/``ref`` from
-``inputs.*`` and to run the native build.
+macOS normalize behaviour (resolving direct workflow_dispatch vs reusable
+workflow_call inputs via its normalize-inputs job) lives in
+``test_macos_installer_normalize.py``.
 """
 
-import os
 import re
-import shutil
-import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
 
-import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
-MACOS_WORKFLOW = WORKFLOWS_DIR / "macos-installer.yml"
 
 #: Every callee the release pipeline depends on. A call site disappearing means
 #: the release shape changed: update this list deliberately, never silently.
 EXPECTED_CALLEES = ("bundle-release.yml", "macos-installer.yml", "windows-installer.yml")
+
+#: Jobs with bespoke input normalization that multiplex direct dispatch and
+#: reusable calls (e.g. macos-installer.yml's normalize-inputs step).
+#: Their normalization behavior is tested by dedicated unit tests
+#: (test_macos_installer_normalize.py); this test ensures no other job
+#: in the called workflow reads github.event.inputs directly.
+CALLEE_EXEMPT_JOBS: dict[str, set[str]] = {
+    "macos-installer.yml": {"normalize-inputs"},
+}
 
 _EVENT_INPUT_DOT = re.compile(r"github\.event\.inputs\.([A-Za-z_][A-Za-z0-9_-]*)")
 _EVENT_INPUT_INDEX = re.compile(r"github\.event\.inputs\[\s*['\"]([^'\"]+)['\"]\s*\]")
@@ -70,7 +68,8 @@ def _load(path: Path) -> dict[str, Any]:
 
 def _triggers(workflow: dict[str, Any]) -> dict[str, Any]:
     # PyYAML resolves the unquoted `on` key to boolean True (YAML 1.1).
-    raw = workflow.get("on", workflow.get(True))
+    workflow_any: dict[Any, Any] = workflow
+    raw = workflow_any.get("on", workflow_any.get(True))
     return raw if isinstance(raw, dict) else {}
 
 
@@ -135,15 +134,23 @@ def _strings(node: Any) -> Iterator[str]:
             yield from _strings(value)
 
 
-def _event_input_reads(workflow: dict[str, Any]) -> set[str]:
+def _event_input_reads(workflow: dict[str, Any], *, exclude_jobs: set[str] | None = None) -> set[str]:
     """Every ``github.event.inputs`` access in the workflow's live values.
 
     Parsed values only: a YAML comment is not part of any value, and shell
     comment lines inside a ``run:`` block are dropped too, so prose that names
     the context (this module's own guidance, for example) is not a finding.
     """
+    exclude = exclude_jobs or set()
+    jobs = workflow.get("jobs")
+    if isinstance(jobs, dict) and exclude:
+        scanned_workflow: dict[str, Any] = {k: v for k, v in workflow.items() if k != "jobs"}
+        scanned_workflow["jobs"] = {jid: job for jid, job in jobs.items() if jid not in exclude}
+    else:
+        scanned_workflow = workflow
+
     reads: set[str] = set()
-    for text in _strings(workflow):
+    for text in _strings(scanned_workflow):
         for line in text.splitlines():
             if line.lstrip().startswith("#"):
                 continue
@@ -188,7 +195,8 @@ def test_called_workflows_do_not_read_caller_owned_event_inputs() -> None:
             continue
         checked.add((site.caller, site.callee_name))
         caller_inputs = _dispatch_inputs(_load(site.caller))
-        reads = _event_input_reads(_load(_callee_path(site)))
+        exempt_jobs = CALLEE_EXEMPT_JOBS.get(site.callee_name)
+        reads = _event_input_reads(_load(_callee_path(site)), exclude_jobs=exempt_jobs)
         for name in sorted(reads):
             if name in caller_inputs:
                 continue
@@ -208,161 +216,3 @@ def test_release_installer_call_sites_are_covered() -> None:
         f"no local call site exercises {missing} - if the release shape genuinely changed, "
         "update EXPECTED_CALLEES deliberately"
     )
-
-
-# ---------------------------------------------------------------------------
-# Behavioural proof: the macOS normalize step resolves a reusable cut/recut call
-# from `inputs.*` even though the event context belongs to the caller.
-# ---------------------------------------------------------------------------
-
-_BASH = shutil.which("bash")
-_NEEDS_BASH = pytest.mark.skipif(_BASH is None, reason="bash is required to execute the normalize step")
-
-
-def _normalize_step() -> dict[str, Any]:
-    jobs = _load(MACOS_WORKFLOW).get("jobs")
-    assert isinstance(jobs, dict), "macos-installer.yml has no jobs mapping"
-    for job in jobs.values():
-        if not isinstance(job, dict):
-            continue
-        steps = job.get("steps")
-        if not isinstance(steps, list):
-            continue
-        for step in steps:
-            if isinstance(step, dict) and step.get("id") == "normalize":
-                return step
-    raise AssertionError("macos-installer.yml has no step with id 'normalize'")
-
-
-def _normalize_script() -> str:
-    script = _normalize_step().get("run")
-    assert isinstance(script, str), "normalize step has no run script"
-    return script
-
-
-def test_macos_normalize_env_reads_only_its_own_inputs() -> None:
-    """The normalize step must not source anything from ``github.event``.
-
-    Inside a called workflow that payload is the CALLER's: release-unified.yml
-    declares only mode/version/freeze, so run 41616355636 saw
-    ``DISPATCH_RC_TAG`` empty next to a correctly-supplied
-    ``CALL_RC_TAG: v0.3.324-rc5`` and failed with "rc_tag input is required".
-    """
-    env = _normalize_step().get("env")
-    assert isinstance(env, dict), "normalize step has no env mapping"
-    offenders = sorted(key for key, value in env.items() if isinstance(value, str) and "github.event.inputs" in value)
-    assert not offenders, f"normalize env reads the caller's event payload: {offenders}"
-
-
-def test_macos_normalize_does_not_branch_on_the_caller_event_name() -> None:
-    """``GITHUB_EVENT_NAME`` the environment variable carries the CALLER's event
-    inside a called workflow, so it cannot distinguish a manual dispatch from a
-    reusable call: run 41616355636 took the dispatch branch for a cut/recut.
-    """
-    live_lines = [
-        line
-        for line in _normalize_script().splitlines()
-        if "GITHUB_EVENT_NAME" in line and not line.lstrip().startswith("#")
-    ]
-    assert not live_lines, f"normalize branches on the caller's event name: {live_lines}"
-
-
-def _invoke_normalize(tmp_path: Path, overrides: dict[str, str]) -> "subprocess.CompletedProcess[str]":
-    output_path = tmp_path / "github_output"
-    output_path.write_text("", encoding="utf-8")
-    env = {
-        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-        "GITHUB_OUTPUT": str(output_path),
-        "GITHUB_REF": "refs/heads/main",
-    }
-    env.update(overrides)
-    return subprocess.run(  # noqa: S603 - fixed bash executable and repository-owned workflow text
-        [_BASH or "bash", "-c", _normalize_script()],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
-
-
-def _run_normalize(tmp_path: Path, overrides: dict[str, str]) -> dict[str, str]:
-    completed = _invoke_normalize(tmp_path, overrides)
-    assert completed.returncode == 0, f"normalize step failed: {completed.stderr}"
-    outputs: dict[str, str] = {}
-    for line in (tmp_path / "github_output").read_text(encoding="utf-8").splitlines():
-        key, _, value = line.partition("=")
-        outputs[key] = value
-    return outputs
-
-
-@_NEEDS_BASH
-def test_normalize_resolves_a_reusable_cut_call_from_inputs(tmp_path: Path) -> None:
-    outputs = _run_normalize(
-        tmp_path,
-        {
-            "CALL_VERSION": "0.3.324",
-            "CALL_RC_TAG": "v0.3.324-rc5",
-            "CALL_REF": "v0.3.324-rc5",
-            "CALL_MODE": "recut",
-            # A called workflow inherits the CALLER's event: release-unified.yml
-            # is a workflow_dispatch that never declares rc_tag. That is exactly
-            # the environment in which the pre-fix script blanked it.
-            "GITHUB_EVENT_NAME": "workflow_dispatch",
-        },
-    )
-    assert outputs["version"] == "0.3.324"
-    assert outputs["rc_tag"] == "v0.3.324-rc5"
-    assert outputs["ref"] == "v0.3.324-rc5"
-    assert outputs["mode"] == "recut"
-    assert outputs["run_native_build"] == "true"
-
-
-@_NEEDS_BASH
-def test_normalize_keeps_the_manual_rehearsal_switch(tmp_path: Path) -> None:
-    outputs = _run_normalize(
-        tmp_path,
-        {
-            "CALL_VERSION": "0.3.324",
-            "CALL_RC_TAG": "manual",
-            "CALL_REF": "",
-            "CALL_MODE": "dry-run",
-            "CALL_BUILD_NATIVE": "true",
-            "GITHUB_EVENT_NAME": "workflow_dispatch",
-        },
-    )
-    # A direct dispatch may leave `ref` blank to mean "the dispatched ref".
-    assert outputs["ref"] == "refs/heads/main"
-    assert outputs["run_native_build"] == "true"
-
-
-@_NEEDS_BASH
-def test_normalize_defaults_a_manual_rehearsal_to_contract_only(tmp_path: Path) -> None:
-    outputs = _run_normalize(
-        tmp_path,
-        {
-            "CALL_VERSION": "0.3.324",
-            "CALL_RC_TAG": "manual",
-            "CALL_REF": "",
-            "CALL_MODE": "dry-run",
-            "CALL_BUILD_NATIVE": "false",
-            "GITHUB_EVENT_NAME": "workflow_dispatch",
-        },
-    )
-    assert outputs["run_native_build"] == "false"
-
-
-@_NEEDS_BASH
-def test_normalize_fails_closed_without_rc_tag(tmp_path: Path) -> None:
-    completed = _invoke_normalize(
-        tmp_path,
-        {
-            "CALL_VERSION": "0.3.324",
-            "CALL_RC_TAG": "",
-            "CALL_REF": "v0.3.324-rc5",
-            "CALL_MODE": "recut",
-            "GITHUB_EVENT_NAME": "workflow_dispatch",
-        },
-    )
-    assert completed.returncode == 1
-    assert "rc_tag input is required" in completed.stderr
