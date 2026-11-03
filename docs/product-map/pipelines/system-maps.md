@@ -78,10 +78,11 @@ its own routed surface (`/system-maps` and `/system-maps/:id`, both
 registry as `feat-system-maps`.
 
 Every route sits behind the internal-only `system_maps` gate: developer mode,
-the dedicated `system_maps_access` grant (operator floor) and the
-`system_maps` feature flag, all resolved server-side on each request. The
-surface is deliberately invisible to ordinary customers and never publishes
-automatically.
+the operator role floor, the `system_maps_access` grant for grant-bearing API
+keys, and the `system_maps` feature flag, all resolved server-side on each
+request. Legacy JWTs and keys with no grant set keep the role-based behaviour
+rather than being refused for the missing grant. The surface is deliberately
+invisible to ordinary customers and never publishes automatically.
 
 The map is stored in dedicated System Maps tables (migration
 `0341_system_maps.py`: `system_maps`, `system_map_revisions`,
@@ -102,14 +103,22 @@ The map is stored in dedicated System Maps tables (migration
       cache key is scoped by that visibility class so an internal response can
       never be served to an ordinary caller or vice versa
       (`core/feature_flags.py`, `api/routes/admin_feature_flags.py`)
-- [x] Every System Maps request is gated three times and fails closed: the
-      router-level `_require_internal_system_maps_access` (developer mode plus
-      the dedicated `system_maps_access` grant through `require_in_dev_operator`),
-      the `require_feature("system_maps")` entitlement gate (disabled -> 402),
-      and the handler's `require_permission(...)` role floor; a caller without
-      the grant, without dev mode, or below the operator floor is refused before
-      any inventory read (`api/routes/system_maps.py`,
-      `api/dependencies.py`; `test_system_maps_routes.py`)
+- [x] Every System Maps request passes three gates and fails closed: the
+      router-level `_require_internal_system_maps_access`, which enforces
+      developer mode and the operator role floor through
+      `require_in_dev_operator`, the `require_feature("system_maps")`
+      entitlement gate (disabled -> 402), and the handler's
+      `require_permission(...)` role floor, all before any inventory read. The
+      dedicated `system_maps_access` grant is an additional leg that binds only
+      grant-bearing API keys: `_enforce_key_grant` treats `key_grants is None`
+      as a no-op because `grants_permit(None, ...)` returns `True`, so a legacy
+      JWT or an ungranted key is judged on developer mode and role alone, as
+      the dependency's own docstring states (`api/routes/system_maps.py`,
+      `api/dependencies.py`, `auth/permissions.py`). The unit cases pin a
+      viewer denied, an operator denied with developer mode off, and an
+      operator key denied without the grant and allowed with it; the
+      grant-denial case presents a grant-bearing key, so the ungranted-JWT path
+      is not covered there (`test_system_maps_routes.py`)
 - [x] The permission vocabulary is registered and enforced on every shipped
       route: `system_maps_access` is operator; `system_map.list`,
       `system_map.revision.get`, `system_map.revision.diff` and
@@ -126,10 +135,27 @@ The map is stored in dedicated System Maps tables (migration
       `organisation_id` (`api/routes/system_maps.py`,
       `db/repositories/system_map.py`; `test_system_maps_routes.py`)
 - [x] Map visibility is team-aware: `system_maps` carries `visibility`
-      (`org` / `team`) and `owner_team_id`, a team-visible map must name an
-      owner team, create is validated by `validate_owner_team_for_create`,
-      update by `validate_team_transition_for_update`, and the repository
-      resolves the team scope (`api/team_scope.py`; `test_system_map_models.py`)
+      (`org` / `team`) and `owner_team_id`, and the model's
+      `ck_system_maps_team_owner` CHECK constraint rejects a `team` visibility
+      with no owner team. Create is validated by
+      `validate_owner_team_for_create` and update by
+      `validate_team_transition_for_update`: a newly named owner team must
+      exist in the caller's organisation and a non-admin caller must belong to
+      it, a team-private map's current owner team gates the transition, and an
+      update cannot set `team` visibility without an owner team (422)
+      (`db/models/system_map.py`, `api/routes/system_maps.py`;
+      `test_system_maps_routes.py`). Isolation itself is enforced in the
+      database: `0341_system_maps.py` creates the `rls_team_isolation` policy
+      on `system_maps` (the org check plus the visibility / owner-team
+      membership matrix). `resolve_system_map_team_scope` is registered in
+      `TEAM_SCOPED_RESOLVERS` for registry completeness but deliberately never
+      attached to a route dependency - the same DB-RLS-only posture as the core
+      tables (`api/team_scope.py`;
+      `tests/architecture/test_team_scope_wiring.py`,
+      `tests/integration/test_rls_isolation.py`) - and `list_maps_by_org`
+      applies only the caller-supplied `visibility` / `owner_team_id` / `name`
+      filters, resolving no caller team scope of its own
+      (`db/repositories/system_map.py`)
 - [x] One published revision per map is a database invariant: a partial unique
       index on `(system_map_id)` where `status = 'published'`, a unique
       `(system_map_id, revision_number)` pair, composite tenant foreign keys,
@@ -281,11 +307,18 @@ The map is stored in dedicated System Maps tables (migration
       `system.config.manage` probe permission, and bounds the flag and overview
       requests (15s) (`frontend/src/stores/systemMaps.ts`;
       `systemMapsStore.spec.ts`)
-- [x] MCP callers only see the `system_maps` flag when they hold the same
-      internal System Maps grant (developer mode, operator role floor, grant
-      check through `grants_permit`); ordinary callers never see the internal
-      flag in flag listings (`api/mcp_server.py::_mcp_flag_visible`;
-      `test_system_maps_routes.py` flag-visibility cases)
+- [x] MCP flag listings hide `system_maps` unless the caller passes the
+      internal access predicate: `_mcp_internal_system_maps_access` requires
+      developer mode, the operator role floor and `grants_permit` over the
+      caller's grant set, and `_mcp_flag_visible` keys the `system_maps` flag
+      on that result. Ordinary callers (no developer mode, or below operator)
+      never see it. As on REST, the grant leg only narrows a grant-bearing
+      credential: a JWT session sets the MCP grant context to `None`,
+      `grants_permit` treats that as "do not narrow", so an ungranted JWT
+      operator does see the flag (`api/mcp_server.py`;
+      `tests/unit/mcp/test_mcp_config_tools.py` -
+      `TestSystemMapsInternalFlagMCP` and
+      `TestSystemMapsAccessUsesSharedGrantCheck::test_ungranted_jwt_caller_keeps_role_behaviour`)
 - [ ] No MCP System Maps tool: the MCP layer only hides/shows the flag. There is
       no MCP equivalent of discovery, authoring, publishing or the overview read
       (`api/mcp_server.py`)
@@ -381,3 +414,29 @@ The map is stored in dedicated System Maps tables (migration
   re-verified rather than copied: MCP has no System Maps tool, the version-aware
   history UI is unwired, discovery is create-only, loop dispatch has no runtime,
   the dashboard discover button is disabled, and there is no BDD file.
+- 2026-11-03: **Access and team-scope accuracy pass** - three verified findings
+  corrected against the code, each after reading the cited implementation
+  rather than the previous wording. (1) "a caller without the grant is refused
+  before any inventory read" was false for legacy JWTs and ungranted keys:
+  `_enforce_key_grant` treats `key_grants is None` as a no-op and
+  `grants_permit(None, ...)` returns `True`, so the `system_maps_access` grant
+  only binds grant-bearing API keys. The bullet now states that contract and
+  records that the cited grant-denial test case presents a grant-bearing key,
+  so the ungranted-JWT path is untested there. (2) "MCP callers only see the
+  `system_maps` flag when they hold the same grant" was false for JWT callers:
+  a JWT session sets the MCP grant context to `None`, which `grants_permit`
+  does not narrow, so an ungranted JWT operator does see the flag. The claim is
+  corrected and the citation now names `tests/unit/mcp/test_mcp_config_tools.py`
+  (`TestSystemMapsInternalFlagMCP`,
+  `TestSystemMapsAccessUsesSharedGrantCheck::test_ungranted_jwt_caller_keeps_role_behaviour`);
+  the previous citation, `test_system_maps_routes.py`, has no flag-visibility
+  test. (3) "the repository resolves the team scope" was false:
+  `resolve_system_map_team_scope` is registered for registry completeness and
+  never route-wired, isolation is the `rls_team_isolation` policy created in
+  migration `0341`, `list_maps_by_org` applies only query filters, and
+  `test_system_map_models.py` contains no team test. The bullet now names the
+  real mechanism and evidence (`tests/architecture/test_team_scope_wiring.py`,
+  `tests/integration/test_rls_isolation.py`) and describes the team validators
+  as implemented. The intro gate sentence carried the same
+  grant-for-everyone assumption and was reworded with it. Status stays
+  `partial`; the remaining-gaps list is unchanged.
