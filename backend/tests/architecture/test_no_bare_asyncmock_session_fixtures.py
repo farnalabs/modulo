@@ -134,7 +134,19 @@ _RESULT_READERS = frozenset(
     }
 )
 
-_CONFIGURE_HELPERS = frozenset({"configure_mock_session", "configure_rls_preamble"})
+#: What each contract helper actually makes safe. ``configure_mock_session``
+#: expresses the whole synchronous session contract (including a stubbed
+#: ``execute``), while ``configure_rls_preamble`` only fixes the RLS preamble's
+#: own members. The distinction matters: a session passed to
+#: ``configure_rls_preamble`` is still a bare ``AsyncMock`` for ``begin``,
+#: ``add_all``/``expunge`` and every ``execute`` result reader, so a configured
+#: name must be exempted member-by-member rather than skipped wholesale.
+_CONFIGURE_MEMBERS: dict[str, frozenset[str]] = {
+    "configure_mock_session": _SYNC_MEMBERS | _ASYNC_CM_MEMBERS | {"execute"},
+    "configure_rls_preamble": frozenset({"in_transaction", "get_bind", "add"}),
+}
+_CONFIGURE_HELPERS = frozenset(_CONFIGURE_MEMBERS)
+
 
 _ASYNC_CM_DECORATORS = frozenset({"asynccontextmanager"})
 
@@ -151,7 +163,7 @@ class _Facts:
     execute_result_reads: dict[str, set[str]] = field(default_factory=dict)
     execute_stubbed: set[str] = field(default_factory=set)
     returns: set[str] = field(default_factory=set)
-    configured: set[str] = field(default_factory=set)
+    configured: dict[str, set[str]] = field(default_factory=dict)
 
 
 def _call_name(func: ast.expr) -> str | None:
@@ -256,7 +268,12 @@ def _collect_facts(scope: ast.AST) -> _Facts:
         elif isinstance(node, ast.Return) and isinstance(node.value, ast.Name):
             facts.returns.add(node.value.id)
         elif isinstance(node, ast.Call) and _call_name(node.func) in _CONFIGURE_HELPERS:
-            facts.configured.update(arg.id for arg in node.args if isinstance(arg, ast.Name))
+            helper = _call_name(node.func)
+            assert helper is not None  # narrowed by the membership test above
+            members = _CONFIGURE_MEMBERS[helper]
+            for arg in node.args:
+                if isinstance(arg, ast.Name):
+                    facts.configured.setdefault(arg.id, set()).update(members)
 
     # Pass 2: attribute reads on variables that hold an awaited execute() result.
     result_vars = {var: session for session, variables in execute_vars.items() for var in variables}
@@ -343,8 +360,7 @@ def _violations_in_source(source: str, filename: str) -> list[str]:
             if (lineno, name) in seen:
                 continue
             seen.add((lineno, name))
-            if name in facts.configured:
-                continue
+            configured_members = facts.configured.get(name, set())
             used = set(facts.used.get(name, set()))
             result_readers = set(facts.execute_result_reads.get(name, set()))
             is_shared_helper = helper_name in helper_returns and name in helper_returns[helper_name]
@@ -355,24 +371,24 @@ def _violations_in_source(source: str, filename: str) -> list[str]:
             typed = facts.typed.get(name, {})
 
             problems: list[str] = []
-            if is_shared_helper:
+            if is_shared_helper and name not in facts.configured:
                 # Rule 1: a double built by a helper is driven by arbitrary
                 # production code the test cannot see, so it must express the
                 # whole synchronous contract (i.e. go through the helper).
                 problems.append(
                     "shared helper double is not built through configure_mock_session/configure_rls_preamble"
                 )
-            untyped_sync = sorted((used & _SYNC_MEMBERS) - set(typed))
+            untyped_sync = sorted((used & _SYNC_MEMBERS) - set(typed) - configured_members)
             if untyped_sync:
                 problems.append(f"sync member(s) not typed as MagicMock: {', '.join(untyped_sync)}")
-            for member in sorted(used & _ASYNC_CM_MEMBERS):
+            for member in sorted((used & _ASYNC_CM_MEMBERS) - configured_members):
                 kind = typed.get(member, "")
                 if kind == f"call:{_MAGIC_MOCK}":
                     continue
                 if kind.startswith("name:") and kind.removeprefix("name:") in cm_functions:
                     continue
                 problems.append(f"{member}() is not an async context manager")
-            if result_readers and name not in facts.execute_stubbed:
+            if result_readers and name not in facts.execute_stubbed and "execute" not in configured_members:
                 readers = ", ".join(sorted(result_readers & _RESULT_READERS)) or ", ".join(sorted(result_readers))
                 problems.append(f"execute() result read ({readers}) without a stubbed synchronous result")
             if problems:
