@@ -1214,24 +1214,27 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `modulo evidence verify` CLI and the `hashing.py` extraction now have one.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
-> **Closed this walk (2026-10-31):** tracked the shipped-but-untracked
-> System Maps preview (FAR-2244 backend discovery, FAR-2245 dashboard
-> draft-review card) in `pipelines/system-maps.md`. The feature has no route of
-> its own (the only UI is a gated card on the existing `/` dashboard route), so
-> it is tracked in this graph rather than the manifest `features:` registry.
-> The entry records the internal-flag visibility rules, the triple access gate,
-> the deterministic discovery contract, the collision-safe lifecycle-map
+> **Closed this walk (2026-10-31) - HISTORICAL RECORD of that date, not a
+> current description:** tracked the shipped-but-untracked System Maps preview
+> (FAR-2244 backend discovery, FAR-2245 dashboard draft-review card) in
+> `pipelines/system-maps.md`. At that date the feature had no route of its own
+> (the only UI was a gated card on the existing `/` dashboard route), so it was
+> tracked in this graph rather than in the manifest `features:` registry. The
+> entry recorded the internal-flag visibility rules, the triple access gate, the
+> deterministic discovery contract, the collision-safe lifecycle-map
 > persistence adapter, the audit event, the fail-closed frontend store and the
-> MCP flag-visibility gate. Its honest remaining gap - the UI never calls the
-> shipped discovery endpoint - keeps it `partial`; `_ORPHANED_BDD_FEATURES`
-> stays empty.
+> MCP flag-visibility gate. Its honest remaining gap at the time - the UI never
+> called the shipped discovery endpoint - kept it `partial`;
+> `_ORPHANED_BDD_FEATURES` was empty.
 >
-> **Superseded 2026-11-03:** the feature now has its own routed surface
-> (`/system-maps`, `/system-maps/:id`) and is registered in the manifest
-> `features:` registry as `feat-system-maps`, so it is no longer tracked here
-> "rather than" the registry. `pipelines/system-maps.md` was refreshed against
-> the dedicated System Maps schema, the revision lifecycle and the wired
-> discovery UI; the entry stays `partial` for the gaps that genuinely remain.
+> **Superseded 2026-11-03 - see the current entry:** for the current state read
+> [`pipelines/system-maps.md`](pipelines/system-maps.md), not the note above.
+> The feature now has its own routed surface (`/system-maps`,
+> `/system-maps/:id`) and is registered in the manifest `features:` registry as
+> `feat-system-maps`, so it is no longer tracked here "rather than" the
+> registry. `pipelines/system-maps.md` was refreshed against the dedicated
+> System Maps schema, the revision lifecycle and the wired discovery UI; the
+> entry stays `partial` for the gaps that genuinely remain.
 
 > **Closed this walk (2026-11-03):** re-verified `feat-system-maps`
 > (`pipelines/system-maps.md`) after FAR-2288's MCP-discovery + BDD PR (#2761)
