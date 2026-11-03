@@ -33,6 +33,11 @@ on:
         description: "Release version in X.Y.Z form (e.g. 0.1.0). Required for recut/promote; for cut it's the target version."
         type: string
         required: false
+      freeze:
+        description: "Establish release-freeze branch to pause merge queue (default false while testing pipeline)"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: release-unified-${{ github.ref }}
@@ -195,7 +200,12 @@ jobs:
       id-token: write
       attestations: write
     outputs:
-      rc_tag: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
+      # Bound to the always-run normaliser below rather than an `||` chain over
+      # the conditionally-skipped cut/recut steps. In run 41655117202 the
+      # `||` form handed the macos-installer job an empty rc_tag even though
+      # bundle received the correct one; the explicit step makes the value
+      # single-sourced and observable in the job log.
+      rc_tag: ${{ steps.rc-output.outputs.rc_tag }}
       ga_tag: ${{ steps.promote.outputs.ga_tag }}
       all_in_one_digest: ${{ steps.publish_images.outputs.all_in_one_digest || steps.retag_images.outputs.all_in_one_digest }}
       backend_digest: ${{ steps.publish_images.outputs.backend_digest || steps.retag_images.outputs.backend_digest }}
@@ -600,8 +610,13 @@ jobs:
           # The freeze signal: merge-queue.yml's freeze-gate pauses while this
           # branch exists. Force-move it on recut so the gate always tracks the
           # latest freeze.
-          git branch -f release-freeze HEAD
-          git push origin refs/heads/release-freeze --force
+          if [ "${{ inputs.freeze }}" = "true" ]; then
+            git branch -f release-freeze HEAD
+            git push origin refs/heads/release-freeze --force
+            echo "Release freeze established on refs/heads/release-freeze."
+          else
+            echo "Release freeze skipped (inputs.freeze != true); merge queue will not be paused."
+          fi
 
           # The hold only covers the version-bump push. Once the authoritative
           # release-freeze exists, remove the temporary suppression marker.
@@ -676,8 +691,13 @@ jobs:
 
           # Move the freeze to the new RC commit so main remains frozen at the
           # exact commit sent to deploy and rc-validate.
-          git branch -f release-freeze HEAD
-          git push origin refs/heads/release-freeze --force
+          if [ "${{ inputs.freeze }}" = "true" ]; then
+            git branch -f release-freeze HEAD
+            git push origin refs/heads/release-freeze --force
+            echo "Release freeze moved to ${RC_TAG} on refs/heads/release-freeze."
+          else
+            echo "Release freeze skipped (inputs.freeze != true); merge queue will not be paused."
+          fi
 
           echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
 
@@ -1394,6 +1414,28 @@ jobs:
           fi
           git push origin --delete refs/heads/release-freeze
           echo "All GA publication steps succeeded; freeze lifted and merge queue resumes."
+
+      # Final step of the release job: normalise the release candidate tag into
+      # the job output consumed by bundle / macos-installer / windows-installer.
+      # `if: always()` so it still runs when cut/recut failed or was skipped,
+      # and the per-mode step outputs are read through env rather than an `||`
+      # expression so the value does not depend on short-circuit behaviour
+      # across conditionally-skipped steps (run 41655117202: release and bundle
+      # succeeded, macos-installer failed with "rc_tag input is required").
+      # Promote mode never sets cut/recut outputs, so it cannot capture a GA
+      # value here.
+      - name: Expose release candidate tag
+        id: rc-output
+        if: always()
+        shell: bash
+        env:
+          CUT_RC_TAG: ${{ steps.cut.outputs.rc_tag }}
+          RECUT_RC_TAG: ${{ steps.recut.outputs.rc_tag }}
+        run: |
+          set -euo pipefail
+          rc_tag="${CUT_RC_TAG:-}${RECUT_RC_TAG:-}"
+          echo "rc_tag=${rc_tag}" >> "$GITHUB_OUTPUT"
+          echo "Release candidate tag exposed to dependent jobs: '${rc_tag}'"
 
   # ---------------------------------------------------------------------------
 

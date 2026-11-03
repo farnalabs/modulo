@@ -7,15 +7,22 @@
     <template #header>
       <button
         type="button"
-        disabled
-        class="rounded-md border px-3 py-2 text-sm font-medium opacity-60"
+        :disabled="discovering"
+        class="rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-60"
         data-testid="dashboard-system-discover"
         :aria-label="$t('views.DashboardView.discover_my_system')"
+        @click="discoverSystem"
       >
         {{ $t('views.DashboardView.discover_my_system') }}
       </button>
     </template>
 
+    <ErrorAlert
+      v-if="discoverError"
+      :message="discoverError"
+      :on-dismiss="clearDiscoverError"
+      :dismiss-label="$t('common.dismiss')"
+    />
     <div v-if="store.overviewLoading" class="text-sm text-muted-foreground" data-testid="system-map-overview-loading">
       {{ $t('views.DashboardView.system_maps_loading') }}
     </div>
@@ -58,13 +65,38 @@ import SectionCard from '../shared/SectionCard.vue'
 import EmptyState from '../shared/EmptyState.vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
 import SystemMapDraftReview from '../system-maps/SystemMapDraftReview.vue'
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { useSystemMapsStore } from '../../stores/systemMaps'
 
 const { t } = useI18n()
+const router = useRouter()
 const store = useSystemMapsStore()
+const discovering = ref(false)
+const discoverError = ref<string | null>(null)
 const healthLabel = (health: string): string => t(`views.DashboardView.system_maps_health_${health}`)
+
+function clearDiscoverError(): void { discoverError.value = null }
+
+/**
+ * Discovery persists an unpublished draft, so hand the user straight to the
+ * draft's detail view with the review panel open rather than leaving the
+ * dashboard preview as the only outcome.
+ */
+async function discoverSystem(): Promise<void> {
+  if (discovering.value) return
+  discovering.value = true
+  discoverError.value = null
+  try {
+    const report = await store.discover()
+    await router.push(`/system-maps/${report.draft_map_id}?discovery=1`)
+  } catch (err: unknown) {
+    discoverError.value = err instanceof Error ? err.message : t('views.DashboardView.system_maps_discover_failed')
+  } finally {
+    discovering.value = false
+  }
+}
 
 /**
  * Load every source this overview renders from. The retry affordance reuses

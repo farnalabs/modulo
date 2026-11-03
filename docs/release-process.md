@@ -34,6 +34,26 @@ Both markers are branches under `refs/heads/`, not tags, so the protected-tag ru
 
 If a `cut` or `recut` fails, a dedicated finalizer job clears `release-freeze` automatically so the merge queue does not remain stranded. The finalizer checks live ref state rather than upstream step outcomes: it confirms `bundle-v<VERSION>` is unpublished, proves the freeze points to one of this release's RC commits before touching it, and leaves any freeze belonging to another version alone.
 
+### How long a freeze may last
+
+A freeze is deliberate, but it is **not unbounded**: the intended maximum is **4 hours** from the moment `release-freeze` is pushed until `promote` deletes it. That window covers the RC soak, the forced deploy and `rc-validate`; a `recut` starts it again from the new RC. It exists because the marker is the one piece of release state with no expiry — on 2026-11-02/03 a release failed four times on an unrelated CI flag and the marker survived for about 12 hours, during which 20 approved green PRs sat unmerged while every merge-queue run still concluded success (the queue job is skipped while the marker exists).
+
+**Nothing opens the gate when the maximum is exceeded.** A release that legitimately overruns must not be un-frozen mid-flight: merging into `main` while an RC is being validated would change the commit that gets promoted. An overrun instead becomes visible, and the decision stays with a human:
+
+- `merge-queue.yml`'s freeze gate reports the marker's commit and age on every tick (a `::notice::` plus a run-summary block) and adds a `::warning::` once the marker is older than the maximum. The gate still fails closed and never lifts a freeze by itself.
+- `merge-queue-watchdog.yml` (every 10 minutes) raises an operator alert through the existing watchdog escalation path — one deduplicated Linear ticket per condition, `RELEASE FREEZE STALE`, naming the marker commit, its age and the threshold. The alert fires on the **watchdog** run, never on the merge-queue tick: a halt somebody chose is not a queue failure, and failing the tick would make every frozen pass look like a broken queue.
+- The threshold defaults to 4 hours and is overridden with the `RELEASE_FREEZE_MAX_HOURS` repository variable; the watchdog also accepts a `max_freeze_hours` `workflow_dispatch` input for a one-off re-check.
+- The reported age is measured from the commit the marker points at, because GitHub exposes no ref-creation time. It is therefore a **lower bound**: an alert can arrive late, never early.
+
+**The manual escape is deleting the branch, and it is the only escape:**
+
+```bash
+git ls-remote --exit-code origin refs/heads/release-freeze   # confirm it exists
+git push origin --delete refs/heads/release-freeze            # lift the freeze
+```
+
+Do that only when the freeze is genuinely abandoned — a `cut`/`recut` that failed in a way the finalizer above could not clear, or a `promote` that was abandoned. Deleting a live freeze lets the merge queue land commits on `main` mid-release, and the GA tag then points at a commit nobody validated. Do **not** promote a release just to clear a stale marker, and do not add an automatic lift: a late merge is recoverable, a wrongly-lifted freeze is a wrong release.
+
 ### Recut runbook
 
 The unified workflow is the canonical entry point. Its `recut` mode publishes from the new RC tag created at current `main`; it never checks out or reuses the previous RC tag.
@@ -94,7 +114,7 @@ The `dry-run` build job builds the four images the release and deployments consu
 
 The `dry-run` rehearsal builds the same four images with `push: false` and applies no tag at all. Publishing happens only in `cut`/`recut`, which tags each pushed image with the RC tag (`vX.Y.Z-rcN`) alone and runs its own smoke check after the push (`import modulo` for the all-in-one and backend, `nginx -t` for the all-in-one and frontend, `opencode --version` for the runner). A failing smoke check fails the job - never `|| true`. `promote` then retags those RC images to the plain `X.Y.Z` and `latest` via `docker buildx imagetools` (falling back to pull/tag/push); it does not rerun the smoke checks, which already passed against the same image digests.
 
-Server images are `linux/amd64` **only**. The native macOS installer is a separate `macos-arm64` artifact built and validated on `macos-15`; it is not an x64/Rosetta artifact. Linux arm64 remains planned for the server bundle.  `publish-images.yml` declares no `platforms:` (so it builds amd64), and `docs/system-requirements.md` lists `linux-amd64 (x86_64)` and the native `macOS arm64` `.dmg` as supported, while `linux-arm64` is Planned (P2) and Windows is out of scope for v1 (post-v1: P3). `bundle-release.yml` carries the same deferral for the server bundle ("linux-amd64 only for now; the matrix structure below is where linux-arm64 slots in; `scripts/bundle-versions.env` already carries the arm64 pins"). The Windows installer remains tracked separately (FAR-1873).
+Server images are `linux/amd64` **only**. The native macOS installer is a separate `macos-arm64` artifact built and validated on `macos-15`; it is not an x64/Rosetta artifact. Linux arm64 remains planned for the server bundle.  `publish-images.yml` declares no `platforms:` (so it builds amd64), and `docs/system-requirements.md` lists `linux-amd64 (x86_64)` and the native `macOS arm64` `.dmg` as supported, while `linux-arm64` is Planned (P2) and Windows is out of scope for v1 (post-v1: P3). `bundle-release.yml` carries the same deferral for the server bundle ("linux-amd64 only for now; the matrix structure below is where linux-arm64 slots in; `scripts/bundle-versions.env` already carries the arm64 pins"). The Windows installer remains tracked separately (FAR-1873); how its bundle directory is built and how the installer is compiled is in [`deploy/windows/BUNDLE-BUILD.md`](../deploy/windows/BUNDLE-BUILD.md).
 
 `dry-run` builds each image with `push: false`, so it validates that every Dockerfile still builds on a clean runner without producing a loadable image. The post-publish smoke checks that guard against the 2026-07-06 stale-image regression (a `:latest` that did not even contain the `modulo` package) live in `publish-images.yml` and are *not* duplicated here - they belong with the publish path, and re-implementing them in a `push: false` build would be a parallel copy that could drift. Wiring them into this workflow is future work (see below).
 

@@ -1225,6 +1225,25 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > MCP flag-visibility gate. Its honest remaining gap - the UI never calls the
 > shipped discovery endpoint - keeps it `partial`; `_ORPHANED_BDD_FEATURES`
 > stays empty.
+>
+> **Superseded 2026-11-03:** the feature now has its own routed surface
+> (`/system-maps`, `/system-maps/:id`) and is registered in the manifest
+> `features:` registry as `feat-system-maps`, so it is no longer tracked here
+> "rather than" the registry. `pipelines/system-maps.md` was refreshed against
+> the dedicated System Maps schema, the revision lifecycle and the wired
+> discovery UI; the entry stays `partial` for the gaps that genuinely remain.
+
+> **Closed this walk (2026-11-03):** re-verified `feat-system-maps`
+> (`pipelines/system-maps.md`) after FAR-2288's MCP-discovery + BDD PR (#2761)
+> and the product-map refresh (#2762). The entry now records the shipped
+> `discover_system_map` MCP tool (discovery only) and cites the two executing
+> BDD feature files instead of `bdd: []`, closing the false "no MCP tool" and
+> "no BDD coverage" gaps. The one real UI gap was wired: the dashboard's
+> "Discover My System" button now runs the shipped endpoint and deep-links to
+> the draft with `?discovery=1`, so the detail view opens the review panel on
+> arrival, and the stale "discovery is not available" copy is gone. The
+> version-aware-history UI, create-only re-scan and missing loop runtime remain
+> the honest unchecked gaps. `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

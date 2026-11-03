@@ -176,7 +176,7 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     })
   })
 
-  test('editor fits the leftover viewport height — toolbar and canvas fully on screen', { tag: '@regression' }, async ({ page, env }) => {
+  test('editor fits the leftover viewport height — toolbar and canvas stay reachable without page scroll', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await mockEditorWithNode(page)
 
@@ -193,10 +193,26 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     // Toolbar is fully above the fold — Save / Run are reachable with no scroll.
     expect(toolbarBox!.y).toBeGreaterThanOrEqual(0)
     expect(toolbarBox!.y + toolbarBox!.height).toBeLessThanOrEqual(667)
-    // The canvas has real width and ends at or above the viewport bottom —
-    // nothing hangs below the fold behind the touch-capturing canvas.
+    // The canvas has real width and starts on screen.
     expect(flowBox!.width).toBeGreaterThan(200)
-    expect(flowBox!.y + flowBox!.height).toBeLessThanOrEqual(667)
+    expect(flowBox!.y).toBeLessThan(667)
+
+    // At 375px the docked toolbar wraps to its min-content height, and the
+    // mobile touch-target sizing (1rem / 2.5rem selects) makes that taller
+    // than the space left below the chrome minus the canvas's 8rem minimum.
+    // FAR-1861 resolves exactly that case by making the CONTENT COLUMN the
+    // scroll container (never the page), so the canvas bottom may start below
+    // the fold. What must hold is that it is reachable: scroll the column to
+    // its end and the canvas bottom comes inside the fold.
+    const content = page.getByTestId('pipeline-editor-content')
+    await content.evaluate((el) => {
+      el.scrollTop = el.scrollHeight
+    })
+    const scrolledFlowBox = await flow.boundingBox()
+    expect(scrolledFlowBox).not.toBeNull()
+    // +1px for sub-pixel layout rounding (the desktop fold spec uses the same
+    // slack) — the point is reachability, not an exact integer edge.
+    expect(scrolledFlowBox!.y + scrolledFlowBox!.height).toBeLessThanOrEqual(667 + 1)
 
     // The document has no scrollable overflow while the editor is open.
     const doc = await page.evaluate(() => ({

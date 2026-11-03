@@ -17,6 +17,7 @@ import asyncio
 import contextvars
 import copy
 import functools
+import inspect
 import json
 import logging
 import re
@@ -280,6 +281,8 @@ _MSG_EVAL_DEF_CREATE_FAILED = "create_eval_definition failed"
 _MSG_EVAL_DEF_UPDATE_FAILED = "update_eval_definition failed"
 _MSG_EVAL_DEF_DELETE_FAILED = "delete_eval_definition failed"
 _MSG_DB_OPERATION_FAILED = "Database operation failed. Please try again."
+_MSG_DISCOVER_SYSTEM_MAP_FAILED = "discover_system_map failed"
+_SYSTEM_MAP_DISCOVERY_SCOPE = "mcp.discover_system_map"
 # FAR-1825: SQLSTATE 55P03 from a bounded row-lock wait is a busy-row CONFLICT,
 # not an outage: the engine is healthy and re-issuing once the other change
 # commits may succeed. The message is imported from ``db_error_handling`` (the
@@ -611,6 +614,20 @@ def _mcp_internal_system_maps_access() -> bool:
     )
 
 
+def _require_mcp_internal_system_maps_access() -> None:
+    """Refuse an MCP System Maps call without the REST internal gate's context.
+
+    Mirrors ``_require_mcp_internal_lifecycle_map_access``: the boolean leg is
+    the same one ``/api/v1/system-maps`` reaches through
+    ``_require_internal_system_maps_access`` (developer mode + operator/admin
+    role + the dedicated ``system_maps_access`` grant). The role and grant legs
+    are ALSO declared in the shared tool-scope registry, so this call-site check
+    is the dev-mode leg plus defence in depth.
+    """
+    if not _mcp_internal_system_maps_access():
+        raise MCPAuthorizationError("System Maps discovery is restricted to internal operators")
+
+
 def _mcp_flag_visible(
     flag_name: str,
     *,
@@ -694,6 +711,10 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
     auth type are threaded into the chokepoint so the caller-scope leg of the
     tool-scope decision sees the live credential class (None fails closed).
 
+    FAR-2288: the credential's team boundary (``_ctx_team_id``) is threaded too,
+    so the ``org-credential`` caller-scope classification can refuse a
+    team-scoped credential before an organisation-wide tool runs.
+
     FAR-1930: the request's live ``is_system_admin`` claim is threaded too, so
     the resolver's system-admin leg (for the tools declared in
     ``SYSTEM_ADMIN_TOOLS``) is evaluated here rather than in each tool body.
@@ -708,6 +729,7 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
             auth_type=_ctx_auth_type.get(None),
             grants=_ctx_key_grants.get(None),
             is_system_admin=_ctx_is_system_admin_val(),
+            team_id=_ctx_team_id_val(),
         )
     except MCPSystemAdminRequiredError as exc:
         # FAR-1930: the shared resolver owns the gate. This adapter emits the
@@ -10758,6 +10780,174 @@ async def list_feature_flags() -> dict[str, Any]:
     except Exception as exc:
         _log.exception("list_feature_flags failed")
         return _tool_exception_error("Failed to list feature flags", exc, "mcp.list_feature_flags")
+
+
+#: HTTP status -> branchable MCP error code for the reused System Maps route
+#: handler. The handler is the REST surface's own implementation, so its
+#: refusals arrive as ``HTTPException``; the MCP caller still needs a specific
+#: code (FAR-1502), never a generic ``server_error`` for a knowable failure.
+_SYSTEM_MAPS_HTTP_ERROR_CODES: dict[int, str] = {
+    400: "invalid_request",
+    402: "feature_required",
+    403: "insufficient_scope",
+    404: "not_found",
+    409: "name_conflict",
+    422: "validation_failed",
+    501: "migration_required",
+    503: "database_unavailable",
+}
+
+
+def _system_maps_http_error_payload(exc: StarletteHTTPException) -> dict[str, Any]:
+    """Render a System Maps route refusal as the MCP tool-error envelope."""
+    code = _SYSTEM_MAPS_HTTP_ERROR_CODES.get(exc.status_code, "server_error")
+    detail = exc.detail if isinstance(exc.detail, str) else _MSG_UNEXPECTED_ERROR
+    return _tool_error(detail, code=code)
+
+
+def _unwrap_system_maps_route_handler(handler: Any) -> Any:
+    """Return the route handler with ``@handle_db_errors``'s wrapper removed.
+
+    The wrapper is a single ``functools.wraps`` layer, so one ``__wrapped__``
+    hop is exact. The ``inspect.isfunction`` guard keeps TEST DOUBLES out of the
+    unwrap: mocks fabricate any attribute (including ``__wrapped__``), so
+    blindly following the attribute would replace the double with a mock child
+    instead of returning the handler under test.
+    """
+    if not inspect.isfunction(handler):
+        return handler
+    unwrapped = getattr(handler, "__wrapped__", None)
+    return unwrapped if unwrapped is not None else handler
+
+
+@asynccontextmanager
+async def _system_maps_discovery_session() -> AsyncGenerator[AsyncSession, None]:
+    """Fresh session for the reused REST discovery handler.
+
+    The handler owns its transaction (``async with session.begin():``) and
+    binds the RLS org/user context itself, so this session must NOT be opened
+    inside ``_session``'s transaction — a second ``begin()`` would raise.
+    """
+    async with _get_session_factory()() as session:
+        yield session
+
+
+@mcp.tool(
+    name="discover_system_map",
+    description=(
+        "Internal preview. Inspect the organisation and persist an unpublished System Maps "
+        "discovery draft, returning the discovery report (draft map/revision ids, inferred "
+        "nodes/edges, warnings, skipped sources, published=false; mirrors "
+        "POST /api/v1/system-maps/discover). Requires the system_maps feature, developer "
+        "mode, an operator/admin role, the system_maps_access grant and an org-scoped "
+        "credential — team-scoped and user-scoped credentials are refused because the scan "
+        "covers the whole organisation; ordinary callers are refused."
+    ),
+)
+@mcp_audited("system_map_discovery_drafted", "system_map", fail_closed=False)
+@_RETRY_DB
+async def discover_system_map(
+    name: str = "Discovered System Map",
+    description: str | None = None,
+) -> dict[str, Any]:
+    """Trigger System Maps discovery over MCP (FAR-2288).
+
+    This tool deliberately does NOT re-implement inference, persistence or
+    validation: it drives the SAME ``POST /api/v1/system-maps/discover``
+    handler the REST surface uses, so the inventory query, the deterministic
+    ``discover_draft`` inference, the persisted content envelope and the
+    repository writes are one implementation. The only MCP-specific work is
+    the transport gate (the REST dependency chain, re-applied here because the
+    handler is invoked directly rather than through FastAPI), the principal
+    construction from the request ContextVars, and the error/payload rendering.
+
+    The handler is resolved through ``inspect.unwrap`` so the REST route's
+    ``@handle_db_errors`` wrapper does not pre-empt the classification: that
+    wrapper turns a session-contract violation into a generic 500 and an
+    ``IntegrityError`` into 409 (rendered as ``name_conflict``), which would
+    tell an agent to rename a map instead of retrying a concurrent uuid5
+    revision write. Driving the UNDECORATED handler lets this tool classify DB
+    failures itself, while the route's own genuine refusals (404/402/409 name
+    conflict/422) remain plain ``HTTPException``s and are still mapped below.
+    """
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("discover_system_map")
+        _require_mcp_internal_system_maps_access()
+
+        org_id = _ctx_org_id_val()
+        user_id = _ctx_user_id_val()
+        role = _ctx_role_val() or ""
+
+        # Same internal gate as the REST route's ``require_feature`` dependency.
+        # Evaluated AFTER the internal gate so an ordinary caller learns nothing
+        # about the org's feature state.
+        feature_error = await _require_plan_feature(org_id, get_settings(), SYSTEM_MAPS_FLAG)
+        if feature_error is not None:
+            return feature_error
+
+        from pydantic import ValidationError as _PydanticValidationError
+
+        from modulo.api.schemas.system_maps import SystemMapDiscoveryRequest
+
+        try:
+            discovery_request = SystemMapDiscoveryRequest(name=name, description=description)
+        except _PydanticValidationError as exc:
+            return {
+                "error": "validation_failed",
+                "detail": f"Discovery request validation failed: {exc.errors(include_url=False)}",
+            }
+
+        from modulo.api.routes.system_maps import discover_system_map as rest_discover_system_map
+        from modulo.auth.jwt import TenantPrincipal
+
+        # Resolve the UNDECORATED handler: ``@handle_db_errors`` on the REST
+        # route would otherwise convert a session-contract ``InvalidRequestError``
+        # to a generic 500 and an ``IntegrityError`` to 409 (``name_conflict``)
+        # before this tool can classify them (FAR-2288). The REST route keeps
+        # its own wrapper — only the MCP invocation bypasses it.
+        rest_discover_system_map = _unwrap_system_maps_route_handler(rest_discover_system_map)
+
+        principal = TenantPrincipal(
+            username=str(user_id),
+            organisation_id=org_id,
+            account_id=user_id,
+            org_role=role,
+            key_grants=_ctx_key_grants.get(None),
+            key_scope=_ctx_key_scope.get(None),
+            team_id=_ctx_team_id_val(),
+        )
+
+        async with _system_maps_discovery_session() as session:
+            report = await rest_discover_system_map(
+                request=discovery_request,
+                session=session,
+                principal=principal,
+            )
+        return report.model_dump(mode="json")
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except StarletteHTTPException as exc:
+        return _system_maps_http_error_payload(exc)
+    except ProgrammingError:
+        _log.exception(_MSG_DISCOVER_SYSTEM_MAP_FAILED)
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except SQLAlchemyError as exc:
+        # Classify the DB failure HERE (the REST wrapper was bypassed above):
+        # session-contract -> session_contract_error, a bounded lock wait ->
+        # lock_timeout, IntegrityError -> conflict (a concurrent uuid5 revision
+        # write, not a name clash), ProgrammingError -> migration_required,
+        # anything else -> database_unavailable. The contract guard stays the
+        # arm's FIRST statement so the static FAR-1464/FAR-1482 architecture
+        # guard sees it.
+        if (contract_error := _tool_session_contract_error(exc, _SYSTEM_MAP_DISCOVERY_SCOPE)) is not None:
+            return contract_error
+        _log.exception(_MSG_DISCOVER_SYSTEM_MAP_FAILED)
+        return _sqlalchemy_exception_response(exc, _MSG_DB_OPERATION_FAILED, _SYSTEM_MAP_DISCOVERY_SCOPE)
+    except Exception as exc:
+        _log.exception(_MSG_DISCOVER_SYSTEM_MAP_FAILED)
+        return _tool_exception_error("Failed to discover system map", exc, _SYSTEM_MAP_DISCOVERY_SCOPE)
 
 
 @mcp.tool(

@@ -30,10 +30,14 @@ mapping deliberately. This helper is therefore the shared translation for the
 patch-helper call sites, not a universal one for every org-settings writer.
 
 Patch contract (mirrors :func:`update_org_json_column_patch`): at most ONE
-``nested_patch`` key per call, and no key may appear in BOTH ``patch`` and
-``nested_patch``, nor in ``delete_keys`` as well as either — the compose order
-would be ambiguous, so the crud entry point refuses it rather than silently
-resolving delete-wins.
+``nested_patch`` key per call and at most ONE ``nested_delete`` key per call,
+``nested_patch`` and ``nested_delete`` may not be combined in one call, and no
+key may appear in more than one of ``patch``, ``nested_patch``,
+``nested_delete`` and ``delete_keys`` — the compose order would be ambiguous,
+so the crud entry point refuses it rather than silently resolving delete-wins.
+``nested_delete`` (FAR-2309) removes named SUB-keys from a single top-level
+object in the same atomic statement, which is how a per-entry clear (a feature
+flag override) avoids a read-modify-write of the whole map.
 """
 
 from __future__ import annotations
@@ -57,6 +61,7 @@ async def apply_org_settings_patch_or_404(
     patch: dict[str, Any] | None = None,
     delete_keys: list[str] | None = None,
     nested_patch: dict[str, dict[str, Any]] | None = None,
+    nested_delete: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Apply the atomic org-settings patch; a missing/soft-deleted org is a 404.
 
@@ -68,10 +73,19 @@ async def apply_org_settings_patch_or_404(
     same ``(session, org_id, patch)`` shape the hand-copied blocks had; an
     absent top-level patch is passed as ``None`` (one call shape, no arity
     branch).
+
+    ``nested_delete`` (FAR-2309) atomically removes named sub-keys from one
+    top-level settings object — the clear path used by the org-admin and
+    system-admin feature-flag override handlers.
     """
     try:
         return await update_org_settings_patch(
-            session, org_id, patch, delete_keys=delete_keys, nested_patch=nested_patch
+            session,
+            org_id,
+            patch,
+            delete_keys=delete_keys,
+            nested_patch=nested_patch,
+            nested_delete=nested_delete,
         )
     except LookupError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND) from None

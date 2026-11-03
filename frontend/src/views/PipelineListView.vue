@@ -64,6 +64,21 @@
           role="alert"
           data-testid="pipeline-list-move-error"
         />
+        <!-- A row-action failure (archive/unarchive/pause/resume) is an inline
+             banner, never the list-load `error`: that ref drives the
+             v-else-if below, so writing a failed toggle into it replaced the
+             whole table with an error box and threw away the user's place in
+             the list. The retry for these is the row action itself, so the
+             banner offers dismiss only. -->
+        <ErrorAlert
+          v-if="actionError"
+          :message="actionError"
+          :retryable="false"
+          :on-dismiss="() => (actionError = null)"
+          :dismiss-label="$t('common.close')"
+          :dismiss-icon="true"
+          class="mb-4"
+        />
         <div v-if="loading || !foldersReady">
           <!-- Reserve the mobile folder-filter row and the breadcrumb row that the
                real content renders above the table, so the table does not drop
@@ -509,6 +524,9 @@ const allPipelines = computed(() => pipelinesResp.value?.items ?? [])
 
 const foldersList = ref<FolderItem[]>([])
 const folderError = ref<string | null>(null)
+// Archive/unarchive/pause/resume failures. Kept separate from the list-load
+// `error` so a failed row action cannot blank the table (see the template).
+const actionError = ref<string | null>(null)
 const foldersReady = ref(false)
 
 const triggerTypes = ref<Record<string, string>>({})
@@ -969,24 +987,26 @@ async function handleRename() {
 }
 
 async function handleArchive(p: PipelineItem) {
+  actionError.value = null
   try {
     throwOnError(await withTimeout(api.POST('/api/v1/pipelines/{pipeline_id}/archive', {
       params: { path: { pipeline_id: p.id } },
     }), TOGGLE_REQUEST_TIMEOUT_MS, 'Archive pipeline'))
     await loadPipelines()
   } catch (e) {
-    error.value = formatApiError(e)
+    actionError.value = formatApiError(e)
   }
 }
 
 async function handleUnarchive(p: PipelineItem) {
+  actionError.value = null
   try {
     throwOnError(await withTimeout(api.POST('/api/v1/pipelines/{pipeline_id}/unarchive', {
       params: { path: { pipeline_id: p.id } },
     }), TOGGLE_REQUEST_TIMEOUT_MS, 'Unarchive pipeline'))
     await loadPipelines()
   } catch (e) {
-    error.value = formatApiError(e)
+    actionError.value = formatApiError(e)
   }
 }
 
@@ -1006,24 +1026,26 @@ function pausedBadgeHelp(p: PipelineItem): string {
 }
 
 async function handlePause(p: PipelineItem) {
+  actionError.value = null
   try {
     throwOnError(await withTimeout(api.POST('/api/v1/pipelines/{pipeline_id}/pause', {
       params: { path: { pipeline_id: p.id } },
     }), TOGGLE_REQUEST_TIMEOUT_MS, 'Pause pipeline'))
     await loadPipelines()
   } catch (e) {
-    error.value = formatApiError(e)
+    actionError.value = formatApiError(e)
   }
 }
 
 async function handleResume(p: PipelineItem) {
+  actionError.value = null
   try {
     throwOnError(await withTimeout(api.POST('/api/v1/pipelines/{pipeline_id}/resume', {
       params: { path: { pipeline_id: p.id } },
     }), TOGGLE_REQUEST_TIMEOUT_MS, 'Resume pipeline'))
     await loadPipelines()
   } catch (e) {
-    error.value = formatApiError(e)
+    actionError.value = formatApiError(e)
   }
 }
 
