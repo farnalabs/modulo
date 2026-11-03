@@ -7745,7 +7745,7 @@ features:
             - "[x] System Maps list page (/system-maps) with create, view, edit, delete, discover actions"
             - "[x] Map detail page (/system-maps/:id) with bounded visual graph editor for the backend node/relationship vocabularies, connected edges, endpoint selection, and drag/keyboard repositioning"
             - "[x] Version-aware revision read model ships (FAR-2288): GET /api/v1/system-maps/{map_id}/revisions/current, /revisions/by-time?at=<ISO8601> and /revisions/history resolve the revision active at a point in time (including superseded revisions after a re-publish), and /overview accepts revision_id or at to report metrics against that revision's window, all behind the same internal access gate and tenant/RLS isolation (backend/src/modulo/api/routes/system_maps.py, test_system_maps_version_aware.py, test_system_map_repository.py)"
-            - "[ ] Revision history sidebar with current/historical revision switching via /revisions/current and /revisions/by-time (the version-aware API ships, but the sidebar lists the revisions the current session has loaded and does not offer current/by-time switching)"
+            - "[x] Revision history sidebar with current/historical revision switching (FAR-2288 follow-up): the sidebar offers a View current action backed by GET /revisions/current and a datetime picker that resolves GET /revisions/by-time?at=<ISO8601> (the local datetime is converted to an absolute instant client-side), the matched revision's graph then loads through the shared per-revision read path and is highlighted as the active revision, the currently published revision is badged Current, and an unmatched timestamp surfaces a distinct \"No revision was active at that time\" error instead of silently leaving the previous revision on screen (frontend/src/components/system-maps/SystemMapRevisionSidebar.vue, frontend/src/views/SystemMapDetailView.vue, frontend/src/stores/systemMaps.ts; SystemMapComponents.coverage.spec.ts, SystemMapDetailView.spec.ts, systemMapsStoreCrud.spec.ts)"
             - "[x] Draft revision creation and save with node/relationship/loop-config payload"
             - "[x] Publish revision (validation + status change to published)"
             - "[x] Archive revision (status change to archived)"
@@ -7758,7 +7758,6 @@ features:
             - "[x] i18n keys and product-map test IDs registered"
             - "[x] Accessibility: STATE-1/2/6, A11Y-1/2/4, I18N-1, TYPE-1, VIS-4"
         deferrals:
-            - "The version-aware API ships; the revision sidebar does not yet switch by /revisions/current or /revisions/by-time"
             - "Re-scan into an existing draft (added/removed/ambiguous diff with operator-edit preservation) is not implemented; re-running discovery is the only refresh path"
             - "MCP exposes discovery only; authoring, publish, diff, restore and overview stay REST-only"
             - "No per-ticket tracking UI (Beta 3 scope)"

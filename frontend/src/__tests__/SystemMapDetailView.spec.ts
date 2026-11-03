@@ -104,7 +104,7 @@ describe('SystemMapDetailView authoring actions', () => {
   const RevisionStub = {
     name: 'RevisionSidebar',
     props: ['mapId', 'revisions', 'activeRevisionId', 'activeMap'],
-    emits: ['select-revision', 'new-draft', 'discover'],
+    emits: ['select-revision', 'select-current', 'select-by-time', 'new-draft', 'discover'],
     template: '<div data-testid="revision-stub" />',
   }
   const DiscoveryStub = {
@@ -283,8 +283,60 @@ describe('SystemMapDetailView authoring actions', () => {
     expect(store.activeRevision?.id).toBe('rev-9')
   })
 
-  it('creates a new draft from the sidebar', async () => {
+  it('switches to the current revision and reports failures', async () => {
     const wrapper = mountWithStubs()
+    await flushPromises()
+    seed(mockPost)
+    await flushPromises()
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/current') return Promise.resolve({ data: { revision: { id: 'rev-5', revision_number: 5 } } })
+      return Promise.resolve({ data: { revision: { id: 'rev-5', revision_number: 5, status: 'published' }, nodes: [], relationships: [] } })
+    })
+    wrapper.findComponent(RevisionStub).vm.$emit('select-current')
+    await flushPromises()
+    expect(useSystemMapsStore().activeRevision?.id).toBe('rev-5')
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/current') return Promise.resolve({ error: {} })
+      return Promise.resolve({ data: {} })
+    })
+    wrapper.findComponent(RevisionStub).vm.$emit('select-current')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not load the current revision')
+  })
+
+  it('switches to the revision active at a timestamp and reports an unmatched time', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    seed(mockPost)
+    await flushPromises()
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/by-time') return Promise.resolve({ data: { matched: true, requested_at: '2026-01-15T10:30:00Z', revision: { id: 'rev-4', revision_number: 4 } } })
+      return Promise.resolve({ data: { revision: { id: 'rev-4', revision_number: 4, status: 'archived' }, nodes: [], relationships: [] } })
+    })
+    wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2026-01-15T10:30:00Z')
+    await flushPromises()
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/by-time', {
+      params: { path: { map_id: 'map-1' }, query: { at: '2026-01-15T10:30:00Z' } },
+    })
+    expect(useSystemMapsStore().activeRevision?.id).toBe('rev-4')
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/by-time') return Promise.resolve({ data: { matched: false, requested_at: '2020-01-01T00:00:00Z', revision: null } })
+      return Promise.resolve({ data: {} })
+    })
+    wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2020-01-01T00:00:00Z')
+    await flushPromises()
+    expect(wrapper.text()).toContain('No revision was active at that time')
+  })
+
+  it('creates a new draft from the sidebar', async () => {    const wrapper = mountWithStubs()
     await flushPromises()
     seed(mockPost)
     await flushPromises()
