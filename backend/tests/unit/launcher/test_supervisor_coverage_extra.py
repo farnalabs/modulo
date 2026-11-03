@@ -1323,10 +1323,21 @@ def test_enforce_startup_deadline_probe_process_none() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_teardown_child_escalation_wait_none_then_kill() -> None:
+def test_teardown_child_escalation_wait_none_then_kill(monkeypatch: pytest.MonkeyPatch) -> None:
     from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     events: list[str] = []
+
+    # The fake pid is not a real process, so the ambient process table must not
+    # decide the signalling path: a live group leader with this pid would make
+    # _signal_group take the killpg branch and never call terminate(). Force the
+    # observable non-group fallback and stop os.kill reaching a real pid.
+    monkeypatch.setattr(
+        supervisor_module.os,
+        "getpgid",
+        lambda _pid: (_ for _ in ()).throw(OSError("no such process")),
+    )
+    monkeypatch.setattr(supervisor_module.os, "kill", lambda _pid, _signum: None)
 
     class HalfDeadProc:
         pid = 7775
