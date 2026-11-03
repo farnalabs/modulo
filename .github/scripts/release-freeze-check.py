@@ -2,7 +2,7 @@
 """Shared release-freeze gate for merge-queue.yml (FAR-...).
 
 Both the entry `freeze-gate` job and the pre-merge TOCTOU re-verify step ask the
-same question -- is the `release-freeze` tag present right now? They previously
+same question -- is the `release-freeze` branch present right now? They previously
 held two copies of the query + retry + fail-closed logic that could (and did)
 diverge. This helper is the single source of truth so the two safety-critical
 checks stay identical.
