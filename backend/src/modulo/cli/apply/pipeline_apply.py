@@ -18,14 +18,13 @@ declared owner is never silently nulled.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from modulo.cli.apply.drift import policy_gate_changes
-from modulo.cli.apply.executor import ApplyHttpError, _failure_message, _find
+from modulo.cli.apply.executor import ApplyHttpError, _find, _record_entity_failure
 from modulo.cli.apply.models import (
     ApplyEntityResolutionError,
     PipelineEntity,
@@ -38,8 +37,6 @@ if TYPE_CHECKING:
     from modulo.cli.apply.executor import ApplyExecutor
     from modulo.cli.apply.models import EntitySet
     from modulo.core.pipeline_engine.git_content import GitContentRef
-
-_log = logging.getLogger(__name__)
 
 _EMPTY_GRAPH: dict[str, list[dict[str, Any]]] = {"nodes": [], "edges": []}
 
@@ -612,11 +609,15 @@ def _record_pipeline_failure(
     triggers an id that points at a graph-less half-created row, so its id
     is dropped from *pipeline_ids*.
     """
-    message = _failure_message(exc)
-    displayed_name = entity.name if entity else entry["name"]
-    _log.exception("apply pipeline failed: %s: %s", displayed_name, message)
-    report[status].remove(entry)
-    report["failed"].append({"kind": KIND_PIPELINE, "name": entry["name"], "error": message})
+    _record_entity_failure(
+        report,
+        status,
+        entry,
+        kind=KIND_PIPELINE,
+        displayed_name=entity.name if entity else entry["name"],
+        exc=exc,
+        entity_label="pipeline",
+    )
     if status == "created" and entity is not None:
         pipeline_ids.pop(entity.name, None)
 
