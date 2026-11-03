@@ -77,12 +77,12 @@
       {{ $t('components.PipelineSnapshotCompare.self_compare') }}
     </output>
 
-    <!-- VIS-3: the shared ErrorAlert owns this region's box, message and
-         retry affordance; the wrapper keeps the assertive role and the BDD
-         testid the compare contract pins. -->
+    <!-- VIS-3: the shared ErrorAlert owns this region's box, message, its
+         `role="alert"` live region and the retry affordance. This wrapper is
+         only the BDD-pinned testid hook — it must NOT carry a second live
+         role, or one message is announced twice. -->
     <div
       v-else-if="status === 'error'"
-      role="alert"
       data-testid="pipeline-compare-error"
     >
       <ErrorAlert

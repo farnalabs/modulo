@@ -1,0 +1,227 @@
+name: Windows Artifacts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/bundle-versions-windows.env
+      - scripts/windows/modulo-launcher.c
+      - scripts/windows/build-launcher.ps1
+      - .github/workflows/windows-artifacts.yml
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+
+concurrency:
+  group: windows-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VALKEY_VERSION: 9.1.3
+  PBS_RELEASE: 20260901
+  PBS_CPYTHON_VERSION: 3.12.14
+  PG_VERSION: 16.15
+
+jobs:
+  download-and-verify:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # contents: read covers actions/checkout. actions/upload-artifact authenticates
+    # with the run's runtime token, so it needs no actions: scope, and this job has
+    # no OIDC or attestation step, so it must not request id-token/attestations.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Load and validate version pins
+        id: pins
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $allowed = @(
+            'VALKEY_VERSION','VALKEY_PROVENANCE_POLICY','VALKEY_ZIP_URL','VALKEY_ZIP_SHA256','VALKEY_ARCHIVE_ROOT','VALKEY_SERVER_EXE','VALKEY_CLI_EXE',
+            'PBS_RELEASE','PBS_CPYTHON_VERSION','PBS_WIN_X64_TARBALL','PBS_WIN_X64_URL','PBS_WIN_X64_SHA256','PBS_ARCHIVE_ROOT','PBS_PYTHON_EXE',
+            'PG_MAJOR','PG_VERSION','PG_WIN_X64_ZIP_URL','PG_WIN_X64_ZIP_SHA256','PG_ARCHIVE_ROOT','PG_SERVER_EXE','PG_CTL_EXE','PG_DUMP_EXE','PG_ISREADY_EXE','PG_PSQL_EXE'
+          )
+          $pins = @{}
+          foreach ($line in (Get-Content -LiteralPath 'scripts/bundle-versions-windows.env')) {
+            $trimmed = $line.Trim()
+            if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+            if ($trimmed -notmatch '^([A-Z0-9_]+)=([^=]+)$') { throw "Invalid pin line: $trimmed" }
+            $name = $Matches[1]
+            $value = $Matches[2]
+            if ($allowed -notcontains $name -or $pins.ContainsKey($name)) { throw "Unexpected or duplicate pin: $name" }
+            # Pin values are interpolated into pwsh command strings below, so
+            # reject anything that could terminate or extend one.
+            if ($value -notmatch '^[A-Za-z0-9._:/@%+-]+$') { throw "Unsupported characters in pin value: $name" }
+            $pins[$name] = $value
+          }
+          if ($pins.Keys.Count -ne $allowed.Count) { throw "Pin key set mismatch" }
+          if ($pins.VALKEY_VERSION -ne $env:VALKEY_VERSION -or $pins.PBS_RELEASE -ne $env:PBS_RELEASE -or $pins.PBS_CPYTHON_VERSION -ne $env:PBS_CPYTHON_VERSION -or $pins.PG_VERSION -ne $env:PG_VERSION) { throw 'Workflow version pins drift from bundle-versions-windows.env' }
+          if ($pins.VALKEY_PROVENANCE_POLICY -ne 'external-release-pinned') { throw 'Unsupported Valkey provenance policy' }
+          foreach ($name in $pins.Keys) { "$name=$($pins[$name])" >> $env:GITHUB_OUTPUT }
+
+      - name: Download and verify pinned archives
+        id: downloads
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Download-Verified([string]$Url, [string]$Expected, [string]$Output) {
+            Invoke-WebRequest -Uri $Url -OutFile $Output -UseBasicParsing
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Output).Hash.ToLowerInvariant()
+            if ($actual -ne $Expected.ToLowerInvariant()) { throw "SHA256 mismatch for $Output" }
+            return $actual
+          }
+          $valkey = Download-Verified '${{ steps.pins.outputs.VALKEY_ZIP_URL }}' '${{ steps.pins.outputs.VALKEY_ZIP_SHA256 }}' "valkey-${{ steps.pins.outputs.VALKEY_VERSION }}.zip"
+          $python = Download-Verified '${{ steps.pins.outputs.PBS_WIN_X64_URL }}' '${{ steps.pins.outputs.PBS_WIN_X64_SHA256 }}' '${{ steps.pins.outputs.PBS_WIN_X64_TARBALL }}'
+          $postgres = Download-Verified '${{ steps.pins.outputs.PG_WIN_X64_ZIP_URL }}' '${{ steps.pins.outputs.PG_WIN_X64_ZIP_SHA256 }}' "postgresql-${{ steps.pins.outputs.PG_VERSION }}.zip"
+          "valkey_file=valkey-${{ steps.pins.outputs.VALKEY_VERSION }}.zip" >> $env:GITHUB_OUTPUT
+          "python_file=${{ steps.pins.outputs.PBS_WIN_X64_TARBALL }}" >> $env:GITHUB_OUTPUT
+          "postgres_file=postgresql-${{ steps.pins.outputs.PG_VERSION }}.zip" >> $env:GITHUB_OUTPUT
+          "valkey_sha256=$valkey" >> $env:GITHUB_OUTPUT
+          "python_sha256=$python" >> $env:GITHUB_OUTPUT
+          "postgres_sha256=$postgres" >> $env:GITHUB_OUTPUT
+
+      - name: Set up reproducible backend environment
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: 0.9.6
+          enable-cache: true
+      - name: Install locked backend dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          uv sync --project backend --frozen --no-dev --no-install-project
+          if (-not (Test-Path -LiteralPath 'backend/.venv/Lib/site-packages' -PathType Container)) {
+            throw 'Backend dependency contract missing: backend/.venv/Lib/site-packages was not created'
+          }
+      - name: Build frontend distribution
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11.28.9
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Build frontend assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pnpm --dir frontend install --frozen-lockfile --ignore-scripts
+          pnpm --dir frontend run build
+          if (-not (Test-Path -LiteralPath 'frontend/dist' -PathType Container)) {
+            throw 'Frontend payload contract missing: frontend/dist was not created'
+          }
+
+      - name: Build native launcher
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $install = & $vsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $install) { throw 'Visual Studio C++ tools not found' }
+          $vcvars = Join-Path $install 'VC/Auxiliary/Build/vcvarsall.bat'
+          if (-not (Test-Path $vcvars)) { throw 'vcvarsall.bat not found' }
+          $build = Join-Path $PWD 'scripts/windows/build-launcher.ps1'
+          & cmd.exe /d /s /c "call `"$vcvars`" x64 && pwsh -NoProfile -File `"$build`" -OutputPath `"$PWD/modulo.exe`""
+          if ($LASTEXITCODE -ne 0) { throw "Launcher build failed: $LASTEXITCODE" }
+          if (-not (Test-Path -LiteralPath (Join-Path $PWD 'modulo.exe') -PathType Leaf)) { throw 'Launcher build contract missing: modulo.exe' }
+
+      - name: Stage exact bundle layout
+        id: stage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path $PWD 'windows-artifacts-staging'
+          $stageScript = Join-Path $PWD 'scripts/windows/build-launcher.ps1'
+          . $stageScript
+          # Extract every third-party archive before staging; the staging function
+          # then creates the stage from scratch and owns the bundled payload copies.
+          $valkeyExtract = Join-Path $PWD 'valkey-extracted'
+          Expand-Archive '${{ steps.downloads.outputs.valkey_file }}' $valkeyExtract -Force
+          $pythonExtract = Join-Path $PWD 'python-extracted'
+          New-Item -ItemType Directory -Force $pythonExtract | Out-Null
+          tar -xzf '${{ steps.downloads.outputs.python_file }}' -C $pythonExtract
+          $pythonRoot = Join-Path $pythonExtract '${{ steps.pins.outputs.PBS_ARCHIVE_ROOT }}'
+          if (-not (Test-Path (Join-Path $pythonRoot '${{ steps.pins.outputs.PBS_PYTHON_EXE }}'))) { throw 'PBS archive layout changed: python/python.exe is required' }
+          $pgExtract = Join-Path $PWD 'postgres-extracted'
+          Expand-Archive '${{ steps.downloads.outputs.postgres_file }}' $pgExtract -Force
+          $pgBin = Join-Path $pgExtract '${{ steps.pins.outputs.PG_ARCHIVE_ROOT }}/bin'
+          foreach ($exe in @('${{ steps.pins.outputs.PG_SERVER_EXE }}','${{ steps.pins.outputs.PG_CTL_EXE }}','${{ steps.pins.outputs.PG_DUMP_EXE }}','${{ steps.pins.outputs.PG_ISREADY_EXE }}','${{ steps.pins.outputs.PG_PSQL_EXE }}')) { if (-not (Test-Path (Join-Path $pgBin $exe))) { throw "Missing PostgreSQL binary: $exe" } }
+          # Single canonical staging invocation: every bundled payload is copied here.
+          Invoke-WindowsBundleStaging -StagePath $stage -PythonRoot $pythonRoot -BackendSource (Join-Path $PWD 'backend/src') -SitePackagesSource (Join-Path $PWD 'backend/.venv/Lib/site-packages') -FrontendDistSource (Join-Path $PWD 'frontend/dist') -LauncherPath (Join-Path $PWD 'modulo.exe')
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage 'pg/bin'), (Join-Path $stage 'redis') | Out-Null
+          Copy-Item (Join-Path $valkeyExtract '${{ steps.pins.outputs.VALKEY_ARCHIVE_ROOT }}/bin/${{ steps.pins.outputs.VALKEY_SERVER_EXE }}') (Join-Path $stage 'redis/${{ steps.pins.outputs.VALKEY_SERVER_EXE }}')
+          Copy-Item (Join-Path $valkeyExtract '${{ steps.pins.outputs.VALKEY_ARCHIVE_ROOT }}/bin/${{ steps.pins.outputs.VALKEY_CLI_EXE }}') (Join-Path $stage 'redis/${{ steps.pins.outputs.VALKEY_CLI_EXE }}')
+          Copy-Item (Join-Path $pgBin '*') (Join-Path $stage 'pg/bin') -Recurse -Force
+          if (-not (Test-Path -LiteralPath (Join-Path $stage 'backend/src/modulo') -PathType Container)) { throw 'Backend payload contract missing: backend/src/modulo' }
+          if (-not (Test-Path -LiteralPath (Join-Path $stage 'runtime/python/Lib/site-packages') -PathType Container)) { throw 'Backend payload contract missing: runtime/python/Lib/site-packages' }
+          if (-not (Test-Path -LiteralPath (Join-Path $stage 'frontend-dist/index.html') -PathType Leaf)) { throw 'Frontend payload contract missing: frontend-dist/index.html' }
+          if (-not (Test-Path -LiteralPath (Join-Path $stage 'runtime/bin/python3.exe') -PathType Leaf)) { throw 'PBS runtime contract missing: runtime/bin/python3.exe' }
+          "stage=$stage" >> $env:GITHUB_OUTPUT
+
+
+      - name: Verify staged binaries and launcher
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = '${{ steps.stage.outputs.stage }}'
+          & (Join-Path $stage 'redis/${{ steps.pins.outputs.VALKEY_SERVER_EXE }}') --version
+          if ($LASTEXITCODE -ne 0) { throw 'Valkey server verification failed' }
+          & (Join-Path $stage 'pg/bin/${{ steps.pins.outputs.PG_SERVER_EXE }}') --version
+          if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL verification failed' }
+          $help = & (Join-Path $stage 'bin/modulo.exe') --help 2>&1
+          if ($LASTEXITCODE -ne 0 -or ($help -notmatch 'modulo')) { throw "Launcher verification failed: exit=$LASTEXITCODE output=$help" }
+
+      - name: Create manifest and payload archive
+        id: package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = '${{ steps.stage.outputs.stage }}'
+          $manifest = [ordered]@{
+            valkey = @{ version='${{ steps.pins.outputs.VALKEY_VERSION }}'; archive_sha256='${{ steps.downloads.outputs.valkey_sha256 }}'; provenance='external-release-pinned' }
+            python = @{ version='${{ steps.pins.outputs.PBS_CPYTHON_VERSION }}'; release='${{ steps.pins.outputs.PBS_RELEASE }}'; archive_sha256='${{ steps.downloads.outputs.python_sha256 }}' }
+            postgres = @{ version='${{ steps.pins.outputs.PG_VERSION }}'; archive_sha256='${{ steps.downloads.outputs.postgres_sha256 }}' }
+            generated_at = (Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ssZ')
+            generated_by = "github-actions-${{ github.run_id }}"
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $stage 'manifest.json') -Encoding utf8NoBOM
+          $payload = Join-Path $PWD 'windows-native-artifacts.zip'
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $payload -Force
+          $payloadHash = (Get-FileHash -Algorithm SHA256 $payload).Hash.ToLowerInvariant()
+          "payload_sha256=$payloadHash" >> $env:GITHUB_OUTPUT
+          "payload=$payload" >> $env:GITHUB_OUTPUT
+
+      - name: Upload verified payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-native-artifacts
+          path: ${{ steps.package.outputs.payload }}
+          if-no-files-found: error
+          retention-days: 30
+
+  attest:
+    needs: download-and-verify
+    runs-on: ubuntu-latest
+    # attest-build-provenance signs through OIDC and writes the attestation.
+    # actions/download-artifact reads same-run artifacts with the runtime token,
+    # so no actions: scope is required; this job does not check out the repo.
+    permissions:
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-native-artifacts
+          path: windows-artifacts
+      - name: Verify uploaded payload and attest it
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f windows-artifacts/windows-native-artifacts.zip
+          sha256sum windows-artifacts/windows-native-artifacts.zip
+      - uses: actions/attest-build-provenance@520d128f165991a6c774bcb264f323e3d70747f4 # v2.2.0
+        with:
+          subject-path: windows-artifacts/windows-native-artifacts.zip

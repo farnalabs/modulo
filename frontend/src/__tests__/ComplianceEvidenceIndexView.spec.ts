@@ -364,7 +364,11 @@ describe('ComplianceEvidenceIndexView', () => {
     const wrapper = mountView()
     await settle()
 
-    expect(wrapper.find('[data-testid="compliance-evidence-index-error"]').text()).toContain('index unavailable')
+    const errorRegion = wrapper.find('[data-testid="compliance-evidence-index-error"]')
+    expect(errorRegion.text()).toContain('index unavailable')
+    // One live region for the message: ErrorAlert's root, never the wrapper.
+    expect(errorRegion.attributes('aria-live')).toBeUndefined()
+    expect(errorRegion.findAll('[role="alert"]')).toHaveLength(1)
     mockGet.mockResolvedValue({ data: payload(), error: undefined })
     await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
     await settle()

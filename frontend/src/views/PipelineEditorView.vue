@@ -62,6 +62,15 @@
            the page keeps every control reachable while holding the
            no-page-scroll invariant for the whole band. -->
       <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain" data-testid="pipeline-editor-content">
+        <!-- Non-fatal pipeline-record load failure (see loadPipeline). The
+             graph-driven editor stays usable underneath; retry re-runs just
+             the record fetch. -->
+        <ErrorAlert
+          v-if="pipelineLoadError"
+          :message="pipelineLoadError"
+          :on-retry="loadPipeline"
+          class="m-2"
+        />
         <!-- Docked toolbar: in-flow above the canvas so it never covers node details.
              `shrink-0`: when the content column is shorter than the wrapped
              toolbar, the toolbar must keep its min-content height (scroll the
@@ -4148,11 +4157,20 @@ async function revertToManual() {
 
 async function loadPipeline() {
   pageError.value = null
+  pipelineLoadError.value = null
   try {
-    const { data } = await withTimeout((signal) => api.GET('/api/v1/pipelines/{pipeline_id}', {
+    const { data, error: pipelineError } = await withTimeout((signal) => api.GET('/api/v1/pipelines/{pipeline_id}', {
       params: { path: { pipeline_id: pipelineId } },
       signal,
     }))
+    // A non-2xx response RESOLVES with `error` set rather than throwing, so
+    // without this branch a 403/404/500 left `pipeline` null and the editor
+    // rendered nameless with no failure surface at all. It is non-fatal: the
+    // graph-driven editor stays usable and this banner offers the retry.
+    if (pipelineError) {
+      pipelineLoadError.value = t('views.PipelineEditorView.failed_to_load_pipeline', { error: formatApiError(pipelineError) })
+      return
+    }
     pipeline.value = data as any
     maxDurationInput.value = (data as any)?.max_duration_seconds ?? undefined
     circuitBreakerInput.value = data?.circuit_breaker_threshold ?? ''
@@ -4163,7 +4181,7 @@ async function loadPipeline() {
     syncOwnerTeamFromPipeline()
     syncRetryPolicyFromPipeline()
   } catch (e) {
-    pageError.value = t('views.PipelineEditorView.failed_to_load_pipeline', { error: formatApiError(e) })
+    pipelineLoadError.value = t('views.PipelineEditorView.failed_to_load_pipeline', { error: formatApiError(e) })
   }
 }
 
@@ -4766,6 +4784,11 @@ async function loadFolders() {
 // loadGraph, loadLifecycleMaps) read/write pageError — the binding must be
 // initialised before the fetcher can run.
 const pageError = ref<string | null>(null)
+// A failed PIPELINE-RECORD load is non-fatal: the graph and the editors
+// below it still work (the record only supplies the name and settings), so
+// it is surfaced as an inline banner instead of taking the page over. Kept
+// separate from `pageError`, which replaces the editor.
+const pipelineLoadError = ref<string | null>(null)
 
 // ---------------------------------------------------------------------------
 // FAR-1812: read-only historic version view.
