@@ -1357,6 +1357,9 @@ elements:
       - testid: admin-audit-export-jsonl
         type: button
         dynamic_testid: false
+      - testid: admin-audit-export-error
+        type: element
+        dynamic_testid: false
       - testid: admin-audit-chain-result
         type: element
         dynamic_testid: false
