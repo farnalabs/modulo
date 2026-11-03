@@ -2374,6 +2374,7 @@ def test_freeze_cleanup_harness_reads_the_job_from_the_workflow() -> None:
 # ---------------------------------------------------------------------------
 
 _RC_OUTPUT_STEP_NAME = "Expose release candidate tag"
+_RC_ASSERT_STEP_NAME = "Assert the resolved RC tag is non-empty"
 
 
 def _release_job() -> dict[str, Any]:
@@ -2390,7 +2391,8 @@ def test_release_rc_tag_output_is_bound_to_an_always_run_normaliser() -> None:
 
     steps = cast(list[dict[str, Any]], job["steps"])
     names = _step_names(steps)
-    assert names[-1] == _RC_OUTPUT_STEP_NAME, "the rc_tag normaliser must be the final step of the release job"
+    assert names[-1] == _RC_ASSERT_STEP_NAME, "the non-empty guard must be the final step of the release job"
+    assert names.index(_RC_ASSERT_STEP_NAME) > names.index(_RC_OUTPUT_STEP_NAME)
 
     step = steps[names.index(_RC_OUTPUT_STEP_NAME)]
     assert step["id"] == "rc-output"
@@ -2398,18 +2400,31 @@ def test_release_rc_tag_output_is_bound_to_an_always_run_normaliser() -> None:
     env = cast(dict[str, str], step["env"])
     assert env["CUT_RC_TAG"] == "${{ steps.cut.outputs.rc_tag }}"
     assert env["RECUT_RC_TAG"] == "${{ steps.recut.outputs.rc_tag }}"
+    # Promote never runs cut/recut, so its leader-tag output is the third arm.
+    # A GA tag is never routed through rc_tag: promote's rc_tag output is the
+    # candidate tag, while ga_tag remains a separate job output.
+    assert env["PROMOTE_RC_TAG"] == "${{ steps.promote.outputs.rc_tag }}"
 
     run = cast(str, step["run"])
     assert 'echo "rc_tag=${rc_tag}" >> "$GITHUB_OUTPUT"' in run
+    assert "PROMOTE_RC_TAG" in run
 
-    # Placement: after both mode steps, and it never reads the promote output,
-    # so a promote run cannot surface a GA tag as the RC tag.
+    # Placement: after every mode step, so each arm is populated before the
+    # normaliser reads it.
     assert names.index(_RC_OUTPUT_STEP_NAME) > names.index("Recut from current main")
     assert names.index(_RC_OUTPUT_STEP_NAME) > names.index("Promote to GA and lift freeze")
-    assert "promote" not in run
+
+    guard = steps[names.index(_RC_ASSERT_STEP_NAME)]
+    assert "if" not in guard, "the guard must keep the default success() condition so it cannot mask a failed mode step"
+    guard_env = cast(dict[str, str], guard["env"])
+    assert guard_env["MODE"] == "${{ inputs.mode }}"
+    assert guard_env["RC_TAG"] == "${{ steps.rc-output.outputs.rc_tag }}"
+    guard_run = cast(str, guard["run"])
+    assert "exit 1" in guard_run
+    assert "::error::" in guard_run
 
 
-def _run_rc_output_step(tmp_path: Path, *, cut: str, recut: str) -> tuple[dict[str, str], str]:
+def _run_rc_output_step(tmp_path: Path, *, cut: str, recut: str, promote: str = "") -> tuple[dict[str, str], str]:
     script = _release_job_run(_RC_OUTPUT_STEP_NAME)
     output = tmp_path / "github-output"
     output.write_text("", encoding="utf-8")
@@ -2418,6 +2433,7 @@ def _run_rc_output_step(tmp_path: Path, *, cut: str, recut: str) -> tuple[dict[s
         "GITHUB_OUTPUT": str(output),
         "CUT_RC_TAG": cut,
         "RECUT_RC_TAG": recut,
+        "PROMOTE_RC_TAG": promote,
     }
     result = _run_bash(script, cwd=tmp_path, env=env)
     assert result.returncode == 0, result.stderr
@@ -2430,17 +2446,40 @@ def _run_rc_output_step(tmp_path: Path, *, cut: str, recut: str) -> tuple[dict[s
 
 
 @pytest.mark.parametrize(
-    ("cut", "recut", "expected"),
+    ("cut", "recut", "promote", "expected"),
     [
-        ("", "v0.3.324-rc6", "v0.3.324-rc6"),
-        ("v0.3.324-rc1", "", "v0.3.324-rc1"),
-        ("", "", ""),
+        ("", "v0.3.324-rc6", "", "v0.3.324-rc6"),
+        ("v0.3.324-rc1", "", "", "v0.3.324-rc1"),
+        ("", "", "v0.3.324-rc7", "v0.3.324-rc7"),
+        ("", "", "", ""),
     ],
 )
-def test_rc_output_step_normalises_mode_outputs(tmp_path: Path, cut: str, recut: str, expected: str) -> None:
-    values, stdout = _run_rc_output_step(tmp_path, cut=cut, recut=recut)
+def test_rc_output_step_normalises_mode_outputs(
+    tmp_path: Path, cut: str, recut: str, promote: str, expected: str
+) -> None:
+    values, stdout = _run_rc_output_step(tmp_path, cut=cut, recut=recut, promote=promote)
     assert values["rc_tag"] == expected
     assert f"Release candidate tag exposed to dependent jobs: '{expected}'" in stdout
+
+
+def _run_rc_assert_step(tmp_path: Path, *, mode: str, rc_tag: str) -> subprocess.CompletedProcess[str]:
+    script = _release_job_run(_RC_ASSERT_STEP_NAME)
+    return _run_bash(script, cwd=tmp_path, env={**os.environ, "MODE": mode, "RC_TAG": rc_tag})
+
+
+def test_rc_assert_step_fails_closed_on_an_empty_tag(tmp_path: Path) -> None:
+    result = _run_rc_assert_step(tmp_path, mode="recut", rc_tag="")
+
+    assert result.returncode != 0
+    assert "::error::" in result.stdout
+    assert "Resolved rc_tag is empty for mode 'recut'" in result.stdout
+
+
+def test_rc_assert_step_accepts_a_non_empty_tag(tmp_path: Path) -> None:
+    result = _run_rc_assert_step(tmp_path, mode="cut", rc_tag="v0.3.324-rc1")
+
+    assert result.returncode == 0, result.stderr
+    assert "Resolved rc_tag for mode 'cut': v0.3.324-rc1" in result.stdout
 
 
 def test_release_rc_tag_callers_read_the_release_job_output() -> None:
