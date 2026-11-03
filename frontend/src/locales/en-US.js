@@ -439,7 +439,8 @@ export default {
       "pipeline_name_placeholder": "Pipeline name",
       "delete_confirm": "Are you sure? This permanently deletes the pipeline and all its runs.",
       "failed_to_load_folders": "Failed to load folders: {error}",
-      "invalid_folder_list_response": "The server returned an invalid folder list."
+      "invalid_folder_list_response": "The server returned an invalid folder list.",
+      "table_scroll_instructions": "Swipe horizontally to view all pipeline columns."
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",

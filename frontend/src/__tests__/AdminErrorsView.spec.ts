@@ -369,7 +369,7 @@ describe('AdminErrorsView', () => {
     wrapper.unmount()
   })
 
-  it('keeps the table wrapper non-stretching (overflow-x-auto + w-full, no forced min width)', async () => {
+  it('keeps the table wrapper non-stretching and scrolls the table in its own region', async () => {
     const wrapper = mountWithLongMessageGroup()
     await flushPromises()
     await nextTick()
@@ -381,11 +381,15 @@ describe('AdminErrorsView', () => {
 
     const table = tableWrapper.find('table')
     expect(table.classes()).toContain('w-full')
-    expect(table.classes()).not.toContain('min-w-max')
+    // The shared DataTable holds columns at their content width and scrolls
+    // horizontally inside its own region instead of compressing them; the
+    // truncated message cell caps that width, so the page never stretches.
+    expect(table.classes()).toContain('min-w-max')
     expect(table.classes()).not.toContain('w-max')
 
-    const scrollRoot = tableWrapper.find('div')
-    expect(scrollRoot.classes()).toContain('overflow-x-auto')
+    const scrollRoot = tableWrapper.find('.overflow-x-auto')
+    expect(scrollRoot.exists()).toBe(true)
+    expect(scrollRoot.attributes('tabindex')).toBe('0')
     wrapper.unmount()
   })
 
