@@ -301,4 +301,70 @@ describe('AgentOutputDiffView', () => {
     expect(text).not.toContain('agent_stderr')
     expect(text).not.toContain('exit_code')
   })
+
+  it('shows a pulse skeleton while the compare request is in flight (STATE-3)', async () => {
+    let resolvePost: (value: unknown) => void = () => {}
+    vi.mocked(api.POST as unknown as () => Promise<unknown>).mockImplementation(
+      () => new Promise((resolve) => { resolvePost = resolve }),
+    )
+
+    router.push('/runs/diff')
+    await router.isReady()
+    const wrapper = mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="diff-run-id-a"]').setValue('run-a')
+    await wrapper.find('[data-testid="diff-node-id"]').setValue('node-1')
+    await wrapper.find('[data-testid="diff-run-id-b"]').setValue('run-b')
+    await wrapper.find('[data-testid="diff-compare-btn"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="diff-comparing"]').exists()).toBe(true)
+
+    resolvePost({
+      data: {
+        run_id_a: 'run-a',
+        run_id_b: 'run-b',
+        node_output_a: { result: 'hello' },
+        node_output_b: { result: 'world' },
+        diff_lines: [{ type: 'added', content: 'world', line_a: null, line_b: 1 }],
+        has_diff: true,
+      },
+      error: undefined,
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="diff-comparing"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('1 added')
+  })
+
+  it('renders recent-run option labels through i18n (I18N-1)', async () => {
+    vi.mocked(fetch as unknown as () => Promise<unknown>).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        recent_runs: [
+          { id: 'run-1', pipeline_name: 'Alpha', status: 'failed', created_at: '2026-01-02T03:04:05Z' },
+        ],
+      }),
+    })
+
+    router.push('/runs/diff')
+    await router.isReady()
+    const wrapper = mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const selects = wrapper.findAllComponents({ name: 'Select' })
+    expect(selects.length).toBeGreaterThanOrEqual(2)
+    expect(selects[0].props('options')).toEqual([
+      { value: 'run-1', label: 'Alpha — failed (2026-01-02T03:04:05Z)' },
+    ])
+  })
 })

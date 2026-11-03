@@ -524,6 +524,7 @@ export default {
       "run_b": "Run B",
       "paste_run_id": "Paste a run ID (or select from dropdown)",
       "select_recent_run": "Select recent run...",
+      "recent_run_option": "{pipeline} — {status} ({createdAt})",
       "select_run_a": "Select run A",
       "select_run_b": "Select run B",
       "loading": "Loading...",
