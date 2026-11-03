@@ -465,11 +465,20 @@ jobs:
         # if: always() so a partially-completed shard's data still lands (the
         # combine job is skipped anyway when a shard fails), and the artifact
         # name keeps each shard's data attributable.
+        #
+        # include-hidden-files: true is LOAD-BEARING, not cosmetic:
+        # upload-artifact defaults it to false, so although the glob matches
+        # `backend/.coverage.unit-<n>` the leading DOT makes it a hidden file
+        # and it is silently dropped ("No files were found with the provided
+        # path: backend/.coverage.unit-*. No artifacts will be uploaded." in
+        # run 41598150598). The combine job then has nothing to combine and
+        # every threshold silently reports against no data.
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-shard-${{ matrix.shard }}
           path: backend/.coverage.unit-*
+          include-hidden-files: true
           retention-days: 7
 
   backend-coverage:

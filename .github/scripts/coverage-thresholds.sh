@@ -11,10 +11,11 @@
 #              threshold in-process. The single-job fallback, and still the
 #              shape a manual/local invocation uses.
 #   shard    - one of N CONCURRENT jobs: runs only its slice of tests/unit into
-#              its own parallel data file and applies NO thresholds. A shard
-#              covers a fraction of the tree, so a whole-suite floor is
+#              its own parallel data file and applies NO thresholds of ANY kind -
+#              neither the whole-suite floor nor the per-module floors. A shard
+#              covers a fraction of the tree, so either kind of floor is
 #              meaningless there (it would fail at ~30% no matter how correct
-#              the code is).
+#              the code is). The shard exits 0 whenever its tests pass.
 #   combine  - merges every shard's data file (`coverage combine`), writes the
 #              coverage.xml the changed-lines gate and SonarCloud consume, and
 #              only THEN enforces the identical thresholds against the merged
@@ -139,6 +140,22 @@ if [ "$MODE" = "run" ]; then
   if compgen -G '.coverage.*' > /dev/null; then
     uv run --no-sync --no-build coverage combine
   fi
+  # The per-module floors belong to the modes that see the WHOLE tree: `run`
+  # (single-job fallback, everything in one data file) and `combine` (enforced
+  # above against the merged report). They must never run in `shard` mode: a
+  # shard only executes its third of tests/unit, so it measures a fraction of
+  # every module's branches and a whole-module floor fails there by
+  # construction, no matter how correct the code is. (Observed in the first
+  # sharded run, 41598150598: shard 1 measured 69% over the files it happened
+  # to touch and `--fail-under=93` for modulo.auth failed the job while every
+  # test passed.) Both thresholds - the 89 whole-suite floor and these
+  # 93/91/95 per-module floors - stay exactly as they are in `run`/`combine`.
+  check_module_thresholds
+elif [ "$MODE" = "shard" ]; then
+  # No threshold is enforced in shard mode, at any level: pytest ran with
+  # --cov-fail-under=0 (so [tool.coverage.report] fail_under can never fire)
+  # and the per-module floors are deliberately skipped. A shard's only job is
+  # to produce its data file and exit 0 when its tests pass; the single
+  # authoritative gate is `coverage combine`.
+  echo "::notice::unit shard ${COVERAGE_SHARD}: coverage thresholds deferred to the combine job (no threshold is enforced per shard)"
 fi
-
-check_module_thresholds
