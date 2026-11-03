@@ -319,17 +319,22 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   /** Load the revision that was active at an ISO-8601 timestamp (historical view). */
   async function loadRevisionByTime(mapId: string, at: string): Promise<void> {
     const response = await api.GET('/api/v1/system-maps/{map_id}/revisions/by-time', { params: { path: { map_id: mapId }, query: { at } } })
+    // The backend answers 404 when nothing was active at that instant (the
+    // success payload always carries matched=true and a revision), so the
+    // status - not a matched=false body - is the empty-result signal. Map it
+    // onto the distinct message instead of a generic load failure.
+    if (response.response.status === 404) {
+      throw new Error(tr('systemMaps.errors.no_revision_at_time'))
+    }
     if (response.error) {
       throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.load_revision_at_time')))
     }
     const payload = response.data as SystemMapRevisionByTime | undefined
-    // matched=false (or a payload without a revision) means nothing was active
-    // at that instant; that is a distinct, actionable empty result, not a
-    // successful load of an unrelated revision.
-    if (!payload?.matched || !payload.revision?.id) {
-      throw new Error(tr('systemMaps.errors.no_revision_at_time'))
+    const revisionId = payload?.revision?.id
+    if (!revisionId) {
+      throw new Error(tr('systemMaps.errors.load_revision_at_time'))
     }
-    await loadRevision(mapId, payload.revision.id)
+    await loadRevision(mapId, revisionId)
   }
 
   async function saveDraft(mapId: string, nodes: Array<{ node_key: string; node_type: string; display_name: string; config_json?: Record<string, unknown>; pipeline_id?: string | null; connector_instance_id?: string | null; owner_team_id?: string | null; eval_id?: string | null; position_x: string | number; position_y: string | number }>, relationships: Array<{ source_node_key: string; target_node_key: string; relationship_type: string; config_json?: Record<string, unknown> }>, notes: string): Promise<SystemMapRevision> {

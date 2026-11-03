@@ -197,7 +197,7 @@ describe('SystemMapRevisionSidebar', () => {
     await wrapper.get('form').trigger('submit')
 
     const at = wrapper.emitted('select-by-time')![0][0] as string
-    expect(Number.isNaN(new Date(at).getTime())).toBe(false)
+    expect(Number.isNaN(new Date(at).getTime())).toBe(false) // nosemgrep: new-date-without-guard
     expect(at).toMatch(/Z$/)
   })
 

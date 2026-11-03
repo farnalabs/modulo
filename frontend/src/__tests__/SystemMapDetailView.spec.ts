@@ -316,7 +316,7 @@ describe('SystemMapDetailView authoring actions', () => {
 
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
-      if (path === '/api/v1/system-maps/{map_id}/revisions/by-time') return Promise.resolve({ data: { matched: true, requested_at: '2026-01-15T10:30:00Z', revision: { id: 'rev-4', revision_number: 4 } } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/by-time') return Promise.resolve({ data: { matched: true, requested_at: '2026-01-15T10:30:00Z', revision: { id: 'rev-4', revision_number: 4 } }, response: { status: 200 } })
       return Promise.resolve({ data: { revision: { id: 'rev-4', revision_number: 4, status: 'archived' }, nodes: [], relationships: [] } })
     })
     wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2026-01-15T10:30:00Z')
@@ -328,7 +328,10 @@ describe('SystemMapDetailView authoring actions', () => {
 
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
-      if (path === '/api/v1/system-maps/{map_id}/revisions/by-time') return Promise.resolve({ data: { matched: false, requested_at: '2020-01-01T00:00:00Z', revision: null } })
+      // The wire contract raises 404 (never matched=false) for an unmatched time.
+      if (path === '/api/v1/system-maps/{map_id}/revisions/by-time') {
+        return Promise.resolve({ error: { detail: 'No revision active at 2020-01-01T00:00:00+00:00' }, response: { status: 404 } })
+      }
       return Promise.resolve({ data: {} })
     })
     wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2020-01-01T00:00:00Z')
@@ -336,7 +339,8 @@ describe('SystemMapDetailView authoring actions', () => {
     expect(wrapper.text()).toContain('No revision was active at that time')
   })
 
-  it('creates a new draft from the sidebar', async () => {    const wrapper = mountWithStubs()
+  it('creates a new draft from the sidebar', async () => {
+    const wrapper = mountWithStubs()
     await flushPromises()
     seed(mockPost)
     await flushPromises()
