@@ -298,7 +298,9 @@ function syncLabelAssociation(): void {
     return
   }
   if (!label.id && resolvedInputId.value) label.id = `${resolvedInputId.value}__label`
-  derivedLabelledBy.value = label.id || undefined
+  // A label is only returned when `resolvedInputId` is set, so the line above
+  // has already given it an id - the association is never empty here.
+  derivedLabelledBy.value = label.id
   label.addEventListener('click', focusCombobox)
 }
 

@@ -322,3 +322,80 @@ describe('AppSelect label association (rendered DOM)', () => {
     wrapper.unmount()
   })
 })
+
+/**
+ * A host with two visible labels so the association can be MOVED when the
+ * control id changes after mount. `syncLabelAssociation` must detach the old
+ * label's click bridge before attaching the new one, or the stale label would
+ * keep focusing the control it no longer describes.
+ */
+const TwoLabelHost = defineComponent({
+  components: { AppSelect },
+  props: { controlId: { type: String, required: true } },
+  template: `
+    <div>
+      <label for="appselect-first-id">First</label>
+      <label for="appselect-second-id">Second</label>
+      <AppSelect :id="controlId" :options="[]" aria-label="Level" />
+    </div>
+  `,
+})
+
+describe('AppSelect label association when the control id changes', () => {
+  it('re-resolves the label and moves the click bridge after an id change', async () => {
+    const wrapper = mount(TwoLabelHost, {
+      props: { controlId: 'appselect-first-id' },
+      attachTo: document.body,
+    })
+    await nextTick()
+
+    const firstLabel = wrapper.find('label[for="appselect-first-id"]')
+      .element as HTMLLabelElement
+    const secondLabel = wrapper.find('label[for="appselect-second-id"]')
+      .element as HTMLLabelElement
+    expect(wrapper.find('[role="combobox"]').attributes('aria-labelledby')).toBe(firstLabel.id)
+
+    await wrapper.setProps({ controlId: 'appselect-second-id' })
+    await nextTick()
+    await nextTick()
+
+    const combobox = wrapper.find('[role="combobox"]').element as HTMLElement
+    expect(combobox.getAttribute('aria-labelledby')).toBe(secondLabel.id)
+
+    // The old label's listener is gone; the new one focuses the combobox.
+    firstLabel.click()
+    expect(document.activeElement).not.toBe(combobox)
+    secondLabel.click()
+    expect(document.activeElement).toBe(combobox)
+
+    wrapper.unmount()
+  })
+
+  it('falls back to manual id escaping when CSS.escape is unavailable', async () => {
+    const originalEscape = CSS.escape
+    const wrapper = mount(LabelHost, {
+      props: { controlId: 'appselect-escape-first' },
+      attachTo: document.body,
+    })
+    await nextTick()
+
+    Object.defineProperty(CSS, 'escape', { configurable: true, writable: true, value: undefined })
+    try {
+      await wrapper.setProps({ controlId: 'appselect-escape-second' })
+      await nextTick()
+      await nextTick()
+
+      const label = wrapper.find('label[for="appselect-escape-second"]')
+        .element as HTMLLabelElement
+      expect(label.id).toBeTruthy()
+      expect(wrapper.find('[role="combobox"]').attributes('aria-labelledby')).toBe(label.id)
+    } finally {
+      Object.defineProperty(CSS, 'escape', {
+        configurable: true,
+        writable: true,
+        value: originalEscape,
+      })
+      wrapper.unmount()
+    }
+  })
+})
