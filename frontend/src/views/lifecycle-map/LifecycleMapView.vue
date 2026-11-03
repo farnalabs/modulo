@@ -20,6 +20,7 @@
               <div class="flex items-center gap-2">
                 <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">{{ $t('views.LifecycleMapView.version_label') }}</label>
                 <Select
+                  id="lifecyclemapview-field-1"
                   :aria-label="$t('views.LifecycleMapView.version_label')"
                   v-model="selectedVersion"
                   @update:model-value="onVersionChange"

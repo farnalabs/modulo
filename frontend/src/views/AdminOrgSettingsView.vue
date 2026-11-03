@@ -118,7 +118,7 @@
         <p class="text-sm text-destructive" role="alert" data-testid="org-mcp-authority-load-error">{{ mcpAuthorityLoadError }}</p>
         <button
           type="button"
-          class="text-sm font-medium text-primary underline underline-offset-2 hover:no-underline"
+          class="text-sm font-medium text-primary-text underline underline-offset-2 hover:no-underline"
           data-testid="org-mcp-authority-retry"
           @click="loadMcpAuthority"
         >
@@ -150,7 +150,7 @@
         >{{ mcpAuthorityError }}</p>
         <p
           v-else-if="mcpAuthoritySaved"
-          class="mt-2 text-sm text-success"
+          class="mt-2 text-sm text-success-text"
           aria-live="polite"
           data-testid="org-mcp-authority-saved"
         >{{ $t('views.AdminOrgSettingsView.mcp_authority_saved') }}</p>
@@ -279,7 +279,7 @@
             @toggle="toggleCommunityObjects"
           />
         </div>
-        <div v-if="communityObjectsError" class="mt-2 text-xs text-destructive">{{ communityObjectsError }}</div>
+        <div v-if="communityObjectsError" class="mt-2 text-xs text-destructive" role="alert">{{ communityObjectsError }}</div>
       </SectionCard>
       </div>
     </template>

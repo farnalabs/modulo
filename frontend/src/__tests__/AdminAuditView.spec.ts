@@ -195,6 +195,27 @@ describe('AdminAuditView — row expansion', () => {
     expect(wrapper.text()).toContain('#evt-2')
   })
 
+  it('renders the expanded detail row directly beneath the expanded row', async () => {
+    const wrapper = await mountLoaded()
+    expect(wrapper.findAll('[data-testid^="admin-audit-event-row-"]').length).toBeGreaterThan(1)
+
+    // Expand the FIRST row: the detail must be its immediate sibling, not a
+    // lone row appended after the whole table (which is what a `v-if` outside
+    // the loop produced — the chevron flipped with no visible change on screen).
+    await wrapper.find('[data-testid="admin-audit-event-row-evt-1"]').trigger('click')
+    await nextTick()
+
+    const rows = wrapper.findAll('[data-testid^="admin-audit-event-row-"]')
+    const detail = rows[0].element.nextElementSibling as HTMLElement | null
+    expect(detail).not.toBeNull()
+    expect(detail!.tagName).toBe('TR')
+    expect(detail!.textContent).toContain('evt-1')
+
+    // The last event row must not be followed by a stray detail row.
+    const lastRow = rows[rows.length - 1]
+    expect(lastRow.element.nextElementSibling).toBeNull()
+  })
+
   it('toggles row expansion via keyboard (Enter and Space) for a11y', async () => {
     const wrapper = await mountLoaded()
     const row = wrapper.find('[data-testid="admin-audit-event-row-evt-1"]')
