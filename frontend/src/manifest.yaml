@@ -1236,6 +1236,75 @@ elements:
       - testid: system-map-revision-sidebar
         type: aside
         dynamic_testid: false
+      - testid: system-map-history-loading
+        type: element
+        dynamic_testid: false
+      - testid: system-map-history-error
+        type: element
+        dynamic_testid: false
+      - testid: system-map-history-empty
+        type: element
+        dynamic_testid: false
+      - testid: system-map-history-pagination
+        type: element
+        dynamic_testid: false
+      - testid: system-map-history-prev
+        type: button
+        dynamic_testid: false
+      - testid: system-map-history-next
+        type: button
+        dynamic_testid: false
+      - testid: system-map-history-page-status
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-as-of-unavailable
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-as-of-error
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-historical-banner
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-compare
+        type: button
+        dynamic_testid: false
+      - testid: system-map-revision-diff-panel
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-revision-diff-backdrop
+        type: button
+        dynamic_testid: false
+      - testid: system-map-revision-diff-close
+        type: button
+        dynamic_testid: false
+      - testid: system-map-revision-diff-base
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-diff-loading
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-diff-error
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-diff-empty
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-diff-summary
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-diff-no-changes
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-diff-content-changed
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-restore-success
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-restore-error
+        type: element
+        dynamic_testid: false
       - testid: system-map-new-draft
         type: button
         dynamic_testid: false
@@ -7757,7 +7826,8 @@ features:
             - "[x] System Maps list page (/system-maps) with create, view, edit, delete, discover actions"
             - "[x] Map detail page (/system-maps/:id) with bounded visual graph editor for the backend node/relationship vocabularies, connected edges, endpoint selection, and drag/keyboard repositioning"
             - "[x] Version-aware revision read model ships (FAR-2288): GET /api/v1/system-maps/{map_id}/revisions/current, /revisions/by-time?at=<ISO8601> and /revisions/history resolve the revision active at a point in time (including superseded revisions after a re-publish), and /overview accepts revision_id or at to report metrics against that revision's window, all behind the same internal access gate and tenant/RLS isolation (backend/src/modulo/api/routes/system_maps.py, test_system_maps_version_aware.py, test_system_map_repository.py)"
-            - "[x] Revision history sidebar with current/historical revision switching (FAR-2288 follow-up): the sidebar offers a View current action backed by GET /revisions/current and a datetime picker that resolves GET /revisions/by-time?at=<ISO8601> (the local datetime is converted to an absolute instant client-side), the matched revision's graph then loads through the shared per-revision read path and is highlighted as the active revision, the currently published revision is badged Current, and the 404 that GET /revisions/by-time raises for an unmatched timestamp is mapped onto a distinct \"No revision was active at that time\" error instead of silently leaving the previous revision on screen (frontend/src/components/system-maps/SystemMapRevisionSidebar.vue, frontend/src/views/SystemMapDetailView.vue, frontend/src/stores/systemMaps.ts; SystemMapComponents.coverage.spec.ts, SystemMapDetailView.spec.ts, systemMapsStoreCrud.spec.ts)"
+            - "[x] Revision history sidebar driven by GET /revisions/history (FAR-2348): the real revision set (published, draft and archived) with revision number, status, created/published timestamps, the is_current marker and client-side pagination; selecting a revision loads it through the shared per-revision read path as a READ-ONLY preview. A View current action resolves GET /revisions/current, and a datetime picker resolves GET /revisions/by-time?at=<ISO8601> (the local datetime is converted to an absolute instant client-side) with an explicit historical read-only banner while a point-in-time revision is displayed; the currently published revision is badged Current, and the 404 that GET /revisions/by-time raises for an unmatched timestamp renders an honest empty state rather than an error (frontend/src/components/system-maps/SystemMapRevisionSidebar.vue, frontend/src/views/SystemMapDetailView.vue, frontend/src/stores/systemMaps.ts; SystemMapComponents.coverage.spec.ts, SystemMapDetailView.spec.ts, SystemMapRevisionHistory.spec.ts, systemMapsStoreCrud.spec.ts)"
+            - "[x] Revision comparison and restore (FAR-2348): POST /revisions/{rev_id}/diff renders added/removed/modified nodes, relationships and loop configs with counts and per-item detail against the currently published revision or an operator-chosen one, and POST /revisions/{rev_id}/restore-as-new creates a NEW DRAFT the operator is navigated to — it never auto-publishes, and both success and failure are surfaced inline (frontend/src/components/system-maps/SystemMapRevisionDiffPanel.vue, SystemMapDetailView.vue)"
             - "[x] Draft revision creation and save with node/relationship/loop-config payload"
             - "[x] Publish revision (validation + status change to published)"
             - "[x] Archive revision (status change to archived)"

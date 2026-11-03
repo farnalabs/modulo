@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
 const mockGet = vi.hoisted(() => vi.fn())
+const mockPost = vi.hoisted(() => vi.fn())
 const mockGetAccessToken = vi.hoisted(() => vi.fn())
 const mockIsOperator = vi.hoisted(() => ({ value: false }))
 const mockIsSystemAdmin = vi.hoisted(() => ({ value: false }))
@@ -15,7 +16,7 @@ const mockPlanStore = vi.hoisted(() => ({
 }))
 
 vi.mock('../lib/api/client', () => ({
-  api: { GET: mockGet },
+  api: { GET: mockGet, POST: mockPost },
   getAccessToken: mockGetAccessToken,
 }))
 vi.mock('../stores/planStore', () => ({ usePlanStore: () => mockPlanStore }))
@@ -836,5 +837,172 @@ describe('useSystemMapsStore overview', () => {
     expect(store.overviewError).toBeNull()
     expect(store.overviewEmpty).toBe(false)
     expect(store.overviewLoading).toBe(false)
+  })
+})
+
+describe('useSystemMapsStore revision history', () => {
+  function revisionEntry(n: number, isCurrent = false) {
+    return {
+      revision: {
+        id: `rev-${n}`,
+        organisation_id: 'org-1',
+        system_map_id: 'map-1',
+        revision_number: n,
+        status: 'published',
+        content_json: {},
+        published_at: `2026-01-${String(n).padStart(2, '0')}T10:00:00Z`,
+        effective_from: `2026-01-${String(n).padStart(2, '0')}T10:00:00Z`,
+        effective_to: null,
+        deleted_at: null,
+        deleted_by: null,
+        created_at: `2026-01-${String(n).padStart(2, '0')}T09:00:00Z`,
+        updated_at: `2026-01-${String(n).padStart(2, '0')}T09:00:00Z`,
+      },
+      is_current: isCurrent,
+    }
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+    mockPost.mockReset()
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-1'))
+  })
+
+  it('loads the history newest-first and pages it client-side', async () => {
+    const revisions = Array.from({ length: 12 }, (_, index) => revisionEntry(index + 1, index === 10))
+    mockGet.mockResolvedValue({ data: { system_map_id: 'map-1', revisions } })
+    const store = useSystemMapsStore()
+
+    await store.fetchRevisionHistory('map-1')
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/history', {
+      params: { path: { map_id: 'map-1' } },
+    })
+    expect(store.revisionHistoryLoaded).toBe(true)
+    expect(store.revisionHistoryTotal).toBe(12)
+    expect(store.revisionHistoryPageCount).toBe(2)
+    expect(store.revisionHistoryPageRevisions.map((item) => item.revision_number)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4, 3])
+    expect(store.currentRevisionId).toBe('rev-11')
+
+    store.setRevisionHistoryPage(2)
+    expect(store.revisionHistoryPageRevisions.map((item) => item.revision_number)).toEqual([2, 1])
+
+    // Out-of-range pages clamp instead of showing an empty page.
+    store.setRevisionHistoryPage(99)
+    expect(store.revisionHistoryPage).toBe(2)
+    store.setRevisionHistoryPage(0)
+    expect(store.revisionHistoryPage).toBe(1)
+  })
+
+  it('reports a history failure as an error, never as an empty history', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'nope' } })
+    const store = useSystemMapsStore()
+
+    await store.fetchRevisionHistory('map-1')
+
+    expect(store.revisionHistoryLoaded).toBe(false)
+    expect(store.revisionHistoryError).toBe('nope')
+    expect(store.revisionHistoryLoading).toBe(false)
+  })
+
+  it('treats a by-time 404 as an empty state rather than an error', async () => {
+    mockGet.mockResolvedValue({ error: { status: 404, detail: 'No revision active' }, response: { status: 404 } })
+    const store = useSystemMapsStore()
+
+    const result = await store.fetchRevisionByTime('map-1', '2025-01-01T00:00:00.000Z')
+
+    expect(result).toBeNull()
+    expect(store.byTimeUnavailable).toBe(true)
+    expect(store.byTimeError).toBeNull()
+    expect(store.byTimeRevision).toBeNull()
+  })
+
+  it('records the revision active at a requested time', async () => {
+    mockGet.mockResolvedValue({ data: { revision: revisionEntry(4).revision, requested_at: '2026-02-01T10:00:00Z', matched: true } })
+    const store = useSystemMapsStore()
+
+    const result = await store.fetchRevisionByTime('map-1', '2026-02-01T10:00:00.000Z')
+
+    expect(result?.id).toBe('rev-4')
+    expect(store.byTimeRequestedAt).toBe('2026-02-01T10:00:00Z')
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/by-time', {
+      params: { path: { map_id: 'map-1' }, query: { at: '2026-02-01T10:00:00.000Z' } },
+    })
+  })
+
+  it('reports a by-time failure that is not a 404', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'boom' }, response: { status: 503 } })
+    const store = useSystemMapsStore()
+
+    const result = await store.fetchRevisionByTime('map-1', '2026-02-01T10:00:00.000Z')
+
+    expect(result).toBeNull()
+    expect(store.byTimeUnavailable).toBe(false)
+    expect(store.byTimeError).toBe('boom')
+  })
+
+  it('diffs the base revision against the chosen target', async () => {
+    mockPost.mockResolvedValue({ data: { base_revision_number: 11, target_revision_number: 9, nodes_added: ['agent:new'] } })
+    const store = useSystemMapsStore()
+
+    const diff = await store.diffRevisions('map-1', 'rev-11', 'rev-9')
+
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff', {
+      params: { path: { map_id: 'map-1', rev_id: 'rev-11' } },
+      body: { against_revision_id: 'rev-9' },
+    })
+    expect(diff?.nodes_added).toEqual(['agent:new'])
+    expect(store.revisionDiff?.base_revision_number).toBe(11)
+  })
+
+  it('records a diff failure without leaving a stale comparison', async () => {
+    mockPost.mockResolvedValue({ error: { detail: 'diff failed' } })
+    const store = useSystemMapsStore()
+
+    const diff = await store.diffRevisions('map-1', 'rev-2', 'rev-1')
+
+    expect(diff).toBeNull()
+    expect(store.revisionDiff).toBeNull()
+    expect(store.revisionDiffError).toBe('diff failed')
+  })
+
+  it('creates a draft from a revision, refreshes history and never publishes', async () => {
+    mockPost.mockResolvedValue({ data: { new_revision: revisionEntry(13).revision, source_revision_id: 'rev-9', source_revision_number: 9 } })
+    mockGet.mockResolvedValue({ data: { system_map_id: 'map-1', revisions: [revisionEntry(9), revisionEntry(13)] } })
+    const store = useSystemMapsStore()
+
+    const created = await store.restoreRevisionAsNew('map-1', 'rev-9')
+
+    expect(created.id).toBe('rev-13')
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/{rev_id}/restore-as-new', {
+      params: { path: { map_id: 'map-1', rev_id: 'rev-9' } },
+    })
+    expect(store.restoredRevision?.id).toBe('rev-13')
+    expect(store.revisionHistory).toHaveLength(2)
+    expect(mockPost.mock.calls.some((call) => String(call[0]).endsWith('/publish'))).toBe(false)
+  })
+
+  it('surfaces a restore failure and rethrows it', async () => {
+    mockPost.mockResolvedValue({ error: { detail: 'source is gone' } })
+    const store = useSystemMapsStore()
+
+    await expect(store.restoreRevisionAsNew('map-1', 'rev-9')).rejects.toThrow('source is gone')
+
+    expect(store.restoreError).toBe('source is gone')
+    expect(store.restoredRevision).toBeNull()
+    expect(store.restoreLoading).toBe(false)
+  })
+
+  it('clears the point-in-time selection and the restore outcome on reset', async () => {
+    const store = useSystemMapsStore()
+    store.byTimeRequestedAt = '2026-02-01T10:00:00Z'
+    store.restoreError = 'boom'
+
+    store.clearByTimeRevision()
+    expect(store.byTimeRequestedAt).toBeNull()
+
+    store.clearRestoreState()
+    expect(store.restoreError).toBeNull()
   })
 })

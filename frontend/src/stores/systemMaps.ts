@@ -11,11 +11,11 @@ import i18n from '../i18n'
 
 type SystemMapOverview = components['schemas']['SystemMapOverviewResponse']
 type SystemMapList = components['schemas']['SystemMapListResponse']
-type SystemMapCurrentRevision = components['schemas']['SystemMapCurrentRevisionResponse']
-type SystemMapRevisionByTime = components['schemas']['SystemMapRevisionByTimeResponse']
 
 export type SystemMap = components['schemas']['SystemMapResponse']
 export type SystemMapRevision = components['schemas']['SystemMapRevisionResponse']
+export type SystemMapRevisionHistoryEntry = components['schemas']['SystemMapRevisionHistoryEntry']
+export type SystemMapRevisionDiff = components['schemas']['SystemMapRevisionDiffResponse']
 export type SystemMapNode = components['schemas']['SystemMapNodeResponse']
 export type SystemMapRelationship = components['schemas']['SystemMapRelationshipResponse']
 export type SystemMapGraph = components['schemas']['SystemMapRevisionDetailResponse']
@@ -42,6 +42,31 @@ interface InternalFeatureFlagsPayload { flags?: Array<{ name: string; currently_
 const OVERVIEW_REQUEST_TIMEOUT_MS = 15000
 const SYSTEM_MAP_PAGE_SIZE = 20
 const MAX_SYSTEM_MAP_PAGES = 1000
+
+/**
+ * The history endpoint returns the WHOLE revision list in one response (it has
+ * no page/page_size query parameters), so the sidebar pages client-side over
+ * that complete set. Ten rows keeps the panel scrollable without hiding the
+ * shape of the history.
+ */
+export const REVISION_HISTORY_PAGE_SIZE = 10
+
+/**
+ * A by-time 404 is an EMPTY state, not a failure: the map simply had no
+ * published revision at that instant (typically a timestamp before the first
+ * publish). Detect it from the HTTP status, or from the problem payload when a
+ * test double supplies only the error body.
+ */
+function isNotFoundResult(error: unknown, response: Response | undefined): boolean {
+  if (response && typeof response.status === 'number') return response.status === 404
+  if (error && typeof error === 'object') {
+    const candidate = error as { status?: unknown; code?: unknown; type?: unknown }
+    if (candidate.status === 404) return true
+    if (candidate.code === 'not_found') return true
+    if (typeof candidate.type === 'string' && candidate.type.endsWith(':not_found')) return true
+  }
+  return false
+}
 
 /** Prefer the detail the API returned over a generic message. */
 function apiErrorMessage(error: unknown, fallback: string): string {
@@ -71,7 +96,34 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const activeMap = ref<SystemMap | null>(null)
   const activeRevision = ref<SystemMapRevision | null>(null)
   const graph = ref<SystemMapGraph | null>(null)
-  const revisions = ref<SystemMapRevision[]>([])
+  // The revision history the API reports (published, draft and archived), each
+  // with effective time range and the is_current marker. The sidebar renders
+  // THIS — never a list accumulated from whatever this session happened to load.
+  const revisionHistory = ref<SystemMapRevisionHistoryEntry[]>([])
+  const revisionHistoryLoaded = ref(false)
+  const revisionHistoryLoading = ref(false)
+  const revisionHistoryError = ref<string | null>(null)
+  const revisionHistoryPage = ref(1)
+  const revisionHistoryPageSize = ref(REVISION_HISTORY_PAGE_SIZE)
+  // /revisions/current — the revision published right now (null when the map
+  // has never been published, which is an empty state rather than an error).
+  const currentRevision = ref<SystemMapRevision | null>(null)
+  const currentRevisionLoading = ref(false)
+  const currentRevisionError = ref<string | null>(null)
+  // /revisions/by-time — the revision that was active at a chosen instant.
+  const byTimeRevision = ref<SystemMapRevision | null>(null)
+  const byTimeRequestedAt = ref<string | null>(null)
+  const byTimeLoading = ref(false)
+  const byTimeError = ref<string | null>(null)
+  const byTimeUnavailable = ref(false)
+  // /revisions/{rev_id}/diff — a comparison between two concrete revisions.
+  const revisionDiff = ref<SystemMapRevisionDiff | null>(null)
+  const revisionDiffLoading = ref(false)
+  const revisionDiffError = ref<string | null>(null)
+  // /revisions/{rev_id}/restore-as-new — creates a draft, never publishes.
+  const restoreLoading = ref(false)
+  const restoreError = ref<string | null>(null)
+  const restoredRevision = ref<SystemMapRevision | null>(null)
   const discovery = ref<DiscoveryReport | null>(null)
   const overview = ref<SystemMapOverview | null>(null)
   const overviewLoading = ref(false)
@@ -95,6 +147,27 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const canProbeInternalFlags = computed(() => planStore.userPermissions.includes(SYSTEM_CONFIG_MANAGE_PERMISSION))
   const hasAccess = computed(() => systemMapsEnabled.value && (isOperator.value || isSystemAdmin.value) && hasSystemMapsAccess.value)
 
+  /** History in the order operators read it: newest revision first. */
+  const revisionHistoryNewestFirst = computed(() =>
+    [...revisionHistory.value].sort((a, b) => b.revision.revision_number - a.revision.revision_number),
+  )
+  const revisionHistoryTotal = computed(() => revisionHistoryNewestFirst.value.length)
+  const revisionHistoryPageCount = computed(() =>
+    Math.max(1, Math.ceil(revisionHistoryTotal.value / revisionHistoryPageSize.value)),
+  )
+  /** The slice of history the current page shows — the sidebar renders this. */
+  const revisionHistoryPageRevisions = computed<SystemMapRevision[]>(() => {
+    const start = (revisionHistoryPage.value - 1) * revisionHistoryPageSize.value
+    return revisionHistoryNewestFirst.value
+      .slice(start, start + revisionHistoryPageSize.value)
+      .map((entry) => entry.revision)
+  })
+  /** The revision published right now, per the history endpoint's is_current marker. */
+  const currentRevisionId = computed<string | null>(() => {
+    const marker = revisionHistory.value.find((entry) => entry.is_current)
+    return marker?.revision.id ?? currentRevision.value?.id ?? null
+  })
+
   function reset(): void {
     accessGeneration += 1
     overviewGeneration += 1
@@ -105,7 +178,26 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     activeMap.value = null
     activeRevision.value = null
     graph.value = null
-    revisions.value = []
+    revisionHistory.value = []
+    revisionHistoryLoaded.value = false
+    revisionHistoryLoading.value = false
+    revisionHistoryError.value = null
+    revisionHistoryPage.value = 1
+    revisionHistoryPageSize.value = REVISION_HISTORY_PAGE_SIZE
+    currentRevision.value = null
+    currentRevisionLoading.value = false
+    currentRevisionError.value = null
+    byTimeRevision.value = null
+    byTimeRequestedAt.value = null
+    byTimeLoading.value = false
+    byTimeError.value = null
+    byTimeUnavailable.value = false
+    revisionDiff.value = null
+    revisionDiffLoading.value = false
+    revisionDiffError.value = null
+    restoreLoading.value = false
+    restoreError.value = null
+    restoredRevision.value = null
     discovery.value = null
     overview.value = null
     overviewLoading.value = false
@@ -297,51 +389,200 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     const value = response.data as SystemMapGraph
     activeRevision.value = 'revision' in value ? value.revision : value as SystemMapRevision
     graph.value = 'revision' in value ? value : null
-    if (activeRevision.value && !revisions.value.some((revision) => revision.id === activeRevision.value?.id)) revisions.value = [...revisions.value, activeRevision.value]
+  }
+
+  function setRevisionHistoryPage(nextPage: number): void {
+    const clamped = Math.min(Math.max(1, Math.trunc(nextPage) || 1), revisionHistoryPageCount.value)
+    revisionHistoryPage.value = clamped
   }
 
   /**
-   * Load the currently published revision (the "current" view).
+   * Load the map's whole revision history (published, draft and archived) with
+   * its effective time ranges and the is_current marker. A failure is a real
+   * error — it must never read as "this map has no revisions".
+   */
+  async function fetchRevisionHistory(mapId: string): Promise<void> {
+    revisionHistoryLoading.value = true
+    revisionHistoryError.value = null
+    try {
+      const response = await api.GET('/api/v1/system-maps/{map_id}/revisions/history', { params: { path: { map_id: mapId } } })
+      if (response.error || !response.data) {
+        throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.load_revision_history')))
+      }
+      revisionHistory.value = response.data.revisions ?? []
+      revisionHistoryLoaded.value = true
+      setRevisionHistoryPage(revisionHistoryPage.value)
+    } catch (err: unknown) {
+      revisionHistoryError.value = thrownMessage(err, tr('systemMaps.errors.load_revision_history'))
+    } finally {
+      revisionHistoryLoading.value = false
+    }
+  }
+
+  /**
+   * Load the revision published right now. A 404 means the map has never been
+   * published — an empty state, not a failed request.
+   */
+  async function fetchCurrentRevision(mapId: string): Promise<SystemMapRevision | null> {
+    currentRevisionLoading.value = true
+    currentRevisionError.value = null
+    try {
+      const response = await api.GET('/api/v1/system-maps/{map_id}/revisions/current', { params: { path: { map_id: mapId } } })
+      if (response.error || !response.data) {
+        if (isNotFoundResult(response.error, response.response)) {
+          currentRevision.value = null
+          return null
+        }
+        throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.load_current_revision')))
+      }
+      currentRevision.value = response.data.revision
+      return currentRevision.value
+    } catch (err: unknown) {
+      currentRevision.value = null
+      currentRevisionError.value = thrownMessage(err, tr('systemMaps.errors.load_current_revision'))
+      return null
+    } finally {
+      currentRevisionLoading.value = false
+    }
+  }
+
+  /**
+   * Load the revision that was active at `at` (ISO8601). A 404 means nothing
+   * was published at that instant, which the UI renders as an honest empty
+   * state rather than an error.
+   */
+  async function fetchRevisionByTime(mapId: string, at: string): Promise<SystemMapRevision | null> {
+    byTimeLoading.value = true
+    byTimeError.value = null
+    byTimeUnavailable.value = false
+    byTimeRequestedAt.value = at
+    byTimeRevision.value = null
+    try {
+      const response = await api.GET('/api/v1/system-maps/{map_id}/revisions/by-time', {
+        params: { path: { map_id: mapId }, query: { at } },
+      })
+      if (response.error || !response.data) {
+        if (isNotFoundResult(response.error, response.response)) {
+          byTimeUnavailable.value = true
+          return null
+        }
+        throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.load_revision_by_time')))
+      }
+      byTimeRevision.value = response.data.revision
+      if (response.data.requested_at) byTimeRequestedAt.value = response.data.requested_at
+      return byTimeRevision.value
+    } catch (err: unknown) {
+      byTimeError.value = thrownMessage(err, tr('systemMaps.errors.load_revision_by_time'))
+      return null
+    } finally {
+      byTimeLoading.value = false
+    }
+  }
+
+  /** Clear the restore outcome before a new restore attempt or panel open. */
+  function clearRestoreState(): void {
+    restoreError.value = null
+    restoredRevision.value = null
+  }
+
+  function clearRestoreError(): void {
+    restoreError.value = null
+  }
+
+  /** Forget a point-in-time selection (returning to the live published view). */
+  function clearByTimeRevision(): void {
+    byTimeRevision.value = null
+    byTimeRequestedAt.value = null
+    byTimeError.value = null
+    byTimeUnavailable.value = false
+  }
+
+  /**
+   * Diff two revisions. `baseRevisionId` is the "before" side (the endpoint's
+   * path revision); `targetRevisionId` is the "after" side. Omitting the target
+   * asks the backend to compare against the current draft.
+   */
+  async function diffRevisions(mapId: string, baseRevisionId: string, targetRevisionId?: string | null): Promise<SystemMapRevisionDiff | null> {
+    revisionDiffLoading.value = true
+    revisionDiffError.value = null
+    revisionDiff.value = null
+    try {
+      const response = await api.POST('/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff', {
+        params: { path: { map_id: mapId, rev_id: baseRevisionId } },
+        body: { against_revision_id: targetRevisionId ?? null },
+      })
+      if (response.error || !response.data) {
+        throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.diff_revisions')))
+      }
+      revisionDiff.value = response.data
+      return revisionDiff.value
+    } catch (err: unknown) {
+      revisionDiffError.value = thrownMessage(err, tr('systemMaps.errors.diff_revisions'))
+      return null
+    } finally {
+      revisionDiffLoading.value = false
+    }
+  }
+
+  /**
+   * Create a NEW DRAFT from an existing published/archived revision. This never
+   * publishes: the returned revision is a draft the operator must review and
+   * publish explicitly. Throws on failure so the caller can surface it inline.
+   */
+  async function restoreRevisionAsNew(mapId: string, revisionId: string): Promise<SystemMapRevision> {
+    restoreLoading.value = true
+    restoreError.value = null
+    restoredRevision.value = null
+    try {
+      const response = await api.POST('/api/v1/system-maps/{map_id}/revisions/{rev_id}/restore-as-new', {
+        params: { path: { map_id: mapId, rev_id: revisionId } },
+      })
+      if (response.error || !response.data) {
+        throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.restore_revision')))
+      }
+      restoredRevision.value = response.data.new_revision
+      await fetchRevisionHistory(mapId)
+      return restoredRevision.value
+    } catch (err: unknown) {
+      restoreError.value = thrownMessage(err, tr('systemMaps.errors.restore_revision'))
+      throw err instanceof Error ? err : new Error(restoreError.value)
+    } finally {
+      restoreLoading.value = false
+    }
+  }
+
+  /**
+   * Load (and display) the revision published right now.
    *
    * The version-aware endpoint returns revision metadata only; the graph is
    * read from the per-revision endpoint so every view (current, historical or
    * explicitly selected) renders through the same read path.
    */
   async function loadCurrentRevision(mapId: string): Promise<void> {
-    const response = await api.GET('/api/v1/system-maps/{map_id}/revisions/current', { params: { path: { map_id: mapId } } })
-    const revisionId = (response.data as SystemMapCurrentRevision | undefined)?.revision?.id
-    if (response.error || !revisionId) {
-      throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.load_current_revision')))
-    }
-    await loadRevision(mapId, revisionId)
+    const revision = await fetchCurrentRevision(mapId)
+    if (!revision) throw new Error(currentRevisionError.value ?? tr('systemMaps.errors.load_current_revision'))
+    await loadRevision(mapId, revision.id)
   }
 
-  /** Load the revision that was active at an ISO-8601 timestamp (historical view). */
+  /** Load (and display) the revision that was active at an ISO-8601 timestamp. */
   async function loadRevisionByTime(mapId: string, at: string): Promise<void> {
-    const response = await api.GET('/api/v1/system-maps/{map_id}/revisions/by-time', { params: { path: { map_id: mapId }, query: { at } } })
-    // The backend answers 404 when nothing was active at that instant (the
-    // success payload always carries matched=true and a revision), so the
-    // status - not a matched=false body - is the empty-result signal. Map it
-    // onto the distinct message instead of a generic load failure.
-    if (response.response.status === 404) {
-      throw new Error(tr('systemMaps.errors.no_revision_at_time'))
+    const revision = await fetchRevisionByTime(mapId, at)
+    if (revision) {
+      await loadRevision(mapId, revision.id)
+      return
     }
-    if (response.error) {
-      throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.load_revision_at_time')))
-    }
-    const payload = response.data as SystemMapRevisionByTime | undefined
-    const revisionId = payload?.revision?.id
-    if (!revisionId) {
-      throw new Error(tr('systemMaps.errors.load_revision_at_time'))
-    }
-    await loadRevision(mapId, revisionId)
+    // 404 => nothing was active at that instant. The state records it so the
+    // caller can render an empty state, and the throw keeps the distinct
+    // message reachable for callers that only consume the error.
+    if (byTimeUnavailable.value) throw new Error(tr('systemMaps.errors.no_revision_at_time'))
+    if (byTimeError.value) throw new Error(byTimeError.value)
+    throw new Error(tr('systemMaps.errors.load_revision_at_time'))
   }
 
   async function saveDraft(mapId: string, nodes: Array<{ node_key: string; node_type: string; display_name: string; config_json?: Record<string, unknown>; pipeline_id?: string | null; connector_instance_id?: string | null; owner_team_id?: string | null; eval_id?: string | null; position_x: string | number; position_y: string | number }>, relationships: Array<{ source_node_key: string; target_node_key: string; relationship_type: string; config_json?: Record<string, unknown> }>, notes: string): Promise<SystemMapRevision> {
     const response = await api.POST('/api/v1/system-maps/{map_id}/revisions', { params: { path: { map_id: mapId } }, body: { nodes, relationships, loop_configs: [], notes } })
     if (response.error || !response.data) throw new Error(tr('systemMaps.errors.save_draft_revision'))
     activeRevision.value = response.data
-    revisions.value = [...revisions.value, response.data]
     await loadRevision(mapId, response.data.id)
     return response.data
   }
@@ -377,10 +618,35 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     return response.data
   }
 
-  function clearActive(): void { activeMap.value = null; activeRevision.value = null; graph.value = null; discovery.value = null }
+  function clearActive(): void {
+    activeMap.value = null
+    activeRevision.value = null
+    graph.value = null
+    discovery.value = null
+    clearByTimeRevision()
+    revisionDiff.value = null
+    revisionDiffError.value = null
+    restoreError.value = null
+    restoredRevision.value = null
+  }
 
   // Kept for the dashboard's preview card; discovery is now a real operation.
   async function fetchDiscovery(): Promise<void> { loaded.value = true }
 
-  return { loaded, loading, error, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadCurrentRevision, loadRevisionByTime, saveDraft, publish, archive, discover, clearActive, fetchDiscovery }
+  return {
+    loaded, loading, error, maps, total, page, pageSize, activeMap, activeRevision, graph,
+    revisionHistory, revisionHistoryLoaded, revisionHistoryLoading, revisionHistoryError,
+    revisionHistoryPage, revisionHistoryPageSize, revisionHistoryTotal, revisionHistoryPageCount,
+    revisionHistoryPageRevisions, currentRevisionId,
+    currentRevision, currentRevisionLoading, currentRevisionError,
+    byTimeRevision, byTimeRequestedAt, byTimeLoading, byTimeError, byTimeUnavailable,
+    revisionDiff, revisionDiffLoading, revisionDiffError,
+    restoreLoading, restoreError, restoredRevision,
+    discovery, overview, overviewLoading, overviewError, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess,
+    reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision,
+    loadCurrentRevision, loadRevisionByTime,
+    fetchRevisionHistory, setRevisionHistoryPage, fetchCurrentRevision, fetchRevisionByTime, clearByTimeRevision,
+    diffRevisions, restoreRevisionAsNew, clearRestoreState, clearRestoreError,
+    saveDraft, publish, archive, discover, clearActive, fetchDiscovery,
+  }
 })

@@ -68,6 +68,7 @@ describe('SystemMapDetailView load failures', () => {
       if (path === '/api/v1/admin/feature-flags') {
         return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
       }
+      if (path !== '/api/v1/system-maps/{map_id}') return Promise.resolve({ data: {} })
       mapCalls += 1
       if (mapCalls === 1) return Promise.resolve({ error: { detail: 'map unavailable' } })
       return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
@@ -336,7 +337,11 @@ describe('SystemMapDetailView authoring actions', () => {
     })
     wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2020-01-01T00:00:00Z')
     await flushPromises()
-    expect(wrapper.text()).toContain('No revision was active at that time')
+    // An unmatched timestamp (404) is the honest empty state, never an error:
+    // the store records it and no error alert is raised for it.
+    expect(useSystemMapsStore().byTimeUnavailable).toBe(true)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
   })
 
   it('ignores current and by-time switching when no map is loaded', async () => {
@@ -724,5 +729,68 @@ describe('SystemMapDetailView loading and graph state lifecycle (STATE-1 / STATE
 
     expect(wrapper.find('[data-testid="system-map-detail-loading"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(true)
+  })
+})
+
+describe('SystemMapDetailView revision history wiring', () => {
+  const HeaderStub = { name: 'HeaderBar', props: ['map', 'revision', 'saving', 'readOnly'], emits: ['toggle-sidebar', 'save', 'publish', 'archive', 'discover'], template: '<div />' }
+  const GraphStub = { name: 'GraphEditor', props: ['nodes', 'relationships', 'loopConfigs', 'readOnly'], emits: ['nodes-change', 'relationships-change'], template: '<div />' }
+  const RevisionStub = { name: 'RevisionSidebar', emits: ['select-revision', 'new-draft', 'discover', 'page-change', 'retry-history', 'load-by-time', 'return-to-current', 'compare'], template: '<div />' }
+  const DiscoveryStub = { name: 'DiscoveryPanel', emits: ['close', 'save'], template: '<div />' }
+
+  function mountWithStubs() {
+    return mount(SystemMapDetailView, {
+      global: {
+        plugins: [i18n],
+        stubs: { BackLink: true, HeaderBar: HeaderStub, GraphEditor: GraphStub, RevisionSidebar: RevisionStub, DiscoveryPanel: DiscoveryStub },
+      },
+    })
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+    mockPost.mockReset()
+    mockRoute.params = { id: 'map-1' }
+    mockRoute.query = {}
+    mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/history') {
+        return Promise.resolve({ data: { system_map_id: 'map-1', revisions: [{ revision: { id: 'rev-1', revision_number: 1, status: 'published' }, is_current: true }] } })
+      }
+      if (path === '/api/v1/system-maps/{map_id}/revisions/{rev_id}') {
+        return Promise.resolve({ data: { revision: { id: 'rev-1', revision_number: 1, status: 'published' }, nodes: [], relationships: [], loop_configs: [] } })
+      }
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: 'rev-1' } })
+    })
+  })
+
+  it('loads the API revision history after the map loads', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/history', { params: { path: { map_id: 'map-1' } } })
+    const store = useSystemMapsStore()
+    expect(store.revisionHistory).toHaveLength(1)
+    expect(store.currentRevisionId).toBe('rev-1')
+    expect(wrapper.find('[data-testid="system-map-revision-sidebar"]').exists()).toBe(true)
+  })
+
+  it('refreshes the revision history after a publish', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+    store.activeRevision = { id: 'rev-1', revision_number: 1, status: 'draft' } as never
+    await flushPromises()
+
+    const historyCalls = () => mockGet.mock.calls.filter((call) => call[0] === '/api/v1/system-maps/{map_id}/revisions/history').length
+    const before = historyCalls()
+
+    mockPost.mockResolvedValue({ data: {} })
+    wrapper.findComponent(HeaderStub).vm.$emit('publish')
+    await flushPromises()
+
+    expect(historyCalls()).toBe(before + 1)
   })
 })

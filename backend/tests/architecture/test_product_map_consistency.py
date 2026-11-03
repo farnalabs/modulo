@@ -475,6 +475,7 @@ OWNED_PAGES = {
         "frontend/src/components/system-maps/SystemMapGraphEditor.vue",
         "frontend/src/components/system-maps/SystemMapHeaderBar.vue",
         "frontend/src/components/system-maps/SystemMapRevisionSidebar.vue",
+        "frontend/src/components/system-maps/SystemMapRevisionDiffPanel.vue",
         "frontend/src/components/system-maps/SystemMapDiscoveryPanel.vue",
         "frontend/src/components/shared/ErrorAlert.vue",
     ),

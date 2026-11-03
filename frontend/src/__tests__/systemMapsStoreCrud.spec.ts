@@ -130,7 +130,6 @@ describe('useSystemMapsStore CRUD', () => {
 
     expect(store.activeRevision?.id).toBe('rev-1')
     expect(store.graph).toEqual({ revision: { id: 'rev-1', revision_number: 1 }, nodes: [], relationships: [] })
-    expect(store.revisions.map((item) => item.id)).toEqual(['rev-1'])
   })
 
   it('reports map load failures', async () => {
@@ -152,15 +151,14 @@ describe('useSystemMapsStore CRUD', () => {
     expect(store.graph).toBeNull()
   })
 
-  it('does not duplicate an already known revision and reports failures', async () => {
+  it('reports revision load failures without disturbing the active revision', async () => {
     mockGet.mockResolvedValue({ data: { revision: { id: 'rev-1', revision_number: 1 }, nodes: [], relationships: [] } })
     const store = useSystemMapsStore()
     await store.loadRevision('map-1', 'rev-1')
-    await store.loadRevision('map-1', 'rev-1')
-    expect(store.revisions).toHaveLength(1)
 
     mockGet.mockResolvedValue({ error: { detail: 'missing' } })
     await expect(store.loadRevision('map-1', 'rev-2')).rejects.toThrow('Could not load map revision')
+    expect(store.activeRevision?.id).toBe('rev-1')
   })
 
   it('loads the current revision through the version-aware endpoint', async () => {
@@ -220,7 +218,7 @@ describe('useSystemMapsStore CRUD', () => {
     await expect(store.loadRevisionByTime('map-1', '2026-01-15T10:30:00Z')).rejects.toThrow('Could not load the revision for that time')
   })
 
-  it('saves a draft and appends the new revision', async () => {
+  it('saves a draft and loads the saved revision graph', async () => {
     mockPost.mockResolvedValue({ data: { id: 'rev-2', revision_number: 2 } })
     mockGet.mockResolvedValue({ data: { revision: { id: 'rev-2', revision_number: 2 }, nodes: [], relationships: [] } })
     const store = useSystemMapsStore()
@@ -228,7 +226,8 @@ describe('useSystemMapsStore CRUD', () => {
     const saved = await store.saveDraft('map-1', [], [], 'Manual save')
 
     expect(saved.id).toBe('rev-2')
-    expect(store.revisions.map((item) => item.id)).toEqual(['rev-2'])
+    expect(store.activeRevision?.id).toBe('rev-2')
+    expect(store.graph?.revision.id).toBe('rev-2')
   })
 
   it('throws when saving a draft fails', async () => {

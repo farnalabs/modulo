@@ -12,14 +12,28 @@
       >
         <RevisionSidebar
           :map-id="mapId"
-          :revisions="revisions"
+          :revisions="historyPageRevisions"
           :active-revision-id="activeRevision?.id"
           :active-map="activeMap"
+          :current-revision-id="currentRevisionId"
+          :loading="historyPending"
+          :error="historyError"
+          :page="historyPage"
+          :page-count="historyPageCount"
+          :total="historyTotal"
+          :by-time-loading="byTimeLoading"
+          :by-time-requested-at="byTimeRequestedAt"
+          :by-time-unavailable="byTimeUnavailable"
+          :by-time-error="byTimeError"
+          :historical-at="historicalAt"
           @select-revision="selectRevision"
           @select-current="selectCurrentRevision"
           @select-by-time="selectRevisionByTime"
           @new-draft="createNewDraft"
           @discover="runDiscovery"
+          @page-change="changeHistoryPage"
+          @retry-history="reloadHistory"
+          @compare="openDiffPanel"
         />
       </div>
 
@@ -43,6 +57,7 @@
           :map="activeMap"
           :revision="activeRevision"
           :saving="saving"
+          :read-only="readOnly"
           @toggle-sidebar="showSidebar = !showSidebar"
           @save="saveDraft"
           @publish="publishRevision"
@@ -100,6 +115,26 @@
             @save="saveDraftWithDiscovery"
             data-testid="system-map-discovery-panel"
           />
+
+          <!-- Revision comparison slide-over (diff + restore-as-new) -->
+          <RevisionDiffPanel
+            v-if="diffOpen"
+            :map-id="mapId"
+            :target-revision="activeRevision"
+            :revisions="store.revisionHistory.map((entry) => entry.revision)"
+            :base-revision-id="diffBaseRevisionId"
+            :diff="revisionDiff"
+            :loading="revisionDiffLoading"
+            :error="revisionDiffError"
+            :restore-loading="restoreLoading"
+            :restore-error="restoreError"
+            :restore-success="restoreSuccess"
+            @close="closeDiffPanel"
+            @compare="compareAgainst"
+            @restore="restoreRevision"
+            @retry="runDiff"
+            @dismiss-restore-error="clearRestoreError"
+          />
         </div>
       </main>
     </div>
@@ -117,6 +152,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import HeaderBar from '../components/system-maps/SystemMapHeaderBar.vue'
 import GraphEditor from '../components/system-maps/SystemMapGraphEditor.vue'
 import RevisionSidebar from '../components/system-maps/SystemMapRevisionSidebar.vue'
+import RevisionDiffPanel from '../components/system-maps/SystemMapRevisionDiffPanel.vue'
 import DiscoveryPanel from '../components/system-maps/SystemMapDiscoveryPanel.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import { mergeDiscoverySelections } from '../components/system-maps/discoveryMerge'
@@ -129,10 +165,40 @@ const mapId = computed(() => route.params.id as string)
 const activeMap = computed(() => store.activeMap)
 const activeRevision = computed(() => store.activeRevision)
 const graph = computed(() => store.graph)
-const revisions = computed(() => store.revisions)
 const discovery = computed(() => store.discovery)
 const loadError = computed(() => store.error)
 const loading = computed(() => store.loading)
+
+// Revision history (the API's full revision set, paged client-side).
+const historyPageRevisions = computed(() => store.revisionHistoryPageRevisions)
+const historyLoading = computed(() => store.revisionHistoryLoading)
+// Never read emptiness as "loaded": until the history request settles, show the
+// skeleton rather than a false "no revisions" empty state. A failed map load
+// stops the history request from ever starting, so that case falls through to
+// the empty state (the main area owns the error and its retry).
+const historyPending = computed(() =>
+  historyLoading.value
+  || (!store.revisionHistoryLoaded && !store.revisionHistoryError && !store.error),
+)
+const historyError = computed(() => store.revisionHistoryError)
+const historyPage = computed(() => store.revisionHistoryPage)
+const historyPageCount = computed(() => store.revisionHistoryPageCount)
+const historyTotal = computed(() => store.revisionHistoryTotal)
+const currentRevisionId = computed(() => store.currentRevisionId)
+const byTimeLoading = computed(() => store.byTimeLoading)
+const byTimeRequestedAt = computed(() => store.byTimeRequestedAt)
+const byTimeUnavailable = computed(() => store.byTimeUnavailable)
+const byTimeError = computed(() => store.byTimeError)
+
+// Diff + restore.
+const diffOpen = ref(false)
+const diffBaseRevisionId = ref<string | null>(null)
+const revisionDiff = computed(() => store.revisionDiff)
+const revisionDiffLoading = computed(() => store.revisionDiffLoading)
+const revisionDiffError = computed(() => store.revisionDiffError)
+const restoreLoading = computed(() => store.restoreLoading)
+const restoreError = computed(() => store.restoreError)
+const restoreSuccess = ref<string | null>(null)
 
 const showSidebar = ref(true)
 const discoveryOpen = ref(false)
@@ -140,13 +206,26 @@ const saving = ref(false)
 const actionError = ref<string | null>(null)
 const editedNodes = ref<SystemMapNode[]>([])
 const editedRelationships = ref<SystemMapRelationship[]>([])
+/**
+ * Browsing the history (or a point-in-time revision) is a read-only preview:
+ * it must never be editable in place. A new draft is how an operator starts
+ * from an existing revision.
+ */
+const previewReadOnly = ref(false)
 
 const nodeTypes = NODE_TYPES
 const relationshipTypes = RELATIONSHIP_TYPES
 
 const isPublished = computed(() => activeRevision.value?.status === 'published')
 const isArchived = computed(() => activeRevision.value?.status === 'archived')
-const readOnly = computed(() => isPublished.value || isArchived.value)
+const readOnly = computed(() => previewReadOnly.value || isPublished.value || isArchived.value)
+
+/** Set only while the displayed revision came from the point-in-time lookup. */
+const historicalAt = computed(() => {
+  const byTime = store.byTimeRevision
+  if (!byTime || activeRevision.value?.id !== byTime.id) return null
+  return store.byTimeRequestedAt
+})
 
 watch(graph, (value) => {
   editedNodes.value = (value?.nodes ?? []).map((node) => ({ ...node, config_json: { ...node.config_json } }))
@@ -179,16 +258,27 @@ function relationshipPayload(relationships: SystemMapRelationship[]) {
   }))
 }
 
+async function reloadHistory(): Promise<void> {
+  await store.fetchRevisionHistory(mapId.value)
+}
+
 async function loadData(): Promise<void> {
   actionError.value = null
+  previewReadOnly.value = false
+  store.clearByTimeRevision()
   await store.fetchAccess()
   await store.loadMap(mapId.value)
+  if (store.error) return
+  await reloadHistory()
 }
 
 async function selectRevision(revisionId: string): Promise<void> {
   if (!activeMap.value) return
+  store.clearByTimeRevision()
   try {
     await store.loadRevision(activeMap.value.id, revisionId)
+    // Only a revision that actually loaded becomes the read-only preview.
+    previewReadOnly.value = true
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.load_revision')
   }
@@ -197,6 +287,8 @@ async function selectRevision(revisionId: string): Promise<void> {
 async function selectCurrentRevision(): Promise<void> {
   if (!activeMap.value) return
   actionError.value = null
+  previewReadOnly.value = false
+  store.clearByTimeRevision()
   try {
     await store.loadCurrentRevision(activeMap.value.id)
   } catch (err) {
@@ -204,12 +296,21 @@ async function selectCurrentRevision(): Promise<void> {
   }
 }
 
+function changeHistoryPage(nextPage: number): void {
+  store.setRevisionHistoryPage(nextPage)
+}
+
+/** Resolve and display the revision that was active at `at` (an absolute instant). */
 async function selectRevisionByTime(at: string): Promise<void> {
   if (!activeMap.value) return
   actionError.value = null
   try {
     await store.loadRevisionByTime(activeMap.value.id, at)
+    previewReadOnly.value = true
   } catch (err) {
+    // A by-time 404 is the honest empty state, not a failure: the store records
+    // it as `byTimeUnavailable`, so no error alert is raised for it.
+    if (store.byTimeUnavailable) return
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.load_revision_at_time')
   }
 }
@@ -225,6 +326,9 @@ async function createNewDraft(): Promise<void> {
       relationshipPayload(editedRelationships.value),
       `Draft from revision ${activeRevision.value.revision_number}`,
     )
+    previewReadOnly.value = false
+    store.clearByTimeRevision()
+    await reloadHistory()
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.create_draft')
   } finally {
@@ -238,6 +342,7 @@ async function runDiscovery(): Promise<void> {
   try {
     await store.discover(`Discovered ${activeMap.value.name}`, `Discovery at ${new Date().toISOString()}`)
     discoveryOpen.value = true
+    await reloadHistory()
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.discovery_failed')
   }
@@ -252,7 +357,7 @@ function onRelationshipsChange(relationships: Array<Record<string, unknown>>): v
 }
 
 async function saveDraft(): Promise<void> {
-  if (!activeMap.value) return
+  if (!activeMap.value || previewReadOnly.value) return
   saving.value = true
   actionError.value = null
   try {
@@ -262,6 +367,7 @@ async function saveDraft(): Promise<void> {
       relationshipPayload(editedRelationships.value),
       'Manual save',
     )
+    await reloadHistory()
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.save_draft')
   } finally {
@@ -283,6 +389,8 @@ async function publishRevision(): Promise<void> {
   actionError.value = null
   try {
     await store.publish(activeMap.value.id, activeRevision.value.id)
+    previewReadOnly.value = false
+    await reloadHistory()
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.publish_revision')
   }
@@ -293,8 +401,73 @@ async function archiveRevision(): Promise<void> {
   actionError.value = null
   try {
     await store.archive(activeMap.value.id, activeRevision.value.id)
+    previewReadOnly.value = false
+    await reloadHistory()
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.archive_revision')
+  }
+}
+
+/** Default comparison base: the published revision, else the newest other one. */
+function defaultBaseRevisionId(targetId: string): string | null {
+  const others = store.revisionHistory
+    .map((entry) => entry.revision)
+    .filter((revision) => revision.id !== targetId)
+    .sort((a, b) => b.revision_number - a.revision_number)
+  const published = others.find((revision) => revision.id === currentRevisionId.value)
+  return published?.id ?? others[0]?.id ?? null
+}
+
+async function runDiff(): Promise<void> {
+  if (!activeMap.value || !activeRevision.value || !diffBaseRevisionId.value) return
+  await store.diffRevisions(activeMap.value.id, diffBaseRevisionId.value, activeRevision.value.id)
+}
+
+async function openDiffPanel(): Promise<void> {
+  if (!activeRevision.value) return
+  diffOpen.value = true
+  restoreSuccess.value = null
+  store.clearRestoreState()
+  await store.fetchCurrentRevision(mapId.value)
+  diffBaseRevisionId.value = defaultBaseRevisionId(activeRevision.value.id)
+  if (diffBaseRevisionId.value) await runDiff()
+}
+
+function closeDiffPanel(): void {
+  diffOpen.value = false
+}
+
+async function compareAgainst(baseRevisionId: string): Promise<void> {
+  diffBaseRevisionId.value = baseRevisionId
+  await runDiff()
+}
+
+function clearRestoreError(): void {
+  store.clearRestoreError()
+}
+
+/**
+ * Restore a published/archived revision as a NEW DRAFT and navigate to it.
+ * It never publishes: the operator must review and publish explicitly.
+ */
+async function restoreRevision(revisionId: string): Promise<void> {
+  if (!activeMap.value) return
+  restoreSuccess.value = null
+  const sourceNumber = store.revisionHistory
+    .map((entry) => entry.revision)
+    .find((revision) => revision.id === revisionId)?.revision_number
+  try {
+    const created = await store.restoreRevisionAsNew(activeMap.value.id, revisionId)
+    previewReadOnly.value = false
+    store.clearByTimeRevision()
+    await store.loadRevision(activeMap.value.id, created.id)
+    restoreSuccess.value = t('views.SystemMapDetailView.restore_success', {
+      number: created.revision_number,
+      source: sourceNumber ?? '—',
+    })
+  } catch {
+    // The store retains the localized message in restoreError, which the panel
+    // renders inline; nothing here should erase it.
   }
 }
 

@@ -275,7 +275,7 @@ describe('useSystemMapsStore authoring', () => {
       },
     })
     expect(store.activeRevision?.id).toBe('rev-2')
-    expect(store.revisions.some((item) => item.id === 'rev-2')).toBe(true)
+    expect(store.graph?.revision.id).toBe('rev-2')
   })
 
   it('surfaces a discovery report and loads its draft map', async () => {
