@@ -789,6 +789,36 @@ def check_tool_scope(
         raise MCPAuthorizationError(message)
 
 
+def _caller_scope_denial_message(
+    *,
+    tool_name: str,
+    scope_key: str,
+    permission_key: str,
+    key_scope: str | None,
+    auth_type: str | None,
+    team_id: uuid.UUID | None,
+) -> str | None:
+    """Leg 3 of ``_denial_message``: the caller-scope refusal text, if any.
+
+    Extracted so ``_denial_message`` stays within the code-smell threshold:
+    each classification arm is one self-contained return.
+    """
+    classification = classify_caller_scope(scope_key, permission_key)
+    if classification == _CALLER_SCOPE_CALLER and key_scope != "user":
+        return (
+            f"Tool '{tool_name}' is caller-scoped and requires a user-scoped "
+            f"credential; this caller's key scope is '{key_scope or 'unset'}'"
+        )
+    if classification == _CALLER_SCOPE_ORG_CREDENTIAL and _org_credential_denied(key_scope, auth_type, team_id):
+        return (
+            f"Tool '{tool_name}' performs an organisation-wide operation and requires an "
+            "org-scoped credential; team-scoped and user-scoped credentials are refused"
+        )
+    if classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key":
+        return f"Tool '{tool_name}' is org-scoped and cannot be called with a user-scoped API key"
+    return None
+
+
 def _denial_message(
     *,
     tool_name: str,
@@ -824,19 +854,16 @@ def _denial_message(
     # Leg 3: caller-scope (kill-switch-ineligible). Keep action-specific
     # classification aligned with the resolver's action-level permission key.
     scope_key = f"{normalized}:{act}" if act is not None else normalized
-    classification = classify_caller_scope(scope_key, permission_key)
-    if classification == _CALLER_SCOPE_CALLER and key_scope != "user":
-        return (
-            f"Tool '{tool_name}' is caller-scoped and requires a user-scoped "
-            f"credential; this caller's key scope is '{key_scope or 'unset'}'"
-        )
-    if classification == _CALLER_SCOPE_ORG_CREDENTIAL and _org_credential_denied(key_scope, auth_type, team_id):
-        return (
-            f"Tool '{tool_name}' performs an organisation-wide operation and requires an "
-            "org-scoped credential; team-scoped and user-scoped credentials are refused"
-        )
-    if classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key":
-        return f"Tool '{tool_name}' is org-scoped and cannot be called with a user-scoped API key"
+    caller_scope_message = _caller_scope_denial_message(
+        tool_name=tool_name,
+        scope_key=scope_key,
+        permission_key=permission_key,
+        key_scope=key_scope,
+        auth_type=auth_type,
+        team_id=team_id,
+    )
+    if caller_scope_message is not None:
+        return caller_scope_message
 
     # Leg 4: role hierarchy — reuse ``assert_org_role`` so the pinned
     # "Insufficient scope ... requires ... got ..." message is identical.
