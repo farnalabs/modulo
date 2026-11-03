@@ -36,39 +36,39 @@
   #error Unsupported BUNDLE_ARCH: only amd64 Windows installers are supported
 #endif
 
-#ifexist "{#BUNDLE_DIR}\launcher"
+#ifexist BUNDLE_DIR + "\launcher"
 #else
   #error Required native launcher is missing: {#BUNDLE_DIR}\launcher
 #endif
-#ifexist "{#BUNDLE_DIR}\runtime"
+#if DirExists(BUNDLE_DIR + "\runtime")
 #else
   #error Required CPython runtime is missing: {#BUNDLE_DIR}\runtime
 #endif
-#ifexist "{#BUNDLE_DIR}\pg"
+#if DirExists(BUNDLE_DIR + "\pg")
 #else
   #error Required PostgreSQL runtime is missing: {#BUNDLE_DIR}\pg
 #endif
-#ifexist "{#BUNDLE_DIR}\redis"
+#if DirExists(BUNDLE_DIR + "\redis")
 #else
   #error Required Redis runtime is missing: {#BUNDLE_DIR}\redis
 #endif
-#ifexist "{#BUNDLE_DIR}\bin"
+#if DirExists(BUNDLE_DIR + "\bin")
 #else
   #error Required native support binaries are missing: {#BUNDLE_DIR}\bin
 #endif
-#ifexist "{#BUNDLE_DIR}\frontend-dist"
+#if DirExists(BUNDLE_DIR + "\frontend-dist")
 #else
   #error Required frontend distribution is missing: {#BUNDLE_DIR}\frontend-dist
 #endif
-#ifexist "{#BUNDLE_DIR}\backend\.venv"
+#if DirExists(BUNDLE_DIR + "\backend\.venv")
 #else
   #error Required backend environment is missing: {#BUNDLE_DIR}\backend\.venv
 #endif
-#ifexist "{#BUNDLE_DIR}\RELEASE_MANIFEST.json"
+#ifexist BUNDLE_DIR + "\RELEASE_MANIFEST.json"
 #else
   #error Required signed release manifest is missing: {#BUNDLE_DIR}\RELEASE_MANIFEST.json
 #endif
-#ifexist "{#BUNDLE_DIR}\RELEASE_MANIFEST.json.sig"
+#ifexist BUNDLE_DIR + "\RELEASE_MANIFEST.json.sig"
 #else
   #error Required release-manifest signature is missing: {#BUNDLE_DIR}\RELEASE_MANIFEST.json.sig
 #endif
@@ -87,8 +87,8 @@ OutputBaseFilename=modulo-{#VERSION_NUM}-windows-{#BUNDLE_ARCH}
 Compression=lzma2/ultra64
 SolidCompression=yes
 PrivilegesRequired=admin
-ArchitecturesInstallIn64BitMode=x64
-ArchitecturesAllowed=x64
+ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed=x64compatible
 DisableProgramGroupPage=yes
 DisableDirPage=auto
 DisableReadyMemo=yes
@@ -129,8 +129,8 @@ Filename: "sc.exe"; Parameters: "start Modulo"; StatusMsg: "Starting Modulo serv
 Filename: "{#MODULO_URL}"; Description: "Open Modulo in your browser"; Flags: postinstall shellexec unchecked; Check: ShouldOpenModulo
 
 [UninstallRun]
-Filename: "sc.exe"; Parameters: "stop Modulo"; StatusMsg: "Stopping Modulo service..."; Flags: runhidden waituntilterminated
-Filename: "sc.exe"; Parameters: "delete Modulo"; StatusMsg: "Removing Modulo service..."; Flags: runhidden waituntilterminated
+Filename: "sc.exe"; Parameters: "stop Modulo"; StatusMsg: "Stopping Modulo service..."; Flags: runhidden waituntilterminated; RunOnceId: "StopModuloService"
+Filename: "sc.exe"; Parameters: "delete Modulo"; StatusMsg: "Removing Modulo service..."; Flags: runhidden waituntilterminated; RunOnceId: "DeleteModuloService"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
