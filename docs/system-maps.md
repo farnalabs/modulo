@@ -15,7 +15,7 @@ Delivery System Maps provides the operational model for an organization's govern
 System Maps represents the end-to-end software delivery topography: executable Modulo pipelines, external CI and verification capabilities, manual human engineering gates, intermediate queues, governance controls, and autonomous improvement loops. It displays flow rates, queue latencies, capacity constraints, bottlenecks, failure concentrations, and telemetry coverage across the whole delivery architecture.
 
 ### 1.2 Category Positioning
-Modulo is an Agentic Delivery Governance platform. For developer experience and platform engineering teams, Modulo functions as a Graph Engineering Platform.
+Modulo is an Agentic Delivery Governance platform: the control plane for a software factory. For developer experience and platform engineering teams, graph engineering is the mechanism Modulo applies: a pipeline is an explicit graph of agent, connector, gate, and human nodes joined by typed edges, and Modulo compiles, executes, and governs that graph.
 
 Modulo governs the execution of autonomous pipelines, enforces quality and safety gates, records immutable audit evidence, and coordinates human-in-the-loop decisions. System Maps provides the system-level visibility required to inspect, operate, and tune that governed delivery network.
 
