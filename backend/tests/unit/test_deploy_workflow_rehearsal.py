@@ -2360,3 +2360,92 @@ def test_freeze_cleanup_harness_reads_the_job_from_the_workflow() -> None:
     assert _FREEZE_CLEANUP_JOB_ID not in without_finalizer["jobs"]
     with pytest.raises(KeyError):
         _freeze_cleanup_script(without_finalizer)
+
+
+# ---------------------------------------------------------------------------
+# Release candidate tag exposure (FAR: run 41655117202)
+#
+# The `release` job used to expose rc_tag as
+#   ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
+# Across conditionally-skipped steps that produced an empty rc_tag for the
+# macos-installer job while bundle received the correct value. The job output
+# is now bound to a single always-run normaliser step, and these tests pin the
+# wiring plus execute the step body.
+# ---------------------------------------------------------------------------
+
+_RC_OUTPUT_STEP_NAME = "Expose release candidate tag"
+
+
+def _release_job() -> dict[str, Any]:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    return cast(dict[str, Any], workflow["jobs"]["release"])
+
+
+def test_release_rc_tag_output_is_bound_to_an_always_run_normaliser() -> None:
+    job = _release_job()
+    outputs = cast(dict[str, str], job["outputs"])
+
+    assert outputs["rc_tag"] == "${{ steps.rc-output.outputs.rc_tag }}"
+    assert "||" not in outputs["rc_tag"], "the rc_tag output must not short-circuit across skipped steps"
+
+    steps = cast(list[dict[str, Any]], job["steps"])
+    names = _step_names(steps)
+    assert names[-1] == _RC_OUTPUT_STEP_NAME, "the rc_tag normaliser must be the final step of the release job"
+
+    step = steps[names.index(_RC_OUTPUT_STEP_NAME)]
+    assert step["id"] == "rc-output"
+    assert step["if"] == "always()"
+    env = cast(dict[str, str], step["env"])
+    assert env["CUT_RC_TAG"] == "${{ steps.cut.outputs.rc_tag }}"
+    assert env["RECUT_RC_TAG"] == "${{ steps.recut.outputs.rc_tag }}"
+
+    run = cast(str, step["run"])
+    assert 'echo "rc_tag=${rc_tag}" >> "$GITHUB_OUTPUT"' in run
+
+    # Placement: after both mode steps, and it never reads the promote output,
+    # so a promote run cannot surface a GA tag as the RC tag.
+    assert names.index(_RC_OUTPUT_STEP_NAME) > names.index("Recut from current main")
+    assert names.index(_RC_OUTPUT_STEP_NAME) > names.index("Promote to GA and lift freeze")
+    assert "promote" not in run
+
+
+def _run_rc_output_step(tmp_path: Path, *, cut: str, recut: str) -> tuple[dict[str, str], str]:
+    script = _release_job_run(_RC_OUTPUT_STEP_NAME)
+    output = tmp_path / "github-output"
+    output.write_text("", encoding="utf-8")
+    env = {
+        **os.environ,
+        "GITHUB_OUTPUT": str(output),
+        "CUT_RC_TAG": cut,
+        "RECUT_RC_TAG": recut,
+    }
+    result = _run_bash(script, cwd=tmp_path, env=env)
+    assert result.returncode == 0, result.stderr
+
+    values: dict[str, str] = {}
+    for line in output.read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        values[key] = value
+    return values, result.stdout
+
+
+@pytest.mark.parametrize(
+    ("cut", "recut", "expected"),
+    [
+        ("", "v0.3.324-rc6", "v0.3.324-rc6"),
+        ("v0.3.324-rc1", "", "v0.3.324-rc1"),
+        ("", "", ""),
+    ],
+)
+def test_rc_output_step_normalises_mode_outputs(tmp_path: Path, cut: str, recut: str, expected: str) -> None:
+    values, stdout = _run_rc_output_step(tmp_path, cut=cut, recut=recut)
+    assert values["rc_tag"] == expected
+    assert f"Release candidate tag exposed to dependent jobs: '{expected}'" in stdout
+
+
+def test_release_rc_tag_callers_read_the_release_job_output() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    for job_id in ("bundle", "macos-installer"):
+        job = cast(dict[str, Any], workflow["jobs"][job_id])
+        with_ = cast(dict[str, Any], job["with"])
+        assert with_["rc_tag"] == "${{ needs.release.outputs.rc_tag }}", job_id
