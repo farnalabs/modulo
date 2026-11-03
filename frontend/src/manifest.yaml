@@ -946,6 +946,39 @@ routes:
         required_permissions: [library.search.in_dev]
         deprecated: false
 
+    /system-maps:
+        name: system-maps
+        breadcrumb: System Maps
+        parent: /
+        product_map: [feat-system-maps]
+        sidebar_group: build
+        sidebar_order: 5
+        type: list_page
+        pattern: /system-maps
+        exact: true
+        visibility: private_preview
+        <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [system_maps_access]
+        deprecated: false
+
+    /system-maps/:id:
+        name: system-map-detail
+        breadcrumb: System Map
+        parent: /system-maps
+        product_map: [feat-system-maps]
+        sidebar_group:
+        sidebar_order:
+        type: detail_page
+        pattern: /system-maps/:id
+        dynamic_params:
+          - id
+        visibility: private_preview
+        <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [system_maps_access]
+        deprecated: false
+
     /admin/runners/profiles:
         name: admin-runners-profiles
         breadcrumb: Runners
@@ -1121,6 +1154,124 @@ elements:
         dynamic_testid: false
       - testid: page-header-right
         type: element
+        dynamic_testid: false
+
+    /system-maps:
+      - testid: system-maps-create
+        type: button
+        dynamic_testid: false
+      - testid: system-map-create-dialog
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-create-name
+        type: input
+        dynamic_testid: false
+      - testid: system-map-create-description
+        type: textarea
+        dynamic_testid: false
+      - testid: system-map-create-cancel
+        type: button
+        dynamic_testid: false
+      - testid: system-map-create-submit
+        type: button
+        dynamic_testid: false
+      - testid: system-maps-pagination
+        type: element
+        dynamic_testid: false
+      - testid: system-maps-prev
+        type: button
+        dynamic_testid: false
+      - testid: system-maps-next
+        type: button
+        dynamic_testid: false
+      - testid: system-maps-loading
+        type: element
+        dynamic_testid: false
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+
+    /system-maps/:id:
+      - testid: system-map-detail-back
+        type: link
+        dynamic_testid: false
+      - testid: system-map-detail-header
+        type: header
+        dynamic_testid: false
+      - testid: system-map-header-toggle-history
+        type: button
+        dynamic_testid: false
+      - testid: system-map-save-draft
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discover
+        type: button
+        dynamic_testid: false
+      - testid: system-map-publish
+        type: button
+        dynamic_testid: false
+      - testid: system-map-archive
+        type: button
+        dynamic_testid: false
+      - testid: system-map-graph-editor
+        type: element
+        dynamic_testid: false
+      - testid: system-map-graph-canvas
+        type: element
+        dynamic_testid: false
+      - testid: system-map-empty-state
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-sidebar
+        type: aside
+        dynamic_testid: false
+      - testid: system-map-new-draft
+        type: button
+        dynamic_testid: false
+      - testid: system-map-sidebar-discover
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-panel
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-discovery-backdrop
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-close
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-cancel
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-save
+        type: button
+        dynamic_testid: false
+      - testid: system-map-relationship-type
+        type: select
+        dynamic_testid: false
+      - testid: system-map-relationship-source
+        type: select
+        dynamic_testid: false
+      - testid: system-map-relationship-target
+        type: select
+        dynamic_testid: false
+      - testid: system-map-add-relationship
+        type: button
+        dynamic_testid: false
+      - testid: system-map-relationships
+        type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
         dynamic_testid: false
     /governance:
       - testid: governance-stack
@@ -1723,6 +1874,9 @@ elements:
         type: select
         dynamic_testid: false
       - testid: admin-error-detail-back
+        type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-copy-support
         type: button
         dynamic_testid: false
       - testid: admin-error-detail-events-loading
@@ -4047,6 +4201,9 @@ elements:
         dynamic_testid: false
       - testid: pipeline-tree-folder-toggle
         type: button
+        dynamic_testid: false
+      - testid: pipeline-tree-link
+        type: link
         dynamic_testid: false
       - testid: folder-tree
         type: element
@@ -7509,6 +7666,28 @@ features:
             - "[x] POST /api/v1/admin/orgs/{org_id}/users creates a user within a target org with cross-tenant account-takeover protection (an account already a member of the org or a local account holding a password in another org is 409), boundary role/password validation (invalid org_role or a weak password is 422), a missing org is 404, and a regular admin is 403 (system_admin_users.feature)"
             - "[x] DELETE /api/v1/admin/orgs/{org_id} deletes an organisation — 404 for a missing org, 403 for a regular admin (system_admin_orgs.feature)"
             - "[x] Org-level license management: GET/PUT/DELETE on /api/v1/admin/orgs/{org_id}/license resolves/stores/clears the org's settings_json.license_key via parse_and_verify, falls back to the system license, and is role-gated (GET org.license.view / PUT+DELETE org.license.manage) — BDD: system_admin_orgs.feature"
+    feat-system-maps:
+        description: Bounded visual authoring of delivery system maps
+        status: partial
+        behaviours:
+            - "[x] System Maps list page (/system-maps) with create, view, edit, delete, discover actions"
+            - "[x] Map detail page (/system-maps/:id) with bounded visual graph editor for the backend node/relationship vocabularies, connected edges, endpoint selection, and drag/keyboard repositioning"
+            - "[ ] Revision history sidebar with current/historical revision switching via /revisions/current and /revisions/by-time (deferred: the version-aware read-model API lands separately; this branch shows revisions created in the current session)"
+            - "[x] Draft revision creation and save with node/relationship/loop-config payload"
+            - "[x] Publish revision (validation + status change to published)"
+            - "[x] Archive revision (status change to archived)"
+            - "[x] Discover My System integration (POST /api/v1/system-maps/discover) with accept/reject review panel that applies accepted nodes/relationships to the draft"
+            - "[ ] Re-scan existing organisation resources into existing draft with added/removed/ambiguous diff and operator edit preservation (deferred: no re-scan endpoint exists on this branch; the mock re-scan was removed rather than shipped as a no-op)"
+            - "[x] No auto-publish — operator must explicitly publish"
+            - "[x] Access gated by system_maps feature + developer mode + operator/admin + system_maps_access permission"
+            - "[x] i18n keys and product-map test IDs registered"
+            - "[x] Accessibility: STATE-1/2/6, A11Y-1/2/4, I18N-1, TYPE-1, VIS-4"
+        deferrals:
+            - "Current/historical revision switching (/revisions/current, /revisions/by-time) depends on the version-aware read-model API"
+            - "Re-scan into an existing draft depends on a re-scan endpoint; the UI is withheld until it exists"
+            - "No per-ticket tracking UI (Beta 3 scope)"
+            - "No loop dispatch runtime/budgets/concurrency (Beta 3 scope)"
+            - "No broad arbitrary graph/cycle editor (Beta 2 scope: only bounded node/relationship types)"
     feat-teams:
         description: Users, teams, and role-based access
         status: covered

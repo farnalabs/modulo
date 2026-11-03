@@ -243,6 +243,7 @@
           <label for="adminusersview-field-1" class="block text-sm font-medium mb-1">{{ $t('views.AdminUsersView.role') }}</label>
           <Select
             :aria-label="$t('views.AdminUsersView.role')"
+            input-id="adminusersview-field-1"
             v-model="newUser.org_role"
             :placeholder="$t('views.AdminUsersView.select_role')"
             data-testid="admin-users-create-role"

@@ -181,7 +181,7 @@ describe('local e2e port selection (FAR-1900)', () => {
 })
 
 describe('playwright.config local webServer defence-in-depth (FAR-1922)', () => {
-  it('disables server reuse and binds the derived port with --strictPort', async () => {
+  it('disables server reuse and binds the derived port with --strictPort', { timeout: 30000 }, async () => {
     // The derived port (pinned above) plus these two playwright.config.ts
     // values are the two layers that stop a local run attaching to a foreign
     // worktree's dev server. On a hash collision, `reuseExistingServer: false`
@@ -221,10 +221,5 @@ describe('playwright.config local webServer defence-in-depth (FAR-1922)', () => 
     const port = env.getLocalE2ePort()
     expect(webServer.url).toBe(`http://127.0.0.1:${port}`)
     expect(webServer.command).toContain(`--port ${port}`)
-    // Importing the REAL playwright config pulls in Playwright itself, which
-    // costs well over the 15 s default on a cold Windows host (measured 16 s
-    // on this machine, in isolation). The assertions are unchanged - the
-    // budget below only covers the import, so a genuine regression in the
-    // config still fails.
-  }, 60_000)
+  })
 })

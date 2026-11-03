@@ -1,0 +1,476 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { flushPromises, mount } from '@vue/test-utils'
+import { createI18n } from 'vue-i18n'
+
+const mockGet = vi.hoisted(() => vi.fn())
+const mockPost = vi.hoisted(() => vi.fn())
+const mockGetAccessToken = vi.hoisted(() => vi.fn())
+const mockIsOperator = vi.hoisted(() => ({ value: true }))
+const mockIsSystemAdmin = vi.hoisted(() => ({ value: false }))
+const mockPlanStore = vi.hoisted(() => ({
+  loaded: true,
+  currentTier: 'community',
+  devMode: true,
+  userPermissions: ['system_maps_access', 'system.config.manage'],
+  fetchPlan: vi.fn(),
+  fetchPermissions: vi.fn(),
+}))
+
+vi.mock('../lib/api/client', () => ({
+  api: { GET: mockGet, POST: mockPost },
+  getAccessToken: mockGetAccessToken,
+}))
+vi.mock('../stores/planStore', () => ({ usePlanStore: () => mockPlanStore }))
+vi.mock('../composables/useCurrentUser', () => ({
+  useCurrentUser: () => ({ isOperator: mockIsOperator, isSystemAdmin: mockIsSystemAdmin }),
+}))
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ params: { id: 'map-1' } }),
+  useRouter: () => ({ push: vi.fn() }),
+  RouterLink: { template: '<a><slot /></a>' },
+}))
+
+import SystemMapDetailView from '../views/SystemMapDetailView.vue'
+import { useSystemMapsStore } from '../stores/systemMaps'
+import enUS from '../locales/en-US.js'
+
+const i18n = createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': enUS } })
+
+function mountView() {
+  return mount(SystemMapDetailView, {
+    global: {
+      plugins: [i18n],
+      stubs: {
+        BackLink: true,
+        HeaderBar: true,
+        GraphEditor: true,
+        RevisionSidebar: true,
+        DiscoveryPanel: true,
+      },
+    },
+  })
+}
+
+describe('SystemMapDetailView load failures', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+    mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+  })
+
+  it('offers an inline retry that re-runs the failed load', async () => {
+    let mapCalls = 0
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      mapCalls += 1
+      if (mapCalls === 1) return Promise.resolve({ error: { detail: 'map unavailable' } })
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    await retry.trigger('click')
+    await flushPromises()
+
+    expect(mapCalls).toBe(2)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(true)
+  })
+})
+
+describe('SystemMapDetailView authoring actions', () => {
+  const HeaderStub = {
+    name: 'HeaderBar',
+    props: ['map', 'revision', 'saving'],
+    emits: ['toggle-sidebar', 'save', 'publish', 'archive', 'discover'],
+    template: '<div data-testid="header-stub" />',
+  }
+  const GraphStub = {
+    name: 'GraphEditor',
+    props: ['nodes', 'relationships', 'loopConfigs', 'nodeTypes', 'relationshipTypes', 'readOnly'],
+    emits: ['nodes-change', 'relationships-change'],
+    template: '<div data-testid="graph-stub" />',
+  }
+  const RevisionStub = {
+    name: 'RevisionSidebar',
+    props: ['mapId', 'revisions', 'activeRevisionId', 'activeMap'],
+    emits: ['select-revision', 'new-draft', 'discover'],
+    template: '<div data-testid="revision-stub" />',
+  }
+  const DiscoveryStub = {
+    name: 'DiscoveryPanel',
+    props: ['discovery'],
+    emits: ['close', 'save'],
+    template: '<div data-testid="discovery-stub" />',
+  }
+
+  function mountWithStubs() {
+    return mount(SystemMapDetailView, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          BackLink: true,
+          HeaderBar: HeaderStub,
+          GraphEditor: GraphStub,
+          RevisionSidebar: RevisionStub,
+          DiscoveryPanel: DiscoveryStub,
+        },
+      },
+    })
+  }
+
+  function seed(mockPost: ReturnType<typeof vi.fn>) {
+    const store = useSystemMapsStore()
+    store.activeMap = { id: 'map-1', name: 'Map one', published_revision_id: null } as never
+    store.activeRevision = { id: 'rev-1', revision_number: 1, status: 'draft' } as never
+    store.graph = {
+      revision: { id: 'rev-1', revision_number: 1, status: 'draft' },
+      nodes: [{ node_key: 'pipeline-1', node_type: 'pipeline', display_name: 'Pipeline 1', config_json: { label: 'a' }, pipeline_id: 'p-1', connector_instance_id: 'c-1', owner_team_id: null, eval_id: 'e-1', position_x: '10', position_y: '20' }],
+      relationships: [{ source_node_key: 'pipeline-1', target_node_key: 'connector-2', relationship_type: 'flow', config_json: { label: 'b' } }],
+      loop_configs: [],
+    } as never
+    mockPost.mockResolvedValue({ data: { id: 'rev-2', revision_number: 2, status: 'draft' } })
+    return store
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+    if (mockPost) mockPost.mockReset()
+    mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/{rev_id}') return Promise.resolve({ data: { revision: { id: 'rev-2', revision_number: 2, status: 'draft' }, nodes: [], relationships: [] } })
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    })
+  })
+
+  it('toggles the revision sidebar', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="system-map-revision-sidebar"]').exists()).toBe(true)
+    wrapper.findComponent(HeaderStub).vm.$emit('toggle-sidebar')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-revision-sidebar"]').exists()).toBe(false)
+  })
+
+  it('saves the drafted graph with the full node and relationship payload', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+
+    expect(store.graph?.nodes).toHaveLength(1)
+    wrapper.findComponent(HeaderStub).vm.$emit('save')
+    await flushPromises()
+
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions', {
+      params: { path: { map_id: 'map-1' } },
+      body: {
+        nodes: [{
+          node_key: 'pipeline-1',
+          node_type: 'pipeline',
+          display_name: 'Pipeline 1',
+          config_json: { label: 'a' },
+          pipeline_id: 'p-1',
+          connector_instance_id: 'c-1',
+          owner_team_id: null,
+          eval_id: 'e-1',
+          position_x: '10',
+          position_y: '20',
+        }],
+        relationships: [{ source_node_key: 'pipeline-1', target_node_key: 'connector-2', relationship_type: 'flow', config_json: { label: 'b' } }],
+        loop_configs: [],
+        notes: 'Manual save',
+      },
+    })
+  })
+
+  it('applies node and relationship changes emitted by the editor', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    seed(mockPost)
+    await flushPromises()
+
+    wrapper.findComponent(GraphStub).vm.$emit('nodes-change', [{ node_key: 'agent-1', node_type: 'agent', display_name: 'Agent', config_json: {} }])
+    wrapper.findComponent(GraphStub).vm.$emit('relationships-change', [{ source_node_key: 'agent-1', target_node_key: 'agent-1', relationship_type: 'data', config_json: {} }])
+    wrapper.findComponent(HeaderStub).vm.$emit('save')
+    await flushPromises()
+
+    const body = mockPost.mock.calls[0][1].body
+    expect(body.nodes[0].node_key).toBe('agent-1')
+    expect(body.relationships[0].relationship_type).toBe('data')
+  })
+
+  it('reports save failures', async () => {
+    seed(mockPost)
+    mockPost.mockResolvedValue({ error: { detail: 'nope' } })
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    wrapper.findComponent(HeaderStub).vm.$emit('save')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Could not save draft revision')
+  })
+
+  it('publishes and archives a revision', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    seed(mockPost)
+    await flushPromises()
+
+    wrapper.findComponent(HeaderStub).vm.$emit('publish')
+    await flushPromises()
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/{rev_id}/publish', { params: { path: { map_id: 'map-1', rev_id: 'rev-1' } } })
+
+    wrapper.findComponent(HeaderStub).vm.$emit('archive')
+    await flushPromises()
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/{rev_id}/archive', { params: { path: { map_id: 'map-1', rev_id: 'rev-1' } } })
+  })
+
+  it('reports publish and archive failures', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    seed(mockPost)
+    await flushPromises()
+
+    mockPost.mockResolvedValue({ error: { detail: 'nope' } })
+    wrapper.findComponent(HeaderStub).vm.$emit('publish')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not publish revision')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    wrapper.findComponent(HeaderStub).vm.$emit('archive')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not archive revision')
+  })
+
+  it('loads a selected revision and reports failures', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      return Promise.resolve({ error: { detail: 'missing' } })
+    })
+    wrapper.findComponent(RevisionStub).vm.$emit('select-revision', 'rev-9')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not load map revision')
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      return Promise.resolve({ data: { revision: { id: 'rev-9', revision_number: 9, status: 'draft' }, nodes: [], relationships: [] } })
+    })
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    wrapper.findComponent(RevisionStub).vm.$emit('select-revision', 'rev-9')
+    await flushPromises()
+    expect(store.activeRevision?.id).toBe('rev-9')
+  })
+
+  it('creates a new draft from the sidebar', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    seed(mockPost)
+    await flushPromises()
+
+    wrapper.findComponent(RevisionStub).vm.$emit('new-draft')
+    await flushPromises()
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions', expect.objectContaining({ body: expect.objectContaining({ notes: 'Draft from revision 1' }) }))
+
+    mockPost.mockResolvedValue({ error: { detail: 'nope' } })
+    wrapper.findComponent(RevisionStub).vm.$emit('new-draft')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not save draft revision')
+  })
+
+  it('runs discovery, opens the review panel and saves selections', async () => {
+    seed(mockPost)
+    const report = { draft_map_id: 'map-1', draft_revision_id: 'rev-1', inferred_nodes: [{ node_key: 'agent-1', node_type: 'agent', display_name: 'Agent' }], inferred_edges: [] }
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/system-maps/discover') return Promise.resolve({ data: report })
+      return Promise.resolve({ data: { id: 'rev-3', revision_number: 3, status: 'draft' } })
+    })
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
+
+    wrapper.findComponent(DiscoveryStub).vm.$emit('save', { acceptedNodes: [0], acceptedEdges: [], rejectedNodes: [], rejectedEdges: [] })
+    await flushPromises()
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions', expect.objectContaining({ body: expect.objectContaining({ nodes: expect.arrayContaining([expect.objectContaining({ node_key: 'agent-1' })]) }) }))
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(false)
+  })
+
+  it('reports discovery and discovery-save failures', async () => {
+    const store = seed(mockPost)
+    mockPost.mockResolvedValue({ error: { detail: 'nope' } })
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not discover system map')
+
+    store.discovery = { inferred_nodes: [], inferred_edges: [] } as never
+    wrapper.findComponent(RevisionStub).vm.$emit('discover')
+    await flushPromises()
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(false)
+  })
+
+  it('closes the discovery panel without saving', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    seed(mockPost)
+    await flushPromises()
+
+    mockPost.mockResolvedValue({ data: { draft_map_id: 'map-1', draft_revision_id: 'rev-1', inferred_nodes: [], inferred_edges: [] } })
+    wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    wrapper.findComponent(DiscoveryStub).vm.$emit('close')
+    await flushPromises()
+
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(false)
+  })
+
+  it('passes read-only to the editor for a published revision', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    store.activeRevision = { id: 'rev-1', revision_number: 1, status: 'published' } as never
+    await flushPromises()
+
+    expect(wrapper.findComponent(GraphStub).props('readOnly')).toBe(true)
+  })
+})
+
+describe('SystemMapDetailView guards and non-Error failures', () => {
+  const HeaderStub = { name: 'HeaderBar', emits: ['toggle-sidebar', 'save', 'publish', 'archive', 'discover'], template: '<div />' }
+  const GraphStub = { name: 'GraphEditor', emits: ['nodes-change', 'relationships-change'], template: '<div />' }
+  const RevisionStub = { name: 'RevisionSidebar', emits: ['select-revision', 'new-draft', 'discover'], template: '<div />' }
+  const DiscoveryStub = { name: 'DiscoveryPanel', emits: ['close', 'save'], template: '<div />' }
+
+  function mountWithStubs() {
+    return mount(SystemMapDetailView, {
+      global: {
+        plugins: [i18n],
+        stubs: { BackLink: true, HeaderBar: HeaderStub, GraphEditor: GraphStub, RevisionSidebar: RevisionStub, DiscoveryPanel: DiscoveryStub },
+      },
+    })
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+    mockPost.mockReset()
+    mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    })
+  })
+
+  async function mountedWithMap() {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+    store.activeMap = { id: 'map-1', name: 'Map one', published_revision_id: null } as never
+    store.activeRevision = { id: 'rev-1', revision_number: 1, status: 'draft' } as never
+    await flushPromises()
+    return { wrapper, store }
+  }
+
+  it('returns early from every action when there is no active map or revision', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+    store.activeMap = null
+    store.activeRevision = null
+
+    wrapper.findComponent(RevisionStub).vm.$emit('select-revision', 'rev-1')
+    wrapper.findComponent(RevisionStub).vm.$emit('new-draft')
+    wrapper.findComponent(RevisionStub).vm.$emit('discover')
+    wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    wrapper.findComponent(HeaderStub).vm.$emit('save')
+    wrapper.findComponent(HeaderStub).vm.$emit('publish')
+    wrapper.findComponent(HeaderStub).vm.$emit('archive')
+    await flushPromises()
+
+    expect(mockPost).not.toHaveBeenCalled()
+
+    store.activeMap = { id: 'map-1', name: 'Map one' } as never
+    wrapper.findComponent(RevisionStub).vm.$emit('new-draft')
+    wrapper.findComponent(HeaderStub).vm.$emit('publish')
+    wrapper.findComponent(HeaderStub).vm.$emit('archive')
+    await flushPromises()
+
+    expect(mockPost).not.toHaveBeenCalled()
+  })
+
+  it('uses localized fallbacks for non-Error rejections', async () => {
+    const { wrapper, store } = await mountedWithMap()
+    vi.spyOn(store, 'loadRevision').mockRejectedValue('offline')
+    vi.spyOn(store, 'saveDraft').mockRejectedValue('offline')
+    vi.spyOn(store, 'discover').mockRejectedValue('offline')
+    vi.spyOn(store, 'publish').mockRejectedValue('offline')
+    vi.spyOn(store, 'archive').mockRejectedValue('offline')
+
+    wrapper.findComponent(RevisionStub).vm.$emit('select-revision', 'rev-1')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not load revision')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    wrapper.findComponent(RevisionStub).vm.$emit('new-draft')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not create draft')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Discovery failed')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    wrapper.findComponent(HeaderStub).vm.$emit('save')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not save draft')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    wrapper.findComponent(HeaderStub).vm.$emit('publish')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not publish revision')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    wrapper.findComponent(HeaderStub).vm.$emit('archive')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not archive revision')
+  })
+
+  it('keeps the discovery panel open when applying selections fails to save', async () => {
+    const { wrapper, store } = await mountedWithMap()
+    vi.spyOn(store, 'discover').mockResolvedValue({ draft_map_id: 'map-1', inferred_nodes: [], inferred_edges: [] } as never)
+    vi.spyOn(store, 'saveDraft').mockRejectedValue(new Error('save failed'))
+    store.discovery = { inferred_nodes: [], inferred_edges: [] } as never
+
+    wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
+
+    wrapper.findComponent(DiscoveryStub).vm.$emit('save', { acceptedNodes: [], acceptedEdges: [], rejectedNodes: [], rejectedEdges: [] })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('save failed')
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
+  })
+})

@@ -40,6 +40,14 @@ quarantine:
     reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125556884614, run 41526232230, PR #2720)"
     expiry: "2026-11-16"
     owner: "platform-team"
+  - test_id: "tests/unit/scripts/test_branch_fixer_dispatch_retry.py::test_capacity_and_transient_failures_are_distinguishable"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125649924673, run 41554109804, PR #2718); passes in isolation"
+    expiry: "2026-11-17"
+    owner: "platform-team"
+  - test_id: "tests/unit/scim/test_scim_provisioning_programming_error.py::TestScimDatabaseErrors::test_error_returns_expected_status[patch_user_503]"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125592954745, run 41536996794, PR #2726)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
 
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"

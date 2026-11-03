@@ -76,7 +76,7 @@
       :role="isSystemAdmin ? 'tabpanel' : undefined"
       :aria-labelledby="isSystemAdmin ? 'admin-audit-tab-org' : undefined"
     >
-    <div v-if="chainResult" class="rounded-lg border px-4 py-3 text-sm" :class="chainResult.valid ? 'border-green-500 bg-green-50 text-green-800' : 'border-red-500 bg-red-50 text-red-800'" data-testid="admin-audit-chain-result">
+    <div v-if="chainResult" class="rounded-lg border px-4 py-3 text-sm" :class="chainResult.valid ? 'border-green-500 bg-green-50 text-green-800' : 'border-red-500 bg-red-50 text-red-800'" aria-live="polite" data-testid="admin-audit-chain-result">
       <strong>{{ chainResult.valid ? $t('views.AdminAuditView.chain_valid') : $t('views.AdminAuditView.chain_broken') }}</strong>
       <span v-if="chainResult.checked_events" class="ml-2">— {{ $t('views.AdminAuditView.events_verified', { count: chainResult.checked_events }) }}</span>
       <span v-if="chainResult.error" class="ml-2">— {{ chainResult.error }}</span>
@@ -227,9 +227,8 @@
             </tr>
           </thead>
           <tbody class="divide-y">
+            <template v-for="event in events" :key="event.id">
             <tr
-              v-for="event in events"
-              :key="event.id"
               class="cursor-pointer transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               :data-testid="'admin-audit-event-row-' + event.id"
               tabindex="0"
@@ -274,7 +273,11 @@
                 </button>
               </td>
             </tr>
-            <tr v-if="expandedId">
+            <!-- The detail row is rendered as the expanded row's immediate
+                 sibling. As a lone `v-if` after the loop it always appeared at
+                 the BOTTOM of the table, so expanding a row near the top
+                 flipped the chevron with no visible change on screen. -->
+            <tr v-if="expandedId === event.id">
               <td colspan="6" class="border-t bg-muted p-4">
                 <div class="space-y-3">
                   <div v-if="expandedEvent?.payload_json && Object.keys(expandedEvent.payload_json).length > 0">
@@ -298,6 +301,7 @@
                 </div>
               </td>
             </tr>
+            </template>
           </tbody>
         </table>
       </div>
@@ -452,9 +456,8 @@
               </tr>
             </thead>
             <tbody class="divide-y">
+              <template v-for="event in systemEvents" :key="event.id">
               <tr
-                v-for="event in systemEvents"
-                :key="event.id"
                 class="cursor-pointer transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 :data-testid="'admin-audit-system-event-row-' + event.id"
                 tabindex="0"
@@ -495,7 +498,7 @@
                   </button>
                 </td>
               </tr>
-              <tr v-if="expandedSystemId">
+              <tr v-if="expandedSystemId === event.id">
                 <td colspan="6" class="border-t bg-muted p-4">
                   <div class="space-y-3">
                     <div v-if="expandedSystemEvent?.payload_json && Object.keys(expandedSystemEvent.payload_json).length > 0">
@@ -521,6 +524,7 @@
                   </div>
                 </td>
               </tr>
+              </template>
             </tbody>
           </table>
         </div>

@@ -51,6 +51,7 @@
               <label for="adminconnectorsview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.type') }}</label>
               <Select
   :aria-label="$t('views.AdminConnectorsView.type')"
+  input-id="adminconnectorsview-field-6"
   v-model="formData.connector_type"
   :placeholder="$t('views.AdminConnectorsView.type_placeholder')"
   data-testid="admin-connectors-type-select"

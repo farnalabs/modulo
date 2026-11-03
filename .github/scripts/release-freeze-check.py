@@ -2,13 +2,13 @@
 """Shared release-freeze gate for merge-queue.yml (FAR-...).
 
 Both the entry `freeze-gate` job and the pre-merge TOCTOU re-verify step ask the
-same question -- is the `release-freeze` tag present right now? They previously
+same question -- is the `release-freeze` branch present right now? They previously
 held two copies of the query + retry + fail-closed logic that could (and did)
 diverge. This helper is the single source of truth so the two safety-critical
 checks stay identical.
 
 Policy (identical for both callers):
-  * Query `gh api .../git/matching-refs/tags/release-freeze` and read the JSON
+  * Query `gh api .../git/matching-refs/heads/release-freeze` and read the JSON
     array length via `--jq 'length'`.
   * Retry up to `FREEZE_GATE_ATTEMPTS` (default 5) times on transient failure
     (no data / non-numeric output / gh error). Backoff is `attempt * BACKOFF`
@@ -38,7 +38,7 @@ def _run_gh(repo: str):
         [
             "gh",
             "api",
-            f"repos/{repo}/git/matching-refs/tags/release-freeze",
+            f"repos/{repo}/git/matching-refs/heads/release-freeze",
             "--jq",
             "length",
         ],
@@ -58,17 +58,17 @@ def _run_query(run_gh, repo: str) -> tuple[int | None, str, str]:
 
 
 def _interpret_query_result(rc: int | None, out: str) -> tuple[str, str] | None:
-    """Return the verdict for a successful tag-count response, else ``None``."""
+    """Return the verdict for a successful branch-count response, else ``None``."""
     if rc != 0 or not out.isdigit():
         return None
     count = int(out)
     if count > 0:
-        return "frozen", f"'release-freeze' tag present (count={count})"
-    return "open", f"no 'release-freeze' tag present (count={count})"
+        return "frozen", f"'release-freeze' branch present (count={count})"
+    return "open", f"no 'release-freeze' branch present (count={count})"
 
 
 def _warn_retry(attempt: int, attempts: int, err: str) -> None:
-    """Emit the retry warning for a failed tag query."""
+    """Emit the retry warning for a failed branch query."""
     print(
         f"::warning::release-freeze query failed (attempt {attempt}/{attempts})"
         + (f": {err}" if err else " - no data")
@@ -82,7 +82,7 @@ def _final_failure(attempts: int, last_stderr: str) -> tuple[str, str]:
     """Return the fail-closed verdict after every attempt failed."""
     return (
         "fail-closed",
-        f"gh api failed querying release-freeze tag after {attempts} attempts"
+        f"gh api failed querying release-freeze branch after {attempts} attempts"
         + (f" - last error: {last_stderr}" if last_stderr else ""),
     )
 
