@@ -443,7 +443,27 @@ def test_terminate_locked_with_no_process() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_teardown_child_escalation_after_grace() -> None:
+@pytest.fixture
+def deterministic_signal_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop teardown tests depending on the host PID table.
+
+    ``_teardown_child_locked`` resolves a child's process group with
+    ``os.getpgid(pid)``. These tests use fixed fake PIDs, so on a busy runner
+    a colliding PID that leads its own group routes the first signal through
+    ``os.killpg`` instead of the double's ``terminate()`` - making the test
+    flaky and signalling an unrelated live process. Force the documented
+    non-group fallback and make the direct-PID signal inert.
+    """
+    monkeypatch.setattr(
+        supervisor_module.os,
+        "getpgid",
+        lambda _pid: (_ for _ in ()).throw(OSError("no such process")),
+    )
+    monkeypatch.setattr(supervisor_module.os, "kill", lambda _pid, _signum: None)
+    monkeypatch.setattr(supervisor_module.os, "killpg", lambda _pgid, _signum: None)
+
+
+def test_teardown_child_escalation_after_grace(deterministic_signal_group: None) -> None:
     """Escalation happens when process ignores first signal and grace elapses."""
     from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
@@ -1323,7 +1343,7 @@ def test_enforce_startup_deadline_probe_process_none() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_teardown_child_escalation_wait_none_then_kill() -> None:
+def test_teardown_child_escalation_wait_none_then_kill(deterministic_signal_group: None) -> None:
     from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     events: list[str] = []
@@ -1544,7 +1564,7 @@ def test_degrade_locked_with_context_provider(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_teardown_child_no_escalate_signal_goes_to_kill() -> None:
+def test_teardown_child_no_escalate_signal_goes_to_kill(deterministic_signal_group: None) -> None:
     from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     events: list[str] = []
@@ -1589,7 +1609,7 @@ def test_teardown_child_no_escalate_signal_goes_to_kill() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_teardown_child_kill_wait_failed_logs() -> None:
+def test_teardown_child_kill_wait_failed_logs(deterministic_signal_group: None) -> None:
     from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     class StubbornProc:
@@ -1630,7 +1650,7 @@ def test_teardown_child_kill_wait_failed_logs() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_teardown_child_first_signal_wait_succeeds() -> None:
+def test_teardown_child_first_signal_wait_succeeds(deterministic_signal_group: None) -> None:
     from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     events: list[str] = []

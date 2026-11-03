@@ -1,4 +1,4 @@
-"""``modulo doctor`` (FAR-671 core checks + FAR-676 full doctor).
+"""``modulo doctor`` (FAR-671 core checks + FAR-676 full doctor + FAR-2316 provider reachability).
 
 Every check is a PURE function over an INJECTED probe interface
 (:class:`DoctorProbes`) so every pass/fail path is unit-testable without
@@ -15,9 +15,9 @@ code  meaning                      recipe (fault injection, no live services)
 0    healthy — all checks pass    default probes back the happy path
 1    unhealthy — a check failed   e.g. redis stopped (``probe_redis`` raises)
 2    degraded — nothing failed    e.g. stale backup older than 7d or ambient
-     but at least one WARNING     PG* env vars (``warning``-severity results)
+      but at least one WARNING     PG* env vars (``warning``-severity results)
 3    uninitialized — the data     no secrets.json / state.json in the data dir
-     dir is not initialized
+      dir is not initialized
 ===  ===========================  ===========================================
 
 Real-machine-only recipes (not CI-reproducible) are annotated inline on the
@@ -72,13 +72,35 @@ Full-doctor checks (FAR-676):
 21. ``stale-backup`` — WARNING when the last recorded backup is older than
     :data:`STALE_BACKUP_SECONDS` (schema v1 records none: honest skip).
 
+Provider reachability check (FAR-2316):
+
+22. ``provider-reachability`` — each configured model backend is probed by its
+    OWN adapter health check (the provider's correct endpoint and auth header,
+    never a guessed URL; no completion). Per backend: ``ok`` /
+    ``error HTTP <code>`` / ``timeout`` / ``unreachable`` / ``error
+    credentials`` / ``error configuration`` / ``skipped (no probe)``. Clock
+    drift comes from the provider's ``Date`` header, and a ``Via`` /
+    ``X-Forwarded-For`` response header is reported as a proxy. Response
+    bodies and credentials are never printed.
+
+    TLS-interception detection is deliberately NOT performed. A server never
+    sends its ROOT CAs — only the leaf and its intermediates — so comparing a
+    served chain against root fingerprints cannot detect an interception, and
+    a sound check needs the served chain, real per-CA fingerprints and the
+    pinned-IP egress transport from :mod:`modulo.core.ssrf`, which is far more
+    machinery than a reachability pre-flight can justify. A detector that
+    cannot detect, or that warns on every healthy TLS deployment, is worse
+    than no detector (FAR-512 pins the transport the probe actually uses, so
+    the connection itself is already the validated one); the check reports the
+    honest proxy hints a health response does carry instead.
+
 ``--fix`` (via :func:`apply_fixes`): orphan cleanup — a stale
 ``postmaster.pid`` / stale per-boot Redis confs / initdb temp debris (the
 supervisor's boot-time reconciliation, refusing a LIVE postgres) — plus
 port re-assignment guidance printed after the sweep.
 
-Every predicate reused from the boot path (“doctor and boot must never
-disagree”): ``bootstrap_role._find_allow_list_violations``,
+Every predicate reused from the boot path ("doctor and boot must never
+disagree"): ``bootstrap_role._find_allow_list_violations``,
 ``health_checks.db_is_at_migration_head``, ``env_safety``, the supervisor
 lock/holder/manifest readers. Windows privilege/ownership/ACL work is
 tracked as deferred P3 work;
@@ -97,12 +119,19 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from modulo.launcher.entry import PGDATA_DIRNAME
-from modulo.util import callable_label
+from modulo.util import callable_label, sanitise_log_value
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from modulo.core.secrets_backend import SecretsBackend
+    from modulo.model_backends.base import ModelBackendBase
 
 _log = logging.getLogger(__name__)
 
@@ -162,6 +191,7 @@ __all__ = [
     "CheckResult",
     "DoctorProbes",
     "apply_fixes",
+    "check_provider_reachability",
     "default_probes",
     "run_doctor",
 ]
@@ -251,6 +281,10 @@ class DoctorProbes:
     # epoch seconds of the data-dir TLS keypair's notAfter, or None when no
     # keypair exists.
     tls_expiry: Callable[[], float | None] = field(default=lambda: None)
+    # per-backend provider reachability rows, or None when the probe is not
+    # wired (the check then reports an honest skip — test doubles and a
+    # not-yet-bootstrapped launcher have no database to read).
+    provider_reachability: Callable[[], list[dict[str, Any]]] | None = field(default=None)
     # vendor description when the data dir sits inside a cloud-sync folder.
     cloud_sync_hit: Callable[[Path], str | None] = field(default=lambda _root: None)
     # the CWD .env path when it exists, else None.
@@ -832,6 +866,333 @@ def check_stale_backup(_data_dir: Path, _state: Any, probes: DoctorProbes) -> Ch
     return CheckResult("stale-backup", True, f"last recorded backup is {age / 86400:.0f} days old")
 
 
+# ---------------------------------------------------------------------------
+# check 22: provider reachability (FAR-2316)
+#
+# The probe deliberately drives the CONFIGURED BACKEND'S OWN health check
+# (``ModelBackendBase.health_check`` / ``openai_compatible_health_check``)
+# instead of re-deriving an endpoint here. That machinery already owns the
+# correct base URL and auth header for every provider, so the doctor can never
+# send a stored credential to a guessed host. A provider whose adapter has no
+# health probe (the base class would perform a real inference call) is
+# reported as ``skipped (no probe)`` — never pointed at a default endpoint.
+# A backend that cannot be CONSTRUCTED from its stored configuration is a
+# failed check (``error configuration``), never a skip: silently skipping it
+# would report the doctor healthy while every model call for that backend
+# fails. Only a provider with no adapter in this process is exonerated.
+# ---------------------------------------------------------------------------
+
+# Clock drift (local UTC vs the provider's ``Date`` header) above this is a WARNING.
+PROVIDER_CLOCK_DRIFT_WARNING_SECONDS = 5.0
+
+# Providers with no external endpoint worth probing (the fixture/stub backend).
+NO_PROBE_PROVIDERS = frozenset({"custom", "stub"})
+
+SKIPPED_NO_PROBE = "skipped (no probe)"
+
+# Markers from ``modulo.core.ssrf``'s fail-closed messages: a backend that
+# cannot even be constructed because its host does not resolve (or resolves to
+# an internal address) is UNREACHABLE, not "no probe" — conflating the two
+# would let the doctor report healthy while every model call fails.
+_UNREACHABLE_BUILD_MARKERS: tuple[str, ...] = (
+    "DNS resolution failed",
+    "DNS resolution timed out",
+    "private/internal network address",
+)
+
+# ``_build_backend`` raises this when no adapter — built-in or plugin — handles
+# the provider in THIS process. That is not a configuration failure: a plugin
+# provider may be installed in the launcher but not loaded by the doctor, so it
+# cannot be verified here and is reported as an honest skip, never failed.
+_NO_ADAPTER_BUILD_MARKER = "Unknown model backend provider"
+
+
+def _provider_result(
+    name: str,
+    *,
+    status: str,
+    ok: bool = False,
+    skipped: bool = False,
+    drift: float | None = None,
+    proxy: str | None = None,
+) -> dict[str, Any]:
+    """One per-backend probe row (the shape ``_summarise_provider_results`` reads)."""
+    return {"name": name, "ok": ok, "status": status, "skipped": skipped, "drift": drift, "proxy": proxy}
+
+
+def check_provider_reachability(data_dir: Path, state: Any, probes: DoctorProbes) -> CheckResult:
+    """Check 22 (FAR-2316) — configured model backends are reachable.
+
+    Runs each configured backend's OWN health check (the provider's correct
+    endpoint and auth header) and reports per backend: ``ok`` /
+    ``error HTTP <code>`` / ``timeout`` / ``unreachable`` / ``error
+    credentials`` / ``error configuration`` / ``skipped (no probe)``, with a
+    clock-drift reading from the provider's ``Date`` header when it sends one.
+
+    A backend that could not be reached, whose credentials are unusable, or
+    that cannot be built from its stored configuration at all fails the check;
+    clock drift and a detected proxy are WARNINGs. Only a provider with no
+    adapter in this process or no dedicated health probe is reported as
+    skipped. Response bodies and credentials are never printed.
+    """
+    if state is None:
+        return CheckResult(
+            "provider-reachability",
+            True,
+            "state.json unreadable — cannot verify model backends (launcher not running)",
+            warning=True,
+        )
+    if not probes.launcher_running():
+        return CheckResult(
+            "provider-reachability",
+            True,
+            "launcher not running — provider reachability check skipped",
+        )
+
+    if probes.provider_reachability is None:
+        return CheckResult(
+            "provider-reachability",
+            True,
+            "provider reachability probe not wired — check skipped",
+        )
+
+    try:
+        results = probes.provider_reachability()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Never a silent pass. The composed database URL carries a password, so
+        # only the exception type is safe to echo into the check detail.
+        _log.warning("provider_reachability probe failed", exc_info=True)
+        return CheckResult(
+            "provider-reachability",
+            False,
+            f"reachability probe failed: {type(exc).__name__}",
+        )
+
+    return _summarise_provider_results(results)
+
+
+def _summarise_provider_results(results: list[dict[str, Any]]) -> CheckResult:
+    """Fold per-backend probe results into one check result (pure)."""
+    if not results:
+        return CheckResult("provider-reachability", True, "no model backends configured — check skipped")
+
+    lines: list[str] = []
+    any_failed = False
+    any_warning = False
+    for result in results:
+        line = f"{result['name']}: {result['status']}"
+        drift = result.get("drift")
+        if drift is not None:
+            line += f" (drift {drift:.1f}s)"
+            if drift > PROVIDER_CLOCK_DRIFT_WARNING_SECONDS:
+                any_warning = True
+        proxy = result.get("proxy")
+        if proxy:
+            line += f" [proxy: {proxy}]"
+            any_warning = True
+        if not result["ok"] and not result.get("skipped", False):
+            any_failed = True
+        lines.append(line)
+
+    detail = "; ".join(lines)
+    if any_failed:
+        return CheckResult("provider-reachability", False, detail)
+    return CheckResult("provider-reachability", True, detail, warning=any_warning)
+
+
+def _provider_reachability_probe(data_dir: Path, state: Any) -> list[dict[str, Any]]:
+    """Synchronous default probe: run the async DB read in a temporary loop."""
+    return asyncio.run(_probe_provider_reachability(data_dir, state))
+
+
+async def _probe_provider_reachability(data_dir: Path, state: Any) -> list[dict[str, Any]]:
+    """Probe every configured model backend in every organisation.
+
+    Reads the configured rows with the admin connection, resolves each row's
+    credentials through the same helper the run-time hub uses (secrets row
+    first, encrypted ``credentials_ciphertext`` fallback), and drives the
+    backend's own ``health_check``. The engine is always disposed.
+    """
+    from sqlalchemy import select, text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    composed = _build_composed_config(data_dir, state)
+    admin_url = composed.get("DATABASE_ADMIN_URL") or ""
+    fernet_key = composed.get("FERNET_KEY") or ""
+    if not admin_url:
+        raise RuntimeError("no composed DATABASE_ADMIN_URL (state/secrets unavailable)")
+    if not fernet_key:
+        raise RuntimeError("no composed FERNET_KEY (secrets unavailable)")
+
+    from modulo.db.models.model_backend import ModelBackend
+    from modulo.db.models.organisation import MODULO_REGISTRY_ORG_ID, SYSTEM_ORG_ID
+    from modulo.db.rls import set_rls_org
+    from modulo.db.url_utils import split_engine_sslmode
+
+    engine_url, ssl_arg = split_engine_sslmode(admin_url)
+    connect_args: dict[str, Any] = {"ssl": ssl_arg} if ssl_arg is not None else {}
+    engine = create_async_engine(engine_url, connect_args=connect_args)
+    results: list[dict[str, Any]] = []
+    try:
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as session:
+            # ``organisations`` is not RLS-scoped, so it can be read before an
+            # org context exists; the reserved instance orgs own no backends.
+            org_rows = await session.execute(
+                text(
+                    "SELECT id FROM organisations "
+                    "WHERE deleted_at IS NULL AND id NOT IN (:system, :registry) "
+                    "ORDER BY created_at ASC"
+                ),
+                {"system": str(SYSTEM_ORG_ID), "registry": str(MODULO_REGISTRY_ORG_ID)},
+            )
+            org_ids = [row[0] for row in org_rows]
+            if not org_ids:
+                return []
+
+            secrets_backend = _build_doctor_secrets_backend(fernet_key, session)
+            for org_id in org_ids:
+                # The secrets table is RLS-scoped; the fernet backend reads the
+                # org from the session, so set it before any credential read.
+                await set_rls_org(session, org_id)
+                rows = (
+                    await session.execute(
+                        select(ModelBackend)
+                        .where(
+                            ModelBackend.organisation_id == org_id,
+                            ModelBackend.tier != "in_dev",
+                        )
+                        .order_by(ModelBackend.name)
+                    )
+                ).scalars()
+                results.extend([await _probe_backend_row(row, secrets_backend) for row in rows])
+        return results
+    finally:
+        await engine.dispose()
+
+
+def _build_doctor_secrets_backend(fernet_key: str, session: "AsyncSession") -> "SecretsBackend":
+    """Build the configured secrets backend, falling back to the DB fernet store.
+
+    The native launcher always stores secrets encrypted in the ``secrets``
+    table, so a deployment whose configured external backend cannot initialise
+    here is still readable — fail open with a log, never with an empty
+    credential dict.
+    """
+    from modulo.core.secrets_backend import create_secrets_backend
+    from modulo.core.secrets_backend.fernet import FernetSecretsBackend
+
+    try:
+        return create_secrets_backend(fernet_key=fernet_key, session=session)
+    except Exception as exc:
+        _log.warning(
+            "provider_reachability: configured secrets backend unavailable (%s); reading the DB secrets table directly",
+            type(exc).__name__,
+        )
+        return FernetSecretsBackend(fernet_key=fernet_key, session=session)
+
+
+def _build_failure_means_unreachable(exc: Exception) -> bool:
+    """True when a backend could not be built because its endpoint is unreachable."""
+    message = str(exc)
+    return any(marker in message for marker in _UNREACHABLE_BUILD_MARKERS)
+
+
+async def _probe_backend_row(row: Any, secrets_backend: "SecretsBackend") -> dict[str, Any]:
+    """Resolve one configured row's credentials and run its own health check."""
+    from modulo.core.model_backend_hub import _instantiate_backend, _resolve_backend_credentials
+
+    name = f"{row.provider}/{row.name}"
+    if row.provider in NO_PROBE_PROVIDERS:
+        return _provider_result(name, status=SKIPPED_NO_PROBE, skipped=True)
+
+    try:
+        creds = await _resolve_backend_credentials(row, secrets_backend)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning("provider_reachability: credentials unavailable for %s (%s)", name, type(exc).__name__)
+        return _provider_result(name, status=f"error credentials ({type(exc).__name__})")
+    if creds is None:
+        _log.warning("provider_reachability: credentials unresolved for %s", name)
+        return _provider_result(name, status="error credentials (unresolved)")
+
+    try:
+        backend = _instantiate_backend(row, creds)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # An unresolvable/blocked host is a real reachability failure. A
+        # provider with no adapter in this process cannot be verified here, so
+        # it is an honest skip (a plugin may supply it in the launcher). Every
+        # OTHER construction failure — a missing credential field, a broken
+        # plugin build — means the configured backend is unusable at run time
+        # too; surfacing it as a failed check is the point of this probe, so
+        # never downgrade it to a silent "no probe" skip.
+        if _build_failure_means_unreachable(exc):
+            _log.warning("provider_reachability: endpoint unresolvable for %s (%s)", name, type(exc).__name__)
+            return _provider_result(name, status=f"unreachable ({type(exc).__name__})")
+        if _NO_ADAPTER_BUILD_MARKER in str(exc):
+            _log.warning("provider_reachability: no adapter for %s (%s)", name, type(exc).__name__)
+            return _provider_result(name, status=SKIPPED_NO_PROBE, skipped=True)
+        _log.warning("provider_reachability: backend not constructible for %s (%s)", name, type(exc).__name__)
+        return _provider_result(name, status=f"error configuration ({type(exc).__name__})")
+
+    return await _run_backend_health_check(backend, name)
+
+
+async def _run_backend_health_check(backend: "ModelBackendBase", name: str) -> dict[str, Any]:
+    """Run one built backend's health check and map it to a body-free status."""
+    from modulo.model_backends.base import HEALTH_CHECK_TIMEOUT, ModelBackendBase
+
+    if type(backend).health_check is ModelBackendBase.health_check:
+        # The base implementation invokes the model (a real completion), not a
+        # reachability probe — skip rather than spend tokens or guess an endpoint.
+        return _provider_result(name, status=SKIPPED_NO_PROBE, skipped=True)
+
+    try:
+        health = await asyncio.wait_for(backend.health_check(), timeout=HEALTH_CHECK_TIMEOUT)
+    except asyncio.CancelledError:
+        raise
+    except TimeoutError:
+        return _provider_result(name, status="timeout")
+    except Exception as exc:
+        _log.warning("provider_reachability: health check raised for %s (%s)", name, type(exc).__name__)
+        return _provider_result(name, status=f"unreachable ({type(exc).__name__})")
+    finally:
+        await _close_backend(backend)
+
+    drift: float | None = None
+    if health.server_time is not None:
+        drift = abs((datetime.now(UTC) - health.server_time).total_seconds())
+    proxy = sanitise_log_value(health.proxy_via, limit=120) if health.proxy_via else None
+
+    if health.ok:
+        return _provider_result(name, status="ok", ok=True, drift=drift, proxy=proxy)
+    if health.error_kind == "timeout":
+        status = "timeout"
+    elif health.status_code is not None:
+        # Status only: the provider's response body is never echoed (it can
+        # contain request details the credential was attached to).
+        status = f"error HTTP {health.status_code}"
+    else:
+        status = "unreachable"
+    return _provider_result(name, status=status, drift=drift, proxy=proxy)
+
+
+async def _close_backend(backend: "ModelBackendBase") -> None:
+    """Close a backend's owned HTTP client/transport; a failure is logged, not raised."""
+    close = getattr(backend, "aclose", None)
+    if close is None:
+        return
+    try:
+        await close()
+    except Exception as exc:
+        _log.warning("provider_reachability: backend close failed (%s)", type(exc).__name__)
+
+
 _CHECKS: tuple[Callable[[Path, Any, DoctorProbes], CheckResult], ...] = (
     check_data_dir,
     check_ports,
@@ -853,6 +1214,7 @@ _CHECKS: tuple[Callable[[Path, Any, DoctorProbes], CheckResult], ...] = (
     check_degraded,
     check_tls_expiry,
     check_stale_backup,
+    check_provider_reachability,
 )
 
 # crash-time check names must match the names the checks themselves emit.
@@ -877,6 +1239,7 @@ _CRASH_NAMES: dict[str, str] = {
     "check_degraded": "degraded",
     "check_tls_expiry": "tls",
     "check_stale_backup": "stale-backup",
+    "check_provider_reachability": "provider-reachability",
 }
 
 _KIND_CHECK_NAME = "state-integrity"
@@ -1061,7 +1424,10 @@ def _probe_ambient_env_names(_data_dir: Path) -> list[str]:
 
 def _probe_available_memory_bytes(_data_dir: Path) -> int | None:
     try:
-        import psutil  # type: ignore[import-untyped]
+        # psutil ships types on some installs (typeshed) and is untyped on
+        # others, so this ignore is required by CI and unused locally —
+        # `unused-ignore` keeps both environments green.
+        import psutil  # type: ignore[import-untyped, unused-ignore]
 
         return int(psutil.virtual_memory().available)
     except Exception as exc:  # psutil unavailable: fall through to /proc (honest None)
@@ -1390,6 +1756,7 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         port_owner_description=_probe_port_owner_description,
         last_backup_at=partial(_probe_last_backup_at, state),
         tls_expiry=partial(_probe_tls_keypair_expiry, data_dir),
+        provider_reachability=partial(_provider_reachability_probe, data_dir, state),
         cwd_env_file=_cwd_env_file(),
         env_file_pinned=_probe_env_file_pinned,
         launcher_running=partial(_probe_launcher_running, data_dir),

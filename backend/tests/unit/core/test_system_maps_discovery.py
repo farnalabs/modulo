@@ -91,3 +91,28 @@ def test_supported_sources_without_skips_do_not_warn() -> None:
     assert draft.node_count == 1
     assert not draft.skipped
     assert not draft.warnings
+
+
+def test_rescan_tracks_added_and_removed_sources_by_node_identity() -> None:
+    pipeline = DiscoverySource(kind="pipeline", identifier="p1", name="build")
+    trigger = DiscoverySource(kind="trigger", identifier="t1", name="push", pipeline_id="p1")
+
+    initial = discover_draft([pipeline, trigger])
+    rescanned = discover_draft([pipeline, trigger, DiscoverySource(kind="pipeline", identifier="p2", name="deploy")])
+    removed = discover_draft([pipeline])
+
+    initial_keys = {node["node_key"] for node in initial.nodes}
+    rescanned_keys = {node["node_key"] for node in rescanned.nodes}
+    removed_keys = {node["node_key"] for node in removed.nodes}
+
+    assert rescanned_keys - initial_keys == {"pipeline:p2"}
+    assert not initial_keys - rescanned_keys
+    assert initial_keys - removed_keys == {"trigger:t1"}
+
+
+def test_rescan_rename_keeps_node_identity_and_updates_its_name() -> None:
+    before = discover_draft([DiscoverySource(kind="pipeline", identifier="p1", name="build")])
+    after = discover_draft([DiscoverySource(kind="pipeline", identifier="p1", name="build-v2")])
+
+    assert [node["node_key"] for node in after.nodes] == [node["node_key"] for node in before.nodes]
+    assert after.nodes[0]["display_name"] == "build-v2"

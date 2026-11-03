@@ -105,6 +105,7 @@ def stage_bundle(
     launcher: Path,
     *,
     preserve_existing: bool = False,
+    version: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     assert POWERSHELL is not None
     command = [POWERSHELL, "-NoProfile", "-NonInteractive"]
@@ -117,6 +118,8 @@ def stage_bundle(
         f"-SitePackagesSource '{site_packages}' -FrontendDistSource '{frontend_dist}' "
         f"-LauncherPath '{launcher}'"
     )
+    if version is not None:
+        invocation += f" -Version '{version}'"
     if preserve_existing:
         invocation += " -PreserveExisting"
     command += ["-Command", invocation]
@@ -281,6 +284,36 @@ def test_offline_staged_payload_contract(tmp_path: Path, repo_root: Path) -> Non
     ]
     for path in expected_files:
         assert path.is_file(), path
+
+
+@requires_powershell
+def test_staged_bundle_writes_the_runtime_marker_the_installer_requires(tmp_path: Path, repo_root: Path) -> None:
+    """modulo.iss refuses to compile without modulo-runtime.json at the bundle root."""
+    assert POWERSHELL is not None  # guaranteed by requires_powershell
+    script = repo_root / "scripts" / "windows" / "build-launcher.ps1"
+    fixture = tmp_path / "fixture"
+    python_root = fixture / "python"
+    backend_source = fixture / "backend-src"
+    site_packages = fixture / "site-packages"
+    frontend_dist = fixture / "frontend-dist"
+    launcher = fixture / "modulo.exe"
+    for directory in (python_root, backend_source / "modulo", site_packages, frontend_dist):
+        directory.mkdir(parents=True)
+    (python_root / "python.exe").write_bytes(b"python")
+    (python_root / "python312.dll").write_bytes(b"dll")
+    (backend_source / "modulo" / "__init__.py").write_text("", encoding="utf-8")
+    (frontend_dist / "index.html").write_text("ok", encoding="utf-8")
+    launcher.write_bytes(b"launcher")
+    stage = tmp_path / "stage"
+    result = stage_bundle(
+        script, stage, python_root, backend_source, site_packages, frontend_dist, launcher, version="1.2.3"
+    )
+    assert result.returncode == 0, result.stderr
+    marker = json.loads((stage / "modulo-runtime.json").read_text(encoding="utf-8"))
+    assert marker["contract"] == "native-windows-v1"
+    assert marker["version"] == "1.2.3"
+    assert (stage / "bin" / "modulo.exe").is_file()
+    assert not (stage / "modulo.exe").exists()
 
 
 @requires_powershell

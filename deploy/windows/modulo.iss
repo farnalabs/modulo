@@ -9,9 +9,11 @@
 ;   MODULO_URL  - local URL opened by the post-install checkbox
 ;
 ; Bundle contract:
-;   BUNDLE_DIR\modulo.exe
+;   BUNDLE_DIR\bin\modulo.exe
 ;   BUNDLE_DIR\modulo-runtime.json
-; The marker is part of the native launcher contract. It must be shipped by
+; The launcher lives in bin\ because it resolves the bundle root as the parent of
+; its own directory (runtime\, backend\, pg\, redis\ are siblings of bin\), so it
+; installs to {app}\bin\modulo.exe. The marker is part of the native launcher contract. It must be shipped by
 ; the real runtime build and is deliberately required at compile time.
 ;
 ; Build example:
@@ -50,9 +52,9 @@
 ; an ISPP expression - inline {#name} substitution only happens on ordinary
 ; lines. So the bundle checks below use BUNDLE_DIR as an expression rather than
 ; "{#BUNDLE_DIR}", which would test for a file literally named {#BUNDLE_DIR}.
-#ifexist BUNDLE_DIR + "\modulo.exe"
+#ifexist BUNDLE_DIR + "\bin\modulo.exe"
 #else
-  #error Required native runtime executable is missing from the bundle (BUNDLE_DIR\modulo.exe)
+  #error Required native runtime executable is missing from the bundle (BUNDLE_DIR\bin\modulo.exe)
 #endif
 #ifexist BUNDLE_DIR + "\modulo-runtime.json"
 #else
@@ -73,8 +75,17 @@ OutputBaseFilename=modulo-{#VERSION_NUM}-windows-{#BUNDLE_ARCH}
 Compression=lzma2/ultra64
 SolidCompression=yes
 PrivilegesRequired=admin
+; x64compatible was introduced by Inno Setup 6.3, which deprecated x64. The
+; release workflow still pins 6.2.2, which only knows x64, so the identifier is
+; version-gated rather than swapped: the newer compiler then emits no
+; deprecation warning and the older one still compiles.
+#if VER >= EncodeVer(6,3,0)
+ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed=x64compatible
+#else
 ArchitecturesInstallIn64BitMode=x64
 ArchitecturesAllowed=x64
+#endif
 DisableProgramGroupPage=yes
 DisableDirPage=auto
 DisableReadyMemo=yes
@@ -85,7 +96,7 @@ AppId={{7B7A9F3B-69DA-4EA0-9EB8-0D8F2D4B8A6B}}
 LicenseFile={#SourcePath}\..\..\LICENSE
 InfoBeforeFile={#SourcePath}\INSTALLER-INFO.txt
 Uninstallable=yes
-UninstallDisplayIcon={app}\modulo.exe
+UninstallDisplayIcon={app}\bin\modulo.exe
 UninstallDisplayName=Modulo {#VERSION_NUM}
 CloseApplications=yes
 RestartApplications=yes
@@ -100,17 +111,17 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; The compile-time contract above is the primary guard. These explicit entries
 ; keep the installer payload contract visible and prevent optional-source flags
 ; from turning a missing runtime into a partial installation.
-Source: "{#BUNDLE_DIR}\modulo.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BUNDLE_DIR}\bin\modulo.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "{#BUNDLE_DIR}\modulo-runtime.json"; DestDir: "{app}"; Flags: ignoreversion
 ; Everything else the bundle ships. skipifsourcedoesntexist is deliberate: the
 ; declared bundle contract is exactly the two files above, so a conforming
 ; bundle leaves this wildcard with nothing to copy, which Inno Setup otherwise
 ; rejects as "No files found matching ...".
-Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "modulo.exe,modulo-runtime.json"
+Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "bin\modulo.exe,modulo-runtime.json"
 
 [Icons]
-Name: "{group}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"
-Name: "{commondesktop}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Modulo"; Filename: "{app}\bin\modulo.exe"; WorkingDir: "{app}"
+Name: "{commondesktop}\Modulo"; Filename: "{app}\bin\modulo.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
 ; Service registration lives in [Code] (RegisterService) rather than here, so
@@ -119,8 +130,8 @@ Name: "{commondesktop}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}
 Filename: "{#MODULO_URL}"; Description: "Open Modulo in your browser"; Flags: postinstall shellexec unchecked; Check: ShouldOpenModulo
 
 [UninstallRun]
-Filename: "sc.exe"; Parameters: "stop Modulo"; StatusMsg: "Stopping Modulo service..."; Flags: runhidden waituntilterminated
-Filename: "sc.exe"; Parameters: "delete Modulo"; StatusMsg: "Removing Modulo service..."; Flags: runhidden waituntilterminated
+Filename: "sc.exe"; Parameters: "stop Modulo"; StatusMsg: "Stopping Modulo service..."; Flags: runhidden waituntilterminated; RunOnceId: "StopModuloService"
+Filename: "sc.exe"; Parameters: "delete Modulo"; StatusMsg: "Removing Modulo service..."; Flags: runhidden waituntilterminated; RunOnceId: "DeleteModuloService"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -450,11 +461,14 @@ var
   ServiceExe: string;
 begin
   Result := False;
-  ServiceExe := ExpandConstant('{app}') + '\modulo.exe';
+  ServiceExe := ExpandConstant('{app}') + '\bin\modulo.exe';
 
   SetStage('service registration (create)');
+  { Only the executable path is quoted. The launcher argument must sit OUTSIDE
+    those quotes so sc.exe stores ImagePath as the executable, not as
+    "<path> service" - a path that does not exist. }
   if not Exec('sc.exe',
-    'create Modulo binPath= "' + ServiceExe + ' service" start= auto',
+    'create Modulo binPath= "' + ServiceExe + '" service start= auto',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
     WriteInstallLog('sc.exe create could not be started');

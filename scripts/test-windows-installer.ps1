@@ -100,11 +100,20 @@ $validBundle = [System.IO.Path]::Combine($tempRoot, 'valid')
 $outputDir = [System.IO.Path]::Combine($tempRoot, 'output')
 $redactDir = [System.IO.Path]::Combine($tempRoot, 'redact')
 $launcherProbeDir = [System.IO.Path]::Combine($tempRoot, 'launcher-probe')
+$rootExeBundle = [System.IO.Path]::Combine($tempRoot, 'root-exe')
+$stagedFixtureDir = [System.IO.Path]::Combine($tempRoot, 'staged-fixture')
+$stagedBundle = [System.IO.Path]::Combine($tempRoot, 'staged')
 
-New-Item -ItemType Directory -Path $missingExeBundle, $missingMarkerBundle, $validBundle, $outputDir, $redactDir, $launcherProbeDir -Force | Out-Null
+New-Item -ItemType Directory -Path $missingExeBundle, $missingMarkerBundle, $validBundle, $outputDir, $redactDir, $launcherProbeDir, $rootExeBundle -Force | Out-Null
 
 [System.IO.File]::WriteAllText([System.IO.Path]::Combine($missingExeBundle, 'modulo-runtime.json'), '{"contract":"native-windows-v1"}')
-[System.IO.File]::WriteAllText([System.IO.Path]::Combine($missingMarkerBundle, 'modulo.exe'), 'placeholder')
+# The launcher resolves the bundle root as the parent of its own directory, so
+# the contract path is bin\modulo.exe. A launcher at the bundle root is the old,
+# wrong layout and must not satisfy the installer.
+New-Item -ItemType Directory -Path ([System.IO.Path]::Combine($missingMarkerBundle, 'bin')) -Force | Out-Null
+[System.IO.File]::WriteAllText([System.IO.Path]::Combine($missingMarkerBundle, 'bin', 'modulo.exe'), 'placeholder')
+[System.IO.File]::WriteAllText([System.IO.Path]::Combine($rootExeBundle, 'modulo.exe'), 'placeholder')
+[System.IO.File]::WriteAllText([System.IO.Path]::Combine($rootExeBundle, 'modulo-runtime.json'), '{"contract":"native-windows-v1"}')
 
 function Invoke-Iscc {
     param(
@@ -287,6 +296,13 @@ try {
             throw "Installer compiled despite missing modulo.exe."
         }
 
+        Write-Output "Checking that a bundle with modulo.exe at the root (not bin) fails compilation..."
+        $result = Invoke-Iscc -BundleDir $rootExeBundle -OutputName 'root-exe-contract' -CaseName 'root-exe'
+        Write-Output "Root modulo.exe compile exit code: $($result.ExitCode)"
+        if ($result.ExitCode -eq 0) {
+            throw "Installer compiled although modulo.exe is not at bin\modulo.exe."
+        }
+
         Write-Output "Checking that a bundle missing modulo-runtime.json fails compilation..."
         $result = Invoke-Iscc -BundleDir $missingMarkerBundle -OutputName 'missing-marker-contract' -CaseName 'missing-marker'
         Write-Output "Missing modulo-runtime.json compile exit code: $($result.ExitCode)"
@@ -294,7 +310,8 @@ try {
             throw "Installer compiled despite missing modulo-runtime.json."
         }
 
-        [System.IO.File]::WriteAllText([System.IO.Path]::Combine($validBundle, 'modulo.exe'), 'placeholder')
+        New-Item -ItemType Directory -Path ([System.IO.Path]::Combine($validBundle, 'bin')) -Force | Out-Null
+        [System.IO.File]::WriteAllText([System.IO.Path]::Combine($validBundle, 'bin', 'modulo.exe'), 'placeholder')
         [System.IO.File]::WriteAllText([System.IO.Path]::Combine($validBundle, 'modulo-runtime.json'), '{"contract":"native-windows-v1"}')
 
         Write-Output "Checking that the declared bundle contract compiles..."
@@ -305,7 +322,59 @@ try {
             throw "Installer failed to compile the declared bundle contract."
         }
         $proofsRun += 'ISCC compile'
-        Write-Output "PASS: ISCC compiled the installer and rejected both incomplete bundles."
+        Write-Output "PASS: ISCC compiled the installer and rejected the incomplete bundles."
+    } else {
+        Write-Warning "ISCC not found: compilation was NOT verified on this host. The windows-installer CI job compiles it on a Windows runner."
+    }
+
+    # --- Proof 1b: the real staging function produces a bundle the .iss accepts ---
+    # Structural half (no ISCC needed): stage a tiny fake payload through
+    # Invoke-WindowsBundleStaging and check the layout against the .iss contract.
+    # Compile half (ISCC only): compile the .iss against that staged directory, so
+    # the contract is proven against the producer, not only a hand-made fixture.
+    # No signing secret is involved; the launcher is a placeholder byte string.
+    Write-Output ""
+    Write-Output "=== Proof 1b: bundle staged by Invoke-WindowsBundleStaging ==="
+    $fxPython = [System.IO.Path]::Combine($stagedFixtureDir, 'python')
+    $fxBackend = [System.IO.Path]::Combine($stagedFixtureDir, 'backend-src')
+    $fxSite = [System.IO.Path]::Combine($stagedFixtureDir, 'site-packages')
+    $fxFrontend = [System.IO.Path]::Combine($stagedFixtureDir, 'frontend-dist')
+    $fxLauncher = [System.IO.Path]::Combine($stagedFixtureDir, 'launcher.exe')
+    New-Item -ItemType Directory -Path $fxPython, ([System.IO.Path]::Combine($fxBackend, 'modulo')), $fxSite, $fxFrontend -Force | Out-Null
+    [System.IO.File]::WriteAllText([System.IO.Path]::Combine($fxPython, 'python.exe'), 'python')
+    [System.IO.File]::WriteAllText([System.IO.Path]::Combine($fxPython, 'python312.dll'), 'dll')
+    [System.IO.File]::WriteAllText([System.IO.Path]::Combine($fxBackend, 'modulo', '__init__.py'), '')
+    [System.IO.File]::WriteAllText([System.IO.Path]::Combine($fxFrontend, 'index.html'), 'ok')
+    [System.IO.File]::WriteAllText($fxLauncher, 'launcher')
+    # Dot-sourced inside a child scope: the script sets Set-StrictMode, which
+    # must not leak into the rest of this test.
+    $stagingScript = [System.IO.Path]::Combine($repoRoot, 'scripts', 'windows', 'build-launcher.ps1')
+    & {
+        . $stagingScript
+        Invoke-WindowsBundleStaging -StagePath $stagedBundle -PythonRoot $fxPython -BackendSource $fxBackend -SitePackagesSource $fxSite -FrontendDistSource $fxFrontend -LauncherPath $fxLauncher -Version $Version | Out-Null
+    }
+    foreach ($contractPath in @('bin\modulo.exe', 'modulo-runtime.json')) {
+        if (-not (Test-Path -LiteralPath ([System.IO.Path]::Combine($stagedBundle, $contractPath)) -PathType Leaf)) {
+            throw "Staged bundle does not satisfy the modulo.iss contract: missing $contractPath"
+        }
+    }
+    $stagedMarker = Get-Content -LiteralPath ([System.IO.Path]::Combine($stagedBundle, 'modulo-runtime.json')) -Raw | ConvertFrom-Json
+    if ($stagedMarker.contract -ne 'native-windows-v1') {
+        throw "Staged modulo-runtime.json has contract '$($stagedMarker.contract)', expected 'native-windows-v1'."
+    }
+    if ($stagedMarker.version -ne $Version) {
+        throw "Staged modulo-runtime.json has version '$($stagedMarker.version)', expected '$Version'."
+    }
+    $proofsRun += 'staged bundle layout'
+    Write-Output "PASS: staging wrote bin\modulo.exe and a valid modulo-runtime.json."
+    if ($isccPath) {
+        $result = Invoke-Iscc -BundleDir $stagedBundle -OutputName 'staged-contract' -CaseName 'staged-contract'
+        Write-Output "Staged bundle compile exit code: $($result.ExitCode)"
+        if ($result.ExitCode -ne 0 -or -not (Test-Path -LiteralPath ([System.IO.Path]::Combine($outputDir, 'staged-contract.exe')) -PathType Leaf)) {
+            throw "Installer failed to compile a bundle produced by Invoke-WindowsBundleStaging."
+        }
+        $proofsRun += 'ISCC compile (staged bundle)'
+        Write-Output "PASS: ISCC compiled the installer against the staged bundle."
     } else {
         Write-Warning "ISCC not found: compilation was NOT verified on this host. The windows-installer CI job compiles it on a Windows runner."
     }

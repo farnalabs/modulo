@@ -479,6 +479,11 @@ ignore = [
 [tool.mypy]
 strict = true
 python_version = "3.12"
+# The deployment target (and every CI runner) is Linux. Without this, mypy
+# infers the stdlib surface from the host, so the SAME command reports
+# POSIX-only calls in the launcher (fcntl.flock, os.getpgid, os.killpg) as
+# errors on a Windows dev box while CI stays green - which makes the pre-push
+# gate (it runs this exact command) unpassable off Linux.
 platform = "linux"
 plugins = ["pydantic.mypy"]
 exclude = ["migrations/"]
@@ -627,7 +632,14 @@ parallel = true
 # correct code (FAR-247). ``thread`` is retained for the TestClient portal.
 concurrency = ["thread", "greenlet"]
 source = ["src/modulo"]
-omit = ["*/tests/*", "*/migrations/*", "*/stub/*"]
+# `_far252_dead_probe.py` is a TRANSIENT fixture: the vulture gate tests write it
+# into `src/modulo` and unlink it in a `finally`. Coverage's un-executed-source
+# scan (`find_possibly_unexecuted_files`) walks every `.py` under `source` when a
+# worker saves its data, so if one xdist worker saves while another is running a
+# probe test the probe is touched into the data with no lines - and the combine
+# job then dies with "No source for code" because the file is gone. Omit the
+# probe so a transient test fixture can never enter the coverage data.
+omit = ["*/tests/*", "*/migrations/*", "*/stub/*", "*/_far252_dead_probe.py"]
 
 [tool.coverage.report]
 fail_under = 89
