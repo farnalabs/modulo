@@ -33,6 +33,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -218,3 +219,22 @@ def test_whitelist_exists_and_names_framework_symbols() -> None:
     content = WHITELIST.read_text(encoding="utf-8")
     for symbol in ("CursorResult", "Dialect", "compiler", "element", "version_id", "circuit_state"):
         assert f'"{symbol}"' in content, f"whitelist does not name framework-contract symbol {symbol!r}"
+
+
+def test_transient_probe_is_omitted_from_coverage() -> None:
+    """Coverage must never record the transient probe as an un-executed source.
+
+    The probe lives under ``src/modulo`` only while the gate tests run. If
+    coverage's un-executed-source scan lists it, the path is written into a
+    shard's data file, and the combine job's ``coverage xml`` fails with
+    "No source for code" once the probe has been unlinked (observed on
+    PR #2775). ``[tool.coverage.run] omit`` is the mechanism that keeps it out.
+    """
+    pyproject = REPO_ROOT / "backend" / "pyproject.toml"
+    config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    omit = config["tool"]["coverage"]["run"]["omit"]
+    assert "*/_far252_dead_probe.py" in omit, (
+        "backend/pyproject.toml [tool.coverage.run] omit must list '*/_far252_dead_probe.py': the vulture gate "
+        "writes that transient file into src/modulo, and without the omit coverage records it and the CI "
+        "combine job fails with 'No source for code'."
+    )
