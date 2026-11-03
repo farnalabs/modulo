@@ -201,10 +201,9 @@ jobs:
       attestations: write
     outputs:
       # Bound to the always-run normaliser below rather than an `||` chain over
-      # the conditionally-skipped cut/recut steps. In run 41655117202 the
-      # `||` form handed the macos-installer job an empty rc_tag even though
-      # bundle received the correct one; the explicit step makes the value
-      # single-sourced and observable in the job log.
+      # the conditionally-skipped cut/recut steps, so the value is single-sourced
+      # and observable in the job log. The normaliser covers all three publishing
+      # modes - promote never runs cut/recut, so it needs its own arm (FAR-2339).
       rc_tag: ${{ steps.rc-output.outputs.rc_tag }}
       ga_tag: ${{ steps.promote.outputs.ga_tag }}
       all_in_one_digest: ${{ steps.publish_images.outputs.all_in_one_digest || steps.retag_images.outputs.all_in_one_digest }}
@@ -1416,14 +1415,21 @@ jobs:
           echo "All GA publication steps succeeded; freeze lifted and merge queue resumes."
 
       # Final step of the release job: normalise the release candidate tag into
-      # the job output consumed by bundle / macos-installer / windows-installer.
-      # `if: always()` so it still runs when cut/recut failed or was skipped,
-      # and the per-mode step outputs are read through env rather than an `||`
-      # expression so the value does not depend on short-circuit behaviour
-      # across conditionally-skipped steps (run 41655117202: release and bundle
-      # succeeded, macos-installer failed with "rc_tag input is required").
-      # Promote mode never sets cut/recut outputs, so it cannot capture a GA
-      # value here.
+      # the job output consumed by bundle / macos-installer / windows-installer /
+      # final-release-manifest / publish-release. `if: always()` so the output is
+      # still recorded when cut/recut/promote failed or was skipped. The value is
+      # read through env with one arm per publishing mode, and the FIRST non-empty
+      # arm wins: the modes are mutually exclusive, so concatenating the arms
+      # would only ever paper over a mistake.
+      #
+      # FAR-2339 note - run 41655117202 did NOT fail at this boundary: the caller
+      # handed `rc_tag: v0.3.324-rc6` to every reusable workflow (see the macOS
+      # job's `##[group] Inputs`). It failed because macos-installer.yml then
+      # overwrote its own call inputs with the caller's `github.event.inputs.*`,
+      # which carry no rc_tag; that is fixed separately (FAR-2327). This
+      # normaliser exists so the boundary is single-sourced, and so an empty
+      # value fails in the job that owns it rather than ~20 minutes later inside
+      # a reusable workflow's own input validation.
       - name: Expose release candidate tag
         id: rc-output
         if: always()
@@ -1431,11 +1437,36 @@ jobs:
         env:
           CUT_RC_TAG: ${{ steps.cut.outputs.rc_tag }}
           RECUT_RC_TAG: ${{ steps.recut.outputs.rc_tag }}
+          PROMOTE_RC_TAG: ${{ steps.promote.outputs.rc_tag }}
         run: |
           set -euo pipefail
-          rc_tag="${CUT_RC_TAG:-}${RECUT_RC_TAG:-}"
+          rc_tag=""
+          for candidate in "${CUT_RC_TAG:-}" "${RECUT_RC_TAG:-}" "${PROMOTE_RC_TAG:-}"; do
+            if [ -n "$candidate" ]; then
+              rc_tag="$candidate"
+              break
+            fi
+          done
           echo "rc_tag=${rc_tag}" >> "$GITHUB_OUTPUT"
           echo "Release candidate tag exposed to dependent jobs: '${rc_tag}'"
+
+      # FAR-2339 regression guard: every downstream job takes
+      # `needs.release.outputs.rc_tag` as BOTH the RC tag and the checkout ref,
+      # so a blank value must fail the job that owns it. Deliberately left on the
+      # default success() condition - when cut/recut/promote already failed the
+      # job is failing for its own reason and this must not mask that.
+      - name: Assert the resolved RC tag is non-empty
+        env:
+          MODE: ${{ inputs.mode }}
+          RC_TAG: ${{ steps.rc-output.outputs.rc_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$RC_TAG" ]; then
+            echo "::error::Resolved rc_tag is empty for mode '${MODE}'. The cut/recut/promote step that owns it did not run or did not emit rc_tag, so dependent jobs would receive a blank RC tag and checkout ref. Refusing to continue."
+            exit 1
+          fi
+          echo "Resolved rc_tag for mode '${MODE}': ${RC_TAG}"
 
   # ---------------------------------------------------------------------------
 
