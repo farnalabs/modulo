@@ -63,28 +63,29 @@ function terminalRun(overrides: Record<string, unknown> = {}): Record<string, un
 }
 
 // Registered AFTER loginAsAdmin (which installs the catch-all mock), so these
-// specific routes take precedence over it for this run id.
-async function mockRun(page: Page, run: Record<string, unknown>): Promise<void> {
-  await page.route(`**/api/v1/runs/${RUN_ID}`, (route) => {
+// specific routes take precedence over it for this run id. `runId` defaults to
+// the metadata fixture's id; FAR-2354 passes a real 36-char uuid instead.
+async function mockRun(page: Page, run: Record<string, unknown>, runId: string = RUN_ID): Promise<void> {
+  await page.route(`**/api/v1/runs/${runId}`, (route) => {
     if (route.request().method() === 'GET') {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(run) })
     }
     return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
   })
-  await page.route(`**/api/v1/runs/${RUN_ID}/io`, (route) =>
+  await page.route(`**/api/v1/runs/${runId}/io`, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ outputs_json: null, input_payload: null }) }),
   )
-  await page.route(`**/api/v1/runs/${RUN_ID}/hitl/pending`, (route) =>
+  await page.route(`**/api/v1/runs/${runId}/hitl/pending`, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reviews: [] }) }),
   )
-  await page.route(`**/api/v1/runs/${RUN_ID}/events*`, (route) =>
+  await page.route(`**/api/v1/runs/${runId}/events*`, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: [] }) }),
   )
 }
 
-async function openRunDetail(page: Page, run: Record<string, unknown>): Promise<void> {
-  await mockRun(page, run)
-  await page.goto(`/runs/${RUN_ID}`)
+async function openRunDetail(page: Page, run: Record<string, unknown>, runId: string = RUN_ID): Promise<void> {
+  await mockRun(page, run, runId)
+  await page.goto(`/runs/${runId}`)
   await expect(page.getByTestId('run-detail-heartbeat')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -175,5 +176,95 @@ test.describe('Run detail metadata + heartbeat (FAR-1839)', { tag: '@regression'
     // ...and the block itself never scrolls horizontally.
     const box = await list.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
     expect(box.scrollWidth, `metadata block overflows: ${JSON.stringify(box)}`).toBeLessThanOrEqual(box.clientWidth + 1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FAR-2354: the run detail "Copy support reference" control.
+//
+// The control was verified by hand once and had no browser coverage, so a
+// refactor could silently drop the full run uuid or the error code and CI
+// would stay green. The payload is built by the shared
+// `lib/supportReference` helper; this spec pins what actually lands on the
+// clipboard, from the real view, through the real Clipboard API.
+// ---------------------------------------------------------------------------
+
+/** A real 36-char uuid, so a truncated display id (`shortId`) cannot pass. */
+const SUPPORT_RUN_ID = '7f3c1e2a-9b4d-4c6e-8a15-2d9e4b7c1f30'
+const SUPPORT_PIPELINE_ID = 'b2a4d6f8-1c3e-4a5b-9d7f-0e2c4a6b8d10'
+const SUPPORT_PIPELINE_NAME = 'Support Reference Pipeline'
+const SUPPORT_ERROR_CODE = 'node_failed'
+
+/**
+ * Assert the clipboard holds `expected` and return the text that was read, so
+ * a failing run can report the raw payload rather than only "not equal".
+ *
+ * `expect.poll` is the wait, not a sleep: the copy handler awaits
+ * `navigator.clipboard.writeText`, so the clipboard can still hold its
+ * previous value for a tick after the click. The budget is generous because a
+ * local run shares this machine with other agents' work, and the first
+ * assertion after a cold SPA boot is the slow one.
+ */
+async function expectClipboard(page: Page, expected: string): Promise<string> {
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()), {
+      message: 'the copy control never wrote the expected support reference to the clipboard',
+      timeout: 30_000,
+    })
+    .toBe(expected)
+  return page.evaluate(() => navigator.clipboard.readText())
+}
+
+test.describe('Run detail support reference (FAR-2354)', { tag: '@regression' }, () => {
+  test.setTimeout(90_000)
+
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('assistant-panel-state', 'closed')
+    })
+  })
+
+  test('the copy control writes the full run uuid and the error code', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await openRunDetail(
+      page,
+      terminalRun({
+        run_id: SUPPORT_RUN_ID,
+        pipeline_id: SUPPORT_PIPELINE_ID,
+        pipeline_name: SUPPORT_PIPELINE_NAME,
+        status: 'failed',
+        error_code: SUPPORT_ERROR_CODE,
+        heartbeat_at: HEARTBEAT_AT,
+      }),
+      SUPPORT_RUN_ID,
+    )
+
+    // The share-summary control is the surface under test. A cold SPA boot on
+    // a shared machine can be slow, so the readiness wait is explicit.
+    const copyButton = page.getByTestId('run-detail-share-summary')
+    await expect(copyButton).toBeVisible({ timeout: 30_000 })
+
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    await copyButton.click()
+
+    // The origin is the one the SPA is served from — the same value the helper
+    // reads from `window.location.origin`, so the assertion cannot drift on a
+    // worktree-derived local port.
+    const origin = await page.evaluate(() => window.location.origin)
+    const copied = await expectClipboard(
+      page,
+      [
+        `run ${SUPPORT_RUN_ID} · pipeline ${SUPPORT_PIPELINE_ID} (${SUPPORT_PIPELINE_NAME}) · status failed · error ${SUPPORT_ERROR_CODE}`,
+        `url ${origin}/runs/${SUPPORT_RUN_ID}`,
+      ].join('\n'),
+    )
+
+    // The full 36-char uuid and the error code are the two facts support needs.
+    expect(copied).toContain(SUPPORT_RUN_ID)
+    expect(copied).toContain(`error ${SUPPORT_ERROR_CODE}`)
+    // The old "share summary" carried a duration and prose; neither belongs in
+    // a pasted reference, and an em dash would render as mojibake in a ticket.
+    expect(copied).not.toContain('Duration:')
+    expect(copied).not.toContain('—')
   })
 })
