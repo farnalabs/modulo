@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -39,6 +40,7 @@ from modulo.launcher.doctor import (
     check_ports,
     check_postgres,
     check_privileges,
+    check_provider_reachability,
     check_redis,
     check_secrets_permissions,
     check_service_identity,
@@ -663,6 +665,211 @@ def test_stale_backup_pass_recent(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# check 22: provider reachability (FAR-2316)
+# ---------------------------------------------------------------------------
+
+
+def test_provider_reachability_skipped_when_launcher_not_running(tmp_path: Path) -> None:
+    _write_state_secrets(tmp_path)
+    state = _state()
+    result = check_provider_reachability(tmp_path, state, _probes(launcher_running=lambda: False))
+    assert result.ok is True
+    assert "skipped" in result.detail
+
+
+def test_provider_reachability_skipped_when_state_unreadable(tmp_path: Path) -> None:
+    result = check_provider_reachability(tmp_path, None, _probes())
+    assert result.ok is True
+    assert result.warning is True
+    assert "state.json unreadable" in result.detail
+
+
+def test_provider_reachability_no_backends_configured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_state_secrets(tmp_path)
+    state = _state()
+
+    # Mock the async probe to return empty results
+    async def mock_probe(data_dir, state):
+        return []
+
+    monkeypatch.setattr(doctor_module, "_probe_provider_reachability", mock_probe)
+
+    result = check_provider_reachability(tmp_path, state, _probes())
+    assert result.ok is True
+    assert "no model backends configured" in result.detail
+
+
+def test_provider_reachability_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_state_secrets(tmp_path)
+    state = _state()
+
+    async def mock_probe(data_dir, state):
+        return [
+            {
+                "name": "openai/gpt-4",
+                "ok": True,
+                "status": "ok",
+                "drift": 0.1,
+                "proxy": None,
+                "tls_intercepted": False,
+            },
+            {
+                "name": "anthropic/claude-3",
+                "ok": True,
+                "status": "ok",
+                "drift": 0.2,
+                "proxy": None,
+                "tls_intercepted": False,
+            },
+        ]
+
+    monkeypatch.setattr(doctor_module, "_probe_provider_reachability", mock_probe)
+
+    result = check_provider_reachability(tmp_path, state, _probes())
+    assert result.ok is True
+    assert "openai/gpt-4: ok" in result.detail
+    assert "anthropic/claude-3: ok" in result.detail
+    assert "drift 0.1s" in result.detail
+    assert "drift 0.2s" in result.detail
+
+
+def test_provider_reachability_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_state_secrets(tmp_path)
+    state = _state()
+
+    async def mock_probe(data_dir, state):
+        return [
+            {
+                "name": "openai/gpt-4",
+                "ok": False,
+                "status": "timeout",
+                "drift": None,
+                "proxy": None,
+                "tls_intercepted": False,
+            }
+        ]
+
+    monkeypatch.setattr(doctor_module, "_probe_provider_reachability", mock_probe)
+
+    result = check_provider_reachability(tmp_path, state, _probes())
+    assert result.ok is False
+    assert "openai/gpt-4: timeout" in result.detail
+
+
+def test_provider_reachability_connection_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_state_secrets(tmp_path)
+    state = _state()
+
+    async def mock_probe(data_dir, state):
+        return [
+            {
+                "name": "openai/gpt-4",
+                "ok": False,
+                "status": "error ConnectError",
+                "drift": None,
+                "proxy": None,
+                "tls_intercepted": False,
+            }
+        ]
+
+    monkeypatch.setattr(doctor_module, "_probe_provider_reachability", mock_probe)
+
+    result = check_provider_reachability(tmp_path, state, _probes())
+    assert result.ok is False
+    assert "error ConnectError" in result.detail
+
+
+def test_provider_reachability_with_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_state_secrets(tmp_path)
+    state = _state()
+
+    async def mock_probe(data_dir, state):
+        return [
+            {
+                "name": "openai/gpt-4",
+                "ok": True,
+                "status": "ok",
+                "drift": 0.5,
+                "proxy": "1.2.3.4",
+                "tls_intercepted": False,
+            }
+        ]
+
+    monkeypatch.setattr(doctor_module, "_probe_provider_reachability", mock_probe)
+
+    result = check_provider_reachability(tmp_path, state, _probes())
+    assert result.ok is True
+    assert result.warning is True  # proxy detection is a warning
+    assert "proxy: 1.2.3.4" in result.detail
+
+
+def test_provider_reachability_with_tls_interception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_state_secrets(tmp_path)
+    state = _state()
+
+    async def mock_probe(data_dir, state):
+        return [
+            {
+                "name": "openai/gpt-4",
+                "ok": True,
+                "status": "ok",
+                "drift": 0.1,
+                "proxy": None,
+                "tls_intercepted": True,
+            }
+        ]
+
+    monkeypatch.setattr(doctor_module, "_probe_provider_reachability", mock_probe)
+
+    result = check_provider_reachability(tmp_path, state, _probes())
+    assert result.ok is True
+    assert result.warning is True  # TLS interception is a warning
+    assert "TLS: intercepted" in result.detail
+
+
+def test_provider_reachability_clock_drift_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_state_secrets(tmp_path)
+    state = _state()
+
+    async def mock_probe(data_dir, state):
+        return [
+            {
+                "name": "openai/gpt-4",
+                "ok": True,
+                "status": "ok",
+                "drift": 10.0,  # > 5s threshold
+                "proxy": None,
+                "tls_intercepted": False,
+            }
+        ]
+
+    monkeypatch.setattr(doctor_module, "_probe_provider_reachability", mock_probe)
+
+    result = check_provider_reachability(tmp_path, state, _probes())
+    assert result.ok is True
+    assert result.warning is True  # clock drift > 5s is a warning
+    assert "drift 10.0s" in result.detail
+
+
+def test_provider_reachability_probe_crash_becomes_failed_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_state_secrets(tmp_path)
+    state = _state()
+
+    async def crashing_async_probe(data_dir, state):
+        raise RuntimeError("probe crashed")
+
+    import modulo.launcher.doctor as doctor_module
+
+    monkeypatch.setattr(doctor_module, "_probe_provider_reachability", crashing_async_probe)
+
+    result = check_provider_reachability(tmp_path, state, _probes())
+    assert result.ok is False
+    assert "reachability probe crashed" in result.detail
+
+
+# ---------------------------------------------------------------------------
 # state-integrity: DISTINCT corrupt vs hmac-mismatch (via run_doctor)
 # ---------------------------------------------------------------------------
 
@@ -822,7 +1029,6 @@ def test_probe_migrations_at_head_translates_sslmode() -> None:
     """FAR-1440: the doctor's migration probe must translate a preserved
     ``sslmode`` into asyncpg's ``ssl`` connect arg rather than build a raw
     engine (which TypeErrors at first connect on a TLS deploy)."""
-    from unittest.mock import AsyncMock, MagicMock, patch
 
     composed = {"DATABASE_URL": "postgresql+asyncpg://u:p@h/db?sslmode=require"}
     (
