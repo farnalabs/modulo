@@ -303,6 +303,17 @@ describe('AdminAuditView — filters', () => {
     expect(wrapper.find('[data-testid="admin-audit-target-type"]').exists()).toBe(true)
   })
 
+  it('gives the From date filter a visible, associated label (A11Y-2)', async () => {
+    const wrapper = await mountLoaded()
+    const fromInput = wrapper.find('[data-testid="admin-audit-date-from"]')
+    expect(fromInput.exists()).toBe(true)
+    const id = fromInput.attributes('id')
+    expect(id).toBeTruthy()
+    const label = wrapper.find(`label[for="${id}"]`)
+    expect(label.exists()).toBe(true)
+    expect(label.text()).toBe('From')
+  })
+
   it('auto-applies filter changes — sets actor, from-date and entity type (FAR-868)', async () => {
     mockAuditGet([auditEvent('evt-1')], { total: 3 })
     const wrapper = await mountLoaded()
@@ -592,6 +603,72 @@ describe('AdminAuditView — exports', () => {
     expect(wrapper.text()).toContain('Export failed:')
     expect(wrapper.text()).toContain('jsonl denied')
     expect(clickSpy).not.toHaveBeenCalled()
+  })
+
+  // ---- STATE-2: an export failure must not take over the list's error state.
+  it('keeps the event list visible and retries the failed CSV export in place', async () => {
+    let exportFails = true
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/admin/audit/export') {
+        if (exportFails) return { data: undefined, error: { detail: 'csv denied' } }
+        return pagePayload([auditEvent('export-1')], { total: 1 })
+      }
+      return pagePayload([auditEvent('evt-1'), auditEvent('evt-2')])
+    })
+    const wrapper = mountView()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-audit-export-csv"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+
+    const exportError = wrapper.find('[data-testid="admin-audit-export-error"]')
+    expect(exportError.exists()).toBe(true)
+    expect(exportError.text()).toContain('csv denied')
+    // The list itself is untouched by an export failure.
+    expect(wrapper.find('[data-testid="admin-audit-event-row-evt-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-audit-event-row-evt-2"]').exists()).toBe(true)
+
+    exportFails = false
+    const exportCallsBefore = (api.GET as Mock).mock.calls.filter(
+      (c: unknown[]) => c[0] === '/api/v1/admin/audit/export',
+    ).length
+    await exportError.find('[data-testid="error-alert-retry"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+
+    // Retry re-runs the CSV export (not the audit list) and clears the alert.
+    const exportCallsAfter = (api.GET as Mock).mock.calls.filter(
+      (c: unknown[]) => c[0] === '/api/v1/admin/audit/export',
+    ).length
+    expect(exportCallsAfter).toBe(exportCallsBefore + 1)
+    expect(wrapper.find('[data-testid="admin-audit-export-error"]').exists()).toBe(false)
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries a failed JSONL export rather than the list load', async () => {
+    let exportFails = true
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/admin/audit/export') {
+        if (exportFails) return { data: undefined, error: { detail: 'jsonl denied again' } }
+        return pagePayload([auditEvent('export-1')], { total: 1 })
+      }
+      return pagePayload([auditEvent('evt-1')])
+    })
+    const wrapper = mountView()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-audit-export-jsonl"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+
+    exportFails = false
+    await wrapper.find('[data-testid="admin-audit-export-error"] [data-testid="error-alert-retry"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="admin-audit-export-error"]').exists()).toBe(false)
   })
 
   it('expands an audit row via keyboard (Enter / Space) for a11y (FAR-821)', async () => {
@@ -1002,6 +1079,26 @@ describe('AdminAuditView — system ledger (system admin)', () => {
     expect(wrapper.find('[data-testid="admin-audit-tab-system"]').attributes('aria-selected')).toBe('false')
     expect(wrapper.find('[data-testid="admin-audit-system-section"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="admin-audit-event-row-evt-1"]').exists()).toBe(true)
+  })
+
+  it('renders the shared table skeleton while the ledger loads (VIS-3/STATE-3)', async () => {
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/admin/system-audit') return new Promise(() => {})
+      if (url === '/api/v1/admin/audit') return pagePayload([auditEvent('evt-1')])
+      return { data: undefined, error: { detail: `unrouted: ${url}` } }
+    })
+    const wrapper = await mountLoaded()
+
+    await wrapper.find('[data-testid="admin-audit-tab-system"]').trigger('click')
+    await vueNextTick()
+    await flushPromises()
+
+    // The ledger's placeholder is the shared TableSkeleton (5 rows), not a
+    // bespoke copy of one.
+    const section = wrapper.find('[data-testid="admin-audit-system-section"]')
+    expect(section.exists()).toBe(true)
+    expect(section.findAll('tbody tr')).toHaveLength(5)
+    expect(section.find('[aria-busy="true"]').exists()).toBe(true)
   })
 
   it('loads the durable ledger when the system tab is selected', async () => {

@@ -980,6 +980,8 @@ export default {
       "timestamp": "Timestamp",
       "target": "Target",
       "summary": "Summary",
+      "summary_fallback": "{action} {resource}",
+      "summary_fallback_named": "{action} {resource} \"{name}\"",
       "details": "Details",
       "event_id": "Event ID",
       "expand_event": "Expand event {id}",

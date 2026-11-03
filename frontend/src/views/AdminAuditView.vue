@@ -131,12 +131,15 @@
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-actor"
           />
-          <input :aria-label="$t('views.AdminAuditView.from')"
-            v-model="filterDateFrom"
-            type="date"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            data-testid="admin-audit-date-from"
-          />
+          <div>
+            <label for="adminauditview-field-from" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.from') }}</label>
+            <input id="adminauditview-field-from"
+              v-model="filterDateFrom"
+              type="date"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              data-testid="admin-audit-date-from"
+            />
+          </div>
         </template>
         <div>
           <label for="adminauditview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.to') }}</label>
@@ -180,30 +183,26 @@
       </div>
     </div>
 
-    <div v-if="loading" aria-hidden="true" class="table-wrapper overflow-x-auto">
-      <table class="w-full">
-        <thead>
-          <tr>
-            <th class="table-header">{{ $t('views.AdminAuditView.timestamp') }}</th>
-            <th class="table-header">{{ $t('views.AdminAuditView.event_type') }}</th>
-            <th class="table-header">{{ $t('views.AdminAuditView.actor') }}</th>
-            <th class="table-header">{{ $t('views.AdminAuditView.target') }}</th>
-            <th class="table-header">{{ $t('views.AdminAuditView.summary') }}</th>
-            <th class="w-8 table-header" />
-          </tr>
-        </thead>
-        <tbody class="divide-y">
-          <tr v-for="row in 8" :key="row">
-            <td class="table-cell whitespace-nowrap"><div class="h-4 w-28 rounded bg-muted/50" /></td>
-            <td class="table-cell"><div class="h-4 w-24 rounded bg-muted/50" /></td>
-            <td class="table-cell"><div class="h-4 w-32 rounded bg-muted/50" /></td>
-            <td class="table-cell"><div class="h-4 w-20 rounded bg-muted/50" /></td>
-            <td class="table-cell"><div class="h-4 w-full max-w-sm rounded bg-muted/50" /></td>
-            <td class="table-cell"><div class="ml-auto h-4 w-4 rounded bg-muted/50" /></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <!-- STATE-2: an export failure is reported in place, above the table it
+         does not belong to, so the event list stays visible and its Retry
+         re-runs the export rather than reloading the list. -->
+    <ErrorAlert
+      v-if="exportFailure"
+      class="mt-4"
+      :message="exportFailure.message"
+      :on-retry="exportFailure.retry"
+      data-testid="admin-audit-export-error"
+    />
+
+    <!-- VIS-3 / STATE-3 (ux-conformance): the column layout is known before
+         the first row arrives, so the loading placeholder is the shared
+         determinate table skeleton, not a bespoke copy of one. -->
+    <TableSkeleton
+      v-if="loading"
+      :columns="6"
+      :rows="8"
+      :aria-label="$t('common.loading')"
+    />
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadEvents" />
 
@@ -409,30 +408,12 @@
         </div>
       </div>
 
-      <div v-if="systemLoading" aria-hidden="true" class="table-wrapper overflow-x-auto">
-        <table class="w-full">
-          <thead>
-            <tr>
-              <th class="table-header">{{ $t('views.AdminAuditView.timestamp') }}</th>
-              <th class="table-header">{{ $t('views.AdminAuditView.event_type') }}</th>
-              <th class="table-header">{{ $t('views.AdminAuditView.system_organisation') }}</th>
-              <th class="table-header">{{ $t('views.AdminAuditView.actor') }}</th>
-              <th class="table-header">{{ $t('views.AdminAuditView.summary') }}</th>
-              <th class="w-8 table-header" />
-            </tr>
-          </thead>
-          <tbody class="divide-y">
-            <tr v-for="row in 5" :key="row">
-              <td class="table-cell whitespace-nowrap"><div class="h-4 w-28 rounded bg-muted/50" /></td>
-              <td class="table-cell"><div class="h-4 w-32 rounded bg-muted/50" /></td>
-              <td class="table-cell"><div class="h-4 w-32 rounded bg-muted/50" /></td>
-              <td class="table-cell"><div class="h-4 w-24 rounded bg-muted/50" /></td>
-              <td class="table-cell"><div class="h-4 w-full max-w-sm rounded bg-muted/50" /></td>
-              <td class="table-cell"><div class="ml-auto h-4 w-4 rounded bg-muted/50" /></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <TableSkeleton
+        v-if="systemLoading"
+        :columns="6"
+        :rows="5"
+        :aria-label="$t('common.loading')"
+      />
 
       <ErrorAlert v-else-if="systemError" :message="systemError" :on-retry="loadSystemEvents" />
 
@@ -576,6 +557,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { formatDateFilename } from '../lib/formatDate'
 import { shortId } from '../utils/format'
 import Select from '../components/shared/AppSelect.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import { ChevronDown } from '@lucide/vue'
 import { useCurrentUser } from '../composables/useCurrentUser'
 
@@ -699,6 +681,14 @@ const expandedEvent = ref<AuditEvent | null>(null)
 
 const exporting = ref(false)
 const exportingJsonl = ref(false)
+// STATE-2: an export failure is its own condition. It must not overwrite the
+// list's error channel, because that replaced the whole table with an
+// ErrorAlert whose Retry re-fetched the list instead of retrying the export.
+interface ExportFailure {
+  message: string
+  retry: () => void
+}
+const exportFailure = ref<ExportFailure | null>(null)
 const verifying = ref(false)
 const chainResult = ref<{ valid: boolean; checked_events?: number; error?: string } | null>(null)
 
@@ -753,9 +743,20 @@ function summarize(event: Summarisable): string {
   const p = event.payload_json ?? {}
   const name = (p as Record<string, unknown>).name ?? (p as Record<string, unknown>).display_name ?? null
 
-  const parts = [action.charAt(0).toUpperCase() + action.slice(1), resource]
-  if (name) parts.push(`"${name}"`)
-  return parts.join(' ')
+  // I18N-1: this fallback is user-facing copy, so it goes through the message
+  // catalogue like every other string in the view rather than being
+  // concatenated in English here.
+  const capitalisedAction = action.charAt(0).toUpperCase() + action.slice(1)
+  return name
+    ? t('views.AdminAuditView.summary_fallback_named', {
+        action: capitalisedAction,
+        resource,
+        name: String(name),
+      })
+    : t('views.AdminAuditView.summary_fallback', {
+        action: capitalisedAction,
+        resource,
+      })
 }
 
 function toggleExpand(id: string) {
@@ -903,8 +904,21 @@ onBeforeUnmount(() => {
   if (systemDebounce) clearTimeout(systemDebounce)
 })
 
+/** Record a failed export so its Retry re-runs the export, not the list load. */
+function setExportError(message: string, format: 'csv' | 'jsonl') {
+  exportFailure.value = {
+    message,
+    retry: () => {
+      exportFailure.value = null
+      if (format === 'csv') exportCsv()
+      else exportJsonl()
+    },
+  }
+}
+
 async function exportCsv() {
   exporting.value = true
+  exportFailure.value = null
   try {
     const allEvents: AuditEvent[] = []
     let page = 1
@@ -926,7 +940,7 @@ async function exportCsv() {
         },
       })
       if (err) {
-        error.value = `${t('views.AdminAuditView.export_failed')} ${formatError(err)}`
+        setExportError(`${t('views.AdminAuditView.export_failed')} ${formatError(err)}`, 'csv')
         return
       }
       if (!data) break
@@ -969,7 +983,7 @@ async function exportCsv() {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e: unknown) {
-    error.value = `${t('views.AdminAuditView.export_failed')} ${formatApiError(e)}`
+    setExportError(`${t('views.AdminAuditView.export_failed')} ${formatApiError(e)}`, 'csv')
   } finally {
     exporting.value = false
   }
@@ -978,7 +992,6 @@ async function exportCsv() {
 async function verifyChain() {
   verifying.value = true
   chainResult.value = null
-  error.value = null
   try {
     const res = await api.GET('/api/v1/admin/audit/verify')
     const data = res.data as unknown as ChainVerification | undefined
@@ -1001,6 +1014,7 @@ async function verifyChain() {
 
 async function exportJsonl() {
   exportingJsonl.value = true
+  exportFailure.value = null
   try {
     const allEvents: AuditEvent[] = []
     let page = 1
@@ -1022,7 +1036,7 @@ async function exportJsonl() {
         },
       })
       if (err) {
-        error.value = `${t('views.AdminAuditView.export_failed')} ${formatError(err)}`
+        setExportError(`${t('views.AdminAuditView.export_failed')} ${formatError(err)}`, 'jsonl')
         return
       }
       if (!data) break
@@ -1041,7 +1055,7 @@ async function exportJsonl() {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e: unknown) {
-    error.value = `${t('views.AdminAuditView.export_failed')} ${formatApiError(e)}`
+    setExportError(`${t('views.AdminAuditView.export_failed')} ${formatApiError(e)}`, 'jsonl')
   } finally {
     exportingJsonl.value = false
   }
