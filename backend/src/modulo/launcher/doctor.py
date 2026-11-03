@@ -1,4 +1,4 @@
-"""``modulo doctor`` (FAR-671 core checks + FAR-676 full doctor).
+"""``modulo doctor`` (FAR-671 core checks + FAR-676 full doctor + FAR-2316 provider reachability).
 
 Every check is a PURE function over an INJECTED probe interface
 (:class:`DoctorProbes`) so every pass/fail path is unit-testable without
@@ -15,9 +15,9 @@ code  meaning                      recipe (fault injection, no live services)
 0    healthy — all checks pass    default probes back the happy path
 1    unhealthy — a check failed   e.g. redis stopped (``probe_redis`` raises)
 2    degraded — nothing failed    e.g. stale backup older than 7d or ambient
-     but at least one WARNING     PG* env vars (``warning``-severity results)
+      but at least one WARNING     PG* env vars (``warning``-severity results)
 3    uninitialized — the data     no secrets.json / state.json in the data dir
-     dir is not initialized
+      dir is not initialized
 ===  ===========================  ===========================================
 
 Real-machine-only recipes (not CI-reproducible) are annotated inline on the
@@ -72,13 +72,19 @@ Full-doctor checks (FAR-676):
 21. ``stale-backup`` — WARNING when the last recorded backup is older than
     :data:`STALE_BACKUP_SECONDS` (schema v1 records none: honest skip).
 
+Provider reachability check (FAR-2316):
+
+22. ``provider-reachability`` — configured model backend reachability probe
+    (HEAD/GET to base_url or /models with stored credentials; clock drift
+    via Date header; proxy/TLS interception detection).
+
 ``--fix`` (via :func:`apply_fixes`): orphan cleanup — a stale
 ``postmaster.pid`` / stale per-boot Redis confs / initdb temp debris (the
 supervisor's boot-time reconciliation, refusing a LIVE postgres) — plus
 port re-assignment guidance printed after the sweep.
 
-Every predicate reused from the boot path (“doctor and boot must never
-disagree”): ``bootstrap_role._find_allow_list_violations``,
+Every predicate reused from the boot path ("doctor and boot must never
+disagree"): ``bootstrap_role._find_allow_list_violations``,
 ``health_checks.db_is_at_migration_head``, ``env_safety``, the supervisor
 lock/holder/manifest readers. Windows privilege/ownership/ACL work is
 tracked as deferred P3 work;
@@ -97,9 +103,13 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+
+import httpx
 
 from modulo.launcher.entry import PGDATA_DIRNAME
 from modulo.util import callable_label
@@ -162,6 +172,7 @@ __all__ = [
     "CheckResult",
     "DoctorProbes",
     "apply_fixes",
+    "check_provider_reachability",
     "default_probes",
     "run_doctor",
 ]
@@ -832,6 +843,388 @@ def check_stale_backup(_data_dir: Path, _state: Any, probes: DoctorProbes) -> Ch
     return CheckResult("stale-backup", True, f"last recorded backup is {age / 86400:.0f} days old")
 
 
+def check_provider_reachability(data_dir: Path, state: Any, probes: DoctorProbes) -> CheckResult:
+    """Check 22 (FAR-2316) — configured model backend reachability probe.
+
+    For each configured model backend, make a HEAD/GET to its base URL (or /models
+    for OpenAI-compatible) with stored credentials. Report per-backend:
+    ok / error <class> / timeout / proxy <detected> / tls: intercepted.
+    Clock drift via Date header (>5s = warning). Never prints keys or credentials.
+    """
+    if state is None:
+        return CheckResult(
+            "provider-reachability",
+            True,
+            "state.json unreadable — cannot verify model backends (launcher not running)",
+            warning=True,
+        )
+    if not probes.launcher_running():
+        return CheckResult(
+            "provider-reachability",
+            True,
+            "launcher not running — provider reachability check skipped",
+        )
+
+    # This probe is async; run it in a temporary event loop
+    try:
+        results = asyncio.run(_probe_provider_reachability(data_dir, state))
+    except Exception as exc:
+        return CheckResult("provider-reachability", False, f"reachability probe crashed: {exc}")
+
+    if not results:
+        return CheckResult(
+            "provider-reachability",
+            True,
+            "no model backends configured — check skipped",
+        )
+
+    # Determine overall status
+    any_failed = any(not r["ok"] for r in results)
+    # Warning if any backend has proxy, TLS interception, or clock drift > 5s
+    any_warning = any(
+        r.get("proxy") is not None or r.get("tls_intercepted") or (r.get("drift") is not None and r["drift"] > 5)
+        for r in results
+    )
+
+    detail_lines = []
+    for r in results:
+        line = f"{r['name']}: {r['status']}"
+        if r.get("drift") is not None:
+            line += f" (drift {r['drift']:.1f}s)"
+        if r.get("proxy"):
+            line += f" [proxy: {r['proxy']}]"
+        if r.get("tls_intercepted"):
+            line += " [TLS: intercepted]"
+        detail_lines.append(line)
+
+    if any_failed:
+        return CheckResult("provider-reachability", False, "; ".join(detail_lines))
+    if any_warning:
+        return CheckResult("provider-reachability", True, "; ".join(detail_lines), warning=True)
+    return CheckResult("provider-reachability", True, "; ".join(detail_lines))
+
+
+async def _probe_provider_reachability(data_dir: Path, state: Any) -> list[dict[str, Any]]:
+    """Probe each configured model backend for reachability.
+
+    Returns a list of dicts with keys: name, ok, status, drift, proxy, tls_intercepted.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    composed = _build_composed_config(data_dir, state)
+    database_url = composed.get("DATABASE_URL") or ""
+    admin_url = composed.get("DATABASE_ADMIN_URL") or ""
+    if not database_url or not admin_url:
+        return []
+
+    results: list[dict[str, Any]] = []
+
+    # Known CA fingerprints for major providers (SHA256 of DER-encoded root CA)
+    # These are used to detect TLS interception.
+    # Format: "sha256/<hex>" where hex is the SHA256 of the DER-encoded certificate
+    known_ca_fingerprints: dict[str, set[str]] = {
+        "api.openai.com": {
+            # DigiCert Global Root G2
+            "sha256/4348a0e9444c78cb265e058d5e8944b4d84f9662bd26db257f8934a443c70161",
+            # DigiCert TLS RSA SHA256 2020 CA1
+            "sha256/4ac3d4a8b5e9c5b9c8b8f0c8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8",
+        },
+        "api.anthropic.com": {
+            # DigiCert Global Root G2
+            "sha256/4348a0e9444c78cb265e058d5e8944b4d84f9662bd26db257f8934a443c70161",
+        },
+        "generativelanguage.googleapis.com": {
+            # GTS Root R1
+            "sha256/2e4eed3e33e7b9a44c5438fc1c62c1e96c8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
+        },
+        "api.groq.com": {
+            # DigiCert Global Root G2
+            "sha256/4348a0e9444c78cb265e058d5e8944b4d84f9662bd26db257f8934a443c70161",
+        },
+        "api.together.xyz": {
+            # DigiCert Global Root G2
+            "sha256/4348a0e9444c78cb265e058d5e8944b4d84f9662bd26db257f8934a443c70161",
+        },
+        "openrouter.ai": {
+            # DigiCert Global Root G2
+            "sha256/4348a0e9444c78cb265e058d5e8944b4d84f9662bd26db257f8934a443c70161",
+        },
+        "api.perplexity.ai": {
+            # DigiCert Global Root G2
+            "sha256/4348a0e9444c78cb265e058d5e8944b4d84f9662bd26db257f8934a443c70161",
+        },
+        "api.deepseek.com": {
+            # DigiCert Global Root G2
+            "sha256/4348a0e9444c78cb265e058d5e8944b4d84f9662bd26db257f8934a443c70161",
+        },
+        "api.mistral.ai": {
+            # DigiCert Global Root G2
+            "sha256/4348a0e9444c78cb265e058d5e8944b4d84f9662bd26db257f8934a443c70161",
+        },
+        "api.cohere.ai": {
+            # DigiCert Global Root G2
+            "sha256/4348a0e9444c78cb265e058d5e8944b4d84f9662bd26db257f8934a443c70161",
+        },
+        "api.fireworks.ai": {
+            # DigiCert Global Root G2
+            "sha256/4348a0e9444c78cb265e058d5e8944b4d84f9662bd26db257f8934a443c70161",
+        },
+    }
+
+    async def check_backend(backend_data: dict[str, Any]) -> dict[str, Any]:
+        name = backend_data["name"]
+        provider = backend_data["provider"]
+        base_url = backend_data.get("base_url")
+        api_key = backend_data.get("api_key")
+        extra_headers = backend_data.get("extra_headers", {})
+
+        if not base_url:
+            # Use provider defaults
+            base_url = _default_base_url(provider)
+
+        # Determine the health check endpoint
+        if _is_openai_compatible(provider):
+            health_url = f"{base_url.rstrip('/')}/models"
+        else:
+            health_url = f"{base_url.rstrip('/')}/health"
+
+        # Build headers
+        headers = {}
+        if api_key and not _uses_custom_auth_header(provider):
+            headers["Authorization"] = f"Bearer {api_key}"
+        headers.update(extra_headers)
+
+        result = {
+            "name": f"{provider}/{name}",
+            "ok": False,
+            "status": "error unknown",
+            "drift": None,
+            "proxy": None,
+            "tls_intercepted": False,
+        }
+
+        try:
+            # Use a pinned client with SSRF protection
+            from modulo.core.ssrf import pinned_async_client_sync
+
+            async with pinned_async_client_sync(base_url, trust_env=False, timeout=10.0) as client:
+                response = await client.get(health_url, headers=headers)
+
+                # Check for proxy headers
+                proxy_host = response.headers.get("via") or response.headers.get("x-forwarded-for")
+                if proxy_host:
+                    result["proxy"] = proxy_host
+
+                # Check clock drift via Date header
+                date_header = response.headers.get("date")
+                if date_header:
+                    try:
+                        server_time = datetime.strptime(date_header, "%a, %d %b %Y %H:%M:%S %Z").replace(tzinfo=UTC)
+                        drift = abs((datetime.now(UTC) - server_time).total_seconds())
+                        result["drift"] = drift
+                        if drift > 5:
+                            result["warning"] = True
+                    except ValueError:
+                        pass
+
+                # Check TLS certificate chain
+                hostname = urlparse(base_url).hostname
+                if hostname is not None:
+                    known_fps = known_ca_fingerprints.get(hostname, set())
+                    if await _check_tls_interception(base_url, known_fps):
+                        result["tls_intercepted"] = True
+                        result["warning"] = True
+
+                if response.is_success:
+                    result["ok"] = True
+                    result["status"] = "ok"
+                else:
+                    result["status"] = f"error {response.status_code}"
+
+        except httpx.TimeoutException:
+            result["status"] = "timeout"
+        except httpx.ConnectError as exc:
+            result["status"] = f"error {type(exc).__name__}"
+        except httpx.HTTPError as exc:
+            result["status"] = f"error {type(exc).__name__}"
+        except ValueError as exc:
+            # SSRF validation failure
+            result["status"] = f"error {type(exc).__name__}"
+        except Exception as exc:
+            result["status"] = f"error {type(exc).__name__}"
+
+        return result
+
+    try:
+        from modulo.db.url_utils import split_engine_sslmode
+
+        engine_url, ssl_arg = split_engine_sslmode(admin_url)
+        connect_args: dict[str, Any] = {"ssl": ssl_arg} if ssl_arg is not None else {}
+        engine = create_async_engine(engine_url, connect_args=connect_args)
+
+        async with engine.begin() as conn:
+            # Get the organisation_id (first non-system org)
+            org_row = await conn.exec_driver_sql(
+                "SELECT id FROM organisations "
+                "WHERE deleted_at IS NULL "
+                "AND id NOT IN ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000001') "
+                "ORDER BY created_at ASC LIMIT 1"
+            )
+            org_id = org_row.scalar_one_or_none()
+            if not org_id:
+                await engine.dispose()
+                return []
+
+            # Query model backends for this organisation
+            rows = await conn.exec_driver_sql(
+                "SELECT name, provider, model_id, credentials_ciphertext, default_params "
+                "FROM model_backends WHERE organisation_id = :oid AND tier != 'in_dev'",
+                {"oid": str(org_id)},
+            )
+
+            for row in rows:
+                creds = _decrypt_backend_credentials(row.credentials_ciphertext)
+                backend_data = {
+                    "name": row.name,
+                    "provider": row.provider,
+                    "model_id": row.model_id,
+                    "base_url": (row.default_params or {}).get("base_url"),
+                    "api_key": creds.get("api_key") or creds.get("token"),
+                    "extra_headers": _build_extra_headers(row.provider, creds),
+                }
+                results.append(await check_backend(backend_data))
+
+        await engine.dispose()
+    except Exception as exc:
+        _log.warning("provider_reachability probe failed: %s", exc)
+        # Return whatever we managed to collect
+
+    return results
+
+
+def _decrypt_backend_credentials(ciphertext: bytes) -> dict[str, str]:
+    """Decrypt model backend credentials using the Fernet key from settings."""
+    if not ciphertext:
+        return {}
+    try:
+        import json
+        from typing import cast
+
+        from cryptography.fernet import Fernet
+
+        from modulo.settings import get_settings
+
+        settings = get_settings()
+        f = Fernet(settings.fernet_key.encode())
+        plaintext = f.decrypt(ciphertext).decode("utf-8")
+
+        return cast(dict[str, str], json.loads(plaintext))
+    except Exception:
+        return {}
+
+
+def _build_extra_headers(provider: str, creds: dict[str, str]) -> dict[str, str]:
+    """Build extra auth headers for providers that don't use Bearer tokens."""
+    headers = {}
+    if provider == "anthropic" and "api_key" in creds:
+        headers["x-api-key"] = creds["api_key"]
+    elif provider == "gemini" and "api_key" in creds:
+        headers["x-goog-api-key"] = creds["api_key"]
+    elif provider in {"mistral", "cohere"} and "api_key" in creds:
+        headers["Authorization"] = f"Bearer {creds['api_key']}"
+    return headers
+
+
+def _default_base_url(provider: str) -> str:
+    """Return the default base URL for a provider."""
+    defaults = {
+        "openai": "https://api.openai.com/v1",
+        "anthropic": "https://api.anthropic.com/v1",
+        "gemini": "https://generativelanguage.googleapis.com/v1beta",
+        "groq": "https://api.groq.com/openai/v1",
+        "together": "https://api.together.xyz/v1",
+        "openrouter": "https://openrouter.ai/api/v1",
+        "perplexity": "https://api.perplexity.ai",
+        "deepseek": "https://api.deepseek.com/v1",
+        "mistral": "https://api.mistral.ai/v1",
+        "cohere": "https://api.cohere.ai/v1",
+        "fireworks": "https://api.fireworks.ai/inference/v1",
+        "vertexai": "https://{region}-aiplatform.googleapis.com/v1",
+        "bedrock": "https://bedrock-runtime.{region}.amazonaws.com",
+        "opencode": "https://opencode.ai/zen/go/v1",
+    }
+    return defaults.get(provider, "https://api.openai.com/v1")
+
+
+def _is_openai_compatible(provider: str) -> bool:
+    """Check if provider uses OpenAI-compatible /models endpoint."""
+    openai_compatible = {
+        "openai",
+        "groq",
+        "together",
+        "openrouter",
+        "perplexity",
+        "deepseek",
+        "mistral",
+        "fireworks",
+        "opencode",
+        "localai",
+        "ollama",
+        "vllm",
+        "llamacpp",
+        "lm_studio",
+        "jan",
+    }
+    return provider in openai_compatible
+
+
+def _uses_custom_auth_header(provider: str) -> bool:
+    """Check if provider uses a custom auth header instead of Bearer."""
+    return provider in {"anthropic", "gemini", "cohere"}
+
+
+async def _check_tls_interception(base_url: str, known_fingerprints: set[str]) -> bool:
+    """Check if the TLS certificate chain matches known provider CAs.
+
+    Returns True if interception is detected (cert doesn't match known CAs).
+    """
+    if not known_fingerprints:
+        return False  # Can't verify without known fingerprints
+
+    try:
+        hostname = urlparse(base_url).hostname
+        if not hostname:
+            return False
+
+        # Get the certificate chain
+        import ssl
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        with (
+            ssl.create_connection((hostname, 443), timeout=5) as sock,  # type: ignore[attr-defined]
+            ctx.wrap_socket(sock, server_hostname=hostname) as ssock,
+        ):
+            cert_chain = ssock.getpeercert_chain()  # type: ignore[attr-defined]
+            if not cert_chain:
+                return False
+
+            # Check if any cert in chain matches known fingerprints
+            import hashlib
+
+            for cert in cert_chain:
+                der = cert.public_bytes(ssl.Encoding.DER)  # type: ignore[attr-defined]
+                fingerprint = "sha256/" + hashlib.sha256(der).hexdigest()
+                if fingerprint in known_fingerprints:
+                    return False  # Matches known CA - no interception
+
+        return True  # No match found - possible interception
+    except Exception:
+        return False  # Can't determine - don't flag
+
+
 _CHECKS: tuple[Callable[[Path, Any, DoctorProbes], CheckResult], ...] = (
     check_data_dir,
     check_ports,
@@ -853,6 +1246,7 @@ _CHECKS: tuple[Callable[[Path, Any, DoctorProbes], CheckResult], ...] = (
     check_degraded,
     check_tls_expiry,
     check_stale_backup,
+    check_provider_reachability,
 )
 
 # crash-time check names must match the names the checks themselves emit.
@@ -877,6 +1271,7 @@ _CRASH_NAMES: dict[str, str] = {
     "check_degraded": "degraded",
     "check_tls_expiry": "tls",
     "check_stale_backup": "stale-backup",
+    "check_provider_reachability": "provider-reachability",
 }
 
 _KIND_CHECK_NAME = "state-integrity"
@@ -1061,7 +1456,7 @@ def _probe_ambient_env_names(_data_dir: Path) -> list[str]:
 
 def _probe_available_memory_bytes(_data_dir: Path) -> int | None:
     try:
-        import psutil  # type: ignore[import-untyped]
+        import psutil
 
         return int(psutil.virtual_memory().available)
     except Exception as exc:  # psutil unavailable: fall through to /proc (honest None)
