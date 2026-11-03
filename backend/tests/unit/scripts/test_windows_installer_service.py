@@ -6,7 +6,7 @@ not abort the install over the deferred Windows service seam.
 the RESULT rather than of the source text:
 
 1. ``ImagePath`` must be stored QUOTED, with the launcher argument inside the
-   quotes (``"C:\\Program Files\\Modulo\\modulo.exe" service``). ``sc.exe``
+   quotes (``"C:\\Program Files\\Modulo\\bin\\modulo.exe" service``). ``sc.exe``
    accepts only ``key= value`` options, so a bare ``service`` token after the
    quoted path is rejected with 1639 (ERROR_INVALID_COMMAND_LINE): sc.exe
    prints its usage block and registers nothing. Measured on an elevated
@@ -53,7 +53,7 @@ _ISS = _REPO_ROOT / "deploy" / "windows" / "modulo.iss"
 # The installer's default directory is {autopf}\Modulo, so the service image
 # path contains spaces on a stock install. That is exactly the shape that makes
 # the quote positions matter.
-_SERVICE_EXE = r"C:\Program Files\Modulo\modulo.exe"
+_SERVICE_EXE = r"C:\Program Files\Modulo\bin\modulo.exe"
 
 # What the Service Control Manager must have stored for the service to start:
 # the executable quoted (so the space in "Program Files" is unambiguous),
@@ -160,7 +160,7 @@ def _service_exe(source: str) -> str:
     match = _SERVICE_EXE_ASSIGNMENT.search(body)
     assert match is not None, "RegisterService no longer assigns ServiceExe"
     assignment = match.group("expr").strip()
-    assert assignment == "ExpandConstant('{app}') + '\\modulo.exe'", (
+    assert assignment == "ExpandConstant('{app}') + '\\bin\\modulo.exe'", (
         f"ServiceExe is no longer the installed launcher: {assignment}"
     )
     return _SERVICE_EXE

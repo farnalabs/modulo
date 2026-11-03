@@ -100,7 +100,15 @@ jobs:
           ref="$CALL_REF"
           mode="$CALL_MODE"
           run_native_build=false
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+          # Inside a reusable-workflow call GITHUB_EVENT_NAME is still the CALLER's event,
+          # so a dispatched release-unified run reports workflow_dispatch too. build_native is
+          # a required input of THIS workflow's own dispatch only, so it identifies a direct
+          # manual dispatch; a call (even from a dispatched caller) never carries it (FAR-2327).
+          direct_dispatch=false
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -n "${DISPATCH_BUILD_NATIVE:-}" ]]; then
+            direct_dispatch=true
+          fi
+          if [[ "$direct_dispatch" == true ]]; then
             version="$DISPATCH_VERSION"
             rc_tag="$DISPATCH_RC_TAG"
             ref="$DISPATCH_REF"
@@ -113,7 +121,7 @@ jobs:
           [[ -n "$version" ]] || { echo '::error::version input is required' >&2; exit 1; }
           [[ -n "$rc_tag" ]] || { echo '::error::rc_tag input is required' >&2; exit 1; }
           [[ -n "$ref" ]] || { echo '::error::ref input is required' >&2; exit 1; }
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$mode" != "dry-run" ]]; then
+          if [[ "$direct_dispatch" == true && "$mode" != "dry-run" ]]; then
             echo "::error::unsupported manual dispatch mode: $mode" >&2
             exit 1
           fi

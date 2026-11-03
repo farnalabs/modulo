@@ -25,6 +25,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
+from modulo.api.constants import MSG_ORGANISATION_NOT_FOUND
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
 from modulo.api.routes import admin_org_feature_flags as route_module
@@ -298,11 +299,6 @@ class TestClearFlag:
         audit = AsyncMock()
         with (
             patch.object(route_module, "_build_registry", AsyncMock(return_value=_mock_registry())),
-            patch.object(
-                route_module,
-                "get_organisation",
-                AsyncMock(return_value=_org({_SETTABLE: False, "saved_views": True})),
-            ),
             patch.object(route_module, "apply_org_settings_patch_or_404", AsyncMock(return_value={})) as apply_mock,
             patch.object(route_module, "_invalidate_cache", AsyncMock()) as cache_mock,
             patch(
@@ -315,8 +311,10 @@ class TestClearFlag:
         assert resp.status_code == 200
         assert resp.json()["enabled"] is True
         assert resp.json()["overridden"] is False
-        # Only the cleared flag is removed; a sibling override survives.
-        assert apply_mock.await_args.kwargs["patch"] == {"feature_overrides": {"saved_views": True}}
+        # FAR-2309: only the cleared flag's entry is removed, atomically, inside
+        # the one settings UPDATE — never a read-pop-write of the whole map.
+        assert apply_mock.await_args.kwargs["nested_delete"] == {"feature_overrides": [_SETTABLE]}
+        assert "patch" not in apply_mock.await_args.kwargs
         cache_mock.assert_awaited_once()
         audit.assert_awaited_once()
         kwargs = audit.await_args.kwargs
@@ -326,18 +324,22 @@ class TestClearFlag:
     def test_missing_org_is_a_404(self, admin_client: TestClient) -> None:
         """A cleared override on a vanished org fails closed, never optimistic.
 
-        ``get_organisation`` returning ``None`` must surface as a 404 inside the
-        write transaction. Falling through to the patch helper would either
-        report a bogus success or touch a row that does not exist, so the
-        handler raises before the write (and ``audited()`` records the error).
+        The atomic patch helper refuses a missing/soft-deleted organisation
+        with ``LookupError``; the shared wrapper must translate that to a 404 so
+        the clear can never report a bogus success for a row that does not
+        exist (and ``audited()`` records the error).
         """
         with (
             patch.object(route_module, "_build_registry", AsyncMock(return_value=_mock_registry())),
-            patch.object(route_module, "get_organisation", AsyncMock(return_value=None)),
+            patch(
+                "modulo.api.routes._org_settings.update_org_settings_patch",
+                AsyncMock(side_effect=LookupError("organisation not found")),
+            ),
         ):
             resp = admin_client.delete(f"{_PATH}/{_SETTABLE}")
 
         assert resp.status_code == 404
+        assert resp.json()["detail"] == MSG_ORGANISATION_NOT_FOUND
 
     def test_unknown_flag_is_a_404(self, admin_client: TestClient) -> None:
         with patch.object(route_module, "_build_registry", AsyncMock(return_value=_mock_registry())):

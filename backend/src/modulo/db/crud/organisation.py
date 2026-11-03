@@ -294,6 +294,7 @@ async def update_org_settings_patch(
     *,
     allow_unbound_context: bool = False,
     nested_patch: dict[str, dict[str, Any]] | None = None,
+    nested_delete: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Atomically merge (and/or remove) top-level keys of ``settings_json`` (FAR-1830).
 
@@ -325,6 +326,23 @@ async def update_org_settings_patch(
     admin level toggle) both survive. At most ONE nested key per call, and a
     key must not appear in BOTH ``patch`` and ``nested_patch`` (the ordering
     would be ambiguous — refused rather than silently resolved).
+
+    ``nested_delete`` (FAR-2309) is the SUB-FIELD counterpart of
+    ``delete_keys``: ``{top_level_key: [sub_key, ...]}`` removes the named
+    entries from that ONE top-level key's stored object, in the SAME statement
+    as the merge. It exists so a single-entry clear (e.g. one feature-flag org
+    override) is atomic instead of a read-modify-write of the whole map: a
+    caller that read the map, popped one key and wrote the map back could drop
+    a concurrent writer's change, while ``nested_delete`` composes against the
+    row's CURRENT value inside the one UPDATE.
+
+    The delete is expressed as an explicit ``nested_delete`` list, NOT as a
+    ``None`` sentinel inside ``nested_patch``: a ``None`` sub-value would be
+    indistinguishable from writing a JSON ``null`` into a settings sub-field
+    (a legitimate value the helper must keep able to write), so the delete gets
+    its own argument and the ambiguities are refused (at most one top-level
+    key per call; a key may not appear in more than one of ``patch``,
+    ``nested_patch``, ``nested_delete``, ``delete_keys``).
 
     FAR-1832 QA F3: the implementation is SHARED with the OTel-config writer —
     this function is a thin wrapper over
@@ -367,9 +385,82 @@ async def update_org_settings_patch(
         require_live_row=True,
         allow_unbound_context=allow_unbound_context,
         nested_patch=nested_patch,
+        nested_delete=nested_delete,
     )
     _invalidate_settings_derived_caches()
     return settings
+
+
+def _validate_json_patch_args(
+    patch: dict[str, Any],
+    delete_keys: list[str],
+    nested_patch: dict[str, dict[str, Any]] | None,
+    nested_delete: dict[str, list[str]] | None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, list[str]]]:
+    """Refuse ambiguous compose arguments before any organisation JSON write.
+
+    Every mechanism (top-level ``patch``, ``nested_patch``, ``nested_delete``,
+    ``delete_keys``) may name a key at most once: the compose order between
+    overlapping mechanisms was never a documented contract, so an overlap is
+    refused rather than resolved implicitly. Also bounds each nested mechanism
+    to one top-level key per call, refuses an empty ``nested_delete`` list
+    (a no-op that would still create/heal the parent object), and refuses a
+    call that combines ``nested_patch`` with ``nested_delete`` at all.
+    """
+    nested = dict(nested_patch or {})
+    sub_delete = dict(nested_delete or {})
+    if len(nested) > 1:
+        raise ValueError(f"nested_patch supports at most one top-level key per call, got {sorted(nested)!r}")
+    if len(sub_delete) > 1:
+        raise ValueError(f"nested_delete supports at most one top-level key per call, got {sorted(sub_delete)!r}")
+    for sub_key, sub_keys in sub_delete.items():
+        if not sub_keys:
+            # An empty list is a no-op that would still create/heal the parent
+            # object — a caller with nothing to remove has a bug, so refuse
+            # rather than write a block it did not ask for.
+            raise ValueError(f"nested_delete[{sub_key!r}] must name at least one sub-key to delete")
+    overlap = set(nested) & set(patch)
+    if overlap:
+        raise ValueError(
+            f"nested_patch key(s) {sorted(overlap)!r} also appear in patch — the compose order would be ambiguous"
+        )
+    # QA F13c: a key in BOTH delete_keys and patch/nested_patch is equally
+    # ambiguous (delete-wins was never a documented contract), so it is refused
+    # for the same reason the patch/nested overlap is — rather than silently
+    # letting the delete win.
+    delete_overlap = set(delete_keys) & (set(patch) | set(nested) | set(sub_delete))
+    if delete_overlap:
+        raise ValueError(
+            f"key(s) {sorted(delete_overlap)!r} appear in both delete_keys and patch/nested_patch/nested_delete — "
+            "the compose order would be ambiguous"
+        )
+    # FAR-2309: a key may be composed by exactly ONE nested mechanism. Merging
+    # sub-fields and removing sibling sub-fields of the same block in one call
+    # is expressible (merge then delete) but has no caller, so the ambiguity is
+    # refused rather than resolved implicitly.
+    nested_overlap = set(nested) & set(sub_delete)
+    if nested_overlap:
+        raise ValueError(
+            f"nested_patch key(s) {sorted(nested_overlap)!r} also appear in nested_delete — "
+            "the compose order would be ambiguous"
+        )
+    # FAR-2309 review: the two nested mechanisms are mutually exclusive even
+    # when they name DIFFERENT top-level keys. The Postgres statement composes
+    # a single nested key (``_nested_parts`` picks one), while the generic
+    # path honours both, so a cross-key combo would silently drop the merge on
+    # Postgres only. No caller needs a merge and a delete in one call, so the
+    # combination is refused rather than made dialect-dependent.
+    if nested and sub_delete:
+        raise ValueError(
+            "nested_patch and nested_delete cannot be combined in one call — only one nested key is composed per write"
+        )
+    patch_overlap = set(patch) & set(sub_delete)
+    if patch_overlap:
+        raise ValueError(
+            f"nested_delete key(s) {sorted(patch_overlap)!r} also appear in patch — "
+            "the compose order would be ambiguous"
+        )
+    return nested, sub_delete
 
 
 async def update_org_json_column_patch(
@@ -382,6 +473,7 @@ async def update_org_json_column_patch(
     require_live_row: bool,
     allow_unbound_context: bool = False,
     nested_patch: dict[str, dict[str, Any]] | None = None,
+    nested_delete: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Atomically merge (and/or remove) top-level keys of ONE Organisation JSON column.
 
@@ -397,6 +489,8 @@ async def update_org_json_column_patch(
       ``deleted_at IS NULL`` predicate / the generic path uses the
       soft-delete-filtered read.
     - ``delete_keys`` — callers that never delete keys pass ``[]``.
+    - ``nested_delete`` — sub-keys removed atomically from ONE top-level key's
+      object (FAR-2309); callers that never clear a sub-entry pass ``None``.
 
     Everything else is shared: the bounded lock wait
     (``set_mutation_row_lock_timeout``), the fail-closed tenant guard
@@ -428,24 +522,7 @@ async def update_org_json_column_patch(
             f"require_live_row={require_live_row!r} — settings_json requires "
             f"require_live_row=True and otel_config_json requires require_live_row=False"
         )
-    nested = dict(nested_patch or {})
-    if len(nested) > 1:
-        raise ValueError(f"nested_patch supports at most one top-level key per call, got {sorted(nested)!r}")
-    overlap = set(nested) & set(patch)
-    if overlap:
-        raise ValueError(
-            f"nested_patch key(s) {sorted(overlap)!r} also appear in patch — the compose order would be ambiguous"
-        )
-    # QA F13c: a key in BOTH delete_keys and patch/nested_patch is equally
-    # ambiguous (delete-wins was never a documented contract), so it is refused
-    # for the same reason the patch/nested overlap is — rather than silently
-    # letting the delete win.
-    delete_overlap = set(delete_keys) & (set(patch) | set(nested))
-    if delete_overlap:
-        raise ValueError(
-            f"key(s) {sorted(delete_overlap)!r} appear in both delete_keys and patch/nested_patch — "
-            "the compose order would be ambiguous"
-        )
+    nested, sub_delete = _validate_json_patch_args(patch, delete_keys, nested_patch, nested_delete)
 
     # Normalise the target to a ``UUID``: callers occasionally pass the id as a
     # string, and both the tenant-mismatch comparison and the bound SQL /
@@ -478,6 +555,7 @@ async def update_org_json_column_patch(
             column=column,
             require_live_row=require_live_row,
             nested_patch=nested or None,
+            nested_delete=sub_delete or None,
         )
     else:
         value = await _apply_json_column_patch_generic(
@@ -488,6 +566,7 @@ async def update_org_json_column_patch(
             column=column,
             require_live_row=require_live_row,
             nested_patch=nested or None,
+            nested_delete=sub_delete or None,
         )
     return value
 
@@ -610,6 +689,20 @@ def _pg_patch_statement(column: str, require_live_row: bool, *, nested: bool = F
     on the right-hand side of an UPDATE sees the OLD row value; the nested
     compose therefore starts from the same base document the top-level ``||``
     produces.
+
+    FAR-2309: the SAME nested statement also subtracts
+    ``:nested_delete_keys`` (a ``text[]`` of sub-keys) from that composed
+    object, so a single-entry clear is one atomic statement rather than a
+    read-modify-write of the whole block. A merge-only call binds an empty
+    array, and ``jsonb - '{}'::text[]`` is a no-op — ONE statement shape serves
+    both the merge and the delete, which is what keeps this a single write path
+    rather than a parallel delete statement.
+
+    PRECEDENCE TRAP (verified against Postgres 16): ``a::jsonb || b::jsonb -
+    c::text[]`` parses as ``a || (b - c)`` — ``-`` binds TIGHTER than ``||`` —
+    so the merge MUST be parenthesised before the subtraction. Without the
+    parentheses the delete applies to the (usually empty) sub-patch instead of
+    the composed object and silently removes nothing.
     """
     if column == "settings_json" and require_live_row:
         if nested:
@@ -624,13 +717,14 @@ def _pg_patch_statement(column: str, require_live_row: bool, *, nested: bool = F
                 "SET settings_json = jsonb_set("
                 "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)), "
                 "ARRAY[:nested_key]::text[], "
-                "CASE WHEN jsonb_typeof("
+                "(CASE WHEN jsonb_typeof("
                 "(COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
                 "-> CAST(:nested_key AS text)) = 'object' "
                 "THEN (COALESCE(settings_json, '{}'::jsonb) || CAST(:patch AS jsonb)) "
                 "-> CAST(:nested_key AS text) "
                 "ELSE '{}'::jsonb END "
                 "|| CAST(:nested_patch AS jsonb)) "
+                "- CAST(:nested_delete_keys AS text[])) "
                 "- CAST(:delete_keys AS text[]) "
                 "WHERE id = :org_id AND deleted_at IS NULL "
                 "RETURNING settings_json"
@@ -671,18 +765,21 @@ async def _apply_json_column_patch_postgres(
     column: str = "settings_json",
     require_live_row: bool = True,
     nested_patch: dict[str, dict[str, Any]] | None = None,
+    nested_delete: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
-    stmt = _pg_patch_statement(column, require_live_row, nested=bool(nested_patch))
+    nested = bool(nested_patch) or bool(nested_delete)
+    stmt = _pg_patch_statement(column, require_live_row, nested=nested)
     params: dict[str, Any] = {"org_id": str(organisation_id)}
     stmt = stmt.bindparams(
         bindparam("patch", value=json.dumps(patch)),
         bindparam("delete_keys", value=delete_keys, type_=ARRAY(Text)),
     )
-    if nested_patch:
-        ((nested_key, nested_sub),) = nested_patch.items()
+    if nested:
+        nested_key, nested_sub, nested_delete_keys = _nested_parts(nested_patch, nested_delete)
         stmt = stmt.bindparams(
             bindparam("nested_key", value=nested_key),
             bindparam("nested_patch", value=json.dumps(nested_sub)),
+            bindparam("nested_delete_keys", value=nested_delete_keys, type_=ARRAY(Text)),
         )
     result = await session.execute(stmt, params)
     row = result.first()
@@ -698,6 +795,28 @@ async def _apply_json_column_patch_postgres(
     return value
 
 
+def _nested_parts(
+    nested_patch: dict[str, dict[str, Any]] | None,
+    nested_delete: dict[str, list[str]] | None,
+) -> tuple[str, dict[str, Any], list[str]]:
+    """Unpack the single-key nested merge/delete pair into statement params.
+
+    ``update_org_json_column_patch`` has already refused more than one top-level
+    key per mechanism and any call combining the two mechanisms, so exactly one
+    of the two mappings is non-empty here. The merge defaults to an empty
+    sub-object and the delete to an empty array, which lets the ONE nested
+    statement serve
+    both mechanisms (``jsonb || '{}'`` and ``jsonb - '{}'::text[]`` are both
+    no-ops).
+    """
+    if nested_delete:
+        ((nested_key, nested_delete_keys),) = nested_delete.items()
+        nested_sub = (nested_patch or {}).get(nested_key, {})
+        return nested_key, nested_sub, list(nested_delete_keys)
+    ((nested_key, nested_sub),) = (nested_patch or {}).items()
+    return nested_key, nested_sub, []
+
+
 async def _apply_json_column_patch_generic(
     session: AsyncSession,
     organisation_id: uuid.UUID,
@@ -707,6 +826,7 @@ async def _apply_json_column_patch_generic(
     column: str = "settings_json",
     require_live_row: bool = True,
     nested_patch: dict[str, dict[str, Any]] | None = None,
+    nested_delete: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     if require_live_row:
         org = await get_organisation(session, organisation_id, for_update=True)
@@ -732,6 +852,16 @@ async def _apply_json_column_patch_generic(
         existing = value.get(nested_key)
         merged_sub = dict(existing) if isinstance(existing, dict) else {}
         merged_sub.update(nested_sub)
+        value[nested_key] = merged_sub
+    # FAR-2309: sub-key clear, applied to the CURRENT value of the key — the
+    # generic-path equivalent of the Postgres ``- text[]`` on the composed
+    # object. A non-object stored block heals to ``{}`` exactly as the merge
+    # path does, so a delete never corrupts it into a list.
+    for nested_key, nested_delete_keys in (nested_delete or {}).items():
+        existing = value.get(nested_key)
+        merged_sub = dict(existing) if isinstance(existing, dict) else {}
+        for sub_key in nested_delete_keys:
+            merged_sub.pop(sub_key, None)
         value[nested_key] = merged_sub
     for key in delete_keys:
         value.pop(key, None)

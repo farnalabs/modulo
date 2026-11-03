@@ -9,9 +9,11 @@
 ;   MODULO_URL  - local URL opened by the post-install checkbox
 ;
 ; Bundle contract:
-;   BUNDLE_DIR\modulo.exe
+;   BUNDLE_DIR\bin\modulo.exe
 ;   BUNDLE_DIR\modulo-runtime.json
-; The marker is part of the native launcher contract. It must be shipped by
+; The launcher lives in bin\ because it resolves the bundle root as the parent of
+; its own directory (runtime\, backend\, pg\, redis\ are siblings of bin\), so it
+; installs to {app}\bin\modulo.exe. The marker is part of the native launcher contract. It must be shipped by
 ; the real runtime build and is deliberately required at compile time.
 ;
 ; Build example:
@@ -50,9 +52,9 @@
 ; an ISPP expression - inline {#name} substitution only happens on ordinary
 ; lines. So the bundle checks below use BUNDLE_DIR as an expression rather than
 ; "{#BUNDLE_DIR}", which would test for a file literally named {#BUNDLE_DIR}.
-#ifexist BUNDLE_DIR + "\modulo.exe"
+#ifexist BUNDLE_DIR + "\bin\modulo.exe"
 #else
-  #error Required native runtime executable is missing from the bundle (BUNDLE_DIR\modulo.exe)
+  #error Required native runtime executable is missing from the bundle (BUNDLE_DIR\bin\modulo.exe)
 #endif
 #ifexist BUNDLE_DIR + "\modulo-runtime.json"
 #else
@@ -94,7 +96,7 @@ AppId={{7B7A9F3B-69DA-4EA0-9EB8-0D8F2D4B8A6B}}
 LicenseFile={#SourcePath}\..\..\LICENSE
 InfoBeforeFile={#SourcePath}\INSTALLER-INFO.txt
 Uninstallable=yes
-UninstallDisplayIcon={app}\modulo.exe
+UninstallDisplayIcon={app}\bin\modulo.exe
 UninstallDisplayName=Modulo {#VERSION_NUM}
 CloseApplications=yes
 RestartApplications=yes
@@ -109,17 +111,17 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; The compile-time contract above is the primary guard. These explicit entries
 ; keep the installer payload contract visible and prevent optional-source flags
 ; from turning a missing runtime into a partial installation.
-Source: "{#BUNDLE_DIR}\modulo.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BUNDLE_DIR}\bin\modulo.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "{#BUNDLE_DIR}\modulo-runtime.json"; DestDir: "{app}"; Flags: ignoreversion
 ; Everything else the bundle ships. skipifsourcedoesntexist is deliberate: the
 ; declared bundle contract is exactly the two files above, so a conforming
 ; bundle leaves this wildcard with nothing to copy, which Inno Setup otherwise
 ; rejects as "No files found matching ...".
-Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "modulo.exe,modulo-runtime.json"
+Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "bin\modulo.exe,modulo-runtime.json"
 
 [Icons]
-Name: "{group}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"
-Name: "{commondesktop}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Modulo"; Filename: "{app}\bin\modulo.exe"; WorkingDir: "{app}"
+Name: "{commondesktop}\Modulo"; Filename: "{app}\bin\modulo.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
 ; Service registration lives in [Code] (RegisterService) rather than here, so
@@ -506,7 +508,7 @@ var
 begin
   Result := False;
   ServiceStarted := False;
-  ServiceExe := ExpandConstant('{app}') + '\modulo.exe';
+  ServiceExe := ExpandConstant('{app}') + '\bin\modulo.exe';
 
   SetStage('service registration (create)');
   { sc.exe accepts only `key= value` options. A bare `service` after the quoted

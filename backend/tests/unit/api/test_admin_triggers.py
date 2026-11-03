@@ -34,11 +34,29 @@ def _make_mock_event(**overrides: object) -> MagicMock:
     return e
 
 
-def _make_event_result(events: list[MagicMock]) -> MagicMock:
+def _make_event_result(
+    events: list[tuple[MagicMock, uuid.UUID, str, bool]],
+) -> MagicMock:
+    """Build the page-query result of ``_TriggerEventRow`` tuples.
+
+    ``session.execute`` is mocked here, so the join/tenancy/soft-delete SQL is
+    not exercised; the real-Postgres coverage for that lives in
+    ``tests/integration/test_admin_trigger_events_history.py``.
+    """
     r = MagicMock()
-    r.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=events)))
+    r.all = MagicMock(return_value=[admin_triggers._TriggerEventRow(*row) for row in events])
     r.scalar = MagicMock(return_value=len(events))
     return r
+
+
+def _make_event_row(
+    event: MagicMock,
+    pipeline_id: uuid.UUID | None = None,
+    pipeline_name: str | None = None,
+    pipeline_deleted: bool = False,
+) -> tuple[MagicMock, uuid.UUID, str, bool]:
+    """One page-query row: event, pipeline id, pipeline name, deleted flag."""
+    return (event, pipeline_id or uuid.uuid4(), pipeline_name or "Pipeline", pipeline_deleted)
 
 
 def _authz_result() -> MagicMock:
@@ -138,10 +156,12 @@ class TestListTriggerEvents:
     URL = "/api/v1/admin/trigger-events"
 
     def test_returns_200_with_events(self, client: TestClient) -> None:
-        event = _make_mock_event()
+        pipeline_id = uuid.uuid4()
+        run_id = uuid.uuid4()
+        event = _make_mock_event(run_id=run_id)
         with patch("modulo.api.routes.admin_triggers.set_rls_org"):
             session = _make_mock_session()
-            event_result = _make_event_result([event])
+            event_result = _make_event_result([_make_event_row(event, pipeline_id, "Release pipeline")])
             count_result = MagicMock()
             count_result.scalar = MagicMock(return_value=1)
             authz_result = MagicMock()
@@ -162,17 +182,49 @@ class TestListTriggerEvents:
         assert body["total"] == 1
         assert body["items"][0]["trigger_type"] == "manual"
         assert body["items"][0]["validation_result"] == "accepted"
+        assert body["items"][0]["run_id"] == str(run_id)
+        assert body["items"][0]["pipeline_id"] == str(pipeline_id)
+        assert body["items"][0]["pipeline_name"] == "Release pipeline"
         assert body["result_counts"]["recent"]["backpressure_skipped"] == 2
         assert body["result_counts"]["previous"]["backpressure_skipped"] == 1
         assert body["result_counts"]["total_recent"] == 2
         assert body["result_counts"]["total_previous"] == 1
         assert body["result_counts"]["direction"] == "up"
 
+    def test_pipeline_deleted_flag_is_returned(self, client: TestClient) -> None:
+        """A soft-deleted/archived pipeline still names the event's pipeline.
+
+        The flag tells the UI to drop the editor link without hiding the name
+        (FAR-2226).
+        """
+        pipeline_id = uuid.uuid4()
+        event = _make_mock_event()
+        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+            session = _make_mock_session()
+            event_result = _make_event_result([_make_event_row(event, pipeline_id, "Archived pipeline", True)])
+            count_result = MagicMock()
+            count_result.scalar = MagicMock(return_value=1)
+            authz_result = MagicMock()
+            authz_result.scalar_one_or_none = MagicMock(return_value=True)
+            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result, _counts_result()])
+
+            async def override_session() -> AsyncGenerator[AsyncMock, None]:
+                yield session
+
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.get(self.URL)
+
+        assert resp.status_code == 200
+        item = resp.json()["items"][0]
+        assert item["pipeline_id"] == str(pipeline_id)
+        assert item["pipeline_name"] == "Archived pipeline"
+        assert item["pipeline_deleted"] is True
+
     def test_returns_200_with_filters(self, client: TestClient) -> None:
         event = _make_mock_event(trigger_type="webhook", validation_result="hmac_failed")
         with patch("modulo.api.routes.admin_triggers.set_rls_org"):
             session = _make_mock_session()
-            event_result = _make_event_result([event])
+            event_result = _make_event_result([_make_event_row(event, pipeline_name="Webhook pipeline")])
             count_result = MagicMock()
             count_result.scalar = MagicMock(return_value=1)
             authz_result = MagicMock()
@@ -259,6 +311,76 @@ class TestListTriggerEvents:
             self._client_with_execute_error(client, RuntimeError("boom"))
             resp = client.get(self.URL)
         assert resp.status_code == 500
+
+    def test_has_more_truncates_the_page_and_sets_next_cursor(self, client: TestClient) -> None:
+        """An overflow row is dropped from the page and its predecessor paginates.
+
+        ``_fetch_trigger_event_rows`` fetches ``limit + 1`` rows so it can tell
+        "there is another page" from "this page is exactly full"; the extra row
+        must never reach the response and the last KEPT row is the next cursor
+        (FAR-2226).
+        """
+        kept = _make_mock_event()
+        overflow = _make_mock_event()
+        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+            session = _make_mock_session()
+            event_result = _make_event_result(
+                [
+                    _make_event_row(kept, pipeline_name="Kept pipeline"),
+                    _make_event_row(overflow, pipeline_name="Overflow pipeline"),
+                ]
+            )
+            count_result = MagicMock()
+            count_result.scalar = MagicMock(return_value=2)
+            authz_result = MagicMock()
+            authz_result.scalar_one_or_none = MagicMock(return_value=True)
+            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result, _counts_result()])
+
+            async def override_session() -> AsyncGenerator[AsyncMock, None]:
+                yield session
+
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.get(self.URL, params={"limit": 1})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["items"]) == 1
+        assert body["items"][0]["pipeline_name"] == "Kept pipeline"
+        assert body["next_cursor"] == f"{_NOW.isoformat()}_{kept.id}"
+        assert body["prev_cursor"] == f"{_NOW.isoformat()}_{kept.id}"
+
+    def test_cursor_param_applies_the_keyset_filter_and_keeps_deleted_rows_reachable(self, client: TestClient) -> None:
+        """The cursor reaches the keyset predicate and the soft-delete opt-out sticks.
+
+        Both halves are load-bearing for FAR-2226: the cursor keeps paging
+        working, and ``include_soft_deleted`` is what stops a deleted trigger or
+        pipeline from silently dropping its event history out of the log.
+        ``session.execute`` is mocked, so the statement is inspected instead of
+        being sent to a database.
+        """
+        event = _make_mock_event()
+        cursor = f"{_NOW.isoformat()}_{uuid.uuid4()}"
+        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+            session = _make_mock_session()
+            event_result = _make_event_result([_make_event_row(event)])
+            count_result = MagicMock()
+            count_result.scalar = MagicMock(return_value=1)
+            authz_result = MagicMock()
+            authz_result.scalar_one_or_none = MagicMock(return_value=True)
+            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result, _counts_result()])
+
+            async def override_session() -> AsyncGenerator[AsyncMock, None]:
+                yield session
+
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.get(self.URL, params={"cursor": cursor})
+
+        assert resp.status_code == 200
+        # Call 0 is the require_permission authz read; call 1 is the page query.
+        page_statement = session.execute.call_args_list[1].args[0]
+        compiled = str(page_statement.compile(compile_kwargs={"literal_binds": True}))
+        assert "trigger_events.created_at <" in compiled
+        assert page_statement.get_execution_options().get("include_deleted") is True
 
 
 class TestFetchResultCounts:
