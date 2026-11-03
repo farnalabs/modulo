@@ -14,8 +14,17 @@ from pathlib import Path
 import pytest
 import yaml
 
-# Ensure scripts directory is on sys.path
-_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
+# Locate the repo root by walking up from this file until the packaged script is
+# found. A fixed parents[N] index silently resolves to the wrong tree once the
+# test moves (repo-root tests/ and backend/tests/ sit at different depths).
+for _parent in Path(__file__).resolve().parents:
+    _SCRIPT_PATH = _parent / "scripts" / "package_compose_release.py"
+    if _SCRIPT_PATH.exists():
+        break
+else:
+    raise RuntimeError("Could not find repo root (scripts/package_compose_release.py)")
+
+_SCRIPTS_DIR = _SCRIPT_PATH.parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
@@ -199,7 +208,7 @@ def test_build_compose_release_rejects_invalid_version(tmp_path: Path):
 # variable the evaluator has never seen.
 # ---------------------------------------------------------------------------
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+_REPO_ROOT = _SCRIPT_PATH.parents[1]
 
 
 def _bundled_files(version: str = "0.4.0") -> dict[str, str]:
@@ -338,8 +347,12 @@ def test_bundled_env_values_satisfy_the_settings_validators():
     # Prove the recipes are accepted by the real validators.
     sample_fernet = base64.b64encode(b"x" * 32).decode()
     assert len(base64.urlsafe_b64decode(sample_fernet)) == 32
-    assert len(Fernet(sample_fernet.encode()).encrypt(b"probe")) > 0
-    assert len(b"x" * 36) >= 32  # 48 base64 chars carry 36 decoded bytes
+    fernet = Fernet(sample_fernet.encode())
+    assert fernet.decrypt(fernet.encrypt(b"probe")) == b"probe"
+    # gen_b64 48 emits 48 base64 chars, which carry 36 decoded bytes - above
+    # the 32-byte floor SECRET_KEY must satisfy.
+    sample_secret = base64.b64encode(b"x" * 36).decode()
+    assert len(base64.b64decode(sample_secret)) >= 32
 
 
 def test_bundled_compose_is_standalone_and_dropped_the_source_build():
