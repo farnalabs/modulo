@@ -82,6 +82,128 @@ beforeEach(() => {
   mockResponses['/api/v1/pipelines?page_size=100'] = { items: [], total: 0, page: 1, page_size: 100 }
 })
 
+describe('PipelineListView failure and retry', () => {
+  it('announces a list-load failure and retries the same request to recover the table', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Retry Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the mocked
+    // client is a plain vi.fn here; its stored implementation is re-used verbatim.
+    const getMock: any = api.GET
+    const original = getMock.getMockImplementation()
+    let fail = true
+    getMock.mockImplementation((url: string, options?: unknown) => {
+      if (url === '/api/v1/pipelines' && fail) return Promise.reject(new Error('pipelines down'))
+      return original ? original(url, options) : Promise.resolve({ data: mockResponses.default, error: undefined })
+    })
+    try {
+      await router.push('/pipelines')
+      await router.isReady()
+      const wrapper = mount(PipelineListView, {
+        global: { plugins: [router], stubs: { FolderTree: true } },
+      })
+      await flushPromises()
+      await nextTick()
+
+      // The failure is an announced inline alert; no rows are shown.
+      const alert = wrapper.find('[role="alert"]')
+      expect(alert.exists()).toBe(true)
+      expect(alert.text()).toContain('pipelines down')
+      expect(wrapper.find('[data-testid="pipeline-tree-row-p1"]').exists()).toBe(false)
+
+      const pipelineCalls = () =>
+        getMock.mock.calls.filter((c: unknown[]) => c[0] === '/api/v1/pipelines').length
+      const before = pipelineCalls()
+      fail = false
+      await alert.find('[data-testid="error-alert-retry"]').trigger('click')
+      await flushPromises()
+      await nextTick()
+
+      // Recovery: the retry re-issued the list request and the table is back.
+      expect(pipelineCalls()).toBeGreaterThan(before)
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="pipeline-tree-row-p1"]').exists()).toBe(true)
+      wrapper.unmount()
+    } finally {
+      getMock.mockImplementation(original)
+    }
+  })
+
+  it('keeps the table rendered when a row action (pause) fails, showing an inline banner', async () => {
+    // Before the fix a failed pause wrote the message into the LIST-LOAD
+    // `error`, whose v-else-if replaced the whole table with an error box —
+    // a row action took the user's list away. The banner is now separate.
+    const running = { id: 'p1', organisation_id: 'org1', name: 'Pause Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: true }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [running], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void; actionMenuItems: Array<{ label: string; command: () => void }> }
+    vm.openActionMenu({} as MouseEvent, running)
+    await nextTick()
+
+    postMock.mockResolvedValueOnce({ data: undefined, error: { detail: 'Pause failed' } })
+    vm.actionMenuItems.find(i => i.label === 'Pause')!.command()
+    await flushPromises()
+    await nextTick()
+
+    const banner = wrapper.find('[role="alert"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Pause failed')
+    // The list is untouched: the row is still on screen and the list-load
+    // error state was not entered.
+    expect(wrapper.find('[data-testid="pipeline-tree-row-p1"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('No pipelines yet')
+
+    // Dismissing the banner restores the clean list surface.
+    await banner.find('[data-testid="error-alert-dismiss"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-tree-row-p1"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it.each([
+    { label: 'Archive', archived_at: null, message: 'Archive failed' },
+    { label: 'Unarchive', archived_at: '2025-02-01T00:00:00Z', message: 'Unarchive failed' },
+  ])('keeps the table rendered when $label fails, showing an inline banner', async ({ label, archived_at, message }) => {
+    // Every row action shares the separate `actionError` surface: an archive
+    // or unarchive failure must not write into the list-load `error` that
+    // replaces the whole table with an error box.
+    const row = { id: 'p1', organisation_id: 'org1', name: `${label} Me`, description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at, run_enabled: true }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [row], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void; actionMenuItems: Array<{ label: string; command: () => void }> }
+    vm.openActionMenu({} as MouseEvent, row)
+    await nextTick()
+
+    postMock.mockResolvedValueOnce({ data: undefined, error: { detail: message } })
+    vm.actionMenuItems.find(i => i.label === label)!.command()
+    await flushPromises()
+    await nextTick()
+
+    const banner = wrapper.find('[role="alert"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain(message)
+    // The list is untouched: the row is still on screen and the list-load
+    // error state was not entered.
+    expect(wrapper.find('[data-testid="pipeline-tree-row-p1"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('No pipelines yet')
+    wrapper.unmount()
+  })
+})
+
 describe('PipelineListView', () => {
   it('renders without crashing', async () => {
     await router.push('/pipelines')
@@ -95,7 +217,7 @@ describe('PipelineListView', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
-  it('opens a pipeline via keyboard (Enter and Space) for a11y', async () => {
+  it('renders the pipeline name as a keyboard-accessible native link', async () => {
     await router.push('/pipelines')
     await router.isReady()
     mockResponses['/api/v1/pipelines?page_size=100'] = {
@@ -115,14 +237,10 @@ describe('PipelineListView', () => {
 
     const row = wrapper.find('[data-testid="pipeline-tree-row-pipe-1"]')
     expect(row.exists()).toBe(true)
-
-    await row.trigger('keydown', { key: 'Enter' })
-    await flushPromises()
-    expect(router.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'pipeline-editor' }))
-
-    await row.trigger('keydown', { key: ' ' })
-    await flushPromises()
-    expect(vi.mocked(router.push).mock.calls.length).toBeGreaterThanOrEqual(2)
+    const link = row.find('[data-testid="pipeline-tree-link"]')
+    expect(link.exists()).toBe(true)
+    expect(link.text()).toContain('Demo Pipeline')
+    expect(link.attributes('href')).toBe('/pipelines/pipe-1/editor')
   })
 
   it('sizes the page to the viewport minus the AppLayout chrome (sibling calc convention, never bare h-screen)', async () => {
@@ -654,7 +772,7 @@ describe('PipelineListView', () => {
     expect(wrapper.text()).toContain('No pipelines match your search')
   })
 
-  it('navigates to the editor when a pipeline row is clicked', async () => {
+  it('keeps the row action menu separate from the pipeline navigation link', async () => {
     const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Click Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
     mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
     await router.push('/pipelines')
@@ -664,8 +782,10 @@ describe('PipelineListView', () => {
     })
     await flushPromises()
     await nextTick()
-    await wrapper.find('[data-testid="pipeline-tree-row-p1"]').trigger('click')
-    expect(router.push).toHaveBeenCalledWith({ name: 'pipeline-editor', params: { id: 'p1' } })
+    const row = wrapper.find('[data-testid="pipeline-tree-row-p1"]')
+    expect(row.find('a').attributes('href')).toBe('/pipelines/p1/editor')
+    expect(row.find('[data-testid="pipeline-list-action-menu"]').exists()).toBe(true)
+    expect(row.attributes('tabindex')).toBeUndefined()
   })
 
   it('drops a pipeline onto a folder row in the table to move it', async () => {
@@ -1026,7 +1146,7 @@ describe('PipelineListView', () => {
     expect(folderButtons.map(b => b.text())).toEqual(['alpha', 'Beta', 'Zeta'])
   })
 
-  it('opens the pipeline editor via keyboard (Enter / Space) for a11y (FAR-821)', async () => {
+  it('exposes the pipeline editor link without making the whole row a control (FAR-821)', async () => {
     const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Keyboard Pipeline', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
     mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
     await router.push('/pipelines')
@@ -1037,21 +1157,12 @@ describe('PipelineListView', () => {
     await flushPromises()
     await nextTick()
 
-    // Prevent real navigation so the row (and its handlers) stay mounted for
-    // both key dispatches.
-    const pushSpy = vi.spyOn(router, 'push').mockImplementation(() => Promise.resolve() as never)
     const row = wrapper.find('[data-testid="pipeline-tree-row-p1"]')
     expect(row.exists()).toBe(true)
-
-    await row.trigger('keydown', { key: 'Enter' })
-    await nextTick()
-    expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({ name: 'pipeline-editor', params: { id: 'p1' } }))
-
-    pushSpy.mockClear()
-    await row.trigger('keydown', { key: ' ', code: 'Space' })
-    await nextTick()
-    expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({ name: 'pipeline-editor', params: { id: 'p1' } }))
-    pushSpy.mockRestore()
+    const link = row.find('a')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('/pipelines/p1/editor')
+    expect(row.attributes('tabindex')).toBeUndefined()
   })
 
   it('remounts the row-action Menu on every open so its item-click handler is fresh (staging @regression)', async () => {

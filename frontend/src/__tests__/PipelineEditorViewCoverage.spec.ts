@@ -1510,7 +1510,7 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
   })
 
   // -- loadPipeline: error path --
-  it('loadPipeline error sets pageError', async () => {
+  it('loadPipeline error surfaces a non-fatal banner and keeps the editor', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = mountEditor()
@@ -1523,7 +1523,17 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
 
     await vm.loadPipeline()
     await flushPromises()
-    expect(vm.pageError).toContain('pipeline_not_found')
+
+    // Non-fatal: the graph-driven editor stays usable and the failure is
+    // announced by the banner, so pageError must stay clear.
+    expect(vm.pipelineLoadError).toContain('pipeline_not_found')
+    expect(vm.pageError).toBeNull()
+    const banner = wrapper
+      .findAll('[role="alert"]')
+      .find((alert) => alert.text().includes('pipeline_not_found'))
+    expect(banner).toBeDefined()
+    expect(banner!.text()).toContain('pipeline_not_found')
+    expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -1868,6 +1878,62 @@ describe('PipelineEditorView — coverage: connector node slot', () => {
     // One card uses the authored label, the other the connector default.
     expect(wrapper.text()).toContain('Slack')
     expect(wrapper.text()).toContain('Connector')
+    wrapper.unmount()
+  })
+})
+
+describe('PipelineEditorView - agent reference is not a dead link', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useApiFns.get.mockReset()
+    useApiFns.post.mockReset()
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
+      return Promise.resolve({ items: [] })
+    })
+    useApiFns.post.mockResolvedValue({})
+  })
+
+  it('shows the selected agent by name and offers no link to the unregistered agent route', async () => {
+    // /admin/agents/:id is not a registered route, so the node-detail panel's
+    // "View Agent" link used to hit the catch-all redirect and silently send the
+    // operator to the dashboard. The agent is shown as text instead.
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true }
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          VueFlow: { template: '<div><slot /></div>' },
+          Background: true,
+          Controls: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', agent_id: 'agent-1', label: 'A', description: '', position: { x: 0, y: 0 } },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'A', description: '' } }]
+    vm.agents = [{ id: 'agent-1', name: 'Agent One', connector_type_refs: [] }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Agent One')
+    expect(wrapper.find('a[href="/admin/agents/agent-1"]').exists()).toBe(false)
+    const agentAnchors = wrapper
+      .findAll('a')
+      .filter((a) => (a.attributes('href') ?? '').startsWith('/admin/agents/'))
+    expect(agentAnchors).toHaveLength(0)
+
     wrapper.unmount()
   })
 })

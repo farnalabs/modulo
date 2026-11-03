@@ -580,7 +580,9 @@ routes:
         # gates, so navigation stays admin-only while the tier stays
         # community. Every team-only section on the page remains behind the
         # in-page team_rbac FeatureGate (dimmed + upgrade overlay on
-        # Community); only the HITL review window card sits outside it.
+        # Community); three org-scoped, community-tier cards render OUTSIDE
+        # it so a community admin can use them: the HITL review window, the
+        # human-linked MCP HITL authority, and the organisation feature flags.
         <<: *community
         required_roles: [admin]
         deprecated: false
@@ -934,6 +936,39 @@ routes:
         required_permissions: [library.search.in_dev]
         deprecated: false
 
+    /system-maps:
+        name: system-maps
+        breadcrumb: System Maps
+        parent: /
+        product_map: [feat-system-maps]
+        sidebar_group: build
+        sidebar_order: 5
+        type: list_page
+        pattern: /system-maps
+        exact: true
+        visibility: private_preview
+        <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [system_maps_access]
+        deprecated: false
+
+    /system-maps/:id:
+        name: system-map-detail
+        breadcrumb: System Map
+        parent: /system-maps
+        product_map: [feat-system-maps]
+        sidebar_group:
+        sidebar_order:
+        type: detail_page
+        pattern: /system-maps/:id
+        dynamic_params:
+          - id
+        visibility: private_preview
+        <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [system_maps_access]
+        deprecated: false
+
     /admin/runners/profiles:
         name: admin-runners-profiles
         breadcrumb: Runners
@@ -1110,6 +1145,124 @@ elements:
       - testid: page-header-right
         type: element
         dynamic_testid: false
+
+    /system-maps:
+      - testid: system-maps-create
+        type: button
+        dynamic_testid: false
+      - testid: system-map-create-dialog
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-create-name
+        type: input
+        dynamic_testid: false
+      - testid: system-map-create-description
+        type: textarea
+        dynamic_testid: false
+      - testid: system-map-create-cancel
+        type: button
+        dynamic_testid: false
+      - testid: system-map-create-submit
+        type: button
+        dynamic_testid: false
+      - testid: system-maps-pagination
+        type: element
+        dynamic_testid: false
+      - testid: system-maps-prev
+        type: button
+        dynamic_testid: false
+      - testid: system-maps-next
+        type: button
+        dynamic_testid: false
+      - testid: system-maps-loading
+        type: element
+        dynamic_testid: false
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+
+    /system-maps/:id:
+      - testid: system-map-detail-back
+        type: link
+        dynamic_testid: false
+      - testid: system-map-detail-header
+        type: header
+        dynamic_testid: false
+      - testid: system-map-header-toggle-history
+        type: button
+        dynamic_testid: false
+      - testid: system-map-save-draft
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discover
+        type: button
+        dynamic_testid: false
+      - testid: system-map-publish
+        type: button
+        dynamic_testid: false
+      - testid: system-map-archive
+        type: button
+        dynamic_testid: false
+      - testid: system-map-graph-editor
+        type: element
+        dynamic_testid: false
+      - testid: system-map-graph-canvas
+        type: element
+        dynamic_testid: false
+      - testid: system-map-empty-state
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-sidebar
+        type: aside
+        dynamic_testid: false
+      - testid: system-map-new-draft
+        type: button
+        dynamic_testid: false
+      - testid: system-map-sidebar-discover
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-panel
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-discovery-backdrop
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-close
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-cancel
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-save
+        type: button
+        dynamic_testid: false
+      - testid: system-map-relationship-type
+        type: select
+        dynamic_testid: false
+      - testid: system-map-relationship-source
+        type: select
+        dynamic_testid: false
+      - testid: system-map-relationship-target
+        type: select
+        dynamic_testid: false
+      - testid: system-map-add-relationship
+        type: button
+        dynamic_testid: false
+      - testid: system-map-relationships
+        type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
     /governance:
       - testid: governance-stack
         type: element
@@ -1191,6 +1344,9 @@ elements:
         dynamic_testid: false
       - testid: admin-audit-export-jsonl
         type: button
+        dynamic_testid: false
+      - testid: admin-audit-export-error
+        type: element
         dynamic_testid: false
       - testid: admin-audit-chain-result
         type: element
@@ -1713,6 +1869,9 @@ elements:
       - testid: admin-error-detail-back
         type: button
         dynamic_testid: false
+      - testid: admin-error-detail-copy-support
+        type: button
+        dynamic_testid: false
       - testid: admin-error-detail-events-loading
         type: element
         dynamic_testid: false
@@ -2176,12 +2335,6 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
-      - testid: org-delete-open
-        type: button
-        dynamic_testid: false
-      - testid: org-delete-confirm-input
-        type: input
-        dynamic_testid: false
       - testid: org-export-start
         type: button
         dynamic_testid: false
@@ -2261,6 +2414,33 @@ elements:
         type: element
         dynamic_testid: false
       - testid: org-mcp-authority-saved
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-loading
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-load-error
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-list
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flag-row
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flag-status
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-empty
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-note
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-error
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-saved
         type: element
         dynamic_testid: false
     /admin/parameter-schemas:
@@ -2745,6 +2925,21 @@ elements:
         type: element
         dynamic_testid: false
     /evidence:
+      - testid: evidence-run-picker
+        type: element
+        dynamic_testid: false
+      - testid: evidence-run-search
+        type: input
+        dynamic_testid: false
+      - testid: evidence-recent-run
+        type: input
+        dynamic_testid: false
+      - testid: evidence-recent-runs-error
+        type: element
+        dynamic_testid: false
+      - testid: evidence-recent-runs-empty
+        type: element
+        dynamic_testid: false
       - testid: evidence-run-id
         type: input
         dynamic_testid: false
@@ -2947,6 +3142,21 @@ elements:
       - testid: compliance-evidence-index-scope-note
         type: element
         dynamic_testid: false
+      - testid: compliance-evidence-summary
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-summary-status
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-summary-count
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-summary-progress
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-summary-percentage
+        type: element
+        dynamic_testid: false
       - testid: compliance-evidence-index-loading
         type: element
         dynamic_testid: false
@@ -3034,6 +3244,15 @@ elements:
         type: element
         dynamic_testid: false
       - testid: analytics-empty-state
+        type: element
+        dynamic_testid: false
+      - testid: analytics-overview-chart
+        type: element
+        dynamic_testid: false
+      - testid: analytics-details
+        type: element
+        dynamic_testid: false
+      - testid: analytics-capacity-details
         type: element
         dynamic_testid: false
       - testid: analytics-table
@@ -3980,6 +4199,9 @@ elements:
         dynamic_testid: false
       - testid: pipeline-tree-folder-toggle
         type: button
+        dynamic_testid: false
+      - testid: pipeline-tree-link
+        type: link
         dynamic_testid: false
       - testid: folder-tree
         type: element
@@ -6758,7 +6980,7 @@ features:
             # Pre-auth / webhook route auditing — actor-less audited_system (FAR-1516)
             - "[x] Pre-auth and webhook routes are audited through the actor-less audited_system variant (FAR-1516): sign-in/out, token refresh, the SAML ACS POST, the public error ingest and inbound webhooks record the same isolated-append event WITHOUT fabricating an actor — actor_user_id stays NULL, the payload carries the SYSTEM_ACTOR marker plus an actor_source string (pre_auth / unauthenticated / signature_verified / authenticated) stating HOW the request was admitted, never WHO; the route publishes its tenant via bind_audit_org at the point it becomes known (with no tenant yet, the unattributed SYSTEM_ORG_ID sentinel is used so the attempt is still recorded and the real org rebinds the moment it resolves), an event with no published org is logged and skipped rather than written into a fabricated tenant, and bind_audit_actor_source lets the route STRENGTHEN its declared actor_source once a verified signature or an authenticated principal lands, so recorded provenance is always the strongest TRUE admission statement (core/audit_coverage.py audited_system/bind_audit_org/bind_audit_actor_source, routes auth/sso/slack/stripe_webhook/webhooks/errors; test_audit_coverage.py, test_webhooks_endpoint.py, test_far1464_route_arm_coverage.py)"
             # Org-independent durable ledger for org-lifecycle events (FAR-1517)
-            - "[x] Org-lifecycle audit records survive a hard delete (FAR-1517): `audit_events.organisation_id` FKs `organisations.id` with ON DELETE CASCADE, so the org-scoped chain - including the `org_deletion_requested` row written moments earlier - dies with the org, and a post-commit append can never satisfy the FK afterwards. The org-lifecycle writers (`DELETE /api/v1/admin/org`, `POST /api/v1/admin/org/deletion-request`, `POST /api/v1/admin/org/deletion-confirm`, `PATCH /api/v1/admin/org/deletion-cancel`, and system-admin `DELETE /api/v1/admin/orgs/{org_id}`) now mirror the same evidence into the org-independent `system_audit_events` ledger IN the deleting transaction BEFORE the org row is removed: the table carries `org_id`/`actor_user_id` as PLAIN values with NO FK and no `organisation_id` tenant column, so nothing cascades into it and no RLS scope excludes it; the record commits only with the delete and a failed append aborts the delete (fail-closed, deliberately no try/except), while UPDATE/DELETE are rejected by database append-only triggers (migration 0285). The ledger is deliberately NOT hash-chained - the tamper-evident chain is per-org and its head cascades away - so immutability here comes from the triggers. Those routes sit in the audit-coverage baseline because `audited()`'s post-commit org-scoped append can never satisfy the audit_events FK after the delete (core/system_audit_logger.py, db/models/system_audit_event.py, db/migrations/versions/0285_system_audit_events.py, tests/integration/test_system_audit_org_deletion.py, tests/unit/core/test_system_audit_logger.py)"
+            - "[x] Org-lifecycle audit records survive a hard delete (FAR-1517): `audit_events.organisation_id` FKs `organisations.id` with ON DELETE CASCADE, so the org-scoped chain - including the `org_deletion_requested` row written moments earlier - dies with the org, and a post-commit append can never satisfy the FK afterwards. The three self-service delete routes no longer delete anything: `DELETE /api/v1/admin/org`, `POST /api/v1/admin/org/deletion-request` and `POST /api/v1/admin/org/deletion-confirm` unconditionally refuse active-organisation deletion with 403 (a system admin must use the explicit cross-organisation route), so they mirror no lifecycle event and their only audit output is the audited() refused-attempt record. The remaining org-lifecycle writers (`PATCH /api/v1/admin/org/deletion-cancel` and the system-admin `DELETE /api/v1/admin/orgs/{org_id}`) still mirror the same evidence into the org-independent `system_audit_events` ledger IN the same transaction BEFORE the org row is removed: the table carries `org_id`/`actor_user_id` as PLAIN values with NO FK and no `organisation_id` tenant column, so nothing cascades into it and no RLS scope excludes it; the record commits only with the delete and a failed append aborts the delete (fail-closed, deliberately no try/except), while UPDATE/DELETE are rejected by database append-only triggers (migration 0285). The ledger is deliberately NOT hash-chained - the tamper-evident chain is per-org and its head cascades away - so immutability here comes from the triggers. Only `admin_orgs.admin_delete_org` remains in the audit-coverage baseline because `audited()`'s post-commit org-scoped append can never satisfy the audit_events FK after the delete; `admin.confirm_org_deletion` and `admin.delete_org_immediate` left it once they stopped deleting and became audited refusals (core/system_audit_logger.py, db/models/system_audit_event.py, db/migrations/versions/0285_system_audit_events.py, tests/integration/test_system_audit_org_deletion.py, tests/unit/core/test_system_audit_logger.py)"
             # Background / cron / boot write-path audit ratchet (FAR-1549)
             - "[x] Writes that never see a request (SAQ system-cron sweeps, runs-worker tasks, reconcilers, boot seeds) are audited or explicitly classified (FAR-1549): the shared append_background_audit_event / record_run_state_change_audits helpers append a SYSTEM-actor event with actor_user_id NULL, a SYSTEM_ACTOR payload marker and an actor_source naming the process, set the org RLS context inside their own fresh transaction, re-select each run and drop any whose live status is not an expected one (the phantom-event guard), and fail open (log + swallow) after the already-committed mutation while always propagating CancelledError; tests/architecture/test_background_audit_coverage.py mechanically enumerates every SAQ task, cron job, reconciler, seeder and boot seed and fails until each is classified audited / exempt (fixed EXEMPT_REASONS vocabulary) / gap, with the SuiteRun-lifecycle and modulo_users boot-seed gaps recorded explicitly (backend/src/modulo/core/audit_logger/background.py, backend/src/modulo/core/cron_helpers.py, backend/src/modulo/core/run_admission.py, backend/src/modulo/core/run_terminal_advance.py, backend/src/modulo/core/runner_capacity.py, backend/src/modulo/core/saq_worker.py, test_background_audit.py, test_background_audit_wiring.py, test_background_audit_coverage.py)"
             # System-admin read surface for the durable org-lifecycle ledger (FAR-1538)
@@ -7020,7 +7242,7 @@ features:
             - "[x] run_daily_facts gains an autonomy_level column populated at fact-write time from the run's latest run.autonomy_level_applied audit event, so the analytics surface can bucket by autonomy without re-joining the audit chain"
             # FAR-1257 + FAR-1269: the configurable review window
             - "[x] The HITL review window is configurable at three levels (FAR-1257): a per-pipeline override, an org default (GET/PUT /api/v1/admin/org/hitl-review-window - whole seconds, 60 to 604800, explicit null clears back to inheritance) and the instance default (HITL_REVIEW_CANCEL_GRACE_SECONDS); the resolved window is stamped ONCE at gate fire time as an absolute hitl_claims.terminalize_at, so stamped rows ignore the env knob while legacy rows keep it verbatim"
-            - "[x] The org review window is editable on EVERY plan tier (FAR-1269): the org-hitl-review-window-* card on /admin/org renders OUTSIDE the team_rbac FeatureGate (the endpoint is not plan-gated) and the /admin/org route itself is community-tier with an explicit [admin] role (FAR-462 pattern), so a community admin reaches the control while every other section of the page stays behind the gate's disabled overlay"
+            - "[x] The org review window is editable on EVERY plan tier (FAR-1269): the org-hitl-review-window-* card on /admin/org renders OUTSIDE the team_rbac FeatureGate (the endpoint is not plan-gated) and the /admin/org route itself is community-tier with an explicit [admin] role (FAR-462 pattern), so a community admin reaches the control while the team-only sections (org info, data export, product analytics, community objects, delete org) stay behind the gate's disabled overlay; three org-scoped community-tier cards render outside that gate — the HITL review window, the human-linked MCP HITL authority, and the organisation feature flags (FAR-1972, FAR-2302)"
             # FAR-1487: reject terminates by default
             - "[x] A HITL rejection with no reject destination ENDS the run with the terminal `rejected` status (not `failed`, not `cancelled`) and error_code `hitl.rejected`: the gate compiles to a conditional edge whose router returns LangGraph END on a stamped rejection (the FAR-541 gate-identity check), and the executor finalize downgrades the would-be `complete` to `rejected` only when BOTH the gate artifact and the committed hitl_claims rejected row agree (backend/tests/integration/test_hitl_resume_roundtrip.py, backend/tests/unit/pipeline_engine/test_hitl_reject_terminate.py)"
             - "[x] Three reject dispositions share one resolver (resolve_reject_disposition): `route` when a reject target/edge exists, `terminate` (the default) otherwise, and `proceed` only when the gate explicitly sets `on_reject: proceed` (validated at graph save, edge-level and node-level); an automated correction_target wins over terminate, and the reviewer briefing (HitlBriefing, HitlReviewCard banners) states the reject consequence in all three states"
@@ -7208,10 +7430,11 @@ features:
         behaviours:
             - "[x] Organization settings are configurable with team management and member roles"
             - "[x] Feature flags can be toggled per organisation"
+            - "[x] Org admins manage the low-sensitivity community feature flags for their own organisation through GET/PUT/DELETE /api/v1/admin/org/feature-flags[/{flag_name}] (org.feature_flags.manage, admin, non-delegable) and the Organisation feature flags card on /admin/org; the set is fail-closed (FeatureFlag.org_admin_settable defaults False, team-tier flags and mcp_human_linked_hitl_authority are refused, and the DB catalog preserves the code-level classification), writes persist to the org feature_overrides map, invalidate the flag cache and emit the existing feature_flag_override_set / feature_flag_override_cleared audit events, and every other flag remains system-administrator-only (backend/src/modulo/api/routes/admin_org_feature_flags.py, backend/src/modulo/core/feature_flags.py, frontend/src/views/AdminOrgSettingsView.vue)"
             - "[x] Org-level feature-flag override governance is auditable end to end: every set/clear/toggle of an org feature_overrides entry (PUT /api/v1/admin/feature-flags/{flag}, PUT/DELETE /{flag}/org-override) appends a tamper-evident audit event to the org chain (feature_flag_override_set / feature_flag_override_cleared, resource_type org, payload {flag_name, enabled}) — fail-open, so a broken audit append never rolls back the already-committed override (backend/src/modulo/api/routes/admin_feature_flags.py, backend/tests/unit/api/test_admin_feature_flags.py)"
-            - "[x] The org-settings UI ships at /admin/org: org delete requires a typed confirmation (org-delete-confirm-input), product-analytics (product-analytics-toggle) and community-objects (community-objects-toggle) toggles render, and the product-analytics error strip dismisses via shared ErrorAlert — surface documented in the manifest elements inventory; backend admin-org endpoints drive it (docs/product-map/admin/org.md)"
-            - "[x] The /admin/org page is reachable on every plan tier (FAR-1269): the route is community-tier with an explicit [admin] role list (required_roles and required_tier are enforced as separate guards), the team-only sections (org info, data export, product analytics, community objects, delete org) stay behind the team_rbac FeatureGate disabled overlay, and only the HITL review window card renders outside the gate so a community admin can configure the org review window"
-            - "[x] The org-management flows ship on the real REST surfaces: self-service org profile read/rename/delete + API-key regeneration are admin-gated unit coverage (api/routes/admin.py, tests/unit/api/test_admin.py — slug immutability and operator/viewer 403 pinned); member invites are BDD-executed (system_admin_users.feature); API-key create/revoke + non-admin 403 are BDD-executed (auth/api_keys.feature); viewer denial is BDD-executed at the org-context boundary (viewmodel_current.feature)"
+            - "[x] The org-settings UI ships at /admin/org: product-analytics (product-analytics-toggle) and community-objects (community-objects-toggle) toggles render, the product-analytics error strip dismisses via shared ErrorAlert, and the page intentionally exposes no self-service organisation-delete affordance (FAR-2225: active-org deletion is refused 403 by every self-service route) — surface documented in the manifest elements inventory; backend admin-org endpoints drive it (docs/product-map/admin/org.md)"
+            - "[x] The /admin/org page is reachable on every plan tier (FAR-1269): the route is community-tier with an explicit [admin] role list (required_roles and required_tier are enforced as separate guards), the team-only sections (org info, data export, product analytics, community objects) stay behind the team_rbac FeatureGate disabled overlay, and three org-scoped community-tier cards render outside the gate so a community admin can use them on any tier: the HITL review window, the human-linked MCP HITL authority, and the organisation feature flags"
+            - "[x] The org-management flows ship on the real REST surfaces: self-service org profile read/rename + API-key regeneration are admin-gated unit coverage (api/routes/admin.py, tests/unit/api/test_admin.py — slug immutability and operator/viewer 403 pinned); member invites are BDD-executed (system_admin_users.feature); API-key create/revoke + non-admin 403 are BDD-executed (auth/api_keys.feature); viewer denial is BDD-executed at the org-context boundary (viewmodel_current.feature)"
     feat-pipelines:
         description: Visual pipeline editor, composite editor, and node categories
         status: covered
@@ -7439,6 +7662,28 @@ features:
             - "[x] POST /api/v1/admin/orgs/{org_id}/users creates a user within a target org with cross-tenant account-takeover protection (an account already a member of the org or a local account holding a password in another org is 409), boundary role/password validation (invalid org_role or a weak password is 422), a missing org is 404, and a regular admin is 403 (system_admin_users.feature)"
             - "[x] DELETE /api/v1/admin/orgs/{org_id} deletes an organisation — 404 for a missing org, 403 for a regular admin (system_admin_orgs.feature)"
             - "[x] Org-level license management: GET/PUT/DELETE on /api/v1/admin/orgs/{org_id}/license resolves/stores/clears the org's settings_json.license_key via parse_and_verify, falls back to the system license, and is role-gated (GET org.license.view / PUT+DELETE org.license.manage) — BDD: system_admin_orgs.feature"
+    feat-system-maps:
+        description: Bounded visual authoring of delivery system maps
+        status: partial
+        behaviours:
+            - "[x] System Maps list page (/system-maps) with create, view, edit, delete, discover actions"
+            - "[x] Map detail page (/system-maps/:id) with bounded visual graph editor for the backend node/relationship vocabularies, connected edges, endpoint selection, and drag/keyboard repositioning"
+            - "[ ] Revision history sidebar with current/historical revision switching via /revisions/current and /revisions/by-time (deferred: the version-aware read-model API lands separately; this branch shows revisions created in the current session)"
+            - "[x] Draft revision creation and save with node/relationship/loop-config payload"
+            - "[x] Publish revision (validation + status change to published)"
+            - "[x] Archive revision (status change to archived)"
+            - "[x] Discover My System integration (POST /api/v1/system-maps/discover) with accept/reject review panel that applies accepted nodes/relationships to the draft"
+            - "[ ] Re-scan existing organisation resources into existing draft with added/removed/ambiguous diff and operator edit preservation (deferred: no re-scan endpoint exists on this branch; the mock re-scan was removed rather than shipped as a no-op)"
+            - "[x] No auto-publish — operator must explicitly publish"
+            - "[x] Access gated by system_maps feature + developer mode + operator/admin + system_maps_access permission"
+            - "[x] i18n keys and product-map test IDs registered"
+            - "[x] Accessibility: STATE-1/2/6, A11Y-1/2/4, I18N-1, TYPE-1, VIS-4"
+        deferrals:
+            - "Current/historical revision switching (/revisions/current, /revisions/by-time) depends on the version-aware read-model API"
+            - "Re-scan into an existing draft depends on a re-scan endpoint; the UI is withheld until it exists"
+            - "No per-ticket tracking UI (Beta 3 scope)"
+            - "No loop dispatch runtime/budgets/concurrency (Beta 3 scope)"
+            - "No broad arbitrary graph/cycle editor (Beta 2 scope: only bounded node/relationship types)"
     feat-teams:
         description: Users, teams, and role-based access
         status: covered

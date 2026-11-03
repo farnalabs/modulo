@@ -13,11 +13,13 @@ registry is the single source of truth (ADR 047).
 
 import contextvars
 import types
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from logging import getLogger
 
 from modulo.auth.permissions import (
+    SYSTEM_MAPS_ACCESS_PERMISSION,
     PermissionConfigurationError,
     PermissionDenied,
     assert_org_role,
@@ -180,6 +182,15 @@ _TOOL_REQUIREMENTS: dict[str, ToolRequirement] = {
     "update_trigger": ToolRequirement("trigger.update"),
     "delete_trigger": ToolRequirement("trigger.delete"),
     "set_org_triggers_paused": ToolRequirement("org.triggers.pause.manage"),
+    # FAR-2288: System Maps discovery over MCP. The REST surface is gated by
+    # ``_require_internal_system_maps_access`` (developer mode + operator/admin
+    # + the dedicated ``system_maps_access`` grant) AND ``require_feature``
+    # (``system_maps``). The role/grant legs are declared on this ONE entry; the
+    # handler re-applies the dev-mode leg via
+    # ``_require_mcp_internal_system_maps_access`` and the feature leg via
+    # ``_require_plan_feature``. Deny-by-default already refuses an ordinary
+    # caller (viewer) and a grant-set without the key.
+    "discover_system_map": ToolRequirement(SYSTEM_MAPS_ACCESS_PERMISSION),
     # FAR-1879/FAR-1930: both MCP housekeeping tools mirror their REST twins
     # (GET /api/v1/admin/housekeeping and POST /api/v1/admin/housekeeping/cleanup),
     # each gated by BOTH ``require_permission("housekeeping.manage")`` (admin
@@ -320,7 +331,7 @@ def _tool_requires_system_admin(tool: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# FAR-620: caller-scope dimension (org-only | caller-scoped | any)
+# FAR-620: caller-scope dimension (org-only | org-credential | caller-scoped | any)
 # ---------------------------------------------------------------------------
 
 # Classification values for CALLER_SCOPE_REQUIREMENTS:
@@ -328,6 +339,13 @@ def _tool_requires_system_admin(tool: str) -> bool:
 #                     key (``scope='user'``) is DENIED; org-wide/team-scoped/
 #                     run-scoped keys and identity-bound JWT/OAuth sessions
 #                     pass (the identity sessions ARE the user).
+#   "org-credential" — an ORGANISATION-wide operation: an API key must be
+#                     org-scoped (``key_scope == 'org'``), and NO credential
+#                     carrying a team boundary is accepted. Team-scoped keys,
+#                     team-bound OAuth clients and user-scoped API keys are all
+#                     DENIED. Identity-bound JWT sessions (no team boundary)
+#                     pass — they are the user's own org-wide identity.
+#                     FAR-2288: used by the org-wide System Maps inventory scan.
 #   "caller-scoped" — the tool operates on the CALLER'S OWN account (its
 #                     permission key carries the ``.self`` suffix): DENIED
 #                     unless the credential is identity-bound or a user-scoped
@@ -336,10 +354,11 @@ def _tool_requires_system_admin(tool: str) -> bool:
 #                     are denied here.
 #   "any"           — no caller-scope restriction (today's behaviour).
 _CALLER_SCOPE_ORG_ONLY = "org-only"
+_CALLER_SCOPE_ORG_CREDENTIAL = "org-credential"
 _CALLER_SCOPE_CALLER = "caller-scoped"
 _CALLER_SCOPE_ANY = "any"
 VALID_CALLER_SCOPE_CLASSIFICATIONS: frozenset[str] = frozenset(
-    {_CALLER_SCOPE_ORG_ONLY, _CALLER_SCOPE_CALLER, _CALLER_SCOPE_ANY}
+    {_CALLER_SCOPE_ORG_ONLY, _CALLER_SCOPE_ORG_CREDENTIAL, _CALLER_SCOPE_CALLER, _CALLER_SCOPE_ANY}
 )
 
 # Caller-scoped tools are DERIVED from the ``.self`` permission-key suffix —
@@ -357,6 +376,12 @@ _CALLER_SCOPED_SUFFIX = ".self"
 # must never mint an org-wide key (that would escape the user scope entirely),
 # so ``create_api_key`` is pinned org-only: under a user-scoped key the tool
 # is denied, under org keys it behaves exactly as today.
+# FAR-2288: ``discover_system_map`` scans the WHOLE organisation and persists
+# an org-visible map, so a team-scoped credential must not reach it. The reused
+# REST handler filters only on ``organisation_id`` and RLS team isolation keys
+# on the owner's memberships, not the key's team, so the restriction is
+# enforced fail-closed here at the shared chokepoint: an org-scoped API key or
+# a team-less identity session only.
 # FAR-2281: ``review_hitl`` is explicitly ``any`` at the caller-scope leg. This
 # is a narrow reachability exception, not authority: every review_hitl action
 # still passes its permission/grant checks and the later human-linkage plus
@@ -366,6 +391,7 @@ _CALLER_SCOPED_SUFFIX = ".self"
 # resolution takes precedence over the base tool mapping.
 _CALLER_SCOPE_REQUIREMENTS: dict[str, str] = {
     "create_api_key": _CALLER_SCOPE_ORG_ONLY,
+    "discover_system_map": _CALLER_SCOPE_ORG_CREDENTIAL,
     "review_hitl": _CALLER_SCOPE_ANY,
     "review_hitl:claim": _CALLER_SCOPE_ANY,
     "review_hitl:approve": _CALLER_SCOPE_ANY,
@@ -440,12 +466,34 @@ _LEG_GRANTS = "grants"
 _LEG_SYSTEM_ADMIN = "system_admin"
 
 
+def _org_credential_denied(
+    key_scope: str | None,
+    auth_type: str | None,
+    team_id: uuid.UUID | None,
+) -> bool:
+    """True when the credential cannot act on an ORGANISATION-wide resource.
+
+    Fail-closed: a credential carrying a team boundary is always refused (the
+    org-wide read/write is outside that team's authority), and an API key must
+    be org-scoped — an unknown/unset key scope is refused rather than treated
+    as org. Identity-bound JWT/OAuth sessions carry no team boundary on the JWT
+    path and pass; an OAuth client minted by a team-bound client carries a
+    team, so it is refused like a team-scoped key.
+    """
+    if team_id is not None:
+        return True
+    if auth_type == "api_key":
+        return key_scope != "org"
+    return False
+
+
 def _caller_scope_denied(
     tool: str,
     action: str | None,
     permission_key: str,
     key_scope: str | None,
     auth_type: str | None,
+    team_id: uuid.UUID | None = None,
 ) -> bool:
     """Leg 3: is the call denied by the credential's caller-scope policy?
 
@@ -457,6 +505,8 @@ def _caller_scope_denied(
     classification = classify_caller_scope(scope_key, permission_key)
     if classification == _CALLER_SCOPE_CALLER:
         return key_scope != "user"
+    if classification == _CALLER_SCOPE_ORG_CREDENTIAL:
+        return _org_credential_denied(key_scope, auth_type, team_id)
     return classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key"
 
 
@@ -471,6 +521,7 @@ def _resolve_tool_access_detail(
     kill_switch: bool,
     grants: frozenset[str] | None,
     is_system_admin: bool,
+    team_id: uuid.UUID | None = None,
 ) -> tuple[bool, str, str | None]:
     """Resolve one MCP call and report the failing leg (FAR-1930).
 
@@ -493,7 +544,7 @@ def _resolve_tool_access_detail(
         return False, "", _LEG_UNMAPPED
 
     # Leg 3: caller-scope (kill-switch-ineligible).
-    if _caller_scope_denied(tool, action, permission_key, key_scope, auth_type):
+    if _caller_scope_denied(tool, action, permission_key, key_scope, auth_type, team_id):
         return False, permission_key, _LEG_CALLER_SCOPE
 
     # Leg 4: role hierarchy (kill-switch-eligible). Fail-closed on a
@@ -529,6 +580,7 @@ def resolve_tool_access(
     kill_switch: bool,
     grants: frozenset[str] | None = None,
     is_system_admin: bool = False,
+    team_id: uuid.UUID | None = None,
 ) -> tuple[bool, str]:
     """Pure tool-access decision for one MCP call (FAR-620).
 
@@ -553,6 +605,11 @@ def resolve_tool_access(
             (FAR-1930). Required for any tool declared in
             ``SYSTEM_ADMIN_TOOLS``; defaults False (fail-closed), so a caller
             that never resolved the claim cannot reach a system-admin tool.
+        team_id: the credential's team boundary (an API key's ``team_id`` or a
+            team-bound OAuth client's team), or ``None`` when it carries none.
+            Read ONLY by the ``org-credential`` caller-scope classification
+            (FAR-2288); absent defaults None, which leaves every other
+            classification's behaviour unchanged.
 
     Returns ``(allowed, permission_key)``. ``permission_key`` is the resolved
     key for error/log detail, or ``""`` when the tool could not be resolved.
@@ -569,9 +626,11 @@ def resolve_tool_access(
        user-scoped key, JWT session, or OAuth token); org-only tools deny
        user-scoped API KEYS (an org-wide key must never be mintable from a
        user-scoped credential, and a user-scoped key is not an org-level
-       machine identity). ``None`` key scope fails closed on caller-scoped
-       tools. Identity-bound JWT/OAuth sessions keep today's access to
-       org-only tools.
+       machine identity). ``org-credential`` tools (FAR-2288) require an
+       org-scoped API key or a team-less identity session and refuse every
+       team-scoped credential. ``None`` key scope fails closed on
+       caller-scoped tools. Identity-bound JWT/OAuth sessions keep today's
+       access to org-only tools.
     4. role leg — kill-switch-ELIGIBLE: the org-role hierarchy check; the
        kill switch OFF bypasses the comparison (never the identity checks,
        which deny above).
@@ -598,6 +657,7 @@ def resolve_tool_access(
         kill_switch=kill_switch,
         grants=grants,
         is_system_admin=is_system_admin,
+        team_id=team_id,
     )
     return allowed, permission_key
 
@@ -640,19 +700,21 @@ def check_tool_scope(
     auth_type: str | None = None,
     grants: frozenset[str] | None = None,
     is_system_admin: bool = False,
+    team_id: uuid.UUID | None = None,
 ) -> None:
     """Single tool-dispatch chokepoint (delegates to ``_resolve_tool_access_detail``).
 
     FAR-620: the DECISION is made by the pure resolver; this wrapper keeps the
     input validation, the ContextVar wiring (node allowed-tools fallback, the
     request-scoped authz-enforce kill switch) and the per-leg denial messages.
-    ``key_scope`` / ``auth_type`` / ``is_system_admin`` arrive from the MCP
-    middleware's ContextVars via ``_check_agent_tool_scope``; direct callers
-    that omit them keep today's behaviour (key_scope None fails closed on
-    caller-scoped tools — e.g. the FAR-614 ``.self`` tools
+    ``key_scope`` / ``auth_type`` / ``is_system_admin`` / ``team_id`` arrive
+    from the MCP middleware's ContextVars via ``_check_agent_tool_scope``;
+    direct callers that omit them keep today's behaviour (key_scope None fails
+    closed on caller-scoped tools — e.g. the FAR-614 ``.self`` tools
     ``get_hitl_email_alerts`` / ``set_hitl_email_alerts`` — the role/org legs
-    are untouched, and ``is_system_admin`` defaults False so a system-admin
-    tool is denied unless the caller passes the live claim).
+    are untouched, ``team_id`` defaults None so only the ``org-credential``
+    classification reads it, and ``is_system_admin`` defaults False so a
+    system-admin tool is denied unless the caller passes the live claim).
 
     Raises ``MCPSystemAdminRequiredError`` (a subclass of
     ``MCPAuthorizationError``) when the ONLY failing leg is the FAR-1930
@@ -700,6 +762,7 @@ def check_tool_scope(
         kill_switch=kill_switch,
         grants=grants,
         is_system_admin=is_system_admin,
+        team_id=team_id,
     )
     if not allowed:
         message = _denial_message(
@@ -713,6 +776,7 @@ def check_tool_scope(
             allowed_set=allowed_set,
             grants=grants,
             is_system_admin=is_system_admin,
+            team_id=team_id,
         )
         if denied_leg == _LEG_SYSTEM_ADMIN:
             # FAR-1930: the MCP adapter (``_check_agent_tool_scope``) owns the
@@ -737,6 +801,7 @@ def _denial_message(
     allowed_set: set[str] | None,
     grants: frozenset[str] | None = None,
     is_system_admin: bool = False,
+    team_id: uuid.UUID | None = None,
 ) -> str:
     """Re-derive the specific denial message for a resolver denial.
 
@@ -764,6 +829,11 @@ def _denial_message(
         return (
             f"Tool '{tool_name}' is caller-scoped and requires a user-scoped "
             f"credential; this caller's key scope is '{key_scope or 'unset'}'"
+        )
+    if classification == _CALLER_SCOPE_ORG_CREDENTIAL and _org_credential_denied(key_scope, auth_type, team_id):
+        return (
+            f"Tool '{tool_name}' performs an organisation-wide operation and requires an "
+            "org-scoped credential; team-scoped and user-scoped credentials are refused"
         )
     if classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key":
         return f"Tool '{tool_name}' is org-scoped and cannot be called with a user-scoped API key"

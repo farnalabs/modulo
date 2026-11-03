@@ -6,12 +6,16 @@ code:
   - backend/src/modulo/api/routes/org_settings.py
   - backend/src/modulo/api/routes/admin_orgs.py
   - backend/src/modulo/api/routes/admin_feature_flags.py
+  - backend/src/modulo/api/routes/admin_org_feature_flags.py
   - backend/src/modulo/api/routes/admin.py
+  - frontend/src/views/AdminOrgSettingsView.vue
 unit-tests:
   - backend/tests/unit/api/test_admin_orgs.py
   - backend/tests/unit/api/test_admin_orgs_coverage_gaps.py
   - backend/tests/unit/api/test_admin_feature_flags.py
+  - backend/tests/unit/api/test_admin_org_feature_flags.py
   - backend/tests/unit/api/test_admin.py
+  - frontend/src/__tests__/AdminOrgSettingsView.spec.ts
 bdd:
   - backend/tests/bdd/features/triggers/pause.feature
   - backend/tests/bdd/features/system_admin/system_admin_users.feature
@@ -62,14 +66,35 @@ kill-switch, authorization enforcement).
       `backend/src/modulo/api/routes/admin_feature_flags.py`,
       `backend/tests/unit/api/test_admin_feature_flags.py`,
       `backend/tests/unit/core/test_feature_flag_registry.py`)
-- [x] Frontend renders org settings at `/admin/org` with org delete confirmation
-      and product-analytics toggle (`frontend/src/manifest.yaml` testids)
+- [x] Org admins govern their own organisation's low-sensitivity community
+      feature flags through `GET`/`PUT`/`DELETE
+      /api/v1/admin/org/feature-flags[/{flag_name}]` without the instance-wide
+      `system.config.manage` gate (`org.feature_flags.manage`, admin,
+      non-delegable). The surface is fail-closed: `FeatureFlag.org_admin_settable`
+      defaults to `False`, team-tier flags are refused, and
+      `mcp_human_linked_hitl_authority` stays on its own dedicated control.
+      Writes persist to the org `settings_json.feature_overrides` map, invalidate
+      the flag cache and emit the existing `feature_flag_override_set` /
+      `feature_flag_override_cleared` audit events; the card renders on
+      `/admin/org` outside the team-tier gate
+      (`backend/src/modulo/api/routes/admin_org_feature_flags.py`,
+      `backend/src/modulo/core/feature_flags.py`,
+      `backend/tests/unit/api/test_admin_org_feature_flags.py`,
+      `frontend/src/views/AdminOrgSettingsView.vue`,
+      `frontend/src/__tests__/AdminOrgSettingsView.spec.ts`)
+- [x] Frontend renders org settings at `/admin/org` with export, product-analytics,
+      community-objects and organisation-feature-flag controls
+      (`frontend/src/manifest.yaml` testids). The page intentionally has no
+      self-service organisation-delete action: active-org deletion is refused by
+      every self-service API route (403, FAR-2225)
 - [x] Self-service org profile (`GET`/`PUT /api/v1/admin/org` in
       `api/routes/admin.py`): admins read and rename the org (slug immutable -
-      `test_update_org_ignores_slug_changes`), delete it immediately, and
-      regenerate the org API key (`POST /org/regenerate-api-key`); every
-      endpoint is admin-gated (operator/viewer → 403,
-      `backend/tests/unit/api/test_admin.py`)
+      `test_update_org_ignores_slug_changes`) and regenerate the org API key
+      (`POST /org/regenerate-api-key`); every endpoint is admin-gated (operator/viewer → 403,
+      `backend/tests/unit/api/test_admin.py`). `DELETE /api/v1/admin/org`,
+      `POST /org/deletion-request`, and `POST /org/deletion-confirm` are explicit
+      403 refusals, before any deletion DB work; system admins must use the
+      cross-organisation route in `admin_orgs.py`
 - [x] Member invites into the org are BDD-executed against
       `POST /api/v1/admin/orgs/{org_id}/users` (`system_admin_users.feature`:
       duplicate-membership 409, cross-tenant local-account 409, invalid role /
@@ -93,28 +118,38 @@ execute (they stayed pinned `@awaiting-implementation`). Each flow's real
 behaviour is covered by the citations above.
 
 ## QA History
+- 2026-11-02: **FAR-2302 delivery follow-up** - registered the org-admin
+  feature-flag governance surface on this tracker: added the route module and
+  the org-settings view to `code:`, their tests to `unit-tests:`, and the
+  behaviour line above. The `feature_overrides` write path, the fail-closed
+  `org_admin_settable` classification and the `/admin/org` card are covered by
+  `test_admin_org_feature_flags.py` (route behaviour + refuse paths) and
+  `AdminOrgSettingsView.spec.ts` (load/save/throw/fallback states). Changed-lines
+  coverage for the new lines is 100% line and branch on both the Python and
+  JavaScript legs.
 - 2026-09-28: **Improve Architecture product-map walk** -
   closed the lingering `ui/org_settings.feature` gap. Archived the five
   never-executing UI-journey drafts (verified: 0/11 referenced testids exist in
   `frontend/src`; `/admin/org` ships a different surface - org profile, data
-  export, product-analytics + community-objects toggles, delete confirmation)
+  export, product-analytics + community-objects toggles, with no active-org
+  delete control because the self-service API refuses deletion (FAR-2225))
   and re-anchored `feat-org` to the real org-management coverage: self-service
-  org profile read/rename/delete + admin role gate (unit, `test_admin.py`),
+  org profile read/rename + admin role gate (unit, `test_admin.py`),
   member invites (`system_admin_users.feature`), API-key create/revoke +
   non-admin 403 (`auth/api_keys.feature`), viewer denial
-  (`viewmodel_current.feature`), and org deletion BDD
-  (`organisation/org_deletion.feature`). Removed the pinned scenarios from
+  (`viewmodel_current.feature`), and the self-service deletion refusals and
+  cancellation/export safety valves (`organisation/org_deletion.feature`). Removed the pinned scenarios from
   `PINNED_AWAITING_IMPLEMENTATION` and the manifest deferral. The manifest
   `feat-org` registry now has no deferral; the tracker's previous claim that the
   drafts were "exercised by component (vitest) and E2E suites" was stale.
 - 2026-09-27: **Improve Architecture product-map walk** -
   reconciled the stale "org settings UI not yet built" Known Gap: the
-  `/admin/org` UI ships (`AdminOrgSettingsView.vue`, org delete confirmation +
-  product-analytics / community-objects toggles + the product-analytics error
-  strip) and its surface is guarded in the manifest; the remaining gap was
-  re-scoped to the `@awaiting-implementation` UI-journey BDD scenarios, which
-  describe frontend flows covered by component + E2E suites rather than backend
-  BDD. Manifest `feat-org` gained the shipped UI behaviour line and the scoped
+  `/admin/org` UI ships (`AdminOrgSettingsView.vue`, org profile, data export,
+  product-analytics / community-objects toggles, and no active-org delete
+  control because self-service deletion is refused (FAR-2225)) and its surface
+  is guarded in the manifest; the remaining gap was re-scoped to the
+  `@awaiting-implementation` UI-journey BDD scenarios, which describe frontend
+  flows covered by component + E2E suites rather than backend BDD. Manifest `feat-org` gained the shipped UI behaviour line and the scoped
   deferral.
 - 2026-09-25: **Improve Architecture product-map walk** -
   closed the feat-org "governance and audit partially wired" gap: the admin

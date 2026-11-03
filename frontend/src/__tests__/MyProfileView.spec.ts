@@ -472,8 +472,11 @@ describe('MyProfileView HITL email alerts', () => {
 
     expect(wrapper.text()).toContain('Failed to load preferences')
     const preferenceError = wrapper.find('[data-testid="my-profile-hitl-email-section"] > div.my-profile-hitl-email-load-error')
-    expect(preferenceError.attributes('role')).toBe('alert')
-    expect(preferenceError.attributes('aria-live')).toBe('assertive')
+    // Exactly one live region for this message: ErrorAlert's root owns it, and
+    // the wrapper must not add a second announcement of the same failure.
+    expect(preferenceError.attributes('role')).toBeUndefined()
+    expect(preferenceError.attributes('aria-live')).toBeUndefined()
+    expect(preferenceError.findAll('[role="alert"]')).toHaveLength(1)
     expect(preferenceError.findAll('[data-testid="error-alert-retry"]').length).toBe(1)
     expect(preferenceError.find('[data-testid="my-profile-hitl-email-retry"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="my-profile-hitl-email-save"]').exists()).toBe(false)
@@ -501,8 +504,8 @@ describe('MyProfileView HITL email alerts', () => {
     expect(wrapper.text()).toContain('Failed to load pipelines')
     expect(wrapper.text()).not.toContain('No pipelines available.')
     const pipelinesError = wrapper.find('.my-profile-hitl-email-pipelines-error')
-    expect(pipelinesError.attributes('role')).toBe('alert')
-    expect(pipelinesError.attributes('aria-live')).toBe('assertive')
+    expect(pipelinesError.attributes('role')).toBeUndefined()
+    expect(pipelinesError.findAll('[role="alert"]')).toHaveLength(1)
     await pipelinesError.find('[data-testid="error-alert-retry"]').trigger('click')
 
     await vi.waitFor(() => {
@@ -527,7 +530,8 @@ describe('MyProfileView HITL email alerts', () => {
 
     const pipelinesError = wrapper.find('.my-profile-hitl-email-pipelines-error')
     expect(pipelinesError.exists()).toBe(true)
-    expect(pipelinesError.attributes('role')).toBe('alert')
+    expect(pipelinesError.attributes('role')).toBeUndefined()
+    expect(pipelinesError.findAll('[role="alert"]')).toHaveLength(1)
     expect(pipelinesError.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('No pipelines available.')
   })
@@ -548,7 +552,8 @@ describe('MyProfileView HITL email alerts', () => {
 
     const pipelinesError = wrapper.find('.my-profile-hitl-email-pipelines-error')
     expect(pipelinesError.exists()).toBe(true)
-    expect(pipelinesError.attributes('role')).toBe('alert')
+    expect(pipelinesError.attributes('role')).toBeUndefined()
+    expect(pipelinesError.findAll('[role="alert"]')).toHaveLength(1)
     expect(pipelinesError.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
   })
 
@@ -684,8 +689,10 @@ describe('MyProfileView loading placeholders and fallbacks', () => {
 
     expect(wrapper.text()).toContain('Failed to load profile')
     const profileError = wrapper.find('.my-profile-profile-error')
-    expect(profileError.attributes('role')).toBe('alert')
-    expect(profileError.attributes('aria-live')).toBe('assertive')
+    // One live region for the message: ErrorAlert's root, not the wrapper.
+    expect(profileError.attributes('role')).toBeUndefined()
+    expect(profileError.attributes('aria-live')).toBeUndefined()
+    expect(profileError.findAll('[role="alert"]')).toHaveLength(1)
     expect(profileError.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
     expect(wrapper.find('.card p.text-lg').exists()).toBe(false)
     expect(wrapper.text()).toContain('HITL email alerts')
@@ -716,7 +723,8 @@ describe('MyProfileView loading placeholders and fallbacks', () => {
 
     const profileError = wrapper.find('.my-profile-profile-error')
     expect(profileError.exists()).toBe(true)
-    expect(profileError.attributes('role')).toBe('alert')
+    expect(profileError.attributes('role')).toBeUndefined()
+    expect(profileError.findAll('[role="alert"]')).toHaveLength(1)
     expect(profileError.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
     expect(wrapper.find('.card p.text-lg').exists()).toBe(false)
   })

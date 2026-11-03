@@ -56,9 +56,9 @@
             type="button"
             data-testid="run-detail-share-summary"
             class="mt-2 inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium text-primary-text hover:bg-primary/10"
-            @click="copyShareSummary"
+            @click="copySupportReference"
           >
-            {{ shareCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.share_summary') }}
+            {{ supportCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.support_reference') }}
           </button>
         </div>
       </header>
@@ -1059,6 +1059,7 @@ import { triggerTypeLabel, heartbeatAgeSeconds, heartbeatDisplayText, isHeartbea
 import { shortId, formatRun } from '../utils/format'
 import { prettyPrintLog, stripAnsi, hasAnsiSequences } from '../utils/logTransforms'
 import { formatMoney } from '../lib/money'
+import { buildRunSupportReference } from '../lib/supportReference'
 import {
   attemptElapsedRows,
   formatCompactDuration,
@@ -1199,7 +1200,7 @@ const runIO = ref<RunIOResponse | null>(null)
 const expandedNodes = ref(new Set<string>())
 const expandedLogs = ref(new Set<string>())
 const copied = ref(false)
-const shareCopied = ref(false)
+const supportCopied = ref(false)
 const promptCopied = ref(false)
 const outputCopied = ref(false)
 const inputPayloadCopied = ref(false)
@@ -1358,43 +1359,31 @@ async function submitOverride() {
   }
 }
 
-const shareSummary = computed(() => {
+// FAR-2304: the ONE copy affordance on this page. It used to be a "share
+// summary" that carried a truncated run id and no error code, so a user had no
+// single thing to send support. The canonical text (full uuid + error code) is
+// built in lib/supportReference so the run and error surfaces cannot drift.
+const supportReference = computed(() => {
   const r = run.value
   if (!r) return ''
-  const completed = nodeEntries.value.filter(n => n.status === 'complete').length
-  const total = nodeEntries.value.length
-  let tokens: string
-  if (nodesReportedTokens.value) {
-    // nodesReportedTokens is true only when node_token_usage exists, which
-    // makes totalTokens non-null — the assertion cannot fail.
-    tokens = `${totalTokens.value!.toLocaleString()} (node-reported)`
-  } else if (costBasisTokens.value != null) {
-    tokens = `${costBasisTokens.value.toLocaleString()} (cost basis)`
-  } else {
-    tokens = totalTokens.value?.toLocaleString() ?? '—'
-  }
-  const cost = r.total_cost_usd != null ? formatMoney(Number(r.total_cost_usd), currencyCode.value, 6) : '—'
-  const runNumber = r.run_number != null ? `#${r.run_number}` : shortId(r.run_id)
-  return [
-    `Run: ${runNumber}`,
-    `Pipeline: ${r.pipeline_name || shortId(r.pipeline_id)}`,
-    `Status: ${r.status}`,
-    `Nodes: ${completed}/${total}`,
-    `Tokens: ${tokens}`,
-    `Cost: ${cost}`,
-    `Duration: —`,
-  ].join('\n')
+  return buildRunSupportReference({
+    runId: r.run_id,
+    pipelineId: r.pipeline_id,
+    pipelineName: r.pipeline_name,
+    status: r.status,
+    errorCode: r.error_code,
+  })
 })
 
-async function copyShareSummary() {
-  const text = shareSummary.value
+async function copySupportReference() {
+  const text = supportReference.value
   if (!text) return
   try {
     await navigator.clipboard.writeText(text)
-    shareCopied.value = true
-    setTimeout(() => { shareCopied.value = false }, 2000)
+    supportCopied.value = true
+    setTimeout(() => { supportCopied.value = false }, 2000)
   } catch (e) {
-    console.warn('Failed to copy share summary', e)
+    console.warn('Failed to copy support reference', e)
   }
 }
 

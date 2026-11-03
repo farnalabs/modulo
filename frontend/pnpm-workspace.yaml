@@ -12,9 +12,20 @@ strictPeerDependencies: false
 auditConfig:
   ignoreGhsas:
     - GHSA-vfj7-8cjw-p6xm
+# pnpm >= 10 reads overrides ONLY from this file; an `overrides` block in
+# package.json is silently ignored (adding one leaves pnpm-lock.yaml identical).
 overrides:
   esbuild: ">=0.28.1"
   qs: ">=6.15.3"
+  # GHSA-g3hv-75wg-m249 (CVE in minimatch): globparts amplification DoS,
+  # affected < 11.0.1, first patched 11.0.1. The 10.x line stops at 10.2.6, so
+  # there is no in-line patch. Every consumer is dev-only (`eslint`,
+  # `@stryker-mutator/core`, `@typescript-eslint/typescript-estree`,
+  # `editorconfig`/`js-beautify`, `glob`, `@redocly/openapi-core` via
+  # `openapi-typescript`); nothing in the production bundle depends on it.
+  # Lower bound, not a pin, to match house style. Remove once every consumer
+  # accepts >= 11 natively.
+  minimatch: ">=11.0.1"
   "@hono/node-server": ">=2.0.5"
   js-yaml: "^4.3.0"
   # FAR-646: @redocly/openapi-core pins js-yaml 4.3.1 exactly (its adapter reads

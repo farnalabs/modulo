@@ -89,6 +89,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-library-collections** - Install, uninstall, and manage library collection installs into runnable org entities (flag-gated behind `library_collection`; see FAR-760 / FAR-762 / FAR-764) - routes: `/library/collections/new`, `/library/collections/:id`
 - **feat-runs** - Run execution, history, and detail (Output Diff deferred from the MVP nav – hidden via private_preview; see FAR-542) - routes: `/runs`, `/runs/:id`
 - **feat-lifecycle-maps** - Internal lifecycle maps and stage workflows (dev-mode dogfood only; not Alpha-facing) - routes: `/lifecycle-maps`, `/lifecycle-maps/:id/editor`, `/lifecycle-maps/:id`
+- **feat-system-maps** - Bounded visual authoring of delivery system maps (private_preview, dev-mode dogfood only; not Alpha-facing) - routes: `/system-maps`, `/system-maps/:id`
 - **feat-governance-stack** - Read-only governance-hierarchy taxonomy readout over existing list APIs - routes: `/governance`
 
 ### Monitor
@@ -1224,6 +1225,13 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > MCP flag-visibility gate. Its honest remaining gap - the UI never calls the
 > shipped discovery endpoint - keeps it `partial`; `_ORPHANED_BDD_FEATURES`
 > stays empty.
+>
+> **Superseded 2026-11-03:** the feature now has its own routed surface
+> (`/system-maps`, `/system-maps/:id`) and is registered in the manifest
+> `features:` registry as `feat-system-maps`, so it is no longer tracked here
+> "rather than" the registry. `pipelines/system-maps.md` was refreshed against
+> the dedicated System Maps schema, the revision lifecycle and the wired
+> discovery UI; the entry stays `partial` for the gaps that genuinely remain.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

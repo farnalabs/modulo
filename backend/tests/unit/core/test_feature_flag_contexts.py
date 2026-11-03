@@ -621,7 +621,10 @@ class TestEffectiveFeatureFlags:
         visible_flags = [f for f in ctx.list_all_features() if f.name not in RETIRED_INTERNAL_FLAGS | INTERNAL_FLAGS]
         assert len(flags) == len(visible_flags)
         inactive_names = {f.name for f in flags if not f.currently_active}
-        assert "user_scoped_mcp_keys" in inactive_names
+        # FAR-2301: user-scoped MCP keys are default-ON; a still-default-OFF
+        # flag proves the inactive set is populated from the real catalog.
+        assert "user_scoped_mcp_keys" not in inactive_names
+        assert "library_collection" in inactive_names
         assert "eval_system" not in inactive_names
 
     def test_effective_flags_ignores_unknown_flag_names(self) -> None:

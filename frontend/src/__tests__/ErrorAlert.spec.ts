@@ -5,6 +5,33 @@ import { nextTick } from 'vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 describe('ErrorAlert', () => {
+  it('announces itself with role=alert so a post-request error is not silent', async () => {
+    // An error box appears as the result of a failed request — a dynamic
+    // change. Without a live role the message renders but is never announced
+    // (WCAG 4.1.3). The role lives on the single alert root, so the message
+    // and its retry control are one announcement region.
+    const wrapper = mount(ErrorAlert, {
+      props: { message: 'boom', onRetry: () => {} },
+    })
+    await nextTick()
+    expect(wrapper.element.getAttribute('role')).toBe('alert')
+    // Still a single element root: no wrapper was introduced to carry the role.
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(wrapper.findAll('[role="alert"]').length).toBe(1)
+  })
+
+  it('lets a caller override the role without losing the retry affordance', async () => {
+    const onRetry = vi.fn()
+    const wrapper = mount(ErrorAlert, {
+      props: { message: 'boom', onRetry },
+      attrs: { role: 'status' },
+    })
+    await nextTick()
+    expect(wrapper.element.getAttribute('role')).toBe('status')
+    await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
+    expect(onRetry).toHaveBeenCalledTimes(1)
+  })
+
   it('renders the i18n Retry label (FAR-1655 / I18N-1)', async () => {
     // The Retry label is not hardcoded English — it resolves through the
     // shared `components.ErrorAlert.retry` locale key.
@@ -18,6 +45,8 @@ describe('ErrorAlert', () => {
     // Unresolved-key leak guard: vue-i18n returns the key itself when the
     // message is missing, so the raw dotted key must never appear.
     expect(retry.text()).not.toContain('components.ErrorAlert')
+    expect(wrapper.attributes('role')).toBe('alert')
+    expect(wrapper.attributes('aria-live')).toBe('assertive')
   })
 
   it('invokes onRetry when the retry button is clicked', async () => {

@@ -663,3 +663,35 @@ entities:
             label: Do work
             position: {x: 0, y: 0}
 """
+
+
+def test_system_map_drift_reports_modified_fields() -> None:
+    """A system map differing in description reports that managed field."""
+    detail = build_drift_detail(
+        {
+            "system_map": {
+                "alpha": {
+                    "description": "Live description",
+                    "owner_team_id": None,
+                    "visibility": "org",
+                    "default_map": False,
+                }
+            }
+        },
+        {
+            "system_map": [
+                (
+                    "alpha",
+                    {
+                        "description": "Desired description",
+                        "owner_team_id": None,
+                        "visibility": "org",
+                        "default_map": False,
+                        "revision": {"status": "draft"},
+                    },
+                )
+            ]
+        },
+        {"updated": [{"kind": "system_map", "name": "alpha"}]},
+    )
+    assert detail == {"system_map:alpha": {"fields": {"added": [], "removed": [], "modified": ["description"]}}}

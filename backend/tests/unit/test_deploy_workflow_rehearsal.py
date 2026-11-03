@@ -30,6 +30,13 @@ RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
 NATIVE_SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "native-release-smoke.yml"
 MANIFEST_SOURCE = REPO_ROOT / "backend" / "src" / "modulo" / "launcher" / "manifest.py"
 
+#: This module EXECUTES the workflows' shipped shell fragments under a real
+#: POSIX shell, so it needs a POSIX shell rather than the Windows WSL launcher
+#: stub. The platform requirement is declared once, as a marker; the gate that
+#: skips it on Windows lives in ``backend/tests/conftest.py``
+#: (``POSIX_ONLY_MARKER``) and Linux CI executes this suite for real.
+pytestmark = pytest.mark.posix_only
+
 _REHEARSAL_STEP_NAME = "Pre-deploy REHEARSAL migrations (one-off machine — always rolls back)"
 _REAL_STEP_NAME = "Pre-deploy migrations (one-off machine)"
 _REHEARSAL_DESTROY_NAME = "Destroy pre-rehearsal machine"
@@ -545,7 +552,7 @@ def test_release_cut_state_gate_checks_all_retry_safety_conditions() -> None:
     assert "--state closed" not in script
     assert "merged_at != null" in script
     assert 'require_remote_ref_absent "refs/heads/${BRANCH}"' in script
-    assert 'require_remote_ref_absent "refs/tags/release-publication-hold"' in script
+    assert 'require_remote_ref_absent "refs/heads/release-publication-hold"' in script
     assert 'REMOTE_REF_STATUS="active"' in script
     assert 'REMOTE_REF_STATUS="error"' in script
     assert 'require_remote_ref_absent "refs/tags/v${VERSION}"' in script
@@ -729,6 +736,11 @@ def _cut_harness(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     _cut_git("init", "-b", "main", str(repo))
     for relative, content in (
         ("backend/pyproject.toml", '[project]\nversion = "0.1.0"\n'),
+        (
+            "backend/uv.lock",
+            'version = 1\nrevision = 5\n\n[[package]]\nname = "farnalabs-modulo"\n'
+            'version = "0.1.0"\nsource = { editable = "." }\n',
+        ),
         ("frontend/package.json", '{"version": "0.1.0"}\n'),
         ("deploy/helm/modulo/Chart.yaml", 'version: 0.1.0\nappVersion: "0.1.0"\n'),
     ):
@@ -740,7 +752,12 @@ def _cut_harness(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     _cut_git("remote", "add", "origin", str(remote), cwd=repo)
     _cut_git("push", "origin", "main", cwd=repo)
     initial_sha = _cut_git("rev-parse", "HEAD", cwd=repo).stdout.strip()
-    for relative in ("backend/pyproject.toml", "frontend/package.json", "deploy/helm/modulo/Chart.yaml"):
+    for relative in (
+        "backend/pyproject.toml",
+        "backend/uv.lock",
+        "frontend/package.json",
+        "deploy/helm/modulo/Chart.yaml",
+    ):
         target = repo / relative
         target.write_text(target.read_text(encoding="utf-8").replace("0.1.0", "0.2.0"), encoding="utf-8")
         _cut_git("add", ".", cwd=repo)
@@ -772,12 +789,23 @@ if [ \"$1\" = \"-c\" ]; then
 fi
 if [ \"$1\" = \"scripts/bump-version.py\" ]; then
   printf '\\n# bump stub\\n' >> backend/pyproject.toml
+  printf '\\n# bump stub\\n' >> backend/uv.lock
   printf '\\n# bump stub\\n' >> frontend/package.json
   printf '\\n# bump stub\\n' >> deploy/helm/modulo/Chart.yaml
   exit 0
 fi
 printf 'unexpected python command: %s\\n' \"$*\" >&2
 exit 1
+""",
+    )
+    _write_executable(
+        bin_dir / "uv",
+        f"""#!/usr/bin/env bash
+set -e
+printf 'uv %s\\n' \"$*\" >> {shlex.quote(str(log))}
+# `uv lock` refreshes the lockfile the workflow later stages; emulate that
+# without invoking the real resolver (the fake repo has no dependencies).
+printf 'version = 1\\nrevision = 3\\n' > backend/uv.lock
 """,
     )
     merged_sha = _cut_git("rev-parse", "refs/remotes/origin/merged", cwd=repo).stdout.strip()
@@ -1049,7 +1077,7 @@ def test_cut_state_gate_rejects_merged_bump_pr_when_main_version_unreadable(tmp_
 
 
 def test_cut_state_gate_rejects_active_publication_hold(tmp_path: Path) -> None:
-    result = _run_cut_state_gate(tmp_path, existing_refs={"refs/tags/release-publication-hold"})
+    result = _run_cut_state_gate(tmp_path, existing_refs={"refs/heads/release-publication-hold"})
     assert result.returncode != 0
     assert "release-publication-hold is active" in result.stdout
 
@@ -1164,8 +1192,8 @@ esac
         tmp_path / "bin" / "git",
         f"""#!/usr/bin/env bash
 printf 'git %s\\n' \"$*\" >> {shlex.quote(str(cleanup_log))}
-if [ \"$1 $2 $3 $4\" = 'ls-remote --exit-code origin refs/tags/release-publication-hold' ]; then exit 0; fi
-if [ \"$1 $2 $3 $4\" = 'push origin --delete release-publication-hold' ]; then exit 0; fi
+if [ \"$1 $2 $3 $4\" = 'ls-remote --exit-code origin refs/heads/release-publication-hold' ]; then exit 0; fi
+if [ \"$1 $2 $3 $4\" = 'push origin --delete refs/heads/release-publication-hold' ]; then exit 0; fi
 exit 0
 """,
     )
@@ -1173,7 +1201,7 @@ exit 0
         _release_job_run("Clean up publication hold after failed cut preparation"), cwd=tmp_path, env=env
     )
     assert cleanup.returncode == 0, cleanup.stderr
-    assert "git push origin --delete release-publication-hold" in cleanup_log.read_text(encoding="utf-8")
+    assert "git push origin --delete refs/heads/release-publication-hold" in cleanup_log.read_text(encoding="utf-8")
 
 
 def _shell_tokens(script: str) -> list[str]:
@@ -1215,7 +1243,7 @@ def _assert_protected_cut_commands_are_safe(cut_path: str) -> None:
             violations.append("git push to main")
         if {"--force", "-f", "--force-with-lease"}.intersection(invocation):
             force_pushes.append(invocation)
-            if invocation != ["git", "push", "origin", "release-freeze", "--force"]:
+            if invocation != ["git", "push", "origin", "refs/heads/release-freeze", "--force"]:
                 violations.append("unexpected force push: " + " ".join(invocation))
     if "--admin" in tokens:
         violations.append("gh pr merge --admin")
@@ -1223,7 +1251,7 @@ def _assert_protected_cut_commands_are_safe(cut_path: str) -> None:
     if not force_pushes:
         return
     assert len(force_pushes) == 2
-    assert all(push == ["git", "push", "origin", "release-freeze", "--force"] for push in force_pushes)
+    assert all(push == ["git", "push", "origin", "refs/heads/release-freeze", "--force"] for push in force_pushes)
 
 
 def _cut_path_scripts() -> list[tuple[Path, str]]:
@@ -1298,7 +1326,7 @@ def test_release_cut_cleanup_is_failure_safe() -> None:
         step = workflow["jobs"]["release"]["steps"][names.index(name)]
         assert "always()" in step["if"]
         assert "steps.publication-hold.outputs.established == 'true'" in step["if"]
-        assert "git push origin --delete release-publication-hold" in step["run"]
+        assert "git push origin --delete refs/heads/release-publication-hold" in step["run"]
 
 
 def _hold_step_script(name: str) -> str:
@@ -1341,14 +1369,14 @@ def test_release_publication_hold_establishment_refuses_existing_hold(tmp_path: 
     )
     assert result.returncode != 0
     assert "already exists" in result.stdout
-    assert "git tag" not in (tmp_path / "hold-commands.log").read_text(encoding="utf-8")
+    assert "git branch -f release-publication-hold" not in (tmp_path / "hold-commands.log").read_text(encoding="utf-8")
 
 
 def _hold_lookup_fragment(script: str) -> str:
     start = script.index("hold_lookup_rc=0")
-    tag_marker = "git tag -a release-publication-hold"
-    if tag_marker in script[start:]:
-        end = script.index("\n", script.index(tag_marker, start))
+    branch_marker = "git branch -f release-publication-hold HEAD"
+    if branch_marker in script[start:]:
+        end = script.index("\n", script.index(branch_marker, start))
     else:
         end = re.search(r"\n\s*esac", script[start:])
         assert end is not None
@@ -1372,11 +1400,11 @@ def test_release_publication_hold_establishment_handles_absent_and_remote_error(
     commands = (tmp_path / "hold-commands.log").read_text(encoding="utf-8")
     if lookup_rc == 2:
         assert result.returncode == 0, result.stderr + result.stdout
-        assert "git tag -a release-publication-hold" in commands
+        assert "git branch -f release-publication-hold HEAD" in commands
     else:
         assert result.returncode != 0
         assert "refusing to treat it as absent" in result.stdout
-        assert "git tag -a release-publication-hold" not in commands
+        assert "git branch -f release-publication-hold HEAD" not in commands
 
 
 @pytest.mark.parametrize(
@@ -1411,15 +1439,15 @@ def test_release_publication_hold_cleanup_is_explicitly_fail_closed(
     commands = (tmp_path / "hold-commands.log").read_text(encoding="utf-8")
     if lookup_rc == 0:
         assert result.returncode == 0, result.stderr + result.stdout
-        assert "git push origin --delete release-publication-hold" in commands
+        assert "git push origin --delete refs/heads/release-publication-hold" in commands
     elif lookup_rc == 2:
         assert result.returncode == 0, result.stderr + result.stdout
         assert "release-publication-hold" in result.stdout
-        assert "git push origin --delete release-publication-hold" not in commands
+        assert "git push origin --delete refs/heads/release-publication-hold" not in commands
     else:
         assert result.returncode != 0
         assert "preserving unknown hold state" in result.stdout
-        assert "git push origin --delete release-publication-hold" not in commands
+        assert "git push origin --delete refs/heads/release-publication-hold" not in commands
 
 
 def _promote_step() -> dict[str, Any]:
@@ -1522,10 +1550,12 @@ def _promote_harness(
     rc_sha = _git(root, "rev-parse", "HEAD")
     _git(root, "tag", "-a", "v1.2.3-rc1", "-m", "rc")
     _git(root, "tag", "-a", "validated/v1.2.3-rc1", "-m", "validated")
-    _git(root, "tag", "-a", "release-freeze", "-m", "freeze")
     _git(root, "init", "--bare", str(origin))
     _git(root, "remote", "add", "origin", str(origin))
     _git(root, "push", "origin", "main", "--tags")
+    # A real release checkout has no local release-freeze branch: the marker
+    # lives only on the remote until the promote step re-establishes it.
+    _git(root, "push", "origin", f"{rc_sha}:refs/heads/release-freeze")
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -1562,7 +1592,7 @@ case "${1:-}" in
         else
           current_sha=$(branch_sha)
           [[ "${SCENARIO}" == stale ]] && current_sha="$PR_SHA"
-          if git rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1; then
+          if git ls-remote --exit-code origin refs/heads/release-freeze >/dev/null 2>&1; then
             printf 'merge queue paused: release-freeze is active\\n' >&2
             exit 1
           fi
@@ -1636,7 +1666,7 @@ esac
         """#!/usr/bin/env bash
 set -euo pipefail
 freeze_marker() {
-  git -C "$ROOT" rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1 || {
+  git -C "$ROOT" rev-parse -q --verify refs/heads/release-freeze >/dev/null 2>&1 || {
     printf 'freeze missing for docker\\n' >&2
     exit 1
   }
@@ -1675,7 +1705,7 @@ exit 1
     helm.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
-git -C "$ROOT" rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1 || {
+git -C "$ROOT" rev-parse -q --verify refs/heads/release-freeze >/dev/null 2>&1 || {
   printf 'freeze missing for helm\\n' >&2
   exit 1
 }
@@ -1714,8 +1744,8 @@ esac
     python3.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
-git -C "$ROOT" rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1 || \\
-  git -C "$ROOT" rev-parse -q --verify refs/tags/release-publication-hold >/dev/null 2>&1 || {
+git -C "$ROOT" rev-parse -q --verify refs/heads/release-freeze >/dev/null 2>&1 || \\
+  git -C "$ROOT" rev-parse -q --verify refs/heads/release-publication-hold >/dev/null 2>&1 || {
   printf 'freeze/hold missing for notes\\n' >&2
   exit 1
 }
@@ -1785,11 +1815,11 @@ exec /usr/bin/python3 "$@"
     # re-publish it when the run left one behind (a successful promotion
     # re-establishes it at the exact GA commit).
     try:
-        _git(root, "rev-parse", "-q", "--verify", "refs/tags/release-freeze")
+        _git(root, "rev-parse", "-q", "--verify", "refs/heads/release-freeze")
     except subprocess.CalledProcessError:
         pass
     else:
-        _git(root, "push", "--force", "origin", "refs/tags/release-freeze:refs/tags/release-freeze")
+        _git(root, "push", "--force", "origin", "refs/heads/release-freeze:refs/heads/release-freeze")
     return result, root, rc_sha, env["PR_SHA"], env
 
 
@@ -1935,7 +1965,7 @@ def test_release_promote_successfully_publishes_exact_tag_target_and_lifts_freez
     remote_tag_object = _git(root, "ls-remote", "origin", "refs/tags/v1.2.3").split()[0]
     remote_ga_sha = _git(root, "cat-file", "tag", remote_tag_object).splitlines()[0].split()[1]
     assert remote_ga_sha == _git(root, "rev-parse", "v1.2.3^{commit}")
-    assert not _git(root, "ls-remote", "origin", "refs/tags/release-freeze")
+    assert not _git(root, "ls-remote", "origin", "refs/heads/release-freeze")
 
 
 def test_release_publication_rejects_missing_or_wrong_target(tmp_path: Path) -> None:
@@ -1967,7 +1997,7 @@ def test_release_promote_failure_reestablishes_freeze_without_lift(tmp_path: Pat
         assert result.returncode == 0, result.stderr + result.stdout
         publication = _run_publication_sequence(root, env, failure=failure)
         assert publication.returncode == 0, publication.stderr + publication.stdout
-        assert _git(root, "ls-remote", "origin", "refs/tags/release-freeze"), publication.stderr + publication.stdout
+        assert _git(root, "ls-remote", "origin", "refs/heads/release-freeze"), publication.stderr + publication.stdout
         assert "freeze lifted" not in publication.stdout
 
 
@@ -2065,12 +2095,12 @@ def test_release_promote_freeze_cleanup_is_final_and_failure_safe() -> None:
     assert steps[lift_idx]["if"] == "inputs.mode == 'promote' && success()"
     # The promote step swaps release-freeze for release-publication-hold so the
     # merge queue can run, then re-establishes the freeze at the exact GA commit.
-    assert "git push origin --delete release-freeze" in steps[promote_idx]["run"]
-    assert 'git tag -f -a release-freeze -m "Release freeze active for ${GA_TAG}"' in steps[promote_idx]["run"]
-    assert "git push origin release-freeze --force" in steps[promote_idx]["run"]
+    assert "git push origin --delete refs/heads/release-freeze" in steps[promote_idx]["run"]
+    assert "git branch -f release-freeze HEAD" in steps[promote_idx]["run"]
+    assert "git push origin refs/heads/release-freeze --force" in steps[promote_idx]["run"]
     assert "release-publication-hold" in steps[promote_idx]["run"]
-    assert "git push origin --delete release-freeze" in steps[lift_idx]["run"]
-    assert "git push origin release-freeze --force" in steps[reestablish_idx]["run"]
+    assert "git push origin --delete refs/heads/release-freeze" in steps[lift_idx]["run"]
+    assert "git push origin refs/heads/release-freeze --force" in steps[reestablish_idx]["run"]
 
 
 def test_release_promote_has_no_bypass_or_silent_fallback() -> None:
@@ -2116,3 +2146,215 @@ def test_release_promote_bypass_scan_excludes_cut_path() -> None:
 
     promote = _promote_step()["run"]
     assert "release-freeze remains active until all publication steps finish" in promote
+
+
+# ---------------------------------------------------------------------------
+# Freeze finalizer (FAR-2316)
+#
+# A failed cut/recut can strand `release-freeze`, and merge-queue.yml's freeze
+# gate pauses EVERY merge while that branch exists. The finalizer is a
+# dedicated job that decides from LIVE ref state after the whole publication
+# chain - never from a step outcome, which cannot distinguish "never froze"
+# from "pushed the freeze, then failed on the next write".
+# ---------------------------------------------------------------------------
+
+_FREEZE_CLEANUP_JOB_ID = "freeze-cleanup"
+_FREEZE_CLEANUP_STEP_NAME = "Clear a stranded release freeze"
+_FREEZE_CLEANUP_VERSION = "0.2.0"
+
+_RC_TAG_OBJECT_SHA = "3" * 40
+_RC_COMMIT_SHA = "4" * 40
+_OTHER_RELEASE_FREEZE_SHA = "2" * 40
+
+
+def _freeze_cleanup_workflow() -> dict[str, Any]:
+    return cast(dict[str, Any], yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8")))
+
+
+def _freeze_cleanup_script(workflow: dict[str, Any] | None = None) -> str:
+    source = _freeze_cleanup_workflow() if workflow is None else workflow
+    steps = cast(list[dict[str, Any]], source["jobs"][_FREEZE_CLEANUP_JOB_ID]["steps"])
+    script = steps[_step_names(steps).index(_FREEZE_CLEANUP_STEP_NAME)].get("run")
+    assert isinstance(script, str), "the freeze finalizer must carry a shell run block"
+    return script
+
+
+def _rc_tag_listing(*peeled_commits: str) -> str:
+    """Model `git ls-remote --tags` output for annotated RC tags.
+
+    An annotated tag is listed twice: the tag object, then its peeled commit
+    under a `^{}` suffix. The freeze branch points at a COMMIT, so only the
+    peeled SHA can match it - this listing makes that distinction load-bearing.
+    """
+    lines: list[str] = []
+    for index, commit in enumerate(peeled_commits, start=1):
+        ref = f"refs/tags/v{_FREEZE_CLEANUP_VERSION}-rc{index}"
+        lines.append(f"{_RC_TAG_OBJECT_SHA}\t{ref}")
+        lines.append(f"{commit}\t{ref}^{{}}")
+    return "\n".join(lines)
+
+
+def _run_freeze_cleanup(
+    tmp_path: Path,
+    *,
+    bundle_rc: int = 2,
+    freeze_rc: int = 0,
+    freeze_sha: str = _RC_COMMIT_SHA,
+    rc_tags_rc: int = 0,
+    rc_listing: str | None = None,
+    delete_rc: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    bin_dir = tmp_path / "freeze-bin"
+    bin_dir.mkdir()
+    log = tmp_path / "freeze-commands.log"
+    listing = _rc_tag_listing(_RC_COMMIT_SHA) if rc_listing is None else rc_listing
+    _write_executable(
+        bin_dir / "git",
+        f"""#!/usr/bin/env bash
+set -u
+printf 'git %s\\n' "$*" >> {shlex.quote(str(log))}
+if [ "$1" = "ls-remote" ]; then
+  case "${{@: -1}}" in
+    refs/tags/bundle-v*) exit {bundle_rc} ;;
+    refs/heads/release-freeze)
+      if [ {freeze_rc} -ne 0 ]; then exit {freeze_rc}; fi
+      printf '%s\\t%s\\n' {shlex.quote(freeze_sha)} refs/heads/release-freeze
+      exit 0
+      ;;
+    refs/tags/v*-rc*)
+      if [ {rc_tags_rc} -ne 0 ]; then exit {rc_tags_rc}; fi
+      cat <<'REFS'
+{listing}
+REFS
+      exit 0
+      ;;
+  esac
+  echo "unexpected ls-remote ref: $*" >&2
+  exit 99
+fi
+if [ "$1" = "push" ]; then
+  exit {delete_rc}
+fi
+echo "unexpected git call: $*" >&2
+exit 99
+""",
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "VERSION": _FREEZE_CLEANUP_VERSION,
+    }
+    return _run_bash(_freeze_cleanup_script(), cwd=tmp_path, env=env), log
+
+
+def _delete_invocations(log: Path) -> list[str]:
+    return [line for line in log.read_text(encoding="utf-8").splitlines() if "push origin --delete" in line]
+
+
+def test_freeze_cleanup_deletes_this_versions_freeze_after_a_failed_cut(tmp_path: Path) -> None:
+    result, log = _run_freeze_cleanup(tmp_path)
+    assert result.returncode == 0, result.stderr + result.stdout
+    commands = log.read_text(encoding="utf-8")
+    # Non-vacuity: the whole decision chain ran, so the delete below is the
+    # final step of a real sequence rather than a short-circuit.
+    assert f"ls-remote --exit-code origin refs/tags/bundle-v{_FREEZE_CLEANUP_VERSION}" in commands
+    assert "ls-remote --exit-code origin refs/heads/release-freeze" in commands
+    assert f"ls-remote --tags origin refs/tags/v{_FREEZE_CLEANUP_VERSION}-rc*" in commands
+    assert _delete_invocations(log) == ["git push origin --delete refs/heads/release-freeze"]
+    assert "merge queue may resume" in result.stdout
+
+
+def test_freeze_cleanup_keeps_the_freeze_once_the_bundle_is_published(tmp_path: Path) -> None:
+    result, log = _run_freeze_cleanup(tmp_path, bundle_rc=0)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert f"bundle-v{_FREEZE_CLEANUP_VERSION} is published" in result.stdout
+    assert not _delete_invocations(log)
+    # A published bundle means the release completed: the freeze is deliberate,
+    # so the identity check must never even be reached.
+    assert "ls-remote --exit-code origin refs/heads/release-freeze" not in log.read_text(encoding="utf-8")
+
+
+def test_freeze_cleanup_leaves_another_releases_freeze_alone(tmp_path: Path) -> None:
+    result, log = _run_freeze_cleanup(tmp_path, freeze_sha=_OTHER_RELEASE_FREEZE_SHA)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "belongs to another release" in result.stdout
+    assert not _delete_invocations(log)
+
+
+def test_freeze_cleanup_is_a_no_op_when_no_freeze_exists(tmp_path: Path) -> None:
+    result, log = _run_freeze_cleanup(tmp_path, freeze_rc=2)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "nothing to clear" in result.stdout
+    assert not _delete_invocations(log)
+
+
+def test_freeze_cleanup_fails_closed_when_the_bundle_state_is_unknown(tmp_path: Path) -> None:
+    result, log = _run_freeze_cleanup(tmp_path, bundle_rc=128)
+    assert result.returncode != 0
+    assert "Could not query bundle-v" in result.stdout + result.stderr
+    assert not _delete_invocations(log)
+
+
+def test_freeze_cleanup_fails_closed_when_the_freeze_state_is_unknown(tmp_path: Path) -> None:
+    result, log = _run_freeze_cleanup(tmp_path, freeze_rc=128)
+    assert result.returncode != 0
+    assert "Could not query release-freeze" in result.stdout + result.stderr
+    assert not _delete_invocations(log)
+
+
+@pytest.mark.parametrize("rc_tags_rc", [2, 128])
+def test_freeze_cleanup_fails_closed_when_the_rc_tag_state_is_unknown(tmp_path: Path, rc_tags_rc: int) -> None:
+    result, log = _run_freeze_cleanup(tmp_path, rc_tags_rc=rc_tags_rc)
+    assert result.returncode != 0
+    assert "rc* tags" in result.stdout + result.stderr
+    assert not _delete_invocations(log)
+
+
+def test_freeze_cleanup_fails_loudly_when_the_delete_is_refused(tmp_path: Path) -> None:
+    result, log = _run_freeze_cleanup(tmp_path, delete_rc=1)
+    assert result.returncode != 0
+    assert "Could not delete refs/heads/release-freeze" in result.stdout + result.stderr
+    assert _delete_invocations(log) == ["git push origin --delete refs/heads/release-freeze"]
+
+
+def test_freeze_cleanup_is_a_dedicated_finalizer_job_after_publication() -> None:
+    workflow = _freeze_cleanup_workflow()
+    jobs = cast(dict[str, Any], workflow["jobs"])
+    assert _FREEZE_CLEANUP_JOB_ID in jobs
+    job = cast(dict[str, Any], jobs[_FREEZE_CLEANUP_JOB_ID])
+    assert job["if"] == "always() && (inputs.mode == 'cut' || inputs.mode == 'recut') && failure()"
+    assert "publish-release" in job["needs"]
+    # A typo in `needs` would silently order the finalizer before publication.
+    assert set(job["needs"]) <= set(jobs)
+    assert job["permissions"] == {"contents": "write"}
+    assert job["name"] == "Clear release freeze after a failed cut or recut"
+
+    # The cleanup must NOT live inside `release`: a step there either cannot
+    # observe a later publishing failure or infers the freeze from a step
+    # outcome. Every freeze delete inside `release` stays promote-only.
+    release_steps = cast(list[dict[str, Any]], jobs["release"]["steps"])
+    assert _FREEZE_CLEANUP_STEP_NAME not in _step_names(release_steps)
+    delete_cmd = "git push origin --delete refs/heads/release-freeze"
+    deleting = [step for step in release_steps if delete_cmd in str(step.get("run", ""))]
+    assert deleting, "the promote path must still lift the freeze"
+    assert all("promote" in str(step.get("if", "")) for step in deleting)
+
+
+def test_freeze_cleanup_script_is_real_and_never_swallows_errors() -> None:
+    script = _freeze_cleanup_script()
+    assert script.strip()
+    assert "set -euo pipefail" in script
+    assert "git push origin --delete refs/heads/release-freeze" in script
+    assert "|| true" not in script
+
+
+def test_freeze_cleanup_harness_reads_the_job_from_the_workflow() -> None:
+    # Guard against a vacuous harness: drop the job from a copy of the workflow
+    # and prove the extraction the runtime tests use can no longer find it.
+    workflow = _freeze_cleanup_workflow()
+    all_jobs = cast(dict[str, Any], workflow["jobs"])
+    jobs = {job_id: job for job_id, job in all_jobs.items() if job_id != _FREEZE_CLEANUP_JOB_ID}
+    without_finalizer = {**workflow, "jobs": jobs}
+    assert _FREEZE_CLEANUP_JOB_ID not in without_finalizer["jobs"]
+    with pytest.raises(KeyError):
+        _freeze_cleanup_script(without_finalizer)

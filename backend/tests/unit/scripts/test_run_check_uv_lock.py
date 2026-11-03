@@ -64,6 +64,7 @@ def test_main_returns_one_on_stale_lockfile(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "FAILED" in err
     assert "lockfile is stale" in err
+    assert "Run `uv lock` in backend/" in err
 
 
 def test_main_forwards_stderr_on_success(monkeypatch, capsys):
@@ -84,3 +85,45 @@ def test_main_prints_no_output_when_streams_empty(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert not captured.out
     assert "Checking uv lockfile freshness" in captured.err
+
+
+def test_main_fails_closed_when_uv_is_missing(monkeypatch, capsys):
+    """FAR-2308: an unrunnable check must fail, never pass or skip."""
+
+    def fake_run(cmd, **kwargs):
+        raise FileNotFoundError("uv")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    assert mod.main() == 1
+
+    err = capsys.readouterr().err
+    assert "FAILED" in err
+    assert "not installed or not on PATH" in err
+    assert "failing closed" in err
+
+
+def test_main_fails_closed_on_timeout(monkeypatch, capsys):
+    def fake_run(cmd, **kwargs):
+        raise mod.subprocess.TimeoutExpired(cmd, mod._TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    assert mod.main() == 1
+
+    err = capsys.readouterr().err
+    assert "did not finish within" in err
+    assert "failing closed" in err
+
+
+def test_main_fails_closed_on_oserror(monkeypatch, capsys):
+    def fake_run(cmd, **kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    assert mod.main() == 1
+
+    err = capsys.readouterr().err
+    assert "could not run `uv lock --check`" in err
+    assert "failing closed" in err

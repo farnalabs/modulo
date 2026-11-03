@@ -189,7 +189,12 @@ describe('PipelineEditorView — page load', () => {
     wrapper.unmount()
   })
 
-  it('surfaces a pipeline fetch rejection as a page error instead of the editor', async () => {
+  it('surfaces a pipeline fetch rejection as an announced banner while keeping the editor usable', async () => {
+    // The pipeline RECORD supplies the name/settings; the graph drives the
+    // editor and loads independently. Failing the whole page because the name
+    // could not be fetched contradicts the environment-profile contract (the
+    // editor must stay usable without the record), so a record failure is a
+    // banner, never a page takeover.
     seedApiSuccess()
     apiGetMock.mockImplementation((url: string) => {
       if (url.includes('/pipelines/{pipeline_id}/graph')) {
@@ -207,8 +212,10 @@ describe('PipelineEditorView — page load', () => {
     await flushPromises()
     await nextTick()
 
-    expect(wrapper.text()).toContain('Failed to load pipeline: pipeline exploded')
-    expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(false)
+    const alert = wrapper.find('[role="alert"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('Failed to load pipeline: pipeline exploded')
+    expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -337,6 +344,100 @@ describe('PipelineEditorView — page load', () => {
     // Cleanup: release the stalled request so no deadline timer lingers.
     releaseVersionRequest({ data: { items: [] }, error: undefined })
     await flushPromises()
+    wrapper.unmount()
+  })
+})
+
+describe('PipelineEditorView — page failure and retry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('announces a graph load failure and retry re-runs the page loaders to recover the editor', async () => {
+    seedApiSuccess()
+    let graphFails = true
+    apiGetMock.mockImplementation((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return graphFails
+          ? Promise.reject(new Error('graph exploded'))
+          : Promise.resolve({ data: graphPayload(), error: undefined })
+      }
+      if (url.includes('/snapshots')) {
+        return Promise.resolve({ data: { items: [{ id: 's2', snapshot_version: 2 }] }, error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}')) {
+        return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    await nextTick()
+
+    // The failure replaces the editor with an ANNOUNCED alert carrying the
+    // retry affordance, rather than a dead page with no recovery.
+    const alert = wrapper.find('[role="alert"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('Failed to load graph: graph exploded')
+    expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(false)
+
+    graphFails = false
+    await alert.find('[data-testid="error-alert-retry"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // Recovery: reloadPage re-ran pipeline + graph + catalog loaders, so the
+    // editor is back and the page error cleared.
+    const vm = wrapper.vm as any
+    expect(vm.pageError).toBeNull()
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Test Pipeline')
+    expect(vm.rawNodes).toEqual(graphPayload().nodes)
+    wrapper.unmount()
+  })
+
+  it('surfaces a failed pipeline-record load as a non-fatal banner and retry recovers', async () => {
+    // The record only supplies the name/settings; the graph-driven editor is
+    // still usable (the environment-profile selector binds independently), so
+    // this failure must be visible WITHOUT taking the page over.
+    seedApiSuccess()
+    let pipelineFails = true
+    apiGetMock.mockImplementation((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: graphPayload(), error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}')) {
+        return pipelineFails
+          ? Promise.resolve({ data: null, error: { detail: 'pipeline rejected' } })
+          : Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    await nextTick()
+
+    const alert = wrapper.find('[role="alert"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('Failed to load pipeline: pipeline rejected')
+    // Non-fatal: the editor is still there beneath the banner.
+    expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(true)
+
+    pipelineFails = false
+    await alert.find('[data-testid="error-alert-retry"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Test Pipeline')
+    expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })

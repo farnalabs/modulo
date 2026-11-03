@@ -11,6 +11,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import ComplianceEvidenceIndexView from '../views/ComplianceEvidenceIndexView.vue'
+import { formatDateShortWithTime } from '../lib/formatDate'
 
 type EvidenceIndex = components['schemas']['EvidenceIndex']
 type ArtifactEntry = components['schemas']['ArtifactEntry']
@@ -97,11 +98,19 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(wrapper.text()).toContain('1')
     expect(wrapper.text()).toContain('Present')
     expect(wrapper.text()).toContain('Observed')
-    expect(wrapper.text()).toContain('10/20/2026')
-    expect(wrapper.text()).toContain('10/22/2026')
+    // The view renders the shared formatter's output, which depends on the
+    // machine's timezone. Deriving the expected text from the same helper keeps
+    // the assertion about "the timestamp is rendered" instead of hardcoding a
+    // US-layout string that fails on a non-US machine.
+    expect(wrapper.text()).toContain(formatDateShortWithTime(payload().pack_published_at))
+    expect(wrapper.text()).toContain(formatDateShortWithTime(payload().generated_at))
     expect(wrapper.find('dl').exists()).toBe(true)
     expect(wrapper.findAll('dl dt')).not.toHaveLength(0)
     expect(wrapper.findAll('dl dd')).not.toHaveLength(0)
+    expect(wrapper.find('[data-testid="compliance-evidence-summary"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-count"]').text()).toBe('1/1')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-percentage"]').text()).toContain('100%')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-status"]').text()).toContain('All indexed evidence artefacts are present')
   })
 
   it('makes every horizontally scrollable table a keyboard-reachable named region', async () => {
@@ -130,6 +139,11 @@ describe('ComplianceEvidenceIndexView', () => {
     })
     const wrapper = mountView()
     await settle()
+
+    expect(wrapper.find('[data-testid="compliance-evidence-summary"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-count"]').text()).toBe('0/0')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-percentage"]').text()).toContain('0%')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-status"]').text()).toContain('Some indexed evidence artefacts are missing')
 
     const warning = wrapper.find('[data-testid="compliance-evidence-index-incomplete"]')
     expect(warning.exists()).toBe(true)
@@ -184,6 +198,16 @@ describe('ComplianceEvidenceIndexView', () => {
 
     expect(wrapper.text()).toContain('No evidence index available')
     expect(wrapper.find('[data-testid="compliance-evidence-index-coverage"]').exists()).toBe(false)
+    // With no index loaded every summary count defaults to zero rather than
+    // throwing on an absent payload.
+    const summary = wrapper.vm as unknown as {
+      totalArtifactCount: number
+      presentArtifactCount: number
+      compliancePercentage: number
+    }
+    expect(summary.totalArtifactCount).toBe(0)
+    expect(summary.presentArtifactCount).toBe(0)
+    expect(summary.compliancePercentage).toBe(0)
   })
 
   it('shows absence reasons and treats missing record counts and mapping rows as unavailable', async () => {
@@ -207,6 +231,22 @@ describe('ComplianceEvidenceIndexView', () => {
     const text = wrapper.text()
     expect(text).toContain('Not produced by this deployment')
     expect(text).toContain('Not available')
+  })
+
+  it('counts customer-supplied evidence as complete summary coverage', async () => {
+    mockGet.mockResolvedValue({
+      data: payload({
+        artifacts: [artifact({ status: 'customer_supplied', provenance: 'customer_supplied' })],
+      }),
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await settle()
+
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-count"]').text()).toBe('1/1')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-percentage"]').text()).toContain('100%')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-status"]').text()).toContain('All indexed evidence artefacts are present')
+    expect(wrapper.text()).toContain('Customer supplied')
   })
 
   it('falls back to the raw timestamp and labels customer-supplied evidence', async () => {
@@ -359,7 +399,11 @@ describe('ComplianceEvidenceIndexView', () => {
     const wrapper = mountView()
     await settle()
 
-    expect(wrapper.find('[data-testid="compliance-evidence-index-error"]').text()).toContain('index unavailable')
+    const errorRegion = wrapper.find('[data-testid="compliance-evidence-index-error"]')
+    expect(errorRegion.text()).toContain('index unavailable')
+    // One live region for the message: ErrorAlert's root, never the wrapper.
+    expect(errorRegion.attributes('aria-live')).toBeUndefined()
+    expect(errorRegion.findAll('[role="alert"]')).toHaveLength(1)
     mockGet.mockResolvedValue({ data: payload(), error: undefined })
     await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
     await settle()

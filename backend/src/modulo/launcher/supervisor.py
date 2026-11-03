@@ -500,7 +500,7 @@ class DataDirLock:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(self._path), os.O_RDWR | os.O_CREAT, 0o644)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             os.close(fd)
             holder = _read_lock_holder(self._path)
@@ -560,7 +560,7 @@ class DataDirLock:
             import fcntl
 
             try:
-                fcntl.flock(self._fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
             except OSError:
                 _log.warning("supervisor.lock_unlock_failed path=%s", self._path)
         with contextlib.suppress(OSError):
@@ -594,12 +594,12 @@ def _lock_is_free(lock_path: Path) -> bool:
     except OSError:
         return False
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         return False
     finally:
         with contextlib.suppress(OSError):
-            fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+            fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
     return True
 
@@ -1662,15 +1662,15 @@ class Supervisor:
                 process.terminate()
             return
         try:
-            pgid = os.getpgid(process.pid)  # type: ignore[attr-defined]
+            pgid = os.getpgid(process.pid)
         except OSError:
             pgid = -1
         if pgid == process.pid:
             # A dying process can lose its group between getpgid and killpg
-            # - that race must never break the teardown of the remaining
+            # — that race must never break the teardown of the remaining
             # children.
             with contextlib.suppress(OSError):
-                os.killpg(pgid, signum)  # type: ignore[attr-defined]
+                os.killpg(pgid, signum)
         else:
             # The process is not the head of its own group (or we could not
             # resolve its group), so signal the single PID directly. Mirror

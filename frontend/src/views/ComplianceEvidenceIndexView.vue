@@ -28,7 +28,7 @@
       <p class="mt-1">{{ $t('views.ComplianceEvidenceIndex.permission_denied_description') }}</p>
     </div>
 
-    <div v-else-if="loadError" aria-live="assertive" data-testid="compliance-evidence-index-error">
+    <div v-else-if="loadError" data-testid="compliance-evidence-index-error">
       <ErrorAlert :message="loadError" :on-retry="load" />
     </div>
 
@@ -39,6 +39,29 @@
     />
 
     <template v-else>
+      <section
+        class="rounded-xl border p-5 shadow-sm"
+        :class="complianceSummaryClass"
+        aria-labelledby="compliance-evidence-summary-heading"
+        data-testid="compliance-evidence-summary"
+      >
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 id="compliance-evidence-summary-heading" class="text-lg font-semibold">{{ $t('views.ComplianceEvidenceIndex.summary_heading') }}</h2>
+            <p class="mt-1 text-sm" data-testid="compliance-evidence-summary-status">{{ complianceSummary }}</p>
+          </div>
+          <p class="text-2xl font-semibold tabular-nums" data-testid="compliance-evidence-summary-count">
+            {{ presentArtifactCount }}/{{ totalArtifactCount }}
+          </p>
+        </div>
+        <div class="mt-4" role="progressbar" :aria-valuenow="presentArtifactCount" :aria-valuemin="0" :aria-valuemax="totalArtifactCount" :aria-label="$t('views.ComplianceEvidenceIndex.summary_progress_label')" data-testid="compliance-evidence-summary-progress">
+          <div class="h-3 overflow-hidden rounded-full bg-background/70">
+            <div class="h-full rounded-full bg-current transition-all" :style="{ width: `${compliancePercentage}%` }"></div>
+          </div>
+          <p class="mt-2 text-xs" data-testid="compliance-evidence-summary-percentage">{{ $t('views.ComplianceEvidenceIndex.summary_percentage', { percentage: compliancePercentage }) }}</p>
+        </div>
+      </section>
+
       <div
         v-if="!indexData.complete || indexData.missing_artifact_types.length > 0"
         class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm"
@@ -221,6 +244,7 @@ import DataCard from '../components/ui/DataCard.vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
 import { useDataFetch } from '../composables/useDataFetch'
+import { formatDateShortWithTime } from '../lib/formatDate'
 import { shortId } from '../utils/format'
 
 type EvidenceIndex = components['schemas']['EvidenceIndex']
@@ -278,6 +302,16 @@ const lowerBoundArtifacts = computed(() =>
     .filter((artifact) => artifact.detail.human_only_counts_are_lower_bounds === true)
     .map((artifact) => artifact.artifact_type),
 )
+
+const totalArtifactCount = computed(() => indexData.value?.artifacts.length ?? 0)
+const presentArtifactCount = computed(() => indexData.value?.artifacts.filter((artifact) => artifact.status === 'present' || artifact.status === 'customer_supplied').length ?? 0)
+const compliancePercentage = computed(() => totalArtifactCount.value === 0 ? 0 : Math.round((presentArtifactCount.value / totalArtifactCount.value) * 100))
+const complianceSummary = computed(() => indexData.value?.complete && compliancePercentage.value === 100
+  ? $t('views.ComplianceEvidenceIndex.summary_complete')
+  : $t('views.ComplianceEvidenceIndex.summary_incomplete'))
+const complianceSummaryClass = computed(() => indexData.value?.complete && compliancePercentage.value === 100
+  ? 'border-success/40 bg-success/10 text-success-text'
+  : 'border-warning/50 bg-warning/10 text-warning-text')
 
 const copiedIdentifier = ref<string | null>(null)
 const copyFailedIdentifier = ref<string | null>(null)
@@ -348,7 +382,7 @@ function identifierCopyLabel(display: IdentifierDisplay): string {
 
 function statusClass(status: string): string {
   if (status === 'present') return 'border-success/40 bg-success/10 text-success-text'
-  if (status === 'customer_supplied') return 'border-primary/40 bg-primary/10 text-primary'
+  if (status === 'customer_supplied') return 'border-primary/40 bg-primary/10 text-primary-text'
   return 'border-warning/50 bg-warning/10 text-warning-text'
 }
 
@@ -382,7 +416,10 @@ function provenanceLabel(provenance: string): string {
 function formatTimestamp(value: string): string {
   const timestamp = new Date(value)
   if (Number.isNaN(timestamp.getTime())) return value
-  return timestamp.toLocaleString()
+  // Use the shared formatter every other surface uses. `toLocaleString()` made
+  // the compliance artefact's timestamps vary with the browser's locale and
+  // timezone (and made the view's own spec locale-dependent).
+  return formatDateShortWithTime(timestamp)
 }
 
 void load()

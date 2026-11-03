@@ -111,7 +111,9 @@ async def test_plan_bootstrap_serves_effective_plan_to_non_admin(
     # Org overlay applied OFF: default-ON community flag the org disabled.
     assert flags["analytics_page"]["currently_active"] is False
     # Inactive flag PRESENT with false (the active-only payload dropped it).
-    assert flags["user_scoped_mcp_keys"]["currently_active"] is False
+    assert flags["library_collection"]["currently_active"] is False
+    # FAR-2301: user-scoped MCP keys are default-ON, untouched by any overlay.
+    assert flags["user_scoped_mcp_keys"]["currently_active"] is True
     # Untouched default flows through: community flag, no override.
     assert flags["eval_system"]["currently_active"] is True
     # Full known set is served, not a filtered subset. Derive the expected set

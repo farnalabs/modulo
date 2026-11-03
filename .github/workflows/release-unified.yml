@@ -33,6 +33,11 @@ on:
         description: "Release version in X.Y.Z form (e.g. 0.1.0). Required for recut/promote; for cut it's the target version."
         type: string
         required: false
+      freeze:
+        description: "Establish release-freeze branch to pause merge queue (default false while testing pipeline)"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: release-unified-${{ github.ref }}
@@ -212,6 +217,12 @@ jobs:
           git config user.name "modulo-release-bot"
           git config user.email "bot@modulo.run"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
       - name: Validate version input
         shell: bash
         env:
@@ -314,7 +325,7 @@ jobs:
             fi
           done < <(jq -c '.[] | select(.state == "closed" and .merged_at == null)' <<<"$MATCHING_PRS")
 
-          if ! require_remote_ref_absent "refs/tags/release-publication-hold"; then
+          if ! require_remote_ref_absent "refs/heads/release-publication-hold"; then
             if [ "$REMOTE_REF_STATUS" = "active" ]; then
               echo "::error::release-publication-hold is active; refusing a second cut."
             fi
@@ -347,7 +358,7 @@ jobs:
       # -----------------------------------------------------------------------
       # Version bump (cut only). The publication hold is established first so
       # publish-images cannot publish stable latest during the main push below.
-      # The later release-freeze tag remains the authoritative release boundary.
+      # The later release-freeze branch remains the authoritative release boundary.
       # -----------------------------------------------------------------------
       - name: Establish release publication hold (cut only)
         id: publication-hold
@@ -358,7 +369,7 @@ jobs:
         run: |
           set -euo pipefail
           hold_lookup_rc=0
-          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          git ls-remote --exit-code origin refs/heads/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
           case "$hold_lookup_rc" in
             0)
               echo "::error::release-publication-hold already exists; refusing to start a second cut over an unresolved hold."
@@ -372,8 +383,8 @@ jobs:
               exit 1
               ;;
           esac
-          git tag -a release-publication-hold -m "Suppress stable publication while cut establishes release-freeze"
-          git push origin release-publication-hold
+          git branch -f release-publication-hold HEAD
+          git push origin refs/heads/release-publication-hold
           echo "established=true" >> "$GITHUB_OUTPUT"
           echo "Established release-publication-hold before the version-bump PR."
 
@@ -413,7 +424,11 @@ jobs:
               # PR or overwrites a live ref.
               git checkout -B "$BRANCH" origin/main
               python3 scripts/bump-version.py --set "$VERSION"
-              git add backend/pyproject.toml frontend/package.json deploy/helm/modulo/Chart.yaml
+              # FAR-2308: backend/uv.lock records the project version too, and
+              # bump-version.py updates it. Staging it here keeps the release PR
+              # consistent with the always-on UV lockfile freshness CI gate.
+              uv lock --project backend
+              git add backend/pyproject.toml backend/uv.lock frontend/package.json deploy/helm/modulo/Chart.yaml
               if git diff --cached --quiet; then
                 echo "::error::bump-version.py changed nothing - refusing to create an empty release PR."
                 exit 1
@@ -543,10 +558,10 @@ jobs:
         run: |
           set -euo pipefail
           hold_lookup_rc=0
-          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          git ls-remote --exit-code origin refs/heads/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
           case "$hold_lookup_rc" in
             0)
-              if ! git push origin --delete release-publication-hold; then
+              if ! git push origin --delete refs/heads/release-publication-hold; then
                 echo "::error::Could not remove release-publication-hold after a failed cut preparation."
                 exit 1
               fi
@@ -588,14 +603,19 @@ jobs:
           git push origin "$RC_TAG"
 
           # The freeze signal: merge-queue.yml's freeze-gate pauses while this
-          # tag exists. Force-move it on recut so the gate always tracks the
+          # branch exists. Force-move it on recut so the gate always tracks the
           # latest freeze.
-          git tag -f -a release-freeze -m "Release freeze active (for $RC_TAG)"
-          git push origin release-freeze --force
+          if [ "${{ inputs.freeze }}" = "true" ]; then
+            git branch -f release-freeze HEAD
+            git push origin refs/heads/release-freeze --force
+            echo "Release freeze established on refs/heads/release-freeze."
+          else
+            echo "Release freeze skipped (inputs.freeze != true); merge queue will not be paused."
+          fi
 
           # The hold only covers the version-bump push. Once the authoritative
           # release-freeze exists, remove the temporary suppression marker.
-          if ! git push origin --delete release-publication-hold; then
+          if ! git push origin --delete refs/heads/release-publication-hold; then
             echo "::error::Could not remove release-publication-hold after establishing release-freeze; refusing to continue with a stale suppression marker."
             exit 1
           fi
@@ -613,10 +633,10 @@ jobs:
         run: |
           set -euo pipefail
           hold_lookup_rc=0
-          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          git ls-remote --exit-code origin refs/heads/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
           case "$hold_lookup_rc" in
             0)
-              if ! git push origin --delete release-publication-hold; then
+              if ! git push origin --delete refs/heads/release-publication-hold; then
                 echo "::error::Could not remove release-publication-hold after a failed release cut."
                 exit 1
               fi
@@ -666,8 +686,13 @@ jobs:
 
           # Move the freeze to the new RC commit so main remains frozen at the
           # exact commit sent to deploy and rc-validate.
-          git tag -f -a release-freeze -m "Release freeze active (for $RC_TAG)"
-          git push origin release-freeze --force
+          if [ "${{ inputs.freeze }}" = "true" ]; then
+            git branch -f release-freeze HEAD
+            git push origin refs/heads/release-freeze --force
+            echo "Release freeze moved to ${RC_TAG} on refs/heads/release-freeze."
+          else
+            echo "Release freeze skipped (inputs.freeze != true); merge queue will not be paused."
+          fi
 
           echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
 
@@ -694,8 +719,8 @@ jobs:
           BRANCH="release/promote-${VERSION}"
 
           # Safety 1: only promote OUT of an active freeze.
-          if ! git rev-parse -q --verify "refs/tags/release-freeze" >/dev/null 2>&1; then
-            echo "::error::No release freeze active ('release-freeze' tag missing) - refusing to promote. Run 'cut' first."
+          if ! git ls-remote --exit-code origin refs/heads/release-freeze >/dev/null 2>&1; then
+            echo "::error::No release freeze active ('release-freeze' branch missing) - refusing to promote. Run 'cut' first."
             exit 1
           fi
 
@@ -749,7 +774,7 @@ jobs:
           # open PR and refuse a closed duplicate rather than racing a second
           # promotion.
           hold_lookup_rc=0
-          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          git ls-remote --exit-code origin refs/heads/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
           case "$hold_lookup_rc" in
             0)
               echo "::error::release-publication-hold already exists; refusing to promote over an unresolved hold."
@@ -763,10 +788,9 @@ jobs:
               exit 1
               ;;
           esac
-          git tag -a release-publication-hold -m "Suppress stable publication while the promote PR merges"
-          git push origin release-publication-hold
-          git push origin --delete release-freeze
-          git tag -d release-freeze
+          git branch -f release-publication-hold HEAD
+          git push origin refs/heads/release-publication-hold
+          git push origin --delete refs/heads/release-freeze
           echo "Swapped release-freeze for release-publication-hold while the promote PR merges."
           git fetch origin --tags
           PREV_FILE="$(mktemp)"
@@ -975,10 +999,10 @@ jobs:
             # commit now that the protected merge has landed. Every downstream
             # GA publication step runs under it, and the finalisation step
             # below is the only place allowed to lift it.
-            git tag -f -a release-freeze -m "Release freeze active for ${GA_TAG}"
-            git push origin release-freeze --force
+            git branch -f release-freeze HEAD
+            git push origin refs/heads/release-freeze --force
             # The temporary suppression marker is now redundant with the freeze.
-            if ! git push origin --delete release-publication-hold; then
+            if ! git push origin --delete refs/heads/release-publication-hold; then
               echo "::error::Could not remove release-publication-hold after re-establishing release-freeze; refusing a stale suppression marker."
               exit 1
             fi
@@ -1073,13 +1097,23 @@ jobs:
             case "$img" in
               all-in-one)
                 docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
+                # deploy/nginx/all-in-one.conf proxies to 127.0.0.1:8000, an IP
+                # literal, so this config test resolves no upstream hostname.
                 docker run --rm --entrypoint nginx "$IMAGE" -t
                 ;;
               backend)
                 docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
                 ;;
               frontend)
-                docker run --rm --entrypoint nginx "$IMAGE" -t
+                # frontend/Dockerfile.prod bakes a config that proxies to
+                # http://backend:8000. nginx resolves upstream hostnames at
+                # config-test time, so `nginx -t` in a bare container fails with
+                # `host not found in upstream "backend"` even though the config
+                # is valid. --add-host gives the name an address so the test can
+                # run without a compose network - the check still fails the job
+                # on a real config error. publish-images.yml documents the same
+                # workaround.
+                docker run --rm --add-host backend:127.0.0.1 --entrypoint nginx "$IMAGE" -t
                 ;;
                runner-opencode)
                  docker run --rm --entrypoint opencode "$IMAGE" --version
@@ -1323,10 +1357,10 @@ jobs:
           set -euo pipefail
           GA_TAG="v${VERSION}"
           if git rev-parse -q --verify "refs/tags/${GA_TAG}" >/dev/null 2>&1; then
-            git tag -f -a release-freeze -m "Release freeze retained after failed GA publication for ${GA_TAG}"
-            git push origin release-freeze --force
+            git branch -f release-freeze HEAD
+            git push origin refs/heads/release-freeze --force
             echo "Re-established release-freeze after failed GA publication."
-          elif git rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1; then
+          elif git ls-remote --exit-code origin refs/heads/release-freeze >/dev/null 2>&1; then
             echo "GA tag ${GA_TAG} was not created; existing release-freeze remains active."
           else
             # The promote step removes release-freeze for the PR-merge window so
@@ -1335,17 +1369,17 @@ jobs:
             # commit (main) rather than left absent.
             git fetch origin main
             RESTORE_SHA="$(git rev-parse origin/main)"
-            git tag -f -a release-freeze -m "Release freeze restored after failed GA promotion for ${GA_TAG}" "$RESTORE_SHA"
-            git push origin release-freeze --force
+            git branch -f release-freeze "$RESTORE_SHA"
+            git push origin refs/heads/release-freeze --force
             echo "Restored release-freeze at ${RESTORE_SHA} after failed GA promotion."
           fi
           # A failed promotion must not leave the temporary suppression marker
           # behind once the authoritative freeze is active again.
           hold_lookup_rc=0
-          git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
+          git ls-remote --exit-code origin refs/heads/release-publication-hold >/dev/null 2>/tmp/release-publication-hold-error || hold_lookup_rc=$?
           case "$hold_lookup_rc" in
             0)
-              if ! git push origin --delete release-publication-hold; then
+              if ! git push origin --delete refs/heads/release-publication-hold; then
                 echo "::error::Could not remove release-publication-hold after a failed GA promotion."
                 exit 1
               fi
@@ -1369,11 +1403,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! git rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1; then
+          if ! git ls-remote --exit-code origin refs/heads/release-freeze >/dev/null 2>&1; then
             echo "::error::release-freeze is missing at final GA publication step; refusing to lift an unknown hold."
             exit 1
           fi
-          git push origin --delete release-freeze
+          git push origin --delete refs/heads/release-freeze
           echo "All GA publication steps succeeded; freeze lifted and merge queue resumes."
 
   # ---------------------------------------------------------------------------
@@ -1459,6 +1493,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.release.outputs.rc_tag }}
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bundle-artefacts-amd64
@@ -1954,3 +1989,133 @@ jobs:
             echo "Verifying attestation for $subject"
             gh attestation verify "$subject" --repo "${{ github.repository }}"
           done
+
+  # ---------------------------------------------------------------------------
+  # Freeze finalizer (FAR-2316)
+  #
+  # A failed `cut`/`recut` can strand `release-freeze` and pause EVERY merge:
+  # merge-queue.yml's freeze gate refuses to merge while that branch exists.
+  # The decision is made here, in a dedicated job that runs after the whole
+  # publication chain, from LIVE ref state - never from an upstream step's
+  # outcome. A step inside `release` cannot do this: a step placed before the
+  # publishing steps can never observe their failure, and `steps.cut.outcome`
+  # cannot distinguish "never established a freeze" from "pushed the freeze,
+  # then failed on the next write".
+  # ---------------------------------------------------------------------------
+  freeze-cleanup:
+    name: Clear release freeze after a failed cut or recut
+    needs: [release, bundle, windows-installer, macos-installer, final-release-manifest, attest-artefacts, publish-release]
+    # `always()` lets this run after a failed publication chain; `failure()`
+    # keeps it out of a successful release (where the freeze is deliberate).
+    if: always() && (inputs.mode == 'cut' || inputs.mode == 'recut') && failure()
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+
+      - name: Clear a stranded release freeze
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          # FAIL CLOSED at every branch: an unknown ref state preserves the
+          # freeze and fails loudly. Wrongly deleting a live freeze lets the
+          # merge queue reopen mid-release; wrongly keeping a stranded one just
+          # costs a manual delete. Only a proven-unpublished freeze of THIS
+          # version is ever removed.
+
+          # 1. A published bundle wins. `bundle-v<VERSION>` is pushed by the very
+          #    last publishing step, so its presence proves the cut/recut reached
+          #    publication and the freeze must survive for the later promote.
+          bundle_rc=0
+          git ls-remote --exit-code origin "refs/tags/bundle-v${VERSION}" >/dev/null || bundle_rc=$?
+          case "$bundle_rc" in
+            0)
+              echo "bundle-v${VERSION} is published; keeping release-freeze for promotion."
+              exit 0
+              ;;
+            2)
+              echo "bundle-v${VERSION} is not published; this cut/recut did not complete."
+              ;;
+            *)
+              echo "::error::Could not query bundle-v${VERSION} (git ls-remote rc=${bundle_rc}); preserving release-freeze because the publication state is unknown."
+              exit 1
+              ;;
+          esac
+
+          # 2. Read the live freeze. rc 2 means there is no freeze to clear.
+          freeze_rc=0
+          freeze_listing="$(git ls-remote --exit-code origin refs/heads/release-freeze)" || freeze_rc=$?
+          case "$freeze_rc" in
+            0) ;;
+            2)
+              echo "No release-freeze branch exists; nothing to clear."
+              exit 0
+              ;;
+            *)
+              echo "::error::Could not query release-freeze (git ls-remote rc=${freeze_rc}); preserving unknown freeze state."
+              exit 1
+              ;;
+          esac
+          freeze_sha="$(printf '%s\n' "$freeze_listing" | awk 'NF >= 1 { print $1; exit }')"
+          if [ -z "$freeze_sha" ]; then
+            echo "::error::release-freeze listing produced no SHA; preserving unknown freeze state."
+            exit 1
+          fi
+
+          # 3. Identity check BEFORE any delete: this run may only clear the
+          #    freeze IT created. A concurrent release for another version owns
+          #    its own freeze, and this run's failure must never delete it. The
+          #    freeze is ours only if it sits at one of this version's RC
+          #    commits. `git ls-remote --tags` lists an annotated tag twice (the
+          #    tag object, then its peeled commit under a `^{}` suffix); the
+          #    freeze branch points at a COMMIT, so compare the peeled SHAs, and
+          #    fall back to the plain SHA for a lightweight tag.
+          rc_tags_rc=0
+          rc_listing="$(git ls-remote --tags origin "refs/tags/v${VERSION}-rc*")" || rc_tags_rc=$?
+          case "$rc_tags_rc" in
+            0) ;;
+            2)
+              echo "::error::No v${VERSION}-rc* tags exist, so the freeze cannot be proven to belong to this release; preserving release-freeze."
+              exit 1
+              ;;
+            *)
+              echo "::error::Could not query v${VERSION}-rc* tags (git ls-remote rc=${rc_tags_rc}); preserving release-freeze because its identity is unknown."
+              exit 1
+              ;;
+          esac
+          rc_commits="$(printf '%s\n' "$rc_listing" | awk -F'\t' '
+            NF == 2 {
+              ref = $2
+              if (ref ~ /\^\{\}$/) {
+                sub(/\^\{\}$/, "", ref)
+                commit[ref] = $1
+                seen[ref] = 1
+              } else if (!(ref in seen)) {
+                commit[ref] = $1
+                seen[ref] = 1
+              }
+            }
+            END { for (ref in seen) print commit[ref] }
+          ')"
+          if [ -z "$rc_commits" ]; then
+            echo "::error::No v${VERSION}-rc* tags found, so the freeze cannot be proven to belong to this release; preserving release-freeze."
+            exit 1
+          fi
+          if ! printf '%s\n' "$rc_commits" | grep -qx "$freeze_sha"; then
+            echo "release-freeze at ${freeze_sha} matches no v${VERSION}-rc* commit; it belongs to another release. Leaving it in place."
+            exit 0
+          fi
+
+          # 4. Proven ours and unpublished: clear it so the merge queue resumes.
+          if ! git push origin --delete refs/heads/release-freeze; then
+            echo "::error::Could not delete refs/heads/release-freeze after a failed cut/recut; the merge queue remains paused."
+            exit 1
+          fi
+          echo "Cleared release-freeze at ${freeze_sha}; the merge queue may resume."
