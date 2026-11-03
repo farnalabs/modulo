@@ -111,6 +111,8 @@ async def test_plan_bootstrap_serves_effective_plan_to_non_admin(
     # Org overlay applied OFF: default-ON community flag the org disabled.
     assert flags["analytics_page"]["currently_active"] is False
     # Inactive flag PRESENT with false (the active-only payload dropped it).
+    # ``library_collection`` is still pinned default-OFF; webhook_notification_log
+    # is default-ON since FAR-2235.
     assert flags["library_collection"]["currently_active"] is False
     # FAR-2301: user-scoped MCP keys are default-ON, untouched by any overlay.
     assert flags["user_scoped_mcp_keys"]["currently_active"] is True
