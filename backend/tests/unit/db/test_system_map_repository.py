@@ -1897,3 +1897,245 @@ class TestVersionAwareRevisionMethods:
         # so we can't verify old_revision changes here. The important thing is that
         # the new revision gets effective_from set and effective_to=None.
         assert db.flush.await_count >= 2
+
+
+class TestRevisionDiff:
+    async def test_missing_base_graph_returns_none(self, repo: SystemMapRepository) -> None:
+        # Both graph lookups run; each returns None after its first query.
+        assert (
+            await repo.diff_revisions(
+                _session(_result(one=None), _result(one=None)),
+                organisation_id=_ORG,
+                base_revision_id=_REV,
+                target_revision_id=_REV,
+            )
+            is None
+        )
+
+    async def test_missing_target_graph_returns_none(self, repo: SystemMapRepository) -> None:
+        revision = _revision()
+        db = _session(
+            _result(one=revision),
+            _result(rows=[]),
+            _result(rows=[]),
+            _result(rows=[]),
+            _result(one=None),
+        )
+        assert (
+            await repo.diff_revisions(
+                db,
+                organisation_id=_ORG,
+                base_revision_id=_REV,
+                target_revision_id=_REV,
+            )
+            is None
+        )
+
+    async def test_identical_revisions_have_empty_diff(self, repo: SystemMapRepository) -> None:
+        revision = _revision()
+        node = _node("n1")
+        rel = _relationship("n1", "n2")
+        loop = _loop_config("loop")
+        db = _session(
+            _result(one=revision),
+            _result(rows=[node]),
+            _result(rows=[rel]),
+            _result(rows=[loop]),
+            _result(one=revision),
+            _result(rows=[node]),
+            _result(rows=[rel]),
+            _result(rows=[loop]),
+        )
+        diff = await repo.diff_revisions(db, organisation_id=_ORG, base_revision_id=_REV, target_revision_id=_REV)
+        assert diff is not None
+        assert not diff["nodes_added"]
+        assert not diff["nodes_removed"]
+        assert not diff["nodes_modified"]
+        assert not diff["relationships_added"]
+        assert not diff["relationships_removed"]
+        assert not diff["relationships_modified"]
+        assert not diff["loop_configs_added"]
+        assert not diff["loop_configs_removed"]
+        assert not diff["loop_configs_modified"]
+        assert diff["content_json_changed"] is False
+
+    async def test_diff_reports_added_removed_and_modified(self, repo: SystemMapRepository) -> None:
+        base_revision = _revision()
+        base_revision.content_json = {"a": 1}
+        target_revision = _revision()
+        target_revision.content_json = {"b": 2}
+
+        base_n1 = _node("n1")
+        target_n1 = _node("n1", position_y=Decimal(5))
+        base_n2 = _node("n2")
+        target_n3 = _node("n3")
+
+        base_rel_flow = _relationship("n1", "n2", "flow")
+        base_rel_data = _relationship("n1", "n2", "data")
+        target_rel_flow = _relationship("n1", "n2", "flow")
+        target_rel_flow.config_json = {"x": 1}
+        target_rel_new = _relationship("n1", "n3", "flow")
+
+        base_loop = _loop_config("loop")
+        base_loop_gone = _loop_config("gone")
+        target_loop = _loop_config("loop", outcome_metric="latency")
+        target_loop_new = _loop_config("new")
+
+        db = _session(
+            _result(one=base_revision),
+            _result(rows=[base_n1, base_n2]),
+            _result(rows=[base_rel_flow, base_rel_data]),
+            _result(rows=[base_loop, base_loop_gone]),
+            _result(one=target_revision),
+            _result(rows=[target_n1, target_n3]),
+            _result(rows=[target_rel_flow, target_rel_new]),
+            _result(rows=[target_loop, target_loop_new]),
+        )
+        diff = await repo.diff_revisions(db, organisation_id=_ORG, base_revision_id=_REV, target_revision_id=_REV)
+        assert diff is not None
+        assert diff["base_revision_id"] == base_revision.id
+        assert diff["target_revision_id"] == target_revision.id
+        assert diff["nodes_added"] == ["n3"]
+        assert diff["nodes_removed"] == ["n2"]
+        assert diff["nodes_modified"] == ["n1"]
+        assert diff["relationships_added"] == ["n1->n3:flow"]
+        assert diff["relationships_removed"] == ["n1->n2:data"]
+        assert diff["relationships_modified"] == ["n1->n2:flow"]
+        assert diff["loop_configs_added"] == ["new"]
+        assert diff["loop_configs_removed"] == ["gone"]
+        assert diff["loop_configs_modified"] == ["loop"]
+        assert diff["content_json_changed"] is True
+
+
+class TestRestoreRevisionAsNewDraft:
+    async def test_missing_source_returns_none(self, repo: SystemMapRepository) -> None:
+        assert (
+            await repo.restore_revision_as_new_draft(
+                _session(_result(one=None)),
+                organisation_id=_ORG,
+                system_map_id=_MAP,
+                source_revision_id=_REV,
+                notes="Restored",
+            )
+            is None
+        )
+
+    async def test_foreign_source_returns_none(self, repo: SystemMapRepository) -> None:
+        foreign = _revision(map_id=uuid.uuid4())
+        assert (
+            await repo.restore_revision_as_new_draft(
+                _session(_result(one=foreign)),
+                organisation_id=_ORG,
+                system_map_id=_MAP,
+                source_revision_id=_REV,
+                notes="Restored",
+            )
+            is None
+        )
+
+    async def test_draft_source_returns_none(self, repo: SystemMapRepository) -> None:
+        draft = _revision()
+        draft.status = "draft"
+        assert (
+            await repo.restore_revision_as_new_draft(
+                _session(_result(one=draft)),
+                organisation_id=_ORG,
+                system_map_id=_MAP,
+                source_revision_id=_REV,
+                notes="Restored",
+            )
+            is None
+        )
+
+    async def test_missing_source_graph_returns_none(self, repo: SystemMapRepository) -> None:
+        published = _revision()
+        published.status = "published"
+        db = _session(
+            _result(one=published),
+            _result(rows=[published]),
+            _result(one=None),
+        )
+        assert (
+            await repo.restore_revision_as_new_draft(
+                db,
+                organisation_id=_ORG,
+                system_map_id=_MAP,
+                source_revision_id=_REV,
+                notes="Restored",
+            )
+            is None
+        )
+
+    async def test_copies_graph_into_new_draft(self, repo: SystemMapRepository) -> None:
+        published = _revision()
+        published.status = "published"
+        published.content_json = {"stored": True}
+        node = _node("n1")
+        rel = _relationship("n1", "n2")
+        loop = _loop_config("loop")
+        db = _session(
+            _result(one=published),
+            _result(rows=[published]),
+            _result(one=published),
+            _result(rows=[node]),
+            _result(rows=[rel]),
+            _result(rows=[loop]),
+        )
+        new_revision = await repo.restore_revision_as_new_draft(
+            db,
+            organisation_id=_ORG,
+            system_map_id=_MAP,
+            source_revision_id=_REV,
+            notes="Restored",
+        )
+        assert new_revision is not None
+        assert new_revision.status == "draft"
+        assert new_revision.revision_number == 2
+        assert new_revision.content_json == {"stored": True, "notes": "Restored"}
+        # The source revision's stored content must not be mutated by the copy.
+        assert published.content_json == {"stored": True}
+        assert db.add.call_count == 4
+
+    async def test_restored_notes_round_trip_into_content_json(self, repo: SystemMapRepository) -> None:
+        published = _revision()
+        published.status = "published"
+        published.content_json = {"stored": True}
+        db = _session(
+            _result(one=published),
+            _result(rows=[published]),
+            _result(one=published),
+            _result(rows=[]),
+            _result(rows=[]),
+            _result(rows=[]),
+        )
+        new_revision = await repo.restore_revision_as_new_draft(
+            db,
+            organisation_id=_ORG,
+            system_map_id=_MAP,
+            source_revision_id=_REV,
+            notes="Restored from revision 2",
+        )
+        assert new_revision is not None
+        assert new_revision.content_json["notes"] == "Restored from revision 2"
+        assert new_revision.content_json["stored"] is True
+
+    async def test_empty_source_graph_creates_only_revision(self, repo: SystemMapRepository) -> None:
+        published = _revision()
+        published.status = "published"
+        db = _session(
+            _result(one=published),
+            _result(rows=[published]),
+            _result(one=published),
+            _result(rows=[]),
+            _result(rows=[]),
+            _result(rows=[]),
+        )
+        new_revision = await repo.restore_revision_as_new_draft(
+            db,
+            organisation_id=_ORG,
+            system_map_id=_MAP,
+            source_revision_id=_REV,
+            notes="Restored",
+        )
+        assert new_revision is not None
+        assert db.add.call_count == 1

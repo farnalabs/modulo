@@ -140,10 +140,11 @@ class TestManifestLoad:
         frontend/src/config/navigation.ts canSeeItem), so the explicit list
         preserves admin-only navigation while the tier stays community.
         Any explicit list is constrained to exactly ["admin"], or to the
-        operator+admin in-dev set when the route is hidden behind an
-        `in_dev` visibility gate and the `library.search.in_dev` permission
-        (FAR-2200 internal lifecycle-map surfaces), by
-        test_community_routes_roles_are_admin_only.
+        operator+admin dev-gated set when the route is hidden behind a
+        dev-only visibility gate paired with its own grant — `in_dev` +
+        `library.search.in_dev` (FAR-2200 internal lifecycle-map surfaces) or
+        `private_preview` + `system_maps_access` (FAR-2288 System Maps
+        authoring surfaces) — by test_community_routes_roles_are_admin_only.
         """
         _reset_manifest()
         from modulo.core.manifest import load_manifest
@@ -162,30 +163,43 @@ class TestManifestLoad:
         Pins the FAR-462 escape hatch (/admin/users is community-tier but
         admin-role-gated for nav) so it cannot widen silently to other roles.
 
-        FAR-2200 adds the only other permitted explicit list: the internal
-        lifecycle-map routes are community-tier, operator+admin, and must ALSO
-        be hidden behind an `in_dev` visibility gate requiring the
-        `library.search.in_dev` permission — so the wider role set is
-        unreachable outside developer mode.
+        A widened (operator+admin) community route is permitted only behind a
+        dev-only visibility gate paired with its own grant:
+
+        - ``in_dev`` + ``library.search.in_dev`` - the retained internal
+          lifecycle-map surfaces (FAR-2200); and
+        - ``private_preview`` + ``system_maps_access`` - the System Maps
+          authoring surfaces (FAR-2288), which deliberately use their own grant
+          separate from the lifecycle-map one.
+
+        Either way the wider role set is unreachable outside developer mode, and
+        the backend re-checks the matching grant plus developer mode.
         """
         _reset_manifest()
         from modulo.core.manifest import load_manifest
 
+        dev_gate_permissions = {
+            "in_dev": "library.search.in_dev",
+            "private_preview": "system_maps_access",
+        }
         manifest = load_manifest()
         for path, route in manifest["routes"].items():
             if route["required_tier"] != "community" or route["required_roles"] is None:
                 continue
             if route["required_roles"] == ["admin"]:
                 continue
-            assert route.get("visibility") == "in_dev", (
-                f"Community route {path} may only widen roles to ['operator', 'admin'] behind an in_dev visibility gate"
+            visibility = route.get("visibility")
+            assert visibility in dev_gate_permissions, (
+                f"Community route {path} may only widen roles to ['operator', 'admin'] "
+                "behind a dev-only visibility gate (in_dev or private_preview)"
             )
-            assert "library.search.in_dev" in (route.get("required_permissions") or []), (
-                f"Community route {path} widened roles without the library.search.in_dev permission gate"
+            gate_permission = dev_gate_permissions[visibility]
+            assert gate_permission in (route.get("required_permissions") or []), (
+                f"Community route {path} widened roles without the {gate_permission} permission gate"
             )
             assert route["required_roles"] == ["operator", "admin"], (
                 f"Community route {path} with explicit roles must require exactly ['admin'] "
-                "or the in-dev ['operator', 'admin'] set"
+                "or the dev-gated ['operator', 'admin'] set"
             )
 
     def test_admin_routes_require_admin_role(self):
