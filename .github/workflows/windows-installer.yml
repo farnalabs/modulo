@@ -59,12 +59,89 @@ jobs:
       - name: Install Inno Setup 6.2.2
         run: |
           $ErrorActionPreference = 'Stop'
-          choco install innosetup --version=6.2.2 --yes --no-progress
-          $isccDir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6'
-          if (-not (Test-Path -LiteralPath (Join-Path $isccDir 'ISCC.exe'))) {
-            throw "ISCC.exe was not installed under $isccDir"
+
+          # FAR-2315: the windows-latest image ships a newer Inno Setup
+          # already installed, and Chocolatey refuses the pinned 6.2.2
+          # without an explicit downgrade - which made this job die before
+          # it ever reached ISCC. Allow the downgrade so CI compiles with
+          # the exact version the release workflow pins.
+          choco install innosetup --version=6.2.2 --yes --no-progress --allow-downgrade
+          $chocoExit = $LASTEXITCODE
+          if ($chocoExit -ne 0) {
+            Write-Warning "choco install innosetup 6.2.2 exited $chocoExit; continuing only if ISCC.exe is present."
           }
-          Add-Content -Path $env:GITHUB_PATH -Value $isccDir
+
+          # Resolve ISCC from the install directory, then from PATH. The
+          # pre-installed copy the image ships lives in the same directory,
+          # so a failed downgrade still leaves a working compiler.
+          $isccCandidates = @()
+          foreach ($programFiles in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+            if ($programFiles) {
+              $isccCandidates += (Join-Path $programFiles 'Inno Setup 6\ISCC.exe')
+            }
+          }
+          $isccPath = $null
+          foreach ($candidate in $isccCandidates) {
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+              $isccPath = $candidate
+              break
+            }
+          }
+          if (-not $isccPath) {
+            $isccCommand = Get-Command -Name 'ISCC.exe' -ErrorAction SilentlyContinue
+            if ($isccCommand) {
+              $isccPath = $isccCommand.Source
+            }
+          }
+
+          # Every Inno Setup install registers a DisplayVersion; capturing it
+          # means the log records which version actually compiled the installer.
+          $registered = @()
+          foreach ($root in @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+          )) {
+            if (Test-Path -LiteralPath $root) {
+              $registered += Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue |
+                ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue } |
+                Where-Object { $_.DisplayName -like 'Inno Setup*' } |
+                ForEach-Object { "$($_.DisplayName) $($_.DisplayVersion)" }
+            }
+          }
+          $registeredText = if ($registered) { $registered -join '; ' } else { 'none' }
+
+          if (-not $isccPath) {
+            $chocoState = 'unavailable'
+            try {
+              $chocoState = (choco list --local-only innosetup 2>&1 | Out-String).Trim()
+            } catch {
+              $chocoState = "choco list failed: $_"
+            }
+            throw ("ISCC.exe is not available after installing Inno Setup 6.2.2.`n" +
+                   "Looked for: $($isccCandidates -join ', ')`n" +
+                   "Registered Inno Setup installs: $registeredText`n" +
+                   "choco list --local-only innosetup:`n$chocoState")
+          }
+
+          $fileVersion = $null
+          $versionInfo = (Get-Item -LiteralPath $isccPath).VersionInfo
+          foreach ($candidate in @($versionInfo.ProductVersion, $versionInfo.FileVersion)) {
+            if ($candidate) {
+              $fileVersion = ($candidate -replace '\s*\([^)]*\)\s*$', '').Trim()
+              break
+            }
+          }
+          $fileVersionText = if ($fileVersion) { $fileVersion } else { 'unknown' }
+          Write-Host "ISCC: $isccPath (file version: $fileVersionText)"
+          Write-Host "Registered Inno Setup installs: $registeredText"
+
+          if ($fileVersion -and ($fileVersion -notmatch '^6\.2\.2')) {
+            Write-Warning "ISCC reports $fileVersion, not the pinned 6.2.2 - compiling with the installed version instead. The log above records it."
+          } elseif (-not $fileVersion) {
+            Write-Warning 'Could not read the ISCC file version; the compile output below is the record of what ran.'
+          }
+
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path -Parent $isccPath)
       - name: Compile the installer and run the contract tests
         run: |
           $ErrorActionPreference = 'Stop'
