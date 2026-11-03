@@ -2430,7 +2430,13 @@ def test_freeze_cleanup_is_a_dedicated_finalizer_job_after_publication() -> None
     jobs = cast(dict[str, Any], workflow["jobs"])
     assert _FREEZE_CLEANUP_JOB_ID in jobs
     job = cast(dict[str, Any], jobs[_FREEZE_CLEANUP_JOB_ID])
-    assert job["if"] == "always() && (inputs.mode == 'cut' || inputs.mode == 'recut') && failure()"
+    assert job["if"] == (
+        "always() && (inputs.mode == 'cut' || inputs.mode == 'recut') "
+        "&& needs.preflight.result == 'success' && failure()"
+    )
+    # The preflight discovery gate must succeed before the finalizer may clear
+    # a freeze: a run whose gate never passed created no freeze of its own.
+    assert "preflight" in job["needs"]
     assert "publish-release" in job["needs"]
     # A typo in `needs` would silently order the finalizer before publication.
     assert set(job["needs"]) <= set(jobs)
