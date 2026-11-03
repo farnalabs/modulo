@@ -903,6 +903,62 @@ def test_main_exits_one_on_failure(tmp_path: Path, capsys):
     assert "PREFLIGHT FAILED" in err
 
 
+def test_safe_summary_path_allows_plain_and_absolute_paths():
+    assert mod._safe_summary_path("summary.md") == "summary.md"
+    assert mod._safe_summary_path("/tmp/step_summary_abc-123") == "/tmp/step_summary_abc-123"
+
+
+def test_safe_summary_path_rejects_empty_traversal_and_unsafe_characters():
+    assert mod._safe_summary_path("") is None
+    assert mod._safe_summary_path("../../etc/passwd") is None
+    assert mod._safe_summary_path("/tmp/../escape.md") is None
+    assert mod._safe_summary_path("/tmp/bad name.md") is None
+    assert mod._safe_summary_path("/tmp/bad\nname.md") is None
+
+
+def test_main_refuses_traversal_summary_path(tmp_path: Path, capsys):
+    repo = _make_dummy_repo(tmp_path)
+    write_target = tmp_path / "inside.md"
+    (tmp_path / "nested").mkdir()
+    exit_code = mod.main(
+        [
+            "--mode",
+            "invalid_mode",
+            "--version",
+            "0.1.0",
+            "--repo-root",
+            str(repo),
+            "--summary-file",
+            f"{tmp_path}/nested/../inside.md",
+        ]
+    )
+    assert exit_code == 1
+    assert not write_target.exists()
+    err = capsys.readouterr().err
+    assert "refusing to write summary to unsafe path" in err
+
+
+def test_main_refuses_summary_path_with_disallowed_characters(tmp_path: Path, capsys):
+    repo = _make_dummy_repo(tmp_path)
+    summary_file = tmp_path / "bad name.md"
+    exit_code = mod.main(
+        [
+            "--mode",
+            "invalid_mode",
+            "--version",
+            "0.1.0",
+            "--repo-root",
+            str(repo),
+            "--summary-file",
+            str(summary_file),
+        ]
+    )
+    assert exit_code == 1
+    assert not summary_file.exists()
+    err = capsys.readouterr().err
+    assert "refusing to write summary to unsafe path" in err
+
+
 # -----------------------------------------------------------------------------
 # Workflow wiring: the preflight job must gate the release-producing jobs
 # -----------------------------------------------------------------------------

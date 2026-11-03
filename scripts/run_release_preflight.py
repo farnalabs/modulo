@@ -917,6 +917,30 @@ class ReleasePreflightChecker:
         return "\n".join(lines) + "\n"
 
 
+#: Allowlisted character set for a caller-supplied step-summary path.
+#:
+#: The destination is externally controlled (a CLI argument defaulting to
+#: ``$GITHUB_STEP_SUMMARY``), so it is a path-injection sink (CWE-22). Only
+#: letters, digits, dot, underscore, hyphen and the path separator are allowed:
+#: no whitespace, glob, control or shell metacharacters can survive the match.
+_SUMMARY_PATH_RE = re.compile(r"/?(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+")
+
+
+def _safe_summary_path(value: str) -> str | None:
+    """Return *value* only when it is a safe, traversal-free summary path.
+
+    Rejects any ``..`` component outright and requires the remainder to match
+    the narrow ``_SUMMARY_PATH_RE`` allowlist. The value returned is the
+    regex-bounded match, so the taint analyser no longer tracks the raw
+    caller-supplied string into the filesystem write. Returns ``None`` when the
+    path is empty or unsafe.
+    """
+    if not value or ".." in Path(value).parts:
+        return None
+    matched = _SUMMARY_PATH_RE.fullmatch(value)
+    return matched.group(0) if matched else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -964,11 +988,18 @@ def main(argv: list[str] | None = None) -> int:
     summary_md = checker.format_markdown_summary(results)
 
     if args.summary_file:
-        try:
-            with Path(args.summary_file).open("a", encoding="utf-8") as f:
-                f.write(summary_md)
-        except OSError as exc:
-            print(f"Warning: could not write summary to {args.summary_file}: {exc}", file=sys.stderr)
+        summary_path = _safe_summary_path(args.summary_file)
+        if summary_path is None:
+            print(
+                f"Warning: refusing to write summary to unsafe path: {args.summary_file!r}",
+                file=sys.stderr,
+            )
+        else:
+            try:
+                with Path(summary_path).open("a", encoding="utf-8") as f:
+                    f.write(summary_md)
+            except OSError as exc:
+                print(f"Warning: could not write summary to {summary_path}: {exc}", file=sys.stderr)
 
     failed_checks = [r.name for r in results if not r.passed]
     if failed_checks:
