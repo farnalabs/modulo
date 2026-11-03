@@ -762,8 +762,8 @@ def _cut_wait_budget_seconds(script: str) -> int:
 
 
 def _schema_wait_budget_seconds(script: str) -> int:
-    match = re.search(r"MAX_WAIT_SECONDS=(\d+)", script)
-    assert match is not None, "schema script must define MAX_WAIT_SECONDS"
+    match = re.search(r"SCHEMA_GATE_MAX_WAIT_SECONDS:-(\d+)", script)
+    assert match is not None, "schema script must define a default wait budget"
     return int(match.group(1))
 
 
@@ -1239,9 +1239,8 @@ set -e
 printf 'gh %s\\n' \"$*\" >> {shlex.quote(str(log))}
 printf '%s\\n' \"${{GH_TOKEN:-}}\" >> {shlex.quote(str(log) + ".tokens")}
 case \"$*\" in
-  *'run list'*) printf '123\\n'; exit 0 ;;
+  *'run list'*) printf '123\\ncompleted\\nsuccess\\n'; exit 0 ;;
   *'actions/runs/123/jobs'*) printf 'success\\n'; exit 0 ;;
-  *'actions/runs/123'*) printf 'completed\\n'; exit 0 ;;
   *) printf 'unexpected gh call: %s\\n' \"$*\" >&2; exit 1 ;;
 esac
 """,
@@ -1254,6 +1253,200 @@ esac
     commands = log.read_text(encoding="utf-8")
     assert f"--commit {cut_sha}" in commands
     assert cut_sha in result.stdout
+
+
+_SCHEMA_GATE_STEP_NAME = "Assert schema-freshness gate green on exact cut/recut commit"
+_SCHEMA_TARGET_SHA = "a" * 40
+
+
+def _schema_gate_harness(
+    tmp_path: Path,
+    *,
+    run_lookups: list[tuple[str, int]],
+    jobs_conclusion: str = "success",
+) -> tuple[dict[str, str], Path]:
+    """Run the schema-gate step against a stubbed ``gh``.
+
+    ``run_lookups`` is the raw stdout payload and exit code of each successive
+    ``gh run list`` call; once the samples run out the last one repeats. The
+    poll budget is set to the number of samples (interval one second), and
+    ``sleep`` is stubbed out, so the loop advances on the stub's own state per
+    invocation rather than on wall-clock time.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "gh.log"
+    counter = tmp_path / "gh-count"
+    samples = tmp_path / "samples"
+    samples.mkdir()
+    for index, (payload, returncode) in enumerate(run_lookups):
+        (samples / f"{index}.out").write_text(payload, encoding="utf-8")
+        (samples / f"{index}.rc").write_text(str(returncode), encoding="utf-8")
+    sample_count = len(run_lookups)
+    _write_executable(
+        bin_dir / "gh",
+        f"""#!/usr/bin/env bash
+set -u
+printf 'gh %s\\n' "$*" >> {shlex.quote(str(log))}
+case "$*" in
+  *'run list'*)
+    count=0
+    if [ -f {shlex.quote(str(counter))} ]; then count="$(cat {shlex.quote(str(counter))})"; fi
+    count=$((count + 1))
+    printf '%s' "$count" > {shlex.quote(str(counter))}
+    index=$((count - 1))
+    if [ "$index" -ge {sample_count} ]; then index=$(({sample_count} - 1)); fi
+    cat {shlex.quote(str(samples))}/"$index.out"
+    rc="$(cat {shlex.quote(str(samples))}/"$index.rc")"
+    if [ "$rc" -ne 0 ]; then printf 'gh: request failed (sample %s)\\n' "$index" >&2; fi
+    exit "$rc"
+    ;;
+  *'actions/runs/'*'/jobs'*) printf '%s\\n' {shlex.quote(jobs_conclusion)}; exit 0 ;;
+  *) printf 'unexpected gh command: %s\\n' "$*" >&2; exit 1 ;;
+esac
+""",
+    )
+    _write_executable(
+        bin_dir / "sleep",
+        f"""#!/usr/bin/env bash
+printf 'sleep %s\\n' "$*" >> {shlex.quote(str(log))}
+""",
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "GITHUB_REPOSITORY": "example/repo",
+        "GH_TOKEN": "test-token",
+        "MODE": "cut",
+        "CUT_SHA": _SCHEMA_TARGET_SHA,
+        "SCHEMA_GATE_POLL_INTERVAL_SECONDS": "1",
+        "SCHEMA_GATE_MAX_WAIT_SECONDS": str(sample_count),
+    }
+    return env, log
+
+
+def _run_schema_gate(tmp_path: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return _run_bash(_release_job_run(_SCHEMA_GATE_STEP_NAME), cwd=tmp_path, env=env)
+
+
+@pytest.mark.posix_only
+def test_schema_gate_waits_for_the_exact_commit_run_to_appear(tmp_path: Path) -> None:
+    env, log = _schema_gate_harness(
+        tmp_path,
+        run_lookups=[("\n\n", 0), ("123\nin_progress\n\n", 0), ("123\ncompleted\nsuccess\n", 0)],
+    )
+    result = _run_schema_gate(tmp_path, env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "No CI workflow run for exact target" in output
+    assert "CI run 123 is in_progress (attempt 2/3" in output
+    assert f"Schema freshness passed on exact target {_SCHEMA_TARGET_SHA}" in output
+    commands = log.read_text(encoding="utf-8")
+    assert commands.count("run list") == 3
+    # Two waits between the three attempts, then the gate is asserted.
+    assert commands.count("sleep 1") == 2
+
+
+@pytest.mark.posix_only
+def test_schema_gate_aborts_when_the_exact_commit_run_fails(tmp_path: Path) -> None:
+    env, log = _schema_gate_harness(tmp_path, run_lookups=[("123\ncompleted\nfailure\n", 0)])
+    result = _run_schema_gate(tmp_path, env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "concluded 'failure', not success" in output
+    assert _SCHEMA_TARGET_SHA in output
+    # The failing run must never be probed for a green job.
+    assert "actions/runs/123/jobs" not in log.read_text(encoding="utf-8")
+
+
+@pytest.mark.posix_only
+@pytest.mark.parametrize("jobs_conclusion", ["cancelled", ""])
+def test_schema_gate_aborts_when_the_schema_freshness_job_did_not_succeed(tmp_path: Path, jobs_conclusion: str) -> None:
+    env, _log = _schema_gate_harness(
+        tmp_path, run_lookups=[("123\ncompleted\nsuccess\n", 0)], jobs_conclusion=jobs_conclusion
+    )
+    result = _run_schema_gate(tmp_path, env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    expected = jobs_conclusion or "missing"
+    assert f"Schema freshness was '{expected}'" in output
+    assert _SCHEMA_TARGET_SHA in output
+
+
+@pytest.mark.posix_only
+def test_schema_gate_fails_closed_and_names_the_sha_when_no_run_appears(tmp_path: Path) -> None:
+    env, log = _schema_gate_harness(tmp_path, run_lookups=[("\n\n", 0)] * 3)
+    result = _run_schema_gate(tmp_path, env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert f"No CI workflow run appeared for exact target {_SCHEMA_TARGET_SHA}" in output
+    assert "refusing to tag" in output
+    assert "minute(s)" in output
+    assert log.read_text(encoding="utf-8").count("run list") == 3
+
+
+@pytest.mark.posix_only
+def test_schema_gate_fails_closed_when_the_run_never_completes(tmp_path: Path) -> None:
+    env, _log = _schema_gate_harness(tmp_path, run_lookups=[("123\nin_progress\n\n", 0)] * 2)
+    result = _run_schema_gate(tmp_path, env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "Timed out after" in output
+    assert f"waiting for CI run 123 on exact target {_SCHEMA_TARGET_SHA}" in output
+    assert "refusing to tag" in output
+
+
+@pytest.mark.posix_only
+def test_schema_gate_retries_transient_gh_errors(tmp_path: Path) -> None:
+    env, log = _schema_gate_harness(
+        tmp_path,
+        run_lookups=[("", 1), ("123\ncompleted\nsuccess\n", 0)],
+    )
+    result = _run_schema_gate(tmp_path, env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "gh run lookup failed (attempt 1/2)" in output
+    assert "Schema freshness passed" in output
+    assert log.read_text(encoding="utf-8").count("run list") == 2
+
+
+@pytest.mark.posix_only
+def test_schema_gate_fails_closed_when_gh_never_answers(tmp_path: Path) -> None:
+    env, _log = _schema_gate_harness(tmp_path, run_lookups=[("", 1)] * 2)
+    result = _run_schema_gate(tmp_path, env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert f"Could not confirm a CI workflow run for exact target {_SCHEMA_TARGET_SHA}" in output
+    assert "last error" in output
+    assert "refusing to tag" in output
+
+
+def test_schema_gate_polls_instead_of_sampling_once() -> None:
+    script = _release_job_run(_SCHEMA_GATE_STEP_NAME)
+
+    assert "for ((poll=1; poll<=MAX_POLLS; poll++)); do" in script
+    assert "MAX_POLLS=$(( (MAX_WAIT_SECONDS + POLL_INTERVAL_SECONDS - 1) / POLL_INTERVAL_SECONDS ))" in script
+    assert "SCHEMA_GATE_MAX_WAIT_SECONDS:-" in script
+    assert "SCHEMA_GATE_POLL_INTERVAL_SECONDS:-" in script
+    # The one-shot abort this change removes: a single empty lookup used to end the cut.
+    assert "No CI workflow run found for exact target" not in script
+    assert "No CI workflow run appeared for exact target" in script
+
+
+def test_schema_gate_wait_budget_fits_the_release_job_timeout() -> None:
+    script = _release_job_run(_SCHEMA_GATE_STEP_NAME)
+    budget = _schema_wait_budget_seconds(script)
+    release_job = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]
+
+    assert budget == 60 * 60
+    assert budget <= release_job["timeout-minutes"] * 60
 
 
 @pytest.mark.posix_only
