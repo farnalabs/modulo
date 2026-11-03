@@ -57,6 +57,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
       - name: Install Inno Setup (preinstalled, choco fallback)
         run: |
           $ErrorActionPreference = 'Stop'
@@ -123,6 +124,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
       - name: Install Free Pascal
         run: |
           sudo apt-get update
