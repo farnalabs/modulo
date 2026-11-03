@@ -1093,7 +1093,8 @@ jobs:
                 # `host not found in upstream "backend"` even though the config
                 # is valid. --add-host gives the name an address so the test can
                 # run without a compose network - the check still fails the job
-                # on a real config error.
+                # on a real config error. publish-images.yml documents the same
+                # workaround.
                 docker run --rm --add-host backend:127.0.0.1 --entrypoint nginx "$IMAGE" -t
                 ;;
                runner-opencode)

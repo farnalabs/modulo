@@ -298,6 +298,7 @@ async function detectPlaceholders() {
             >{{ $t('components.pipeline.composite.PortDefinitionPanel.type') }}</label
           >
           <Select
+  id="portdefinitionpanel-field-3"
   aria-label="Port type"
   v-model="form.type"
   placeholder="Select type"
