@@ -6,6 +6,8 @@ Source of truth: ``backend/pyproject.toml`` ``[project].version``. The script
 reads the current version from there and writes it to every mirror:
 
 * ``backend/pyproject.toml``            ``version = "X.Y.Z"``
+* ``backend/uv.lock``                   ``version = "X.Y.Z"`` (the editable
+  ``farnalabs-modulo`` package entry — uv records the project version there)
 * ``frontend/package.json``             ``"version": "X.Y.Z"``
 * ``deploy/helm/modulo/Chart.yaml``     ``version: X.Y.Z`` AND ``appVersion: "X.Y.Z"``
 
@@ -30,17 +32,27 @@ from pathlib import Path
 from typing import Literal
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+UV_LOCK_FILENAME = "uv.lock"
 BACKEND_PYPROJECT = PROJECT_ROOT / "backend" / "pyproject.toml"
+BACKEND_UV_LOCK = PROJECT_ROOT / "backend" / UV_LOCK_FILENAME
 FRONTEND_PACKAGE = PROJECT_ROOT / "frontend" / "package.json"
 HELM_CHART = PROJECT_ROOT / "deploy" / "helm" / "modulo" / "Chart.yaml"
 
 _VALID_PARTS = {"major", "minor", "patch"}
 _SET_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
+# uv.lock records the project's own version in the editable package entry.
+# Anchored on the block so an unrelated dependency's version line can never be
+# rewritten; a format change makes the pattern miss, which the fail-loud
+# contract below reports instead of silently skipping the mirror.
+_UV_LOCK_MODULO_BLOCK_RE = re.compile(r'(?m)^\[\[package\]\]\r?\nname = "farnalabs-modulo"\r?\nversion = "([^"]+)"')
+
 
 def _extract_version(content: str, path: Path) -> str | None:
     """Pull the version value out of one target file's content."""
-    if path.suffix == ".toml":
+    if path.name == UV_LOCK_FILENAME:
+        m = _UV_LOCK_MODULO_BLOCK_RE.search(content)
+    elif path.suffix == ".toml":
         m = re.search(r'(?m)^version\s*=\s*"([^"]+)"', content)
     elif path.suffix in (".yaml", ".yml"):
         # Chart.yaml: the top-level `version:` line (never `appVersion:`).
@@ -51,7 +63,7 @@ def _extract_version(content: str, path: Path) -> str | None:
 
 
 def read_version(path: Path) -> str | None:
-    """Extract version from pyproject.toml, package.json or Chart.yaml."""
+    """Extract version from pyproject.toml, uv.lock, package.json or Chart.yaml."""
     return _extract_version(path.read_text(encoding="utf-8"), path)
 
 
@@ -68,6 +80,16 @@ def bump(version: str, part: str) -> str:
 
 def _field_patterns(path: Path, old_version: str, new_version: str) -> list[tuple[re.Pattern[str], str]]:
     """(pattern, replacement) pairs that carry the version in one target file."""
+    if path.name == UV_LOCK_FILENAME:
+        return [
+            (
+                re.compile(
+                    r'(?m)^(\[\[package\]\]\r?\nname = "farnalabs-modulo"\r?\nversion = )'
+                    rf'"{re.escape(old_version)}"'
+                ),
+                rf'\g<1>"{new_version}"',
+            ),
+        ]
     if path.suffix == ".toml":
         return [
             (re.compile(rf'(?m)^version\s*=\s*"{re.escape(old_version)}"'), f'version = "{new_version}"'),
@@ -205,7 +227,7 @@ def main() -> None:
         new = bump(old, value)
         print(f"Bumping {value} version: {old} -> {new}")
     try:
-        apply_version(old, new, (BACKEND_PYPROJECT, FRONTEND_PACKAGE, HELM_CHART))
+        apply_version(old, new, (BACKEND_PYPROJECT, BACKEND_UV_LOCK, FRONTEND_PACKAGE, HELM_CHART))
     except ValueError as exc:
         print(f"ERROR: {exc}")
         sys.exit(1)

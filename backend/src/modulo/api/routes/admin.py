@@ -72,6 +72,8 @@ from modulo.db.crud.last_admin_guard import (
     LastAdminLockoutUnavailableError,
     assert_not_last_admin,
 )
+from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_org_deletion  # noqa: F401
+from modulo.db.crud.org_deletion import request_org_deletion as _request_org_deletion  # noqa: F401
 from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.organisation import get_organisation, update_org_settings_patch, update_organisation
 from modulo.db.crud.pipeline_snapshot import (
@@ -141,11 +143,13 @@ _CODE_ADMIN_ADMIN_REACTIVATE_USER = "admin.admin_reactivate_user"
 _CODE_ADMIN_ADMIN_UPDATE_TEAM = "admin.admin_update_team"
 _CODE_ADMIN_ADMIN_DELETE_TEAM = "admin.admin_delete_team"
 _CODE_ORG_DELETE = "org.delete"
-_CODE_ADMIN_REQUEST_ORG_DELETION = "admin.request_org_deletion"
-_CODE_ADMIN_CONFIRM_ORG_DELETION = "admin.confirm_org_deletion"
 _CODE_ADMIN_CANCEL_ORG_DELETION = "admin.cancel_org_deletion"
 _CODE_ADMIN_EXPORT_ORG_DATA = "admin.export_org_data"
-_CODE_ADMIN_DELETE_ORG_IMMEDIATE = "admin.delete_org_immediate"
+# The caller's own organisation can never be deleted through this router: the
+# only target these routes can address is the active organisation.
+_MSG_ACTIVE_ORG_DELETION_REFUSED = (
+    "Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}"
+)
 _MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again later."
 _RE_GREEN_OR_AMBER = "^(green|amber)$"
 _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "A database error occurred. Please try again later."
@@ -177,6 +181,16 @@ def _require_admin(current_user: TenantPrincipal, action: str) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Only admin users can {action}",
         )
+
+
+def _reject_active_org_deletion(
+    _current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
+) -> NoReturn:
+    """Reject tenant-scoped deletion before any database work begins."""
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}",
+    )
 
 
 _MSG_SERVICE_ACCOUNT_MANAGED_ELSEWHERE = (
@@ -2587,13 +2601,6 @@ async def admin_billing_overview(
 # ── Org Deletion ─────────────────────────────────────────────────────
 
 
-class DeletionRequestResponse(BaseModel):
-    message: str
-    token: str
-    token_expires_at: str
-    export_summary: dict[str, object]
-
-
 @router.post(
     "/org/deletion-request",
     dependencies=[
@@ -2606,92 +2613,25 @@ class DeletionRequestResponse(BaseModel):
             )
         )
     ],
-    status_code=status.HTTP_202_ACCEPTED,
+    status_code=status.HTTP_403_FORBIDDEN,
+    response_model=None,
+    responses={
+        status.HTTP_403_FORBIDDEN: {
+            "description": "Active-organisation deletion is refused; use the system-admin route.",
+        }
+    },
 )
-@handle_db_errors(_CODE_ADMIN_REQUEST_ORG_DELETION)
 async def request_org_deletion(
-    current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
-    session: AsyncSession = Depends(get_db_session),
-) -> DeletionRequestResponse:
-    from modulo.core.audit_logger import append_audit_event
-    from modulo.core.system_audit_logger import append_system_audit_event
-    from modulo.db.crud.org_deletion import request_org_deletion as _request_deletion
+    _current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
+) -> None:
+    """Refuse self-service deletion of the caller's own organisation.
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-
-            try:
-                result = await _request_deletion(
-                    session,
-                    org_id=current_user.organisation_id,
-                    _actor_user_id=current_user.account_id,
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
-            await append_audit_event(
-                session,
-                org_id=current_user.organisation_id,
-                event_type="org_deletion_requested",
-                actor_user_id=current_user.account_id,
-                resource_type="organisation",
-                resource_id=current_user.organisation_id,
-                payload_json={
-                    "deletion_token": result["token"][:12] + "...",
-                    "token_expires_at": result["token_expires_at"],
-                    "exported_entities": list(result["export"].keys()),
-                },
-            )
-
-            # FAR-1517: the chained event above dies with the org when the
-            # deletion is confirmed — mirror it into the org-independent
-            # ledger, in this transaction, so the request outlives the delete.
-            _org_row = (result["export"].get("organisation") or [{}])[0]
-            await append_system_audit_event(
-                session,
-                event_type="org_deletion_requested",
-                org_id=current_user.organisation_id,
-                actor_user_id=current_user.account_id,
-                resource_type="organisation",
-                resource_id=current_user.organisation_id,
-                payload_json={
-                    "flow": "deletion_request",
-                    "immediate": False,
-                    "token_expires_at": result["token_expires_at"],
-                    "exported_entities": list(result["export"].keys()),
-                    "organisation_name": _org_row.get("name"),
-                    "organisation_slug": _org_row.get("slug"),
-                },
-            )
-    except IntegrityError:
-        logger.exception(_CODE_ADMIN_REQUEST_ORG_DELETION)
-        _raise_conflict()
-    except ProgrammingError:
-        logger.exception(_CODE_ADMIN_REQUEST_ORG_DELETION)
-        _raise_feature_not_available()
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.request_org_deletion")
-        logger.exception(_CODE_ADMIN_REQUEST_ORG_DELETION)
-        _raise_db_unavailable("Database error while requesting org deletion.")
-
-    export = result["export"]
-    return DeletionRequestResponse(
-        message="Deletion requested. A confirmation link has been generated (valid for 24 h).",
-        token=result["token"],
-        token_expires_at=result["token_expires_at"],
-        export_summary={
-            "organisation": export.get("organisation", [{}])[0].get("name", "unknown"),
-            "user_count": len(export.get("memberships", [])),
-            "pipeline_count": len(export.get("pipelines", [])),
-            "run_count": len(export.get("runs", [])),
-            "audit_event_count": len(export.get("audit_events", [])),
-            "library_count": len(export.get("library_primitives", [])),
-            "connector_count": len(export.get("connector_instances", [])),
-            "backend_count": len(export.get("model_backends", [])),
-        },
-    )
+    The only organisation this route can address is the caller's active one, so
+    it can never delete anything: cross-organisation deletion is a system-admin
+    capability on ``DELETE /api/v1/admin/orgs/{org_id}``. The ``audited()``
+    dependency still records each refused attempt.
+    """
+    _reject_active_org_deletion()
 
 
 class ConfirmDeletionRequest(BaseModel):
@@ -2700,88 +2640,28 @@ class ConfirmDeletionRequest(BaseModel):
     force: bool = False
 
 
-class ConfirmDeletionResponse(BaseModel):
-    message: str
-    deleted_organisation_id: str
-    hard_deleted_runs: int
-
-
 @router.post(
     "/org/deletion-confirm",
-    # FAR-1517: NO audited() dependency here. audited() appends to the
-    # org-scoped chain on a FRESH session AFTER the handler commits — but this
-    # handler hard-deletes the org, so that append can never satisfy
-    # audit_events.organisation_id's FK (it would fail open every time and
-    # record nothing). The durable, org-independent record is written
-    # IN-transaction by the handler instead (see append_system_audit_event).
+    dependencies=[Depends(audited("api_access_post", "organisation", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_403_FORBIDDEN,
+    response_model=None,
+    responses={
+        status.HTTP_403_FORBIDDEN: {
+            "description": "Active-organisation deletion is refused; use the system-admin route.",
+        }
+    },
 )
-@handle_db_errors(_CODE_ADMIN_CONFIRM_ORG_DELETION)
 async def confirm_org_deletion(
-    req: ConfirmDeletionRequest,
-    current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
-    session: AsyncSession = Depends(get_db_session),
-) -> ConfirmDeletionResponse:
-    from modulo.core.system_audit_logger import append_system_audit_event
-    from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_deletion
+    _req: ConfirmDeletionRequest,
+    _current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
+) -> None:
+    """Refuse confirmation of the caller's own organisation deletion.
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-
-            # FAR-1517: the hard delete destroys this org's audit trail, so the
-            # record of the destructive act goes to the org-independent ledger
-            # IN the same transaction — it commits only if the delete commits,
-            # and a failed append aborts the delete (fail-closed).
-            try:
-                result = await _confirm_deletion(
-                    session,
-                    org_id=current_user.organisation_id,
-                    token=req.token,
-                    immediate=False,
-                    force=req.force,
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
-            # FAR-1832 (R4): append AFTER the crud call, not before it. This
-            # was the one org-deletion FSM path that performed an in-transaction
-            # write BEFORE the org-row ``FOR UPDATE`` (every sibling route —
-            # request, cancel, immediate delete, and (QA F6) the cross-org
-            # ``admin_orgs.admin_delete_org`` — locks/deletes the org row
-            # first). ``system_audit_events`` is deliberately not hash-chained,
-            # so ``append_system_audit_event`` takes no chain-head lock; it is a
-            # plain INSERT. Same transaction, so atomicity and the fail-closed
-            # property are unchanged; only the ordering is repaired to the
-            # global order (org FSM lock, then the audit append).
-            await append_system_audit_event(
-                session,
-                event_type="org_deletion_completed",
-                org_id=current_user.organisation_id,
-                actor_user_id=current_user.account_id,
-                resource_type="organisation",
-                resource_id=current_user.organisation_id,
-                payload_json={"flow": "deletion_confirm", "immediate": False, "force": req.force},
-            )
-    except IntegrityError:
-        logger.exception(_CODE_ADMIN_CONFIRM_ORG_DELETION)
-        _raise_conflict()
-    except ProgrammingError:
-        logger.exception(_CODE_ADMIN_CONFIRM_ORG_DELETION)
-        _raise_feature_not_available()
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.confirm_org_deletion")
-        logger.exception(_CODE_ADMIN_CONFIRM_ORG_DELETION)
-        _raise_db_unavailable("Database error while confirming org deletion.")
-
-    return ConfirmDeletionResponse(
-        message=(
-            "Organisation has been permanently deleted."
-            + (" (FORCED — deleted despite live runs.)" if req.force else "")
-        ),
-        deleted_organisation_id=result["deleted_organisation_id"],
-        hard_deleted_runs=result["hard_deleted_runs"],
-    )
+    The token is still accepted and validated as a request body so the endpoint
+    contract is unchanged, but no deletion is ever attempted: the only org this
+    route can confirm is the active one, and that is never deletable here.
+    """
+    _reject_active_org_deletion()
 
 
 class CancelDeletionResponse(BaseModel):
@@ -2882,96 +2762,24 @@ async def export_org_data(
 
 @router.delete(
     "/org",
-    # FAR-1517: NO audited() dependency — same reason as /org/deletion-confirm:
-    # this handler hard-deletes the org, so a post-commit org-scoped append can
-    # never satisfy the audit_events FK. Both lifecycle events are written
-    # IN-transaction to the durable ledger instead.
+    dependencies=[Depends(audited("api_access_delete", "organisation", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_403_FORBIDDEN,
+    response_model=None,
+    responses={
+        status.HTTP_403_FORBIDDEN: {
+            "description": "Active-organisation deletion is refused; use the system-admin route.",
+        }
+    },
 )
-@handle_db_errors(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
 async def delete_org_immediate(
-    current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
-    session: AsyncSession = Depends(get_db_session),
-) -> ConfirmDeletionResponse:
-    from modulo.core.audit_logger import append_audit_event
-    from modulo.core.system_audit_logger import append_system_audit_event
-    from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_deletion
-    from modulo.db.crud.org_deletion import request_org_deletion as _request_deletion
+    _current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
+) -> None:
+    """Refuse immediate deletion of the caller's own organisation.
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-
-            try:
-                req = await _request_deletion(
-                    session,
-                    org_id=current_user.organisation_id,
-                    _actor_user_id=current_user.account_id,
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
-            await append_audit_event(
-                session,
-                org_id=current_user.organisation_id,
-                event_type="org_deletion_requested",
-                actor_user_id=current_user.account_id,
-                resource_type="organisation",
-                resource_id=current_user.organisation_id,
-                payload_json={"immediate": True, "exported_entities": list(req["export"].keys())},
-            )
-
-            # FAR-1517: durable copies of BOTH lifecycle steps — the chained
-            # events above are destroyed by the hard delete that follows.
-            _org_row = (req["export"].get("organisation") or [{}])[0]
-            _org_identity = {
-                "organisation_name": _org_row.get("name"),
-                "organisation_slug": _org_row.get("slug"),
-            }
-            await append_system_audit_event(
-                session,
-                event_type="org_deletion_requested",
-                org_id=current_user.organisation_id,
-                actor_user_id=current_user.account_id,
-                resource_type="organisation",
-                resource_id=current_user.organisation_id,
-                payload_json={"flow": "delete_org_immediate", "immediate": True, **_org_identity},
-            )
-            # Written BEFORE the org row is removed: same transaction, so it
-            # commits only with the delete and an append failure aborts it.
-            await append_system_audit_event(
-                session,
-                event_type="org_deletion_completed",
-                org_id=current_user.organisation_id,
-                actor_user_id=current_user.account_id,
-                resource_type="organisation",
-                resource_id=current_user.organisation_id,
-                payload_json={"flow": "delete_org_immediate", "immediate": True, "force": True, **_org_identity},
-            )
-
-            result = await _confirm_deletion(
-                session,
-                org_id=current_user.organisation_id,
-                token=req["token"],
-                immediate=True,
-                force=True,
-            )
-    except IntegrityError:
-        logger.exception(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
-        _raise_conflict()
-    except ProgrammingError:
-        logger.exception(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
-        _raise_feature_not_available()
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.delete_org_immediate")
-        logger.exception(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
-        _raise_db_unavailable("Database error while deleting org.")
-
-    return ConfirmDeletionResponse(
-        message="Organisation has been permanently deleted. (FORCED — deleted despite live runs.)",
-        deleted_organisation_id=result["deleted_organisation_id"],
-        hard_deleted_runs=result["hard_deleted_runs"],
-    )
+    This route always targets the caller's active organisation, so even a
+    system admin must use the explicit cross-organisation route instead.
+    """
+    _reject_active_org_deletion()
 
 
 # ── Eval Dashboard ──────────────────────────────────────────────────────

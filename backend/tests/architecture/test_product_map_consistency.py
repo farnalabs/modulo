@@ -465,6 +465,19 @@ OWNED_PAGES = {
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
+    "/system-maps": (
+        "frontend/src/views/SystemMapsView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+        "frontend/src/components/shared/ErrorAlert.vue",
+    ),
+    "/system-maps/:id": (
+        "frontend/src/views/SystemMapDetailView.vue",
+        "frontend/src/components/system-maps/SystemMapGraphEditor.vue",
+        "frontend/src/components/system-maps/SystemMapHeaderBar.vue",
+        "frontend/src/components/system-maps/SystemMapRevisionSidebar.vue",
+        "frontend/src/components/system-maps/SystemMapDiscoveryPanel.vue",
+        "frontend/src/components/shared/ErrorAlert.vue",
+    ),
     "/risk-assessment": (
         "frontend/src/views/RiskAssessmentView.vue",
         "frontend/src/components/risk-assessment/RiskAssessmentFacets.vue",

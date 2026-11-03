@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.sql import Select
 
-from tests.unit.api.mock_session import configure_rls_preamble
+from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")
 os.environ.setdefault("SECRET_KEY", "a" * 32)
@@ -88,15 +88,13 @@ def make_system_session_mock(
     # coroutine behind. Type the double to match the real contract.
     session.in_transaction = MagicMock(return_value=True)
 
-    empty_row = MagicMock()
-    empty_row.scalar_one_or_none = MagicMock(return_value=None)
-    empty_row.scalar_one = AsyncMock(return_value=0)
-    empty_row.scalar = AsyncMock(return_value=0)
-    empty_scalars = MagicMock()
-    empty_scalars.all = MagicMock(return_value=[])
-    empty_row.scalars = MagicMock(return_value=empty_scalars)
-    empty_row.first = MagicMock(return_value=None)
-    empty_row.all = MagicMock(return_value=[])
+    # The awaited ``execute()`` result's readers are SYNC ``Result`` methods.
+    # Building them as ``AsyncMock`` children leaves a never-awaited coroutine
+    # behind every synchronous read of ``scalar_one()``/``scalar()`` — the
+    # FAR-2674 ambient-leak class that surfaces as
+    # ``PytestUnraisableExceptionWarning`` on whichever test happens to trigger
+    # GC. Use the shared empty-result builder, which types every reader sync.
+    empty_row = make_empty_execute_result(scalar_value=0)
 
     trigger_mock = None
     if trigger_found:

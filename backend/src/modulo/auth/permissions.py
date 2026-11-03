@@ -120,6 +120,8 @@ PERMISSIONS: dict[str, str] = {
     "system_map.revision.publish": "operator",
     "system_map.revision.archive": "operator",
     "system_map.revision.delete": "operator",
+    "system_map.revision.diff": "viewer",
+    "system_map.revision.restore_as_new": "operator",
     "system_map.overview": "viewer",
     "system_map.node.create": "operator",
     "system_map.relationship.create": "operator",
@@ -166,6 +168,15 @@ PERMISSIONS: dict[str, str] = {
     # ``org.guardrails.kill_switch.manage`` governance-toggle pattern.
     "org.mcp.human_linked_hitl_authority.manage": "admin",
     "org.settings.update": "admin",
+    # FAR-2302: an org admin controls the feature flags that govern their OWN
+    # organisation's usage (only the curated community-tier flags marked
+    # ``org_admin_settable``; sensitive and team-tier flags stay
+    # system-admin-only). Named in the ``org.feature_flags`` namespace — no
+    # existing key shares that prefix, and it is distinct from the
+    # system-scoped ``system.config.manage`` gate the instance-wide
+    # feature-flags page uses, so a typo cannot silently resolve to a sibling's
+    # role.
+    "org.feature_flags.manage": "admin",
     # guardrail definition/binding management — the admin-level permission for
     # managing guardrail definitions, node bindings, and the elevated (full,
     # unmasked) config read. Mirrors the org.guardrails.kill_switch.manage
@@ -429,6 +440,12 @@ NON_DELEGABLE_PERMISSIONS: frozenset[str] = frozenset(
         # ``human_only`` gate), so it is never delegable to a credential —
         # same class as the two entries above.
         "org.mcp.human_linked_hitl_authority.manage",
+        # FAR-2302: org feature-flag governance decides what the whole
+        # organisation may enable (including authz-adjacent flags such as
+        # API-key grant-sets and user-scoped MCP keys), so it is an
+        # organisation-governance control and is never delegated to a
+        # credential.
+        "org.feature_flags.manage",
         # instance-scope (SYSTEM_ORG_ID sentinel partition) error reads —
         # system-admin only, so never delegable to a credential (FAR-1547).
         "errors.resolve_instance",

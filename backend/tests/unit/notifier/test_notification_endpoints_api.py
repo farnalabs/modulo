@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from tests.unit.notifier.conftest import begin_context
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -37,10 +38,7 @@ def _make_session() -> AsyncMock:
     session.in_transaction = MagicMock(return_value=True)
     session.get_bind = MagicMock(return_value=bind)
     session.info = {}
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
+    session.begin = MagicMock(return_value=begin_context())
     session.add = MagicMock()
     session.flush = AsyncMock()
     session.delete = MagicMock()

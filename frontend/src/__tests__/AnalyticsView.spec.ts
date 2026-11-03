@@ -896,15 +896,56 @@ describe('AnalyticsView', () => {
     expect(wrapper.find('[data-testid="analytics-title"]').exists()).toBe(true)
   })
 
-  it('renders the chart and trend table when data loads', async () => {
+  it('puts the chart first and keeps the detail table collapsed by default', async () => {
     setupMocks()
     const wrapper = mount(AnalyticsView)
     await flushPromises()
     expect(wrapper.find('[data-testid="analytics-chart"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="analytics-table"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analytics-details"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analytics-details"]').attributes('open')).toBeUndefined()
+    const overview = wrapper.find('[data-testid="analytics-overview-chart"]').element
+    const details = wrapper.find('[data-testid="analytics-details"]').element
+    expect(overview.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(wrapper.text()).toContain('2026-08-01')
     expect(wrapper.find('[data-testid="analytics-table"]').text()).toContain('3')
     expect(wrapper.find('[data-testid="analytics-table"]').text()).toContain('5')
+  })
+
+  it('renders an em dash delta for a row with no previous-window baseline', async () => {
+    // The previous window comes back empty, so the first row has no baseline to
+    // compare against: its delta cell must fall back to the em dash rather than
+    // render a trend arrow.
+    const previousResponse = {
+      group_by: 'day',
+      dimension: null,
+      date_from: '2026-07-23',
+      date_to: '2026-07-30',
+      buckets: [],
+    }
+    let queryCalls = 0
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/analytics/query') {
+        queryCalls += 1
+        return Promise.resolve({
+          data: queryCalls === 1 ? validResponse : previousResponse,
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/pipeline-folders') return Promise.resolve({ data: [], error: undefined })
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [], total: 0, page: 1, page_size: 100, next_cursor: null, has_more: false },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    const rows = wrapper.findAll('[data-testid="analytics-table"] tbody tr')
+    expect(rows.length).toBe(2)
+    expect(rows[0].find('[data-testid="analytics-trend-arrow"]').exists()).toBe(false)
+    expect(rows[0].text()).toContain('—')
   })
 
   it('hides the day/week group-by control and shows a disabled Hour pill for hour-granular timespans', async () => {
@@ -1058,6 +1099,10 @@ describe('AnalyticsView', () => {
     // Aggregated per key: manual=5 vs 4 (up), webhook=7 vs 11 (down).
     const arrows = wrapper.findAll('[data-testid="analytics-trend-arrow"]')
     expect(arrows.length).toBe(2)
+    // The visible glyph is aria-hidden, so the direction also needs a text
+    // equivalent for screen readers (WCAG 1.4.1 / 4.1.2).
+    expect(arrows[0].find('.sr-only').text()).toBe('increase')
+    expect(arrows[1].find('.sr-only').text()).toBe('decrease')
     expect(arrows[0].text()).toContain('▲')
     expect(arrows[1].text()).toContain('▼')
   })

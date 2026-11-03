@@ -15,7 +15,7 @@ import respx
 from cryptography.fernet import Fernet
 from httpx import Response
 from tests.unit.api.mock_session import configure_mock_session
-from tests.unit.notifier.conftest import make_scalar_result, session_factory_for
+from tests.unit.notifier.conftest import begin_context, make_scalar_result, session_factory_for
 
 from modulo.core.notifier import (
     MAX_ATTEMPTS,
@@ -48,9 +48,7 @@ def _configure_rls_session(session: AsyncMock) -> MagicMock:
     session.in_transaction = MagicMock(return_value=True)
     session.get_bind = MagicMock(return_value=bind)
     session.info = {}
-    begin_cm = MagicMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    begin_cm = begin_context()
     session.begin = MagicMock(return_value=begin_cm)
     return begin_cm
 
@@ -67,10 +65,7 @@ def _make_db_session(
     """
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     _configure_rls_session(session)
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
+    session.begin = MagicMock(return_value=begin_context())
     if execute is not None:
         session.execute = execute
     if add is not None:
@@ -913,10 +908,7 @@ async def test_dispatch_event_creates_in_app_notification_with_zero_webhook_endp
         patch.object(notifier, "_session_factory") as factory,
     ):
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        begin_cm = AsyncMock()
-        begin_cm.__aenter__ = AsyncMock(return_value=None)
-        begin_cm.__aexit__ = AsyncMock(return_value=False)
-        session.begin = MagicMock(return_value=begin_cm)
+        session.begin = MagicMock(return_value=begin_context())
         factory.return_value.__aenter__.return_value = session
 
         results = await notifier.dispatch_event(_ORG, "hitl_overdue", {"run_id": str(_RUN)})
@@ -990,10 +982,7 @@ async def test_dispatch_event_re_raises_cancelled_error_from_in_app_block(notifi
         patch("modulo.core.notifier.set_rls_org", AsyncMock(side_effect=asyncio.CancelledError)),
     ):
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        begin_cm = AsyncMock()
-        begin_cm.__aenter__ = AsyncMock(return_value=None)
-        begin_cm.__aexit__ = AsyncMock(return_value=False)
-        session.begin = MagicMock(return_value=begin_cm)
+        session.begin = MagicMock(return_value=begin_context())
         factory.return_value.__aenter__.return_value = session
 
         with pytest.raises(asyncio.CancelledError):

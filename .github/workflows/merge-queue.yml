@@ -76,15 +76,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Check for release-freeze tag
+      - name: Check for release-freeze branch
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          # Alpha release process: while the 'release-freeze' tag exists,
+          # Alpha release process: while the 'release-freeze' branch exists,
           # main is frozen and the merge queue must not merge anything.
-          # Manual escape: delete the 'release-freeze' tag. Do NOT use Release ->
+          # Manual escape: delete the 'release-freeze' branch. Do NOT use Release ->
           # release as an escape - that promotes GA prematurely.
           # The retry/backoff/fail-closed policy lives in the shared helper
           # (.github/scripts/release-freeze-check.py) so it cannot diverge from
@@ -92,14 +92,14 @@ jobs:
           # (e.g. 503s or snapshot-lock contention during a pipeline burst)
           # cannot masquerade as a freeze; we still FAIL CLOSED, but only after
           # the call persists in failing across retries. A genuine release freeze
-          # (tag present) is detected on the very first successful response.
+          # (branch present) is detected on the very first successful response.
           OUT=$(python3 .github/scripts/release-freeze-check.py) || true
           VERDICT="${OUT%%|*}"
           MSG="${OUT#*|}"
           case "$VERDICT" in
             frozen)
               echo "frozen=true" >> "$GITHUB_OUTPUT"
-              echo "::notice::Release freeze ACTIVE ('release-freeze' tag present) - merge queue paused." ;;
+              echo "::notice::Release freeze ACTIVE ('release-freeze' branch present) - merge queue paused." ;;
             open)
               echo "frozen=false" >> "$GITHUB_OUTPUT" ;;
             fail-closed)
@@ -287,7 +287,7 @@ jobs:
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.9
+          version: 11.28.10
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -1555,6 +1555,24 @@ jobs:
         run: |
           echo "" > /tmp/failure_description.txt
 
+      - name: Check backend uv.lock freshness (FAR-2308)
+        # The validation branch is main + every approved PR, so a stale lock can
+        # appear even when each PR passed its own CI (two lock-touching PRs, or
+        # a version bump batched with a dependency change). `uv sync --frozen`
+        # below installs from the lock as-is and cannot detect the drift; only
+        # `uv lock --check` can, and it never writes the lockfile. The failure
+        # line is appended to /tmp/failure_description.txt (like every other
+        # gate in this job) so the Branch Fixer receives a real description
+        # rather than an empty one.
+        if: steps.merge.outputs.merged_count != '0'
+        working-directory: backend
+        shell: bash
+        run: |
+          if ! uv lock --check; then
+            echo "backend/uv.lock stale on the merged validation branch (run: uv lock in backend/)" >> /tmp/failure_description.txt
+            exit 1
+          fi
+
       - name: Install backend deps
         if: steps.merge.outputs.merged_count != '0'
         working-directory: backend
@@ -1965,7 +1983,7 @@ jobs:
           # description is written (the old script's `TEST_EXIT=$?` line was
           # unreachable on a pytest failure for that reason).
           set +e
-          uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+          uv run --no-build --no-sync pytest tests/unit/ -n 2 -x -q --timeout=120 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
           TEST_EXIT=$?
           set -e
 

@@ -543,37 +543,41 @@ describe('RunDetailView coverage — script logic branches', () => {
     expect(writeText.mock.calls[0][0]).toContain('"key": "val"')
   })
 
-  // ── share summary: with node data ──────────────────────────────
-  it('includes node counts in share summary', async () => {
+  // ── support reference: failed run carries the full uuid + error code ──
+  it('copied support reference carries the full run id and error code', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
+    const fullRunId = '1f0c0d6e-6a0b-4f1e-9d1a-0c9b8a7f6e5d'
     const wrapper = await mountWith(
-      baseRun({ node_token_usage: { n1: {}, n2: {} } }),
-      { outputs_json: { n1: { output: 'ok' }, n2: { output: 'ok' } } },
+      baseRun({ run_id: fullRunId, status: 'failed', error_code: 'node_deadline_exceeded' }),
     )
     await wrapper.find('[data-testid="run-detail-share-summary"]').trigger('click')
     await flushPromises()
-    expect(writeText.mock.calls[0][0]).toContain('Nodes: 2/2')
+    const text = writeText.mock.calls[0][0]
+    // The whole uuid — never the truncated display id — and the error code.
+    expect(text).toContain(fullRunId)
+    expect(text).toContain('error node_deadline_exceeded')
+    expect(text).not.toContain('#1f0c0d6e')
   })
 
-  // ── share summary: no tokens ───────────────────────────────────
-  it('shows dash for tokens when no token data', async () => {
+  // ── support reference: no literal placeholder ───────────────────
+  it('support reference never ships a literal em-dash placeholder', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
     const wrapper = await mountWith(baseRun({ node_token_usage: null }))
     await wrapper.find('[data-testid="run-detail-share-summary"]').trigger('click')
     await flushPromises()
-    expect(writeText.mock.calls[0][0]).toContain('Tokens: —')
+    expect(writeText.mock.calls[0][0]).not.toContain('—')
   })
 
-  // ── share summary: no cost ─────────────────────────────────────
-  it('shows dash for cost when total_cost_usd null', async () => {
+  // ── support reference: passing run has no error code ────────────
+  it('reads error none for a run that did not fail', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
     const wrapper = await mountWith(baseRun({ total_cost_usd: null }))
     await wrapper.find('[data-testid="run-detail-share-summary"]').trigger('click')
     await flushPromises()
-    expect(writeText.mock.calls[0][0]).toContain('Cost: —')
+    expect(writeText.mock.calls[0][0]).toContain('error none')
   })
 
   // ── copyRunId ───────────────────────────────────────────────────

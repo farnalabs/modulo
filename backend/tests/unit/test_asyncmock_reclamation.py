@@ -136,3 +136,22 @@ def test_unrelated_runtime_warning_keeps_normal_warning_policy() -> None:
         warnings.warn("unrelated warning", RuntimeWarning, stacklevel=1)
 
     assert [str(entry.message) for entry in captured] == ["unrelated warning"]
+
+
+async def test_shared_api_system_session_result_readers_are_sync() -> None:
+    """The shared pre-auth session double must not leak on ``Result`` reads.
+
+    ``scalar()``/``scalar_one()`` on the value returned by
+    ``await session.execute(...)`` are SYNC ``Result`` methods. Building them
+    as ``AsyncMock`` children makes each synchronous read a never-awaited
+    coroutine, which surfaces later as
+    ``PytestUnraisableExceptionWarning`` on an unrelated test (FAR-2674).
+    """
+    from tests.unit.api.conftest import make_system_session_mock
+
+    session = make_system_session_mock()
+    result = await session.execute(object())
+
+    assert result.scalar() == 0
+    assert result.scalar_one() == 0
+    assert result.scalar_one_or_none() is None

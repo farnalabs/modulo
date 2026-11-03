@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { defineComponent, nextTick } from 'vue'
 import type { SchemaField } from '../../types/pipeline'
 import FieldMappingPair from '../../components/pipeline/composite/FieldMappingPair.vue'
 
@@ -157,6 +157,42 @@ describe('FieldMappingPair', () => {
         expect(Object.keys(mappings).length).toBe(0)
       }
     }
+  })
+
+  it('renders unique control ids across the input and output copies', async () => {
+    // One app instance renders both copies, mirroring SchemaMappingPanel, so
+    // PrimeVue's own generated ids are shared across the tree as they are in
+    // production (two separate mount() calls would each restart that counter).
+    const Harness = defineComponent({
+      components: { FieldMappingPair },
+      setup() {
+        return { sourceFields: mockSourceFields, targetFields: mockTargetFields, mappings: {} }
+      },
+      template: `
+        <FieldMappingPair :source-fields="sourceFields" :target-fields="targetFields" :mappings="mappings" direction="input" />
+        <FieldMappingPair :source-fields="sourceFields" :target-fields="targetFields" :mappings="mappings" direction="output" />
+      `,
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const wrapper = mount(Harness, { attachTo: container })
+
+    const addButtons = wrapper.findAll('button').filter(b => b.text().includes('Add mapping'))
+    expect(addButtons).toHaveLength(2)
+    for (const button of addButtons) {
+      await button.trigger('click')
+    }
+    await nextTick()
+
+    const ids = Array.from(container.querySelectorAll<HTMLElement>('[id]')).map(el => el.id)
+    expect(ids).toContain('fieldmappingpair-input-source')
+    expect(ids).toContain('fieldmappingpair-input-target')
+    expect(ids).toContain('fieldmappingpair-output-source')
+    expect(ids).toContain('fieldmappingpair-output-target')
+    expect(new Set(ids).size).toBe(ids.length)
+
+    wrapper.unmount()
+    container.remove()
   })
 
   it('opens picker when Add mapping is clicked', async () => {

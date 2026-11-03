@@ -2,6 +2,11 @@
 
 Common issues, their causes, and resolutions.
 
+If you are here because something is broken and you need to send diagnostics,
+start with [Get support](./support.md): it has one command per install shape,
+the exact printed reference line, and what the support bundle does and does not
+contain.
+
 ---
 
 ## 1. Startup Failures
@@ -250,8 +255,10 @@ modulo logs app         # launcher/supervisor log (pass -f to follow; postgres/r
 - `status` prints `DEGRADED: <reason>` when a previous crash tripped the
   terminal-degraded trip: resume with `modulo start --clear-degraded`
   (persistence: `degraded.json` beside `state.json` in the data dir).
-- `doctor --report report.zip` writes a REDACTED diagnostic archive
-  (versions, OS info, doctor output, log tails) for bug reports.
+- `modulo support` writes the support bundle for a bug report. See
+  [Get support](./support.md) for what it contains, the one command
+  for each install shape (native, Docker Compose, Kubernetes), and how to
+  inspect it before sending.
 
 Where things live: install root `~/.local/opt/modulo/` (versions under
 `versions/<version>/`, the `current` symlink), data dir
