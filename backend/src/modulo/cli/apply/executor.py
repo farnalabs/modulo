@@ -141,6 +141,7 @@ def _entity_reports(config: ApplyConfig) -> dict[str, list[tuple[str, Any]]]:
         KIND_BACKEND: [(e.name, e) for e in config.entities.model_backends],
         KIND_PIPELINE: [(e.name, e) for e in config.entities.pipelines],
         KIND_TRIGGER: [(e.display_key(), e) for e in config.entities.triggers],
+        KIND_SYSTEM_MAP: [(e.name, e) for e in config.entities.system_maps],
     }
 
 

@@ -81,8 +81,8 @@ def _create_payload(entity: SystemMapEntity) -> dict[str, Any]:
     return entity.create_payload()
 
 
-def _patch_payload(entity: SystemMapEntity) -> dict[str, Any]:
-    """Build the PATCH /api/v1/system-maps/{id} body for a declared system map."""
+def _update_payload(entity: SystemMapEntity) -> dict[str, Any]:
+    """Build the PUT /api/v1/system-maps/{id} body for a declared system map."""
     return entity.update_payload()
 
 
@@ -114,7 +114,7 @@ def _apply_one_system_map(
     bad system map never aborts the run.
 
     Create: POST /api/v1/system-maps, then POST /api/v1/system-maps/{id}/revisions
-    when the config declares a revision. Update: PATCH /api/v1/system-maps/{id}.
+    when the config declares a revision. Update: PUT /api/v1/system-maps/{id}.
 
     For "created" status, adds the map id to map_ids immediately after creation
     so that a revision failure can clean it up.
@@ -131,7 +131,7 @@ def _apply_one_system_map(
     else:
         current = current_system_maps[entity.name]
         map_id = str(current["id"])
-        executor._patch(f"/system-maps/{map_id}", _patch_payload(entity))
+        executor._put(f"/system-maps/{map_id}", _update_payload(entity))
         # Revision content is create-only: the list endpoint exposes no revision
         # content to reconcile, so an update cannot decide whether a declared
         # revision differs. plan_entity emits an explicit warning when an
