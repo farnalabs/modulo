@@ -22,6 +22,11 @@ modulo support
   is the bundle's per-run reference.
 - Prints the reference line, the bundle path and its size, and any member it
   could not collect, listed as `missing <member>: <reason>`.
+- If something looked like it might carry a credential, the bundle leaves it
+  out rather than shipping it, and names it in a `withheld:` line:
+  `withheld: <member> - <n> item(s) removed (<reason>)`. A whole small member
+  that cannot be split is withheld entire, as
+  `withheld: <member> - member removed (<reason>)`.
 - Pass `--out <path>` to write the zip somewhere else.
 
 `modulo doctor --report report.zip` also writes a redacted diagnostic zip, to a
@@ -147,7 +152,10 @@ Open the bundle and check it before sending it to Farnalabs support.
 ```
 
 If a member could not be collected, a `missing <member>: <reason>` line follows
-the summary.
+the summary. If the redaction gate removed something because it looked like it
+might carry a credential, a `withheld: <member> - <n> item(s) removed
+(<reason>)` line appears there too: the bundle still builds, minus that named
+item.
 
 The run, error-group and installer lines are landing in this milestone.
 On an older build, `modulo doctor --report` prints
@@ -167,8 +175,8 @@ without a format-version change, so the list below is the contract.
 
 | Member | What it carries | Install shape |
 |---|---|---|
-| `MANIFEST.txt` | Format version, reference, every member with its byte count and what it carries, redaction substitution counts, and a `missing:` list for anything that could not be collected. | All |
-| `report.json` | The same inventory, machine-readable: format version, members and bytes, per-layer redaction counts, missing sources. | All |
+| `MANIFEST.txt` | Format version, reference, every member with its byte count and what it carries, redaction substitution counts, a `withheld:` list for anything the redaction gate removed, and a `missing:` list for anything that could not be collected. | All |
+| `report.json` | The same inventory, machine-readable: format version, members and bytes, per-layer redaction counts, missing sources, and `withheld` records (`member`, `items`, `reason`, `scope`). | All |
 | `version.txt` | Modulo version, build commit, Python version, OS, architecture, UTC offset and clock drift. | All |
 | `doctor.txt` | Output of the launcher doctor checks. | Native (recorded as missing in a container) |
 | `health.json` | Health check names, statuses and error codes only. No check detail strings. | All |
@@ -206,18 +214,21 @@ The collector does not collect or copy any of the following:
 The bundle is built to exclude credentials and customer content. It is plain
 text - open it and read it before you send it.
 
-Redaction runs in layers and the build fails closed: if a member still looks
-like it carries a secret after redaction, the collector refuses to write the
-zip, names the member, and exits non-zero. That is a guard against known secret
-shapes, not a guarantee about arbitrary free text. A log line can contain
-anything, which is why you should read it first.
+Redaction runs in layers and fails closed. If something still looks like it
+carries a secret after redaction, the collector removes it before writing the
+zip and names it in a `withheld:` line, rather than shipping it. If the
+offending text cannot be isolated, the build refuses to write the zip, names
+the member, and exits non-zero. That is a guard against known secret shapes,
+not a guarantee about arbitrary free text. A log line can contain anything,
+which is why you should read it first.
 
 ---
 
 ## 5. How to check before sending
 
 1. Open the zip with any archive tool. Read `MANIFEST.txt` first: it lists every
-   member, its size, and what it carries, in plain text.
+   member, its size, and what it carries, in plain text. It also names anything
+   that was withheld, and why.
 2. Look at the short members first: `version.txt`, `deployment.txt`,
    `settings.txt` and `db.txt` are a few dozen lines each. The log tails are the
    long ones.
@@ -238,7 +249,8 @@ anything, which is why you should read it first.
 
 4. Delete any member you are not comfortable sharing, then send the rest to
    `support@modulo.run`. `MANIFEST.txt` still lists the members that were
-   generated, so say which ones you removed when you send it.
+   generated, and names anything that was withheld so you can see exactly what
+   was left out and why. Say which ones you removed when you send it.
 
 ---
 
