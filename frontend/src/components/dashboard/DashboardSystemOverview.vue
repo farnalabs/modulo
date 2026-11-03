@@ -3,7 +3,6 @@
     :title="$t('views.DashboardView.system_overview')"
     :description="$t('views.DashboardView.system_overview_description')"
     data-testid="dashboard-system-overview"
-    aria-live="polite"
   >
     <template #header>
       <button

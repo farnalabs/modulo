@@ -11,6 +11,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import ComplianceEvidenceIndexView from '../views/ComplianceEvidenceIndexView.vue'
+import { formatDateShortWithTime } from '../lib/formatDate'
 
 type EvidenceIndex = components['schemas']['EvidenceIndex']
 type ArtifactEntry = components['schemas']['ArtifactEntry']
@@ -97,11 +98,12 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(wrapper.text()).toContain('1')
     expect(wrapper.text()).toContain('Present')
     expect(wrapper.text()).toContain('Observed')
-    // formatTimestamp renders through the JS runtime's default locale, so the
-    // expectation must be built the same way: a US-format literal fails on any
-    // en-GB machine while the component is correct.
-    expect(wrapper.text()).toContain(new Date('2026-10-20T12:00:00Z').toLocaleDateString()) // nosemgrep: new-date-without-guard
-    expect(wrapper.text()).toContain(new Date('2026-10-22T12:00:00Z').toLocaleDateString()) // nosemgrep: new-date-without-guard
+    // The view renders the shared formatter's output, which depends on the
+    // machine's timezone. Deriving the expected text from the same helper keeps
+    // the assertion about "the timestamp is rendered" instead of hardcoding a
+    // US-layout string that fails on a non-US machine.
+    expect(wrapper.text()).toContain(formatDateShortWithTime(payload().pack_published_at))
+    expect(wrapper.text()).toContain(formatDateShortWithTime(payload().generated_at))
     expect(wrapper.find('dl').exists()).toBe(true)
     expect(wrapper.findAll('dl dt')).not.toHaveLength(0)
     expect(wrapper.findAll('dl dd')).not.toHaveLength(0)

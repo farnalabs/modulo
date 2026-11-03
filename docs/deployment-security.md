@@ -275,7 +275,9 @@ Backups are encrypted with AES-256-CBC (PBKDF2, 600K iterations). See
 `docs/operations/backup.md` for the full procedure.
 
 **Key requirements:**
-- `MODULO_BACKUP_PASSPHRASE` must be at least 32 characters.
+- Set `MODULO_BACKUP_PASSPHRASE` to a strong passphrase. The CLI only rejects an
+  empty or `-`-prefixed value, so a 32+ character minimum is an operator
+  recommendation, not an enforced check.
 - Store the passphrase separately from the backup file (different vault, different
   location, or hardware security module).
 - Verify backup integrity with `--dry-run` before relying on it for DR.
@@ -307,9 +309,15 @@ This prevents IP-based collisions behind NAT.
 
 **Verify:**
 ```bash
-# Trigger rate limit
-for i in $(seq 1 120); do curl -s -o /dev/null -w "%{http_code}\n" https://modulo.example.com/healthz/ready; done
-# Expected: after ~100 requests, responses return 429
+# Trigger rate limit: POST /api/v1/triggers is capped at 100 requests/minute.
+# Rate limiting applies to POST/PUT/PATCH (plus a small pre-auth GET allowlist);
+# GET /healthz is not rate limited, so probing it here proves nothing.
+for i in $(seq 1 120); do
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+    https://modulo.example.com/api/v1/triggers/<webhook-token> \
+    -H 'Content-Type: application/json' -d '{}'
+done
+# Expected: once the 60-second window has seen 100 requests, responses return 429
 ```
 
 Without Redis, rate limiting falls back to in-memory token bucket – this does
@@ -370,8 +378,9 @@ using the configured secrets backend (Fernet, Vault, or AWS Secrets Manager).
 
 - Decrypted values appear only in run-scoped context objects – never in logs,
   checkpoint blobs, OTel spans, or API responses (masked as `●●●●●`).
-- API keys can be revealed to authenticated users for 30 seconds via the
-  unmask endpoint, logged as an audit event.
+- Stored connector credentials, SSO provider secrets and observability values
+  can be revealed for 30 seconds via `POST /api/v1/admin/sensitive/reveal`
+  (`admin.sensitive.manage` required), logged as an audit event.
 - See `docs/security/secret-management.md` for rotation and incident response.
 
 ---
@@ -426,26 +435,33 @@ trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo:<version>
 
 ### 5.3 Non-Root User
 
-Both backend and frontend containers run as a non-root user by default:
+Every published image runs as a non-root user by default. The user differs by
+image, because the all-in-one image runs nginx and supervisord alongside the
+API and both SAQ workers:
 
 ```dockerfile
-# Backend Dockerfile
+# backend/Dockerfile (ghcr.io/farnalabs/modulo/backend)
 RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Frontend Dockerfile (prod final stage)
+# deploy/docker/Dockerfile.all-in-one (ghcr.io/farnalabs/modulo)
+USER www-data
+
+# frontend/Dockerfile.prod (ghcr.io/farnalabs/modulo/frontend)
 USER nginx
 ```
 
 **Verify:**
 ```bash
-docker run --rm ghcr.io/farnalabs/modulo:<version> whoami
-# Expected: appuser (not root)
+docker run --rm --entrypoint whoami ghcr.io/farnalabs/modulo:<version>
+# Expected: www-data (the all-in-one image)
+
+docker run --rm --entrypoint whoami ghcr.io/farnalabs/modulo/backend:<version>
+# Expected: appuser
 ```
 
-The Dockerfiles already enforce a non-root user (`USER appuser` in backend,
-`USER nginx` in the frontend prod image), so no runtime override is needed
-under Docker Compose or Fly.io.
+The Dockerfiles enforce these users, so no runtime override is needed under
+Docker Compose or Fly.io.
 
 ### 5.4 Read-Only Filesystem
 
@@ -487,19 +503,24 @@ The audit log uses cryptographic chaining – each entry includes the SHA-256 ha
 of the previous entry, forming a tamper-evident chain:
 
 ```python
-# Audit log entry structure
+# Audit log entry as returned by GET /api/v1/admin/audit and /admin/audit/export
 {
     "id": "uuid",
-    "timestamp": "2026-06-28T12:00:00Z",
-    "actor_id": "uuid",
-    "action": "user.deleted",
+    "event_type": "user.deleted",          # the action name
+    "actor_user_id": "uuid",               # null for system/anonymous events
     "resource_type": "user",
     "resource_id": "uuid",
-    "organisation_id": "uuid",
-    "previous_hash": "sha256-of-previous-entry",
-    "hash": "sha256-of-this-entry",
+    "payload_json": {...},                 # event-specific fields
+    "request_id": "request-id-or-null",
+    "previous_hash": "sha256-of-previous-event-or-null",
+    "created_at": "2026-06-28T12:00:00Z",
 }
 ```
+
+A row does not store its own hash. `verify_chain` recomputes each event's
+SHA-256 over its canonical JSON (including `previous_hash`) and compares it
+with the next event's `previous_hash`, then checks the final hash against the
+organisation's `audit_chain_heads.last_event_hash`.
 
 Recording is not licence-gated: the append-only triggers and hash chaining are
 always active, so a Community install records the chain too. Reading it through

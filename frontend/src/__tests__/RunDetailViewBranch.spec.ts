@@ -486,31 +486,26 @@ describe('RunDetailView — branch coverage sweep', () => {
     expect(wrapper.find('[data-testid="run-detail-no-output"]').exists()).toBe(true)
   })
 
-  // -- shareSummary: with nodesReportedTokens --
-  it('includes node-reported token label in share summary', async () => {
+  // -- supportReference: pipeline name in the copied text --
+  it('includes the pipeline name in the support reference', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
     const wrapper = await mountWith(
-      baseRun({ node_token_usage: { n1: { total_tokens: 500 } } }),
+      baseRun({ pipeline_name: 'PR Reviewer' }),
     )
     await wrapper.find('[data-testid="run-detail-share-summary"]').trigger('click')
     await flushPromises()
-    expect(writeText.mock.calls[0][0]).toContain('node-reported')
+    expect(writeText.mock.calls[0][0]).toContain('pipeline test-pipeline (PR Reviewer)')
   })
 
-  // -- shareSummary: with costBasisTokens --
-  it('includes cost-basis token label in share summary', async () => {
+  // -- supportReference: run url line --
+  it('includes a url line for the run in the support reference', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
-    const wrapper = await mountWith(
-      baseRun({
-        total_cost_usd: 0.5,
-        cost_breakdown: [{ component: 'model', amount_usd: '0.500000', basis: { tokens_total_reported: 100 } }],
-      }),
-    )
+    const wrapper = await mountWith(baseRun())
     await wrapper.find('[data-testid="run-detail-share-summary"]').trigger('click')
     await flushPromises()
-    expect(writeText.mock.calls[0][0]).toContain('cost basis')
+    expect(writeText.mock.calls[0][0]).toContain('/runs/test-run-id')
   })
 
   // -- totalTokens: node reported tokens display --

@@ -753,7 +753,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         if: needs.changes.outputs.frontend == 'true'
         with:
-          version: 11.28.9
+          version: 11.28.10
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         if: needs.changes.outputs.frontend == 'true'
         with:
@@ -975,7 +975,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         if: needs.changes.outputs.frontend == 'true'
         with:
-          version: 11.28.9
+          version: 11.28.10
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         if: needs.changes.outputs.frontend == 'true'
         with:
@@ -1167,7 +1167,15 @@ jobs:
         #      the server's own `errorMessage` is fetched from `/api/ce/task`
         #      and logged before any retry, so a DETERMINISTIC CE failure
         #      (quota, licence, malformed report) stays visible and still fails
-        #      the check after that single retry.
+        #      the check after that single retry. One deterministic variant is a
+        #      STALE report: when a newer commit's report has already been
+        #      processed the CE refuses the older one ("a newer report has
+        #      already been processed ... processing older reports is not
+        #      supported") and no retry can change that. Observed on main
+        #      2026-11-02 (run 41487471842 for c56bf72b9, superseded by the
+        #      report for 7053d4eed). That newer analysis already covers fresher
+        #      code, so the stale report is skipped as non-fatal instead of
+        #      leaving a false red on an already-superseded commit.
         #
         # All three are matched by an exact log signature, never a quality-gate
         # failure or any other error, so a genuine red check is never masked.
@@ -1213,6 +1221,17 @@ jobs:
               if [ -n "$TASK_ID" ]; then
                 CE_REASON="$(curl -sS --max-time 30 -H "Authorization: Bearer ${SONAR_TOKEN}" "${SONAR_HOST_URL}/api/ce/task?id=${TASK_ID}" 2>/dev/null | jq -r '.task.errorMessage // .errors[0].msg // empty' 2>/dev/null || true)"
                 echo "::notice::SonarCloud CE task ${TASK_ID} failed server-side: ${CE_REASON:-<no errorMessage returned>}"
+              fi
+              # A report for an OLDER commit that reaches the CE after a NEWER
+              # commit's report has already been processed can never be accepted:
+              # the CE rejects it deterministically ("a newer report has already
+              # been processed ... processing older reports is not supported"),
+              # so the retry below is futile and the red check is a false alarm.
+              # The newer commit's analysis is strictly fresher and already
+              # covers this project state, so skip this stale report (non-fatal).
+              if printf '%s' "$CE_REASON" | grep -qi "a newer report has already been processed"; then
+                echo "::notice::SonarCloud report for this commit was superseded by a newer commit's analysis; skipping the stale report (non-fatal - the newer report already covers fresher code)."
+                exit 0
               fi
               if [ "$CE_FAILURES" -lt 2 ] && [ "$attempt" -lt 3 ]; then
                 echo "::warning::SonarCloud CE task rejected the report server-side (CE attempt ${CE_FAILURES}/2); retrying once -- identical analyses of this project have completed green minutes apart."
@@ -1485,7 +1504,7 @@ jobs:
           enable-cache: true
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.9
+          version: 11.28.10
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, useId } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { cn } from '@/lib/utils'
 
 export interface Column {
@@ -14,6 +15,8 @@ export interface Column {
 export interface DataTableRow {
   [key: string]: unknown
 }
+
+const { t } = useI18n()
 
 const props = withDefaults(defineProps<{
   columns: Column[]
@@ -39,6 +42,7 @@ const emit = defineEmits<{
   'row-click': [row: DataTableRow]
 }>()
 
+const scrollInstructionsId = `data-table-scroll-instructions-${useId()}`
 const sortColumn = ref<string | null>(props.initialSortColumn)
 const sortDirection = ref<'asc' | 'desc'>(props.initialSortDirection)
 
@@ -94,16 +98,25 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
 </script>
 
 <template>
-  <!-- The scroll container is focusable so a keyboard user reaches a wide
-       table that has no focusable cell (a non-clickable, unsortable one) and
-       can scroll it with the arrow keys; the ring makes that stop visible
-       (A11Y-3). It carries no role and no handler: adding either would make it
-       a static element claiming an interaction it does not have. -->
-  <div
-    class="overflow-x-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-    tabindex="0"
-  >
-    <table class="w-full">
+  <div class="relative">
+    <div
+      class="pointer-events-none absolute right-0 top-0 z-10 h-full w-8 bg-gradient-to-l from-background to-transparent sm:hidden"
+      aria-hidden="true"
+    />
+    <p :id="scrollInstructionsId" class="sr-only">
+      {{ t('components.DataTable.scroll_instructions') }}
+    </p>
+    <!-- The scroll container is focusable so a keyboard user reaches a wide
+         table that has no focusable cell (a non-clickable, unsortable one) and
+         can scroll it with the arrow keys; the ring makes that stop visible
+         (A11Y-3). It carries no role and no handler: adding either would make it
+         a static element claiming an interaction it does not have. -->
+    <div
+      class="overflow-x-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      tabindex="0"
+      :aria-describedby="scrollInstructionsId"
+    >
+      <table class="w-full min-w-max">
       <thead>
         <tr>
           <th
@@ -178,5 +191,6 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
         </tr>
       </tbody>
     </table>
+    </div>
   </div>
 </template>

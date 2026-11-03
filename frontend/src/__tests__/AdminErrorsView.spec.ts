@@ -369,7 +369,7 @@ describe('AdminErrorsView', () => {
     wrapper.unmount()
   })
 
-  it('keeps the table wrapper non-stretching (overflow-x-auto + w-full, no forced min width)', async () => {
+  it('keeps the table wrapper non-stretching and scrolls the table in its own region', async () => {
     const wrapper = mountWithLongMessageGroup()
     await flushPromises()
     await nextTick()
@@ -381,11 +381,15 @@ describe('AdminErrorsView', () => {
 
     const table = tableWrapper.find('table')
     expect(table.classes()).toContain('w-full')
-    expect(table.classes()).not.toContain('min-w-max')
+    // The shared DataTable holds columns at their content width and scrolls
+    // horizontally inside its own region instead of compressing them; the
+    // truncated message cell caps that width, so the page never stretches.
+    expect(table.classes()).toContain('min-w-max')
     expect(table.classes()).not.toContain('w-max')
 
-    const scrollRoot = tableWrapper.find('div')
-    expect(scrollRoot.classes()).toContain('overflow-x-auto')
+    const scrollRoot = tableWrapper.find('.overflow-x-auto')
+    expect(scrollRoot.exists()).toBe(true)
+    expect(scrollRoot.attributes('tabindex')).toBe('0')
     wrapper.unmount()
   })
 
@@ -693,6 +697,170 @@ describe('AdminErrorsView', () => {
     const vm = wrapper.vm as unknown as { navigateToDetail: (id: string) => void }
     vm.navigateToDetail('eg-456')
     expect(routerMocks.push).toHaveBeenCalledWith({ path: '/admin/errors/eg-456', query: { scope: 'instance' } })
+    wrapper.unmount()
+  })
+
+  it('copies the canonical support reference for an error-group row (FAR-2304)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    getMock.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/errors') {
+        return {
+          items: [
+            {
+              id: 'eg-support-1',
+              fingerprint: 'fp-abcdef123456',
+              level_peak: 'error',
+              sample_message: 'boom',
+              count: 7,
+              first_seen: new Date().toISOString(),
+              last_seen: new Date().toISOString(),
+              status: 'new',
+              assigned_to: null,
+            },
+          ],
+          total: 1,
+        }
+      }
+      return { items: [], total: 0 }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const btn = wrapper.find('[data-testid="admin-errors-copy-support-eg-support-1"]')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await flushPromises()
+
+    const text = writeText.mock.calls[0][0]
+    expect(text).toContain('error eg-support-1')
+    expect(text).toContain('fingerprint fp-abcdef123456')
+    expect(text).toContain('level error')
+    expect(text).toContain('count 7')
+    // The list payload carries no group source, so the segment is omitted
+    // rather than invented.
+    expect(text).not.toContain('source')
+    // Copying is a cell action, not a row activation.
+    expect(routerMocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('warns and keeps the copy label when the clipboard write fails (FAR-2304)', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    Object.assign(navigator, { clipboard: { writeText } })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    getMock.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/errors') {
+        return {
+          items: [
+            {
+              id: 'eg-copy-fail',
+              fingerprint: 'fp-copy-fail',
+              level_peak: 'error',
+              sample_message: 'boom',
+              count: 1,
+              first_seen: new Date().toISOString(),
+              last_seen: new Date().toISOString(),
+              status: 'new',
+              assigned_to: null,
+            },
+          ],
+          total: 1,
+        }
+      }
+      return { items: [], total: 0 }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const btn = wrapper.find('[data-testid="admin-errors-copy-support-eg-copy-fail"]')
+    await btn.trigger('click')
+    await flushPromises()
+
+    expect(warn).toHaveBeenCalledWith('Failed to copy support reference', expect.any(Error))
+    expect(btn.text()).toContain('Copy support reference')
+    warn.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('clears the copied label after 2s without clobbering a newer row (FAR-2304)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    getMock.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/errors') {
+        const row = (id: string) => ({
+          id,
+          fingerprint: `fp-${id}`,
+          level_peak: 'error',
+          sample_message: 'boom',
+          count: 1,
+          first_seen: new Date().toISOString(),
+          last_seen: new Date().toISOString(),
+          status: 'new',
+          assigned_to: null,
+        })
+        return { items: [row('eg-timer-a'), row('eg-timer-b')], total: 2 }
+      }
+      return { items: [], total: 0 }
+    })
+    vi.useFakeTimers()
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const btnA = wrapper.find('[data-testid="admin-errors-copy-support-eg-timer-a"]')
+    const btnB = wrapper.find('[data-testid="admin-errors-copy-support-eg-timer-b"]')
+    await btnA.trigger('click')
+    await flushPromises()
+    expect(btnA.text()).toContain('Copied')
+
+    // Copy a second row before the first row's 2s window elapses.
+    vi.advanceTimersByTime(1000)
+    await btnB.trigger('click')
+    await flushPromises()
+    expect(btnB.text()).toContain('Copied')
+
+    // A's timer fires while B is the copied row: it must NOT clear B.
+    vi.advanceTimersByTime(1000)
+    await flushPromises()
+    await nextTick()
+    expect(btnB.text()).toContain('Copied')
+
+    // B's own timer then clears B.
+    vi.advanceTimersByTime(1000)
+    await flushPromises()
+    await nextTick()
+    expect(btnB.text()).toContain('Copy support reference')
+    wrapper.unmount()
+  })
+
+  it('handles rows with no id or non-canonical field types (FAR-2304)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as {
+      copyGroupSupport: (row: Record<string, unknown>) => Promise<void>
+    }
+
+    // No id → the row cannot be referenced, so nothing is copied.
+    await vm.copyGroupSupport({})
+    expect(writeText).not.toHaveBeenCalled()
+
+    // Non-string fingerprint/level and a string count fall back to safe values.
+    await vm.copyGroupSupport({ id: 'eg-edge', count: '5' })
+    expect(writeText).toHaveBeenCalledTimes(1)
+    expect(writeText.mock.calls[0][0]).toContain('error eg-edge')
+    expect(writeText.mock.calls[0][0]).toContain('count 5')
+
+    // A null count falls back to zero.
+    await vm.copyGroupSupport({ id: 'eg-edge-2', count: null })
+    expect(writeText).toHaveBeenCalledTimes(2)
+    expect(writeText.mock.calls[1][0]).toContain('count 0')
     wrapper.unmount()
   })
 })

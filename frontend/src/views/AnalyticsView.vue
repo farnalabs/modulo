@@ -136,6 +136,10 @@
                         class="inline-flex items-center gap-1 tabular-nums"
                         data-testid="analytics-trend-arrow"
                       >
+                        <!-- The glyph is the only visible direction cue and is
+                             aria-hidden, so screen readers would hear just the
+                             percentage with no direction. Announce it in text. -->
+                        <span class="sr-only">{{ trendDirectionLabel(row.direction) }}</span>
                         <span aria-hidden="true">{{ arrowGlyph(row.direction) }}</span>
                         <span v-if="row.deltaPercent">{{ row.deltaPercent }}</span>
                       </span>
@@ -300,6 +304,13 @@ function arrowGlyph(direction: TrendDirection): string {
   if (direction === "up") return "▲";
   if (direction === "down") return "▼";
   return "→";
+}
+
+/** Text equivalent of the direction glyph, for screen readers. */
+function trendDirectionLabel(direction: TrendDirection): string {
+  if (direction === "up") return t("views.AnalyticsView.trend_up");
+  if (direction === "down") return t("views.AnalyticsView.trend_down");
+  return t("views.AnalyticsView.trend_flat");
 }
 
 function arrowClass(direction: TrendDirection): string {

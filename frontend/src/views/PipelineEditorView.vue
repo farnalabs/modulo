@@ -75,7 +75,7 @@
              `shrink-0`: when the content column is shorter than the wrapped
              toolbar, the toolbar must keep its min-content height (scroll the
              column to reach it) rather than being squeezed. -->
-        <div class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b bg-card px-3 py-2" data-testid="pipeline-editor-toolbar">
+        <div class="flex shrink-0 flex-wrap items-start gap-x-2 gap-y-2 border-b bg-card px-3 py-2 md:items-center" data-testid="pipeline-editor-toolbar">
           <!-- Group: identity -->
           <div class="flex min-w-0 items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-identity">
             <h2 class="truncate text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
@@ -184,7 +184,7 @@
           <template v-if="!isViewing">
           <span :class="groupDividerClass" />
           <!-- Group: pipeline settings -->
-          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-settings">
+          <div class="flex w-full flex-wrap items-center gap-1.5 md:w-auto" data-testid="pipeline-editor-toolbar-group-settings">
             <button v-if="!pipeline?.archived_at" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
             <!-- FAR-1530: per-pipeline Paused execution state. Paused is a
@@ -1127,14 +1127,11 @@
             <div>
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.agent') }}</dt>
               <dd class="font-medium">{{ agentName(selectedNodeData.agent_id) || shortId(selectedNodeData.agent_id) }}</dd>
-              <router-link
-                v-if="selectedNodeData.agent_id"
-                :to="`/admin/agents/${selectedNodeData.agent_id}`"
-                class="mt-0.5 inline-flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-400"
-              >
-                {{ $t('views.PipelineEditorView.view_agent') }}
-                <ExternalLinkIcon class="h-2.5 w-2.5" aria-hidden="true" />
-              </router-link>
+              <!-- No agent-detail route exists: /admin/agents/:id is not
+                   registered, so the catch-all redirect silently sent the
+                   operator to the dashboard. The agent is shown as text above;
+                   no navigation affordance is promised for a route that cannot
+                   resolve. -->
             </div>
             <div v-if="agentModelBackendId(selectedNodeData.agent_id)">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.model_backend') }}</dt>
@@ -1678,6 +1675,7 @@
           <div>
             <label for="pipelineeditorview-field-11" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.condition_type') }}</label>
             <Select
+  id="pipelineeditorview-field-11"
   :aria-label="$t('views.PipelineEditorView.condition_type')"
   v-model="edgeForm.condition_type"
   :disabled="isViewing"
@@ -1731,6 +1729,7 @@
               <div class="flex-1">
                 <label for="pipelineeditorview-field-7" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.operator') }}</label>
                 <Select
+  id="pipelineeditorview-field-7"
   :aria-label="$t('views.PipelineEditorView.operator')"
   v-model="edgeForm.eval_operator"
   :disabled="isViewing"
@@ -1773,6 +1772,7 @@
           <div>
             <label for="pipelineeditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent_select_label') }}</label>
             <Select
+  id="pipelineeditorview-field-6"
   :aria-label="$t('views.PipelineEditorView.agent_select_label')"
   :title="$t('views.PipelineEditorView.agent_select_hint')"
   v-model="pickerAgentId"
@@ -1792,6 +1792,7 @@
           <div v-if="selectedAgent">
             <label for="pipelineeditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.connector') }}</label>
             <Select
+  id="pipelineeditorview-field-5"
   :aria-label="$t('views.PipelineEditorView.connector')"
   v-model="pickerConnectorId"
   :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')"
@@ -1839,6 +1840,7 @@
         <div>
           <label for="pipelineeditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.snapshot_label') }}</label>
           <Select
+  id="pipelineeditorview-field-4"
   :aria-label="$t('views.PipelineEditorView.snapshot_label')"
   v-model="revertSnapshotId"
   :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')"
@@ -2140,7 +2142,7 @@ import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
 import { currentSubstantiveVersion, NON_VERSION_CREATED_KINDS, SNAPSHOT_PAGE_SIZE } from '../lib/pipelineVersion'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
-import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon, ExternalLink as ExternalLinkIcon } from '@lucide/vue'
+import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon } from '@lucide/vue'
 
 // The legacy useApi `post` helper aborted every request after 30s; the typed
 // client has no deadline of its own, so the archive/pause toggles keep the
@@ -5590,5 +5592,25 @@ const { loading, load: reloadPage } = useDataFetch<null>(
 .toolbar-select :deep(.p-select-label) {
   padding: 0 0.5rem;
   font-size: 0.75rem;
+}
+
+@media (max-width: 767px) {
+  /* Keep form controls at the browser's no-zoom touch target size while
+     retaining the compact desktop editor density. Placed AFTER the base
+     .toolbar-select rules so the mobile sizing actually wins the cascade
+     (a media query does not change source order). */
+  input,
+  textarea,
+  select {
+    font-size: 1rem;
+  }
+
+  .toolbar-select {
+    height: 2.5rem;
+  }
+
+  .toolbar-select :deep(.p-select-label) {
+    font-size: 1rem;
+  }
 }
 </style>
