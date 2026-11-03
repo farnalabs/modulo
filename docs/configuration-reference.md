@@ -625,7 +625,7 @@ via the admin API. Unknown/absent keys default to safe values.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODULO_BACKUP_PASSPHRASE` | For encryption | – | AES-256-CBC backup encryption passphrase (min 32 chars) |
+| `MODULO_BACKUP_PASSPHRASE` | For encryption | – | AES-256-CBC backup encryption passphrase (32+ chars recommended; the CLI does not enforce a length) |
 
 See [`docs/operations/backup.md`](./operations/backup.md) for backup configuration.
 

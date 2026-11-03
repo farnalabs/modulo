@@ -1449,6 +1449,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/feature-flags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Org Feature Flags
+         * @description List the community-tier flags this org admin may set for their own org.
+         */
+        get: operations["list_org_feature_flags_api_v1_admin_org_feature_flags_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/org/feature-flags/{flag_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Org Feature Flag
+         * @description Set (or update) this org's override for an org-settable flag.
+         */
+        put: operations["set_org_feature_flag_api_v1_admin_org_feature_flags__flag_name__put"];
+        post?: never;
+        /**
+         * Clear Org Feature Flag
+         * @description Clear this org's override for an org-settable flag (revert to default).
+         *
+         *     The ``feature_overrides`` map has no per-entry delete in the atomic patch
+         *     helper, so this reads the map, removes the key and writes the map back
+         *     through the same patch helper the other org-settings writers use — the
+         *     existing clear path's shape. Only the one map is rewritten; no other
+         *     settings key is touched.
+         */
+        delete: operations["clear_org_feature_flag_api_v1_admin_org_feature_flags__flag_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -18113,6 +18163,38 @@ export interface components {
             /** Exported At */
             exported_at: string;
         };
+        /**
+         * OrgFeatureFlagItem
+         * @description One org-settable flag, with its effective state for this organisation.
+         *
+         *     ``default`` is the registry's computed state for the org's plan (a
+         *     system-level override included) before any org override is applied;
+         *     ``enabled`` is the effective state after the org override; ``overridden``
+         *     reports whether the org has an explicit override, so the UI can distinguish
+         *     "on by default" from "on because someone set it".
+         */
+        OrgFeatureFlagItem: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Overridden */
+            overridden: boolean;
+            /** Default */
+            default: boolean;
+        };
+        /** OrgFeatureFlagListResponse */
+        OrgFeatureFlagListResponse: {
+            /** Flags */
+            flags: components["schemas"]["OrgFeatureFlagItem"][];
+        };
+        /** OrgFeatureFlagUpdateRequest */
+        OrgFeatureFlagUpdateRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** OrgGuardrailsKillSwitchResponse */
         OrgGuardrailsKillSwitchResponse: {
             /** Enabled */
@@ -27770,6 +27852,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpAuthorityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_org_feature_flags_api_v1_admin_org_feature_flags_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgFeatureFlagListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    set_org_feature_flag_api_v1_admin_org_feature_flags__flag_name__put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                flag_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrgFeatureFlagUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgFeatureFlagItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    clear_org_feature_flag_api_v1_admin_org_feature_flags__flag_name__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                flag_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgFeatureFlagItem"];
                 };
             };
             /** @description Validation Error */

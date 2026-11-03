@@ -24,6 +24,30 @@ const mcpAuthorityState = vi.hoisted(() => ({
   reject: false,
 }))
 
+// FAR-2302: org-admin feature-flag governance endpoint state.
+const orgFlagsState = vi.hoisted(() => ({
+  data: {
+    flags: [
+      {
+        name: 'webhook_notification_log',
+        description: 'Webhook notification delivery log',
+        enabled: true,
+        overridden: false,
+        default: true,
+      },
+      {
+        name: 'dashboard_charts',
+        description: 'Dashboard trend charts',
+        enabled: false,
+        overridden: true,
+        default: false,
+      },
+    ],
+  } as unknown,
+  error: undefined as unknown,
+  reject: false,
+}))
+
 // View-level data-load state (billing overview + org profile) and the
 // data-export endpoint state, so the load/export/delete branches are all
 // independently reachable from a test.
@@ -83,6 +107,12 @@ vi.mock('../lib/api/client', () => ({
         }
         return Promise.resolve({ data: mcpAuthorityState.data, error: mcpAuthorityState.error })
       }
+      if (url === '/api/v1/admin/org/feature-flags') {
+        if (orgFlagsState.reject) {
+          return Promise.reject(new Error('flags unreachable'))
+        }
+        return Promise.resolve({ data: orgFlagsState.data, error: orgFlagsState.error })
+      }
       if (url === '/api/v1/admin/billing/overview') {
         if (orgOverviewState.reject) {
           return Promise.reject(new Error('overview unreachable'))
@@ -140,6 +170,26 @@ describe('AdminOrgSettingsView', () => {
     mcpAuthorityState.data = { enabled: true, overridden: false }
     mcpAuthorityState.error = undefined
     mcpAuthorityState.reject = false
+    orgFlagsState.data = {
+      flags: [
+        {
+          name: 'webhook_notification_log',
+          description: 'Webhook notification delivery log',
+          enabled: true,
+          overridden: false,
+          default: true,
+        },
+        {
+          name: 'dashboard_charts',
+          description: 'Dashboard trend charts',
+          enabled: false,
+          overridden: true,
+          default: false,
+        },
+      ],
+    }
+    orgFlagsState.error = undefined
+    orgFlagsState.reject = false
     hitlWindowState.data = { hitl_review_window_seconds: null, is_default: true }
     hitlWindowState.error = undefined
     hitlWindowState.reject = false
@@ -418,6 +468,41 @@ describe('AdminOrgSettingsView', () => {
     await save.trigger('click')
     await flushPromises()
     expect(windowPutBodies()).toEqual([{ hitl_review_window_seconds: 900 }])
+    wrapper.unmount()
+  })
+
+  it('keeps the organisation feature-flags card outside the team gate and saving on the community tier', async () => {
+    // FAR-2302: the org feature-flags endpoint is not plan-gated, so its card
+    // sits OUTSIDE the team_rbac gate like the HITL review window. This mounts
+    // the REAL FeatureGate (never stubbed) in its community-tier state; a
+    // regression that moved the card inside the disabled overlay fails here.
+    const wrapper = await mountCommunityTierView()
+
+    // The gate must genuinely be in its DISABLED state, otherwise the
+    // placement assertion below would silently prove nothing.
+    expect(wrapper.find('[data-testid="feature-gate-disabled"]').exists()).toBe(true)
+
+    const toggle = wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]')
+    expect(toggle.exists()).toBe(true)
+
+    // The control may not live inside the disabled (pointer-events-none)
+    // subtree - that is exactly the "card moved inside the overlay" failure.
+    expect(toggle.element.closest('.pointer-events-none')).toBeNull()
+    expect(
+      wrapper.find('[data-testid="feature-gate-disabled"] [data-testid="org-feature-flag-toggle-webhook_notification_log"]').exists(),
+    ).toBe(false)
+
+    // Interactive end to end: the toggle still issues its PUT.
+    await toggle.trigger('click')
+    await vi.waitFor(() => {
+      expect(vi.mocked(api.PUT)).toHaveBeenCalledWith(
+        '/api/v1/admin/org/feature-flags/{flag_name}',
+        expect.objectContaining({
+          params: { path: { flag_name: 'webhook_notification_log' } },
+          body: { enabled: false },
+        }),
+      )
+    })
     wrapper.unmount()
   })
 
@@ -834,6 +919,163 @@ describe('AdminOrgSettingsView', () => {
     })
     expect(wrapper.find('[data-testid="org-mcp-authority-toggle"]').attributes('aria-checked')).toBe('true')
     expect(wrapper.find('[data-testid="org-mcp-authority-saved"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // -- FAR-2302: organisation feature-flag governance -----------------------
+
+  it('renders a toggle row for each org-settable feature flag', async () => {
+    const wrapper = await mountWindowView()
+
+    const rows = wrapper.findAll('[data-testid="org-feature-flag-row"]')
+    expect(rows).toHaveLength(2)
+    expect(
+      wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').attributes('aria-checked'),
+    ).toBe('true')
+    expect(
+      wrapper.find('[data-testid="org-feature-flag-toggle-dashboard_charts"]').attributes('aria-checked'),
+    ).toBe('false')
+    const statuses = wrapper.findAll('[data-testid="org-feature-flag-status"]').map(node => node.text())
+    expect(statuses).toEqual(['Using the default', 'Overridden for this organisation'])
+    expect(wrapper.find('[data-testid="org-feature-flags-note"]').text()).toContain('system administrator')
+    wrapper.unmount()
+  })
+
+  it('PUTs an org override and confirms the save', async () => {
+    const wrapper = await mountWindowView()
+    const putMock = vi.mocked(api.PUT)
+    putMock.mockResolvedValueOnce({
+      data: {
+        name: 'webhook_notification_log',
+        description: 'Webhook notification delivery log',
+        enabled: false,
+        overridden: true,
+        default: true,
+      },
+      error: undefined,
+    } as any)
+
+    await wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-feature-flags-saved"]').exists()).toBe(true)
+    })
+
+    expect(putMock).toHaveBeenCalledWith(
+      '/api/v1/admin/org/feature-flags/{flag_name}',
+      expect.objectContaining({
+        params: { path: { flag_name: 'webhook_notification_log' } },
+        body: { enabled: false },
+      }),
+    )
+    expect(
+      wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').attributes('aria-checked'),
+    ).toBe('false')
+    expect(wrapper.find('[data-testid="org-feature-flags-saved"]').attributes('aria-live')).toBe('polite')
+    expect(wrapper.find('[data-testid="org-feature-flags-saved"]').attributes('role')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('shows an error and keeps the previous state when a flag save fails', async () => {
+    const wrapper = await mountWindowView()
+    vi.mocked(api.PUT).mockResolvedValueOnce({ data: null, error: 'Server exploded' } as any)
+
+    await wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-feature-flags-error"]').text()).toContain('Server exploded')
+    })
+    expect(
+      wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').attributes('aria-checked'),
+    ).toBe('true')
+    expect(wrapper.find('[data-testid="org-feature-flags-saved"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows the retry affordance when the flags cannot be loaded', async () => {
+    orgFlagsState.reject = true
+    const wrapper = await mountWindowView()
+
+    const error = wrapper.find('[data-testid="org-feature-flags-load-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('flags unreachable')
+    expect(error.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('reports a load error carried in the response body', async () => {
+    orgFlagsState.error = 'flags rejected'
+    const wrapper = await mountWindowView()
+
+    expect(wrapper.find('[data-testid="org-feature-flags-load-error"]').text()).toContain('flags rejected')
+    wrapper.unmount()
+  })
+
+  it('renders the empty state and the system-administrator note when no flag is settable', async () => {
+    orgFlagsState.data = { flags: [] }
+    const wrapper = await mountWindowView()
+
+    expect(wrapper.findAll('[data-testid="org-feature-flag-row"]')).toHaveLength(0)
+    expect(wrapper.find('[data-testid="org-feature-flags-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="org-feature-flags-note"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('renders the empty state when the flags response carries no body', async () => {
+    orgFlagsState.data = undefined
+    const wrapper = await mountWindowView()
+
+    expect(wrapper.find('[data-testid="org-feature-flags-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="org-feature-flags-load-error"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps the previous state when the save request throws', async () => {
+    const wrapper = await mountWindowView()
+    vi.mocked(api.PUT).mockRejectedValueOnce(new Error('network down'))
+
+    await wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-feature-flags-error"]').text()).toContain('network down')
+    })
+    expect(
+      wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').attributes('aria-checked'),
+    ).toBe('true')
+    expect(wrapper.find('[data-testid="org-feature-flags-saved"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('falls back to the requested state when the save response carries no body', async () => {
+    const wrapper = await mountWindowView()
+    vi.mocked(api.PUT).mockResolvedValueOnce({ data: undefined, error: undefined } as any)
+
+    await wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-feature-flags-saved"]').exists()).toBe(true)
+    })
+    expect(
+      wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').attributes('aria-checked'),
+    ).toBe('false')
+    expect(wrapper.findAll('[data-testid="org-feature-flag-status"]')[0].text()).toContain(
+      'Overridden for this organisation',
+    )
+    wrapper.unmount()
+  })
+
+  it('ignores a second toggle while a save is in flight', async () => {
+    const wrapper = await mountWindowView()
+    let resolvePut: (value: unknown) => void = () => {}
+    vi.mocked(api.PUT).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePut = resolve
+        }) as any,
+    )
+
+    await wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').trigger('click')
+    await wrapper.find('[data-testid="org-feature-flag-toggle-dashboard_charts"]').trigger('click')
+    expect(vi.mocked(api.PUT)).toHaveBeenCalledTimes(1)
+
+    resolvePut({ data: undefined, error: undefined })
+    await flushPromises()
     wrapper.unmount()
   })
 })

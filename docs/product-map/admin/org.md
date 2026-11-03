@@ -6,12 +6,16 @@ code:
   - backend/src/modulo/api/routes/org_settings.py
   - backend/src/modulo/api/routes/admin_orgs.py
   - backend/src/modulo/api/routes/admin_feature_flags.py
+  - backend/src/modulo/api/routes/admin_org_feature_flags.py
   - backend/src/modulo/api/routes/admin.py
+  - frontend/src/views/AdminOrgSettingsView.vue
 unit-tests:
   - backend/tests/unit/api/test_admin_orgs.py
   - backend/tests/unit/api/test_admin_orgs_coverage_gaps.py
   - backend/tests/unit/api/test_admin_feature_flags.py
+  - backend/tests/unit/api/test_admin_org_feature_flags.py
   - backend/tests/unit/api/test_admin.py
+  - frontend/src/__tests__/AdminOrgSettingsView.spec.ts
 bdd:
   - backend/tests/bdd/features/triggers/pause.feature
   - backend/tests/bdd/features/system_admin/system_admin_users.feature
@@ -62,10 +66,27 @@ kill-switch, authorization enforcement).
       `backend/src/modulo/api/routes/admin_feature_flags.py`,
       `backend/tests/unit/api/test_admin_feature_flags.py`,
       `backend/tests/unit/core/test_feature_flag_registry.py`)
+- [x] Org admins govern their own organisation's low-sensitivity community
+      feature flags through `GET`/`PUT`/`DELETE
+      /api/v1/admin/org/feature-flags[/{flag_name}]` without the instance-wide
+      `system.config.manage` gate (`org.feature_flags.manage`, admin,
+      non-delegable). The surface is fail-closed: `FeatureFlag.org_admin_settable`
+      defaults to `False`, team-tier flags are refused, and
+      `mcp_human_linked_hitl_authority` stays on its own dedicated control.
+      Writes persist to the org `settings_json.feature_overrides` map, invalidate
+      the flag cache and emit the existing `feature_flag_override_set` /
+      `feature_flag_override_cleared` audit events; the card renders on
+      `/admin/org` outside the team-tier gate
+      (`backend/src/modulo/api/routes/admin_org_feature_flags.py`,
+      `backend/src/modulo/core/feature_flags.py`,
+      `backend/tests/unit/api/test_admin_org_feature_flags.py`,
+      `frontend/src/views/AdminOrgSettingsView.vue`,
+      `frontend/src/__tests__/AdminOrgSettingsView.spec.ts`)
 - [x] Frontend renders org settings at `/admin/org` with export, product-analytics,
-      and community-objects controls (`frontend/src/manifest.yaml` testids). The
-      page intentionally has no self-service organisation-delete action: active-org
-      deletion is refused by every self-service API route (403, FAR-2225)
+      community-objects and organisation-feature-flag controls
+      (`frontend/src/manifest.yaml` testids). The page intentionally has no
+      self-service organisation-delete action: active-org deletion is refused by
+      every self-service API route (403, FAR-2225)
 - [x] Self-service org profile (`GET`/`PUT /api/v1/admin/org` in
       `api/routes/admin.py`): admins read and rename the org (slug immutable -
       `test_update_org_ignores_slug_changes`) and regenerate the org API key
@@ -97,6 +118,15 @@ execute (they stayed pinned `@awaiting-implementation`). Each flow's real
 behaviour is covered by the citations above.
 
 ## QA History
+- 2026-11-02: **FAR-2302 delivery follow-up** - registered the org-admin
+  feature-flag governance surface on this tracker: added the route module and
+  the org-settings view to `code:`, their tests to `unit-tests:`, and the
+  behaviour line above. The `feature_overrides` write path, the fail-closed
+  `org_admin_settable` classification and the `/admin/org` card are covered by
+  `test_admin_org_feature_flags.py` (route behaviour + refuse paths) and
+  `AdminOrgSettingsView.spec.ts` (load/save/throw/fallback states). Changed-lines
+  coverage for the new lines is 100% line and branch on both the Python and
+  JavaScript legs.
 - 2026-09-28: **Improve Architecture product-map walk** -
   closed the lingering `ui/org_settings.feature` gap. Archived the five
   never-executing UI-journey drafts (verified: 0/11 referenced testids exist in

@@ -133,6 +133,8 @@ def _run_pytest(test_paths: list[str], timeout: int = 120) -> int:
         "uv",
         "run",
         "--no-sync",
+        # FAR-2308: never let a test hook rewrite backend/uv.lock mid-gate.
+        "--frozen",
         "pytest",
         "--tb=short",
         "-q",

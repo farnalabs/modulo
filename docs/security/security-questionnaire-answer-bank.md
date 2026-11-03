@@ -160,6 +160,28 @@ themselves are always active.
 Evidence: `backend/src/modulo/auth/permissions.py`; `docs/architecture.md`
 ("Row-Level Security").
 
+**Q: Who can change a feature flag?**
+
+A: Two levels, and the boundary is fail-closed. An organisation admin may set
+the low-sensitivity community-tier flags that govern their own organisation's
+usage (for example saved views, dashboard charts, the webhook notification log
+and API-key grant-sets) through
+`GET/PUT/DELETE /api/v1/admin/org/feature-flags`, gated by
+`org.feature_flags.manage` (admin, non-delegable). Everything else is
+system-administrator-only: sensitive community flags (SSO unrestricted
+provisioning, web vitals), every team-tier flag, and any flag that has not
+explicitly opted into org administration. Each `FeatureFlag` carries
+`org_admin_settable`, default `False`, so a new flag cannot be opened to org
+admins by omission, and the org surface never offers a team-tier flag. A future
+sensitive org-scoped flag (community-library access, telemetry/metrics export)
+must default to system-administrator-only.
+
+Evidence: `backend/src/modulo/core/feature_flags.py`
+(`FeatureFlag.org_admin_settable`, `ORG_ADMIN_SETTABLE_FLAGS`);
+`backend/src/modulo/api/routes/admin_org_feature_flags.py`;
+`backend/src/modulo/auth/permissions.py`; `docs/architecture.md`
+("Feature Flags").
+
 **Q: Do you support least-privilege API keys?**
 
 A: Yes. Org-scoped API keys are always role-scoped (`operator` or `runner`),

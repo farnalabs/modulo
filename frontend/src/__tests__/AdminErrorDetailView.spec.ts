@@ -346,4 +346,79 @@ describe('AdminErrorDetailView', () => {
     expect(routerPush).toHaveBeenCalledWith('/admin/errors')
     wrapper.unmount()
   })
+
+  it('copies the canonical support reference including the group source (FAR-2304)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mountView()
+    await flush()
+
+    const btn = wrapper.find('[data-testid="admin-error-detail-copy-support"]')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await flush()
+
+    expect(writeText).toHaveBeenCalledOnce()
+    // The detail payload's sample event carries the source the list payload
+    // cannot, so the reference here is the full canonical shape.
+    expect(writeText.mock.calls[0][0]).toBe(
+      'error err-1 · fingerprint abcdef1234567890 · level error · count 3 · source runner',
+    )
+    wrapper.unmount()
+  })
+
+  it('offers the support reference in instance scope too (read-only copy)', async () => {
+    authState.isSystemAdmin = true
+    routeState.query = { scope: 'instance' }
+    const wrapper = mountView()
+    await flush()
+
+    expect(wrapper.find('[data-testid="admin-error-detail-copy-support"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('warns and keeps the copy label when the clipboard write fails (FAR-2304)', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    Object.assign(navigator, { clipboard: { writeText } })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const wrapper = mountView()
+    await flush()
+
+    const btn = wrapper.find('[data-testid="admin-error-detail-copy-support"]')
+    await btn.trigger('click')
+    await flush()
+
+    expect(warn).toHaveBeenCalledWith('Failed to copy support reference', expect.any(Error))
+    expect(btn.text()).toContain('Copy support reference')
+    warn.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('has no reference and copies nothing before a group loads (FAR-2304)', async () => {
+    fetchGroupMock.mockResolvedValue(null)
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mountView()
+    await flush()
+
+    const vm = wrapper.vm as unknown as {
+      supportReference: string
+      copySupportReference: () => Promise<void>
+    }
+    expect(vm.supportReference).toBe('')
+    await vm.copySupportReference()
+    expect(writeText).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('omits the source segment when the sample event has no source (FAR-2304)', async () => {
+    fetchGroupMock.mockResolvedValue(groupDetail({ sample_event: null }))
+    const wrapper = mountView()
+    await flush()
+
+    const vm = wrapper.vm as unknown as { supportReference: string }
+    expect(vm.supportReference).toContain('error err-1')
+    expect(vm.supportReference).not.toContain('source')
+    wrapper.unmount()
+  })
 })
