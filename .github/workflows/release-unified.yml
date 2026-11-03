@@ -33,6 +33,11 @@ on:
         description: "Release version in X.Y.Z form (e.g. 0.1.0). Required for recut/promote; for cut it's the target version."
         type: string
         required: false
+      freeze:
+        description: "Establish release-freeze branch to pause merge queue (default false while testing pipeline)"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: release-unified-${{ github.ref }}
@@ -600,8 +605,13 @@ jobs:
           # The freeze signal: merge-queue.yml's freeze-gate pauses while this
           # branch exists. Force-move it on recut so the gate always tracks the
           # latest freeze.
-          git branch -f release-freeze HEAD
-          git push origin refs/heads/release-freeze --force
+          if [ "${{ inputs.freeze }}" = "true" ]; then
+            git branch -f release-freeze HEAD
+            git push origin refs/heads/release-freeze --force
+            echo "Release freeze established on refs/heads/release-freeze."
+          else
+            echo "Release freeze skipped (inputs.freeze != true); merge queue will not be paused."
+          fi
 
           # The hold only covers the version-bump push. Once the authoritative
           # release-freeze exists, remove the temporary suppression marker.
@@ -676,8 +686,13 @@ jobs:
 
           # Move the freeze to the new RC commit so main remains frozen at the
           # exact commit sent to deploy and rc-validate.
-          git branch -f release-freeze HEAD
-          git push origin refs/heads/release-freeze --force
+          if [ "${{ inputs.freeze }}" = "true" ]; then
+            git branch -f release-freeze HEAD
+            git push origin refs/heads/release-freeze --force
+            echo "Release freeze moved to ${RC_TAG} on refs/heads/release-freeze."
+          else
+            echo "Release freeze skipped (inputs.freeze != true); merge queue will not be paused."
+          fi
 
           echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
 
