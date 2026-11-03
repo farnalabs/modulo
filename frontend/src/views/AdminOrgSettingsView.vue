@@ -118,7 +118,7 @@
         <p class="text-sm text-destructive" role="alert" data-testid="org-mcp-authority-load-error">{{ mcpAuthorityLoadError }}</p>
         <button
           type="button"
-          class="text-sm font-medium text-primary underline underline-offset-2 hover:no-underline"
+          class="text-sm font-medium text-primary-text underline underline-offset-2 hover:no-underline"
           data-testid="org-mcp-authority-retry"
           @click="loadMcpAuthority"
         >
@@ -150,7 +150,7 @@
         >{{ mcpAuthorityError }}</p>
         <p
           v-else-if="mcpAuthoritySaved"
-          class="mt-2 text-sm text-success"
+          class="mt-2 text-sm text-success-text"
           aria-live="polite"
           data-testid="org-mcp-authority-saved"
         >{{ $t('views.AdminOrgSettingsView.mcp_authority_saved') }}</p>
@@ -279,7 +279,7 @@
             @toggle="toggleCommunityObjects"
           />
         </div>
-        <div v-if="communityObjectsError" class="mt-2 text-xs text-destructive">{{ communityObjectsError }}</div>
+        <div v-if="communityObjectsError" class="mt-2 text-xs text-destructive" role="alert">{{ communityObjectsError }}</div>
       </SectionCard>
 
       <!-- Delete Organization -->
@@ -329,7 +329,7 @@
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-destructive/50"
           data-testid="org-delete-confirm-input"
         />
-        <p v-if="deleteError" class="text-sm text-destructive">{{ deleteError }}</p>
+        <p v-if="deleteError" class="text-sm text-destructive" role="alert">{{ deleteError }}</p>
       </div>
     </FormDialog>
     </FeatureGate>

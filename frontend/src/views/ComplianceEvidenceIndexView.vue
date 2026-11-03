@@ -244,6 +244,7 @@ import DataCard from '../components/ui/DataCard.vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
 import { useDataFetch } from '../composables/useDataFetch'
+import { formatDateShortWithTime } from '../lib/formatDate'
 import { shortId } from '../utils/format'
 
 type EvidenceIndex = components['schemas']['EvidenceIndex']
@@ -381,7 +382,7 @@ function identifierCopyLabel(display: IdentifierDisplay): string {
 
 function statusClass(status: string): string {
   if (status === 'present') return 'border-success/40 bg-success/10 text-success-text'
-  if (status === 'customer_supplied') return 'border-primary/40 bg-primary/10 text-primary'
+  if (status === 'customer_supplied') return 'border-primary/40 bg-primary/10 text-primary-text'
   return 'border-warning/50 bg-warning/10 text-warning-text'
 }
 
@@ -415,7 +416,10 @@ function provenanceLabel(provenance: string): string {
 function formatTimestamp(value: string): string {
   const timestamp = new Date(value)
   if (Number.isNaN(timestamp.getTime())) return value
-  return timestamp.toLocaleString()
+  // Use the shared formatter every other surface uses. `toLocaleString()` made
+  // the compliance artefact's timestamps vary with the browser's locale and
+  // timezone (and made the view's own spec locale-dependent).
+  return formatDateShortWithTime(timestamp)
 }
 
 void load()

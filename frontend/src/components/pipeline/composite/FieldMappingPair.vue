@@ -19,6 +19,14 @@ const showPicker = ref(false)
 const selectedSource = ref('')
 const selectedTarget = ref('')
 
+// Per-instance id prefix derived from the `direction` prop. A counter declared
+// in `<script setup>` re-executes for every instance, so it always yielded
+// `fieldmappingpair-1`; SchemaMappingPanel renders exactly one pair per
+// direction (`input` and `output`) and PrimeVue renders every TabPanel's
+// content, so both copies exist in the document at once. Direction is unique
+// per rendered copy, so `label[for]` resolves to the right control.
+const idPrefix = `fieldmappingpair-${props.direction}`
+
 const isPassthrough = computed(() => {
   if (props.sourceFields.length !== props.targetFields.length) return false
   return props.sourceFields.every((sf, i) => {
@@ -143,8 +151,9 @@ function removeMapping(sourceKey: string) {
         <div v-else class="mt-2 space-y-2 rounded-md border border-border/50 bg-muted/20 p-3">
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label for="fieldmappingpair-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('components.pipeline.composite.FieldMappingPair.source_field') }}</label>
+              <label :for="`${idPrefix}-source`" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('components.pipeline.composite.FieldMappingPair.source_field') }}</label>
               <Select
+  :id="`${idPrefix}-source`"
   aria-label="Source field"
   v-model="selectedSource"
   placeholder="Select source"
@@ -159,8 +168,9 @@ function removeMapping(sourceKey: string) {
 </Select>
             </div>
             <div>
-              <label for="fieldmappingpair-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('components.pipeline.composite.FieldMappingPair.target_field') }}</label>
+              <label :for="`${idPrefix}-target`" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('components.pipeline.composite.FieldMappingPair.target_field') }}</label>
               <Select
+  :id="`${idPrefix}-target`"
   aria-label="Target field"
   v-model="selectedTarget"
   placeholder="Select target"
