@@ -10,13 +10,27 @@
 
   - repo: local
     hooks:
+      # FAR-2308: backend/uv.lock records the project version and the resolved
+      # dependency set. A pyproject.toml change without a matching lock update
+      # makes `uv run` rewrite the lock mid-gate, pre-commit's stash/restore
+      # collides, and pushes from any branch based on the stale tree abort. This
+      # gate fires on EITHER file and fails closed. `--frozen` on the hook's own
+      # `uv run` wrapper means the checker can never mutate the lock it checks.
+      # CI mirrors it as the always-on "UV lockfile freshness" job (ci.yml) and
+      # as a batch gate in merge-queue.yml.
+      - id: check-uv-lock
+        name: check uv lockfile freshness
+        entry: uv run --project backend --no-sync --frozen python scripts/run_check_uv_lock.py
+        language: system
+        files: ^(backend/(pyproject\.toml|uv\.lock)|scripts/run_check_uv_lock\.py)$
+        pass_filenames: false
       - id: ruff
         name: ruff (locked backend environment)
         # pass_filenames: true — pre-commit passes only the staged .py files,
         # so ruff checks/fixes only what changed, not the entire backend.
         # CI (ci.yml backend-lint job) still runs `ruff check .` against the
         # whole backend on every PR/push.
-        entry: uv run --project backend --no-sync ruff check --fix
+        entry: uv run --project backend --no-sync --frozen ruff check --fix
         language: system
         types: [python]
         files: ^backend/
@@ -26,7 +40,7 @@
         name: ruff format (locked backend environment)
         # Same scoping as ruff — staged files only at commit time, full
         # backend in CI (ci.yml backend-lint job: `ruff format --check .`).
-        entry: uv run --project backend --no-sync ruff format
+        entry: uv run --project backend --no-sync --frozen ruff format
         language: system
         types: [python]
         files: ^backend/
@@ -34,34 +48,34 @@
         stages: [pre-commit]
       - id: mypy
         name: mypy (locked backend environment)
-        entry: uv --directory backend run --no-sync mypy --strict --ignore-missing-imports src/
+        entry: uv --directory backend run --no-sync --frozen mypy --strict --ignore-missing-imports src/
         language: system
         files: ^backend/src/
         pass_filenames: false
         stages: [manual]
       - id: check-migration-heads
         name: check migration number/revision collisions
-        entry: uv run --project backend --no-sync python scripts/run_check_migration_heads.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_check_migration_heads.py
         language: system
         files: ^backend/src/modulo/db/migrations/versions/.*\.py$
         pass_filenames: false
       - id: semgrep
         name: semgrep
-        entry: uv run --project backend --no-sync python scripts/run_semgrep.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_semgrep.py
         language: system
         files: ^backend/src/
         pass_filenames: false
         stages: [pre-commit]
       - id: validate-semgrep-rules
         name: validate .semgrep rule files (shape)
-        entry: uv run --project backend --no-sync python scripts/run_validate_semgrep_rules.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_validate_semgrep_rules.py
         language: system
         files: ^\.semgrep/.*\.ya?ml$
         pass_filenames: false
         stages: [pre-commit]
       - id: vulture
         name: vulture (dead code gate)
-        entry: uv run --project backend --no-sync python scripts/run_vulture.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_vulture.py
         language: system
         types: [python]
         files: ^backend/src/
@@ -104,20 +118,20 @@
     hooks:
       - id: import-linter
         name: import-linter
-        entry: uv --directory backend run --no-sync lint-imports
+        entry: uv --directory backend run --no-sync --frozen lint-imports
         language: system
         files: ^backend/src/
         pass_filenames: false
       - id: generate-api-types
         name: Generate API types from OpenAPI schema
-        entry: uv run --project backend --no-sync python scripts/run_generate_api_types.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_generate_api_types.py
         language: system
         files: ^backend/src/
         pass_filenames: false
         stages: [manual]
       - id: eslint
         name: ESLint
-        entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py lint
+        entry: uv run --project backend --no-sync --frozen python scripts/run_frontend_npm.py lint
         language: system
         # Match only frontend/src, mirroring the CI lint command `eslint src`
         # (frontend/package.json).  A repo-wide pattern would also match docs
@@ -127,14 +141,14 @@
         pass_filenames: true
       - id: vue-tsc
         name: vue-tsc type check
-        entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py type-check
+        entry: uv run --project backend --no-sync --frozen python scripts/run_frontend_npm.py type-check
         language: system
         files: \.(vue|ts)$
         pass_filenames: false
         stages: [manual]
       - id: check-c1-chars
         name: check C1 control characters in workflow files
-        entry: uv run --project backend --no-sync python scripts/run_check_c1_chars.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_check_c1_chars.py
         language: system
         files: ^\.github/workflows/.*\.ya?ml$
         pass_filenames: false
@@ -147,33 +161,27 @@
       # the backend's OpenAPI route table.
       - id: check-e2e-route-methods
         name: check E2E HTTP calls match live API routes
-        entry: uv run --project backend --no-sync python scripts/run_check_e2e_route_methods.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_check_e2e_route_methods.py
         language: system
         files: ^(frontend/tests/e2e/.*|backend/src/modulo/api/.*|scripts/run_check_e2e_route_methods\.py)$
         pass_filenames: false
 
       - id: check-utf8
         name: check UTF-8 encoding (no corrupted files)
-        entry: uv run --project backend --no-sync python scripts/run_check_utf8_encoding.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_check_utf8_encoding.py
         language: system
         pass_filenames: false
         stages: [pre-commit]
       - id: run-changed-tests
         name: run tests for changed test files
-        entry: uv run --project backend --no-sync python scripts/run_changed_tests.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_changed_tests.py
         language: system
         files: ^backend/tests/.*\.py$
         pass_filenames: false
         stages: [pre-commit]
-      - id: check-uv-lock
-        name: check uv lockfile freshness
-        entry: uv run --project backend --no-sync python scripts/run_check_uv_lock.py
-        language: system
-        files: ^backend/pyproject\.toml$
-        pass_filenames: false
       - id: validate-translations
         name: validate sidebar nav translation keys
-        entry: uv run --project backend --no-sync python scripts/run_validate_translations.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_validate_translations.py
         language: system
         files: ^frontend/src/(config/navigation\.ts|locales/en-US\.js|manifest\.yaml)$
         pass_filenames: false
@@ -182,7 +190,7 @@
       # validate-translations hook above; this one owns the structure rules.
       - id: validate-nav-config
         name: validate manifest nav structure (groups, sidebar_order, route-id parity)
-        entry: uv run --project backend --no-sync python scripts/run_validate_nav_config.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_validate_nav_config.py
         language: system
         files: ^(frontend/src/manifest\.yaml|frontend/src/config/navigation\.ts)$
         pass_filenames: false
@@ -191,7 +199,7 @@
       # manifest). Only fires when manifest, views/ or components/ change.
       - id: product-map-consistency
         name: product map consistency (declared data-testids)
-        entry: uv run --directory backend --no-sync python -m pytest tests/architecture/test_product_map_consistency.py -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+        entry: uv run --directory backend --no-sync --frozen python -m pytest tests/architecture/test_product_map_consistency.py -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
         language: system
         files: ^frontend/src/(manifest\.yaml|views/|components/)
         pass_filenames: false
@@ -200,13 +208,13 @@
       # Remove this hook (and scripts/run_check_vocabulary_sweep.py) at GA.
       - id: check-vocabulary-sweep
         name: forbid retired sandbox/external agent vocabulary (remove at GA)
-        entry: uv run --project backend --no-sync python scripts/run_check_vocabulary_sweep.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_check_vocabulary_sweep.py
         language: system
         files: ^frontend/src/(locales/.*\.js|views/.*\.vue|components/.*\.vue)$
         pass_filenames: false
       - id: validate-pipeline-configs
         name: validate pipeline configs (agent_prompt, timeout_seconds, template_id)
-        entry: uv run --directory backend --no-sync python ../scripts/validate_pipeline_configs.py
+        entry: uv run --directory backend --no-sync --frozen python ../scripts/validate_pipeline_configs.py
         language: system
         files: ^(backend/src/modulo/core/pipeline_engine/node_runner\.py|backend/src/modulo/api/mcp_server\.py|scripts/validate_pipeline_configs\.py)$
         pass_filenames: false
@@ -215,7 +223,7 @@
       # commit hook off the network; the URL pass is run by hand.
       - id: check-doc-validity
         name: docs validity sweep (no network)
-        entry: uv run --project backend --no-sync python scripts/check_doc_validity.py --no-urls
+        entry: uv run --project backend --no-sync --frozen python scripts/check_doc_validity.py --no-urls
         language: system
         files: ^(README\.md|docs/.*\.md)$
         pass_filenames: false
@@ -224,7 +232,7 @@
       # extraction, capped-run exit code) whenever the script itself changes.
       - id: check-doc-validity-self-test
         name: docs validity checker self-test
-        entry: uv run --project backend --no-sync python scripts/check_doc_validity.py --self-test
+        entry: uv run --project backend --no-sync --frozen python scripts/check_doc_validity.py --self-test
         language: system
         files: ^scripts/check_doc_validity\.py$
         pass_filenames: false
@@ -242,9 +250,11 @@
       # NOT `--strict --ignore-missing-imports` — those flags change what mypy
       # reports and mask failures CI doesn't (and vice versa). See the
       # "Diagnose CI failures with the EXACT CI command" lesson.
+      # `--frozen` is the FAR-2308 lock-safety flag only: it forbids uv from
+      # rewriting backend/uv.lock, and changes nothing about what mypy analyses.
       - id: prepush-mypy
         name: prepush mypy (exact CI Lint Backend command)
-        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "backend/src/modulo/**/*.py" -- uv --directory backend run --no-build --no-sync mypy src/modulo/
+        entry: uv run --project backend --no-sync --frozen python scripts/run_prepush_gated_check.py --pattern "backend/src/modulo/**/*.py" -- uv --directory backend run --no-build --no-sync --frozen mypy src/modulo/
         language: system
         files: ^backend/src/
         pass_filenames: false
@@ -254,7 +264,7 @@
       # run_frontend_npm.py runs `pnpm run type-check` in frontend/ — same command.
       - id: prepush-vue-tsc
         name: prepush vue-tsc (exact CI type-check command)
-        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "frontend/src/**" -- uv run --project backend --no-sync python scripts/run_frontend_npm.py type-check
+        entry: uv run --project backend --no-sync --frozen python scripts/run_prepush_gated_check.py --pattern "frontend/src/**" -- uv run --project backend --no-sync --frozen python scripts/run_frontend_npm.py type-check
         language: system
         files: \.(vue|ts)$
         pass_filenames: false
@@ -263,14 +273,14 @@
       # file and fail if it differs from the committed schema.ts (never touches it).
       - id: prepush-schema-freshness
         name: prepush schema freshness (openapi-typescript@7.13.0 --check)
-        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "backend/src/**/*.py" -- uv run --project backend --no-sync python scripts/run_generate_api_types.py --check
+        entry: uv run --project backend --no-sync --frozen python scripts/run_prepush_gated_check.py --pattern "backend/src/**/*.py" -- uv run --project backend --no-sync --frozen python scripts/run_generate_api_types.py --check
         language: system
         files: ^(backend/src/.+\.py$)
         pass_filenames: false
         stages: [pre-push]
       - id: prepush-merge-conflict-check
         name: prepush merge-conflict-with-main check
-        entry: uv run --project backend --no-sync python scripts/run_check_merge_conflict.py
+        entry: uv run --project backend --no-sync --frozen python scripts/run_check_merge_conflict.py
         language: system
         pass_filenames: false
         stages: [pre-push]

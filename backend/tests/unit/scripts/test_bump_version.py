@@ -1,4 +1,4 @@
-"""Unit tests for bump-version.py — version sync across pyproject.toml, package.json and Chart.yaml."""
+"""Unit tests for bump-version.py — version sync across pyproject.toml, uv.lock, package.json and Chart.yaml."""
 
 from __future__ import annotations
 
@@ -153,6 +153,40 @@ def test_write_version_chart_partial_drift_raises(root_tmp):
     assert 'appVersion: "9.9.9"' in path.read_text()
 
 
+def test_read_version_uv_lock(root_tmp):
+    """Only the editable project entry carries the project version.
+
+    An unrelated dependency's quoted ``version =`` line sits BEFORE the
+    ``farnalabs-modulo`` block, so a naive first-match reader
+    (``^version = "..."``) returns that dependency's version. The reader must
+    be anchored on the project block.
+    """
+    path = root_tmp / "uv.lock"
+    path.write_text(_UV_LOCK_FIXTURE_WITH_LEADING_DEPENDENCY, encoding="utf-8")
+    assert bv.read_version(path) == "1.2.3"
+
+
+def test_write_version_uv_lock_updates_only_the_project_entry(root_tmp):
+    """FAR-2308: uv.lock mirrors the project version in its editable package entry."""
+    path = root_tmp / "uv.lock"
+    path.write_text(_UV_LOCK_FIXTURE, encoding="utf-8")
+    bv.write_version(path, "1.2.3", "2.0.0")
+    content = path.read_text(encoding="utf-8")
+    assert 'name = "farnalabs-modulo"\nversion = "2.0.0"' in content
+    # An unrelated dependency's version line is never touched.
+    assert 'name = "httpx"\nversion = "0.28.1"' in content
+    assert "1.2.3" not in content
+
+
+def test_write_version_uv_lock_drifted_raises(root_tmp):
+    """A uv.lock format change must fail loud, never silently skip the mirror."""
+    path = root_tmp / "uv.lock"
+    path.write_text(_UV_LOCK_FIXTURE.replace('version = "1.2.3"', 'version = "9.9.9"'), encoding="utf-8")
+    with pytest.raises(ValueError, match="drifted"):
+        bv.write_version(path, "1.2.3", "2.0.0")
+    assert 'version = "9.9.9"' in path.read_text(encoding="utf-8")
+
+
 def test_write_version_already_at_target_raises(root_tmp):
     """Setting a file to the version it already has is a no-op -> hard error."""
     path = root_tmp / "pyproject.toml"
@@ -203,27 +237,66 @@ def test_write_version_refuses_outside_root(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+_UV_LOCK_FIXTURE = """version = 1
+revision = 5
+
+[[package]]
+name = "farnalabs-modulo"
+version = "1.2.3"
+source = { editable = "." }
+dependencies = [
+    { name = "httpx" },
+]
+
+[[package]]
+name = "httpx"
+version = "0.28.1"
+source = { registry = "https://pypi.org/simple" }
+"""
+
+
+#: Same shape as ``_UV_LOCK_FIXTURE``, but an unrelated package's quoted
+#: ``version =`` line comes FIRST. A naive first-match reader returns 4.9.0.
+_UV_LOCK_FIXTURE_WITH_LEADING_DEPENDENCY = """version = 1
+revision = 5
+
+[[package]]
+name = "anyio"
+version = "4.9.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "farnalabs-modulo"
+version = "1.2.3"
+source = { editable = "." }
+"""
+
+
 def _setup_main(root_tmp):
-    """Create all three version targets at 1.2.3 and return them."""
+    """Create all four version targets at 1.2.3 and return them."""
     pyproject = root_tmp / "pyproject.toml"
     pyproject.write_text('[project]\nname = "modulo"\nversion = "1.2.3"\n')
+    uv_lock = root_tmp / "uv.lock"
+    uv_lock.write_text(_UV_LOCK_FIXTURE, encoding="utf-8")
     package = root_tmp / "package.json"
     package.write_text('{"name": "modulo", "version": "1.2.3"}\n')
     chart = root_tmp / "Chart.yaml"
     chart.write_text('apiVersion: v2\nname: modulo\nversion: 1.2.3\nappVersion: "1.2.3"\n')
-    return pyproject, package, chart
+    return pyproject, uv_lock, package, chart
 
 
 def test_main_bumps_patch_by_default(monkeypatch, root_tmp, capsys):
-    pyproject, package, chart = _setup_main(root_tmp)
+    pyproject, uv_lock, package, chart = _setup_main(root_tmp)
     monkeypatch.setattr(sys, "argv", ["bump-version.py"])
     with (
         patch.object(bv, "BACKEND_PYPROJECT", pyproject),
+        patch.object(bv, "BACKEND_UV_LOCK", uv_lock),
         patch.object(bv, "FRONTEND_PACKAGE", package),
         patch.object(bv, "HELM_CHART", chart),
     ):
         bv.main()
     assert 'version = "1.2.4"' in pyproject.read_text()
+    assert 'name = "farnalabs-modulo"\nversion = "1.2.4"' in uv_lock.read_text(encoding="utf-8")
     assert '"version": "1.2.4"' in package.read_text()
     assert 'appVersion: "1.2.4"' in chart.read_text()
     out = capsys.readouterr().out
@@ -231,10 +304,11 @@ def test_main_bumps_patch_by_default(monkeypatch, root_tmp, capsys):
 
 
 def test_main_bumps_requested_part(monkeypatch, root_tmp):
-    pyproject, package, chart = _setup_main(root_tmp)
+    pyproject, uv_lock, package, chart = _setup_main(root_tmp)
     monkeypatch.setattr(sys, "argv", ["bump-version.py", "minor"])
     with (
         patch.object(bv, "BACKEND_PYPROJECT", pyproject),
+        patch.object(bv, "BACKEND_UV_LOCK", uv_lock),
         patch.object(bv, "FRONTEND_PACKAGE", package),
         patch.object(bv, "HELM_CHART", chart),
     ):
@@ -245,10 +319,11 @@ def test_main_bumps_requested_part(monkeypatch, root_tmp):
 
 
 def test_main_bumps_major(monkeypatch, root_tmp):
-    pyproject, package, chart = _setup_main(root_tmp)
+    pyproject, uv_lock, package, chart = _setup_main(root_tmp)
     monkeypatch.setattr(sys, "argv", ["bump-version.py", "major"])
     with (
         patch.object(bv, "BACKEND_PYPROJECT", pyproject),
+        patch.object(bv, "BACKEND_UV_LOCK", uv_lock),
         patch.object(bv, "FRONTEND_PACKAGE", package),
         patch.object(bv, "HELM_CHART", chart),
     ):
@@ -259,11 +334,12 @@ def test_main_bumps_major(monkeypatch, root_tmp):
 
 
 def test_main_set_writes_explicit_version(monkeypatch, root_tmp, capsys):
-    """--set X.Y.Z writes the exact version to all three targets."""
-    pyproject, package, chart = _setup_main(root_tmp)
+    """--set X.Y.Z writes the exact version to all four targets."""
+    pyproject, uv_lock, package, chart = _setup_main(root_tmp)
     monkeypatch.setattr(sys, "argv", ["bump-version.py", "--set", "2.5.0"])
     with (
         patch.object(bv, "BACKEND_PYPROJECT", pyproject),
+        patch.object(bv, "BACKEND_UV_LOCK", uv_lock),
         patch.object(bv, "FRONTEND_PACKAGE", package),
         patch.object(bv, "HELM_CHART", chart),
     ):
@@ -297,11 +373,12 @@ def test_main_fails_loud_when_a_target_has_drifted(monkeypatch, root_tmp, capsys
     exited 0. Against that old behaviour this test FAILS (main() returns
     normally instead of raising SystemExit, and pyproject gets bumped).
     """
-    pyproject, package, chart = _setup_main(root_tmp)
+    pyproject, uv_lock, package, chart = _setup_main(root_tmp)
     package.write_text('{"name": "modulo", "version": "9.9.9"}\n')
     monkeypatch.setattr(sys, "argv", ["bump-version.py", "patch"])
     with (
         patch.object(bv, "BACKEND_PYPROJECT", pyproject),
+        patch.object(bv, "BACKEND_UV_LOCK", uv_lock),
         patch.object(bv, "FRONTEND_PACKAGE", package),
         patch.object(bv, "HELM_CHART", chart),
         pytest.raises(SystemExit) as exc,
@@ -314,6 +391,7 @@ def test_main_fails_loud_when_a_target_has_drifted(monkeypatch, root_tmp, capsys
     assert "drifted from backend/pyproject.toml" in out
     # Validation runs before any write: the valid targets stayed untouched.
     assert 'version = "1.2.3"' in pyproject.read_text()
+    assert 'version = "1.2.3"' in uv_lock.read_text(encoding="utf-8")
     assert "version: 1.2.3" in chart.read_text()
 
 
@@ -324,11 +402,12 @@ def test_main_set_fails_when_all_targets_already_at_version(monkeypatch, root_tm
     mode, so the run aborted on "invalid part" and never emitted the
     already-at-target diagnosis asserted below.
     """
-    pyproject, package, chart = _setup_main(root_tmp)
-    before = (pyproject.read_bytes(), package.read_bytes(), chart.read_bytes())
+    pyproject, uv_lock, package, chart = _setup_main(root_tmp)
+    before = (pyproject.read_bytes(), uv_lock.read_bytes(), package.read_bytes(), chart.read_bytes())
     monkeypatch.setattr(sys, "argv", ["bump-version.py", "--set", "1.2.3"])
     with (
         patch.object(bv, "BACKEND_PYPROJECT", pyproject),
+        patch.object(bv, "BACKEND_UV_LOCK", uv_lock),
         patch.object(bv, "FRONTEND_PACKAGE", package),
         patch.object(bv, "HELM_CHART", chart),
         pytest.raises(SystemExit) as exc,
@@ -338,7 +417,7 @@ def test_main_set_fails_when_all_targets_already_at_version(monkeypatch, root_tm
     out = capsys.readouterr().out
     assert "no files were written" in out
     assert "already at version 1.2.3" in out
-    after = (pyproject.read_bytes(), package.read_bytes(), chart.read_bytes())
+    after = (pyproject.read_bytes(), uv_lock.read_bytes(), package.read_bytes(), chart.read_bytes())
     assert after == before
 
 

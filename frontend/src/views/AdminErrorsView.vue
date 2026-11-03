@@ -163,6 +163,21 @@
           <template #cell-assignee="{ row }">
             <span class="text-xs text-muted-foreground font-mono">{{ formatErrorAssignee(row) }}</span>
           </template>
+          <!-- FAR-2304: one-click canonical support reference per group, so a
+               user reporting an error has a single thing to paste. The id is
+               dynamic (per row), so it is not part of the product map's static
+               testid inventory. -->
+          <template #cell-support="{ row }">
+            <button
+              type="button"
+              class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium text-primary-text hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              :data-testid="`admin-errors-copy-support-${errorGroupRowId(row)}`"
+              @click.stop="copyGroupSupport(row)"
+              @keydown.stop
+            >
+              {{ copiedGroupId === errorGroupRowId(row) ? $t('views.AdminErrorsView.support_reference_copied') : $t('views.AdminErrorsView.copy_support_reference') }}
+            </button>
+          </template>
         </DataTable>
       </div>
 
@@ -217,6 +232,7 @@ import { useCurrentUser } from '../composables/useCurrentUser'
 import { useDataFetch } from '../composables/useDataFetch'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { shortId } from '../utils/format'
+import { buildErrorGroupSupportReference } from '../lib/supportReference'
 import {
   errorGroupRowId,
   formatErrorAssignee,
@@ -243,6 +259,7 @@ const columns = computed<Column[]>(() => [
   { key: 'last_seen', label: t('views.AdminErrorDetailView.last_seen') },
   { key: 'status', label: t('views.AdminErrorsView.status') },
   { key: 'assignee', label: t('views.AdminErrorsView.assignee') },
+  { key: 'support', label: t('views.AdminErrorsView.support_reference') },
 ])
 
 type FilterDefinition = { key: string; label: string; options: Array<{ value: string; label: string }> }
@@ -380,14 +397,41 @@ function toggleMessage(id: string) {
   expandedMessageIds.value = next
 }
 
+// FAR-2304: per-row copy state. The reference itself is built by the shared
+// helper; the list payload carries no `source` for a group (only the sample
+// event on the detail payload does), so the reference omits that segment here
+// rather than inventing one — the detail view's copy includes it.
+const copiedGroupId = ref('')
+
 // A scope switch re-queries against a different partition: reset pagination
 // and the per-row expand state, then reload through the new scope's endpoint.
 watch(scope, () => {
   currentPage.value = 1
   offset.value = 0
   expandedMessageIds.value = new Set()
+  copiedGroupId.value = ''
   loadGroups()
 })
+
+async function copyGroupSupport(row: Record<string, unknown>) {
+  const groupId = errorGroupRowId(row)
+  if (!groupId) return
+  const text = buildErrorGroupSupportReference({
+    groupId,
+    fingerprint: typeof row.fingerprint === 'string' ? row.fingerprint : '',
+    level: typeof row.level_peak === 'string' ? row.level_peak : '',
+    count: typeof row.count === 'number' ? row.count : Number(row.count ?? 0),
+  })
+  try {
+    await navigator.clipboard.writeText(text)
+    copiedGroupId.value = groupId
+    setTimeout(() => {
+      if (copiedGroupId.value === groupId) copiedGroupId.value = ''
+    }, 2000)
+  } catch (e) {
+    console.warn('Failed to copy support reference', e)
+  }
+}
 
 function formatStarvationAge(minutes: number): string {
   if (minutes < 120) return t('views.AdminErrorsView.scheduler_starvation_age_minutes', { minutes: Math.round(minutes) })

@@ -222,7 +222,7 @@ def _check_multiple_heads(repo_root: str) -> None:
     backend_dir = str(Path(repo_root, "backend"))
     try:
         result = subprocess.run(
-            ["uv", "run", "python", "-m", "alembic", "heads"],
+            ["uv", "run", "--frozen", "python", "-m", "alembic", "heads"],
             cwd=backend_dir,
             capture_output=True,
             text=True,

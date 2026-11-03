@@ -419,6 +419,9 @@ jobs:
               # PR or overwrites a live ref.
               git checkout -B "$BRANCH" origin/main
               python3 scripts/bump-version.py --set "$VERSION"
+              # FAR-2308: backend/uv.lock records the project version too, and
+              # bump-version.py updates it. Staging it here keeps the release PR
+              # consistent with the always-on UV lockfile freshness CI gate.
               uv lock --project backend
               git add backend/pyproject.toml backend/uv.lock frontend/package.json deploy/helm/modulo/Chart.yaml
               if git diff --cached --quiet; then
@@ -1079,13 +1082,23 @@ jobs:
             case "$img" in
               all-in-one)
                 docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
+                # deploy/nginx/all-in-one.conf proxies to 127.0.0.1:8000, an IP
+                # literal, so this config test resolves no upstream hostname.
                 docker run --rm --entrypoint nginx "$IMAGE" -t
                 ;;
               backend)
                 docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
                 ;;
               frontend)
-                docker run --rm --entrypoint nginx "$IMAGE" -t
+                # frontend/Dockerfile.prod bakes a config that proxies to
+                # http://backend:8000. nginx resolves upstream hostnames at
+                # config-test time, so `nginx -t` in a bare container fails with
+                # `host not found in upstream "backend"` even though the config
+                # is valid. --add-host gives the name an address so the test can
+                # run without a compose network - the check still fails the job
+                # on a real config error. publish-images.yml documents the same
+                # workaround.
+                docker run --rm --add-host backend:127.0.0.1 --entrypoint nginx "$IMAGE" -t
                 ;;
                runner-opencode)
                  docker run --rm --entrypoint opencode "$IMAGE" --version
@@ -1465,6 +1478,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.release.outputs.rc_tag }}
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bundle-artefacts-amd64

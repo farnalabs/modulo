@@ -10,6 +10,7 @@ The **single source of truth** for the product version is `backend/pyproject.tom
 
 | File | Field |
 |------|-------|
+| `backend/uv.lock` | `version` on the editable `farnalabs-modulo` package entry |
 | `frontend/package.json` | `"version"` |
 | `deploy/helm/modulo/Chart.yaml` | `version` and `appVersion` |
 
@@ -22,7 +23,7 @@ python scripts/bump-version.py patch        # or: minor | major
 python scripts/bump-version.py --set 1.2.3  # explicit version
 ```
 
-The script fails loudly (non-zero exit, nothing written) if any mirror has drifted away from the source of truth or is already at the target version - it never reports a change it did not make. After a bump, run `uv lock` in `backend/`: `backend/uv.lock` also records the project version, and the `check-uv-lock` pre-commit hook fails the commit when it is stale.
+The script fails loudly (non-zero exit, nothing written) if any mirror has drifted away from the source of truth or is already at the target version - it never reports a change it did not make. It writes `backend/uv.lock` directly (the editable `farnalabs-modulo` package entry), so no separate `uv lock` run is needed after a bump. The `check-uv-lock` pre-commit hook and the CI `UV lockfile freshness` job fail closed when `backend/uv.lock` is stale against `backend/pyproject.toml`; if the resolution itself changed, run `uv lock` in `backend/` and commit the result.
 
 ---
 
