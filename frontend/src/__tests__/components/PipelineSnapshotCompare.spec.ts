@@ -302,10 +302,16 @@ describe('PipelineSnapshotCompare', () => {
     expect(error.attributes('role')).toBeUndefined()
     expect(error.attributes('aria-live')).toBeUndefined()
 
-    // Exactly one live region inside this error subtree — ErrorAlert's root.
+    // Exactly one live-region ELEMENT inside this error subtree — ErrorAlert's
+    // root. The shared alert now carries role="alert" AND an explicit
+    // aria-live="assertive" on the same element; role="alert" already implies
+    // assertive, so that is still ONE region. What this pins is that no OTHER
+    // element adds a live region (which would announce the message twice).
     const liveRegions = error.findAll('[role="alert"]')
     expect(liveRegions).toHaveLength(1)
-    expect(error.findAll('[aria-live]')).toHaveLength(0)
+    const ariaLiveRegions = error.findAll('[aria-live]')
+    expect(ariaLiveRegions).toHaveLength(1)
+    expect(ariaLiveRegions[0].element).toBe(liveRegions[0].element)
     expect(liveRegions[0].text()).toContain('node is missing an id')
   })
 
