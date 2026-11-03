@@ -810,6 +810,26 @@ async def test_unknown_provider_is_skipped_without_probing_openai() -> None:
     assert not seen
 
 
+async def test_unbuildable_backend_is_a_failure_not_a_silent_skip() -> None:
+    """Finding 4: a backend that cannot be built from its config must fail.
+
+    ``azure_openai`` without ``azure_endpoint`` raises while the hub builds the
+    adapter. Reporting that as ``skipped (no probe)`` would let the doctor
+    report healthy while every run using the backend fails.
+    """
+    result = await doctor_module._probe_backend_row(
+        _provider_row("azure_openai"),
+        _FakeSecretsBackend(json.dumps({"api_key": "sk-azure"})),
+    )
+
+    assert result["ok"] is False
+    assert result["skipped"] is False
+    assert result["status"] == "error configuration (ValueError)"
+    summary = doctor_module._summarise_provider_results([result])
+    assert summary.ok is False
+    assert "error configuration" in summary.detail
+
+
 async def test_anthropic_backend_probes_models_not_health() -> None:
     """Finding 2: anthropic's real probe is ``/models`` with its own auth headers."""
     seen: list[httpx.Request] = []

@@ -78,10 +78,21 @@ Provider reachability check (FAR-2316):
     OWN adapter health check (the provider's correct endpoint and auth header,
     never a guessed URL; no completion). Per backend: ``ok`` /
     ``error HTTP <code>`` / ``timeout`` / ``unreachable`` / ``error
-    credentials`` / ``skipped (no probe)``. Clock drift comes from the
-    provider's ``Date`` header, and a ``Via`` / ``X-Forwarded-For`` response
-    header is reported as a proxy. Response bodies and credentials are never
-    printed.
+    credentials`` / ``error configuration`` / ``skipped (no probe)``. Clock
+    drift comes from the provider's ``Date`` header, and a ``Via`` /
+    ``X-Forwarded-For`` response header is reported as a proxy. Response
+    bodies and credentials are never printed.
+
+    TLS-interception detection is deliberately NOT performed. A server never
+    sends its ROOT CAs — only the leaf and its intermediates — so comparing a
+    served chain against root fingerprints cannot detect an interception, and
+    a sound check needs the served chain, real per-CA fingerprints and the
+    pinned-IP egress transport from :mod:`modulo.core.ssrf`, which is far more
+    machinery than a reachability pre-flight can justify. A detector that
+    cannot detect, or that warns on every healthy TLS deployment, is worse
+    than no detector (FAR-512 pins the transport the probe actually uses, so
+    the connection itself is already the validated one); the check reports the
+    honest proxy hints a health response does carry instead.
 
 ``--fix`` (via :func:`apply_fixes`): orphan cleanup — a stale
 ``postmaster.pid`` / stale per-boot Redis confs / initdb temp debris (the
@@ -865,6 +876,10 @@ def check_stale_backup(_data_dir: Path, _state: Any, probes: DoctorProbes) -> Ch
 # send a stored credential to a guessed host. A provider whose adapter has no
 # health probe (the base class would perform a real inference call) is
 # reported as ``skipped (no probe)`` — never pointed at a default endpoint.
+# A backend that cannot be CONSTRUCTED from its stored configuration is a
+# failed check (``error configuration``), never a skip: silently skipping it
+# would report the doctor healthy while every model call for that backend
+# fails. Only a provider with no adapter in this process is exonerated.
 # ---------------------------------------------------------------------------
 
 # Clock drift (local UTC vs the provider's ``Date`` header) above this is a WARNING.
@@ -884,6 +899,12 @@ _UNREACHABLE_BUILD_MARKERS: tuple[str, ...] = (
     "DNS resolution timed out",
     "private/internal network address",
 )
+
+# ``_build_backend`` raises this when no adapter — built-in or plugin — handles
+# the provider in THIS process. That is not a configuration failure: a plugin
+# provider may be installed in the launcher but not loaded by the doctor, so it
+# cannot be verified here and is reported as an honest skip, never failed.
+_NO_ADAPTER_BUILD_MARKER = "Unknown model backend provider"
 
 
 def _provider_result(
@@ -905,12 +926,14 @@ def check_provider_reachability(data_dir: Path, state: Any, probes: DoctorProbes
     Runs each configured backend's OWN health check (the provider's correct
     endpoint and auth header) and reports per backend: ``ok`` /
     ``error HTTP <code>`` / ``timeout`` / ``unreachable`` / ``error
-    credentials`` / ``skipped (no probe)``, with a clock-drift reading from the
-    provider's ``Date`` header when it sends one.
+    credentials`` / ``error configuration`` / ``skipped (no probe)``, with a
+    clock-drift reading from the provider's ``Date`` header when it sends one.
 
-    Only a backend that could not be reached fails the check; clock drift and a
-    detected proxy are WARNINGs. A provider the doctor cannot probe is reported
-    as skipped, never failed. Response bodies and credentials are never printed.
+    A backend that could not be reached, whose credentials are unusable, or
+    that cannot be built from its stored configuration at all fails the check;
+    clock drift and a detected proxy are WARNINGs. Only a provider with no
+    adapter in this process or no dedicated health probe is reported as
+    skipped. Response bodies and credentials are never printed.
     """
     if state is None:
         return CheckResult(
@@ -1101,14 +1124,21 @@ async def _probe_backend_row(row: Any, secrets_backend: "SecretsBackend") -> dic
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        # An unresolvable/blocked host is a real reachability failure. Any other
-        # construction failure means this provider has no probe the doctor can
-        # drive from its stored configuration — skip it, never guess a URL.
+        # An unresolvable/blocked host is a real reachability failure. A
+        # provider with no adapter in this process cannot be verified here, so
+        # it is an honest skip (a plugin may supply it in the launcher). Every
+        # OTHER construction failure — a missing credential field, a broken
+        # plugin build — means the configured backend is unusable at run time
+        # too; surfacing it as a failed check is the point of this probe, so
+        # never downgrade it to a silent "no probe" skip.
         if _build_failure_means_unreachable(exc):
             _log.warning("provider_reachability: endpoint unresolvable for %s (%s)", name, type(exc).__name__)
             return _provider_result(name, status=f"unreachable ({type(exc).__name__})")
+        if _NO_ADAPTER_BUILD_MARKER in str(exc):
+            _log.warning("provider_reachability: no adapter for %s (%s)", name, type(exc).__name__)
+            return _provider_result(name, status=SKIPPED_NO_PROBE, skipped=True)
         _log.warning("provider_reachability: backend not constructible for %s (%s)", name, type(exc).__name__)
-        return _provider_result(name, status=SKIPPED_NO_PROBE, skipped=True)
+        return _provider_result(name, status=f"error configuration ({type(exc).__name__})")
 
     return await _run_backend_health_check(backend, name)
 
