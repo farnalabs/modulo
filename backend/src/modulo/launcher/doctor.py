@@ -1456,7 +1456,7 @@ def _probe_ambient_env_names(_data_dir: Path) -> list[str]:
 
 def _probe_available_memory_bytes(_data_dir: Path) -> int | None:
     try:
-        import psutil
+        import psutil  # type: ignore[import-untyped]
 
         return int(psutil.virtual_memory().available)
     except Exception as exc:  # psutil unavailable: fall through to /proc (honest None)
