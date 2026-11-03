@@ -308,3 +308,59 @@ def test_a_trip_no_single_item_explains_is_refused() -> None:
         bundle._withhold_tripping_items(members, _WholeTextOnlyRedactor(), frozenset())  # type: ignore[arg-type]
 
     assert excinfo.value.member == "errors.json"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(f"not json at all {UNCLASSIFIED_SECRET}", id="invalid-json"),
+        pytest.param(json.dumps([UNCLASSIFIED_SECRET]), id="not-an-object"),
+    ],
+)
+def test_a_collection_member_that_cannot_be_decomposed_is_refused(text: str) -> None:
+    """Malformed or non-object JSON has no per-item shape to withhold from."""
+    members = {"errors.json": text}
+
+    with pytest.raises(RedactionGateError) as excinfo:
+        bundle._withhold_tripping_items(members, Redactor({}), frozenset())
+
+    assert excinfo.value.member == "errors.json"
+
+
+def test_a_tripping_field_outside_the_item_list_still_refuses() -> None:
+    """Dropping the bad record cannot help when the member itself still trips."""
+    payload = {
+        "bundle_format_version": 1,
+        "note": UNCLASSIFIED_SECRET,
+        "error_groups": [{"id": "good"}, {"id": "bad", "message": UNCLASSIFIED_SECRET}],
+    }
+    members = {"errors.json": json.dumps(payload, indent=2, sort_keys=True)}
+
+    with pytest.raises(RedactionGateError) as excinfo:
+        bundle._withhold_tripping_items(members, Redactor({}), frozenset())
+
+    assert excinfo.value.member == "errors.json"
+
+
+class _SplitTokenRedactor:
+    """Trips only when the whole text carries both markers, never one alone.
+
+    Models a gate finding that spans lines, so no single log line can be held
+    responsible and the withholding helper must refuse the member.
+    """
+
+    def gate_reasons(self, text: str, *, allowed_tokens: frozenset[str] = frozenset()) -> list[str]:
+        tokens = set(text.split())
+        return ["unclassified high-entropy token present"] if {"PART_A", "PART_B"} <= tokens else []
+
+
+def test_log_member_with_no_attributable_line_is_refused() -> None:
+    text = "PART_A\nPART_B\n"
+
+    assert bundle._without_tripping_log_lines(text, _SplitTokenRedactor(), frozenset()) is None  # type: ignore[arg-type]
+
+
+def test_log_member_whose_survivors_still_trip_is_refused() -> None:
+    text = "x PART_A PART_B\nPART_A\nPART_B\n"
+
+    assert bundle._without_tripping_log_lines(text, _SplitTokenRedactor(), frozenset()) is None  # type: ignore[arg-type]
