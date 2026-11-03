@@ -22,27 +22,22 @@ Coverage here:
   probe is the gate's primary purpose (FAR-252 review finding: unused functions
   were passing at --min-confidence 80); the import/unreachable probe proves the
   original import-level detection still holds.
+- The probe is staged in a temp directory and handed to the gate as an extra
+  scan target, so it NEVER appears inside ``backend/src/modulo``. Coverage's
+  un-executed-source scan walks ``[tool.coverage.run] source`` on save, so a
+  probe written into the measured tree can be touched into a shard's coverage
+  data and then fails ``coverage combine`` on a fresh checkout with
+  "No source for code" (FAR-2334). A regression test pins that invariant.
 - The whitelist file exists and names the framework-contract symbols.
 """
 
 from __future__ import annotations
 
-import hashlib
-import os
 import subprocess
 import sys
-import tempfile
-import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-
-if sys.platform == "win32":
-    import msvcrt
-else:
-    import fcntl
 
 # Locate the repo root: walk up from this test file until scripts/run_vulture.py
 # is found (mirrors the scripts test convention in test_backup.py / test_restore.py).
@@ -58,93 +53,54 @@ WRAPPER = REPO_ROOT / "scripts" / "run_vulture.py"
 WHITELIST = REPO_ROOT / ".vulture_whitelist.py"
 SRC = REPO_ROOT / "backend" / "src" / "modulo"
 
-# A dead-code probe that vulture reports at 60% confidence — the gate's primary
-# purpose is to block NEW dead functions, so the probe must be a function, not
-# an import. Includes a dead import (90%) and unreachable code (100%) as
-# secondary signals that the legacy detection levels still block.
-DEAD_PROBE = (
-    "def _far252_dead_probe() -> None:\n"
-    "    pass\n"
-    "\n"
-    "import ftplib\n"
-    "\n"
-    "def _far252_unreachable():\n"
-    "    return 1\n"
-    "    x = 2\n"
-)
+PROBE_FILENAME = "_far252_dead_probe.py"
+
+# Dead code probes that vulture reports at the gate's BLOCKING confidence
+# levels: an unused function (60%) and an unused import (90%) plus unreachable
+# code (100%). They are written to a temp directory by the tests, never into
+# the measured source tree.
+DEAD_FUNCTION_PROBE = "def _far252_dead_probe() -> None:\n    pass\n"
+DEAD_IMPORT_AND_UNREACHABLE_PROBE = "import ftplib\n\n\ndef _far252_unreachable():\n    return 1\n    x = 2\n"
 
 
-def _run_gate() -> subprocess.CompletedProcess[str]:
-    """Run the gate wrapper exactly as pre-commit / CI invoke it."""
+def _probe_path(directory: Path) -> Path:
+    """Return the probe path inside ``directory``.
+
+    This is the single source of truth for where the gate tests stage a probe,
+    and it is deliberately a plain ``directory / PROBE_FILENAME``: callers pass
+    pytest's ``tmp_path``, so the probe lives outside ``backend/src/modulo``
+    (the measured coverage source tree) and outside the repo entirely. A probe
+    created inside that tree can be recorded in coverage data and later break
+    ``coverage combine`` (FAR-2334).
+    """
+    return directory / PROBE_FILENAME
+
+
+def _stage_probe(directory: Path, content: str) -> Path:
+    """Write ``content`` to the probe path inside ``directory`` and return it."""
+    probe = _probe_path(directory)
+    probe.write_text(content, encoding="utf-8")
+    return probe
+
+
+def _run_gate(extra_targets: list[Path] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run the gate wrapper exactly as pre-commit / CI invoke it.
+
+    ``extra_targets`` are additional scan paths — the staged probe — which lets
+    a test put dead code in front of the real gate without writing it into the
+    measured source tree.
+    """
+    args = [sys.executable, str(WRAPPER)]
+    if extra_targets:
+        args.extend(str(target) for target in extra_targets)
     return subprocess.run(  # noqa: S603 - test fixture
-        [sys.executable, str(WRAPPER)],
+        args,
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
         timeout=300,
         check=False,
     )
-
-
-def _probe_lock_path() -> str:
-    """Lock file for THIS worktree's probe path.
-
-    The probe lives inside this checkout's source tree
-    (``backend/src/modulo/_far252_dead_probe.py``), so two worktrees have two
-    independent probes and nothing to serialise against each other. A single
-    host-wide lock name (``modulo_vulture_gate.lock``) still made them queue:
-    with several agents' worth of worktrees on one machine, one checkout's
-    ~80 s vulture scans became another checkout's lock wait. Scope the name to
-    the repo root so only workers sharing the same probe path contend.
-    """
-    digest = hashlib.sha256(str(REPO_ROOT).encode("utf-8")).hexdigest()[:16]
-    return str(Path(tempfile.gettempdir()) / f"modulo_vulture_gate_{digest}.lock")
-
-
-_LOCK_PATH = _probe_lock_path()
-
-
-@contextmanager
-def _probe_lock(timeout: float = 300.0) -> Iterator[None]:
-    """Serialize the shared probe path across xdist workers.
-
-    The gate tests share one fixed probe path
-    (backend/src/modulo/_far252_dead_probe.py): two workers can clobber the
-    same file, and a clean-tree scan on one worker can see another worker's
-    probe mid-run. The ``xdist_group`` mark only serializes under
-    ``--dist loadgroup``, which CI does not use (default ``load`` and
-    ``worksteal`` both ignore it), so the tests take an exclusive
-    cross-process lock on a temp-dir file instead. The lock is released
-    automatically if a worker dies, so a crashed probe test cannot wedge the
-    suite.
-    """
-    fd = os.open(_LOCK_PATH, os.O_CREAT | os.O_RDWR)
-    try:
-        if os.fstat(fd).st_size == 0:
-            os.write(fd, b"\x00")
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                if sys.platform == "win32":
-                    os.lseek(fd, 0, os.SEEK_SET)
-                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                else:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError:
-                if time.monotonic() > deadline:
-                    raise TimeoutError(f"timed out acquiring {_LOCK_PATH}") from None
-                time.sleep(0.05)
-        try:
-            yield
-        finally:
-            if sys.platform == "win32":
-                os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
 
 
 # A full-tree vulture scan is CPU-bound and measured at 23-85 s per scan on a
@@ -157,60 +113,72 @@ _SCAN_TEST_TIMEOUT_SECONDS = 600
 
 
 @pytest.mark.timeout(_SCAN_TEST_TIMEOUT_SECONDS)
-@pytest.mark.xdist_group(name="vulture")
 def test_gate_passes_on_clean_tree() -> None:
-    with _probe_lock():
-        result = _run_gate()
-        assert result.returncode == 0, f"vulture gate reported blocking findings on the clean tree:\n{result.stdout}"
-        assert not result.stdout.strip()
+    result = _run_gate()
+    assert result.returncode == 0, f"vulture gate reported blocking findings on the clean tree:\n{result.stdout}"
+    assert not result.stdout.strip()
 
 
 @pytest.mark.timeout(_SCAN_TEST_TIMEOUT_SECONDS)
-@pytest.mark.xdist_group(name="vulture")
-def test_gate_blocks_new_dead_function() -> None:
+def test_gate_blocks_new_dead_function(tmp_path: Path) -> None:
     """The gate's primary purpose: a new dead FUNCTION blocks at 60%."""
-    with _probe_lock():
-        probe = SRC / "_far252_dead_probe.py"
+    probe = _stage_probe(tmp_path, DEAD_FUNCTION_PROBE)
+    source_before = set(SRC.rglob("*.py"))
+    try:
+        result = _run_gate([probe])
+    finally:
+        probe.unlink(missing_ok=True)
 
-        try:
-            probe.write_text("def _far252_dead_probe() -> None:\n    pass\n", encoding="utf-8")
+    source_after = set(SRC.rglob("*.py"))
+    assert source_after == source_before, (
+        "the gate test created a file inside the measured source tree: "
+        f"{sorted(str(path) for path in source_after - source_before)}"
+    )
+    assert result.returncode != 0, (
+        f"vulture gate exited 0 despite a dead function in the scanned probe:\n{result.stdout}"
+    )
+    assert "_far252_dead_probe" in result.stdout, f"gate output did not name the dead function:\n{result.stdout}"
 
-            result = _run_gate()
-            assert result.returncode != 0, (
-                f"vulture gate exited 0 despite a dead function under backend/src/modulo:\n{result.stdout}"
-            )
-            assert "_far252_dead_probe" in result.stdout, (
-                f"gate output did not name the dead function:\n{result.stdout}"
-            )
-        finally:
-            probe.unlink(missing_ok=True)
-
-        clean = _run_gate()
-        assert clean.returncode == 0, f"gate did not return to a clean pass after removing the probe:\n{clean.stdout}"
-        assert not clean.stdout.strip()
+    clean = _run_gate()
+    assert clean.returncode == 0, f"gate did not return to a clean pass after removing the probe:\n{clean.stdout}"
+    assert not clean.stdout.strip()
 
 
 @pytest.mark.timeout(_SCAN_TEST_TIMEOUT_SECONDS)
-@pytest.mark.xdist_group(name="vulture")
-def test_gate_blocks_unused_import_and_unreachable() -> None:
+def test_gate_blocks_unused_import_and_unreachable(tmp_path: Path) -> None:
     """The legacy detection levels (import at 90%, unreachable at 100%) still block."""
-    with _probe_lock():
-        probe = SRC / "_far252_dead_probe.py"
+    probe = _stage_probe(tmp_path, DEAD_IMPORT_AND_UNREACHABLE_PROBE)
+    try:
+        result = _run_gate([probe])
+    finally:
+        probe.unlink(missing_ok=True)
 
-        try:
-            probe.write_text(
-                "import ftplib\n\n\ndef _far252_unreachable():\n    return 1\n    x = 2\n",
-                encoding="utf-8",
-            )
+    assert result.returncode != 0, (
+        f"vulture gate exited 0 despite a dead import + unreachable code in the scanned probe:\n{result.stdout}"
+    )
+    assert "ftplib" in result.stdout, f"gate output did not name the unused import:\n{result.stdout}"
 
-            result = _run_gate()
-            assert result.returncode != 0, (
-                "vulture gate exited 0 despite a dead import + unreachable code "
-                f"under backend/src/modulo:\n{result.stdout}"
-            )
-            assert "ftplib" in result.stdout, f"gate output did not name the unused import:\n{result.stdout}"
-        finally:
-            probe.unlink(missing_ok=True)
+
+@pytest.mark.parametrize(
+    "content",
+    [DEAD_FUNCTION_PROBE, DEAD_IMPORT_AND_UNREACHABLE_PROBE],
+    ids=["dead-function", "dead-import-unreachable"],
+)
+def test_probe_is_staged_outside_the_measured_source_tree(tmp_path: Path, content: str) -> None:
+    """Regression guard (FAR-2334): probes must never live under ``backend/src/modulo``.
+
+    ``[tool.coverage.run] source = ["src/modulo"]`` makes coverage's
+    un-executed-source scan walk every module below ``backend/src/modulo``. A
+    probe written there — even transiently — is touched into a shard's coverage
+    data on save, and ``coverage combine`` then dies on a fresh checkout with
+    "No source for code". This pins the gate tests' single probe-staging helper
+    to a location outside the measured tree.
+    """
+    probe = _stage_probe(tmp_path, content)
+    assert probe.read_text(encoding="utf-8") == content
+    assert SRC.resolve() not in probe.resolve().parents, (
+        f"vulture probe would be staged inside the measured coverage source tree: {probe}"
+    )
 
 
 def test_whitelist_exists_and_names_framework_symbols() -> None:
