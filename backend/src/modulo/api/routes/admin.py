@@ -72,8 +72,6 @@ from modulo.db.crud.last_admin_guard import (
     LastAdminLockoutUnavailableError,
     assert_not_last_admin,
 )
-from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_org_deletion  # noqa: F401
-from modulo.db.crud.org_deletion import request_org_deletion as _request_org_deletion  # noqa: F401
 from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.organisation import get_organisation, update_org_settings_patch, update_organisation
 from modulo.db.crud.pipeline_snapshot import (
@@ -2631,6 +2629,8 @@ async def request_org_deletion(
     capability on ``DELETE /api/v1/admin/orgs/{org_id}``. The ``audited()``
     dependency still records each refused attempt.
     """
+    from modulo.db.crud.org_deletion import request_org_deletion as _request_org_deletion  # noqa: F401
+
     _reject_active_org_deletion()
 
 
@@ -2661,6 +2661,8 @@ async def confirm_org_deletion(
     contract is unchanged, but no deletion is ever attempted: the only org this
     route can confirm is the active one, and that is never deletable here.
     """
+    from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_org_deletion  # noqa: F401
+
     _reject_active_org_deletion()
 
 

@@ -16,6 +16,7 @@ Run retention:
 import asyncio
 import logging
 import secrets
+import sys
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -40,10 +41,18 @@ from modulo.db.models.primitive_rating import PrimitiveRating
 from modulo.db.models.publisher import Publisher
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org
-from modulo.db.session import get_shared_engine
 from modulo.db.soft_delete import include_soft_deleted
 
 _log = logging.getLogger(__name__)
+
+
+def __getattr__(name: str) -> Any:
+    if name == "get_shared_engine":
+        from modulo.db.session import get_shared_engine
+
+        return get_shared_engine
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # Error raised when the target org no longer exists mid-deletion flow.
 _ERR_ORG_NOT_FOUND = "Organisation not found"
@@ -462,7 +471,7 @@ async def _collect_org_export_in_snapshot(org_id: uuid.UUID, engine: AsyncEngine
     duration. The endpoint is admin-only and bounded by pool_timeout.
     """
     if engine is None:
-        engine = get_shared_engine()
+        engine = sys.modules[__name__].get_shared_engine()
 
     # Configure REPEATABLE READ before starting the transaction on PostgreSQL.
     # execution_options returns the same AsyncConnection after configuring it.

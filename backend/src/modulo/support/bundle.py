@@ -8,6 +8,12 @@ The member set is closed: adding one requires updating :data:`GOLDEN_MEMBERS`,
 which the golden-member test pins. Readers tolerate unknown members so a newer
 bundle can still be inspected by an older reader (forward compatibility).
 
+When a member still trips the layer-5 gate, the build withholds only what
+tripped (FAR-2333): the offending error group, run row or log line for a
+collection member, the whole member for a small invariant. Every withholding
+is recorded in ``MANIFEST.txt`` and ``report.json``. Only a trip that cannot
+be attributed to an item refuses the whole build.
+
 Runs inside the app container with no launcher and no data dir:
 
 ``python -m modulo.support.bundle --out <path> [--json]``
@@ -109,6 +115,29 @@ DEGRADED_MEMBER = "degraded.json"
 
 LOG_MEMBER_SUFFIX = ".log.tail"
 LOG_MEMBER_PREFIX = "logs/"
+
+#: Small invariant members. When one trips the layer-5 gate it is withheld WHOLE
+#: (there is no meaningful item to keep), and the rest of the bundle still
+#: builds (FAR-2333).
+_MEMBER_LEVEL_WITHHOLD_MEMBERS: frozenset[str] = frozenset(
+    {
+        VERSION_MEMBER,
+        DOCTOR_MEMBER,
+        HEALTH_MEMBER,
+        SETTINGS_MEMBER,
+        DEPLOYMENT_MEMBER,
+        DB_MEMBER,
+        LICENCE_MEMBER,
+        DEGRADED_MEMBER,
+    }
+)
+
+#: Members that decompose into per-item records, keyed by the JSON list field
+#: that holds them. One tripping record is withheld, the rest are kept.
+_JSON_ITEM_MEMBER_KEYS: dict[str, str] = {
+    ERRORS_MEMBER: "error_groups",
+    RUNS_MEMBER: "runs",
+}
 
 #: The fixed member allowlist (layer 1). A member not in this set (and not a
 #: well-formed ``logs/<component>.log.tail``) is refused at assembly time.
@@ -215,6 +244,9 @@ class BundleResult:
     #: Per-run reference (``MSB-...``); empty only for a bundle that predates
     #: the ref or a reader that could not recover it.
     ref: str = ""
+    #: Gate-triggered withholdings: ``{member, items, reason, scope}`` entries.
+    #: Empty when every member passed the layer-5 gate intact (FAR-2333).
+    withheld: tuple[dict[str, Any], ...] = ()
 
     def to_json_dict(self) -> dict[str, Any]:
         return {
@@ -230,6 +262,7 @@ class BundleResult:
             "redaction": dict(self.redaction_counts),
             "missing": list(self.missing),
             "truncated_log_members": list(self.truncated_log_members),
+            "withheld": list(self.withheld),
         }
 
 
@@ -298,8 +331,18 @@ def summary_lines(result: BundleResult) -> list[str]:
         f"bundle: {result.bundle_path} ({result.total_bytes} bytes)",
         "Open the bundle and check it before sending it to Farnalabs support.",
     ]
+    lines.extend(f"  {_withheld_sentence(entry)}" for entry in result.withheld)
     lines.extend(f"  missing {entry.get('member')}: {entry.get('reason')}" for entry in result.missing)
     return lines
+
+
+def _withheld_sentence(entry: Mapping[str, Any]) -> str:
+    """The one-line human record for a gate-triggered withholding."""
+    member = entry.get("member")
+    reason = entry.get("reason")
+    if entry.get("scope") == "member":
+        return f"withheld: {member} — member removed ({reason})"
+    return f"withheld: {member} — {entry.get('items')} item(s) removed ({reason})"
 
 
 def is_allowed_member(name: str) -> bool:
@@ -854,6 +897,7 @@ def _render_report(
     truncated: Sequence[str],
     report_size: int,
     manifest_size: int,
+    withheld: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     members = [
         {"name": name, "bytes": size}
@@ -874,6 +918,7 @@ def _render_report(
         "redaction": dict(redaction_counts),
         "missing": list(missing),
         "truncated_log_members": list(truncated),
+        "withheld": list(withheld),
         "self_referential_bytes": [MANIFEST_MEMBER, REPORT_MEMBER],
     }
     return json.dumps(payload, indent=2, sort_keys=True)
@@ -888,6 +933,7 @@ def _render_manifest(
     truncated: Sequence[str],
     report_size: int,
     manifest_size: int,
+    withheld: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     lines = [
         "modulo support bundle",
@@ -914,9 +960,14 @@ def _render_manifest(
             "",
             "truncated_log_members: " + (", ".join(truncated) if truncated else "(none)"),
             "",
-            "missing:",
+            "withheld:",
         ]
     )
+    if withheld:
+        lines.extend(f"  {_withheld_sentence(entry)}" for entry in withheld)
+    else:
+        lines.append("  (none)")
+    lines.extend(["", "missing:"])
     if missing:
         lines.extend(f"  {entry.get('member')}: {entry.get('reason')}" for entry in missing)
     else:
@@ -931,6 +982,7 @@ def _render_meta(
     redaction_counts: Mapping[str, int],
     missing: Sequence[Mapping[str, str]],
     truncated: Sequence[str],
+    withheld: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[str, str]:
     """Stabilise the self-referential byte counts for MANIFEST/report."""
     report_size = 0
@@ -944,6 +996,7 @@ def _render_meta(
             truncated=truncated,
             report_size=report_size,
             manifest_size=manifest_size,
+            withheld=withheld,
         )
         new_report = len(report_text.encode("utf-8"))
         manifest_text = _render_manifest(
@@ -954,6 +1007,7 @@ def _render_meta(
             truncated=truncated,
             report_size=new_report,
             manifest_size=manifest_size,
+            withheld=withheld,
         )
         new_manifest = len(manifest_text.encode("utf-8"))
         if new_report == report_size and new_manifest == manifest_size:
@@ -977,6 +1031,7 @@ def _assemble(
     redaction_counts: Mapping[str, int],
     missing: Sequence[Mapping[str, str]],
     truncated: Sequence[str],
+    withheld: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[dict[str, str], bytes]:
     meta = {MANIFEST_MEMBER, REPORT_MEMBER}
     sizes = {name: len(text.encode("utf-8")) for name, text in members.items() if name not in meta}
@@ -986,6 +1041,7 @@ def _assemble(
         redaction_counts=redaction_counts,
         missing=missing,
         truncated=truncated,
+        withheld=withheld,
     )
     final = dict(members)
     final[REPORT_MEMBER] = report_text
@@ -1015,8 +1071,11 @@ async def build_bundle_async(
 ) -> BundleResult:
     """Build the support bundle, or raise :class:`RedactionGateError`.
 
-    The zip is written ONLY after every member passes the layer-5 gate, so a
-    refused build leaves no partial artefact behind.
+    The zip is written ONLY after the residual scan runs, so a refused build
+    leaves no partial artefact behind. A member that trips the layer-5 gate
+    loses only the offending item (or, for a small invariant member, the member
+    itself) and the rest of the bundle is still written (FAR-2333); every
+    withholding is recorded in ``MANIFEST.txt`` and ``report.json``.
     """
     bundle_ref = ref or generate_ref()
     resolved = sources if sources is not None else BundleSources()
@@ -1042,11 +1101,13 @@ async def build_bundle_async(
     # The ref is a token THIS build minted, so the entropy heuristic must not
     # refuse our own report/MANIFEST text. Only that exact token is exempt.
     allowed_tokens = frozenset({bundle_ref})
+    redacted, withheld = _withhold_tripping_items(redacted, redactor, allowed_tokens)
     final, archive, truncated = _assemble_and_gate(
         redacted,
         bundle_ref,
         counts,
         missing,
+        withheld,
         resolved.max_bundle_bytes,
         redactor,
         allowed_tokens,
@@ -1065,6 +1126,7 @@ async def build_bundle_async(
         missing=tuple(missing),
         truncated_log_members=tuple(truncated),
         ref=bundle_ref,
+        withheld=tuple(withheld),
     )
 
 
@@ -1181,11 +1243,121 @@ def _redact_all_members(raw_members: dict[str, str], redactor: Redactor) -> tupl
     return redacted, counts
 
 
+def _withhold_tripping_items(
+    members: Mapping[str, str],
+    redactor: Redactor,
+    allowed_tokens: frozenset[str],
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    """Drop only what the layer-5 gate objects to (FAR-2333).
+
+    A collection member loses the offending error group / run row / log line;
+    a small invariant member is withheld whole. Content is removed BEFORE
+    assembly, so the offending text can never reach the written zip.
+
+    A trip that cannot be attributed to an item — an unexpected member shape —
+    is still a hard refusal naming the member: withholding must never become a
+    silent loss of evidence.
+    """
+    kept: dict[str, str] = {}
+    withheld: list[dict[str, Any]] = []
+    for name in sorted(members):
+        text = members[name]
+        reasons = redactor.gate_reasons(text, allowed_tokens=allowed_tokens)
+        if not reasons:
+            kept[name] = text
+            continue
+        reason = "; ".join(reasons)
+        if name in _MEMBER_LEVEL_WITHHOLD_MEMBERS:
+            withheld.append({"member": name, "items": 1, "reason": reason, "scope": "member"})
+            continue
+        reduced = _without_tripping_items(name, text, redactor, allowed_tokens)
+        if reduced is None:
+            raise RedactionGateError(name, reasons)
+        survivors, dropped = reduced
+        withheld.append({"member": name, "items": dropped, "reason": reason, "scope": "item"})
+        if survivors:
+            kept[name] = survivors
+    return kept, withheld
+
+
+def _without_tripping_items(
+    name: str,
+    text: str,
+    redactor: Redactor,
+    allowed_tokens: frozenset[str],
+) -> tuple[str, int] | None:
+    """Return ``(surviving text, items withheld)``, or ``None`` when unattributable.
+
+    ``None`` means the member's shape is not one this build knows how to
+    decompose (or the survivors still trip), so the caller refuses the build.
+    """
+    if name in _JSON_ITEM_MEMBER_KEYS:
+        return _without_tripping_json_items(name, text, redactor, allowed_tokens)
+    if _is_log_member(name):
+        return _without_tripping_log_lines(text, redactor, allowed_tokens)
+    return None
+
+
+def _without_tripping_json_items(
+    name: str,
+    text: str,
+    redactor: Redactor,
+    allowed_tokens: frozenset[str],
+) -> tuple[str, int] | None:
+    key = _JSON_ITEM_MEMBER_KEYS[name]
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    items = payload.get(key)
+    if not isinstance(items, list):
+        return None
+    survivors = [item for item in items if not _item_trips(item, redactor, allowed_tokens)]
+    dropped = len(items) - len(survivors)
+    if not dropped:
+        return None
+    if not survivors:
+        return "", dropped
+    payload[key] = survivors
+    rebuilt = json.dumps(payload, indent=2, sort_keys=True, default=str)
+    if redactor.gate_reasons(rebuilt, allowed_tokens=allowed_tokens):
+        return None
+    return rebuilt, dropped
+
+
+def _without_tripping_log_lines(
+    text: str,
+    redactor: Redactor,
+    allowed_tokens: frozenset[str],
+) -> tuple[str, int] | None:
+    lines = text.splitlines()
+    survivors = [line for line in lines if not redactor.gate_reasons(line, allowed_tokens=allowed_tokens)]
+    dropped = len(lines) - len(survivors)
+    if not dropped:
+        return None
+    rebuilt = "\n".join(survivors)
+    if survivors and redactor.gate_reasons(rebuilt, allowed_tokens=allowed_tokens):
+        return None
+    return rebuilt, dropped
+
+
+def _item_trips(item: Any, redactor: Redactor, allowed_tokens: frozenset[str]) -> bool:
+    item_text = json.dumps(item, indent=2, sort_keys=True, default=str)
+    return bool(redactor.gate_reasons(item_text, allowed_tokens=allowed_tokens))
+
+
+def _is_log_member(name: str) -> bool:
+    return name.startswith(LOG_MEMBER_PREFIX) and name.endswith(LOG_MEMBER_SUFFIX)
+
+
 def _assemble_and_gate(
     redacted: dict[str, str],
     bundle_ref: str,
     counts: dict[str, int],
     missing: list[dict[str, str]],
+    withheld: list[dict[str, Any]],
     max_bundle_bytes: int,
     redactor: Redactor,
     allowed_tokens: frozenset[str],
@@ -1198,6 +1370,7 @@ def _assemble_and_gate(
         redaction_counts=counts,
         missing=missing,
         truncated=(),
+        withheld=withheld,
     )
 
     for name in final:
@@ -1212,6 +1385,7 @@ def _assemble_and_gate(
             redaction_counts=counts,
             missing=missing,
             truncated=truncated,
+            withheld=withheld,
         )
         for name in final:
             redactor.gate(name, final[name], allowed_tokens=allowed_tokens)
@@ -1290,6 +1464,7 @@ def inspect_bundle(path: Path) -> BundleResult:
     counts: dict[str, int] = {}
     missing: list[dict[str, str]] = []
     truncated: list[str] = []
+    withheld: list[dict[str, Any]] = []
     ref = ""
     report_raw = members.get(REPORT_MEMBER)
     if report_raw is not None:
@@ -1298,6 +1473,7 @@ def inspect_bundle(path: Path) -> BundleResult:
             counts = dict(report.get("redaction", {}))
             missing = list(report.get("missing", []))
             truncated = list(report.get("truncated_log_members", []))
+            withheld = list(report.get("withheld", []))
             ref = str(report.get("ref") or "")
         except ValueError:
             pass
@@ -1309,6 +1485,7 @@ def inspect_bundle(path: Path) -> BundleResult:
         missing=tuple(missing),
         truncated_log_members=tuple(truncated),
         ref=ref,
+        withheld=tuple(withheld),
     )
 
 
