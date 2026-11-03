@@ -71,7 +71,7 @@ The GA tag is the release identity, so it is created and pushed before anything 
 - builds every container image (see below);
 - generates the CycloneDX SBOM and uploads it as the `sbom-cyclonedx` workflow artefact (building a file inside the run is not publishing - it reaches no registry and no release).
 
-It does **not** publish anything. It does not create a marker of any kind - not the RC tag, not a `release-freeze` branch, not a `validated/*` tag, not the GA tag - does not push to any registry, and does not create a Release, commit a CHANGELOG, publish a package, create an attestation, or deploy. It is therefore safe to run during an active freeze.
+It does **not** publish anything. It does not create a tag or marker branch of any kind - not the RC, not `release-freeze`, not `release-publication-hold`, not `validated/*`, not GA - does not push to any registry, and does not create a Release, commit a CHANGELOG, publish a package, create an attestation, or deploy. It is therefore safe to run during an active freeze.
 
 ### Why the "no marker at all" guarantee is structural, not a convention
 
@@ -106,7 +106,7 @@ If a cut fails between pushing `release-publication-hold` and removing it, the h
 
 ```bash
 git ls-remote --exit-code origin refs/heads/release-publication-hold   # confirm it exists
-git push origin --delete refs/heads/release-publication-hold           # release the suppression
+git push origin --delete refs/heads/release-publication-hold            # release the suppression
 ```
 
 The dry-run's no-publication guarantee stays structural: it performs no marker action, registry push, Release creation, commit, attestation, or deploy. A human or another credential pushing a tag or branch marker is a separate event and is outside the dry-run path.

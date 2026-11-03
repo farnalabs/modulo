@@ -212,6 +212,12 @@ jobs:
           git config user.name "modulo-release-bot"
           git config user.email "bot@modulo.run"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
       - name: Validate version input
         shell: bash
         env:
@@ -373,7 +379,7 @@ jobs:
               ;;
           esac
           git branch -f release-publication-hold HEAD
-          git push origin refs/heads/release-publication-hold:refs/heads/release-publication-hold
+          git push origin refs/heads/release-publication-hold
           echo "established=true" >> "$GITHUB_OUTPUT"
           echo "Established release-publication-hold before the version-bump PR."
 
@@ -413,7 +419,8 @@ jobs:
               # PR or overwrites a live ref.
               git checkout -B "$BRANCH" origin/main
               python3 scripts/bump-version.py --set "$VERSION"
-              git add backend/pyproject.toml frontend/package.json deploy/helm/modulo/Chart.yaml
+              uv lock --project backend
+              git add backend/pyproject.toml backend/uv.lock frontend/package.json deploy/helm/modulo/Chart.yaml
               if git diff --cached --quiet; then
                 echo "::error::bump-version.py changed nothing - refusing to create an empty release PR."
                 exit 1
@@ -591,7 +598,7 @@ jobs:
           # branch exists. Force-move it on recut so the gate always tracks the
           # latest freeze.
           git branch -f release-freeze HEAD
-          git push origin refs/heads/release-freeze:refs/heads/release-freeze --force
+          git push origin refs/heads/release-freeze --force
 
           # The hold only covers the version-bump push. Once the authoritative
           # release-freeze exists, remove the temporary suppression marker.
@@ -667,7 +674,7 @@ jobs:
           # Move the freeze to the new RC commit so main remains frozen at the
           # exact commit sent to deploy and rc-validate.
           git branch -f release-freeze HEAD
-          git push origin refs/heads/release-freeze:refs/heads/release-freeze --force
+          git push origin refs/heads/release-freeze --force
 
           echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
 
@@ -693,10 +700,7 @@ jobs:
           GA_TAG="v${VERSION}"
           BRANCH="release/promote-${VERSION}"
 
-          # Safety 1: only promote OUT of an active freeze. The marker is a
-          # remote branch, and the checkout action does not create local
-          # branches for it, so query origin explicitly (a lookup failure
-          # refuses rather than guessing).
+          # Safety 1: only promote OUT of an active freeze.
           if ! git ls-remote --exit-code origin refs/heads/release-freeze >/dev/null 2>&1; then
             echo "::error::No release freeze active ('release-freeze' branch missing) - refusing to promote. Run 'cut' first."
             exit 1
@@ -767,11 +771,8 @@ jobs:
               ;;
           esac
           git branch -f release-publication-hold HEAD
-          git push origin refs/heads/release-publication-hold:refs/heads/release-publication-hold
+          git push origin refs/heads/release-publication-hold
           git push origin --delete refs/heads/release-freeze
-          # The marker is a remote branch: actions/checkout never materialises a
-          # local release-freeze branch, so there is nothing local to delete
-          # (and `git branch -D` would abort the promote under `set -e`).
           echo "Swapped release-freeze for release-publication-hold while the promote PR merges."
           git fetch origin --tags
           PREV_FILE="$(mktemp)"
@@ -981,7 +982,7 @@ jobs:
             # GA publication step runs under it, and the finalisation step
             # below is the only place allowed to lift it.
             git branch -f release-freeze HEAD
-            git push origin refs/heads/release-freeze:refs/heads/release-freeze --force
+            git push origin refs/heads/release-freeze --force
             # The temporary suppression marker is now redundant with the freeze.
             if ! git push origin --delete refs/heads/release-publication-hold; then
               echo "::error::Could not remove release-publication-hold after re-establishing release-freeze; refusing a stale suppression marker."
@@ -1329,7 +1330,7 @@ jobs:
           GA_TAG="v${VERSION}"
           if git rev-parse -q --verify "refs/tags/${GA_TAG}" >/dev/null 2>&1; then
             git branch -f release-freeze HEAD
-            git push origin refs/heads/release-freeze:refs/heads/release-freeze --force
+            git push origin refs/heads/release-freeze --force
             echo "Re-established release-freeze after failed GA publication."
           elif git ls-remote --exit-code origin refs/heads/release-freeze >/dev/null 2>&1; then
             echo "GA tag ${GA_TAG} was not created; existing release-freeze remains active."
@@ -1341,7 +1342,7 @@ jobs:
             git fetch origin main
             RESTORE_SHA="$(git rev-parse origin/main)"
             git branch -f release-freeze "$RESTORE_SHA"
-            git push origin refs/heads/release-freeze:refs/heads/release-freeze --force
+            git push origin refs/heads/release-freeze --force
             echo "Restored release-freeze at ${RESTORE_SHA} after failed GA promotion."
           fi
           # A failed promotion must not leave the temporary suppression marker
