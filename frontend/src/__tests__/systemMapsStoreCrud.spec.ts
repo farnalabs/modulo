@@ -163,6 +163,63 @@ describe('useSystemMapsStore CRUD', () => {
     await expect(store.loadRevision('map-1', 'rev-2')).rejects.toThrow('Could not load map revision')
   })
 
+  it('loads the current revision through the version-aware endpoint', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/system-maps/{map_id}/revisions/current') {
+        return Promise.resolve({ data: { revision: { id: 'rev-3', revision_number: 3 } } })
+      }
+      return Promise.resolve({ data: { revision: { id: 'rev-3', revision_number: 3 }, nodes: [], relationships: [] } })
+    })
+    const store = useSystemMapsStore()
+
+    await store.loadCurrentRevision('map-1')
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/current', { params: { path: { map_id: 'map-1' } } })
+    expect(store.activeRevision?.id).toBe('rev-3')
+  })
+
+  it('loads the revision active at a timestamp and rejects an unmatched time', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/system-maps/{map_id}/revisions/by-time') {
+        return Promise.resolve({ data: { matched: true, requested_at: '2026-01-15T10:30:00Z', revision: { id: 'rev-2', revision_number: 2 } }, response: { status: 200 } })
+      }
+      return Promise.resolve({ data: { revision: { id: 'rev-2', revision_number: 2 }, nodes: [], relationships: [] } })
+    })
+    const store = useSystemMapsStore()
+
+    await store.loadRevisionByTime('map-1', '2026-01-15T10:30:00Z')
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/by-time', {
+      params: { path: { map_id: 'map-1' }, query: { at: '2026-01-15T10:30:00Z' } },
+    })
+    expect(store.activeRevision?.id).toBe('rev-2')
+
+    // The wire contract raises 404 (never matched=false) for an unmatched time.
+    mockGet.mockResolvedValue({
+      error: { detail: 'No revision active at 2025-01-01T00:00:00+00:00' },
+      response: { status: 404 },
+    })
+    await expect(store.loadRevisionByTime('map-1', '2025-01-01T00:00:00Z')).rejects.toThrow('No revision was active at that time')
+  })
+
+  it('reports failures from the current and by-time endpoints', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'missing' }, response: { status: 500 } })
+    const store = useSystemMapsStore()
+
+    await expect(store.loadCurrentRevision('map-1')).rejects.toThrow('missing')
+    await expect(store.loadRevisionByTime('map-1', '2026-01-15T10:30:00Z')).rejects.toThrow('missing')
+  })
+
+  it('treats a contract-violating by-time response without a revision as a load failure', async () => {
+    mockGet.mockResolvedValue({
+      data: { matched: true, requested_at: '2026-01-15T10:30:00Z', revision: null },
+      response: { status: 200 },
+    })
+    const store = useSystemMapsStore()
+
+    await expect(store.loadRevisionByTime('map-1', '2026-01-15T10:30:00Z')).rejects.toThrow('Could not load the revision for that time')
+  })
+
   it('saves a draft and appends the new revision', async () => {
     mockPost.mockResolvedValue({ data: { id: 'rev-2', revision_number: 2 } })
     mockGet.mockResolvedValue({ data: { revision: { id: 'rev-2', revision_number: 2 }, nodes: [], relationships: [] } })

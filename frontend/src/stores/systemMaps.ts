@@ -11,6 +11,8 @@ import i18n from '../i18n'
 
 type SystemMapOverview = components['schemas']['SystemMapOverviewResponse']
 type SystemMapList = components['schemas']['SystemMapListResponse']
+type SystemMapCurrentRevision = components['schemas']['SystemMapCurrentRevisionResponse']
+type SystemMapRevisionByTime = components['schemas']['SystemMapRevisionByTimeResponse']
 
 export type SystemMap = components['schemas']['SystemMapResponse']
 export type SystemMapRevision = components['schemas']['SystemMapRevisionResponse']
@@ -298,6 +300,43 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     if (activeRevision.value && !revisions.value.some((revision) => revision.id === activeRevision.value?.id)) revisions.value = [...revisions.value, activeRevision.value]
   }
 
+  /**
+   * Load the currently published revision (the "current" view).
+   *
+   * The version-aware endpoint returns revision metadata only; the graph is
+   * read from the per-revision endpoint so every view (current, historical or
+   * explicitly selected) renders through the same read path.
+   */
+  async function loadCurrentRevision(mapId: string): Promise<void> {
+    const response = await api.GET('/api/v1/system-maps/{map_id}/revisions/current', { params: { path: { map_id: mapId } } })
+    const revisionId = (response.data as SystemMapCurrentRevision | undefined)?.revision?.id
+    if (response.error || !revisionId) {
+      throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.load_current_revision')))
+    }
+    await loadRevision(mapId, revisionId)
+  }
+
+  /** Load the revision that was active at an ISO-8601 timestamp (historical view). */
+  async function loadRevisionByTime(mapId: string, at: string): Promise<void> {
+    const response = await api.GET('/api/v1/system-maps/{map_id}/revisions/by-time', { params: { path: { map_id: mapId }, query: { at } } })
+    // The backend answers 404 when nothing was active at that instant (the
+    // success payload always carries matched=true and a revision), so the
+    // status - not a matched=false body - is the empty-result signal. Map it
+    // onto the distinct message instead of a generic load failure.
+    if (response.response.status === 404) {
+      throw new Error(tr('systemMaps.errors.no_revision_at_time'))
+    }
+    if (response.error) {
+      throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.load_revision_at_time')))
+    }
+    const payload = response.data as SystemMapRevisionByTime | undefined
+    const revisionId = payload?.revision?.id
+    if (!revisionId) {
+      throw new Error(tr('systemMaps.errors.load_revision_at_time'))
+    }
+    await loadRevision(mapId, revisionId)
+  }
+
   async function saveDraft(mapId: string, nodes: Array<{ node_key: string; node_type: string; display_name: string; config_json?: Record<string, unknown>; pipeline_id?: string | null; connector_instance_id?: string | null; owner_team_id?: string | null; eval_id?: string | null; position_x: string | number; position_y: string | number }>, relationships: Array<{ source_node_key: string; target_node_key: string; relationship_type: string; config_json?: Record<string, unknown> }>, notes: string): Promise<SystemMapRevision> {
     const response = await api.POST('/api/v1/system-maps/{map_id}/revisions', { params: { path: { map_id: mapId } }, body: { nodes, relationships, loop_configs: [], notes } })
     if (response.error || !response.data) throw new Error(tr('systemMaps.errors.save_draft_revision'))
@@ -343,5 +382,5 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   // Kept for the dashboard's preview card; discovery is now a real operation.
   async function fetchDiscovery(): Promise<void> { loaded.value = true }
 
-  return { loaded, loading, error, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, saveDraft, publish, archive, discover, clearActive, fetchDiscovery }
+  return { loaded, loading, error, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadCurrentRevision, loadRevisionByTime, saveDraft, publish, archive, discover, clearActive, fetchDiscovery }
 })

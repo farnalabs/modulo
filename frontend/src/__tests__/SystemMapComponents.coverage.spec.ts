@@ -69,8 +69,8 @@ function revision(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function map() {
-  return { id: 'map-1', name: 'Delivery map', published_revision_id: null }
+function map(overrides: Record<string, unknown> = {}) {
+  return { id: 'map-1', name: 'Delivery map', published_revision_id: null, ...overrides }
 }
 
 describe('SystemMapHeaderBar', () => {
@@ -153,7 +153,7 @@ describe('SystemMapRevisionSidebar', () => {
       ],
     })
 
-    const buttons = wrapper.findAll('[data-testid^="system-map-revision-"]')
+    const buttons = wrapper.findAll('ol li > button')
     expect(buttons.map((button) => button.attributes('data-testid'))).toEqual([
       'system-map-revision-3',
       'system-map-revision-2',
@@ -181,6 +181,42 @@ describe('SystemMapRevisionSidebar', () => {
     expect(wrapper.emitted('select-revision')![0]).toEqual(['rev-1'])
     expect(wrapper.emitted('new-draft')).toBeTruthy()
     expect(wrapper.emitted('discover')).toBeTruthy()
+  })
+
+  it('emits current and by-time switching events', async () => {
+    const wrapper = mountSidebar({ mapId: 'map-1', activeMap: map(), revisions: [revision()] })
+
+    await wrapper.get('[data-testid="system-map-revision-current"]').trigger('click')
+    expect(wrapper.emitted('select-current')).toBeTruthy()
+
+    const byTime = wrapper.get('[data-testid="system-map-revision-by-time"]')
+    expect(byTime.attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('select-by-time')).toBeUndefined()
+
+    const vm = wrapper.vm as unknown as { atValue: string }
+    vm.atValue = 'not-a-date'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[data-testid="system-map-revision-by-time"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('select-by-time')).toBeUndefined()
+
+    await wrapper.get('[data-testid="system-map-revision-at"]').setValue('2026-01-15T10:30')
+    await wrapper.get('form').trigger('submit')
+
+    const at = wrapper.emitted('select-by-time')![0][0] as string
+    expect(Number.isNaN(new Date(at).getTime())).toBe(false) // nosemgrep: new-date-without-guard
+    expect(at).toMatch(/Z$/)
+  })
+
+  it('marks the currently published revision', () => {
+    const wrapper = mountSidebar({
+      mapId: 'map-1',
+      activeMap: map({ published_revision_id: 'rev-2' }),
+      revisions: [revision({ id: 'rev-2', revision_number: 2, status: 'published' })],
+    })
+
+    expect(wrapper.get('[data-testid="system-map-revision-current-badge"]').text()).toContain('Current')
   })
 })
 

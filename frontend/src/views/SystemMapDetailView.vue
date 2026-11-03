@@ -16,6 +16,8 @@
           :active-revision-id="activeRevision?.id"
           :active-map="activeMap"
           @select-revision="selectRevision"
+          @select-current="selectCurrentRevision"
+          @select-by-time="selectRevisionByTime"
           @new-draft="createNewDraft"
           @discover="runDiscovery"
         />
@@ -189,6 +191,26 @@ async function selectRevision(revisionId: string): Promise<void> {
     await store.loadRevision(activeMap.value.id, revisionId)
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.load_revision')
+  }
+}
+
+async function selectCurrentRevision(): Promise<void> {
+  if (!activeMap.value) return
+  actionError.value = null
+  try {
+    await store.loadCurrentRevision(activeMap.value.id)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.load_current_revision')
+  }
+}
+
+async function selectRevisionByTime(at: string): Promise<void> {
+  if (!activeMap.value) return
+  actionError.value = null
+  try {
+    await store.loadRevisionByTime(activeMap.value.id, at)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.load_revision_at_time')
   }
 }
 

@@ -104,7 +104,7 @@ describe('SystemMapDetailView authoring actions', () => {
   const RevisionStub = {
     name: 'RevisionSidebar',
     props: ['mapId', 'revisions', 'activeRevisionId', 'activeMap'],
-    emits: ['select-revision', 'new-draft', 'discover'],
+    emits: ['select-revision', 'select-current', 'select-by-time', 'new-draft', 'discover'],
     template: '<div data-testid="revision-stub" />',
   }
   const DiscoveryStub = {
@@ -281,6 +281,94 @@ describe('SystemMapDetailView authoring actions', () => {
     wrapper.findComponent(RevisionStub).vm.$emit('select-revision', 'rev-9')
     await flushPromises()
     expect(store.activeRevision?.id).toBe('rev-9')
+  })
+
+  it('switches to the current revision and reports failures', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    seed(mockPost)
+    await flushPromises()
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/current') return Promise.resolve({ data: { revision: { id: 'rev-5', revision_number: 5 } } })
+      return Promise.resolve({ data: { revision: { id: 'rev-5', revision_number: 5, status: 'published' }, nodes: [], relationships: [] } })
+    })
+    wrapper.findComponent(RevisionStub).vm.$emit('select-current')
+    await flushPromises()
+    expect(useSystemMapsStore().activeRevision?.id).toBe('rev-5')
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/current') return Promise.resolve({ error: {} })
+      return Promise.resolve({ data: {} })
+    })
+    wrapper.findComponent(RevisionStub).vm.$emit('select-current')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not load the current revision')
+  })
+
+  it('switches to the revision active at a timestamp and reports an unmatched time', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    seed(mockPost)
+    await flushPromises()
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/by-time') return Promise.resolve({ data: { matched: true, requested_at: '2026-01-15T10:30:00Z', revision: { id: 'rev-4', revision_number: 4 } }, response: { status: 200 } })
+      return Promise.resolve({ data: { revision: { id: 'rev-4', revision_number: 4, status: 'archived' }, nodes: [], relationships: [] } })
+    })
+    wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2026-01-15T10:30:00Z')
+    await flushPromises()
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/by-time', {
+      params: { path: { map_id: 'map-1' }, query: { at: '2026-01-15T10:30:00Z' } },
+    })
+    expect(useSystemMapsStore().activeRevision?.id).toBe('rev-4')
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      // The wire contract raises 404 (never matched=false) for an unmatched time.
+      if (path === '/api/v1/system-maps/{map_id}/revisions/by-time') {
+        return Promise.resolve({ error: { detail: 'No revision active at 2020-01-01T00:00:00+00:00' }, response: { status: 404 } })
+      }
+      return Promise.resolve({ data: {} })
+    })
+    wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2020-01-01T00:00:00Z')
+    await flushPromises()
+    expect(wrapper.text()).toContain('No revision was active at that time')
+  })
+
+  it('ignores current and by-time switching when no map is loaded', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+    store.activeMap = null
+    const loadCurrent = vi.spyOn(store, 'loadCurrentRevision')
+    const loadByTime = vi.spyOn(store, 'loadRevisionByTime')
+
+    wrapper.findComponent(RevisionStub).vm.$emit('select-current')
+    wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2026-01-15T10:30:00Z')
+    await flushPromises()
+
+    expect(loadCurrent).not.toHaveBeenCalled()
+    expect(loadByTime).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the generic message when switching failures are not Error instances', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+
+    vi.spyOn(store, 'loadCurrentRevision').mockRejectedValueOnce('boom')
+    wrapper.findComponent(RevisionStub).vm.$emit('select-current')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not load the current revision')
+
+    vi.spyOn(store, 'loadRevisionByTime').mockRejectedValueOnce('boom')
+    wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2026-01-15T10:30:00Z')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not load the revision for that time')
   })
 
   it('creates a new draft from the sidebar', async () => {
