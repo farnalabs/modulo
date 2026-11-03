@@ -479,6 +479,11 @@ ignore = [
 [tool.mypy]
 strict = true
 python_version = "3.12"
+# The deployment target (and every CI runner) is Linux. Without this, mypy
+# infers the stdlib surface from the host, so the SAME command reports
+# POSIX-only calls in the launcher (fcntl.flock, os.getpgid, os.killpg) as
+# errors on a Windows dev box while CI stays green - which makes the pre-push
+# gate (it runs this exact command) unpassable off Linux.
 platform = "linux"
 plugins = ["pydantic.mypy"]
 exclude = ["migrations/"]
