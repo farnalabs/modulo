@@ -3,11 +3,16 @@
 Validate the Windows Inno Setup installer contract.
 
 .DESCRIPTION
-Two independent proofs, plus a supplementary fast signal:
+Two independent proofs, plus a fast syntax check and a supplementary text signal:
 
+  0. PREPROCESSOR (any OS, no compiler): no line of modulo.iss may begin with
+     a character-code literal, because ISPP reads a leading "#" as a directive
+     and aborts the compile with nothing but an exit code to show for it.
   1. COMPILE (Windows + Inno Setup 6.2.2): ISCC compiles deploy/windows/modulo.iss
      against fixture bundles. A bundle missing modulo.exe or modulo-runtime.json
      must FAIL to compile; a complete bundle must compile and produce an installer.
+     ISCC's own output is printed whenever the exit code is non-zero - a bare
+     exit code is not a diagnosis.
   2. REDACTION (any OS + Free Pascal): the Redact() source is extracted verbatim
      from modulo.iss, compiled with fpc and executed against credential fixtures.
      This proves the function removes credentials rather than merely mentioning
@@ -16,7 +21,9 @@ Two independent proofs, plus a supplementary fast signal:
      never accepted as evidence that the script works.
 
 In CI at least one compiler must be present or the run fails; a silent "nothing
-was verified" pass is the defect this script exists to prevent.
+was verified" pass is the defect this script exists to prevent. CI passes
+-RequireIscc on the Windows job and -RequireFpc on the Ubuntu job so each proof
+is owned by a job that must fail rather than skip when its compiler is missing.
 #>
 
 [CmdletBinding()]
@@ -27,7 +34,16 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateSet("amd64")]
-    [string]$Arch = "amd64"
+    [string]$Arch = "amd64",
+
+    # CI passes exactly one of these per job so a proof can never be skipped
+    # silently: the Windows job owns ISCC, the Ubuntu job owns fpc. Each job
+    # fails if the compiler it is responsible for is missing.
+    [Parameter(Mandatory = $false)]
+    [switch]$RequireIscc,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$RequireFpc
 )
 
 $ErrorActionPreference = "Stop"
@@ -95,7 +111,9 @@ function Invoke-Iscc {
         [Parameter(Mandatory = $true)]
         [string]$BundleDir,
         [Parameter(Mandatory = $true)]
-        [string]$OutputName
+        [string]$OutputName,
+        [Parameter(Mandatory = $true)]
+        [string]$CaseName
     )
 
     if (-not $isccPath) {
@@ -112,10 +130,50 @@ function Invoke-Iscc {
         "/DMODULO_URL=http://127.0.0.1:8000",
         $issPath
     )
+
+    # ISCC's own output is the only explanation of WHY a compile failed, so it is
+    # captured here and printed whenever the exit code is non-zero. Without this
+    # the only signal is a bare exit code and every fix is a guess.
+    # ISCC exit codes (Projects/ISCC.dpr in jrsoftware/issrc, tag is-6_2_2):
+    #   0 = success, 2 = script compile failure, 1 = command-line/internal error.
     $compilerOutput = & $isccPath @arguments 2>&1
     $exitCode = [int]$LASTEXITCODE
-    $compilerOutput | ForEach-Object { Write-Output $_ }
-    return @{ ExitCode = $exitCode; Output = $compilerOutput }
+    $lines = @($compilerOutput | ForEach-Object { "$_" })
+
+    $logPath = [System.IO.Path]::Combine($repoRoot, "iscc-$CaseName.log")
+    $logBody = @(
+        "ISCC: $isccPath",
+        "Case: $CaseName",
+        "Arguments: $($arguments -join ' ')",
+        "Exit code: $exitCode",
+        '',
+        $lines
+    ) -join [Environment]::NewLine
+    try {
+        [System.IO.File]::WriteAllText($logPath, $logBody)
+    } catch {
+        Write-Warning "Could not write the ISCC log to $logPath : $_"
+    }
+
+    if ($exitCode -ne 0) {
+        Write-Output "--- ISCC output ($CaseName, exit $exitCode) ---"
+        if ($lines.Count -eq 0) {
+            Write-Output "  (ISCC produced no output)"
+        } else {
+            $tailCount = [System.Math]::Min(40, $lines.Count)
+            $tail = $lines[($lines.Count - $tailCount)..($lines.Count - 1)]
+            foreach ($line in $tail) {
+                Write-Output $line
+            }
+            if ($lines.Count -gt $tailCount) {
+                Write-Output "  (showing the last $tailCount of $($lines.Count) lines)"
+            }
+        }
+        Write-Output "--- end ISCC output ($CaseName) ---"
+        Write-Output "Full ISCC output written to $logPath"
+    }
+
+    return @{ ExitCode = $exitCode; Output = $lines; LogPath = $logPath }
 }
 
 function Get-MarkedBlock {
@@ -155,19 +213,49 @@ try {
     Write-Output "Installer source: $issPath"
     Write-Output ""
 
+    if ($RequireIscc -and -not $isccPath) {
+        throw "Inno Setup ISCC is required by -RequireIscc but was not found on this host. The compilation proof would otherwise be skipped."
+    }
+    if ($RequireFpc -and -not $fpcPath) {
+        throw "Free Pascal fpc is required by -RequireFpc but was not found on this host. The Redact()/[Code] proofs would otherwise be skipped."
+    }
+
+    # --- Proof 0: the ISPP preprocessor can read every line ----------------
+    # ISPP treats a line whose first non-blank character is "#" as a directive
+    # (Projects/ISPP/IsppPreprocessor.pas: ParsePreprocCommand), and an unknown
+    # directive aborts the compile. A Pascal character-code literal at the start
+    # of a line therefore aborts compilation - the failure ISCC reports only as
+    # a bare exit code. No ISPP directive begins with a digit or "$", so this
+    # check has no false positives and needs no compiler.
+    Write-Output "=== Proof 0: the preprocessor can read every line ==="
+    $issPreprocText = Get-Content -LiteralPath $issPath -Raw
+    $directiveViolations = @()
+    $lineNumber = 0
+    foreach ($line in ($issPreprocText -split "`r?`n")) {
+        $lineNumber++
+        if ($line -match '^\s*#[0-9$]') {
+            $directiveViolations += "line ${lineNumber}: $($line.Trim())"
+        }
+    }
+    if ($directiveViolations.Count -gt 0) {
+        throw ("A line starts with a character-code literal, which ISPP parses as an unknown preprocessor directive: " + ($directiveViolations -join '; ') + ". Move the '#' escape away from the start of the line.")
+    }
+    Write-Output "PASS: no line starts with a character-code literal."
+    Write-Output ""
+
     # --- Proof 1: the script compiles, and fails closed on a broken bundle ---
     if ($isccPath) {
         Write-Output "=== Proof 1: ISCC compilation (Inno Setup 6) ==="
 
         Write-Output "Checking that a bundle missing modulo.exe fails compilation..."
-        $result = Invoke-Iscc -BundleDir $missingExeBundle -OutputName 'missing-exe-contract'
+        $result = Invoke-Iscc -BundleDir $missingExeBundle -OutputName 'missing-exe-contract' -CaseName 'missing-exe'
         Write-Output "Missing modulo.exe compile exit code: $($result.ExitCode)"
         if ($result.ExitCode -eq 0) {
             throw "Installer compiled despite missing modulo.exe."
         }
 
         Write-Output "Checking that a bundle missing modulo-runtime.json fails compilation..."
-        $result = Invoke-Iscc -BundleDir $missingMarkerBundle -OutputName 'missing-marker-contract'
+        $result = Invoke-Iscc -BundleDir $missingMarkerBundle -OutputName 'missing-marker-contract' -CaseName 'missing-marker'
         Write-Output "Missing modulo-runtime.json compile exit code: $($result.ExitCode)"
         if ($result.ExitCode -eq 0) {
             throw "Installer compiled despite missing modulo-runtime.json."
@@ -177,7 +265,7 @@ try {
         [System.IO.File]::WriteAllText([System.IO.Path]::Combine($validBundle, 'modulo-runtime.json'), '{"contract":"native-windows-v1"}')
 
         Write-Output "Checking that the declared bundle contract compiles..."
-        $result = Invoke-Iscc -BundleDir $validBundle -OutputName 'valid-contract'
+        $result = Invoke-Iscc -BundleDir $validBundle -OutputName 'valid-contract' -CaseName 'valid-contract'
         Write-Output "Valid contract compile exit code: $($result.ExitCode)"
         $installerPath = [System.IO.Path]::Combine($outputDir, 'valid-contract.exe')
         if ($result.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
@@ -279,11 +367,20 @@ end.
         Write-Output "PASS: Redact() removes credentials and is idempotent."
 
         # --- Proof 2b: the WHOLE [Code] section compiles -------------------
-        # Compiled against declarations that mirror Inno Setup 6's documented
-        # support-function signatures. Any identifier the script uses that is
-        # not in that surface fails here, which is the "unknown identifier"
-        # class that shipped in the first revision of this script. ISCC is
-        # still the authoritative compiler and runs in the windows CI job.
+        # The declarations below are copied verbatim from Inno Setup 6.2.2, not
+        # invented: https://github.com/jrsoftware/issrc (tag is-6_2_2)
+        #   Projects/ScriptFunc.pas   - the support-function declaration tables
+        #   Projects/ScriptFunc_C.pas - registered types, enums and constants
+        #   Components/UniPs          - Pascal Script standard procedures
+        #                               (SetArrayLength, Copy, Pos, Delete,
+        #                               Insert, Length, LowerCase, IntToStr)
+        # Anything the script uses that neither these declarations nor FPC's own
+        # runtime provide fails here, which catches an unknown identifier or a
+        # wrong argument shape without a Windows host. Its blind spot is an
+        # identifier Pascal Script lacks but FPC's RTL provides (Randomize,
+        # Sleep, ...): that is caught by the forbidden-identifier list below.
+        # It does NOT run the ISPP preprocessor (see Proof 0), and ISCC remains
+        # the authoritative compiler in the windows CI job.
         Write-Output ""
         Write-Output "=== Proof 2b: whole [Code] section compiles against Inno support stubs ==="
 
@@ -300,13 +397,25 @@ program CodeSectionCheck;
 uses SysUtils;
 
 type
+  TFileTime = record
+    dwLowDateTime: LongWord;
+    dwHighDateTime: LongWord;
+  end;
   TFindRec = record
     Name: string;
+    Attributes: LongWord;
+    SizeHigh: LongWord;
+    SizeLow: LongWord;
+    CreationTime: TFileTime;
+    LastAccessTime: TFileTime;
+    LastWriteTime: TFileTime;
+    AlternateName: string;
+    FindHandle: LongWord;
   end;
-  TSetupStep = (ssInstall, ssPostInstall, ssDone);
-  TExecWait = (ewNoWait, ewWaitUntilTerminated);
-  TMsgBoxType = (mbInformation, mbError);
-  TStringArray = array of string;
+  TSetupStep = (ssPreInstall, ssInstall, ssPostInstall, ssDone);
+  TExecWait = (ewNoWait, ewWaitUntilTerminated, ewWaitUntilIdle);
+  TMsgBoxType = (mbInformation, mbConfirmation, mbError, mbCriticalError);
+  TArrayOfString = array of string;
 
 const
   SW_HIDE = 0;
@@ -317,19 +426,23 @@ const
   wpSelectTasks = 4;
   wpReady = 5;
 
-function ExpandConstant(const S: string): string; begin Result := S; end;
-function SaveStringToFile(const FileName, S: string; Append: Boolean): Boolean; begin Result := True; end;
-function FileExists(const Name: string): Boolean; begin Result := False; end;
-function DirExists(const Name: string): Boolean; begin Result := False; end;
-function ForceDirectories(const Dir: string): Boolean; begin Result := True; end;
-function DeleteFile(const Name: string): Boolean; begin Result := True; end;
-function FindFirst(const FileName: string; var FindRec: TFindRec): Boolean; begin Result := False; end;
+function ExpandConstant(const S: String): String; begin Result := S; end;
+function SaveStringToFile(const FileName: String; const S: AnsiString; const Append: Boolean): Boolean; begin Result := True; end;
+function FileExists(const Name: String): Boolean; begin Result := False; end;
+function DirExists(const Name: String): Boolean; begin Result := False; end;
+function ForceDirectories(Dir: string): Boolean; begin Result := True; end;
+function DeleteFile(const FileName: string): Boolean; begin Result := True; end;
+function FindFirst(const FileName: String; var FindRec: TFindRec): Boolean; begin Result := False; end;
 function FindNext(var FindRec: TFindRec): Boolean; begin Result := False; end;
 procedure FindClose(var FindRec: TFindRec); begin end;
-procedure SetArrayLength(var A: TStringArray; NewLength: Integer); begin SetLength(A, NewLength); end;
-function GetDateTimeString(const Fmt: string; const DateSep, TimeSep: Char): string; begin Result := ''; end;
-function Exec(const Filename, Params, WorkingDir: string; ShowCmd: Integer; Wait: TExecWait; var ResultCode: Integer): Boolean; begin ResultCode := 0; Result := True; end;
-function MsgBox(const Text: string; Typ: TMsgBoxType; Buttons: Integer): Integer; begin Result := 0; end;
+{ Pascal Script standard procedure; Inno's help gives it as
+  procedure SetArrayLength(var Arr: Array; I: Longint). }
+procedure SetArrayLength(var Arr: TArrayOfString; const I: Longint); begin SetLength(Arr, I); end;
+function GetDateTimeString(const DateTimeFormat: String; const DateSeparator, TimeSeparator: Char): String; begin Result := ''; end;
+function CompareText(const S1, S2: string): Integer; begin Result := 0; end;
+function Random(const Range: Integer): Integer; begin Result := 0; end;
+function Exec(const Filename, Params, WorkingDir: String; const ShowCmd: Integer; const Wait: TExecWait; var ResultCode: Integer): Boolean; begin ResultCode := 0; Result := True; end;
+function MsgBox(const Text: String; const Typ: TMsgBoxType; const Buttons: Integer): Integer; begin Result := 0; end;
 function WizardSilent: Boolean; begin Result := False; end;
 function IsUninstaller: Boolean; begin Result := False; end;
 procedure Abort; begin Halt(1); end;
@@ -403,11 +516,17 @@ end.
 
     # Identifiers that do not exist in Inno Setup 6 Pascal Script, plus the
     # built-in "Log" shadowing that broke the first revision of this script.
-    # Comments are stripped first: prose that *names* an unsupported function
-    # (to explain why it is not used) is not a call to it.
+    # Comments are stripped first - brace comments, // comments and the .iss
+    # section-file ";" comment lines - because prose that *names* an unsupported
+    # function (to explain why it is not used) is not a call to it.
+    # Randomize is listed because FPC's own RTL provides it, so the stub compile
+    # cannot catch it - but Pascal Script has only Random (Setup seeds the
+    # generator in InitializeCommonVars), and ISCC rejects Randomize.
     $codeOnly = [regex]::Replace($issContent, '(?s)\{[^}]*\}', '')
     $codeOnly = [regex]::Replace($codeOnly, '(?m)//.*$', '')
+    $codeOnly = [regex]::Replace($codeOnly, '(?m)^[ \t]*;.*$', '')
     $forbiddenPatterns = @(
+        @{ Name = "Randomize (not in Pascal Script; use Random)"; Pattern = '\bRandomize\b' }
         @{ Name = "CryptGenRandom"; Pattern = 'CryptGenRandom' }
         @{ Name = "SetFilePermissions"; Pattern = 'SetFilePermissions' }
         @{ Name = "FindFiles"; Pattern = 'FindFiles' }

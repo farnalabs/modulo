@@ -21,6 +21,13 @@
 ; functions are used; there is no WinAPI import. scripts/test-windows-installer.ps1
 ; compiles this file with ISCC 6.2.2 in CI, so a script that cannot build fails
 ; the build rather than shipping.
+;
+; Two rules the 6.2.2 compiler enforces that are easy to trip over:
+;   1. A line whose first non-blank character is "#" is an ISPP directive, so a
+;      character-code literal may never start a line (#13#10 belongs mid-line).
+;   2. Only the functions in Inno Setup's support-function tables exist. There
+;      is no Randomize (Setup seeds the generator itself at startup), and
+;      dynamic arrays are resized with SetArrayLength, not SetLength.
 
 #ifndef VERSION_NUM
   #error VERSION_NUM is required
@@ -181,7 +188,7 @@ procedure PruneInstallLogs;
 var
   LogDir: string;
   FindRec: TFindRec;
-  Names: array of string;
+  Names: TArrayOfString;
   Count, I, J: Integer;
   TempName: string;
 begin
@@ -231,8 +238,9 @@ var
   S: string;
 begin
   { A support reference is a correlation id printed in the log, not a secret,
-    so the pseudo-random generator is sufficient and needs no WinAPI. }
-  Randomize;
+    so Random() is sufficient and needs no WinAPI. Pascal Script has no
+    Randomize: Setup calls it itself in InitializeCommonVars before any script
+    runs, so the generator is already seeded when this executes. }
   S := '';
   for I := 1 to SUPPORT_REF_LENGTH do
     S := S + Copy(HEX_CHARS, Random(16) + 1, 1);
@@ -400,8 +408,7 @@ begin
     '  Install target   : ' + Redact(TargetDesc) + #13#10 +
     '  Failing stage    : ' + Redact(CurrentStage) + #13#10 +
     '  Install log      : ' + Redact(LogDisplay) + #13#10 +
-    '  Support reference: ' + SupportRef + #13#10 +
-    #13#10 +
+    '  Support reference: ' + SupportRef + #13#10 + #13#10 +
     'Send this block AND the install log file above to Modulo support so the' + #13#10 +
     'failure can be diagnosed: https://github.com/farnalabs/modulo/issues' + #13#10 +
     '----- end of Modulo install support block -----' + #13#10;

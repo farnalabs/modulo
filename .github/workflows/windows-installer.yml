@@ -145,7 +145,18 @@ jobs:
       - name: Compile the installer and run the contract tests
         run: |
           $ErrorActionPreference = 'Stop'
-          ./scripts/test-windows-installer.ps1
+          # -RequireIscc: this job owns the compilation proof, so a missing
+          # ISCC must fail the job instead of silently skipping it. The
+          # script prints ISCC's own output on a non-zero exit and writes it to
+          # iscc-<case>.log, which the next step uploads as the diagnosis trail.
+          ./scripts/test-windows-installer.ps1 -RequireIscc
+      - name: Upload ISCC compiler output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iscc-output
+          path: iscc-*.log
+          if-no-files-found: ignore
 
   redaction-unit:
     name: Redaction unit test (Free Pascal)
@@ -162,7 +173,9 @@ jobs:
       - name: Compile and execute the extracted Redact() fixtures
         run: |
           $ErrorActionPreference = 'Stop'
-          ./scripts/test-windows-installer.ps1
+          # -RequireFpc: this job owns the fpc proofs (Redact() behaviour and
+          # the [Code] stub compile), so a missing compiler must fail the job.
+          ./scripts/test-windows-installer.ps1 -RequireFpc
 
   version-parity:
     name: Assert bundle versions match
