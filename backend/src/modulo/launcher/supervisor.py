@@ -458,6 +458,29 @@ def _read_lock_holder(path: Path) -> LockHolder | None:
     )
 
 
+def _flock_exclusive_nonblocking(fd: int) -> None:
+    """Take an exclusive, non-blocking ``flock`` on *fd* (POSIX callers only).
+
+    ``getattr`` rather than a direct ``fcntl.flock`` attribute access, for the
+    same reason as ``doctor._probe_username_of_uid``: typeshed exposes no
+    ``fcntl`` members on win32, while strict ``warn_unused_ignores`` rejects a
+    platform-conditional ``type: ignore`` on the Linux CI run. Every caller has
+    already established ``supports_posix_file_locking()``.
+    """
+    import fcntl
+
+    flock = getattr(fcntl, "flock")  # noqa: B009 - typeshed omits fcntl on win32
+    flock(fd, getattr(fcntl, "LOCK_EX") | getattr(fcntl, "LOCK_NB"))  # noqa: B009 - typeshed omits fcntl on win32
+
+
+def _flock_unlock(fd: int) -> None:
+    """Release the ``flock`` held on *fd* (see ``_flock_exclusive_nonblocking``)."""
+    import fcntl
+
+    flock = getattr(fcntl, "flock")  # noqa: B009 - typeshed omits fcntl on win32
+    flock(fd, getattr(fcntl, "LOCK_UN"))  # noqa: B009 - typeshed omits fcntl on win32
+
+
 class DataDirLock:
     """Exclusive OS-advisory lock over one data dir (kernel-released).
 
@@ -495,12 +518,11 @@ class DataDirLock:
                 "The data-dir lock is not implemented on Windows yet (TODO(P3)); "
                 "the native launcher is Linux-first (ADR 031 P1a)."
             )
-        import fcntl
 
         self._path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(self._path), os.O_RDWR | os.O_CREAT, 0o644)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+            _flock_exclusive_nonblocking(fd)
         except OSError as exc:
             os.close(fd)
             holder = _read_lock_holder(self._path)
@@ -557,10 +579,8 @@ class DataDirLock:
         if self._fd is None:
             return
         if supports_posix_file_locking():
-            import fcntl
-
             try:
-                fcntl.flock(self._fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+                _flock_unlock(self._fd)
             except OSError:
                 _log.warning("supervisor.lock_unlock_failed path=%s", self._path)
         with contextlib.suppress(OSError):
@@ -587,19 +607,18 @@ def _lock_is_free(lock_path: Path) -> bool:
     """
     if not supports_posix_file_locking():
         return False
-    import fcntl
 
     try:
         fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     except OSError:
         return False
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+        _flock_exclusive_nonblocking(fd)
     except OSError:
         return False
     finally:
         with contextlib.suppress(OSError):
-            fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+            _flock_unlock(fd)
         os.close(fd)
     return True
 
@@ -1662,15 +1681,21 @@ class Supervisor:
                 process.terminate()
             return
         try:
-            pgid = os.getpgid(process.pid)  # type: ignore[attr-defined]
+            # getattr - not a direct attribute access: typeshed exposes
+            # os.getpgid/killpg only on POSIX, so the direct bind fails mypy on
+            # Windows builds while a platform-conditional type: ignore is
+            # rejected by strict warn_unused_ignores on the Linux CI run.
+            getpgid = getattr(os, "getpgid")  # noqa: B009 - POSIX-only os member
+            pgid = getpgid(process.pid)
         except OSError:
             pgid = -1
         if pgid == process.pid:
             # A dying process can lose its group between getpgid and killpg
-            # - that race must never break the teardown of the remaining
+            # — that race must never break the teardown of the remaining
             # children.
+            killpg = getattr(os, "killpg")  # noqa: B009 - POSIX-only os member
             with contextlib.suppress(OSError):
-                os.killpg(pgid, signum)  # type: ignore[attr-defined]
+                killpg(pgid, signum)
         else:
             # The process is not the head of its own group (or we could not
             # resolve its group), so signal the single PID directly. Mirror
