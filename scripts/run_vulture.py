@@ -52,6 +52,14 @@ Gate semantics (FAR-252):
   sanctioned dead-code escape hatch; it exists solely for framework-contract
   symbols and test-referenced-but-production-dead code, each with a comment.
   New dead code is a blocking finding.
+
+Additional scan targets may be passed as positional arguments. The unit tests
+stage a probe file OUTSIDE ``backend/src/modulo`` and hand it to the gate, so
+the gate's blocking behaviour can be exercised without writing into the
+measured coverage source tree (FAR-2334: coverage's un-executed-source scan
+walks ``[tool.coverage.run] source``, so a probe created there can be recorded
+in a shard's coverage data and then fail ``coverage combine`` on a fresh
+checkout with "No source for code").
 """
 
 from __future__ import annotations
@@ -101,13 +109,22 @@ def _repo_root() -> str:
     return str(Path(__file__).resolve().parent.parent)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     root = _repo_root()
     src = str(Path(root) / "backend" / "src" / "modulo")
     whitelist = str(Path(root) / ".vulture_whitelist.py")
+    extra_targets = list(sys.argv[1:] if argv is None else argv)
     if not Path(src).is_dir() or not Path(whitelist).is_file():
         print(
             f"run_vulture.py: could not resolve repo layout (src={src!r}, whitelist={whitelist!r})",
+            file=sys.stderr,
+        )
+        return 2
+
+    missing_targets = [target for target in extra_targets if not Path(target).exists()]
+    if missing_targets:
+        print(
+            f"run_vulture.py: extra scan target(s) not found: {missing_targets!r}",
             file=sys.stderr,
         )
         return 2
@@ -123,6 +140,7 @@ def main() -> int:
         "--frozen",
         "vulture",
         src,
+        *extra_targets,
         whitelist,
         "--min-confidence",
         "60",

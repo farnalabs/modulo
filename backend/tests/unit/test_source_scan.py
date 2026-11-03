@@ -1,10 +1,14 @@
 """Regression tests for the shared whole-tree source scanner.
 
-The vulture dead-code gate writes a transient module into
-``backend/src/modulo`` and unlinks it again. A scan in another xdist worker can
-list that path during its directory walk and read it after the unlink, so a
-static scan must skip files that vanish mid-scan rather than raise
-``FileNotFoundError``.
+The vulture dead-code gate used to write a transient module into
+``backend/src/modulo`` and unlink it again. The probe is now staged in pytest's
+``tmp_path`` — outside the measured source tree and outside the repo — and passed
+to ``scripts/run_vulture.py`` as an extra scan target (FAR-2334), so that
+particular ``FileNotFoundError`` race can no longer occur and no fix is needed
+for it. The scanner still skips files that vanish mid-scan, because any
+transient file under a scanned root (a fixture, an editor swap file, concurrent
+cleanup) has the same race: a scan in another xdist worker can list a path during
+its directory walk and read it after a fixture has removed it.
 """
 
 from __future__ import annotations
