@@ -224,6 +224,12 @@ _NO_ORM_MODEL_TABLES: frozenset[str] = frozenset(
         # FAR-1962 (chunk 13 slice 3+4): the legacy eval_definitions table was
         # DROPPED by migration 0324 — it is no longer a DB-vs-ORM divergence
         # (neither side has it), so the entry was removed with the table.
+        # FAR-2233 (saved views removed): the SavedView model, CRUD and API were
+        # deleted but the physical saved_views table deliberately stays in
+        # migration history (docs/product-map/build/dashboard.md), so the
+        # DB-vs-ORM diff is a benign remove_table.
+        # permanent (documented repo divergence)
+        "saved_views",
     }
 )
 
@@ -569,6 +575,9 @@ class TestParityIgnoreListClassify:
         assert _is_benign_migration_managed(
             ("remove_table", Table("run_node_outputs_quarantine", MetaData(), Column("run_id", Integer)))
         )
+        # Table whose ORM model was removed with its feature but which stays in
+        # migration history (FAR-2233 saved views).
+        assert _is_benign_migration_managed(("remove_table", Table("saved_views", MetaData(), Column("id", UUID()))))
         # A known-gap wheel that was CLOSED (FAR-644) must NOT stay silent:
         # nodes.id FKs were stripped from the ORM, so any add_fk is real drift.
         assert not _is_benign_migration_managed(("add_fk", self._fk("pipeline_edges", "source_node_id", "nodes.id")))
