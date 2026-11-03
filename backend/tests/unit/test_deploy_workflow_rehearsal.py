@@ -1538,10 +1538,12 @@ def _promote_harness(
     rc_sha = _git(root, "rev-parse", "HEAD")
     _git(root, "tag", "-a", "v1.2.3-rc1", "-m", "rc")
     _git(root, "tag", "-a", "validated/v1.2.3-rc1", "-m", "validated")
-    _git(root, "branch", "release-freeze", rc_sha)
     _git(root, "init", "--bare", str(origin))
     _git(root, "remote", "add", "origin", str(origin))
-    _git(root, "push", "origin", "main", "release-freeze", "--tags")
+    # Mirror the real actions/checkout ref state: release-freeze exists on the
+    # remote only, never as a local branch. Push the commit straight to the
+    # remote branch so the promote step's remote-marker logic is exercised.
+    _git(root, "push", "origin", "main", f"{rc_sha}:refs/heads/release-freeze", "--tags")
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

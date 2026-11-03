@@ -769,7 +769,9 @@ jobs:
           git branch -f release-publication-hold HEAD
           git push origin refs/heads/release-publication-hold:refs/heads/release-publication-hold
           git push origin --delete refs/heads/release-freeze
-          git branch -D release-freeze
+          # The marker is a remote branch: actions/checkout never materialises a
+          # local release-freeze branch, so there is nothing local to delete
+          # (and `git branch -D` would abort the promote under `set -e`).
           echo "Swapped release-freeze for release-publication-hold while the promote PR merges."
           git fetch origin --tags
           PREV_FILE="$(mktemp)"
