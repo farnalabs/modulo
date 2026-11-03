@@ -141,36 +141,40 @@ function Invoke-Iscc {
     $lines = @($compilerOutput | ForEach-Object { "$_" })
 
     $logPath = [System.IO.Path]::Combine($repoRoot, "iscc-$CaseName.log")
-    $logBody = @(
+    $logHeader = @(
         "ISCC: $isccPath",
         "Case: $CaseName",
         "Arguments: $($arguments -join ' ')",
         "Exit code: $exitCode",
-        '',
-        $lines
-    ) -join [Environment]::NewLine
+        ''
+    )
+    $logBody = (@($logHeader) + @($lines)) -join [Environment]::NewLine
     try {
         [System.IO.File]::WriteAllText($logPath, $logBody)
     } catch {
         Write-Warning "Could not write the ISCC log to $logPath : $_"
     }
 
+    # Write-Host, not Write-Output: this function's output stream is captured by
+    # the caller into $result, so anything written with Write-Output would be
+    # swallowed and never reach the build log - which is exactly how ISCC's
+    # diagnosis went missing before.
     if ($exitCode -ne 0) {
-        Write-Output "--- ISCC output ($CaseName, exit $exitCode) ---"
+        Write-Host "--- ISCC output ($CaseName, exit $exitCode) ---"
         if ($lines.Count -eq 0) {
-            Write-Output "  (ISCC produced no output)"
+            Write-Host "  (ISCC wrote nothing to stdout or stderr)"
         } else {
             $tailCount = [System.Math]::Min(40, $lines.Count)
             $tail = $lines[($lines.Count - $tailCount)..($lines.Count - 1)]
             foreach ($line in $tail) {
-                Write-Output $line
+                Write-Host "  $line"
             }
             if ($lines.Count -gt $tailCount) {
-                Write-Output "  (showing the last $tailCount of $($lines.Count) lines)"
+                Write-Host "  (showing the last $tailCount of $($lines.Count) lines)"
             }
         }
-        Write-Output "--- end ISCC output ($CaseName) ---"
-        Write-Output "Full ISCC output written to $logPath"
+        Write-Host "--- end ISCC output ($CaseName) ---"
+        Write-Host "Full ISCC output written to $logPath"
     }
 
     return @{ ExitCode = $exitCode; Output = $lines; LogPath = $logPath }
