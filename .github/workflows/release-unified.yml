@@ -522,29 +522,88 @@ jobs:
             TARGET_SHA="$(git rev-parse origin/main)"
           fi
           echo "Checking schema-freshness on exact target ${TARGET_SHA}..."
-          # `gh run list --workflow ci.yml` already scopes to ci.yml; `path` is not a
-          # supported --json field and made this lookup always fail (FAR-2213).
-          RUN_ID="$(gh run list --workflow ci.yml --commit "$TARGET_SHA" --limit 100 --json databaseId \
-            --jq '.[0].databaseId // empty')"
-          if [ -z "$RUN_ID" ]; then
-            echo "::error::No CI workflow run found for exact target ${TARGET_SHA}; refusing to tag."
-            exit 1
-          fi
-          echo "Found CI run: ${RUN_ID}"
-          POLL_INTERVAL_SECONDS=10
-          MAX_WAIT_SECONDS=2700
-          MAX_POLLS=$((MAX_WAIT_SECONDS / POLL_INTERVAL_SECONDS))
-          STATUS=""
+          # A release samples a HEAD that may be only seconds old, so on a busy
+          # main the ci.yml run for that exact commit often does not exist yet.
+          # A single instantaneous lookup therefore aborted a perfectly healthy
+          # cut whenever the queue was warm (observed in runs 41649963889 and
+          # earlier). Poll for the run to APPEAR and then to COMPLETE, bounded by
+          # a budget, instead of sampling once. The gate itself is unchanged: a
+          # completed run must still be a success whose Schema freshness job is
+          # green. Both knobs are overridable so the rehearsal tests can drive
+          # the loop without waiting; production uses the defaults.
+          #
+          # `gh run list --workflow ci.yml` already scopes to ci.yml; `path` is not
+          # a supported --json field and made this lookup always fail (FAR-2213).
+          POLL_INTERVAL_SECONDS="${SCHEMA_GATE_POLL_INTERVAL_SECONDS:-30}"
+          MAX_WAIT_SECONDS="${SCHEMA_GATE_MAX_WAIT_SECONDS:-3600}"
+          require_positive_integer() {
+            case "$2" in
+              ''|*[!0-9]*)
+                echo "::error::$1 must be a positive integer, got '$2'."
+                exit 1
+                ;;
+            esac
+            if [ "$2" -lt 1 ]; then
+              echo "::error::$1 must be a positive integer, got '$2'."
+              exit 1
+            fi
+          }
+          require_positive_integer SCHEMA_GATE_POLL_INTERVAL_SECONDS "$POLL_INTERVAL_SECONDS"
+          require_positive_integer SCHEMA_GATE_MAX_WAIT_SECONDS "$MAX_WAIT_SECONDS"
+          MAX_POLLS=$(( (MAX_WAIT_SECONDS + POLL_INTERVAL_SECONDS - 1) / POLL_INTERVAL_SECONDS ))
+          SECONDS=0
+          RUN_ID=""
+          RUN_STATUS=""
+          RUN_CONCLUSION=""
+          LAST_LOOKUP_ERROR=""
           for ((poll=1; poll<=MAX_POLLS; poll++)); do
-            STATUS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '.status')"
-            if [ "$STATUS" = "completed" ]; then
+            RUN_ID=""
+            RUN_STATUS=""
+            RUN_CONCLUSION=""
+            LOOKUP_OUTPUT=""
+            # A transient gh/API failure is retried while budget remains; it is
+            # never treated as a green gate.
+            if LOOKUP_OUTPUT="$(gh run list --workflow ci.yml --commit "$TARGET_SHA" --limit 100 \
+              --json databaseId,status,conclusion \
+              --jq '.[0] | "\(.databaseId // "")\n\(.status // "")\n\(.conclusion // "")"' 2>&1)"; then
+              mapfile -t RUN_FIELDS <<<"$LOOKUP_OUTPUT"
+              RUN_ID="${RUN_FIELDS[0]:-}"
+              RUN_STATUS="${RUN_FIELDS[1]:-}"
+              RUN_CONCLUSION="${RUN_FIELDS[2]:-}"
+              LAST_LOOKUP_ERROR=""
+            else
+              LAST_LOOKUP_ERROR="$LOOKUP_OUTPUT"
+            fi
+            if [ -n "$RUN_ID" ] && [ "$RUN_STATUS" = "completed" ]; then
+              echo "Found completed CI run ${RUN_ID} on exact target ${TARGET_SHA} (${poll} attempt(s), ${SECONDS}s)."
               break
             fi
-            echo "CI run ${RUN_ID} still in progress (${STATUS}); waiting (${poll}/${MAX_POLLS})."
-            sleep "$POLL_INTERVAL_SECONDS"
+            if [ -n "$LAST_LOOKUP_ERROR" ]; then
+              echo "gh run lookup failed (attempt ${poll}/${MAX_POLLS}); retrying: ${LAST_LOOKUP_ERROR}"
+            elif [ -z "$RUN_ID" ]; then
+              echo "No CI workflow run for exact target ${TARGET_SHA} yet; waiting (attempt ${poll}/${MAX_POLLS}, ${SECONDS}s/${MAX_WAIT_SECONDS}s)."
+            else
+              echo "CI run ${RUN_ID} is ${RUN_STATUS:-unknown}; waiting (attempt ${poll}/${MAX_POLLS}, ${SECONDS}s/${MAX_WAIT_SECONDS}s)."
+            fi
+            if [ "$poll" -lt "$MAX_POLLS" ]; then
+              sleep "$POLL_INTERVAL_SECONDS"
+            fi
           done
-          if [ "$STATUS" != "completed" ]; then
-            echo "::error::Timed out waiting for CI run ${RUN_ID}; refusing to tag."
+          if [ -z "$RUN_ID" ] || [ "$RUN_STATUS" != "completed" ]; then
+            ELAPSED_MINUTES=$(( SECONDS / 60 ))
+            if [ -n "$LAST_LOOKUP_ERROR" ]; then
+              echo "::error::Could not confirm a CI workflow run for exact target ${TARGET_SHA} after ${ELAPSED_MINUTES} minute(s) (${SECONDS}s of a ${MAX_WAIT_SECONDS}s budget); last error: ${LAST_LOOKUP_ERROR}; refusing to tag."
+              exit 1
+            fi
+            if [ -z "$RUN_ID" ]; then
+              echo "::error::No CI workflow run appeared for exact target ${TARGET_SHA} after ${ELAPSED_MINUTES} minute(s) (${SECONDS}s of a ${MAX_WAIT_SECONDS}s budget); refusing to tag."
+              exit 1
+            fi
+            echo "::error::Timed out after ${ELAPSED_MINUTES} minute(s) (${SECONDS}s of a ${MAX_WAIT_SECONDS}s budget) waiting for CI run ${RUN_ID} on exact target ${TARGET_SHA} to complete; refusing to tag."
+            exit 1
+          fi
+          if [ "$RUN_CONCLUSION" != "success" ]; then
+            echo "::error::CI run ${RUN_ID} on exact target ${TARGET_SHA} concluded '${RUN_CONCLUSION:-missing}', not success; refusing to tag."
             exit 1
           fi
           SCHEMA_CONCLUSION="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" \
