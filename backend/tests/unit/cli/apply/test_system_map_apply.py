@@ -1,11 +1,19 @@
 """Unit tests for System Maps modulo apply support (FAR-2288)."""
 
+import json
+import re
 import uuid
 from typing import Any
 
+import httpx
 import pytest
+import respx
 from pydantic import ValidationError
+from tests.unit.cli.test_apply_executor import _mock_current
 
+from modulo.api.schemas.system_maps import SystemMapUpdate
+from modulo.cli.apply.executor import PAGE_SIZE, ApplyExecutor
+from modulo.cli.apply.loader import parse_apply_documents
 from modulo.cli.apply.models import (
     SystemMapEntity,
     SystemMapLoopConfigEntity,
@@ -16,9 +24,9 @@ from modulo.cli.apply.models import (
 from modulo.cli.apply.system_map_apply import (
     _apply_one_system_map,
     _create_payload,
-    _patch_payload,
     _plan_system_map_view,
     _revision_payload,
+    _update_payload,
     apply_system_maps,
     build_desired_views,
 )
@@ -253,11 +261,16 @@ class _MockExecutor:
 
     def __init__(self) -> None:
         self.posts: list[tuple[str, dict[str, Any]]] = []
+        self.puts: list[tuple[str, dict[str, Any]]] = []
         self.patches: list[tuple[str, dict[str, Any]]] = []
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         self.posts.append((path, payload))
         return {"id": str(_MAP_ID)}
+
+    def _put(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.puts.append((path, payload))
+        return {}
 
     def _patch(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         self.patches.append((path, payload))
@@ -297,9 +310,9 @@ def test_create_payload() -> None:
     assert payload["owner_team_id"] == str(_USER_ID)
 
 
-def test_patch_payload() -> None:
+def test_update_payload() -> None:
     entity = _system_map_entity(name="Test Map", visibility="team", owner_team_id=_USER_ID)
-    payload = _patch_payload(entity)
+    payload = _update_payload(entity)
     assert payload["name"] == "Test Map"
     assert payload["visibility"] == "team"
     assert payload["owner_team_id"] == str(_USER_ID)
@@ -396,9 +409,85 @@ def test_apply_one_system_map_update() -> None:
     )
 
     assert map_id == str(_MAP_ID)
-    assert len(executor.patches) == 1
-    assert executor.patches[0][0] == f"/system-maps/{_MAP_ID}"
-    assert executor.patches[0][1]["description"] == "Updated"
+    assert len(executor.puts) == 1
+    assert executor.puts[0][0] == f"/system-maps/{_MAP_ID}"
+    assert executor.puts[0][1]["description"] == "Updated"
+    # The map update route is PUT-only (there is no PATCH /system-maps/{id}).
+    assert not executor.patches
+
+
+_SYSTEM_MAP_UPDATE_TEXT = """
+api_version: modulo.dev/v1
+entities:
+  system_maps:
+    - name: Existing Map
+      description: Updated
+"""
+
+
+class TestSystemMapUpdateMethod:
+    """FAR-2288: updating an existing map uses the route's PUT verb.
+
+    ``PATCH /api/v1/system-maps/{id}`` does not exist (the route is PUT-only),
+    so a PATCH apply received 405. These tests drive the REAL executor so the
+    HTTP method and URL are asserted on the actual wire request.
+    """
+
+    @staticmethod
+    def _apply_update_routes() -> dict[str, respx.Route]:
+        _mock_current([], [])
+        routes: dict[str, respx.Route] = {
+            "maps_get": respx.get(
+                "https://api.test/api/v1/system-maps",
+                params={"page": "1", "page_size": str(PAGE_SIZE)},
+            ).respond(
+                json={
+                    "items": [_map_row(name="Existing Map", description="Original")],
+                    "total": 1,
+                    "page": 1,
+                    "page_size": PAGE_SIZE,
+                }
+            ),
+            "map_put": respx.put(re.compile(r"https://api\.test/api/v1/system-maps/[0-9a-f-]+")).respond(
+                json=_map_row(name="Existing Map", description="Updated")
+            ),
+            # Registered only so a regression to PATCH is observable rather than
+            # surfacing as an unmocked-request error.
+            "map_patch": respx.patch(re.compile(r"https://api\.test/api/v1/system-maps/[0-9a-f-]+")).respond(
+                status_code=405, json={"detail": "Method Not Allowed"}
+            ),
+        }
+        return routes
+
+    @respx.mock
+    def test_update_uses_put_and_the_map_url(self) -> None:
+        routes = self._apply_update_routes()
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(parse_apply_documents(_SYSTEM_MAP_UPDATE_TEXT), dry_run=False)
+
+        assert [entry["name"] for entry in report["updated"]] == ["Existing Map"]
+        assert not report["failed"]
+        # The wire request is PUT, never PATCH (405 on the real route).
+        assert routes["map_patch"].call_count == 0
+        assert routes["map_put"].call_count == 1
+        request = routes["map_put"].calls.last.request
+        assert request.method == "PUT"
+        assert str(request.url) == f"https://api.test/api/v1/system-maps/{_MAP_ID}"
+
+    @respx.mock
+    def test_update_body_validates_against_real_update_model(self) -> None:
+        routes = self._apply_update_routes()
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            executor.run(parse_apply_documents(_SYSTEM_MAP_UPDATE_TEXT), dry_run=False)
+
+        payload = json.loads(routes["map_put"].calls.last.request.content)
+        # Contract round-trip: the body is what the route's model accepts.
+        update = SystemMapUpdate.model_validate(payload)
+        assert update.description == "Updated"
+        assert update.visibility == "org"
+        assert update.default_map is False
 
 
 def test_build_desired_views() -> None:
@@ -472,7 +561,8 @@ def test_apply_system_maps_update() -> None:
     map_ids = apply_system_maps(executor, entities, current_entities, report)
 
     assert map_ids["Existing Map"] == str(_MAP_ID)
-    assert len(executor.patches) == 1
+    assert len(executor.puts) == 1
+    assert not executor.patches
 
 
 def test_apply_system_maps_create_with_revision() -> None:
