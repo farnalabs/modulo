@@ -9,8 +9,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
-from decimal import Decimal
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
@@ -35,6 +34,7 @@ from modulo.api.schemas.system_maps import (
     PublishValidationError,
     PublishValidationErrorHTTP,
     SystemMapCreate,
+    SystemMapCurrentRevisionResponse,
     SystemMapDiscoveryReport,
     SystemMapDiscoveryRequest,
     SystemMapDiscoverySkipped,
@@ -48,9 +48,16 @@ from modulo.api.schemas.system_maps import (
     SystemMapOverviewResponse,
     SystemMapRelationshipResponse,
     SystemMapResponse,
+    SystemMapRevisionByTimeResponse,
     SystemMapRevisionCreate,
     SystemMapRevisionDetailResponse,
+    SystemMapRevisionDiffRequest,
+    SystemMapRevisionDiffResponse,
+    SystemMapRevisionHistoryEntry,
+    SystemMapRevisionHistoryResponse,
     SystemMapRevisionResponse,
+    SystemMapRevisionRestoreAsNewRequest,
+    SystemMapRevisionRestoreAsNewResponse,
     SystemMapUpdate,
 )
 from modulo.api.team_scope import validate_owner_team_for_create
@@ -67,7 +74,7 @@ from modulo.core.system_maps_discovery import (
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_folder import PipelineFolder
-from modulo.db.models.system_map import SystemMap
+from modulo.db.models.system_map import SystemMap, SystemMapRevision
 from modulo.db.models.trigger import Trigger
 from modulo.db.repositories.system_map import SystemMapRepository
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -83,6 +90,8 @@ _CODE_SYSTEM_MAP_REVISION_GET = "system_map.revision.get"
 _CODE_SYSTEM_MAP_REVISION_PUBLISH = "system_map.revision.publish"
 _CODE_SYSTEM_MAP_REVISION_ARCHIVE = "system_map.revision.archive"
 _CODE_SYSTEM_MAP_REVISION_DELETE = "system_map.revision.delete"
+_CODE_SYSTEM_MAP_REVISION_DIFF = "system_map.revision.diff"
+_CODE_SYSTEM_MAP_REVISION_RESTORE = "system_map.revision.restore_as_new"
 _CODE_SYSTEM_MAP_OVERVIEW = "system_map.overview"
 _CODE_SYSTEM_MAP_NODE_CREATE = "system_map.node.create"
 _CODE_SYSTEM_MAP_RELATIONSHIP_CREATE = "system_map.relationship.create"
@@ -116,6 +125,12 @@ _EP_CREATE_SYSTEM_MAP_REVISION = "system_maps.create_system_map_revision_endpoin
 _EP_PUBLISH_SYSTEM_MAP_REVISION = "system_maps.publish_system_map_revision_endpoint"
 _EP_ARCHIVE_SYSTEM_MAP_REVISION = "system_maps.archive_system_map_revision_endpoint"
 _EP_DELETE_SYSTEM_MAP_REVISION = "system_maps.delete_system_map_revision_endpoint"
+_EP_DIFF_SYSTEM_MAP_REVISION = "system_maps.diff_system_map_revision_endpoint"
+_EP_RESTORE_SYSTEM_MAP_REVISION = "system_maps.restore_system_map_revision_endpoint"
+# Version-aware endpoints (FAR-2288)
+_EP_GET_REVISION_BY_TIME = "system_maps.get_revision_by_time_endpoint"
+_EP_GET_CURRENT_REVISION = "system_maps.get_current_revision_endpoint"
+_EP_GET_REVISION_HISTORY = "system_maps.get_revision_history_endpoint"
 _EP_GET_SYSTEM_MAP_OVERVIEW = "system_maps.get_system_map_overview_endpoint"
 _EP_CREATE_ATTRIBUTION_BINDING = "system_maps.create_attribution_binding_endpoint"
 _EP_LIST_ATTRIBUTION_BINDINGS = "system_maps.list_attribution_bindings_endpoint"
@@ -123,6 +138,15 @@ _EP_DELETE_ATTRIBUTION_BINDING = "system_maps.delete_attribution_binding_endpoin
 
 _DESC_SYSTEM_MAP_ID = "System map ID"
 _DESC_REVISION_ID = "Revision ID"
+
+# The overview window: the trailing seven UTC days, half-open on both ends
+# (``[window_start, window_end)``). Named so the response, the repository call
+# and the tests cannot drift apart.
+OVERVIEW_WINDOW_DAYS = 7
+
+# A node whose observed failure rate reaches this share of countable runs is
+# reported unhealthy; any lower non-zero rate is degraded.
+_UNHEALTHY_FAILURE_RATE_THRESHOLD = 0.5
 
 _INTERNAL_SYSTEM_MAP_PERMISSION = SYSTEM_MAPS_ACCESS_PERMISSION
 _require_system_maps_feature = require_feature("system_maps")
@@ -536,6 +560,201 @@ async def delete_system_map_endpoint(
 # ─── SystemMapRevision CRUD ───
 
 
+# ─── Version-aware Revision Endpoints (FAR-2288) ───
+
+
+@router.get("/{map_id}/revisions/by-time")
+@handle_db_errors(_EP_GET_REVISION_BY_TIME)
+async def get_revision_by_time_endpoint(
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    at: datetime = Query(..., description="ISO8601 timestamp to find the active revision at"),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    repository: SystemMapRepository = Depends(get_repo),
+) -> SystemMapRevisionByTimeResponse:
+    """Get the revision active at a specific timestamp.
+
+    Returns the revision (published, or superseded/archived after a re-publish)
+    where effective_from <= at < effective_to (or effective_to IS NULL for the
+    current revision). Drafts have no effective_from and never match.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Verify map exists
+            system_map = await repository.get_map_by_id(
+                session, organisation_id=principal.organisation_id, map_id=map_id
+            )
+            if not system_map:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
+
+            revision = await repository.get_revision_by_time(
+                session, organisation_id=principal.organisation_id, system_map_id=map_id, at=at
+            )
+    except ProgrammingError as exc:
+        _log.exception(_EP_GET_REVISION_BY_TIME)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _EP_GET_REVISION_BY_TIME)
+        _log.exception(_EP_GET_REVISION_BY_TIME)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("system_maps.get_revision_by_time")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    if revision is None:
+        # No revision active at that time - return 404 with context
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No revision active at {at.isoformat()}",
+        )
+
+    return SystemMapRevisionByTimeResponse(
+        revision=SystemMapRevisionResponse.model_validate(revision),
+        requested_at=at,
+        matched=True,
+    )
+
+
+@router.get("/{map_id}/revisions/current")
+@handle_db_errors(_EP_GET_CURRENT_REVISION)
+async def get_current_revision_endpoint(
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    repository: SystemMapRepository = Depends(get_repo),
+) -> SystemMapCurrentRevisionResponse:
+    """Get the currently active (published) revision.
+
+    Alias for the existing published revision endpoint with clearer semantics.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Verify map exists
+            system_map = await repository.get_map_by_id(
+                session, organisation_id=principal.organisation_id, map_id=map_id
+            )
+            if not system_map:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
+
+            revision = await repository.get_current_revision(
+                session, organisation_id=principal.organisation_id, system_map_id=map_id
+            )
+    except ProgrammingError as exc:
+        _log.exception(_EP_GET_CURRENT_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _EP_GET_CURRENT_REVISION)
+        _log.exception(_EP_GET_CURRENT_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("system_maps.get_current_revision")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    if revision is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No published revision found for this map",
+        )
+
+    return SystemMapCurrentRevisionResponse(revision=SystemMapRevisionResponse.model_validate(revision))
+
+
+@router.get("/{map_id}/revisions/history")
+@handle_db_errors(_EP_GET_REVISION_HISTORY)
+async def get_revision_history_endpoint(
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    repository: SystemMapRepository = Depends(get_repo),
+) -> SystemMapRevisionHistoryResponse:
+    """List all revisions for a system map with their effective time ranges.
+
+    Returns all revisions (published, draft, archived) ordered by revision_number
+    so the caller can see the full history with effective_from/effective_to.
+    The current (published) revision is marked with is_current=True.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Verify map exists
+            system_map = await repository.get_map_by_id(
+                session, organisation_id=principal.organisation_id, map_id=map_id
+            )
+            if not system_map:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
+
+            revisions = await repository.list_revisions_history(
+                session, organisation_id=principal.organisation_id, system_map_id=map_id
+            )
+    except ProgrammingError as exc:
+        _log.exception(_EP_GET_REVISION_HISTORY)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _EP_GET_REVISION_HISTORY)
+        _log.exception(_EP_GET_REVISION_HISTORY)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("system_maps.get_revision_history")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    # Determine current revision ID
+    current_revision_id = system_map.published_revision_id
+
+    history_entries = [
+        SystemMapRevisionHistoryEntry(
+            revision=SystemMapRevisionResponse.model_validate(rev),
+            is_current=(rev.id == current_revision_id),
+        )
+        for rev in revisions
+    ]
+
+    return SystemMapRevisionHistoryResponse(
+        system_map_id=map_id,
+        revisions=history_entries,
+    )
+
+
 @router.get("/{map_id}/revisions/{rev_id}")
 @handle_db_errors(_EP_GET_SYSTEM_MAP_REVISION)
 async def get_system_map_revision_endpoint(
@@ -925,9 +1144,16 @@ async def archive_system_map_revision_endpoint(
             if revision.status == "archived":
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Revision is already archived")
 
-            # Archive the revision
-            revision.status = "archived"
-            await session.flush()
+            # Archive the revision and close its effective window (FAR-2288)
+            archived_revision = await repository.archive_revision(
+                session,
+                organisation_id=principal.organisation_id,
+                system_map_id=map_id,
+                revision_id=rev_id,
+            )
+            if archived_revision is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+            revision = archived_revision
 
             # If this was the published revision, clear the map's published_revision_id
             if system_map.published_revision_id == rev_id:
@@ -965,6 +1191,198 @@ async def archive_system_map_revision_endpoint(
         ) from None
 
     return SystemMapRevisionResponse.model_validate(revision)
+
+
+@router.post(
+    "/{map_id}/revisions/{rev_id}/diff",
+    response_model=SystemMapRevisionDiffResponse,
+)
+@handle_db_errors(_EP_DIFF_SYSTEM_MAP_REVISION)
+async def diff_system_map_revision_endpoint(
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    rev_id: uuid.UUID = Path(..., description=_DESC_REVISION_ID),
+    req: SystemMapRevisionDiffRequest = Body(default=SystemMapRevisionDiffRequest()),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_DIFF),
+    repository: SystemMapRepository = Depends(get_repo),
+) -> SystemMapRevisionDiffResponse:
+    """Diff a revision against another revision or the current draft."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Verify map exists
+            system_map = await repository.get_map_by_id(
+                session, organisation_id=principal.organisation_id, map_id=map_id
+            )
+            if not system_map:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
+
+            # Verify base revision exists and belongs to map
+            base_revision = await repository.get_revision_by_id(
+                session, organisation_id=principal.organisation_id, revision_id=rev_id
+            )
+            if not base_revision or base_revision.system_map_id != map_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+
+            # Determine target revision
+            target_revision_id = req.against_revision_id
+            if target_revision_id is None:
+                # Try to find the current draft revision
+                draft_revisions = await repository.list_revisions(
+                    session,
+                    organisation_id=principal.organisation_id,
+                    system_map_id=map_id,
+                    status="draft",
+                    limit=1,
+                )
+                if not draft_revisions:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="No draft revision found to diff against; specify against_revision_id",
+                    )
+                target_revision_id = draft_revisions[0].id
+            else:
+                # Verify target revision exists and belongs to map
+                target_revision = await repository.get_revision_by_id(
+                    session, organisation_id=principal.organisation_id, revision_id=target_revision_id
+                )
+                if not target_revision or target_revision.system_map_id != map_id:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+
+            diff_result = await repository.diff_revisions(
+                session,
+                organisation_id=principal.organisation_id,
+                base_revision_id=rev_id,
+                target_revision_id=target_revision_id,
+            )
+            if not diff_result:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Could not compute diff")
+    except HTTPException:
+        raise
+    except ProgrammingError as exc:
+        _log.exception(_EP_DIFF_SYSTEM_MAP_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _EP_DIFF_SYSTEM_MAP_REVISION)
+        _log.exception(_EP_DIFF_SYSTEM_MAP_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except Exception:
+        _log.exception("system_maps.diff_revision")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    return SystemMapRevisionDiffResponse(**diff_result)
+
+
+@router.post(
+    "/{map_id}/revisions/{rev_id}/restore-as-new",
+    response_model=SystemMapRevisionRestoreAsNewResponse,
+    dependencies=[
+        Depends(
+            audited(
+                "system_map_revision_restored_as_new",
+                "system_map_revision",
+                principal_dep=get_current_tenant_user_or_api_key,
+            )
+        )
+    ],
+)
+@handle_db_errors(_EP_RESTORE_SYSTEM_MAP_REVISION)
+async def restore_system_map_revision_endpoint(
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    rev_id: uuid.UUID = Path(..., description=_DESC_REVISION_ID),
+    req: SystemMapRevisionRestoreAsNewRequest = Body(default=SystemMapRevisionRestoreAsNewRequest()),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_RESTORE),
+    repository: SystemMapRepository = Depends(get_repo),
+) -> SystemMapRevisionRestoreAsNewResponse:
+    """Create a new draft revision from a published/archived revision."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Verify map exists
+            system_map = await repository.get_map_by_id(
+                session, organisation_id=principal.organisation_id, map_id=map_id
+            )
+            if not system_map:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
+
+            # Verify source revision exists and belongs to map
+            source_revision = await repository.get_revision_by_id(
+                session, organisation_id=principal.organisation_id, revision_id=rev_id, include_deleted=True
+            )
+            if not source_revision or source_revision.system_map_id != map_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+
+            if source_revision.status == "draft":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Cannot restore a draft revision as new; it is already editable",
+                )
+
+            # Create new draft from source
+            new_revision = await repository.restore_revision_as_new_draft(
+                session,
+                organisation_id=principal.organisation_id,
+                system_map_id=map_id,
+                source_revision_id=rev_id,
+                notes=req.notes.replace("{revision_number}", str(source_revision.revision_number)),
+            )
+            if not new_revision:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+
+            await _record_audit(
+                session,
+                org_id=principal.organisation_id,
+                event_type="system_map.revision.restored_as_new",
+                account_id=principal.account_id,
+                resource_id=new_revision.id,
+                payload_json={
+                    "system_map_id": str(map_id),
+                    "source_revision_id": str(rev_id),
+                    "source_revision_number": source_revision.revision_number,
+                    "new_revision_number": new_revision.revision_number,
+                },
+            )
+    except HTTPException:
+        raise
+    except ProgrammingError as exc:
+        _log.exception(_EP_RESTORE_SYSTEM_MAP_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _EP_RESTORE_SYSTEM_MAP_REVISION)
+        _log.exception(_EP_RESTORE_SYSTEM_MAP_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except Exception:
+        _log.exception("system_maps.restore_revision")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    return SystemMapRevisionRestoreAsNewResponse(
+        new_revision=SystemMapRevisionResponse.model_validate(new_revision),
+        source_revision_id=rev_id,
+        source_revision_number=source_revision.revision_number,
+    )
 
 
 @router.delete(
@@ -1054,15 +1472,67 @@ async def delete_system_map_revision_endpoint(
 # ─── Overview (Aggregate Read Model) ───
 
 
+async def _resolve_overview_revision(
+    repository: SystemMapRepository,
+    session: AsyncSession,
+    *,
+    organisation_id: uuid.UUID,
+    map_id: uuid.UUID,
+    revision_id: uuid.UUID | None,
+    at: datetime | None,
+) -> SystemMapRevision:
+    """Resolve which revision an overview request targets (FAR-2288)."""
+    if revision_id:
+        revision = await repository.get_revision_by_id(
+            session, organisation_id=organisation_id, revision_id=revision_id
+        )
+        if not revision or revision.system_map_id != map_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+        return revision
+    if at:
+        revision = await repository.get_revision_by_time(
+            session, organisation_id=organisation_id, system_map_id=map_id, at=at
+        )
+        if not revision:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No revision active at {at.isoformat()}",
+            )
+        return revision
+    revision = await repository.get_published_revision(session, organisation_id=organisation_id, system_map_id=map_id)
+    # The repository already filters on status, but the route re-checks it so a
+    # malformed/draft row can never be aggregated and reported as published.
+    if not revision or revision.status != "published":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No published revision found for this map",
+        )
+    return revision
+
+
 @router.get("/{map_id}/overview")
 @handle_db_errors(_EP_GET_SYSTEM_MAP_OVERVIEW)
 async def get_system_map_overview_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    revision_id: uuid.UUID | None = Query(default=None, description="Specific revision ID to get overview for"),
+    at: datetime | None = Query(
+        default=None, description="ISO8601 timestamp to get overview for the revision active at that time"
+    ),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_OVERVIEW),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapOverviewResponse:
-    """Aggregate read model with node health, loop configs, and bottleneck detection."""
+    """Aggregate read model with node health, loop configs, and bottleneck detection.
+
+    Can optionally specify a revision_id or 'at' timestamp to get the overview
+    for a specific historical revision (FAR-2288 version-aware read model).
+    Metrics cover the trailing seven UTC days.
+    """
+    if revision_id and at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot specify both revision_id and at; choose one",
+        )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1075,19 +1545,18 @@ async def get_system_map_overview_endpoint(
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
-            # Get published revision
-            published_revision = await repository.get_published_revision(
-                session, organisation_id=principal.organisation_id, system_map_id=map_id
+            target_revision = await _resolve_overview_revision(
+                repository,
+                session,
+                organisation_id=principal.organisation_id,
+                map_id=map_id,
+                revision_id=revision_id,
+                at=at,
             )
-            if not published_revision:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="No published revision found for this map",
-                )
 
-            # Get full graph
+            # Get full graph for the target revision
             graph = await repository.get_full_revision_graph(
-                session, organisation_id=principal.organisation_id, revision_id=published_revision.id
+                session, organisation_id=principal.organisation_id, revision_id=target_revision.id
             )
             if not graph:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
@@ -1095,73 +1564,35 @@ async def get_system_map_overview_endpoint(
             nodes = graph["nodes"]
             loop_configs = graph["loop_configs"]
 
-            # Build node health from runs data (simplified - would query runs in production)
-            node_health: list[SystemMapOverviewNodeHealth] = []
-            for node in nodes:
-                # In a real implementation, this would query run data for the node's pipeline
-                health = SystemMapOverviewNodeHealth(
-                    node_key=node.node_key,
-                    node_type=node.node_type,
-                    display_name=node.display_name,
-                    health="unknown",
-                    queue_depth=None,
-                    throughput_per_min=None,
-                    capacity_pressure=None,
-                    failure_rate=None,
-                    telemetry_coverage=None,
-                    last_run_id=None,
-                    last_run_status=None,
-                    last_run_completed_at=None,
-                )
-                node_health.append(health)
-
-            # Build loop config overview
-            loop_config_overview: list[SystemMapOverviewLoopConfig] = []
-            for lc in loop_configs:
-                # In a real implementation, this would query admission attempts and reservations
-                loop_overview = SystemMapOverviewLoopConfig(
-                    node_key=lc.node_key,
-                    target_signal=lc.target_signal,
-                    observation_window_seconds=lc.observation_window_seconds,
-                    action_pipeline_id=lc.action_pipeline_id,
-                    budget_limit_usd=lc.budget_limit_usd,
-                    cooldown_seconds=lc.cooldown_seconds,
-                    outcome_metric=lc.outcome_metric,
-                    last_admission_at=None,
-                    last_admission_status=None,
-                    cooldown_active=False,
-                    cooldown_until=None,
-                    budget_used_usd=Decimal(0),
-                    budget_period_start=None,
-                )
-                loop_config_overview.append(loop_overview)
-
-            # Detect bottlenecks (simplified heuristic)
-            bottlenecks: list[SystemMapOverviewBottleneck] = []
-            for node in nodes:
-                if node.node_type == "improvement_loop":
-                    # Check if loop config exists
-                    matching_lc = next((lc for lc in loop_configs if lc.node_key == node.node_key), None)
-                    if not matching_lc:
-                        bottlenecks.append(
-                            SystemMapOverviewBottleneck(
-                                node_key=node.node_key,
-                                node_type=node.node_type,
-                                display_name=node.display_name,
-                                kind="unobserved",
-                                detail=(f"Improvement loop node '{node.node_key}' missing loop configuration"),
-                                severity="high",
-                            )
-                        )
+            window_end = datetime.now(UTC)
+            window_start = window_end - timedelta(days=OVERVIEW_WINDOW_DAYS)
+            pipeline_ids = {node.pipeline_id for node in nodes if node.pipeline_id is not None}
+            metrics = await repository.get_overview_pipeline_metrics(
+                session,
+                organisation_id=principal.organisation_id,
+                pipeline_ids=pipeline_ids,
+                window_start=window_start,
+                window_end=window_end,
+            )
+            loop_metrics = await repository.get_overview_loop_metrics(
+                session,
+                organisation_id=principal.organisation_id,
+                loop_config_ids={loop.id for loop in loop_configs},
+                window_start=window_start,
+                window_end=window_end,
+            )
 
             return SystemMapOverviewResponse(
                 system_map_id=map_id,
-                revision_id=published_revision.id,
-                revision_number=published_revision.revision_number,
-                generated_at=datetime.now(UTC),
-                nodes=node_health,
-                loop_configs=loop_config_overview,
-                bottlenecks=bottlenecks,
+                revision_id=target_revision.id,
+                revision_number=target_revision.revision_number,
+                generated_at=window_end,
+                window_days=OVERVIEW_WINDOW_DAYS,
+                window_start=window_start,
+                window_end=window_end,
+                nodes=_build_overview_node_health(nodes, metrics),
+                loop_configs=_build_overview_loop_configs(loop_configs, loop_metrics),
+                bottlenecks=_detect_overview_bottlenecks(nodes, loop_configs),
             )
     except HTTPException:
         raise
@@ -1184,6 +1615,101 @@ async def get_system_map_overview_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
+
+
+def _overview_node_health(run_count: int, failure_rate: float | None) -> str:
+    """Classify a node's health from observed run facts.
+
+    A run count with no countable (non-benign) run leaves the failure rate
+    undefined — that is unknown, never "healthy".
+    """
+    if run_count == 0 or failure_rate is None:
+        return "unknown"
+    if failure_rate >= _UNHEALTHY_FAILURE_RATE_THRESHOLD:
+        return "unhealthy"
+    if failure_rate > 0:
+        return "degraded"
+    return "healthy"
+
+
+def _build_overview_node_health(
+    nodes: list[Any],
+    metrics: dict[uuid.UUID, dict[str, Any]],
+) -> list[SystemMapOverviewNodeHealth]:
+    """Project each graph node onto its observed health row."""
+    node_health: list[SystemMapOverviewNodeHealth] = []
+    for node in nodes:
+        item = metrics.get(node.pipeline_id, {}) if node.pipeline_id else {}
+        failure_rate = item.get("failure_rate")
+        node_health.append(
+            SystemMapOverviewNodeHealth(
+                node_key=node.node_key,
+                node_type=node.node_type,
+                display_name=node.display_name,
+                health=_overview_node_health(item.get("run_count", 0), failure_rate),
+                queue_depth=item.get("queue_depth"),
+                throughput_per_min=item.get("throughput_per_min"),
+                capacity_pressure=item.get("capacity_pressure"),
+                failure_rate=failure_rate,
+                telemetry_coverage=item.get("telemetry_coverage"),
+                last_run_id=item.get("last_run_id"),
+                last_run_status=item.get("last_run_status"),
+                last_run_completed_at=item.get("last_run_completed_at"),
+            )
+        )
+    return node_health
+
+
+def _build_overview_loop_configs(
+    loop_configs: list[Any],
+    loop_metrics: dict[uuid.UUID, dict[str, Any]],
+) -> list[SystemMapOverviewLoopConfig]:
+    """Project each loop config onto its observed admission/budget row."""
+    loop_config_overview: list[SystemMapOverviewLoopConfig] = []
+    for lc in loop_configs:
+        loop_item = loop_metrics.get(lc.id, {})
+        loop_config_overview.append(
+            SystemMapOverviewLoopConfig(
+                node_key=lc.node_key,
+                target_signal=lc.target_signal,
+                observation_window_seconds=lc.observation_window_seconds,
+                action_pipeline_id=lc.action_pipeline_id,
+                budget_limit_usd=lc.budget_limit_usd,
+                cooldown_seconds=lc.cooldown_seconds,
+                outcome_metric=lc.outcome_metric,
+                last_admission_at=loop_item.get("last_admission_at"),
+                last_admission_status=loop_item.get("last_admission_status"),
+                cooldown_active=loop_item.get("cooldown_active"),
+                cooldown_until=loop_item.get("cooldown_until"),
+                budget_used_usd=loop_item.get("budget_used_usd"),
+                budget_period_start=loop_item.get("budget_period_start"),
+            )
+        )
+    return loop_config_overview
+
+
+def _detect_overview_bottlenecks(
+    nodes: list[Any],
+    loop_configs: list[Any],
+) -> list[SystemMapOverviewBottleneck]:
+    """Flag improvement-loop nodes that have no loop configuration (simplified heuristic)."""
+    bottlenecks: list[SystemMapOverviewBottleneck] = []
+    for node in nodes:
+        if node.node_type != "improvement_loop":
+            continue
+        if any(lc.node_key == node.node_key for lc in loop_configs):
+            continue
+        bottlenecks.append(
+            SystemMapOverviewBottleneck(
+                node_key=node.node_key,
+                node_type=node.node_type,
+                display_name=node.display_name,
+                kind="unobserved",
+                detail=f"Improvement loop node '{node.node_key}' missing loop configuration",
+                severity="high",
+            )
+        )
+    return bottlenecks
 
 
 async def _validate_attribution_binding_node(

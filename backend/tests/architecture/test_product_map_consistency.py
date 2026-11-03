@@ -455,6 +455,7 @@ OWNED_PAGES = {
         "frontend/src/components/onboarding/OnboardingBanner.vue",
         "frontend/src/components/onboarding/SpotlightOverlay.vue",
         "frontend/src/components/DashboardNotificationsPanel.vue",
+        "frontend/src/components/dashboard/DashboardSystemOverview.vue",
     ),
     "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
     "/oauth/authorize": "frontend/src/views/OAuthConsentView.vue",
@@ -463,6 +464,19 @@ OWNED_PAGES = {
         "frontend/src/views/GovernanceStackView.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
+    ),
+    "/system-maps": (
+        "frontend/src/views/SystemMapsView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+        "frontend/src/components/shared/ErrorAlert.vue",
+    ),
+    "/system-maps/:id": (
+        "frontend/src/views/SystemMapDetailView.vue",
+        "frontend/src/components/system-maps/SystemMapGraphEditor.vue",
+        "frontend/src/components/system-maps/SystemMapHeaderBar.vue",
+        "frontend/src/components/system-maps/SystemMapRevisionSidebar.vue",
+        "frontend/src/components/system-maps/SystemMapDiscoveryPanel.vue",
+        "frontend/src/components/shared/ErrorAlert.vue",
     ),
     "/risk-assessment": (
         "frontend/src/views/RiskAssessmentView.vue",
