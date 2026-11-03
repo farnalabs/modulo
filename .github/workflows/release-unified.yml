@@ -90,7 +90,7 @@ jobs:
           if [ "${RELEASE_FREEZE}" = "true" ]; then
             freeze_arg="--freeze"
           fi
-          uv run --no-project --no-sync --no-build python scripts/run_release_preflight.py \
+          uv run --no-project --no-build python scripts/run_release_preflight.py \
             --mode "${RELEASE_MODE}" \
             --version "${RELEASE_VERSION}" \
             $freeze_arg

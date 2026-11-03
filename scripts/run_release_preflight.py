@@ -183,7 +183,37 @@ class ReleasePreflightChecker:
         if not runs:
             return None
 
-        run_id = str(runs[0].get("databaseId", ""))
+        # A commit can have more than one CI run (re-runs, docs-only pushes),
+        # and the Schema freshness job may be absent from some of them. Check
+        # every run until one proves the gate green; a run without the job is
+        # not evidence either way, so keep looking.
+        non_green: PreflightCheckResult | None = None
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            run_id = str(run.get("databaseId", "") or "")
+            if not run_id:
+                continue
+            verdict = self._schema_freshness_job_verdict(run_id, gh_repo, target_sha, name)
+            if verdict is None:
+                continue
+            if verdict.passed:
+                return verdict
+            if non_green is None:
+                non_green = verdict
+
+        if non_green is not None:
+            return non_green
+        return PreflightCheckResult(
+            name,
+            False,
+            f"Schema freshness job not found in any CI run on commit {target_sha[:7]}",
+        )
+
+    def _schema_freshness_job_verdict(
+        self, run_id: str, gh_repo: str, target_sha: str, name: str
+    ) -> PreflightCheckResult | None:
+        """Return the schema-freshness verdict for one run, or ``None`` if absent."""
         rc_jobs, stdout_jobs, stderr_jobs = self.run_cmd(
             [
                 "gh",
@@ -204,11 +234,7 @@ class ReleasePreflightChecker:
             )
 
         if not stdout_jobs.strip():
-            return PreflightCheckResult(
-                name,
-                False,
-                f"Schema freshness job not found in CI run {run_id} on commit {target_sha[:7]}",
-            )
+            return None
 
         try:
             job_data = json.loads(stdout_jobs)
@@ -573,7 +599,7 @@ class ReleasePreflightChecker:
         name = "Release-freeze marker state valid and movable (FAR-2317 tag ruleset)"
 
         # Check for active release-publication-hold (refused in cut and promote)
-        rc_hold, _, _ = self.run_cmd(
+        rc_hold, _, hold_err = self.run_cmd(
             ["git", "ls-remote", "--exit-code", "origin", "refs/heads/release-publication-hold"],
             cwd=self.repo_root,
         )
@@ -583,18 +609,32 @@ class ReleasePreflightChecker:
                 False,
                 "Active 'release-publication-hold' branch detected on origin; prior cut/promote left unresolved hold",
             )
+        if rc_hold != 2:
+            reason = hold_err.strip() or f"exit code {rc_hold}"
+            return PreflightCheckResult(
+                name,
+                False,
+                f"Could not determine 'release-publication-hold' state on origin: {reason}",
+            )
 
         # Check release-freeze requirement for promote mode
         if self.mode == "promote":
-            rc_freeze, _, _ = self.run_cmd(
+            rc_freeze, _, freeze_err = self.run_cmd(
                 ["git", "ls-remote", "--exit-code", "origin", "refs/heads/release-freeze"],
                 cwd=self.repo_root,
             )
-            if rc_freeze != 0:
+            if rc_freeze == 2:
                 return PreflightCheckResult(
                     name,
                     False,
                     "Promotion requires an active 'release-freeze' branch, but none was found on origin",
+                )
+            if rc_freeze != 0:
+                reason = freeze_err.strip() or f"exit code {rc_freeze}"
+                return PreflightCheckResult(
+                    name,
+                    False,
+                    f"Could not determine 'release-freeze' state on origin: {reason}",
                 )
 
         freeze_note = ""
@@ -753,31 +793,49 @@ class ReleasePreflightChecker:
                 f"Clean branch state against {baseline} (no divergent commits)",
             )
 
-        # Check git merge-tree
-        rc_mt, mt_out, _ = self.run_cmd(
+        # `git merge-tree --write-tree` exits 1 when the merge conflicts and
+        # prints the resulting tree OID followed by the conflicted paths (with
+        # --name-only), a blank line, then informational messages. Any other
+        # non-zero exit is a real error (for example an older git that lacks
+        # --write-tree exits 129), which falls back to the deprecated 3-arg
+        # form. A git error on the fallback path is a hard failure, never a
+        # silent pass: a gate that cannot determine the merge state must fail
+        # closed.
+        rc_mt, mt_out, mt_err = self.run_cmd(
             ["git", "merge-tree", "--write-tree", "--name-only", baseline, "HEAD"],
             cwd=self.repo_root,
         )
+        if rc_mt == 1:
+            conflicts = self._parse_merge_tree_conflicts(mt_out)
+            if not conflicts:
+                return PreflightCheckResult(
+                    name,
+                    False,
+                    f"Merge conflicts detected against {baseline} (git merge-tree reported a conflicted merge)",
+                )
+            return PreflightCheckResult(
+                name,
+                False,
+                f"Merge conflicts detected against {baseline} in {len(conflicts)} path(s): {', '.join(conflicts[:5])}",
+            )
         if rc_mt != 0:
-            # Fallback to 3-arg git merge-tree syntax on older git
-            rc_mt3, mt3_out, _ = self.run_cmd(
+            # Fallback to 3-arg git merge-tree syntax on older git.
+            rc_mt3, mt3_out, mt3_err = self.run_cmd(
                 ["git", "merge-tree", base_sha, "HEAD", baseline],
                 cwd=self.repo_root,
             )
-            if rc_mt3 == 0 and "<<<<<<<" in mt3_out:
+            if rc_mt3 != 0:
+                reason = (mt3_err or mt3_out or mt_err).strip() or f"exit code {rc_mt3}"
+                return PreflightCheckResult(
+                    name,
+                    False,
+                    f"Unable to determine merge state against {baseline}: git merge-tree failed ({reason})",
+                )
+            if "<<<<<<<" in mt3_out:
                 return PreflightCheckResult(
                     name,
                     False,
                     f"Merge conflicts detected against {baseline} in 3-way merge",
-                )
-        else:
-            lines = [line.strip() for line in mt_out.splitlines() if line.strip()]
-            if len(lines) > 1:
-                conflicts = lines[1:]
-                return PreflightCheckResult(
-                    name,
-                    False,
-                    f"Merge conflicts detected against {baseline} in {len(conflicts)} path(s): {', '.join(conflicts[:5])}",
                 )
 
         return PreflightCheckResult(
@@ -785,6 +843,22 @@ class ReleasePreflightChecker:
             True,
             f"Branch has no merge conflicts against {baseline}",
         )
+
+    @staticmethod
+    def _parse_merge_tree_conflicts(output: str) -> list[str]:
+        """Extract conflicted paths from `git merge-tree --write-tree` output.
+
+        The first line is the merged-tree OID; conflicted paths follow until a
+        blank line, after which informational conflict messages are printed.
+        A clean merge emits only the tree OID.
+        """
+        lines = [line.strip() for line in output.splitlines()]
+        conflicts: list[str] = []
+        for line in lines[1:]:
+            if not line:
+                break
+            conflicts.append(line)
+        return conflicts
 
     # -------------------------------------------------------------------------
     # Orchestration & Summary

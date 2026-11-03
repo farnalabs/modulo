@@ -187,6 +187,117 @@ def test_schema_freshness_fails_when_job_is_not_green(tmp_path: Path):
     assert "in_progress" in res.details
 
 
+def _schema_ci_env() -> dict[str, str]:
+    return {
+        "GH_TOKEN": "token-123",
+        "GITHUB_REPOSITORY": "farnalabs/modulo",
+        "GITHUB_SHA": "abc1234",
+    }
+
+
+def _run_id_from_jobs_cmd(cmd) -> str:
+    url = next(arg for arg in cmd if arg.endswith("/jobs"))
+    return url.rsplit("/", 2)[-2]
+
+
+def test_schema_freshness_uses_a_green_run_when_latest_is_not_green(tmp_path: Path):
+    """A re-run (or docs-only run) must not mask a green Schema freshness job."""
+    repo = _make_dummy_repo(tmp_path)
+    jobs = {
+        "100": {"conclusion": "failure", "status": "completed"},
+        "99": {"conclusion": "success", "status": "completed"},
+    }
+
+    def fake_run(cmd, **kwargs):
+        if "run" in cmd and "list" in cmd:
+            return 0, json.dumps([{"databaseId": 100}, {"databaseId": 99}]), ""
+        if "api" in cmd and any(arg.endswith("/jobs") for arg in cmd):
+            return 0, json.dumps(jobs[_run_id_from_jobs_cmd(cmd)]), ""
+        return 0, "", ""
+
+    checker = ReleasePreflightChecker(
+        mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run
+    )
+    res = checker.check_schema_freshness()
+    assert res.passed
+    assert "run 99" in res.details
+
+
+def test_schema_freshness_skips_runs_without_the_job(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if "run" in cmd and "list" in cmd:
+            return 0, json.dumps([{"databaseId": 100}, {"databaseId": 99}]), ""
+        if "api" in cmd and any(arg.endswith("/jobs") for arg in cmd):
+            if _run_id_from_jobs_cmd(cmd) == "100":
+                return 0, "", ""
+            return 0, json.dumps({"conclusion": "success", "status": "completed"}), ""
+        return 0, "", ""
+
+    checker = ReleasePreflightChecker(
+        mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run
+    )
+    res = checker.check_schema_freshness()
+    assert res.passed
+    assert "run 99" in res.details
+
+
+def test_schema_freshness_fails_when_no_run_carries_the_job(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if "run" in cmd and "list" in cmd:
+            return 0, json.dumps(["junk", {}, {"databaseId": ""}, {"databaseId": 7}]), ""
+        if "api" in cmd and any(arg.endswith("/jobs") for arg in cmd):
+            return 0, "", ""
+        return 0, "", ""
+
+    checker = ReleasePreflightChecker(
+        mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run
+    )
+    res = checker.check_schema_freshness()
+    assert not res.passed
+    assert "not found in any CI run" in res.details
+
+
+def test_schema_freshness_fails_closed_when_job_payload_is_unparseable(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if "run" in cmd and "list" in cmd:
+            return 0, json.dumps([{"databaseId": 7}]), ""
+        if "api" in cmd and any(arg.endswith("/jobs") for arg in cmd):
+            return 0, "not-json", ""
+        return 0, "", ""
+
+    checker = ReleasePreflightChecker(
+        mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run
+    )
+    res = checker.check_schema_freshness()
+    assert not res.passed
+    assert "Could not parse the schema-freshness job" in res.details
+
+
+def test_schema_freshness_fails_closed_when_jobs_query_errors(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if "run" in cmd and "list" in cmd:
+            return 0, json.dumps([{"databaseId": 7}]), ""
+        if "api" in cmd and any(arg.endswith("/jobs") for arg in cmd):
+            return 1, "", "HTTP 403: Forbidden"
+        return 0, "", ""
+
+    checker = ReleasePreflightChecker(
+        mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run
+    )
+    res = checker.check_schema_freshness()
+    assert not res.passed
+    assert "Could not read the jobs of CI run 7" in res.details
+    assert "HTTP 403" in res.details
+
+
 # -----------------------------------------------------------------------------
 # 2. macOS installer inputs
 # -----------------------------------------------------------------------------
@@ -400,8 +511,9 @@ def test_release_freeze_state_reports_the_freeze_flag(tmp_path: Path):
 # -----------------------------------------------------------------------------
 # 6. uv.lock freshness
 # -----------------------------------------------------------------------------
-def test_uv_lock_freshness_passes_when_lock_clean(tmp_path: Path):
+def test_uv_lock_freshness_passes_when_lock_clean(tmp_path: Path, monkeypatch):
     repo = _make_dummy_repo(tmp_path)
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "/usr/bin/uv")
 
     def fake_run(cmd, **kwargs):
         if "uv" in cmd:
@@ -413,19 +525,30 @@ def test_uv_lock_freshness_passes_when_lock_clean(tmp_path: Path):
     assert res.passed
 
 
-def test_uv_lock_freshness_fails_when_stale(tmp_path: Path):
+def test_uv_lock_freshness_fails_when_stale(tmp_path: Path, monkeypatch):
     repo = _make_dummy_repo(tmp_path)
+    # Without this the result depends on whether uv happens to be on PATH.
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "/usr/bin/uv")
 
     def fake_run(cmd, **kwargs):
         if "uv" in cmd:
             return 1, "", "error: lockfile is stale\n"
         return 0, "", ""
 
-    # Mock shutil.which to return "uv"
     checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, run_cmd=fake_run)
     res = checker.check_uv_lock_freshness()
     assert not res.passed
     assert "stale" in res.details
+
+
+def test_uv_lock_freshness_skips_dynamic_check_when_uv_absent(tmp_path: Path, monkeypatch):
+    repo = _make_dummy_repo(tmp_path)
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo)
+    res = checker.check_uv_lock_freshness()
+    assert res.passed
+    assert "uv binary not found" in res.details
 
 
 # -----------------------------------------------------------------------------
@@ -456,6 +579,35 @@ def test_release_freeze_state_fails_on_promote_without_freeze(tmp_path: Path):
     res = checker.check_release_freeze_state()
     assert not res.passed
     assert "Promotion requires an active" in res.details
+
+
+def test_release_freeze_state_fails_closed_when_hold_query_errors(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        # 128 is a git transport failure, not "branch absent" (2).
+        return 128, "", "fatal: unable to access 'origin': network unreachable"
+
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, run_cmd=fake_run)
+    res = checker.check_release_freeze_state()
+    assert not res.passed
+    assert "Could not determine 'release-publication-hold' state" in res.details
+    assert "network unreachable" in res.details
+
+
+def test_release_freeze_state_fails_closed_when_freeze_query_errors(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if any("release-publication-hold" in arg for arg in cmd):
+            return 2, "", ""
+        return 128, "", "fatal: could not read from remote repository"
+
+    checker = ReleasePreflightChecker(mode="promote", version="0.1.0", repo_root=repo, run_cmd=fake_run)
+    res = checker.check_release_freeze_state()
+    assert not res.passed
+    assert "Could not determine 'release-freeze' state" in res.details
+    assert "could not read from remote" in res.details
 
 
 # -----------------------------------------------------------------------------
@@ -526,7 +678,7 @@ def test_azure_signing_secrets_cut_passes_when_present(tmp_path: Path):
 # -----------------------------------------------------------------------------
 # 10. Branch merge-conflict check against main
 # -----------------------------------------------------------------------------
-def test_merge_conflicts_clean_branch(tmp_path: Path):
+def test_merge_conflicts_clean_when_head_matches_baseline(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
 
     def fake_run(cmd, **kwargs):
@@ -546,7 +698,7 @@ def test_merge_conflicts_clean_branch(tmp_path: Path):
     assert res.passed
 
 
-def test_merge_conflicts_detected(tmp_path: Path):
+def test_merge_conflicts_clean_branch_with_divergent_commits(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
 
     def fake_run(cmd, **kwargs):
@@ -557,8 +709,34 @@ def test_merge_conflicts_detected(tmp_path: Path):
         if "rev-parse" in cmd and "HEAD" in cmd:
             return 0, "222222\n", ""
         if "merge-tree" in cmd:
-            # Tree OID then conflicted paths
-            return 0, "treeoid123\nbackend/pyproject.toml\n", ""
+            return 0, "treeoid123\n", ""
+        return 0, "", ""
+
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, run_cmd=fake_run)
+    res = checker.check_merge_conflicts()
+    assert res.passed
+
+
+def test_merge_conflicts_detected_via_write_tree(tmp_path: Path):
+    """The real git path: --write-tree exits 1 and prints the conflicted paths."""
+
+    repo = _make_dummy_repo(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if "rev-parse" in cmd and "origin/main" in cmd:
+            return 0, "111111\n", ""
+        if "merge-base" in cmd:
+            return 0, "000000\n", ""
+        if "rev-parse" in cmd and "HEAD" in cmd:
+            return 0, "222222\n", ""
+        if "merge-tree" in cmd and "--write-tree" in cmd:
+            # Tree OID, then conflicted paths, a blank line, then messages.
+            return (
+                1,
+                "treeoid123\nbackend/pyproject.toml\n\nAuto-merging backend/pyproject.toml\n"
+                "CONFLICT (content): Merge conflict in backend/pyproject.toml\n",
+                "",
+            )
         return 0, "", ""
 
     checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, run_cmd=fake_run)
@@ -566,6 +744,94 @@ def test_merge_conflicts_detected(tmp_path: Path):
     assert not res.passed
     assert "Merge conflicts detected" in res.details
     assert "backend/pyproject.toml" in res.details
+
+
+def test_merge_conflicts_detected_without_path_names(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if "rev-parse" in cmd and "origin/main" in cmd:
+            return 0, "111111\n", ""
+        if "merge-base" in cmd:
+            return 0, "000000\n", ""
+        if "rev-parse" in cmd and "HEAD" in cmd:
+            return 0, "222222\n", ""
+        if "merge-tree" in cmd and "--write-tree" in cmd:
+            return 1, "treeoid123\n", ""
+        return 0, "", ""
+
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, run_cmd=fake_run)
+    res = checker.check_merge_conflicts()
+    assert not res.passed
+    assert "Merge conflicts detected" in res.details
+
+
+def test_merge_conflicts_fails_closed_when_merge_tree_errors(tmp_path: Path):
+    """A git error must never be reported as a clean branch."""
+
+    repo = _make_dummy_repo(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if "rev-parse" in cmd and "origin/main" in cmd:
+            return 0, "111111\n", ""
+        if "merge-base" in cmd:
+            return 0, "000000\n", ""
+        if "rev-parse" in cmd and "HEAD" in cmd:
+            return 0, "222222\n", ""
+        if "merge-tree" in cmd and "--write-tree" in cmd:
+            return 129, "", "error: unknown option `write-tree'"
+        if "merge-tree" in cmd:
+            return 128, "", "fatal: not a git repository"
+        return 0, "", ""
+
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, run_cmd=fake_run)
+    res = checker.check_merge_conflicts()
+    assert not res.passed
+    assert "Unable to determine merge state" in res.details
+    assert "not a git repository" in res.details
+
+
+def test_merge_conflicts_falls_back_to_three_arg_form_on_clean_merge(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if "rev-parse" in cmd and "origin/main" in cmd:
+            return 0, "111111\n", ""
+        if "merge-base" in cmd:
+            return 0, "000000\n", ""
+        if "rev-parse" in cmd and "HEAD" in cmd:
+            return 0, "222222\n", ""
+        if "merge-tree" in cmd and "--write-tree" in cmd:
+            return 129, "", "error: unknown option `write-tree'"
+        if "merge-tree" in cmd:
+            return 0, "merged\n", ""
+        return 0, "", ""
+
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, run_cmd=fake_run)
+    res = checker.check_merge_conflicts()
+    assert res.passed
+
+
+def test_merge_conflicts_detected_in_three_arg_fallback(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if "rev-parse" in cmd and "origin/main" in cmd:
+            return 0, "111111\n", ""
+        if "merge-base" in cmd:
+            return 0, "000000\n", ""
+        if "rev-parse" in cmd and "HEAD" in cmd:
+            return 0, "222222\n", ""
+        if "merge-tree" in cmd and "--write-tree" in cmd:
+            return 129, "", "error: unknown option `write-tree'"
+        if "merge-tree" in cmd:
+            return 0, "some output\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> main\n", ""
+        return 0, "", ""
+
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, run_cmd=fake_run)
+    res = checker.check_merge_conflicts()
+    assert not res.passed
+    assert "3-way merge" in res.details
 
 
 # -----------------------------------------------------------------------------
