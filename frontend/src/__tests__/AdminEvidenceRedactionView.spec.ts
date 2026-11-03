@@ -305,6 +305,9 @@ describe('AdminEvidenceRedactionView', () => {
     const loadError = wrapper.find('[data-testid="admin-evidence-redaction-load-error"]')
     expect(loadError.exists()).toBe(true)
     expect(loadError.text()).toContain('registry unavailable')
+    // One live region for the message: ErrorAlert's root, never the wrapper.
+    expect(loadError.attributes('aria-live')).toBeUndefined()
+    expect(loadError.findAll('[role="alert"]')).toHaveLength(1)
     expect(wrapper.find('[data-testid="admin-evidence-redaction-table"]').exists()).toBe(false)
     expect(
       wrapper.find('[data-testid="admin-evidence-redaction-add"]').attributes('disabled'),
@@ -388,6 +391,8 @@ describe('AdminEvidenceRedactionView', () => {
     const refetchError = wrapper.find('[data-testid="admin-evidence-redaction-refetch-error"]')
     expect(refetchError.exists()).toBe(true)
     expect(refetchError.text()).toContain('refetch unavailable')
+    expect(refetchError.attributes('aria-live')).toBeUndefined()
+    expect(refetchError.findAll('[role="alert"]')).toHaveLength(1)
     expect(wrapper.find('[data-testid="admin-evidence-redaction-load-error"]').exists()).toBe(false)
   })
 

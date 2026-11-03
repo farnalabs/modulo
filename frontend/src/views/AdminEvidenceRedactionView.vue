@@ -38,7 +38,7 @@
       <span>{{ $t('views.AdminEvidenceRedaction.loading') }}</span>
     </div>
 
-    <div v-else-if="initialLoadError" aria-live="assertive" data-testid="admin-evidence-redaction-load-error">
+    <div v-else-if="initialLoadError" data-testid="admin-evidence-redaction-load-error">
       <ErrorAlert :message="initialLoadError" :on-retry="loadRules" />
     </div>
 
@@ -48,7 +48,6 @@
            the failure surfaces here as a non-fatal, retry-able banner. -->
       <div
         v-if="refetchLoadError"
-        aria-live="assertive"
         class="mb-4"
         data-testid="admin-evidence-redaction-refetch-error"
       >
