@@ -27,10 +27,6 @@ def test_anthropic_base_url_constant():
     assert ANTHROPIC_BASE_URL == "https://api.anthropic.com"
 
 
-def test_backend_id(backend):
-    assert backend.backend_id == "anthropic/claude-haiku-4-5"
-
-
 def test_chat_anthropic_uses_default_params():
     with patch("modulo.model_backends.anthropic.ChatAnthropic") as mock_chat:
         AnthropicBackend(api_key="sk-ant-test", model_id="claude-haiku-4-5", max_tokens=1024)

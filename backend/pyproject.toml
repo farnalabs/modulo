@@ -12,7 +12,7 @@ build-backend = "hatchling.build"
 [project]
 name = "farnalabs-modulo"
 # SINGLE SOURCE OF TRUTH for the product version. Mirrored by
-# scripts/bump-version.py into frontend/package.json and
+# scripts/bump-version.py into backend/uv.lock, frontend/package.json and
 # deploy/helm/modulo/Chart.yaml (version + appVersion). Files carry X.Y.Z only;
 # -rcN prerelease suffixes live in git tags only. See docs/upgrade-process.md.
 version = "0.3.324"
@@ -617,6 +617,13 @@ markers = [
 
 [tool.coverage.run]
 branch = true
+# Parallel data files. CI's unit suite runs as three concurrent shards, each
+# writing its own data file (COVERAGE_FILE=.coverage.unit-<n>) that a single
+# combine job folds together with `coverage combine`; parallel mode is what keeps
+# concurrent writers from overwriting one another's data. A local `coverage
+# report` after a manual run therefore needs a `coverage combine` first - the
+# same idiom coverage documents for this setting.
+parallel = true
 # SQLAlchemy's async engine runs statements through greenlets
 # (``greenlet_spawn``). Without ``greenlet`` here, coverage's line tracer loses
 # the lines that follow a greenlet switch, so genuinely-executed statements

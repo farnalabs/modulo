@@ -139,7 +139,7 @@ guarded against tampering at both the ORM and the database layer.
       Community install, 403 for non-admin, 401 unauthenticated
       (`test_audit_gating`, audit_export.feature)
 - [x] Cross-domain product events are recorded: HITL output delivery, HITL
-      claim expiry, org deletion requests, fernet key rotation, and run
+      claim expiry, org deletion cancellation, fernet key rotation, and run
       lifecycle (event_recording.feature scenarios)
 - [x] Pipeline graph mutations are ALWAYS audited (FAR-1471): every successful
       `replace_pipeline_graph` write AND every `rollback_to_snapshot` appends
@@ -182,17 +182,21 @@ guarded against tampering at both the ORM and the database layer.
       `organisations.id` with `ON DELETE CASCADE`, so a hard-deleted org took
       its ENTIRE chain with it – including the `org_deletion_requested` row
       written moments earlier – and a post-commit append could never satisfy
-      the FK on an org that no longer exists. The five org-lifecycle writers
+      the FK on an org that no longer exists. The org-lifecycle writers that
+      can still change the active organisation's lifecycle – `PATCH
+      /api/v1/admin/org/deletion-cancel` – and the system-admin
+      cross-organisation `DELETE /api/v1/admin/orgs/{org_id}` mirror the same
+      evidence (`org_deletion_cancelled` / `org_deletion_completed`) into
+      `system_audit_events` **inside the same transaction, before the org row
+      is removed**: the record commits only if the delete commits, and a
+      failed append aborts the destructive act (fail-closed – the writer
+      deliberately has no try/except; route handlers map the raised
+      `SQLAlchemyError` family to 5xx). The three self-service delete routes
       (`DELETE /api/v1/admin/org`, `POST /api/v1/admin/org/deletion-request`,
-      `POST /api/v1/admin/org/deletion-confirm`,
-      `PATCH /api/v1/admin/org/deletion-cancel`, and the system-admin
-      `DELETE /api/v1/admin/orgs/{org_id}`) now mirror the same evidence
-      (`org_deletion_requested` / `org_deletion_completed` /
-      `org_deletion_cancelled`) into `system_audit_events` **inside the
-      deleting transaction, before the org row is removed**: the record commits
-      only if the delete commits, and a failed append aborts the destructive
-      act (fail-closed – the writer deliberately has no try/except; route
-      handlers map the raised `SQLAlchemyError` family to 5xx). The table
+      `POST /api/v1/admin/org/deletion-confirm`) no longer write lifecycle
+      events at all: they unconditionally refuse active-organisation deletion
+      with 403 (FAR-2225), and their only audit output is the `audited()`
+      refused-attempt record on the org chain. The table
       deliberately has **no `organisation_id` tenant column and no FK**: the
       org id is a plain `org_id` value, so no cascade reaches it and no RLS
       scope excludes it – the record stays readable by an operator long after
@@ -200,9 +204,11 @@ guarded against tampering at both the ORM and the database layer.
       triggers, the same structural guard `audit_events` carries (the ledger is
       deliberately **not** hash-chained: the tamper-evident chain is
       per-organisation and its head cascades away, so immutability here comes
-      from the triggers). The three routes are recorded in
+      from the triggers). `admin_orgs.py:admin_delete_org` remains in
       `tests/architecture/audit_coverage_baseline.txt` because `audited()`'s
-      post-commit org-scoped append cannot record anything after a hard delete
+      post-commit org-scoped append cannot record anything after a hard delete;
+      `admin.py:confirm_org_deletion` and `admin.py:delete_org_immediate` left
+      the baseline once they stopped deleting and became audited refusals
       (`core/system_audit_logger.py`, `db/models/system_audit_event.py`,
       migration 0285, the writer files `api/routes/admin.py` and
       `api/routes/admin_orgs.py`,

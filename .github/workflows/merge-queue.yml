@@ -1555,6 +1555,24 @@ jobs:
         run: |
           echo "" > /tmp/failure_description.txt
 
+      - name: Check backend uv.lock freshness (FAR-2308)
+        # The validation branch is main + every approved PR, so a stale lock can
+        # appear even when each PR passed its own CI (two lock-touching PRs, or
+        # a version bump batched with a dependency change). `uv sync --frozen`
+        # below installs from the lock as-is and cannot detect the drift; only
+        # `uv lock --check` can, and it never writes the lockfile. The failure
+        # line is appended to /tmp/failure_description.txt (like every other
+        # gate in this job) so the Branch Fixer receives a real description
+        # rather than an empty one.
+        if: steps.merge.outputs.merged_count != '0'
+        working-directory: backend
+        shell: bash
+        run: |
+          if ! uv lock --check; then
+            echo "backend/uv.lock stale on the merged validation branch (run: uv lock in backend/)" >> /tmp/failure_description.txt
+            exit 1
+          fi
+
       - name: Install backend deps
         if: steps.merge.outputs.merged_count != '0'
         working-directory: backend
@@ -1965,7 +1983,7 @@ jobs:
           # description is written (the old script's `TEST_EXIT=$?` line was
           # unreachable on a pytest failure for that reason).
           set +e
-          uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+          uv run --no-build --no-sync pytest tests/unit/ -n 2 -x -q --timeout=120 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
           TEST_EXIT=$?
           set -e
 

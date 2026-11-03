@@ -108,18 +108,26 @@ async def _seed_trigger(
     pipeline_id: uuid.UUID,
     account_id: uuid.UUID,
     *,
+    name: str,
     deleted: bool = False,
 ) -> uuid.UUID:
     trigger_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO triggers (id, organisation_id, pipeline_id, trigger_type, active, "
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, "
                 "max_concurrent_runs, config_json, account_id, deleted_at) "
-                "VALUES (:id, :oid, :pid, 'webhook', true, 5, '{}'::json, :uid, "
+                "VALUES (:name, :id, :oid, :pid, 'webhook', true, 5, '{}'::json, :uid, "
                 "CASE WHEN :deleted THEN now() ELSE NULL END)"
             ),
             {
+                # ``name`` is NOT NULL since migration 0339 (FAR-2227), so a raw
+                # INSERT must supply it. Each call site passes a distinct name:
+                # ``uq_triggers_org_pipeline_name`` is unique on
+                # (organisation_id, pipeline_id, name) among LIVE rows, and
+                # excluding soft-deleted rows cannot be relied on to make two
+                # live triggers on one pipeline distinct.
+                "name": name,
                 "id": str(trigger_id),
                 "oid": str(org_id),
                 "pid": str(pipeline_id),
@@ -200,11 +208,15 @@ class TestAdminTriggerEventHistory:
         live_pipeline = await _seed_pipeline(db_engine, org_a, user_a, "Live pipeline")
         deleted_pipeline = await _seed_pipeline(db_engine, org_a, user_a, "Deleted pipeline", deleted=True)
 
-        live_trigger = await _seed_trigger(db_engine, org_a, live_pipeline, user_a)
-        trigger_on_deleted_pipeline = await _seed_trigger(db_engine, org_a, deleted_pipeline, user_a)
-        deleted_trigger = await _seed_trigger(db_engine, org_a, live_pipeline, user_a, deleted=True)
+        live_trigger = await _seed_trigger(db_engine, org_a, live_pipeline, user_a, name="live-trigger")
+        trigger_on_deleted_pipeline = await _seed_trigger(
+            db_engine, org_a, deleted_pipeline, user_a, name="trigger-on-deleted-pipeline"
+        )
+        deleted_trigger = await _seed_trigger(
+            db_engine, org_a, live_pipeline, user_a, name="deleted-trigger", deleted=True
+        )
         deleted_trigger_on_deleted_pipeline = await _seed_trigger(
-            db_engine, org_a, deleted_pipeline, user_a, deleted=True
+            db_engine, org_a, deleted_pipeline, user_a, name="deleted-trigger-on-deleted-pipeline", deleted=True
         )
 
         event_live = await _seed_event(db_engine, org_a, live_trigger)
@@ -215,7 +227,7 @@ class TestAdminTriggerEventHistory:
         org_b = await _seed_org(db_engine, "far2226-org-b")
         user_b = await _seed_account(db_engine, org_b, f"far2226-b-{org_b.hex[:8]}@example.com")
         other_pipeline = await _seed_pipeline(db_engine, org_b, user_b, "Other org pipeline")
-        other_trigger = await _seed_trigger(db_engine, org_b, other_pipeline, user_b)
+        other_trigger = await _seed_trigger(db_engine, org_b, other_pipeline, user_b, name="other-org-trigger")
         event_other_org = await _seed_event(db_engine, org_b, other_trigger)
 
         response = await _list(admin_events_session, _principal(org_a, user_a))
@@ -260,7 +272,7 @@ class TestAdminTriggerEventHistory:
         org = await _seed_org(db_engine, "far2226-org-archived")
         user = await _seed_account(db_engine, org, f"far2226-arch-{org.hex[:8]}@example.com")
         archived_pipeline = await _seed_pipeline(db_engine, org, user, "Archived pipeline", archived=True)
-        trigger = await _seed_trigger(db_engine, org, archived_pipeline, user)
+        trigger = await _seed_trigger(db_engine, org, archived_pipeline, user, name="archived-pipeline-trigger")
         event_id = await _seed_event(db_engine, org, trigger)
 
         response = await _list(admin_events_session, _principal(org, user))

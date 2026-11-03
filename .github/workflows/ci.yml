@@ -79,9 +79,10 @@ jobs:
     # (a job-level skip is surfaced as a non-green "skipped" check, which the
     # PR Reviewer flags - same reason notify-pr-failure gates at step level).
     #
-    # Test (Backend) is deliberately NOT gated: backend/tests/architecture/
-    # read frontend/ (product map, manifest, login field), and its coverage
-    # artifact feeds SonarCloud and the coverage gate.
+    # The backend test jobs are deliberately NOT gated: backend/tests/
+    # architecture/ read frontend/ (product map, manifest, login field), and the
+    # combined coverage artifact (`backend-coverage`) feeds SonarCloud and the
+    # coverage gate.
     name: Detect changed paths
     runs-on: ubicloud-standard-2
     timeout-minutes: 5
@@ -373,15 +374,15 @@ jobs:
         working-directory: .
         run: uv run --no-build --project backend --no-sync python scripts/run_validate_nav_config.py
       - name: Product map consistency (declared data-testids)
-        # BLOCKING, deliberately in the fast lint job rather than only in
-        # Test (Backend). The test file itself only reads manifest.yaml, the
-        # router and .vue sources (no app imports), but pytest loads
-        # tests/conftest.py which pulls app modules - ~35s cold on Windows,
-        # ~5-10s in CI Linux. Still far faster than the 45-min Test (Backend)
-        # round trip. `Test (Backend)` still runs it as part of the full suite;
-        # leaving it ONLY there meant a PR that adds a static data-testid
-        # without declaring it in the manifest went red after ~45 minutes and
-        # the Branch Fixer patched the manifest.
+        # BLOCKING, deliberately in the fast lint job rather than only in the
+        # "Test (Backend) non-unit suites" job. The test file itself only reads
+        # manifest.yaml, the router and .vue sources (no app imports), but
+        # pytest loads tests/conftest.py which pulls app modules - ~35s cold on
+        # Windows, ~5-10s in CI Linux. Still far faster than the ~10 min backend
+        # unit shard round trip. `Test (Backend) non-unit suites` still runs it
+        # as part of the full suite; leaving it ONLY there meant a PR that adds
+        # a static data-testid without declaring it in the manifest went red
+        # ~10 minutes later and the Branch Fixer patched the manifest.
         run: uv run --no-build --no-sync python -m pytest tests/architecture/test_product_map_consistency.py -q --tb=short -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - name: Trivy filesystem scan (dependency CVEs + misconfigs)
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297
@@ -414,21 +415,62 @@ jobs:
           format: 'table'
           skip-dirs: '**/.venv,**/node_modules,**/.git,**/.agents,**/.pytest_cache,**/dist,**/build'
 
+  uv-lock-check:
+    # FAR-2308: backend/uv.lock records the project version and the resolved
+    # dependency set. `uv sync --frozen` (used by every other job) installs from
+    # the lock as-is and cannot see that it has drifted from
+    # backend/pyproject.toml, so a stale lock reached main unnoticed and every
+    # `uv run` in a local commit gate rewrote the lock mid-run, colliding with
+    # pre-commit's stash/restore and aborting pushes from any branch based on
+    # the stale tree. This job is deliberately NOT path-gated: a stale lock on
+    # main must fail an unrelated PR too, because that is exactly how the drift
+    # propagates. `uv lock --check` never writes the lockfile, and the gate
+    # fails closed if it cannot run.
+    name: UV lockfile freshness
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Check backend/uv.lock is in sync with backend/pyproject.toml
+        run: uv lock --check
+
   backend-test:
-    name: Test (Backend)
+    name: Test (Backend) unit shard ${{ matrix.shard }}/3
+    # The unit suite, split across three CONCURRENT shards (unit shard 1/3,
+    # 2/3, 3/3). The suite is memory-bound: 4 xdist workers peak at ~11.7 GB
+    # RSS on a 16 GB runner, so adding workers to one runner cannot shorten the
+    # run - only another runner can. Three parallel 16 GB shards each keep the
+    # same 4 workers over a third of the tree, cutting the critical path to
+    # roughly a third of the old single-job wall-clock.
+    #
+    # Each shard writes its OWN coverage data file (.coverage.unit-<n>, see
+    # coverage-thresholds.sh "shard" mode) and enforces NO thresholds - it
+    # covers a third of the tree. The `backend-coverage` job below combines the
+    # shards and is the only place the thresholds (line AND branch) are checked.
+    #
     # FAR-1427 (cheap-first): wait for Lint (Backend) (~2.4 min) so a push that
-    # fails lint/mypy/bandit/vulture/semgrep does not burn ~25 runner-min of
-    # unit tests. Trade-off: +~2.4 min wall-clock on every green run. If lint
-    # fails this job is skipped and every dependent (coverage-gate, Sonar) is
-    # skipped with it - the run still concludes FAILURE because lint failed,
-    # and notify-pr-failure's failure() sees the failed ancestor.
+    # fails lint/mypy/bandit/vulture/semgrep does not burn ~35 runner-minutes of
+    # sharded unit tests. Trade-off: +~2.4 min wall-clock on every green run. If
+    # lint fails these jobs are skipped and every dependent (backend-coverage,
+    # coverage-gate, Sonar) is skipped with it - the run still concludes FAILURE
+    # because lint failed, and notify-pr-failure's needs-aware guard sees it.
     needs: [backend-lint]
-    # FAR-2106: 4 vCPU / 16 GB. The unit coverage run peaks at ~9.8 GB RSS with
-    # 2 xdist workers, against standard-2's 8 GB - FAR-2081 had to shard the
-    # suite into two sequential halves to fit. 16 GB removes that ceiling, and
-    # 4 vCPU (so `-n auto` runs 4 workers) roughly halves the wall-clock at
-    # ~neutral absolute cost (2x the rate for ~half the minutes).
+    # FAR-2106 memory ceiling (16 GB) is unchanged per shard; the parallelism,
+    # not the worker count, is what moves the wall-clock now.
+    strategy:
+      matrix:
+        shard: [1, 2, 3]
     runs-on: ubicloud-standard-4
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: backend
@@ -441,11 +483,93 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen
-      - name: Run unit tests with coverage
+      - name: Run unit tests with coverage (shard ${{ matrix.shard }}/3)
         shell: bash
-        run: ../.github/scripts/coverage-thresholds.sh
+        run: ../.github/scripts/coverage-thresholds.sh auto shard
         env:
           DATABASE_URL: "postgresql+asyncpg://unused:${{ secrets.POSTGRES_PASSWORD || 'unused' }}@localhost/unused"
+          COVERAGE_SHARD: ${{ matrix.shard }}/3
+      - name: Upload unit coverage shard
+        # if: always() so a partially-completed shard's data still lands (the
+        # combine job is skipped anyway when a shard fails), and the artifact
+        # name keeps each shard's data attributable.
+        #
+        # include-hidden-files: true is LOAD-BEARING, not cosmetic:
+        # upload-artifact defaults it to false, so although the glob matches
+        # `backend/.coverage.unit-<n>` the leading DOT makes it a hidden file
+        # and it is silently dropped ("No files were found with the provided
+        # path: backend/.coverage.unit-*. No artifacts will be uploaded." in
+        # run 41598150598). The combine job then has nothing to combine and
+        # every threshold silently reports against no data.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: backend/.coverage.unit-*
+          include-hidden-files: true
+          retention-days: 7
+
+  backend-coverage:
+    # Combines the three unit-coverage shards and enforces EVERY threshold
+    # against the merged report - the single place the coverage gate (line AND
+    # branch, per-module and whole-suite) actually fires. It also produces the
+    # `coverage-report` artifact (backend/coverage.xml) that `coverage-gate` and
+    # SonarCloud consume, so the artifact name and shape are unchanged from the
+    # single-job era.
+    name: Coverage combine (backend unit shards)
+    needs: [backend-test]
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Download unit coverage shards
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: coverage-shard-*
+          path: backend
+          merge-multiple: true
+      - name: Combine shards and enforce coverage thresholds
+        shell: bash
+        run: ../.github/scripts/coverage-thresholds.sh auto combine
+        env:
+          DATABASE_URL: "postgresql+asyncpg://unused:${{ secrets.POSTGRES_PASSWORD || 'unused' }}@localhost/unused"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-report
+          path: backend/coverage.xml
+
+  backend-non-unit:
+    # The non-Docker suites that used to queue behind the ~25 min unit run in
+    # `backend-test`: the architecture scan, the connector contracts and the two
+    # self-contained BDD module sets. They are small and produce no coverage, so
+    # they run in their own job PARALLEL to the unit shards and stop being part
+    # of the critical path at all.
+    name: Test (Backend) non-unit suites
+    needs: [backend-lint]
+    runs-on: ubicloud-standard-4
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
       - name: Run architecture tests
         # The architecture suite scans all of src/modulo for structural
         # violations (raw SQL f-strings, sensitive data logging, module-level
@@ -497,11 +621,6 @@ jobs:
             tests/bdd/steps/test_eval_block_steps.py tests/bdd/steps/test_hitl.py \
             tests/bdd/steps/test_eval_scorer_gates.py \
             -q --tb=short --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
-        with:
-          name: coverage-report
-          path: backend/coverage.xml
 
   integration-changed:
     # Runs the integration test files a PR (or push) actually changed. The
@@ -957,9 +1076,9 @@ jobs:
     #
     # Cost (measured in the merge queue: 470 s for 271 files / 5380 tests, plus
     # a cached `pnpm install`): a frontend-touching PR and a push to main each
-    # add ~8-9 runner-minutes on their own runner — parallel with backend-test
-    # (~25 min), so no added PR critical-path wall-clock; a backend-only PR
-    # skips every step (a few seconds of runner allocation).
+    # add ~8-9 runner-minutes on their own runner — parallel with the backend
+    # unit shards (~14 min), so no added PR critical-path wall-clock; a
+    # backend-only PR skips every step (a few seconds of runner allocation).
     name: Frontend unit suite (merge-queue parity)
     needs: [changes]
     runs-on: ubicloud-standard-2
@@ -999,24 +1118,24 @@ jobs:
     # to bound runner cost (the badge tracks main, not PRs), but the "SonarCloud
     # scan (coverage import)" status check is REQUIRED for merge, so it must also
     # run on pull_request — otherwise the check is never produced on a PR and the
-    # merge gate can never go green. Reuses the coverage-report artifact
-    # backend-test already uploads (and the frontend-coverage artifact the
-    # frontend job uploads) instead of re-running either suite.
+    # merge gate can never go green. Reuses the coverage-report artifact the
+    # shard combine job (`backend-coverage`) uploads (and the frontend-coverage
+    # artifact the frontend job uploads) instead of re-running either suite.
     # workflow_dispatch is allowed so this job can be validated manually.
     if: >-
       !cancelled()
       && needs.changes.result == 'success'
-      && needs.backend-test.result == 'success'
+      && needs.backend-coverage.result == 'success'
       && (github.event_name == 'pull_request'
       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
       || github.event_name == 'workflow_dispatch')
     # FAR-1430: `frontend` is a need only so its coverage artifact is ready to
     # download. Sonar must still run when `frontend` FAILS (it ran independently
     # before), so the condition above replaces the implicit success() with
-    # !cancelled() + an explicit backend-test success check (the old behaviour:
-    # skipped when backend-test fails/is skipped). frontend (~7 min) finishes
-    # well inside backend-test (~25 min), so this adds no wall-clock.
-    needs: [backend-test, frontend, changes]
+    # !cancelled() + an explicit success check on the backend coverage combine
+    # job (the old behaviour: skipped when the backend run fails/is skipped).
+    # frontend (~7 min) finishes well inside the backend unit shards.
+    needs: [backend-coverage, frontend, changes]
     runs-on: ubicloud-standard-2
     # A job-level block REPLACES the workflow default. actions: read is needed
     # by `gh run download` (Actions artifacts REST API) in the frontend-coverage
@@ -1167,7 +1286,15 @@ jobs:
         #      the server's own `errorMessage` is fetched from `/api/ce/task`
         #      and logged before any retry, so a DETERMINISTIC CE failure
         #      (quota, licence, malformed report) stays visible and still fails
-        #      the check after that single retry.
+        #      the check after that single retry. One deterministic variant is a
+        #      STALE report: when a newer commit's report has already been
+        #      processed the CE refuses the older one ("a newer report has
+        #      already been processed ... processing older reports is not
+        #      supported") and no retry can change that. Observed on main
+        #      2026-11-02 (run 41487471842 for c56bf72b9, superseded by the
+        #      report for 7053d4eed). That newer analysis already covers fresher
+        #      code, so the stale report is skipped as non-fatal instead of
+        #      leaving a false red on an already-superseded commit.
         #
         # All three are matched by an exact log signature, never a quality-gate
         # failure or any other error, so a genuine red check is never masked.
@@ -1213,6 +1340,17 @@ jobs:
               if [ -n "$TASK_ID" ]; then
                 CE_REASON="$(curl -sS --max-time 30 -H "Authorization: Bearer ${SONAR_TOKEN}" "${SONAR_HOST_URL}/api/ce/task?id=${TASK_ID}" 2>/dev/null | jq -r '.task.errorMessage // .errors[0].msg // empty' 2>/dev/null || true)"
                 echo "::notice::SonarCloud CE task ${TASK_ID} failed server-side: ${CE_REASON:-<no errorMessage returned>}"
+              fi
+              # A report for an OLDER commit that reaches the CE after a NEWER
+              # commit's report has already been processed can never be accepted:
+              # the CE rejects it deterministically ("a newer report has already
+              # been processed ... processing older reports is not supported"),
+              # so the retry below is futile and the red check is a false alarm.
+              # The newer commit's analysis is strictly fresher and already
+              # covers this project state, so skip this stale report (non-fatal).
+              if printf '%s' "$CE_REASON" | grep -qi "a newer report has already been processed"; then
+                echo "::notice::SonarCloud report for this commit was superseded by a newer commit's analysis; skipping the stale report (non-fatal - the newer report already covers fresher code)."
+                exit 0
               fi
               if [ "$CE_FAILURES" -lt 2 ] && [ "$attempt" -lt 3 ]; then
                 echo "::warning::SonarCloud CE task rejected the report server-side (CE attempt ${CE_FAILURES}/2); retrying once -- identical analyses of this project have completed green minutes apart."
@@ -1379,7 +1517,11 @@ jobs:
     if: >-
       github.event_name == 'pull_request'
       || github.event_name == 'workflow_dispatch'
-    needs: [backend-test, frontend, changes]
+    # `backend-coverage` is the job that combines the three unit shards and
+    # enforces the thresholds; `backend-test` (the shard matrix) is its own
+    # dependency, so naming the combine job here is enough. It also uploads the
+    # `coverage-report` artifact this job downloads.
+    needs: [backend-coverage, frontend, changes]
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1743,7 +1885,7 @@ jobs:
     # failure() nor cancelled(); every job here either always runs (path gates
     # are step-level) or is only skipped because an ancestor already failed,
     # which is itself a failure.
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, uv-lock-check, backend-test, backend-coverage, backend-non-unit, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -2163,7 +2305,7 @@ jobs:
     # `self-report-ci` (both `github.event_name == 'pull_request' && ...`) never
     # run on a push or dispatch to main, so they cannot fail there.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && always()
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, uv-lock-check, backend-test, backend-coverage, backend-non-unit, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -2318,7 +2460,7 @@ jobs:
     # ONLY the jobs named in `needs`, so a failure of a job omitted here still
     # satisfies the guard and self-reports the "ci" stage as done — a false-green
     # observability report while the PR's run is red. The rule is precise: every
-    # PRODUCT job that can fail on a PR is listed — the 16 below, including the
+    # PRODUCT job that can fail on a PR is listed — the 17 below, including the
     # FAR-1947 `frontend-unit-parity` job plus the pre-existing `tier1b-light`,
     # `runner-ci-harness` and `changes` (5-min timeout) omissions swept here
     # (this list equals notify-pr-failure's). Notifier jobs are deliberately
@@ -2326,13 +2468,13 @@ jobs:
     # documents for its own list), and the exclusion cannot false-green:
     # `notify-main-failure` never runs on a PR (its `if:` requires a
     # push/workflow_dispatch to main), and `notify-pr-failure` cannot fail
-    # unless one of the 16 product jobs above already failed or the run was
+    # unless one of the 17 product jobs above already failed or the run was
     # cancelled — every step of it that can fail is gated on
     # `contains(needs.*.result, 'failure') || cancelled()` — and both of those
     # conditions already make
     # this job's guard false. `self-report-ci` cannot list itself.
     if: github.event_name == 'pull_request' && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, uv-lock-check, backend-test, backend-coverage, backend-non-unit, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
       - name: Self-report CI Validate stage to Modulo (fail-open, best-effort)

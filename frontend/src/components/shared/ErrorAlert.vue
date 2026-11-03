@@ -35,6 +35,15 @@
 </template>
 
 <script setup lang="ts">
+/*
+ * The ONE shared error surface.
+ *
+ * The root carries `role="alert"`: an error appears as the result of a failed
+ * request, which is a dynamic change — without a live role the message is
+ * rendered but never announced. Call sites that already pass `role="alert"`
+ * (FolderListError, the pipeline move banner) keep working unchanged, and a
+ * caller-supplied role still wins via attribute fallthrough.
+ */
 import { computed } from 'vue'
 import { X } from '@lucide/vue'
 import { isProblemDetail, type ProblemDetail } from '../../lib/api/formatError'
