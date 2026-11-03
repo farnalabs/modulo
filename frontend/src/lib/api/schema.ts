@@ -103,7 +103,13 @@ export interface paths {
         /** Admin Update Org */
         put: operations["admin_update_org_api_v1_admin_org_put"];
         post?: never;
-        /** Delete Org Immediate */
+        /**
+         * Delete Org Immediate
+         * @description Refuse immediate deletion of the caller's own organisation.
+         *
+         *     This route always targets the caller's active organisation, so even a
+         *     system admin must use the explicit cross-organisation route instead.
+         */
         delete: operations["delete_org_immediate_api_v1_admin_org_delete"];
         options?: never;
         head?: never;
@@ -377,7 +383,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Request Org Deletion */
+        /**
+         * Request Org Deletion
+         * @description Refuse self-service deletion of the caller's own organisation.
+         *
+         *     The only organisation this route can address is the caller's active one, so
+         *     it can never delete anything: cross-organisation deletion is a system-admin
+         *     capability on ``DELETE /api/v1/admin/orgs/{org_id}``. The ``audited()``
+         *     dependency still records each refused attempt.
+         */
         post: operations["request_org_deletion_api_v1_admin_org_deletion_request_post"];
         delete?: never;
         options?: never;
@@ -394,7 +408,14 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Confirm Org Deletion */
+        /**
+         * Confirm Org Deletion
+         * @description Refuse confirmation of the caller's own organisation deletion.
+         *
+         *     The token is still accepted and validated as a request body so the endpoint
+         *     contract is unchanged, but no deletion is ever attempted: the only org this
+         *     route can confirm is the active one, and that is never deletable here.
+         */
         post: operations["confirm_org_deletion_api_v1_admin_org_deletion_confirm_post"];
         delete?: never;
         options?: never;
@@ -13823,15 +13844,6 @@ export interface components {
              */
             force: boolean;
         };
-        /** ConfirmDeletionResponse */
-        ConfirmDeletionResponse: {
-            /** Message */
-            message: string;
-            /** Deleted Organisation Id */
-            deleted_organisation_id: string;
-            /** Hard Deleted Runs */
-            hard_deleted_runs: number;
-        };
         /** ConnectorBinding */
         ConnectorBinding: {
             /** Type */
@@ -14637,19 +14649,6 @@ export interface components {
             status: string;
             /** Id */
             id: string;
-        };
-        /** DeletionRequestResponse */
-        DeletionRequestResponse: {
-            /** Message */
-            message: string;
-            /** Token */
-            token: string;
-            /** Token Expires At */
-            token_expires_at: string;
-            /** Export Summary */
-            export_summary: {
-                [key: string]: unknown;
-            };
         };
         /** DeliverManualRequest */
         DeliverManualRequest: {
@@ -24722,13 +24721,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Active-organisation deletion is refused; use the system-admin route. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ConfirmDeletionResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -25217,13 +25216,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            202: {
+            /** @description Active-organisation deletion is refused; use the system-admin route. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DeletionRequestResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -25252,13 +25251,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Active-organisation deletion is refused; use the system-admin route. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ConfirmDeletionResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
