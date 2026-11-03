@@ -128,8 +128,13 @@ def test_server_argv_pins_endpoint_arguments(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     argv = postgres_server_argv(pgdata, "127.0.0.1", 18000, bin_dir)
 
+    # The bundled binary carries the host's executable suffix (FAR-2229's
+    # ``binary_name`` seam): POSIX stays the bare "postgres", Windows is
+    # "postgres.exe". Both paths are asserted exactly — never a suffix-less
+    # match that would accept the wrong host's binary.
+    expected_binary = str(bin_dir / ("postgres.exe" if sys.platform == "win32" else "postgres"))
     assert argv == [
-        str(bin_dir / "postgres"),
+        expected_binary,
         "-D",
         str(pgdata),
         "-h",

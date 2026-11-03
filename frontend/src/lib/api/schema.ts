@@ -1428,6 +1428,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/feature-flags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Org Feature Flags
+         * @description List the community-tier flags this org admin may set for their own org.
+         */
+        get: operations["list_org_feature_flags_api_v1_admin_org_feature_flags_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/org/feature-flags/{flag_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Org Feature Flag
+         * @description Set (or update) this org's override for an org-settable flag.
+         */
+        put: operations["set_org_feature_flag_api_v1_admin_org_feature_flags__flag_name__put"];
+        post?: never;
+        /**
+         * Clear Org Feature Flag
+         * @description Clear this org's override for an org-settable flag (revert to default).
+         *
+         *     The ``feature_overrides`` map has no per-entry delete in the atomic patch
+         *     helper, so this reads the map, removes the key and writes the map back
+         *     through the same patch helper the other org-settings writers use — the
+         *     existing clear path's shape. Only the one map is rewritten; no other
+         *     settings key is touched.
+         */
+        delete: operations["clear_org_feature_flag_api_v1_admin_org_feature_flags__flag_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -7362,6 +7412,46 @@ export interface paths {
          * @description Archive revision.
          */
         post: operations["archive_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Diff System Map Revision Endpoint
+         * @description Diff a revision against another revision or the current draft.
+         */
+        post: operations["diff_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__diff_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/revisions/{rev_id}/restore-as-new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore System Map Revision Endpoint
+         * @description Create a new draft revision from a published/archived revision.
+         */
+        post: operations["restore_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__restore_as_new_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -18074,6 +18164,38 @@ export interface components {
             /** Exported At */
             exported_at: string;
         };
+        /**
+         * OrgFeatureFlagItem
+         * @description One org-settable flag, with its effective state for this organisation.
+         *
+         *     ``default`` is the registry's computed state for the org's plan (a
+         *     system-level override included) before any org override is applied;
+         *     ``enabled`` is the effective state after the org override; ``overridden``
+         *     reports whether the org has an explicit override, so the UI can distinguish
+         *     "on by default" from "on because someone set it".
+         */
+        OrgFeatureFlagItem: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Overridden */
+            overridden: boolean;
+            /** Default */
+            default: boolean;
+        };
+        /** OrgFeatureFlagListResponse */
+        OrgFeatureFlagListResponse: {
+            /** Flags */
+            flags: components["schemas"]["OrgFeatureFlagItem"][];
+        };
+        /** OrgFeatureFlagUpdateRequest */
+        OrgFeatureFlagUpdateRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** OrgGuardrailsKillSwitchResponse */
         OrgGuardrailsKillSwitchResponse: {
             /** Enabled */
@@ -22832,6 +22954,60 @@ export interface components {
             loop_configs: components["schemas"]["SystemMapLoopConfigResponse"][];
         };
         /**
+         * SystemMapRevisionDiffRequest
+         * @description Request to diff a revision against another revision or the current draft.
+         */
+        SystemMapRevisionDiffRequest: {
+            /**
+             * Against Revision Id
+             * @description Revision to diff against. If omitted, diffs against the current draft revision (if any).
+             */
+            against_revision_id?: string | null;
+        };
+        /**
+         * SystemMapRevisionDiffResponse
+         * @description Diff result between two revisions.
+         */
+        SystemMapRevisionDiffResponse: {
+            /**
+             * Base Revision Id
+             * Format: uuid
+             */
+            base_revision_id: string;
+            /** Base Revision Number */
+            base_revision_number: number;
+            /**
+             * Target Revision Id
+             * Format: uuid
+             */
+            target_revision_id: string;
+            /** Target Revision Number */
+            target_revision_number: number;
+            /** Nodes Added */
+            nodes_added?: string[];
+            /** Nodes Removed */
+            nodes_removed?: string[];
+            /** Nodes Modified */
+            nodes_modified?: string[];
+            /** Relationships Added */
+            relationships_added?: string[];
+            /** Relationships Removed */
+            relationships_removed?: string[];
+            /** Relationships Modified */
+            relationships_modified?: string[];
+            /** Loop Configs Added */
+            loop_configs_added?: string[];
+            /** Loop Configs Removed */
+            loop_configs_removed?: string[];
+            /** Loop Configs Modified */
+            loop_configs_modified?: string[];
+            /**
+             * Content Json Changed
+             * @default false
+             */
+            content_json_changed: boolean;
+        };
+        /**
          * SystemMapRevisionHistoryEntry
          * @description Single entry in the revision history with its effective time range.
          */
@@ -22901,6 +23077,31 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * SystemMapRevisionRestoreAsNewRequest
+         * @description Request to restore a published/archived revision as a new draft revision.
+         */
+        SystemMapRevisionRestoreAsNewRequest: {
+            /**
+             * Notes
+             * @default Restored from revision {revision_number}
+             */
+            notes: string;
+        };
+        /**
+         * SystemMapRevisionRestoreAsNewResponse
+         * @description Response for restore-as-new operation.
+         */
+        SystemMapRevisionRestoreAsNewResponse: {
+            new_revision: components["schemas"]["SystemMapRevisionResponse"];
+            /**
+             * Source Revision Id
+             * Format: uuid
+             */
+            source_revision_id: string;
+            /** Source Revision Number */
+            source_revision_number: number;
         };
         /** SystemMapUpdate */
         SystemMapUpdate: {
@@ -27652,6 +27853,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpAuthorityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_org_feature_flags_api_v1_admin_org_feature_flags_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgFeatureFlagListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    set_org_feature_flag_api_v1_admin_org_feature_flags__flag_name__put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                flag_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrgFeatureFlagUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgFeatureFlagItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    clear_org_feature_flag_api_v1_admin_org_feature_flags__flag_name__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                flag_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgFeatureFlagItem"];
                 };
             };
             /** @description Validation Error */
@@ -39626,6 +39928,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemMapRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    diff_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__diff_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+                /** @description Revision ID */
+                rev_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SystemMapRevisionDiffRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapRevisionDiffResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    restore_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__restore_as_new_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+                /** @description Revision ID */
+                rev_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SystemMapRevisionRestoreAsNewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapRevisionRestoreAsNewResponse"];
                 };
             };
             /** @description Validation Error */

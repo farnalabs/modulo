@@ -250,6 +250,7 @@ _KNOWN_WRITER_MODULES = frozenset(
         "admin_email.py",
         "admin_evidence_retention.py",
         "admin_feature_flags.py",
+        "admin_org_feature_flags.py",
         "admin_orgs.py",
         "costs.py",
         "observability.py",
@@ -257,7 +258,17 @@ _KNOWN_WRITER_MODULES = frozenset(
     }
 )
 
+# Two equivalent paths classify 55P03 as a 409:
+#   - the shared helper, called from a route-local ``except SQLAlchemyError``
+#     arm (the converted arms below); or
+#   - ``@handle_db_errors``, whose ``SQLAlchemyError`` handler delegates to the
+#     SAME ``_MSG_LOCK_TIMEOUT`` 409 (pinned in
+#     ``tests/unit/api/test_db_error_handling.py::TestLockTimeout``). A module
+#     whose every writer is decorated therefore never needs a local arm — it
+#     would only duplicate the classifier. The guard accepts either because the
+#     invariant is "55P03 is a 409 here", not "the helper is spelled literally".
 _CLASSIFIER_NAME = "raise_lock_timeout_conflict_if"
+_DECORATOR_MARKER = "@handle_db_errors"
 
 
 def _route_sources_reaching_a_patch_helper() -> dict[str, str]:
@@ -295,7 +306,10 @@ def test_every_patch_writer_route_classifies_55p03() -> None:
     ``@handle_db_errors`` backstop at all); the independent F16 pass found them
     still missing. This guard makes the invariant STRUCTURAL rather than prose:
     it discovers every route module that reaches a patch helper and fails if any
-    of them does not classify 55P03.
+    of them does not classify 55P03 — through the shared helper in a route-local
+    ``except SQLAlchemyError`` arm, or (equivalently, and with no local arm to
+    convert) through the ``@handle_db_errors`` backstop, which maps 55P03 to the
+    same 409.
 
     It is non-vacuous by construction — it asserts the discovered set contains
     the known writers, so a stale-token discovery that finds nothing (or too
@@ -313,10 +327,16 @@ def test_every_patch_writer_route_classifies_55p03() -> None:
         "fix the discovery tokens, do not weaken the guard"
     )
 
-    unclassified = sorted(name for name, source in discovered.items() if _CLASSIFIER_NAME not in source)
+    unclassified = sorted(
+        name
+        for name, source in discovered.items()
+        if _CLASSIFIER_NAME not in source and _DECORATOR_MARKER not in source
+    )
     assert not unclassified, (
-        "FAR-1832: these route modules reach a bounded-lock org-settings/OTel patch but never "
-        f"call {_CLASSIFIER_NAME}: {unclassified}. Add "
-        "raise_lock_timeout_conflict_if(exc, <that route's own log key>) as the FIRST statement "
-        "of the arm's except SQLAlchemyError (55P03 must be a 409 conflict, not a 503 outage)."
+        "FAR-1832: these route modules reach a bounded-lock org-settings/OTel patch but classify "
+        f"55P03 through neither {_CLASSIFIER_NAME} nor {_DECORATOR_MARKER}: {unclassified}. "
+        "Either add raise_lock_timeout_conflict_if(exc, <that route's own log key>) as the FIRST "
+        "statement of the arm's except SQLAlchemyError, or wrap the writer with @handle_db_errors "
+        "(its SQLAlchemyError handler maps 55P03 to the same 409) — never leave a 55P03 to become "
+        "a 503 outage."
     )
