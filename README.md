@@ -172,8 +172,11 @@ with the [system requirements](docs/system-requirements.md), then follow the
 [deployment guide](docs/deployment.md). The [release process](docs/release-process.md)
 documents what must exist before the native path can become available.
 
-Native installation on macOS and Windows is also Alpha scope and is not
-installable today.
+Native installation on macOS uses the supported, signed and notarized arm64
+`.dmg` (see the [system requirements](docs/system-requirements.md)); it is not
+installable today only because no signed `bundle-v*` release is published yet.
+Native Windows installation is Beta scope, planned after Alpha: the native
+installer is still in progress and no signed Windows artifact is published yet.
 
 
 ## Documentation
