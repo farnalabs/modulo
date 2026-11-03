@@ -42,9 +42,13 @@
           </select>
         </div>
       </div>
-      <div v-if="recentRunsError" class="text-sm text-destructive-text" aria-live="assertive" data-testid="evidence-recent-runs-error">
-        {{ recentRunsError }}
-      </div>
+      <ErrorAlert
+        v-if="recentRunsError"
+        :message="recentRunsError"
+        :on-retry="loadRecentRuns"
+        compact
+        data-testid="evidence-recent-runs-error"
+      />
       <p v-else-if="!recentRunsLoading && recentRuns.length === 0" class="text-sm text-muted-foreground" data-testid="evidence-recent-runs-empty">
         {{ $t('views.EvidenceView.no_recent_runs') }}
       </p>

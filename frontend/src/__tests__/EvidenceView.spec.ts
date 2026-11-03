@@ -172,6 +172,42 @@ describe('EvidenceView', () => {
     expect(wrapper.find('[data-testid="evidence-recent-runs-error"]').text()).toContain('runs unavailable')
   })
 
+  it('retries loading recent runs when the retry button in the error alert is clicked', async () => {
+    mockFetchRuns.mockRejectedValueOnce(new Error('Failed to fetch runs'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    const errorAlert = wrapper.find('[data-testid="evidence-recent-runs-error"]')
+    expect(errorAlert.exists()).toBe(true)
+    expect(errorAlert.text()).toContain('Failed to fetch runs')
+
+    mockFetchRuns.mockResolvedValueOnce({
+      items: [
+        {
+          run_id: 'run-retried',
+          pipeline_id: 'pipe-1',
+          pipeline_name: 'Pipeline 1',
+          status: 'complete',
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 50,
+      next_cursor: null,
+      has_more: false,
+    })
+
+    const retryBtn = errorAlert.find('[data-testid="error-alert-retry"]')
+    expect(retryBtn.exists()).toBe(true)
+    await retryBtn.trigger('click')
+    await flushPromises()
+
+    expect(mockFetchRuns).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="evidence-recent-runs-error"]').exists()).toBe(false)
+    const options = wrapper.findAll('[data-testid="evidence-recent-run"] option')
+    expect(options.some((opt) => opt.text().includes('Pipeline 1'))).toBe(true)
+  })
+
   it('falls back to the unknown-pipeline label and filters a run whose pipeline name is null', async () => {
     mockFetchRuns.mockResolvedValue({
       items: [
