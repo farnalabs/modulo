@@ -6,6 +6,7 @@ import { createI18n } from 'vue-i18n'
 const mockGet = vi.hoisted(() => vi.fn())
 const mockPost = vi.hoisted(() => vi.fn())
 const mockGetAccessToken = vi.hoisted(() => vi.fn())
+const mockRoute = vi.hoisted(() => ({ params: { id: 'map-1' } as Record<string, string>, query: {} as Record<string, string> }))
 const mockIsOperator = vi.hoisted(() => ({ value: true }))
 const mockIsSystemAdmin = vi.hoisted(() => ({ value: false }))
 const mockPlanStore = vi.hoisted(() => ({
@@ -26,7 +27,7 @@ vi.mock('../composables/useCurrentUser', () => ({
   useCurrentUser: () => ({ isOperator: mockIsOperator, isSystemAdmin: mockIsSystemAdmin }),
 }))
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { id: 'map-1' } }),
+  useRoute: () => mockRoute,
   useRouter: () => ({ push: vi.fn() }),
   RouterLink: { template: '<a><slot /></a>' },
 }))
@@ -56,6 +57,8 @@ describe('SystemMapDetailView load failures', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     mockGet.mockReset()
+    mockRoute.params = { id: 'map-1' }
+    mockRoute.query = {}
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
   })
 
@@ -143,6 +146,8 @@ describe('SystemMapDetailView authoring actions', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     mockGet.mockReset()
+    mockRoute.params = { id: 'map-1' }
+    mockRoute.query = {}
     if (mockPost) mockPost.mockReset()
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
     mockGet.mockImplementation((path: string) => {
@@ -345,6 +350,18 @@ describe('SystemMapDetailView authoring actions', () => {
     expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(false)
   })
 
+  it('opens the discovery review panel for the dashboard deep link', async () => {
+    const store = useSystemMapsStore()
+    await store.fetchAccess()
+    store.discovery = { inferred_nodes: [], inferred_edges: [] } as never
+    mockRoute.query = { discovery: '1' }
+
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
+  })
+
   it('passes read-only to the editor for a published revision', async () => {
     const wrapper = mountWithStubs()
     await flushPromises()
@@ -375,6 +392,8 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     setActivePinia(createPinia())
     mockGet.mockReset()
     mockPost.mockReset()
+    mockRoute.params = { id: 'map-1' }
+    mockRoute.query = {}
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })

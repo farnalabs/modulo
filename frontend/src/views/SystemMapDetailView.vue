@@ -257,6 +257,14 @@ async function archiveRevision(): Promise<void> {
   }
 }
 
-onMounted(loadData)
+async function loadAndOpenDiscovery(): Promise<void> {
+  await loadData()
+  // The dashboard deep-links here after running discovery so the inferred
+  // draft is reviewed straight away; the report only opens when it belongs to
+  // this navigation (the query flag), not on any later visit to the map.
+  if (route.query.discovery === '1' && store.discovery) discoveryOpen.value = true
+}
+
+onMounted(loadAndOpenDiscovery)
 watch(() => route.params.id, loadData)
 </script>
