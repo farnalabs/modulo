@@ -52,8 +52,25 @@
         <div class="flex-1 flex overflow-hidden relative">
           <!-- Graph Editor -->
           <div class="flex-1 relative" :data-testid="`system-map-graph-editor`">
+            <!-- ux-conformance STATE-1/STATE-3: the live region announces ONLY
+                 the loading status text. <output> carries the implicit `status`
+                 role, so an explicit role="status" is deliberately omitted
+                 (FAR-1812 / SonarCloud Web:S6819); `aria-busy` sits on the
+                 spinner placeholder it describes, never on the live region. -->
+            <div
+              v-if="loading"
+              class="flex flex-col items-center justify-center h-full gap-3"
+              data-testid="system-map-detail-loading"
+            >
+              <output class="text-sm text-muted-foreground" aria-live="polite">{{ $t('views.SystemMapDetailView.loading') }}</output>
+              <LoadingSpinner aria-busy="true" />
+            </div>
+
+            <!-- The editor renders for ANY loaded graph, including one with zero
+                 nodes: it owns the node-type toolbar, so hiding it for an empty
+                 draft would leave no way to add the first node. -->
             <GraphEditor
-              v-if="graph"
+              v-else-if="graph"
               :nodes="graph.nodes"
               :relationships="graph.relationships"
               :loop-configs="graph.loop_configs"
@@ -65,7 +82,7 @@
               data-testid="system-map-graph-canvas"
             />
 
-            <div v-else class="flex items-center justify-center h-full text-muted-foreground" data-testid="system-map-empty-state">
+            <div v-else-if="!loadError" class="flex items-center justify-center h-full text-muted-foreground" data-testid="system-map-empty-state">
               <div class="text-center">
                 <p class="text-lg">{{ $t('views.SystemMapDetailView.no_graph') }}</p>
                 <p class="text-sm mt-2">{{ $t('views.SystemMapDetailView.no_graph_hint') }}</p>
@@ -99,6 +116,7 @@ import HeaderBar from '../components/system-maps/SystemMapHeaderBar.vue'
 import GraphEditor from '../components/system-maps/SystemMapGraphEditor.vue'
 import RevisionSidebar from '../components/system-maps/SystemMapRevisionSidebar.vue'
 import DiscoveryPanel from '../components/system-maps/SystemMapDiscoveryPanel.vue'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import { mergeDiscoverySelections } from '../components/system-maps/discoveryMerge'
 
 const route = useRoute()
@@ -112,6 +130,7 @@ const graph = computed(() => store.graph)
 const revisions = computed(() => store.revisions)
 const discovery = computed(() => store.discovery)
 const loadError = computed(() => store.error)
+const loading = computed(() => store.loading)
 
 const showSidebar = ref(true)
 const discoveryOpen = ref(false)

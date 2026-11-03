@@ -474,3 +474,148 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
   })
 })
+
+describe('SystemMapDetailView loading and graph state lifecycle (STATE-1 / STATE-2)', () => {
+  let resolveFlags: (value: unknown) => void
+  let resolveMap: (value: unknown) => void
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+    mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+  })
+
+  it('renders loading state while store.loading is true and does not render empty state', async () => {
+    const flagsPromise = new Promise((resolve) => { resolveFlags = resolve })
+    const mapPromise = new Promise((resolve) => { resolveMap = resolve })
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return flagsPromise
+      if (path === '/api/v1/system-maps/map-1' || path === '/api/v1/system-maps/{map_id}') return mapPromise
+      return Promise.resolve({ data: {} })
+    })
+
+    const wrapper = mountView()
+    const store = useSystemMapsStore()
+    expect(store.loading).toBe(true)
+    await wrapper.vm.$nextTick()
+
+    const loadingIndicator = wrapper.find('[data-testid="system-map-detail-loading"]')
+    expect(loadingIndicator.exists()).toBe(true)
+    // <output> carries the implicit `status` role, so it must be announced as
+    // a polite live region without an explicit role="status" (Web:S6819).
+    const liveRegion = loadingIndicator.find('output')
+    expect(liveRegion.exists()).toBe(true)
+    expect(liveRegion.attributes('aria-live')).toBe('polite')
+    expect(liveRegion.text()).toContain('Loading system map')
+
+    expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-graph-canvas"]').exists()).toBe(false)
+
+    resolveFlags({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+    resolveMap({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    await flushPromises()
+  })
+
+  it('renders empty-graph state once loaded and map genuinely has zero nodes', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const store = useSystemMapsStore()
+    expect(store.loading).toBe(false)
+    expect(store.graph).toBeNull()
+
+    expect(wrapper.find('[data-testid="system-map-detail-loading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-map-graph-canvas"]').exists()).toBe(false)
+  })
+
+  it('renders graph editor when nodes exist', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      if (path === '/api/v1/system-maps/{map_id}/revisions/{rev_id}') {
+        return Promise.resolve({
+          data: {
+            revision: { id: 'rev-1', revision_number: 1, status: 'published' },
+            nodes: [{ node_key: 'pipeline-1', node_type: 'pipeline', display_name: 'Pipeline 1', config_json: {}, position_x: '0', position_y: '0' }],
+            relationships: [],
+          },
+        })
+      }
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: 'rev-1' } })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const store = useSystemMapsStore()
+    expect(store.loading).toBe(false)
+    expect(store.graph?.nodes).toHaveLength(1)
+
+    expect(wrapper.find('[data-testid="system-map-detail-loading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-graph-canvas"]').exists()).toBe(true)
+  })
+
+  it('keeps the graph editor mounted for a loaded draft with zero nodes so the first node can be added', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const store = useSystemMapsStore()
+    store.graph = {
+      revision: { id: 'rev-1', revision_number: 1, status: 'draft' },
+      nodes: [],
+      relationships: [],
+      loop_configs: [],
+    } as never
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-testid="system-map-graph-canvas"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-detail-loading"]').exists()).toBe(false)
+  })
+
+  it('toggles loading and empty states reactively when store.loading changes', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const store = useSystemMapsStore()
+    expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-map-detail-loading"]').exists()).toBe(false)
+
+    store.loading = true
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-testid="system-map-detail-loading"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(false)
+
+    store.loading = false
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-testid="system-map-detail-loading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(true)
+  })
+})
