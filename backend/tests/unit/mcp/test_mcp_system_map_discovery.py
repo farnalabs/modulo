@@ -23,13 +23,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError, InvalidRequestError, ProgrammingError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
 from modulo.api.main import app
-from modulo.api.mcp_server import discover_system_map
+from modulo.api.mcp_server import (
+    _MSG_DB_MIGRATION_REQUIRED,
+    _MSG_UNEXPECTED_ERROR,
+    _system_maps_discovery_session,
+    _system_maps_http_error_payload,
+    discover_system_map,
+)
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.system_map_persistence import SystemMapDiscoveryRepository
+from modulo.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
 from modulo.settings import Settings
 from tests.unit.api.mock_session import configure_mock_session
 from tests.unit.mcp.helpers import ORG_ID, USER_ID
@@ -136,6 +145,7 @@ def _mcp_auth_context(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         _ctx_key_scope,
         _ctx_org_id,
         _ctx_role,
+        _ctx_team_id,
         _ctx_user_id,
     )
 
@@ -149,6 +159,7 @@ def _mcp_auth_context(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     _ctx_auth_token.set("mk_testprefix_testsecretkey1234567890abc")
     _ctx_key_grants.set(frozenset({"system_maps_access"}))
     _ctx_key_scope.set("org")
+    _ctx_team_id.set(None)
     yield
     _ctx_org_id.set(None)
     _ctx_user_id.set(None)
@@ -157,6 +168,7 @@ def _mcp_auth_context(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     _ctx_auth_token.set(None)
     _ctx_key_grants.set(None)
     _ctx_key_scope.set(None)
+    _ctx_team_id.set(None)
 
 
 @pytest.mark.asyncio
@@ -421,3 +433,289 @@ async def test_mcp_and_rest_paths_persist_the_same_draft(rest_client: TestClient
     assert mcp_report["inferred_edges"] == rest_report["inferred_edges"]
     assert mcp_report["skipped"] == rest_report["skipped"]
     assert mcp_report["warnings"] == rest_report["warnings"]
+
+
+# ─── Error mapping: the tool classifies DB failures itself (FAR-2288 fix) ───
+#
+# The reused REST handler is wrapped by ``@handle_db_errors``, which would turn
+# a session-contract violation into a generic 500 and an ``IntegrityError``
+# into 409/``name_conflict`` before the tool sees it. The tool resolves the
+# UNDECORATED handler, so these tests drive the real route function and assert
+# the branchable codes the agent receives.
+
+
+async def _call_tool_with_rest_handler_error(exc: BaseException) -> dict[str, Any]:
+    """Drive the tool with a mocked route handler that raises *exc*."""
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock(side_effect=exc)),
+        _patch_discovery_session(_discovery_session()),
+    ):
+        return await discover_system_map()
+
+
+@pytest.mark.parametrize(
+    ("status_code", "detail", "expected_code"),
+    [
+        (400, "bad request", "invalid_request"),
+        (402, "system_maps is not available on your plan", "feature_required"),
+        (403, "not permitted", "insufficient_scope"),
+        (404, "System map not found", "not_found"),
+        (409, "A system map named 'x' already exists", "name_conflict"),
+        (422, "name is invalid", "validation_failed"),
+        (501, "migrations required", "migration_required"),
+        (503, "database unavailable", "database_unavailable"),
+        (418, "unmapped refusal", "server_error"),
+    ],
+    ids=[
+        "400-bad-request",
+        "402-feature-required",
+        "403-insufficient-scope",
+        "404-not-found",
+        "409-name-conflict",
+        "422-validation-failed",
+        "501-migration-required",
+        "503-database-unavailable",
+        "418-unmapped-server-error",
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_http_refusal_maps_to_its_branchable_code(
+    status_code: int,
+    detail: str,
+    expected_code: str,
+) -> None:
+    result = await _call_tool_with_rest_handler_error(StarletteHTTPException(status_code=status_code, detail=detail))
+
+    assert result == {"error": expected_code, "detail": detail}
+
+
+@pytest.mark.parametrize(
+    ("status_code", "detail", "expected_code"),
+    [
+        (400, "bad request", "invalid_request"),
+        (402, "feature required", "feature_required"),
+        (404, "not found", "not_found"),
+        (422, "invalid", "validation_failed"),
+        (503, "unavailable", "database_unavailable"),
+        (418, "unmapped", "server_error"),
+    ],
+    ids=[
+        "direct-400",
+        "direct-402",
+        "direct-404",
+        "direct-422",
+        "direct-503",
+        "direct-418",
+    ],
+)
+def test_http_error_payload_maps_statuses_directly(
+    status_code: int,
+    detail: str,
+    expected_code: str,
+) -> None:
+    """The envelope helper is unit-testable without the tool's gate stack."""
+    payload = _system_maps_http_error_payload(StarletteHTTPException(status_code=status_code, detail=detail))
+
+    assert payload == {"error": expected_code, "detail": detail}
+
+
+def test_http_error_payload_never_echoes_a_structured_detail() -> None:
+    """A non-string detail is replaced by the safe constant."""
+    payload = _system_maps_http_error_payload(
+        StarletteHTTPException(status_code=404, detail={"internal": "do-not-leak"})
+    )
+
+    assert payload == {"error": "not_found", "detail": _MSG_UNEXPECTED_ERROR}
+    assert "do-not-leak" not in payload["detail"]
+
+
+@pytest.mark.asyncio
+async def test_discovery_session_yields_the_factory_session() -> None:
+    """The helper yields the factory's own session, never a nested transaction."""
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock(return_value=session)
+
+    with patch("modulo.api.mcp_server._get_session_factory", return_value=factory):
+        async with _system_maps_discovery_session() as yielded:
+            assert yielded is session
+
+    factory.assert_called_once_with()
+    session.__aenter__.assert_awaited_once()
+    session.__aexit__.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_programming_error_maps_to_migration_required() -> None:
+    result = await _call_tool_with_rest_handler_error(
+        ProgrammingError("SELECT 1", {}, Exception("column does not exist"))
+    )
+
+    assert result["error"] == "migration_required"
+    assert result["detail"] == _MSG_DB_MIGRATION_REQUIRED
+    assert "column does not exist" not in result["detail"]
+
+
+@pytest.mark.asyncio
+async def test_real_route_session_contract_error_keeps_its_own_code() -> None:
+    """Without the unwrap this is a generic 500 -> ``server_error``."""
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch(
+            "modulo.api.routes.system_maps.set_rls_org",
+            new=AsyncMock(side_effect=InvalidRequestError("session outside transaction")),
+        ),
+        _patch_discovery_session(_discovery_session()),
+    ):
+        result = await discover_system_map()
+
+    assert result["error"] == "session_contract_error"
+    assert result["detail"] == MSG_SESSION_CONTRACT
+    assert "session outside transaction" not in result["detail"]
+
+
+@pytest.mark.asyncio
+async def test_real_route_uuid5_revision_collision_is_a_retryable_conflict() -> None:
+    """A concurrent same-fingerprint revision write is NOT a name clash.
+
+    Without the unwrap ``@handle_db_errors`` turns this IntegrityError into a
+    409, which the tool rendered as ``name_conflict`` — steering the agent to
+    rename a map instead of retrying the idempotent write.
+    """
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=_draft_map())),
+        patch.object(
+            SystemMapDiscoveryRepository,
+            "save_discovery_revision",
+            new=AsyncMock(
+                side_effect=IntegrityError(
+                    "INSERT INTO system_map_revisions ...",
+                    {},
+                    Exception("duplicate key value violates unique constraint"),
+                )
+            ),
+        ),
+        _patch_discovery_session(_discovery_session()),
+    ):
+        result = await discover_system_map()
+
+    assert result["error"] == "conflict"
+    assert result["error"] != "name_conflict"
+    assert "duplicate key" not in result["detail"]
+
+
+@pytest.mark.asyncio
+async def test_real_route_name_conflict_still_maps_to_name_conflict() -> None:
+    """A genuine name clash keeps its distinct code."""
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch.object(
+            SystemMapDiscoveryRepository,
+            "get_or_create_draft",
+            new=AsyncMock(side_effect=SystemMapNameConflictError("A system map named 'draft' already exists")),
+        ),
+        _patch_discovery_session(_discovery_session()),
+    ):
+        result = await discover_system_map(name="draft")
+
+    assert result["error"] == "name_conflict"
+    assert "already exists" in result["detail"]
+
+
+@pytest.mark.asyncio
+async def test_real_route_value_error_is_a_non_leaking_server_error() -> None:
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=_draft_map())),
+        patch.object(
+            SystemMapDiscoveryRepository,
+            "save_discovery_revision",
+            new=AsyncMock(side_effect=ValueError("system map discovery draft not found")),
+        ),
+        _patch_discovery_session(_discovery_session()),
+    ):
+        result = await discover_system_map()
+
+    assert result["error"] == "server_error"
+    assert result["detail"] == "Failed to discover system map"
+    assert "draft not found" not in result["detail"]
+
+
+# ─── Credential scope: an org-wide scan requires an org-scoped credential ───
+
+
+@pytest.mark.asyncio
+async def test_team_scoped_credential_is_refused_before_discovery() -> None:
+    """A team-scoped key must not trigger an org-wide inventory scan."""
+    from modulo.api.mcp_server import _ctx_team_id
+
+    team_id = uuid.uuid4()
+    _ctx_team_id.set(team_id)
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
+        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+    ):
+        result = await discover_system_map()
+
+    assert result["error"] == "insufficient_scope"
+    assert "org-scoped credential" in result["detail"]
+    assert str(team_id) not in result["detail"]
+    feature_gate.assert_not_awaited()
+    rest_handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_user_scoped_api_key_is_refused_before_discovery() -> None:
+    from modulo.api.mcp_server import _ctx_key_scope
+
+    _ctx_key_scope.set("user")
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
+        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+    ):
+        result = await discover_system_map()
+
+    assert result["error"] == "insufficient_scope"
+    assert "org-scoped credential" in result["detail"]
+    feature_gate.assert_not_awaited()
+    rest_handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_less_identity_session_is_allowed() -> None:
+    """A JWT session is the user's own org-wide identity — not a team key."""
+    from modulo.api.mcp_server import _ctx_auth_type, _ctx_key_scope
+
+    _ctx_key_scope.set("user")
+    _ctx_auth_type.set("jwt")
+    rest_handler = AsyncMock(return_value=SimpleNamespace(model_dump=MagicMock(return_value={"ok": True})))
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("modulo.api.routes.system_maps.discover_system_map", new=rest_handler),
+        _patch_discovery_session(_discovery_session()),
+    ):
+        result = await discover_system_map()
+
+    assert result == {"ok": True}
+    rest_handler.assert_awaited_once()
+
+
+def test_route_handler_without_a_wrapper_is_used_as_is() -> None:
+    """The unwrap helper tolerates a plain (already-undecorated) function."""
+    from modulo.api.mcp_server import _unwrap_system_maps_route_handler
+
+    async def handler() -> None:
+        return None
+
+    assert _unwrap_system_maps_route_handler(handler) is handler

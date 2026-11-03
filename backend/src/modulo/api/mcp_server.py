@@ -17,6 +17,7 @@ import asyncio
 import contextvars
 import copy
 import functools
+import inspect
 import json
 import logging
 import re
@@ -708,6 +709,10 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
     auth type are threaded into the chokepoint so the caller-scope leg of the
     tool-scope decision sees the live credential class (None fails closed).
 
+    FAR-2288: the credential's team boundary (``_ctx_team_id``) is threaded too,
+    so the ``org-credential`` caller-scope classification can refuse a
+    team-scoped credential before an organisation-wide tool runs.
+
     FAR-1930: the request's live ``is_system_admin`` claim is threaded too, so
     the resolver's system-admin leg (for the tools declared in
     ``SYSTEM_ADMIN_TOOLS``) is evaluated here rather than in each tool body.
@@ -722,6 +727,7 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
             auth_type=_ctx_auth_type.get(None),
             grants=_ctx_key_grants.get(None),
             is_system_admin=_ctx_is_system_admin_val(),
+            team_id=_ctx_team_id_val(),
         )
     except MCPSystemAdminRequiredError as exc:
         # FAR-1930: the shared resolver owns the gate. This adapter emits the
@@ -10797,6 +10803,21 @@ def _system_maps_http_error_payload(exc: StarletteHTTPException) -> dict[str, An
     return _tool_error(detail, code=code)
 
 
+def _unwrap_system_maps_route_handler(handler: Any) -> Any:
+    """Return the route handler with ``@handle_db_errors``'s wrapper removed.
+
+    The wrapper is a single ``functools.wraps`` layer, so one ``__wrapped__``
+    hop is exact. The ``inspect.isfunction`` guard keeps TEST DOUBLES out of the
+    unwrap: mocks fabricate any attribute (including ``__wrapped__``), so
+    blindly following the attribute would replace the double with a mock child
+    instead of returning the handler under test.
+    """
+    if not inspect.isfunction(handler):
+        return handler
+    unwrapped = getattr(handler, "__wrapped__", None)
+    return unwrapped if unwrapped is not None else handler
+
+
 @asynccontextmanager
 async def _system_maps_discovery_session() -> AsyncGenerator[AsyncSession, None]:
     """Fresh session for the reused REST discovery handler.
@@ -10816,8 +10837,9 @@ async def _system_maps_discovery_session() -> AsyncGenerator[AsyncSession, None]
         "discovery draft, returning the discovery report (draft map/revision ids, inferred "
         "nodes/edges, warnings, skipped sources, published=false; mirrors "
         "POST /api/v1/system-maps/discover). Requires the system_maps feature, developer "
-        "mode, an operator/admin role and the system_maps_access grant; ordinary callers "
-        "are refused."
+        "mode, an operator/admin role, the system_maps_access grant and an org-scoped "
+        "credential — team-scoped and user-scoped credentials are refused because the scan "
+        "covers the whole organisation; ordinary callers are refused."
     ),
 )
 @mcp_audited("system_map_discovery_drafted", "system_map", fail_closed=False)
@@ -10836,6 +10858,15 @@ async def discover_system_map(
     the transport gate (the REST dependency chain, re-applied here because the
     handler is invoked directly rather than through FastAPI), the principal
     construction from the request ContextVars, and the error/payload rendering.
+
+    The handler is resolved through ``inspect.unwrap`` so the REST route's
+    ``@handle_db_errors`` wrapper does not pre-empt the classification: that
+    wrapper turns a session-contract violation into a generic 500 and an
+    ``IntegrityError`` into 409 (rendered as ``name_conflict``), which would
+    tell an agent to rename a map instead of retrying a concurrent uuid5
+    revision write. Driving the UNDECORATED handler lets this tool classify DB
+    failures itself, while the route's own genuine refusals (404/402/409 name
+    conflict/422) remain plain ``HTTPException``s and are still mapped below.
     """
     try:
         if not await validate_current_auth():
@@ -10869,6 +10900,13 @@ async def discover_system_map(
         from modulo.api.routes.system_maps import discover_system_map as rest_discover_system_map
         from modulo.auth.jwt import TenantPrincipal
 
+        # Resolve the UNDECORATED handler: ``@handle_db_errors`` on the REST
+        # route would otherwise convert a session-contract ``InvalidRequestError``
+        # to a generic 500 and an ``IntegrityError`` to 409 (``name_conflict``)
+        # before this tool can classify them (FAR-2288). The REST route keeps
+        # its own wrapper — only the MCP invocation bypasses it.
+        rest_discover_system_map = _unwrap_system_maps_route_handler(rest_discover_system_map)
+
         principal = TenantPrincipal(
             username=str(user_id),
             organisation_id=org_id,
@@ -10894,10 +10932,17 @@ async def discover_system_map(
         _log.exception("discover_system_map failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError as exc:
+        # Classify the DB failure HERE (the REST wrapper was bypassed above):
+        # session-contract -> session_contract_error, a bounded lock wait ->
+        # lock_timeout, IntegrityError -> conflict (a concurrent uuid5 revision
+        # write, not a name clash), ProgrammingError -> migration_required,
+        # anything else -> database_unavailable. The contract guard stays the
+        # arm's FIRST statement so the static FAR-1464/FAR-1482 architecture
+        # guard sees it.
         if (contract_error := _tool_session_contract_error(exc, "mcp.discover_system_map")) is not None:
             return contract_error
         _log.exception("discover_system_map failed")
-        return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE, code="database_unavailable")
+        return _sqlalchemy_exception_response(exc, _MSG_DB_OPERATION_FAILED, "mcp.discover_system_map")
     except Exception as exc:
         _log.exception("discover_system_map failed")
         return _tool_exception_error("Failed to discover system map", exc, "mcp.discover_system_map")

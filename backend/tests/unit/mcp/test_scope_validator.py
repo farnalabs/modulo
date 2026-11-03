@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.auth.permissions import SYSTEM_MAPS_ACCESS_PERMISSION
 from modulo.core.mcp.scope_validator import (
     CALLER_SCOPE_REQUIREMENTS,
     SYSTEM_ADMIN_TOOLS,
@@ -1224,3 +1225,65 @@ class TestCallerScopeClassification:
     def test_read_only_is_any(self) -> None:
         for tool in ("list_pipelines", "get_run_status", "search_library"):
             assert classify_caller_scope(tool, "resource.read_only") == "any"
+
+    def test_discover_system_map_is_pinned_org_credential(self) -> None:
+        """FAR-2288: the org-wide System Maps scan needs an org-scoped credential."""
+        assert CALLER_SCOPE_REQUIREMENTS["discover_system_map"] == "org-credential"
+        assert (
+            classify_caller_scope("discover_system_map", TOOL_SCOPE_REQUIREMENTS["discover_system_map"])
+            == "org-credential"
+        )
+
+    @pytest.mark.parametrize(
+        ("key_scope", "auth_type", "has_team", "expected"),
+        [
+            # Org-scoped API key: allowed.
+            pytest.param("org", "api_key", False, True, id="orgkey-allowed"),
+            # Team-scoped API key (scope 'org' + team_id): refused.
+            pytest.param("org", "api_key", True, False, id="teamkey-denied"),
+            # User-scoped API key: refused.
+            pytest.param("user", "api_key", False, False, id="userkey-denied"),
+            # Unset key scope on an API key: fails closed.
+            pytest.param(None, "api_key", False, False, id="unset-key-denied"),
+            # Team-less identity sessions carry the user's org-wide identity.
+            pytest.param("user", "jwt", False, True, id="jwt-allowed"),
+            pytest.param("user", "oauth", False, True, id="oauth-allowed"),
+            # A team-bound OAuth client is a team-scoped credential.
+            pytest.param("user", "oauth", True, False, id="team-oauth-denied"),
+        ],
+    )
+    def test_org_credential_resolver_matrix(
+        self,
+        key_scope: str | None,
+        auth_type: str | None,
+        has_team: bool,
+        expected: bool,
+    ) -> None:
+        team_id = uuid.uuid4() if has_team else None
+        allowed, permission_key = resolve_tool_access(
+            tool="discover_system_map",
+            action=None,
+            role="operator",
+            key_scope=key_scope,
+            auth_type=auth_type,
+            allowed_tools=None,
+            kill_switch=True,
+            team_id=team_id,
+        )
+        assert allowed is expected, f"key_scope={key_scope} auth_type={auth_type} team={has_team}"
+        assert permission_key == SYSTEM_MAPS_ACCESS_PERMISSION
+
+    def test_team_scoped_denial_message_is_non_leaking(self) -> None:
+        """The chokepoint names the policy, never the team identifier."""
+        team_id = uuid.uuid4()
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope(
+                "operator",
+                "discover_system_map",
+                key_scope="org",
+                auth_type="api_key",
+                team_id=team_id,
+            )
+        message = str(excinfo.value)
+        assert "org-scoped credential" in message
+        assert str(team_id) not in message
