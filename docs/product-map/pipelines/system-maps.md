@@ -378,7 +378,7 @@ The map is stored in dedicated System Maps tables (migration
       without publishing, a diff naming the added node, restore-as-new from an
       archived revision (and the draft 409), and the `by-time` read including
       its 404-before-first-publish case
-      (`steps/test_system_maps.py`;
+      (`backend/tests/bdd/steps/test_system_maps.py`;
       `backend/tests/bdd/features/system_maps/access_and_discovery.feature`,
       `backend/tests/bdd/features/system_maps/revisions.feature`)
 
