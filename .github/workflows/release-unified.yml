@@ -1507,10 +1507,15 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Final cross-platform manifest (cut and recut)
+  #
+  # Alpha scope is Linux and macOS. Windows native packaging is BETA scope
+  # (windows-installer.yml is still a deliberate fail-closed placeholder), so
+  # this job must NOT depend on it or bundle its artefact - doing so made every
+  # Alpha cut/recut impossible. See the manifest step's note before re-adding.
   # ---------------------------------------------------------------------------
   final-release-manifest:
     name: Generate final cross-platform release manifest
-    needs: [release, bundle, windows-installer, macos-installer]
+    needs: [release, bundle, macos-installer]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
@@ -1527,16 +1532,16 @@ jobs:
           path: release-artefacts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: windows-installer-${{ inputs.version }}
-          path: release-artefacts
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
           name: macos-installer-${{ inputs.version }}
           path: release-artefacts
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
           python-version: "3.12"
           enable-cache: true
+      # Alpha bundle = Linux + macOS only. Windows native packaging is BETA
+      # scope: windows-installer.yml still fails closed, so the Windows .exe is
+      # deliberately absent here and must not be re-added to SHA256SUMS, the
+      # manifest `names` list or `components` until Windows is back in scope.
       - name: Build final signed manifest after every platform artifact
         env:
           MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
@@ -1545,7 +1550,7 @@ jobs:
           set -euo pipefail
           [[ -n "$MANIFEST_SIGNING_KEY" ]] || { echo '::error::manifest signing key is required'; exit 1; }
           cd release-artefacts
-          sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "modulo-${VERSION}-windows-amd64.exe" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+          sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
           cd ..
           uv run --no-project --no-sync --no-build python - <<'PY'
           import hashlib, json, os, sys
@@ -1554,8 +1559,8 @@ jobs:
           from modulo.launcher import manifest as m
           root = Path("release-artefacts")
           version = os.environ["VERSION"]
-          names = [f"modulo-{version}-linux-amd64.tar.gz", f"modulo-{version}-windows-amd64.exe", f"Modulo-{version}-macos-arm64.dmg"]
-          body = m.build_release_manifest(release=f"bundle-v{version}", platform="multi-platform", generated_at=os.environ.get("GITHUB_SHA", ""), components={"linux": "amd64", "windows": "amd64", "macos": "arm64"}, artifacts=[{"name": n, "sha256": hashlib.sha256((root / n).read_bytes()).hexdigest(), "version": version} for n in names])
+          names = [f"modulo-{version}-linux-amd64.tar.gz", f"Modulo-{version}-macos-arm64.dmg"]
+          body = m.build_release_manifest(release=f"bundle-v{version}", platform="multi-platform", generated_at=os.environ.get("GITHUB_SHA", ""), components={"linux": "amd64", "macos": "arm64"}, artifacts=[{"name": n, "sha256": hashlib.sha256((root / n).read_bytes()).hexdigest(), "version": version} for n in names])
           payload = json.dumps(body, indent=2, sort_keys=True).encode()
           signing_key = os.environ["MANIFEST_SIGNING_KEY"]
           if len(signing_key) != 64:
@@ -1592,9 +1597,10 @@ jobs:
   # ---------------------------------------------------------------------------
   publish-release:
     name: Create GitHub Release
-    needs: [release, final-release-manifest, attest-artefacts, windows-installer, macos-installer]
+    needs: [release, final-release-manifest, attest-artefacts, macos-installer]
     # Do not publish until the final signed manifest covers the macOS DMG.
-
+    # Windows is Beta scope (windows-installer.yml fails closed) and is
+    # intentionally not a dependency of Alpha publication.
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
@@ -1619,7 +1625,6 @@ jobs:
           set -euo pipefail
           for artifact in \
             "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz" \
-            "release-artefacts/modulo-${VERSION}-windows-amd64.exe" \
             "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg" \
             release-artefacts/SHA256SUMS \
             release-artefacts/RELEASE_MANIFEST.json \
@@ -1627,7 +1632,7 @@ jobs:
             test -s "$artifact"
           done
           (cd release-artefacts && sha256sum --check SHA256SUMS)
-          echo "Final signed manifest and SHA256SUMS cover Linux, Windows and macOS arm64 artifacts."
+          echo "Final signed manifest and SHA256SUMS cover Linux amd64 and macOS arm64 artifacts."
 
       - name: Set up Python 3.12 for OpenAPI dump
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
@@ -1721,7 +1726,6 @@ jobs:
 
           ASSETS=(
             "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz"
-            "release-artefacts/modulo-${VERSION}-windows-amd64.exe"
             "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg"
             "release-artefacts/SHA256SUMS"
             "release-artefacts/RELEASE_MANIFEST.json"
