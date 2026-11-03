@@ -916,39 +916,47 @@ function setExportError(message: string, format: 'csv' | 'jsonl') {
   }
 }
 
+/** Page through the export endpoint once, shared by the CSV and JSONL exporters. */
+async function fetchAllExportEvents(format: 'csv' | 'jsonl'): Promise<AuditEvent[] | null> {
+  const allEvents: AuditEvent[] = []
+  let page = 1
+  const pageSize = 1000
+  let totalPages = 1
+
+  while (page <= totalPages) {
+    const { data, error: err } = await api.GET('/api/v1/admin/audit/export', {
+      params: {
+        query: {
+          page,
+          page_size: pageSize,
+          event_type: filterEventType.value || undefined,
+          user_id: filterActor.value || undefined,
+          entity_type: filterTargetType.value || undefined,
+          from_date: filterDateFrom.value || undefined,
+          to_date: filterDateTo.value || undefined,
+        } as any,
+      },
+    })
+    if (err) {
+      setExportError(`${t('views.AdminAuditView.export_failed')} ${formatError(err)}`, format)
+      return null
+    }
+    if (!data) break
+    const exportPage = data as unknown as AuditPage
+    allEvents.push(...exportPage.items)
+    totalPages = Math.ceil(exportPage.total / pageSize)
+    page++
+  }
+
+  return allEvents
+}
+
 async function exportCsv() {
   exporting.value = true
   exportFailure.value = null
   try {
-    const allEvents: AuditEvent[] = []
-    let page = 1
-    const pageSize = 1000
-    let totalPages = 1
-
-    while (page <= totalPages) {
-      const { data, error: err } = await api.GET('/api/v1/admin/audit/export', {
-        params: {
-          query: {
-            page,
-            page_size: pageSize,
-            event_type: filterEventType.value || undefined,
-            user_id: filterActor.value || undefined,
-            entity_type: filterTargetType.value || undefined,
-            from_date: filterDateFrom.value || undefined,
-            to_date: filterDateTo.value || undefined,
-          } as any,
-        },
-      })
-      if (err) {
-        setExportError(`${t('views.AdminAuditView.export_failed')} ${formatError(err)}`, 'csv')
-        return
-      }
-      if (!data) break
-      const exportPage = data as unknown as AuditPage
-      allEvents.push(...exportPage.items)
-      totalPages = Math.ceil(exportPage.total / pageSize)
-      page++
-    }
+    const allEvents = await fetchAllExportEvents('csv')
+    if (!allEvents) return
 
     const headers = [
       t('views.AdminAuditView.timestamp'),
@@ -1016,35 +1024,8 @@ async function exportJsonl() {
   exportingJsonl.value = true
   exportFailure.value = null
   try {
-    const allEvents: AuditEvent[] = []
-    let page = 1
-    const pageSize = 1000
-    let totalPages = 1
-
-    while (page <= totalPages) {
-      const { data, error: err } = await api.GET('/api/v1/admin/audit/export', {
-        params: {
-          query: {
-            page,
-            page_size: pageSize,
-            event_type: filterEventType.value || undefined,
-            user_id: filterActor.value || undefined,
-            entity_type: filterTargetType.value || undefined,
-            from_date: filterDateFrom.value || undefined,
-            to_date: filterDateTo.value || undefined,
-          } as any,
-        },
-      })
-      if (err) {
-        setExportError(`${t('views.AdminAuditView.export_failed')} ${formatError(err)}`, 'jsonl')
-        return
-      }
-      if (!data) break
-      const exportPage = data as unknown as AuditPage
-      allEvents.push(...exportPage.items)
-      totalPages = Math.ceil(exportPage.total / pageSize)
-      page++
-    }
+    const allEvents = await fetchAllExportEvents('jsonl')
+    if (!allEvents) return
 
     const jsonl = allEvents.map(e => JSON.stringify(e)).join('\n')
     const blob = new Blob([jsonl], { type: 'application/x-ndjson' })
