@@ -729,6 +729,7 @@ def _cut_harness(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     _cut_git("init", "-b", "main", str(repo))
     for relative, content in (
         ("backend/pyproject.toml", '[project]\nversion = "0.1.0"\n'),
+        ("backend/uv.lock", "version = 1\nrevision = 3\n"),
         ("frontend/package.json", '{"version": "0.1.0"}\n'),
         ("deploy/helm/modulo/Chart.yaml", 'version: 0.1.0\nappVersion: "0.1.0"\n'),
     ):
@@ -778,6 +779,16 @@ if [ \"$1\" = \"scripts/bump-version.py\" ]; then
 fi
 printf 'unexpected python command: %s\\n' \"$*\" >&2
 exit 1
+""",
+    )
+    _write_executable(
+        bin_dir / "uv",
+        f"""#!/usr/bin/env bash
+set -e
+printf 'uv %s\\n' \"$*\" >> {shlex.quote(str(log))}
+# `uv lock` refreshes the lockfile the workflow later stages; emulate that
+# without invoking the real resolver (the fake repo has no dependencies).
+printf 'version = 1\\nrevision = 3\\n' > backend/uv.lock
 """,
     )
     merged_sha = _cut_git("rev-parse", "refs/remotes/origin/merged", cwd=repo).stdout.strip()
