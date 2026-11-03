@@ -12,93 +12,41 @@
 #   reason: "Brief explanation of flakiness"
 #   expiry: "YYYY-MM-DD"
 #   owner: "GitHub username or team" (optional)
+#
+# REGISTRY EMPTY (2026-11-03). The 2026-11-01 GC-attribution class has not
+# reproduced on main since the leak fixes (FAR-2273 dependency-override
+# isolation, session-double hardening, #2725 MagicMock for sync result
+# methods). In that class an unrelated earlier unit test leaked a never-awaited
+# AsyncMock coroutine; CPython's generational GC then collected it while an
+# arbitrary innocent test was running, so the escalated unraisable-warning gate
+# blamed that victim. The attribution was non-deterministic under xdist, which
+# is why every observed victim was listed while the leak was live.
+#
+# All 13 remaining victims were retired 2026-11-03 after validation on main @
+# 3e51fd5fb with the registry bypassed (`-o quarantine_file=<empty>`):
+#   * 3 x full `tests/unit/` under `-n auto` with
+#     `-W error::pytest.PytestUnraisableExceptionWarning`:
+#     45427 passed, 11 skipped, exit 0 on every run (wall 18:33, 16:26, 15:37);
+#     zero PytestUnraisableExceptionWarning occurrences.
+#   * each former victim's nodeid: 3 serial runs, plus 3 `-n auto` runs of its
+#     file / surrounding directory, all green.
+# A single green run would not have justified retirement, because the class is
+# GC-timing dependent; the entries were removed only after all of the above.
+#
+# This file is the mechanism, not a to-do list. Entries are non-strict xfail, so
+# any test that no longer reproduces simply XPASSes. Re-add a newly observed
+# flake with a reason and an expiry; an entry missing either is not accepted.
+# Keep this header, the format below and the requirement intact.
 
-quarantine:
-  # Full-suite-only GC attribution (2026-11-01): an unrelated earlier unit test
-  # leaks a never-awaited AsyncMock coroutine. CPython's generational GC then
-  # collects it while whichever test happens to be running, so pytest's
-  # unraisable-warning gate attributes the failure there. The attribution is
-  # non-deterministic under xdist, so every victim observed is listed.
-  #
-  # The ORIGINAL victim set was RETIRED 2026-11-03 after the leak fixes on main
-  # (FAR-2273 dependency-override isolation, session-double hardening, #2725
-  # MagicMock for sync result methods): a `tests/unit/` run with xdist and
-  # `-W error::pytest.PytestUnraisableExceptionWarning` passed with the
-  # quarantine file bypassed, and each former victim's file also passed 3x
-  # serial and 3x under `-n auto`. The class has since recurred on main (new
-  # victims reported through 2026-11-03 13:00), so those newer observations are
-  # kept below with their own reason and expiry. Entries are non-strict xfail,
-  # so any test that no longer reproduces simply XPASSes.
-  - test_id: "tests/unit/test_trigger_engine_pre_guardrail.py::test_handle_webhook_mechanism_error_fails_closed_for_block"
-    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125622658533, run 41545972532, PR #2728); passes in isolation"
-    expiry: "2026-11-17"
-    owner: "platform-team"
-  - test_id: "tests/unit/trigger_engine/test_trigger_engine.py::test_webhook_route[replay-success]"
-    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (main CI run 41487626568 at 05d676b, 2026-11-02)"
-    expiry: "2026-11-16"
-    owner: "platform-team"
-  - test_id: "tests/unit/scripts/test_run_coverage_gate.py::test_tiny_diff_exemption_withheld_when_production_lines_deleted"
-    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (PR #2705 CI run 41520943457 at b60cd6077, 2026-11-02)"
-    expiry: "2026-11-16"
-    owner: "platform-team"
-  - test_id: "tests/unit/test_saq_worker_startup.py::TestStartupHook::test_attribution_install_failure_is_fail_open"
-    reason: "Unrelated leaked AsyncMock coroutine is GC'd at setup in the full unit run (main CI run 41487169204, 2026-11-02)"
-    expiry: "2026-11-16"
-    owner: "platform-team"
-  - test_id: "tests/unit/test_pipeline_node_conversion.py::TestRevertToManual::test_unexpected_exception_returns_500"
-    reason: "Unrelated leaked AsyncMock coroutine is GC'd at setup in the full unit run (main CI run 41487777782, 2026-11-02)"
-    expiry: "2026-11-16"
-    owner: "platform-team"
-  - test_id: "tests/unit/scim/test_scim_provisioning.py::TestServiceProviderConfig::test_returns_200"
-    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (deploy run 41510926766 at fe222a6f3, 2026-11-02)"
-    expiry: "2026-11-16"
-    owner: "platform-team"
-  - test_id: "tests/unit/scim/test_scim_provisioning_programming_error.py::TestScimDatabaseErrors::test_error_returns_expected_status[replace_user_500]"
-    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (deploy run 41518651845 at cc2a70de9, 2026-11-02)"
-    expiry: "2026-11-16"
-    owner: "platform-team"
-  - test_id: "tests/unit/test_far2005_dead_heartbeat_reap.py::TestDeadHeartbeatReapScope::test_non_running_status_is_untouched"
-    reason: >-
-      Ambient pre-existing AsyncMock leak (FAR-2674 / FAR-2289): an unrelated
-      test's never-awaited coroutine is GC'd while this test runs in the full
-      unit run, so the escalated PytestUnraisableExceptionWarning fails this
-      innocent victim. Passes in isolation and under forced gc (PR #2719 CI run
-      41523847563, 2026-11-02).
-    expiry: "2026-11-17"
-    owner: "platform-team"
-  - test_id: "tests/unit/test_dispatch.py::TestGetOrgRunConcurrencyLimit::test_clamps_out_of_range"
-    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125556884614, run 41526232230, PR #2720)"
-    expiry: "2026-11-16"
-    owner: "platform-team"
-  - test_id: "tests/unit/test_dispatch.py::TestReconcileF6aRecovery::test_running_claim_cap_exhausted_terminalized"
-    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125666502499, run 41559012473, PR #2732); passes in isolation and file-scoped"
-    expiry: "2026-11-17"
-    owner: "platform-team"
-  - test_id: "tests/unit/test_merge_queue_workflow_task_kind.py::test_workflow_file_exists_and_parses"
-    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125612117549, run 41542674284, PR #2721)"
-    expiry: "2026-11-16"
-    owner: "platform-team"
-  - test_id: "tests/unit/scripts/test_branch_fixer_dispatch_retry.py::test_capacity_and_transient_failures_are_distinguishable"
-    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125649924673, run 41554109804, PR #2718); passes in isolation"
-    expiry: "2026-11-17"
-    owner: "platform-team"
-  - test_id: "tests/unit/test_mcp_structural_coverage.py::test_every_chokepoint_bypassing_tool_enforces_node_allowed_tools"
-    reason: >-
-      Ambient pre-existing AsyncMock leak (FAR-2674 / FAR-2289): an unrelated
-      test's never-awaited coroutine is GC'd while this AST-only guard runs in
-      the full unit run, so the escalated PytestUnraisableExceptionWarning
-      fails this innocent victim. Passes in isolation and alongside the PR's new
-      flag tests (PR #2719 CI run 41548873183, 2026-11-03).
-    expiry: "2026-11-17"
-    owner: "platform-team"
+quarantine: []
 
-  # Example (illustrative — remove if no currently-quarantined tests):
-  # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
-  #   reason: "Flaky due to GitHub API rate limit window — fails ~15% of CI runs"
-  #   expiry: "2026-08-01"
-  #   owner: "platform-team"
-  #
-  # - test_id: "tests/integration/test_websocket_reconnection.py::test_reconnect_during_deploy"
-  #   reason: "Race between server shutdown and client reconnect — needs deterministic fixture"
-  #   expiry: "2026-07-15"
-  #   owner: "duncan"
+# Format example (illustrative only — not an active entry):
+# - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
+#   reason: "Flaky due to GitHub API rate limit window — fails ~15% of CI runs"
+#   expiry: "2026-08-01"
+#   owner: "platform-team"
+#
+# - test_id: "tests/integration/test_websocket_reconnection.py::test_reconnect_during_deploy"
+#   reason: "Race between server shutdown and client reconnect — needs deterministic fixture"
+#   expiry: "2026-07-15"
+#   owner: "duncan"
