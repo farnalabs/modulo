@@ -87,6 +87,14 @@ on:
     # the escalation below covers liveness gaps.
     - cron: "*/10 * * * *"
   workflow_dispatch:
+    inputs:
+      max_freeze_hours:
+        # FAR-2326: override the stale-freeze threshold for a manual re-check.
+        # Applies to THIS RUN only; the durable override is the
+        # RELEASE_FREEZE_MAX_HOURS repository variable.
+        description: "Hours a release-freeze marker may exist before alerting (blank = the RELEASE_FREEZE_MAX_HOURS variable, else 4)"
+        required: false
+        default: ""
   repository_dispatch:
     # Accept poke from app.modulo.run or other automation so the queue can be
     # re-armed on demand without waiting for the next cron tick.
@@ -121,6 +129,18 @@ jobs:
     runs-on: ubicloud-standard-2
     timeout-minutes: 5
     steps:
+      # FAR-2326: needed only for the stale-release-freeze leg below, which
+      # reuses the SAME release-freeze helper merge-queue.yml gates on
+      # (.github/scripts/release-freeze-check.py) rather than growing a second
+      # copy of the query. Pinned to main so a cron tick and a manual dispatch
+      # both run the merged definition; the credentials are not persisted.
+      - name: Checkout the release-freeze helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Cancel stuck merge-queue runs and re-arm
         id: watchdog
         shell: bash
@@ -605,6 +625,91 @@ jobs:
           # Read-only classifier: never fail the job on a classification issue.
           exit 0
 
+      # FAR-2326 - a leftover `release-freeze` marker halts the queue while the
+      # queue still LOOKS healthy: merge-queue.yml's freeze-gate skips the queue
+      # job, so every run concludes SUCCESS and the success-age checks above
+      # (sections 3/4) stay fresh. On 2026-11-02/03 the marker survived a
+      # release that failed 4x on an unrelated CI flag: ~12h with 20 approved
+      # green PRs waiting at a median 10.8h since approval, and nothing said so.
+      #
+      # The freeze itself is NOT bounded: a release legitimately holds it for
+      # hours, and auto-lifting a real freeze mid-release would be far worse
+      # than a late merge (docs/release-process.md, "How long a freeze may
+      # last"). So this leg only ALERTS once the marker is older than the
+      # threshold, delivered through the existing escalation leg below (a
+      # deduplicated Linear ticket keyed on the condition title).
+      #
+      # `always()`: it must still report when the sweep step above already
+      # failed, and the escalate step reads its output either way.
+      - name: Detect a stale release freeze (FAR-2326)
+        id: freeze
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Threshold: manual input (this run only) -> repo variable -> 4h.
+          # `github.event.inputs` is empty on schedule/repository_dispatch.
+          FREEZE_MAX_HOURS: ${{ github.event.inputs.max_freeze_hours || vars.RELEASE_FREEZE_MAX_HOURS || '4' }}
+        run: |
+          set -o pipefail
+
+          # Same helper (and therefore the same fail-closed policy) the merge
+          # queue gates on. The verdict is the FIRST output line; sha/age/
+          # stale lines follow only when a freeze is present.
+          OUT=$(python3 .github/scripts/release-freeze-check.py) || true
+          VERDICT_LINE="$(printf '%s\n' "$OUT" | sed -n '1p')"
+          VERDICT="${VERDICT_LINE%%|*}"
+          MSG="${VERDICT_LINE#*|}"
+          MARKER_SHA="$(printf '%s\n' "$OUT" | sed -n 's/^sha=//p')"
+          MARKER_AGE="$(printf '%s\n' "$OUT" | sed -n 's/^age_seconds=//p')"
+          MARKER_STALE="$(printf '%s\n' "$OUT" | sed -n 's/^stale=//p')"
+          MARKER_MAX_H="$(printf '%s\n' "$OUT" | sed -n 's/^max_freeze_hours=//p')"
+          SHORT_SHA="${MARKER_SHA:0:7}"
+          if [ -z "$SHORT_SHA" ]; then
+            SHORT_SHA="unknown"
+          fi
+          if [ -n "$MARKER_AGE" ]; then
+            AGE_H="$(awk -v s="$MARKER_AGE" 'BEGIN { printf "%.1f", s / 3600 }')"
+          else
+            AGE_H=""
+          fi
+
+          case "$VERDICT" in
+            frozen)
+              if [ -z "$AGE_H" ]; then
+                # A live freeze whose age could not be measured: report it, but
+                # never assert staleness from a figure we do not have.
+                echo "::warning::Release freeze is ACTIVE at marker commit ${SHORT_SHA} but its age could not be measured - staleness NOT asserted this tick (merge-queue.yml still pauses merges)."
+                exit 0
+              fi
+              if [ "$MARKER_STALE" = "true" ]; then
+                echo "::error::Release freeze STALE: 'release-freeze' has been active for ${AGE_H}h (threshold ${MARKER_MAX_H:-4}h) at marker commit ${SHORT_SHA} - the merge queue is halted. If no release is in flight, delete refs/heads/release-freeze."
+                {
+                  echo "freeze_stale=true"
+                  echo "freeze_sha=${MARKER_SHA}"
+                  echo "freeze_age_hours=${AGE_H}"
+                  echo "freeze_threshold_hours=${MARKER_MAX_H:-4}"
+                } >> "$GITHUB_OUTPUT"
+                # Delivery: this failure is what makes the existing
+                # "Escalate alert to Linear" leg fire (FAR-1843 pattern).
+                exit 1
+              fi
+              echo "::notice::Release freeze ACTIVE at marker commit ${SHORT_SHA}, age ${AGE_H}h - within the ${MARKER_MAX_H:-4}h intended maximum. Merge queue intentionally paused."
+              exit 0 ;;
+            open)
+              echo "No release freeze active (no 'release-freeze' branch)."
+              exit 0 ;;
+            fail-closed)
+              # The gate already fails CLOSED on every merge-queue tick with a
+              # loud ::error::. This leg cannot assert staleness without a
+              # verdict, and inventing one would be a false alert. Warn only.
+              echo "::warning::${MSG} - stale-freeze check could not determine whether a freeze exists this tick; no alert raised (merge-queue.yml fails CLOSED meanwhile)."
+              exit 0 ;;
+            *)
+              echo "::warning::release-freeze helper produced no verdict ($OUT) - stale-freeze check skipped this tick."
+              exit 0 ;;
+          esac
+
       # FAR-1843 review F3 — alert delivery leg (mirrors deploy-watchdog's
       # FAR-910/FAR-1407 escalation, the repo's existing watchdog-notification
       # precedent). The sweep step exits non-zero when the stall alert
@@ -629,6 +734,10 @@ jobs:
           LAST_MERGE_AGE: ${{ steps.watchdog.outputs.last_merge_age }}
           MERGEABLE_WAITING: ${{ steps.watchdog.outputs.mergeable_waiting }}
           AWAITING_REVIEW: ${{ steps.watchdog.outputs.awaiting_review }}
+          FREEZE_STALE: ${{ steps.freeze.outputs.freeze_stale }}
+          FREEZE_SHA: ${{ steps.freeze.outputs.freeze_sha }}
+          FREEZE_AGE_HOURS: ${{ steps.freeze.outputs.freeze_age_hours }}
+          FREEZE_THRESHOLD_HOURS: ${{ steps.freeze.outputs.freeze_threshold_hours }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           LINEAR_API_URL: "https://api.linear.app/graphql"
           LINEAR_TEAM_ID: "ae855baf-6439-4980-97fb-38da80129485"
@@ -646,7 +755,17 @@ jobs:
 
           # Static condition titles (no run-specific figures) — the title IS
           # the dedup key (FAR-1407).
-          if [ "$STALLED" = "true" ]; then
+          #
+          # FAR-2326 precedence: a stale freeze is checked FIRST because it is
+          # the ROOT CAUSE of any co-firing stall/zero-merge condition — with
+          # the marker present the queue job is skipped, so "nothing merged"
+          # is expected, and reporting it as a stall would send the operator
+          # after the wrong thing. One ticket per tick; once the marker is
+          # cleared the stall/zero-merge conditions report themselves again.
+          if [ "$FREEZE_STALE" = "true" ]; then
+            TITLE="RELEASE FREEZE STALE: leftover release-freeze marker is halting the merge queue (FAR-2326)"
+            DESC="The merge-queue watchdog found the 'release-freeze' marker branch older than the intended maximum at ${TS}: the merge queue is PAUSED (merge-queue.yml skips its queue job while the marker exists, and every such run still concludes success, so the queue looks healthy from its run history). Marker commit: ${FREEZE_SHA:-unknown}; marker age: ${FREEZE_AGE_HOURS:-unknown}h; intended maximum: ${FREEZE_THRESHOLD_HOURS:-unknown}h. If a release is genuinely in flight this is a reminder that it has been running longer than expected. If no release is in flight (a failed cut/recut strands the marker), the documented manual escape is: git push origin --delete refs/heads/release-freeze - the queue resumes on its next tick. Do NOT promote a release just to clear the marker. Run: ${RUN_URL}. See FAR-2326 and docs/release-process.md."
+          elif [ "$STALLED" = "true" ]; then
             TITLE="MERGE QUEUE STALLED: no successful queue run with approved PRs waiting (FAR-1689)"
             DESC="The merge-queue watchdog's success-aware stall alert fired at ${TS}: no SUCCESSFUL merge-queue run for ${LAST_SUCCESS_AGE:-unknown} min while ${APPROVED_WAITING:-unknown} approved PR(s) wait — the queue machinery is not merging. Run: ${RUN_URL}. See FAR-1689."
           elif [ "$ZERO_MERGE" = "true" ]; then

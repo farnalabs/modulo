@@ -1,11 +1,12 @@
 """Shared helper for tests that statically scan a source tree.
 
-Some tests deliberately create a transient module inside
-``backend/src/modulo`` (the vulture dead-code gate writes
-``_far252_dead_probe.py`` and removes it again). A scan running in another
-xdist worker in the same checkout can list that path during its directory walk
-and then read it after the probe test has unlinked it, raising
-``FileNotFoundError`` for a file that is not part of the committed source.
+A whole-tree scan can list a path during its directory walk and then read it
+after a concurrent test fixture has removed it, raising ``FileNotFoundError``
+for a file that is not part of the committed source. The vulture dead-code gate
+used to stage its ``_far252_dead_probe.py`` probe inside ``backend/src/modulo``
+and trip exactly this; FAR-2334 moved that probe into a temp directory, but any
+transient file under a scanned root (a fixture, an editor swap file, concurrent
+cleanup) still has the same race.
 
 A static scan must not fail because a transient file vanished mid-scan, so
 every whole-tree scan reads through :func:`iter_source_text`, which yields

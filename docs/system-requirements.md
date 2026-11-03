@@ -7,7 +7,9 @@ Supported platforms, minimum resources, and database backends for running Modulo
 ## Supported Platforms
 
 Modulo v1 targets Linux hosts and Apple Silicon macOS for the native single-install
-artifact. Windows remains out of scope for v1.
+artifact. Windows is in Alpha scope, but the native Windows installer is still in
+progress: Linux is the only validated native target today and no signed Windows
+release artifact is published yet.
 
 ### Platform support matrix (v1)
 
@@ -19,7 +21,7 @@ below).
 |----------------------|-----------|
 | **Linux** | Supported (native single-install and container paths) |
 | **macOS arm64** | Supported native single-install host (signed/notarized `.dmg`, macos-15 validation) |
-| **Windows** | Not a supported v1 server host: no native installer, no Windows release artifact |
+| **Windows** | Alpha scope, native installer in progress (delivered by a separate workstream, FAR-2337 / FAR-2338): no signed Windows installer is published yet, so Windows is not a supported native server host today |
 
 Docker Desktop (see Development / Evaluation below) is a developer
 convenience on macOS and Windows: it runs the Linux containers inside a Linux
@@ -31,10 +33,14 @@ on `macos-15` with the pinned native runtime and is validated separately from th
 Linux bundle. It requires Apple Silicon; x64/Rosetta is not supported. The
 macOS installer's trust boundary is Apple Developer ID signing/notarization and
 stapling, verified with `codesign`, `spctl` and `hdiutil verify`; it does not
-consume the Linux signed release manifest. Windows remains out of scope for v1.
+consume the Linux signed release manifest.
 
-A Windows-hosted deployment therefore means Windows Server running the Linux
-stack in a VM or container host, not native Windows binaries.
+Windows is in Alpha scope. The native Windows installer is delivered by a
+separate workstream (FAR-2338 / FAR-2337; see
+[`deploy/windows/BUNDLE-BUILD.md`](../deploy/windows/BUNDLE-BUILD.md)) and no
+signed Windows installer is published yet. Until it ships, a Windows-hosted
+deployment means Windows Server running the Linux stack in a VM or container
+host, not native Windows binaries.
 
 ### Install paths
 
@@ -62,7 +68,7 @@ actually ship - do not widen these rows until the packaging tickets land):
 | Ubuntu 26.04+ | 2.41+ | Supported |
 | Ubuntu 24.04 and earlier | 2.39 and below | Not supported (below the bundled service-binary floor) |
 | macOS arm64 | Apple Silicon | Supported native `.dmg`; x64/Rosetta is not supported |
-| Windows | - | Out of scope for v1 (post-v1: P3, ADR 031) |
+| Windows | - | Alpha scope; native installer in progress (FAR-2337 / FAR-2338), no signed installer published yet |
 
 The hard requirement is **glibc 2.41 or newer**. The bundled PostgreSQL 16 and
 Redis 8 binaries are extracted from Debian 13 (trixie) packages, and the venv's

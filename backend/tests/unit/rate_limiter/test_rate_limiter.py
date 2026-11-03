@@ -1,6 +1,5 @@
 """Unit tests for RedisSlidingWindowRateLimiter and RateLimiterRegistry."""
 
-import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -31,7 +30,7 @@ class TestRedisSlidingWindowRateLimiter:
         [(0, True), (1, True), (5, True), (6, False)],
         ids=["empty", "single", "at-limit", "over-limit"],
     )
-    async def test_check_limit(self, sliding_redis, zcard_value, expected):
+    async def test_allows_up_to_max_requests_then_blocks(self, sliding_redis, zcard_value, expected):
         sliding_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, zcard_value, True))
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         assert await limiter.check("test-key", max_requests=5) is expected
@@ -56,23 +55,21 @@ class TestRedisSlidingWindowRateLimiter:
         await limiter.check("k", max_requests=5)
         sliding_redis.pipeline.assert_called_once_with(transaction=True)
 
-    async def test_prunes_entries_older_than_window(self, sliding_redis):
+    async def test_prunes_entries_older_than_window(self, sliding_redis, frozen_time):
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5, window_s=120)
         pipe = sliding_redis.pipeline.return_value
         pipe.zremrangebyscore.assert_called_once()
         _, lower_bound, cutoff = pipe.zremrangebyscore.call_args[0]
         assert lower_bound == 0
-        now = time.time()
-        assert abs(cutoff - (now - 120)) < 2
+        assert cutoff == frozen_time - 120
 
-    async def test_uses_default_window(self, sliding_redis):
+    async def test_uses_default_window(self, sliding_redis, frozen_time):
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5)
         pipe = sliding_redis.pipeline.return_value
         _, _, cutoff = pipe.zremrangebyscore.call_args[0]
-        now = time.time()
-        assert abs(cutoff - (now - WINDOW_SECONDS)) < 2
+        assert cutoff == frozen_time - WINDOW_SECONDS
 
     @pytest.mark.parametrize("window_s", [120, WINDOW_SECONDS], ids=["explicit-window", "default-window"])
     async def test_expires_key_at_double_window(self, sliding_redis, window_s):
@@ -83,15 +80,14 @@ class TestRedisSlidingWindowRateLimiter:
         assert pipe.expire.call_args[0][0] == "ratelimit:k"
         assert pipe.expire.call_args[0][1] == window_s * 2
 
-    async def test_records_timestamp_member(self, sliding_redis):
+    async def test_records_timestamp_member(self, sliding_redis, frozen_time):
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5)
         pipe = sliding_redis.pipeline.return_value
         pipe.zadd.assert_called_once()
         _, member = pipe.zadd.call_args[0]
         ((ts, score),) = member.items()
-        now = time.time()
-        assert abs(score - now) < 2
+        assert score == frozen_time
         ts_str, sep, suffix = ts.partition(":")
         assert sep == ":"
         assert ts_str == str(score)
@@ -103,15 +99,14 @@ class TestRedisSlidingWindowRateLimiter:
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         assert await limiter.check("k", max_requests=0) is False
 
-    async def test_window_zero_sets_cutoff_to_now(self, sliding_redis):
+    async def test_window_zero_sets_cutoff_to_now(self, sliding_redis, frozen_time):
         """window_s=0 prunes everything strictly before now but still allows the current request."""
         sliding_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, 1, True))
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         assert await limiter.check("k", max_requests=1, window_s=0) is True
         pipe = sliding_redis.pipeline.return_value
         _, _, cutoff = pipe.zremrangebyscore.call_args[0]
-        now = time.time()
-        assert abs(cutoff - now) < 2
+        assert cutoff == frozen_time
 
 
 class TestRateLimitRule:
@@ -149,13 +144,12 @@ class TestRateLimiterRegistry:
         registry = RateLimiterRegistry(redis_client=sliding_redis)
         assert await registry.check("k", max_requests=5) is expected
 
-    async def test_registry_forwards_window(self, sliding_redis):
+    async def test_registry_forwards_window(self, sliding_redis, frozen_time):
         registry = RateLimiterRegistry(redis_client=sliding_redis)
         await registry.check("k", max_requests=5, window_s=90)
         pipe = sliding_redis.pipeline.return_value
         _, _, cutoff = pipe.zremrangebyscore.call_args[0]
-        now = time.time()
-        assert abs(cutoff - (now - 90)) < 2
+        assert cutoff == frozen_time - 90
 
     def test_requires_redis_client(self):
         with pytest.raises(ValueError, match="requires a Redis client"):
