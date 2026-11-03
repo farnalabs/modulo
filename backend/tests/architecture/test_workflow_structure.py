@@ -551,6 +551,25 @@ def test_merge_queue_per_branch_gate_uses_product_ci_name() -> None:
     )
 
 
+def test_merge_queue_ci_gates_are_pinned_to_the_pr_head_sha() -> None:
+    """Every per-branch product-CI query must be pinned to the PR head SHA (FAR-2341).
+
+    Taking the latest run on the branch lets a green run for an OLDER commit
+    read as green for a newer, untested one. Each gate must filter on
+    ``--commit`` and request ``headSha`` so a mismatch or missing run falls
+    into the existing waiting path."""
+    raw = _code(MERGE_QUEUE_YML.read_text(encoding="utf-8"))
+    lines = raw.splitlines()
+    gate_indexes = [i for i, line in enumerate(lines) if "gh run list" in line and '"$CI_BRANCH"' in line]
+    assert len(gate_indexes) == 2, "merge-queue.yml: expected the collect gate and the stall check; update deliberately"
+    unpinned: list[str] = []
+    for i in gate_indexes:
+        statement = " ".join(lines[i : i + 3])
+        if '--commit "$PR_HEAD_SHA"' not in statement or "headSha" not in statement:
+            unpinned.append(lines[i].strip())
+    assert not unpinned, "merge-queue.yml: CI gate(s) not pinned to the PR head SHA:\n" + "\n".join(unpinned)
+
+
 # --- Merge-queue concurrency is scoped to the queue job, not the workflow ---
 
 

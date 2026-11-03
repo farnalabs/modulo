@@ -500,7 +500,19 @@ jobs:
               # into ci.yml; give it its own workflow. Guarded by
               # backend/tests/architecture/test_workflow_structure.py.
               CI_BRANCH=$(echo "$pr" | jq -r ".headRefName")
-              CI_CONCLUSION=$(gh run list --branch "$CI_BRANCH" --workflow "CI: Fast Validation" --limit 1 --json conclusion --jq ".[0].conclusion" 2>/dev/null || echo "unknown")
+              # FAR-2341: pin the CI verdict to the PR's CURRENT head SHA. The latest
+              # run on the branch may belong to an older commit (a push whose CI run
+              # GitHub has not created yet), so its green must never count for the new
+              # commit. `--commit` filters server-side; the jq select on headSha is a
+              # second guard. No run for this SHA yields "null" and an unreadable head
+              # SHA or any gh/jq error yields "unknown" - both land in the existing
+              # waiting path below, so the self-chain re-checks and nothing fails open.
+              PR_HEAD_SHA=$(gh pr view "$NUM" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "")
+              if [ -z "$PR_HEAD_SHA" ]; then
+                CI_CONCLUSION="unknown"
+              else
+                CI_CONCLUSION=$(gh run list --branch "$CI_BRANCH" --workflow "CI: Fast Validation" --commit "$PR_HEAD_SHA" --limit 5 --json conclusion,headSha --jq "[.[] | select(.headSha == \"$PR_HEAD_SHA\")] | .[0].conclusion" 2>/dev/null || echo "unknown")
+              fi
               if [ "$CI_CONCLUSION" != "success" ]; then
                 echo "  skipping - CI not passing (latest: $CI_CONCLUSION)"
                 # FAR-492: a still-running/queued (or unknown) CI is a "waiting"
@@ -2832,8 +2844,15 @@ jobs:
               # (2026-10-07: PR #1374's Test (Backend) was still running while its
               # attempt-1 createdAt showed 188min). Fall back to createdAt only when
               # startedAt is empty (a run queued but never picked up by a runner).
-              CI_RUN=$(gh run list --branch "$CI_BRANCH" --workflow "CI: Fast Validation" --limit 1 \
-                --json conclusion,createdAt,startedAt,status 2>/dev/null || echo "[]")
+              # FAR-2341: only a run for the PR's CURRENT head SHA counts. A run for an
+              # older commit would otherwise read as "concluded" (hiding a stall) or
+              # age the wrong attempt. No head SHA or no matching run -> "[]", which
+              # takes the existing "no CI run found - skipping stall check" path.
+              PR_HEAD_SHA=$(gh pr view "$PR_NUM" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "")
+              [ -z "$PR_HEAD_SHA" ] && continue
+              CI_RUN=$(gh run list --branch "$CI_BRANCH" --workflow "CI: Fast Validation" --commit "$PR_HEAD_SHA" --limit 5 \
+                --json conclusion,createdAt,startedAt,status,headSha \
+                --jq "[.[] | select(.headSha == \"$PR_HEAD_SHA\")]" 2>/dev/null || echo "[]")
               CI_CONCLUSION=$(echo "$CI_RUN" | jq -r '.[0].conclusion // empty' 2>/dev/null || echo "")
               CI_CREATED=$(echo "$CI_RUN" | jq -r '.[0].createdAt // empty' 2>/dev/null || echo "")
               CI_STARTED=$(echo "$CI_RUN" | jq -r '.[0].startedAt // empty' 2>/dev/null || echo "")
