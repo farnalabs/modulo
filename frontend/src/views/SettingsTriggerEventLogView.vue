@@ -159,7 +159,7 @@
                 >
                   {{ shortId(event.run_id) }}
                 </router-link>
-                <span v-else class="text-muted-foreground/50">&mdash;</span>
+                <span v-else class="text-muted-foreground">&mdash;</span>
               </td>
               <!-- FAR-2226: this cell must stay in the same column as the
                    "Pipeline" header above. A deleted/archived pipeline keeps
@@ -179,12 +179,12 @@
                 >
                   {{ event.pipeline_name }}
                 </span>
-                <span v-else class="text-muted-foreground/50">&mdash;</span>
+                <span v-else class="text-muted-foreground">&mdash;</span>
               </td>
               <td class="max-w-xs truncate px-4 py-3 text-sm text-muted-foreground" :title="event.error_detail ?? undefined">
                 {{ event.error_detail || '—' }}
               </td>
-              <td class="px-4 py-3 font-mono text-xs text-muted-foreground/70">
+              <td class="px-4 py-3 font-mono text-xs text-muted-foreground">
                 {{ shortId(event.trigger_id) }}
               </td>
             </tr>
