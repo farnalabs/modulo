@@ -729,7 +729,11 @@ def _cut_harness(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     _cut_git("init", "-b", "main", str(repo))
     for relative, content in (
         ("backend/pyproject.toml", '[project]\nversion = "0.1.0"\n'),
-        ("backend/uv.lock", "version = 1\nrevision = 3\n"),
+        (
+            "backend/uv.lock",
+            'version = 1\nrevision = 5\n\n[[package]]\nname = "farnalabs-modulo"\n'
+            'version = "0.1.0"\nsource = { editable = "." }\n',
+        ),
         ("frontend/package.json", '{"version": "0.1.0"}\n'),
         ("deploy/helm/modulo/Chart.yaml", 'version: 0.1.0\nappVersion: "0.1.0"\n'),
     ):
@@ -741,7 +745,12 @@ def _cut_harness(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     _cut_git("remote", "add", "origin", str(remote), cwd=repo)
     _cut_git("push", "origin", "main", cwd=repo)
     initial_sha = _cut_git("rev-parse", "HEAD", cwd=repo).stdout.strip()
-    for relative in ("backend/pyproject.toml", "frontend/package.json", "deploy/helm/modulo/Chart.yaml"):
+    for relative in (
+        "backend/pyproject.toml",
+        "backend/uv.lock",
+        "frontend/package.json",
+        "deploy/helm/modulo/Chart.yaml",
+    ):
         target = repo / relative
         target.write_text(target.read_text(encoding="utf-8").replace("0.1.0", "0.2.0"), encoding="utf-8")
         _cut_git("add", ".", cwd=repo)
@@ -773,6 +782,7 @@ if [ \"$1\" = \"-c\" ]; then
 fi
 if [ \"$1\" = \"scripts/bump-version.py\" ]; then
   printf '\\n# bump stub\\n' >> backend/pyproject.toml
+  printf '\\n# bump stub\\n' >> backend/uv.lock
   printf '\\n# bump stub\\n' >> frontend/package.json
   printf '\\n# bump stub\\n' >> deploy/helm/modulo/Chart.yaml
   exit 0

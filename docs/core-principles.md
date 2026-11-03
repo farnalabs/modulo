@@ -90,6 +90,12 @@ observable and controllable; at the limit it must be the same product.
 **Benefit:** "we are at capacity" is an operational fact an operator reads and acts
 on – not a 429 nobody can explain and a slot nobody can see.
 
+## 11. Run-level truth is free
+Everything needed to understand and trust a single run - its frozen snapshot, events, gate decisions, evidence, provenance, and audit trail - is available in the free Community tier. Paid tiers charge for organisation-scale aggregation, long-term retention, and export, never for basic safety, inspection, or execution of a run.
+**Why:** trust in a single run is the foundation the product rests on, and a governance record that is inaccessible to the operator who needs to verify it is not governance; commercial value comes from scale, retention, and organisation-wide controls, not from withholding run-level truth.
+**Where:** run-level API and UI surfaces; plan-tier gating such as `docs/system-maps.md` §11.3 Decision 2.
+**Benefit:** a self-hoster can always inspect and trust what a run did, while paid tiers stay compelling for multi-team scale and long-horizon governance.
+
 ## How this doc is used
 
 - New engineers and agents read it to understand why the system is shaped this way.

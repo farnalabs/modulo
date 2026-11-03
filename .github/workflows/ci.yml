@@ -414,6 +414,34 @@ jobs:
           format: 'table'
           skip-dirs: '**/.venv,**/node_modules,**/.git,**/.agents,**/.pytest_cache,**/dist,**/build'
 
+  uv-lock-check:
+    # FAR-2308: backend/uv.lock records the project version and the resolved
+    # dependency set. `uv sync --frozen` (used by every other job) installs from
+    # the lock as-is and cannot see that it has drifted from
+    # backend/pyproject.toml, so a stale lock reached main unnoticed and every
+    # `uv run` in a local commit gate rewrote the lock mid-run, colliding with
+    # pre-commit's stash/restore and aborting pushes from any branch based on
+    # the stale tree. This job is deliberately NOT path-gated: a stale lock on
+    # main must fail an unrelated PR too, because that is exactly how the drift
+    # propagates. `uv lock --check` never writes the lockfile, and the gate
+    # fails closed if it cannot run.
+    name: UV lockfile freshness
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Check backend/uv.lock is in sync with backend/pyproject.toml
+        run: uv lock --check
+
   backend-test:
     name: Test (Backend)
     # FAR-1427 (cheap-first): wait for Lint (Backend) (~2.4 min) so a push that
@@ -1167,7 +1195,15 @@ jobs:
         #      the server's own `errorMessage` is fetched from `/api/ce/task`
         #      and logged before any retry, so a DETERMINISTIC CE failure
         #      (quota, licence, malformed report) stays visible and still fails
-        #      the check after that single retry.
+        #      the check after that single retry. One deterministic variant is a
+        #      STALE report: when a newer commit's report has already been
+        #      processed the CE refuses the older one ("a newer report has
+        #      already been processed ... processing older reports is not
+        #      supported") and no retry can change that. Observed on main
+        #      2026-11-02 (run 41487471842 for c56bf72b9, superseded by the
+        #      report for 7053d4eed). That newer analysis already covers fresher
+        #      code, so the stale report is skipped as non-fatal instead of
+        #      leaving a false red on an already-superseded commit.
         #
         # All three are matched by an exact log signature, never a quality-gate
         # failure or any other error, so a genuine red check is never masked.
@@ -1213,6 +1249,17 @@ jobs:
               if [ -n "$TASK_ID" ]; then
                 CE_REASON="$(curl -sS --max-time 30 -H "Authorization: Bearer ${SONAR_TOKEN}" "${SONAR_HOST_URL}/api/ce/task?id=${TASK_ID}" 2>/dev/null | jq -r '.task.errorMessage // .errors[0].msg // empty' 2>/dev/null || true)"
                 echo "::notice::SonarCloud CE task ${TASK_ID} failed server-side: ${CE_REASON:-<no errorMessage returned>}"
+              fi
+              # A report for an OLDER commit that reaches the CE after a NEWER
+              # commit's report has already been processed can never be accepted:
+              # the CE rejects it deterministically ("a newer report has already
+              # been processed ... processing older reports is not supported"),
+              # so the retry below is futile and the red check is a false alarm.
+              # The newer commit's analysis is strictly fresher and already
+              # covers this project state, so skip this stale report (non-fatal).
+              if printf '%s' "$CE_REASON" | grep -qi "a newer report has already been processed"; then
+                echo "::notice::SonarCloud report for this commit was superseded by a newer commit's analysis; skipping the stale report (non-fatal - the newer report already covers fresher code)."
+                exit 0
               fi
               if [ "$CE_FAILURES" -lt 2 ] && [ "$attempt" -lt 3 ]; then
                 echo "::warning::SonarCloud CE task rejected the report server-side (CE attempt ${CE_FAILURES}/2); retrying once -- identical analyses of this project have completed green minutes apart."
@@ -1743,7 +1790,7 @@ jobs:
     # failure() nor cancelled(); every job here either always runs (path gates
     # are step-level) or is only skipped because an ancestor already failed,
     # which is itself a failure.
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, uv-lock-check, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -2163,7 +2210,7 @@ jobs:
     # `self-report-ci` (both `github.event_name == 'pull_request' && ...`) never
     # run on a push or dispatch to main, so they cannot fail there.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && always()
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, uv-lock-check, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -2318,7 +2365,7 @@ jobs:
     # ONLY the jobs named in `needs`, so a failure of a job omitted here still
     # satisfies the guard and self-reports the "ci" stage as done — a false-green
     # observability report while the PR's run is red. The rule is precise: every
-    # PRODUCT job that can fail on a PR is listed — the 16 below, including the
+    # PRODUCT job that can fail on a PR is listed — the 17 below, including the
     # FAR-1947 `frontend-unit-parity` job plus the pre-existing `tier1b-light`,
     # `runner-ci-harness` and `changes` (5-min timeout) omissions swept here
     # (this list equals notify-pr-failure's). Notifier jobs are deliberately
@@ -2326,13 +2373,13 @@ jobs:
     # documents for its own list), and the exclusion cannot false-green:
     # `notify-main-failure` never runs on a PR (its `if:` requires a
     # push/workflow_dispatch to main), and `notify-pr-failure` cannot fail
-    # unless one of the 16 product jobs above already failed or the run was
+    # unless one of the 17 product jobs above already failed or the run was
     # cancelled — every step of it that can fail is gated on
     # `contains(needs.*.result, 'failure') || cancelled()` — and both of those
     # conditions already make
     # this job's guard false. `self-report-ci` cannot list itself.
     if: github.event_name == 'pull_request' && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, uv-lock-check, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
       - name: Self-report CI Validate stage to Modulo (fail-open, best-effort)
