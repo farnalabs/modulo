@@ -26,6 +26,7 @@ import yaml
 
 _GIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _SEMVER_PATTERN = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$")
+_COMPOSE_FILENAME = "docker-compose.prod.yml"
 
 
 def validate_release_tag(tag: str) -> str:
@@ -255,7 +256,7 @@ def _find_repo_root() -> Path:
     """Locate repository root by walking up from this script."""
     current = Path(__file__).resolve().parent
     while current != current.parent:
-        if (current / "deploy" / "compose" / "docker-compose.prod.yml").is_file():
+        if (current / "deploy" / "compose" / _COMPOSE_FILENAME).is_file():
             return current
         current = current.parent
     return Path.cwd()
@@ -285,7 +286,7 @@ def build_compose_release(
     repo_root = _find_repo_root()
 
     # Locate source compose file
-    src_compose = Path(compose_file) if compose_file else repo_root / "deploy" / "compose" / "docker-compose.prod.yml"
+    src_compose = Path(compose_file) if compose_file else repo_root / "deploy" / "compose" / _COMPOSE_FILENAME
     if not src_compose.is_file():
         raise FileNotFoundError(f"Source compose file not found: {src_compose}")
 
@@ -311,7 +312,7 @@ def build_compose_release(
 
     # Prepare file bytes map for tarball
     files_to_pack: dict[str, bytes] = {
-        "docker-compose.prod.yml": compose_transformed.encode("utf-8"),
+        _COMPOSE_FILENAME: compose_transformed.encode("utf-8"),
         "docker-compose.yml": compose_transformed.encode("utf-8"),
         ".env.example": env_content.encode("utf-8"),
         "quickstart.md": quickstart_content.encode("utf-8"),
@@ -376,7 +377,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--compose-file",
         default=None,
-        help="Path to source docker-compose.prod.yml",
+        help=f"Path to source {_COMPOSE_FILENAME}",
     )
     parser.add_argument(
         "--env-file",
