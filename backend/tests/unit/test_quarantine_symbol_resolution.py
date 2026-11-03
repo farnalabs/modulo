@@ -2,8 +2,9 @@
 
 These lock in the behaviour introduced alongside the quarantine registry safety
 net in ``tests/architecture/test_test_suite_safety_nets.py``. The real repo
-``.quarantine.yml`` is not empty: it carries live flaky-test entries (13 at the
-time of writing), so that lens resolves them in CI. These tests additionally
+``.quarantine.yml`` currently carries an empty registry (``quarantine: []``), so
+that lens finds no live entries on main — it still resolves entries when present
+(the 13 live entries of 2026-11-01 were retired 2026-11-03). These tests additionally
 exercise the symbol-resolution helpers (``_stripped_symbol`` /
 ``_collect_definitions`` / ``_resolves_definitions`` / ``_resolve_quarantine_target``
 / ``_is_bdd_scenario_module``) against synthetic temp modules, covering the
