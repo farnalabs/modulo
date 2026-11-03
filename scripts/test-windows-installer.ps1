@@ -43,7 +43,7 @@ if (${env:ProgramFiles} -or ${env:ProgramFiles(x86)}) {
         $candidates += Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
     }
     $isccPath = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-    $isInnoSetupAvailable = $isccPath -ne $null
+    $isInnoSetupAvailable = $null -ne $isccPath
 }
 if (-not $isInnoSetupAvailable) {
     Write-Warning "Inno Setup 6 not found (expected on non-Windows). Skipping compilation tests."
