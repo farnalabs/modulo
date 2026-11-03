@@ -31,6 +31,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+_GITHUB_DIR = ".github"
+_WINDOWS_ARTIFACTS_ZIP = "windows-native-artifacts.zip"
+
 
 @dataclass
 class PreflightCheckResult:
@@ -100,45 +103,65 @@ class ReleasePreflightChecker:
     def check_schema_freshness(self) -> PreflightCheckResult:
         name = "Schema freshness"
         schema_file = self.repo_root / "frontend" / "src" / "lib" / "api" / "schema.ts"
-        if not schema_file.exists():
-            return PreflightCheckResult(name, False, "frontend/src/lib/api/schema.ts does not exist")
-        try:
-            size = schema_file.stat().st_size
-        except OSError as exc:
-            return PreflightCheckResult(name, False, f"Could not inspect schema.ts: {exc}")
-        if size == 0:
-            return PreflightCheckResult(name, False, "frontend/src/lib/api/schema.ts is empty (0 bytes)")
+        file_result, size = self._validate_schema_file(schema_file, name)
+        if file_result is not None:
+            return file_result
 
         # In CI (or whenever a GitHub token and repository are supplied), prove
         # the schema-freshness gate actually ran and passed on the target
         # commit. A file existing is not evidence that the generated schema
         # matches the backend.
-        gh_token = self.env.get("GH_TOKEN") or self.env.get("GITHUB_TOKEN")
-        gh_repo = self.env.get("GITHUB_REPOSITORY")
-
-        if gh_token and gh_repo:
-            target_sha = self.env.get("CUT_SHA") or self.env.get("GITHUB_SHA") or ""
-            if not target_sha:
-                rc, stdout, _ = self.run_cmd(["git", "rev-parse", "HEAD"], cwd=self.repo_root)
-                if rc == 0 and stdout.strip():
-                    target_sha = stdout.strip()
-
-            if target_sha:
-                gate = self._lookup_schema_freshness_gate(target_sha, gh_repo)
-                if gate is not None:
-                    return gate
-                if self.mode in ("cut", "recut"):
-                    return PreflightCheckResult(
-                        name,
-                        False,
-                        f"No CI run found for commit {target_sha[:7]} in repository {gh_repo}",
-                    )
+        ci_result = self._ci_schema_freshness_gate(name)
+        if ci_result is not None:
+            return ci_result
 
         return PreflightCheckResult(
             name,
             True,
             f"frontend/src/lib/api/schema.ts present and valid ({size} bytes)",
         )
+
+    @staticmethod
+    def _validate_schema_file(schema_file: Path, name: str) -> tuple[PreflightCheckResult | None, int]:
+        """Return a failure result for an unusable schema file, else ``(None, size)``."""
+        if not schema_file.exists():
+            return PreflightCheckResult(name, False, "frontend/src/lib/api/schema.ts does not exist"), 0
+        try:
+            size = schema_file.stat().st_size
+        except OSError as exc:
+            return PreflightCheckResult(name, False, f"Could not inspect schema.ts: {exc}"), 0
+        if size == 0:
+            return PreflightCheckResult(name, False, "frontend/src/lib/api/schema.ts is empty (0 bytes)"), 0
+        return None, size
+
+    def _ci_schema_freshness_gate(self, name: str) -> PreflightCheckResult | None:
+        """Prove the schema-freshness CI gate ran green, when CI context is present."""
+        gh_token = self.env.get("GH_TOKEN") or self.env.get("GITHUB_TOKEN")
+        gh_repo = self.env.get("GITHUB_REPOSITORY")
+        if not (gh_token and gh_repo):
+            return None
+
+        target_sha = self._resolve_target_sha()
+        if not target_sha:
+            return None
+
+        gate = self._lookup_schema_freshness_gate(target_sha, gh_repo)
+        if gate is not None:
+            return gate
+        if self.mode in ("cut", "recut"):
+            return PreflightCheckResult(
+                name,
+                False,
+                f"No CI run found for commit {target_sha[:7]} in repository {gh_repo}",
+            )
+        return None
+
+    def _resolve_target_sha(self) -> str:
+        target_sha = self.env.get("CUT_SHA") or self.env.get("GITHUB_SHA") or ""
+        if target_sha:
+            return target_sha
+        rc, stdout, _ = self.run_cmd(["git", "rev-parse", "HEAD"], cwd=self.repo_root)
+        return stdout.strip() if rc == 0 and stdout.strip() else ""
 
     def _lookup_schema_freshness_gate(self, target_sha: str, gh_repo: str) -> PreflightCheckResult | None:
         """Return the schema-freshness verdict for *target_sha*, or ``None``.
@@ -182,11 +205,19 @@ class ReleasePreflightChecker:
             )
         if not runs:
             return None
+        return self._first_green_schema_verdict(runs, gh_repo, target_sha, name)
 
-        # A commit can have more than one CI run (re-runs, docs-only pushes),
-        # and the Schema freshness job may be absent from some of them. Check
-        # every run until one proves the gate green; a run without the job is
-        # not evidence either way, so keep looking.
+    def _first_green_schema_verdict(
+        self, runs: list[object], gh_repo: str, target_sha: str, name: str
+    ) -> PreflightCheckResult:
+        """Scan every CI run for a green schema-freshness verdict.
+
+        A commit can have more than one CI run (re-runs, docs-only pushes),
+        and the Schema freshness job may be absent from some of them. Check
+        every run until one proves the gate green; a run without the job is
+        not evidence either way, so keep looking. The first non-green verdict
+        is returned only when no run proved green.
+        """
         non_green: PreflightCheckResult | None = None
         for run in runs:
             if not isinstance(run, dict):
@@ -199,8 +230,7 @@ class ReleasePreflightChecker:
                 continue
             if verdict.passed:
                 return verdict
-            if non_green is None:
-                non_green = verdict
+            non_green = non_green or verdict
 
         if non_green is not None:
             return non_green
@@ -292,7 +322,7 @@ class ReleasePreflightChecker:
                 f"Release version '{self.version}' is invalid; must be semver X.Y.Z (e.g. 0.1.0)",
             )
 
-        macos_workflow = self.repo_root / ".github" / "workflows" / "macos-installer.yml"
+        macos_workflow = self.repo_root / _GITHUB_DIR / "workflows" / "macos-installer.yml"
         if not macos_workflow.exists():
             return PreflightCheckResult(
                 name,
@@ -321,14 +351,14 @@ class ReleasePreflightChecker:
             return PreflightCheckResult(name, False, f"Could not read deploy/windows/modulo.iss: {exc}")
 
         # Check for preprocessor violation: leading '#' followed by digit (character code literal)
-        for line_num, line in enumerate(iss_text.splitlines(), start=1):
-            stripped = line.strip()
-            if re.match(r"^#\d+", stripped):
-                return PreflightCheckResult(
-                    name,
-                    False,
-                    f"deploy/windows/modulo.iss line {line_num} starts with invalid character-code literal: '{stripped}'",
-                )
+        violation = self._iss_preprocessor_violation(iss_text)
+        if violation is not None:
+            line_num, stripped = violation
+            return PreflightCheckResult(
+                name,
+                False,
+                f"deploy/windows/modulo.iss line {line_num} starts with invalid character-code literal: '{stripped}'",
+            )
 
         if "[Setup]" not in iss_text:
             return PreflightCheckResult(
@@ -337,7 +367,7 @@ class ReleasePreflightChecker:
                 "deploy/windows/modulo.iss missing required [Setup] section",
             )
 
-        win_workflow = self.repo_root / ".github" / "workflows" / "windows-installer.yml"
+        win_workflow = self.repo_root / _GITHUB_DIR / "workflows" / "windows-installer.yml"
         if not win_workflow.exists():
             return PreflightCheckResult(
                 name,
@@ -347,14 +377,14 @@ class ReleasePreflightChecker:
 
         try:
             workflow_content = win_workflow.read_text(encoding="utf-8")
-            if "Find-Iscc" not in workflow_content:
-                return PreflightCheckResult(
-                    name,
-                    False,
-                    "windows-installer.yml does not define Inno Setup probe (Find-Iscc)",
-                )
         except OSError as exc:
             return PreflightCheckResult(name, False, f"Could not read windows-installer.yml: {exc}")
+        if "Find-Iscc" not in workflow_content:
+            return PreflightCheckResult(
+                name,
+                False,
+                "windows-installer.yml does not define Inno Setup probe (Find-Iscc)",
+            )
 
         launcher_helper = self.repo_root / "scripts" / "create-windows-launcher.ps1"
         if not launcher_helper.exists():
@@ -364,26 +394,36 @@ class ReleasePreflightChecker:
                 "scripts/create-windows-launcher.ps1 is missing",
             )
 
-        # If on Windows, check if ISCC binary is present for local diagnosis
-        iscc_note = ""
-        if sys.platform == "win32":
-            iscc_found = shutil.which("ISCC.exe")
-            if not iscc_found:
-                for env_var in ("ProgramFiles", "ProgramFiles(x86)"):
-                    pf = self.env.get(env_var)
-                    if pf:
-                        candidate = Path(pf) / "Inno Setup 6" / "ISCC.exe"
-                        if candidate.exists():
-                            iscc_found = str(candidate)
-                            break
-            if iscc_found:
-                iscc_note = f" (local compiler found at {iscc_found})"
-
         return PreflightCheckResult(
             name,
             True,
-            f"Inno Setup workflow probe, modulo.iss preprocessor syntax, and launcher script verified{iscc_note}",
+            f"Inno Setup workflow probe, modulo.iss preprocessor syntax, and launcher script verified{self._local_iscc_note()}",
         )
+
+    @staticmethod
+    def _iss_preprocessor_violation(iss_text: str) -> tuple[int, str] | None:
+        """Return the first character-code literal line in *iss_text*, if any."""
+        for line_num, line in enumerate(iss_text.splitlines(), start=1):
+            stripped = line.strip()
+            if re.match(r"^#\d+", stripped):
+                return line_num, stripped
+        return None
+
+    def _local_iscc_note(self) -> str:
+        """Return a diagnostic note about a locally installed Inno Setup compiler."""
+        if sys.platform != "win32":
+            return ""
+        iscc_found = shutil.which("ISCC.exe")
+        if not iscc_found:
+            for env_var in ("ProgramFiles", "ProgramFiles(x86)"):
+                pf = self.env.get(env_var)
+                if not pf:
+                    continue
+                candidate = Path(pf) / "Inno Setup 6" / "ISCC.exe"
+                if candidate.exists():
+                    iscc_found = str(candidate)
+                    break
+        return f" (local compiler found at {iscc_found})" if iscc_found else ""
 
     # -------------------------------------------------------------------------
     # 4. GHCR auth / buildx context / tag availability
@@ -400,13 +440,7 @@ class ReleasePreflightChecker:
                 "GH_TOKEN / GITHUB_TOKEN is missing in environment for GHCR authentication",
             )
 
-        dockerfiles = [
-            ("all-in-one", self.repo_root / "deploy" / "docker" / "Dockerfile.all-in-one"),
-            ("backend", self.repo_root / "backend" / "Dockerfile"),
-            ("frontend", self.repo_root / "frontend" / "Dockerfile.prod"),
-            ("runner-opencode", self.repo_root / "deploy" / "docker" / "runner-opencode.Dockerfile"),
-        ]
-        missing_dockerfiles = [img for img, path in dockerfiles if not path.exists()]
+        missing_dockerfiles = self._missing_dockerfiles()
         if missing_dockerfiles:
             return PreflightCheckResult(
                 name,
@@ -416,61 +450,13 @@ class ReleasePreflightChecker:
 
         buildx_note = ""
         if is_ci and gh_token:
-            # The runner must have a docker CLI with a working buildx builder,
-            # because every publish path builds with `docker buildx build`.
-            rc, stdout, stderr = self.run_cmd(["docker", "buildx", "version"], cwd=self.repo_root)
-            if rc != 0:
-                reason = (stderr or stdout).strip() or f"exit code {rc}"
-                return PreflightCheckResult(
-                    name,
-                    False,
-                    f"docker buildx is unavailable on the runner: {reason}",
-                )
-            buildx_note = f" buildx: {stdout.strip().splitlines()[0]}." if stdout.strip() else ""
+            buildx_result, buildx_note = self._verify_buildx_and_login(gh_token, name)
+            if buildx_result is not None:
+                return buildx_result
 
-            # Prove the GHCR credential actually authenticates rather than
-            # assuming the token carries registry access. The token is fed on
-            # stdin and never printed.
-            registry_user = self.env.get("REGISTRY_USER") or self.env.get("GITHUB_ACTOR") or "github-actions"
-            rc_login, _, stderr_login = self.run_cmd(
-                ["docker", "login", "ghcr.io", "-u", registry_user, "--password-stdin"],
-                cwd=self.repo_root,
-                stdin_data=gh_token,
-            )
-            if rc_login != 0:
-                reason = stderr_login.strip().splitlines()[-1] if stderr_login.strip() else f"exit code {rc_login}"
-                return PreflightCheckResult(
-                    name,
-                    False,
-                    f"GHCR authentication failed for user '{registry_user}': {reason}",
-                )
-
-        # Tag availability check: for cut mode, vX.Y.Z and bundle-vX.Y.Z must not exist
-        if self.mode == "cut" and self.version:
-            target_tags = [f"v{self.version}", f"bundle-v{self.version}"]
-            # Local tag check
-            rc, stdout, _ = self.run_cmd(["git", "tag", "-l", *target_tags], cwd=self.repo_root)
-            if rc == 0 and stdout.strip():
-                existing = [t.strip() for t in stdout.splitlines() if t.strip() in target_tags]
-                if existing:
-                    return PreflightCheckResult(
-                        name,
-                        False,
-                        f"Release tag(s) already exist locally: {', '.join(existing)}; duplicate cut refused",
-                    )
-
-            # Remote tag check
-            for tag in target_tags:
-                rc, _, _ = self.run_cmd(
-                    ["git", "ls-remote", "--exit-code", "origin", f"refs/tags/{tag}"],
-                    cwd=self.repo_root,
-                )
-                if rc == 0:
-                    return PreflightCheckResult(
-                        name,
-                        False,
-                        f"Release tag '{tag}' already exists on origin; duplicate cut refused",
-                    )
+        tag_result = self._check_release_tags(name)
+        if tag_result is not None:
+            return tag_result
 
         return PreflightCheckResult(
             name,
@@ -478,12 +464,85 @@ class ReleasePreflightChecker:
             f"GHCR token configured, 4 container build contexts verified, and release tags available.{buildx_note}",
         )
 
+    def _missing_dockerfiles(self) -> list[str]:
+        dockerfiles = [
+            ("all-in-one", self.repo_root / "deploy" / "docker" / "Dockerfile.all-in-one"),
+            ("backend", self.repo_root / "backend" / "Dockerfile"),
+            ("frontend", self.repo_root / "frontend" / "Dockerfile.prod"),
+            ("runner-opencode", self.repo_root / "deploy" / "docker" / "runner-opencode.Dockerfile"),
+        ]
+        return [img for img, path in dockerfiles if not path.exists()]
+
+    def _verify_buildx_and_login(self, gh_token: str, name: str) -> tuple[PreflightCheckResult | None, str]:
+        """Prove buildx works and the GHCR credential authenticates.
+
+        Returns ``(failure_result_or_None, buildx_note)``.
+        """
+        # The runner must have a docker CLI with a working buildx builder,
+        # because every publish path builds with `docker buildx build`.
+        rc, stdout, stderr = self.run_cmd(["docker", "buildx", "version"], cwd=self.repo_root)
+        if rc != 0:
+            reason = (stderr or stdout).strip() or f"exit code {rc}"
+            return PreflightCheckResult(
+                name,
+                False,
+                f"docker buildx is unavailable on the runner: {reason}",
+            ), ""
+        buildx_note = f" buildx: {stdout.strip().splitlines()[0]}." if stdout.strip() else ""
+
+        # Prove the GHCR credential actually authenticates rather than
+        # assuming the token carries registry access. The token is fed on
+        # stdin and never printed.
+        registry_user = self.env.get("REGISTRY_USER") or self.env.get("GITHUB_ACTOR") or "github-actions"
+        rc_login, _, stderr_login = self.run_cmd(
+            ["docker", "login", "ghcr.io", "-u", registry_user, "--password-stdin"],
+            cwd=self.repo_root,
+            stdin_data=gh_token,
+        )
+        if rc_login != 0:
+            reason = stderr_login.strip().splitlines()[-1] if stderr_login.strip() else f"exit code {rc_login}"
+            return PreflightCheckResult(
+                name,
+                False,
+                f"GHCR authentication failed for user '{registry_user}': {reason}",
+            ), buildx_note
+        return None, buildx_note
+
+    def _check_release_tags(self, name: str) -> PreflightCheckResult | None:
+        """Reject a duplicate cut when vX.Y.Z / bundle-vX.Y.Z already exist."""
+        if self.mode != "cut" or not self.version:
+            return None
+
+        target_tags = [f"v{self.version}", f"bundle-v{self.version}"]
+        rc, stdout, _ = self.run_cmd(["git", "tag", "-l", *target_tags], cwd=self.repo_root)
+        if rc == 0 and stdout.strip():
+            existing = [t.strip() for t in stdout.splitlines() if t.strip() in target_tags]
+            if existing:
+                return PreflightCheckResult(
+                    name,
+                    False,
+                    f"Release tag(s) already exist locally: {', '.join(existing)}; duplicate cut refused",
+                )
+
+        for tag in target_tags:
+            rc_remote, _, _ = self.run_cmd(
+                ["git", "ls-remote", "--exit-code", "origin", f"refs/tags/{tag}"],
+                cwd=self.repo_root,
+            )
+            if rc_remote == 0:
+                return PreflightCheckResult(
+                    name,
+                    False,
+                    f"Release tag '{tag}' already exists on origin; duplicate cut refused",
+                )
+        return None
+
     # -------------------------------------------------------------------------
     # 5. rc_tag output defined and propagated
     # -------------------------------------------------------------------------
     def check_rc_tag_propagation(self) -> PreflightCheckResult:
         name = "rc_tag output defined and propagated"
-        workflow_file = self.repo_root / ".github" / "workflows" / "release-unified.yml"
+        workflow_file = self.repo_root / _GITHUB_DIR / "workflows" / "release-unified.yml"
         if not workflow_file.exists():
             return PreflightCheckResult(name, False, ".github/workflows/release-unified.yml is missing")
 
@@ -492,34 +551,36 @@ class ReleasePreflightChecker:
         except OSError as exc:
             return PreflightCheckResult(name, False, f"Could not read release-unified.yml: {exc}")
 
-        # Verify release job declares rc_tag output
-        if "rc_tag: ${{ steps.rc-output.outputs.rc_tag }}" not in content:
-            return PreflightCheckResult(
-                name,
-                False,
+        for required, message in (
+            (
+                "rc_tag: ${{ steps.rc-output.outputs.rc_tag }}",
                 "release-unified.yml: 'release' job does not declare 'rc_tag: ${{ steps.rc-output.outputs.rc_tag }}'",
-            )
-
-        # Verify rc-output step exists
-        if "id: rc-output" not in content:
-            return PreflightCheckResult(
-                name,
-                False,
-                "release-unified.yml: 'rc-output' step missing in 'release' job",
-            )
-
-        # Verify dependent jobs consume needs.release.outputs.rc_tag
-        if "rc_tag: ${{ needs.release.outputs.rc_tag }}" not in content:
-            return PreflightCheckResult(
-                name,
-                False,
+            ),
+            ("id: rc-output", "release-unified.yml: 'rc-output' step missing in 'release' job"),
+            (
+                "rc_tag: ${{ needs.release.outputs.rc_tag }}",
                 "release-unified.yml: dependent jobs do not reference '${{ needs.release.outputs.rc_tag }}'",
-            )
+            ),
+        ):
+            if required not in content:
+                return PreflightCheckResult(name, False, message)
 
-        # Compute and validate expected rc_tag for this run
+        expected_tag, failure = self._resolve_expected_rc_tag(name)
+        if failure is not None:
+            return failure
+
+        return PreflightCheckResult(
+            name,
+            True,
+            f"Workflow rc_tag outputs declared and expected tag resolved to '{expected_tag}'",
+        )
+
+    def _resolve_expected_rc_tag(self, name: str) -> tuple[str, PreflightCheckResult | None]:
+        """Resolve the expected rc_tag for this mode, or a failure result."""
         if self.mode == "dry-run":
-            expected_tag = f"v{self.version}-dry-run"
-        elif self.mode in ("cut", "recut"):
+            return f"v{self.version}-dry-run", None
+
+        if self.mode in ("cut", "recut"):
             # Determine next free RC number
             rc, stdout, _ = self.run_cmd(
                 ["git", "tag", "-l", f"v{self.version}-rc*"],
@@ -529,28 +590,23 @@ class ReleasePreflightChecker:
             n = 1
             while f"v{self.version}-rc{n}" in local_tags:
                 n += 1
-            expected_tag = f"v{self.version}-rc{n}"
-        elif self.mode == "promote":
+            return f"v{self.version}-rc{n}", None
+
+        if self.mode == "promote":
             rc, stdout, _ = self.run_cmd(
                 ["git", "tag", "-l", f"v{self.version}-rc*"],
                 cwd=self.repo_root,
             )
             tags = [t.strip() for t in stdout.splitlines() if t.strip()] if rc == 0 else []
             if not tags:
-                return PreflightCheckResult(
+                return "", PreflightCheckResult(
                     name,
                     False,
                     f"Cannot promote: no prior release candidate tags 'v{self.version}-rc*' found",
                 )
-            expected_tag = max(tags)
-        else:
-            expected_tag = "unknown"
+            return max(tags), None
 
-        return PreflightCheckResult(
-            name,
-            True,
-            f"Workflow rc_tag outputs declared and expected tag resolved to '{expected_tag}'",
-        )
+        return "unknown", None
 
     # -------------------------------------------------------------------------
     # 6. uv.lock freshness for release version bump
@@ -663,58 +719,72 @@ class ReleasePreflightChecker:
                 "Dry-run mode: native Windows packaging skipped by contract",
             )
 
-        # Check local zip artifact
-        local_payloads = [
-            self.repo_root / "windows-native-artifacts.zip",
-            self.repo_root / "windows-artifacts" / "windows-native-artifacts.zip",
-            self.repo_root / "deploy" / "windows" / "windows-native-artifacts.zip",
-        ]
-        for p in local_payloads:
-            if p.exists() and p.stat().st_size > 0:
-                return PreflightCheckResult(
-                    name,
-                    True,
-                    f"Windows native artifacts payload present locally ({p.name}, {p.stat().st_size} bytes)",
-                )
-
-        # In CI, check if a windows-artifacts.yml run has produced the artifact
-        gh_token = self.env.get("GH_TOKEN") or self.env.get("GITHUB_TOKEN")
-        gh_repo = self.env.get("GITHUB_REPOSITORY")
-        if gh_token and gh_repo:
-            rc, stdout, _ = self.run_cmd(
-                [
-                    "gh",
-                    "run",
-                    "list",
-                    "--workflow",
-                    "windows-artifacts.yml",
-                    "--limit",
-                    "5",
-                    "--json",
-                    "databaseId,status,conclusion",
-                ],
-                cwd=self.repo_root,
-                env=self.env,
+        payload = self._find_local_windows_payload()
+        if payload is not None:
+            return PreflightCheckResult(
+                name,
+                True,
+                f"Windows native artifacts payload present locally ({payload.name}, {payload.stat().st_size} bytes)",
             )
-            if rc == 0 and stdout.strip():
-                try:
-                    runs = json.loads(stdout)
-                except json.JSONDecodeError:
-                    runs = []
-                for r in runs:
-                    if r.get("status") == "completed" and r.get("conclusion") == "success":
-                        run_id = r.get("databaseId")
-                        return PreflightCheckResult(
-                            name,
-                            True,
-                            f"Windows native artifacts available from successful windows-artifacts.yml run ({run_id})",
-                        )
+
+        run_id = self._find_successful_windows_artifact_run()
+        if run_id is not None:
+            return PreflightCheckResult(
+                name,
+                True,
+                f"Windows native artifacts available from successful windows-artifacts.yml run ({run_id})",
+            )
 
         return PreflightCheckResult(
             name,
             False,
             f"Windows native artifacts payload 'windows-native-artifacts' is missing; release packaging requires it for mode '{self.mode}'",
         )
+
+    def _find_local_windows_payload(self) -> Path | None:
+        """Return the first non-empty local Windows artifacts zip, if any."""
+        local_payloads = [
+            self.repo_root / _WINDOWS_ARTIFACTS_ZIP,
+            self.repo_root / "windows-artifacts" / _WINDOWS_ARTIFACTS_ZIP,
+            self.repo_root / "deploy" / "windows" / _WINDOWS_ARTIFACTS_ZIP,
+        ]
+        for payload in local_payloads:
+            if payload.exists() and payload.stat().st_size > 0:
+                return payload
+        return None
+
+    def _find_successful_windows_artifact_run(self) -> object:
+        """Return the databaseId of a successful windows-artifacts run, if any."""
+        gh_token = self.env.get("GH_TOKEN") or self.env.get("GITHUB_TOKEN")
+        gh_repo = self.env.get("GITHUB_REPOSITORY")
+        if not (gh_token and gh_repo):
+            return None
+
+        rc, stdout, _ = self.run_cmd(
+            [
+                "gh",
+                "run",
+                "list",
+                "--workflow",
+                "windows-artifacts.yml",
+                "--limit",
+                "5",
+                "--json",
+                "databaseId,status,conclusion",
+            ],
+            cwd=self.repo_root,
+            env=self.env,
+        )
+        if rc != 0 or not stdout.strip():
+            return None
+        try:
+            runs = json.loads(stdout)
+        except json.JSONDecodeError:
+            return None
+        for run in runs:
+            if run.get("status") == "completed" and run.get("conclusion") == "success":
+                return run.get("databaseId")
+        return None
 
     # -------------------------------------------------------------------------
     # 9. Azure Trusted Signing resource / secrets presence check
@@ -778,29 +848,42 @@ class ReleasePreflightChecker:
                 f"Cannot compute merge-base with {baseline}; merge-conflict check skipped",
             )
 
-        base_sha = base_sha.strip()
-        rc_head, head_sha, _ = self.run_cmd(["git", "rev-parse", "HEAD"], cwd=self.repo_root)
-        head_sha = head_sha.strip() if rc_head == 0 else ""
-
-        rc_target, target_sha, _ = self.run_cmd(["git", "rev-parse", baseline], cwd=self.repo_root)
-        target_sha = target_sha.strip() if rc_target == 0 else ""
-
-        # If HEAD is on baseline or up-to-date ancestor
-        if base_sha in (head_sha, target_sha):
+        if self._is_head_on_baseline(base_sha.strip(), baseline):
             return PreflightCheckResult(
                 name,
                 True,
                 f"Clean branch state against {baseline} (no divergent commits)",
             )
 
-        # `git merge-tree --write-tree` exits 1 when the merge conflicts and
-        # prints the resulting tree OID followed by the conflicted paths (with
-        # --name-only), a blank line, then informational messages. Any other
-        # non-zero exit is a real error (for example an older git that lacks
-        # --write-tree exits 129), which falls back to the deprecated 3-arg
-        # form. A git error on the fallback path is a hard failure, never a
-        # silent pass: a gate that cannot determine the merge state must fail
-        # closed.
+        conflict = self._merge_tree_conflict(baseline, base_sha.strip(), name)
+        if conflict is not None:
+            return conflict
+
+        return PreflightCheckResult(
+            name,
+            True,
+            f"Branch has no merge conflicts against {baseline}",
+        )
+
+    def _is_head_on_baseline(self, base_sha: str, baseline: str) -> bool:
+        rc_head, head_sha, _ = self.run_cmd(["git", "rev-parse", "HEAD"], cwd=self.repo_root)
+        head_sha = head_sha.strip() if rc_head == 0 else ""
+        rc_target, target_sha, _ = self.run_cmd(["git", "rev-parse", baseline], cwd=self.repo_root)
+        target_sha = target_sha.strip() if rc_target == 0 else ""
+        return base_sha in (head_sha, target_sha)
+
+    def _merge_tree_conflict(self, baseline: str, base_sha: str, name: str) -> PreflightCheckResult | None:
+        """Return a conflict/error result, or ``None`` when the merge is clean.
+
+        `git merge-tree --write-tree` exits 1 when the merge conflicts and
+        prints the resulting tree OID followed by the conflicted paths (with
+        --name-only), a blank line, then informational messages. Any other
+        non-zero exit is a real error (for example an older git that lacks
+        --write-tree exits 129), which falls back to the deprecated 3-arg
+        form. A git error on the fallback path is a hard failure, never a
+        silent pass: a gate that cannot determine the merge state must fail
+        closed.
+        """
         rc_mt, mt_out, mt_err = self.run_cmd(
             ["git", "merge-tree", "--write-tree", "--name-only", baseline, "HEAD"],
             cwd=self.repo_root,
@@ -818,31 +901,30 @@ class ReleasePreflightChecker:
                 False,
                 f"Merge conflicts detected against {baseline} in {len(conflicts)} path(s): {', '.join(conflicts[:5])}",
             )
-        if rc_mt != 0:
-            # Fallback to 3-arg git merge-tree syntax on older git.
-            rc_mt3, mt3_out, mt3_err = self.run_cmd(
-                ["git", "merge-tree", base_sha, "HEAD", baseline],
-                cwd=self.repo_root,
-            )
-            if rc_mt3 != 0:
-                reason = (mt3_err or mt3_out or mt_err).strip() or f"exit code {rc_mt3}"
-                return PreflightCheckResult(
-                    name,
-                    False,
-                    f"Unable to determine merge state against {baseline}: git merge-tree failed ({reason})",
-                )
-            if "<<<<<<<" in mt3_out:
-                return PreflightCheckResult(
-                    name,
-                    False,
-                    f"Merge conflicts detected against {baseline} in 3-way merge",
-                )
+        if rc_mt == 0:
+            return None
+        return self._merge_tree_fallback(baseline, base_sha, mt_err, name)
 
-        return PreflightCheckResult(
-            name,
-            True,
-            f"Branch has no merge conflicts against {baseline}",
+    def _merge_tree_fallback(self, baseline: str, base_sha: str, mt_err: str, name: str) -> PreflightCheckResult | None:
+        """Run the deprecated 3-arg merge-tree form on older git."""
+        rc_mt3, mt3_out, mt3_err = self.run_cmd(
+            ["git", "merge-tree", base_sha, "HEAD", baseline],
+            cwd=self.repo_root,
         )
+        if rc_mt3 != 0:
+            reason = (mt3_err or mt3_out or mt_err).strip() or f"exit code {rc_mt3}"
+            return PreflightCheckResult(
+                name,
+                False,
+                f"Unable to determine merge state against {baseline}: git merge-tree failed ({reason})",
+            )
+        if "<<<<<<<" in mt3_out:
+            return PreflightCheckResult(
+                name,
+                False,
+                f"Merge conflicts detected against {baseline} in 3-way merge",
+            )
+        return None
 
     @staticmethod
     def _parse_merge_tree_conflicts(output: str) -> list[str]:
