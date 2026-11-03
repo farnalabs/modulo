@@ -191,6 +191,14 @@ describe('SystemMapRevisionSidebar', () => {
 
     const byTime = wrapper.get('[data-testid="system-map-revision-by-time"]')
     expect(byTime.attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('select-by-time')).toBeUndefined()
+
+    const vm = wrapper.vm as unknown as { atValue: string }
+    vm.atValue = 'not-a-date'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[data-testid="system-map-revision-by-time"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
     expect(wrapper.emitted('select-by-time')).toBeUndefined()
 
     await wrapper.get('[data-testid="system-map-revision-at"]').setValue('2026-01-15T10:30')

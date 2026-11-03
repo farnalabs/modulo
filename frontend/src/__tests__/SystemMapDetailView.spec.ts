@@ -339,6 +339,38 @@ describe('SystemMapDetailView authoring actions', () => {
     expect(wrapper.text()).toContain('No revision was active at that time')
   })
 
+  it('ignores current and by-time switching when no map is loaded', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+    store.activeMap = null
+    const loadCurrent = vi.spyOn(store, 'loadCurrentRevision')
+    const loadByTime = vi.spyOn(store, 'loadRevisionByTime')
+
+    wrapper.findComponent(RevisionStub).vm.$emit('select-current')
+    wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2026-01-15T10:30:00Z')
+    await flushPromises()
+
+    expect(loadCurrent).not.toHaveBeenCalled()
+    expect(loadByTime).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the generic message when switching failures are not Error instances', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+
+    vi.spyOn(store, 'loadCurrentRevision').mockRejectedValueOnce('boom')
+    wrapper.findComponent(RevisionStub).vm.$emit('select-current')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not load the current revision')
+
+    vi.spyOn(store, 'loadRevisionByTime').mockRejectedValueOnce('boom')
+    wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2026-01-15T10:30:00Z')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not load the revision for that time')
+  })
+
   it('creates a new draft from the sidebar', async () => {
     const wrapper = mountWithStubs()
     await flushPromises()
