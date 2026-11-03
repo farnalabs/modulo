@@ -5,8 +5,9 @@ Covers the contract the ticket pins down:
 * the planted-secret fixture (a) — every generated/known secret shape in every
   log is gone, ``secrets.json`` is absent, and every redaction layer that
   applied reports a substitution count;
-* the negative gate (b) — a secret shape no layer covers REFUSES the build,
-  names the member, writes NO zip and exits non-zero;
+* the residual gate (b) — a secret shape no layer covers WITHHOLDS only the
+  offending item (FAR-2333), keeps the rest of the bundle, and records the
+  withholding in MANIFEST.txt and report.json;
 * the golden member set (c);
 * ``--list`` / ``--show`` never print an unredacted value (d);
 * unknown-member forward compatibility (e);
@@ -32,7 +33,6 @@ from modulo.support.bundle import (
     BUNDLE_FORMAT_VERSION,
     GOLDEN_MEMBERS,
     BundleSources,
-    RedactionGateError,
     build_bundle,
     generate_ref,
     inspect_bundle,
@@ -184,40 +184,53 @@ def test_settings_inventory_hides_unsafe_values(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_unclassified_secret_refuses_build_and_writes_no_zip(tmp_path: Path) -> None:
+def test_unclassified_secret_withholds_the_log_line_not_the_bundle(tmp_path: Path) -> None:
+    """FAR-2333: one bad log line must not cost the whole bundle."""
     _seed_data_dir(tmp_path, f"harmless line\nGREETING={UNCLASSIFIED_SECRET}\n")
-    out = tmp_path / "refused.zip"
+    out = tmp_path / "withheld.zip"
 
-    with pytest.raises(RedactionGateError) as excinfo:
-        build_bundle(
-            out,
-            sources=BundleSources(
-                data_dir=tmp_path,
-                doctor_output="healthy",
-                settings=_FakeSettings(),
-                environ={},
-                enable_db=False,
-            ),
-        )
+    result = build_bundle(
+        out,
+        sources=BundleSources(
+            data_dir=tmp_path,
+            doctor_output="healthy",
+            settings=_FakeSettings(),
+            environ={},
+            enable_db=False,
+        ),
+    )
 
-    assert excinfo.value.member == "logs/app.log.tail"
-    assert not out.exists()
+    assert out.is_file()
+    with zipfile.ZipFile(out) as archive:
+        log_text = archive.read("logs/app.log.tail").decode()
+        report = json.loads(archive.read("report.json"))
+        manifest = archive.read("MANIFEST.txt").decode()
+    assert "harmless line" in log_text
+    assert UNCLASSIFIED_SECRET not in log_text
+    assert {
+        "member": "logs/app.log.tail",
+        "items": 1,
+        "reason": "unclassified high-entropy token present",
+        "scope": "item",
+    } in report["withheld"]
+    assert "withheld: logs/app.log.tail" in manifest
+    assert any(entry["member"] == "logs/app.log.tail" for entry in result.withheld)
 
 
-def test_cli_refuses_and_exits_nonzero(
+def test_cli_withholds_the_bad_log_line_and_writes_the_bundle(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _seed_data_dir(tmp_path, f"harmless line\nGREETING={UNCLASSIFIED_SECRET}\n")
-    out = tmp_path / "refused-cli.zip"
+    out = tmp_path / "withheld-cli.zip"
     monkeypatch.setattr(bundle_module, "_session_factory", lambda sources: None)
 
     code = main(["--out", str(out), "--data-dir", str(tmp_path)])
 
     captured = capsys.readouterr()
-    assert code != 0
-    assert "logs/app.log.tail" in captured.err
-    assert "no bundle written" in captured.err
-    assert not out.exists()
+    assert code == 0
+    assert str(out) in captured.out
+    assert "withheld: logs/app.log.tail" in captured.out
+    assert out.is_file()
 
 
 # ---------------------------------------------------------------------------

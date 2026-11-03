@@ -14,12 +14,22 @@ Layers, in the order they are applied to every member's raw text:
    (GitHub PATs, API keys, bearer tokens, URL userinfo, private keys, JWTs).
 5. **Fail-closed post-assembly gate** — re-scans each already-redacted member.
    Any residual seeded value, pattern hit, unredacted sensitive ``KEY=value``,
-   or unclassified high-entropy token aborts the build.
+   or unclassified high-entropy token withholds the offending item (or, for a
+   small invariant member, the whole member) and aborts the build only when
+   the trip cannot be attributed to an item.
 
 The gate deliberately includes an entropy heuristic no earlier layer
-implements: a secret shape none of the pattern layers know about is REFUSED
-rather than shipped. That is the "fail closed" guarantee — an unknown shape is
-a build failure, never a silent leak.
+implements: a secret shape none of the pattern layers know about is WITHHELD
+rather than shipped. That is the "fail closed" guarantee — an unknown shape
+never reaches the archive silently.
+
+The entropy heuristic exempts one benign shape (FAR-2333): a content-hashed
+build artefact filename (``index-aB3dE5fG.js``). Its hash is mixed case plus
+digits, i.e. byte-for-byte the entropy profile of a generated secret, and a
+hashed Vite asset path in a browser error message made every real bundle
+unbuildable. The exemption is deliberately NARROW — only the filename shape
+is masked, never a whole URL — so a credential that lives in a URL path (a
+Slack webhook token) is still refused/withheld.
 """
 
 from __future__ import annotations
@@ -206,9 +216,23 @@ class Redactor:
         only — every seeded value, pattern and structural ``KEY=value`` check
         still applies to the text that carries them.
         """
-        reasons = _gate_reasons(text, self._seeds, allowed_tokens)
+        reasons = self.gate_reasons(text, allowed_tokens=allowed_tokens)
         if reasons:
             raise RedactionGateError(member, reasons)
+
+    def gate_reasons(
+        self,
+        text: str,
+        *,
+        allowed_tokens: frozenset[str] = frozenset(),
+    ) -> list[str]:
+        """The layer-5 findings for *text* (empty when it is clean).
+
+        Non-raising form of :meth:`gate`, so a caller can decide whether the
+        trip is attributable to one item and withhold just that item
+        (FAR-2333) instead of failing the whole build.
+        """
+        return _gate_reasons(text, self._seeds, allowed_tokens)
 
 
 def _replace_seeds(text: str, seeds: list[str]) -> tuple[str, int]:
@@ -257,6 +281,45 @@ _ENTROPY_TOKEN = re.compile(r"[A-Za-z0-9+/_\-]{24,}")
 _HEX_ONLY = re.compile(r"[0-9a-fA-F]+")
 _MIN_ENTROPY_BITS = 3.5
 
+#: File extensions of content-hashed build artefacts (Vite/webpack output).
+_ASSET_EXTENSIONS: tuple[str, ...] = (
+    "js",
+    "mjs",
+    "cjs",
+    "css",
+    "map",
+    "json",
+    "wasm",
+    "woff",
+    "woff2",
+    "ttf",
+    "otf",
+    "eot",
+    "png",
+    "svg",
+    "jpg",
+    "jpeg",
+    "gif",
+    "webp",
+    "ico",
+    "avif",
+)
+
+#: The filename shape Vite/webpack give a content-hashed build artefact:
+#: ``index-aB3dE5fG.js`` / ``index-aB3dE5fG.chunk.css``. The hash is mixed case
+#: plus digits, so it has exactly the entropy profile of a generated secret.
+#: Deliberately anchored to a PATH SEGMENT: only the filename is exempt, never
+#: a whole URL, because a credential in a URL path must still be caught.
+_HASHED_ASSET_NAME = re.compile(
+    r"(?<![A-Za-z0-9_\-])"
+    r"[A-Za-z0-9_]{1,80}"
+    r"(?:[.\-][A-Za-z0-9_]{1,80})*"
+    r"-[A-Za-z0-9_\-]{8,}"
+    r"(?:\.[A-Za-z0-9]{1,12})?"
+    r"\.(?:" + "|".join(_ASSET_EXTENSIONS) + r")"
+    r"(?![A-Za-z0-9_\-])"
+)
+
 
 def _gate_reasons(
     text: str,
@@ -296,12 +359,28 @@ def _check_structured_lines(text: str, reasons: list[str]) -> None:
 
 
 def _check_entropy_tokens(text: str, allowed_tokens: frozenset[str], reasons: list[str]) -> None:
-    for token in _ENTROPY_TOKEN.findall(text):
+    for token in _ENTROPY_TOKEN.findall(_mask_hashed_asset_names(text)):
         if token in allowed_tokens:
             continue
         if _looks_like_unclassified_secret(token):
             reasons.append("unclassified high-entropy token present")
             break
+
+
+def _mask_hashed_asset_names(text: str) -> str:
+    """Blank out hashed build-artefact filenames before entropy tokenising.
+
+    FAR-2333: a browser error message carrying
+    ``https://staging.modulo.run/assets/index-<hash>.js`` tripped the entropy
+    heuristic on ``run/assets/index-<hash>`` (``.`` is not in the token class,
+    so the match runs from one dot to the next) and made every real support
+    bundle unbuildable. Replacing just the hashed FILENAME with a space leaves
+    the rest of the URL intact for the scan: a path with no uppercase/digit run
+    is not secret-shaped, while a credential embedded in a URL path (a Slack
+    webhook segment, ``hooks.slack.com/services/T…/B…/<token>``) has no
+    ``<stem>-<hash>.<asset ext>`` filename and is still scanned.
+    """
+    return _HASHED_ASSET_NAME.sub(" ", text)
 
 
 def _looks_like_unclassified_secret(token: str) -> bool:
