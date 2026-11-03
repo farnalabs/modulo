@@ -562,6 +562,11 @@ def test_release_cut_state_gate_fails_closed_on_ref_query_errors() -> None:
     assert "refusing to treat it as absent" in script
 
 
+# POSIX-only (this module is mixed): the tests below execute the shipped shell
+# script for real, so each carries ``pytest.mark.posix_only``. The gate that skips
+# them on Windows lives in ``backend/tests/conftest.py``; the module's remaining
+# tests assert on workflow/file text and still run on Windows.
+@pytest.mark.posix_only
 def test_cut_state_gate_rejects_remote_ref_query_error(tmp_path: Path) -> None:
     result = _run_cut_state_gate(tmp_path, git_failure=True)
     assert result.returncode != 0
@@ -970,6 +975,7 @@ exit 2
     return _run_bash(_cut_state_script(), cwd=tmp_path, env=env)
 
 
+@pytest.mark.posix_only
 def test_cut_state_gate_allows_closed_unmerged_pr_when_all_release_identity_is_absent(tmp_path: Path) -> None:
     result = _run_cut_state_gate(
         tmp_path,
@@ -979,6 +985,7 @@ def test_cut_state_gate_allows_closed_unmerged_pr_when_all_release_identity_is_a
     assert "Safe retry: prior closed unmerged release PR(s) #2649" in result.stdout
 
 
+@pytest.mark.posix_only
 def test_cut_state_gate_matches_exact_version_identity_across_branches(tmp_path: Path) -> None:
     result = _run_cut_state_gate(
         tmp_path,
@@ -1004,6 +1011,7 @@ def test_cut_state_gate_matches_exact_version_identity_across_branches(tmp_path:
     assert "#2650" not in result.stdout
 
 
+@pytest.mark.posix_only
 def test_cut_state_gate_rejects_closed_unmerged_pr_when_branch_exists(tmp_path: Path) -> None:
     result = _run_cut_state_gate(
         tmp_path,
@@ -1014,6 +1022,7 @@ def test_cut_state_gate_rejects_closed_unmerged_pr_when_branch_exists(tmp_path: 
     assert "Remote ref refs/heads/release/version-0.2.0 exists" in result.stdout
 
 
+@pytest.mark.posix_only
 def test_cut_state_gate_rejects_closed_merged_pr(tmp_path: Path) -> None:
     result = _run_cut_state_gate(
         tmp_path,
@@ -1033,6 +1042,7 @@ def test_cut_state_gate_rejects_closed_merged_pr(tmp_path: Path) -> None:
     assert "refusing to cut again" in result.stdout
 
 
+@pytest.mark.posix_only
 def test_cut_state_gate_resumes_merged_bump_pr_when_main_version_matches(tmp_path: Path) -> None:
     result = _run_cut_state_gate(
         tmp_path,
@@ -1052,6 +1062,7 @@ def test_cut_state_gate_resumes_merged_bump_pr_when_main_version_matches(tmp_pat
     assert "refusing to cut again" not in result.stdout
 
 
+@pytest.mark.posix_only
 def test_cut_state_gate_rejects_merged_bump_pr_when_main_version_unreadable(tmp_path: Path) -> None:
     result = _run_cut_state_gate(
         tmp_path,
@@ -1069,18 +1080,21 @@ def test_cut_state_gate_rejects_merged_bump_pr_when_main_version_unreadable(tmp_
     assert "::error::Could not read version from main backend/pyproject.toml" in result.stdout
 
 
+@pytest.mark.posix_only
 def test_cut_state_gate_rejects_active_publication_hold(tmp_path: Path) -> None:
     result = _run_cut_state_gate(tmp_path, existing_refs={"refs/heads/release-publication-hold"})
     assert result.returncode != 0
     assert "release-publication-hold is active" in result.stdout
 
 
+@pytest.mark.posix_only
 def test_cut_state_gate_rejects_existing_release_tag(tmp_path: Path) -> None:
     result = _run_cut_state_gate(tmp_path, existing_refs={"refs/tags/v0.2.0"})
     assert result.returncode != 0
     assert "Remote ref refs/tags/v0.2.0 exists" in result.stdout
 
 
+@pytest.mark.posix_only
 def test_cut_state_gate_rejects_existing_github_release(tmp_path: Path) -> None:
     result = _run_cut_state_gate(tmp_path, existing_refs={"release:v0.2.0"})
     assert result.returncode != 0
@@ -1093,6 +1107,7 @@ def test_cut_state_gate_rejects_github_query_error(tmp_path: Path) -> None:
     assert result.stderr or result.stdout
 
 
+@pytest.mark.posix_only
 def test_protected_cut_drives_every_gh_call_with_the_trusted_bot_token(tmp_path: Path) -> None:
     repo, log, env = _cut_harness(tmp_path)
     result = _run_bash(
@@ -1105,6 +1120,7 @@ def test_protected_cut_drives_every_gh_call_with_the_trusted_bot_token(tmp_path:
 
 
 @pytest.mark.parametrize("token", [None, ""])
+@pytest.mark.posix_only
 def test_protected_cut_fails_closed_without_the_release_pr_token(tmp_path: Path, token: str | None) -> None:
     repo, log, env = _cut_harness(tmp_path)
     if token is None:
@@ -1119,6 +1135,7 @@ def test_protected_cut_fails_closed_without_the_release_pr_token(tmp_path: Path,
     assert not log.exists() or "gh " not in log.read_text(encoding="utf-8")
 
 
+@pytest.mark.posix_only
 def test_protected_cut_executes_branch_pr_and_exact_merged_sha_handoff(tmp_path: Path) -> None:
     repo, log, env = _cut_harness(tmp_path)
     result = _run_bash(
@@ -1135,6 +1152,7 @@ def test_protected_cut_executes_branch_pr_and_exact_merged_sha_handoff(tmp_path:
     assert "git push origin release/version-0.2.0" not in commands
 
 
+@pytest.mark.posix_only
 def test_protected_cut_schema_handoff_uses_exact_cut_sha(tmp_path: Path) -> None:
     repo, log, env = _cut_harness(tmp_path)
     cut_sha = _cut_git("rev-parse", "refs/remotes/origin/merged", cwd=repo).stdout.strip()
@@ -1163,6 +1181,7 @@ esac
     assert cut_sha in result.stdout
 
 
+@pytest.mark.posix_only
 def test_protected_cut_cleanup_executes_hold_deletion_after_preparation_failure(tmp_path: Path) -> None:
     repo, _log, env = _cut_harness(tmp_path)
     _write_executable(
@@ -1354,6 +1373,7 @@ exit 0
     return _run_bash(script, cwd=tmp_path, env=env)
 
 
+@pytest.mark.posix_only
 def test_release_publication_hold_establishment_refuses_existing_hold(tmp_path: Path) -> None:
     result = _run_hold_lookup_script(
         tmp_path,
@@ -1385,6 +1405,7 @@ def _hold_lookup_fragment(script: str) -> str:
     ],
 )
 @pytest.mark.parametrize("lookup_rc", [2, 17])
+@pytest.mark.posix_only
 def test_release_publication_hold_establishment_handles_absent_and_remote_error(
     tmp_path: Path, step_name: str, lookup_rc: int
 ) -> None:
@@ -1425,6 +1446,7 @@ def test_release_publication_hold_establishment_handles_absent_and_remote_error(
         "ga-publication-lookup-error",
     ),
 )
+@pytest.mark.posix_only
 def test_release_publication_hold_cleanup_is_explicitly_fail_closed(
     tmp_path: Path, step_name: str, lookup_rc: int
 ) -> None:
@@ -1449,6 +1471,7 @@ def _promote_step() -> dict[str, Any]:
     return steps[_step_names(steps).index("Promote to GA and lift freeze")]
 
 
+@pytest.mark.posix_only
 def test_release_promote_drives_every_gh_call_with_the_trusted_bot_token(tmp_path: Path) -> None:
     result, _root, _rc_sha, _pr_sha, env = _promote_harness(tmp_path, scenario="valid")
     assert result.returncode == 0, result.stderr + result.stdout
@@ -1458,6 +1481,7 @@ def test_release_promote_drives_every_gh_call_with_the_trusted_bot_token(tmp_pat
 
 
 @pytest.mark.parametrize("token", [None, ""])
+@pytest.mark.posix_only
 def test_release_promote_fails_closed_without_the_release_pr_token(tmp_path: Path, token: str | None) -> None:
     result, _root, _rc_sha, _pr_sha, env = _promote_harness(tmp_path, scenario="valid")
     guarded_env = dict(env)
@@ -1921,6 +1945,7 @@ def _run_publication_sequence(
     )
 
 
+@pytest.mark.posix_only
 def test_release_promote_successfully_publishes_exact_tag_target_and_lifts_freeze(tmp_path: Path) -> None:
     result, root, _rc_sha, _pr_sha, env = _promote_harness(tmp_path, scenario="valid")
     assert result.returncode == 0, result.stderr + result.stdout
@@ -1961,6 +1986,7 @@ def test_release_promote_successfully_publishes_exact_tag_target_and_lifts_freez
     assert not _git(root, "ls-remote", "origin", "refs/heads/release-freeze")
 
 
+@pytest.mark.posix_only
 def test_release_publication_rejects_missing_or_wrong_target(tmp_path: Path) -> None:
     result, root, _rc_sha, _pr_sha, env = _promote_harness(tmp_path, scenario="valid")
     assert result.returncode == 0, result.stderr + result.stdout
@@ -1984,6 +2010,7 @@ def test_release_publication_rejects_missing_or_wrong_target(tmp_path: Path) -> 
     assert "release target mismatch" in wrong.stderr
 
 
+@pytest.mark.posix_only
 def test_release_promote_failure_reestablishes_freeze_without_lift(tmp_path: Path) -> None:
     for failure in ("retag", "helm", "notes"):
         result, root, _rc_sha, _pr_sha, env = _promote_harness(tmp_path / failure, scenario="valid")
@@ -1994,6 +2021,7 @@ def test_release_promote_failure_reestablishes_freeze_without_lift(tmp_path: Pat
         assert "freeze lifted" not in publication.stdout
 
 
+@pytest.mark.posix_only
 def test_release_promote_rejects_wrong_version_heading(tmp_path: Path) -> None:
     result, _root, _rc_sha, _pr_sha, _env = _promote_harness(tmp_path, scenario="wrong-heading")
     output = result.stderr + result.stdout
@@ -2001,6 +2029,7 @@ def test_release_promote_rejects_wrong_version_heading(tmp_path: Path) -> None:
     assert "exact generated release metadata" in output
 
 
+@pytest.mark.posix_only
 def test_release_promote_rejects_wrong_generated_release_body(tmp_path: Path) -> None:
     result, _root, _rc_sha, _pr_sha, _env = _promote_harness(tmp_path, scenario="wrong-body")
     output = result.stderr + result.stdout
@@ -2008,6 +2037,7 @@ def test_release_promote_rejects_wrong_generated_release_body(tmp_path: Path) ->
     assert "exact generated release metadata" in output
 
 
+@pytest.mark.posix_only
 def test_release_promote_rejects_stale_reused_pr_head(tmp_path: Path) -> None:
     result, _root, _rc_sha, _pr_sha, _env = _promote_harness(tmp_path, scenario="stale")
     output = result.stderr + result.stdout
@@ -2015,6 +2045,7 @@ def test_release_promote_rejects_stale_reused_pr_head(tmp_path: Path) -> None:
     assert "does not match release branch" in output
 
 
+@pytest.mark.posix_only
 def test_release_promote_rejects_old_ci_head(tmp_path: Path) -> None:
     old_ci_sha = "0" * 40
     result, _root, _rc_sha, _pr_sha, _env = _promote_harness(tmp_path, scenario="valid", ci_sha=old_ci_sha)
@@ -2023,6 +2054,7 @@ def test_release_promote_rejects_old_ci_head(tmp_path: Path) -> None:
     assert "did not succeed for exact promote PR head" in output
 
 
+@pytest.mark.posix_only
 def test_release_promote_shell_fragments_are_executable_bash() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["release"]["steps"]
@@ -2244,6 +2276,7 @@ def _delete_invocations(log: Path) -> list[str]:
     return [line for line in log.read_text(encoding="utf-8").splitlines() if "push origin --delete" in line]
 
 
+@pytest.mark.posix_only
 def test_freeze_cleanup_deletes_this_versions_freeze_after_a_failed_cut(tmp_path: Path) -> None:
     result, log = _run_freeze_cleanup(tmp_path)
     assert result.returncode == 0, result.stderr + result.stdout
@@ -2257,6 +2290,7 @@ def test_freeze_cleanup_deletes_this_versions_freeze_after_a_failed_cut(tmp_path
     assert "merge queue may resume" in result.stdout
 
 
+@pytest.mark.posix_only
 def test_freeze_cleanup_keeps_the_freeze_once_the_bundle_is_published(tmp_path: Path) -> None:
     result, log = _run_freeze_cleanup(tmp_path, bundle_rc=0)
     assert result.returncode == 0, result.stderr + result.stdout
@@ -2267,6 +2301,7 @@ def test_freeze_cleanup_keeps_the_freeze_once_the_bundle_is_published(tmp_path: 
     assert "ls-remote --exit-code origin refs/heads/release-freeze" not in log.read_text(encoding="utf-8")
 
 
+@pytest.mark.posix_only
 def test_freeze_cleanup_leaves_another_releases_freeze_alone(tmp_path: Path) -> None:
     result, log = _run_freeze_cleanup(tmp_path, freeze_sha=_OTHER_RELEASE_FREEZE_SHA)
     assert result.returncode == 0, result.stderr + result.stdout
@@ -2274,6 +2309,7 @@ def test_freeze_cleanup_leaves_another_releases_freeze_alone(tmp_path: Path) -> 
     assert not _delete_invocations(log)
 
 
+@pytest.mark.posix_only
 def test_freeze_cleanup_is_a_no_op_when_no_freeze_exists(tmp_path: Path) -> None:
     result, log = _run_freeze_cleanup(tmp_path, freeze_rc=2)
     assert result.returncode == 0, result.stderr + result.stdout
@@ -2281,6 +2317,7 @@ def test_freeze_cleanup_is_a_no_op_when_no_freeze_exists(tmp_path: Path) -> None
     assert not _delete_invocations(log)
 
 
+@pytest.mark.posix_only
 def test_freeze_cleanup_fails_closed_when_the_bundle_state_is_unknown(tmp_path: Path) -> None:
     result, log = _run_freeze_cleanup(tmp_path, bundle_rc=128)
     assert result.returncode != 0
@@ -2288,6 +2325,7 @@ def test_freeze_cleanup_fails_closed_when_the_bundle_state_is_unknown(tmp_path: 
     assert not _delete_invocations(log)
 
 
+@pytest.mark.posix_only
 def test_freeze_cleanup_fails_closed_when_the_freeze_state_is_unknown(tmp_path: Path) -> None:
     result, log = _run_freeze_cleanup(tmp_path, freeze_rc=128)
     assert result.returncode != 0
@@ -2296,6 +2334,7 @@ def test_freeze_cleanup_fails_closed_when_the_freeze_state_is_unknown(tmp_path: 
 
 
 @pytest.mark.parametrize("rc_tags_rc", [2, 128])
+@pytest.mark.posix_only
 def test_freeze_cleanup_fails_closed_when_the_rc_tag_state_is_unknown(tmp_path: Path, rc_tags_rc: int) -> None:
     result, log = _run_freeze_cleanup(tmp_path, rc_tags_rc=rc_tags_rc)
     assert result.returncode != 0
@@ -2303,6 +2342,7 @@ def test_freeze_cleanup_fails_closed_when_the_rc_tag_state_is_unknown(tmp_path: 
     assert not _delete_invocations(log)
 
 
+@pytest.mark.posix_only
 def test_freeze_cleanup_fails_loudly_when_the_delete_is_refused(tmp_path: Path) -> None:
     result, log = _run_freeze_cleanup(tmp_path, delete_rc=1)
     assert result.returncode != 0
