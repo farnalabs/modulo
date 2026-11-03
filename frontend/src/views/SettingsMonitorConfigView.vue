@@ -35,7 +35,7 @@
                   <div>
                     <h3 :id="`settingsmonitorconfigview-backend-label-${b.key}`" class="font-medium">{{ b.label }}</h3>
                     <p class="text-xs text-muted-foreground">{{ b.description }}</p>
-                    <p v-if="!b.enabled" class="text-xs text-muted-foreground/60 mt-1">{{ b.hint }}</p>
+                    <p v-if="!b.enabled" class="text-xs text-muted-foreground mt-1">{{ b.hint }}</p>
                   </div>
                   <label :for="`settingsmonitorconfigview-toggle-${b.key}`" class="relative inline-flex items-center cursor-pointer">
                     <input :id="`settingsmonitorconfigview-toggle-${b.key}`" type="checkbox" v-model="b.enabled" class="sr-only peer" :aria-labelledby="`settingsmonitorconfigview-backend-label-${b.key}`" @change="onDirty" />

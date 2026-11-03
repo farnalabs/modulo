@@ -170,7 +170,7 @@
                       {{ $t('views.variantCompare.tokens', { count: s.tokenTotal !== null ? s.tokenTotal.toLocaleString() : '—' }) }}
                     </div>
                     <div class="flex gap-2 text-muted-foreground">
-                      <span class="text-muted-foreground/60">{{ $t('views.variantCompare.noHitl') }}</span>
+                      <span class="text-muted-foreground">{{ $t('views.variantCompare.noHitl') }}</span>
                     </div>
                   </div>
                 </td>

@@ -250,10 +250,10 @@
                 <span v-if="event.resource_type" class="text-muted-foreground">
                   {{ event.resource_type }}
                 </span>
-                <span v-if="event.resource_id" class="ml-1 font-mono text-xs text-muted-foreground/70">
+                <span v-if="event.resource_id" class="ml-1 font-mono text-xs text-muted-foreground">
                   / {{ shortId(event.resource_id) }}
                 </span>
-                <span v-else class="text-muted-foreground/50">&mdash;</span>
+                <span v-else class="text-muted-foreground">&mdash;</span>
               </td>
               <td class="table-cell max-w-xs truncate text-muted-foreground" v-tooltip.top="{ value: summarize(event), showDelay: 300 }">{{ summarize(event) }}</td>
               <td class="table-cell text-xs text-muted-foreground">
@@ -456,11 +456,11 @@
                 </td>
                 <td class="table-cell font-mono text-xs">
                   <span v-if="event.org_id">{{ shortId(event.org_id) }}</span>
-                  <span v-else class="text-muted-foreground/50">&mdash;</span>
+                  <span v-else class="text-muted-foreground">&mdash;</span>
                 </td>
                 <td class="table-cell font-mono">
                   <span v-if="event.actor_user_id">usr_{{ shortId(event.actor_user_id).replace('#', '') }}</span>
-                  <span v-else class="text-muted-foreground/50">&mdash;</span>
+                  <span v-else class="text-muted-foreground">&mdash;</span>
                 </td>
                 <td class="table-cell max-w-xs truncate text-muted-foreground" v-tooltip.top="{ value: summarize(event), showDelay: 300 }">{{ summarize(event) }}</td>
                 <td class="table-cell text-xs text-muted-foreground">

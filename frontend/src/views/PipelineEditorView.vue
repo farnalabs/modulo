@@ -85,7 +85,7 @@
             <span v-if="pipeline?.archived_at" class="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning-text">{{ $t('views.PipelineEditorView.archived') }}</span>
             <span v-if="folderPath.length > 0" class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
               <span v-for="(f, i) in folderPath" :key="f.id" class="truncate">
-                <template v-if="i > 0"><span class="text-muted-foreground/50">/</span></template>
+                <template v-if="i > 0"><span class="text-muted-foreground">/</span></template>
                 <router-link :to="`/pipelines?folder_id=${f.id}`" class="hover:text-foreground">{{ f.name }}</router-link>
               </span>
             </span>
@@ -858,7 +858,7 @@
           <div class="text-center">
             <h2 class="text-xl font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_fallback_title') }}</h2>
             <p v-if="pipeline?.description" class="mt-1 text-sm text-muted-foreground">{{ pipeline.description }}</p>
-            <p class="mt-4 text-sm italic text-muted-foreground/60 select-none">{{ $t('views.PipelineEditorView.empty_state_hint') }}</p>
+            <p class="mt-4 text-sm italic text-muted-foreground select-none">{{ $t('views.PipelineEditorView.empty_state_hint') }}</p>
           </div>
           <div class="flex items-center gap-2 pointer-events-auto">
             <Button size="small" type="button" class="text-xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>

@@ -250,7 +250,7 @@
                     </td>
                     <td class="px-4 py-3">
                       <span v-if="(row.data as PipelineItem).description" class="text-muted-foreground truncate block max-w-xs">{{ (row.data as PipelineItem).description }}</span>
-                      <span v-else class="text-muted-foreground/80 italic">{{ $t('views.PipelineListView.no_description') }}</span>
+                      <span v-else class="text-muted-foreground italic">{{ $t('views.PipelineListView.no_description') }}</span>
                     </td>
                     <td class="px-4 py-3">
                       <span class="badge text-xs" :class="(row.data as PipelineItem).visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'">
