@@ -4,18 +4,14 @@ prd: 8.20
 adr: []
 code:
   - backend/src/modulo/api/routes/dashboard.py
-  - backend/src/modulo/api/routes/views.py
   - backend/src/modulo/db/crud/daily_run_count.py
 unit-tests:
   - backend/tests/unit/api/test_dashboard.py
   - backend/tests/unit/api/test_daily_run_counts.py
-  - backend/tests/unit/api/test_view_endpoint.py
 bdd:
   - backend/tests/bdd/features/dashboard/hitl_trends.feature
   - backend/tests/bdd/features/dashboard/dashboard_summary.feature
   - backend/tests/bdd/features/dashboard/daily_run_counts.feature
-  - backend/tests/bdd/features/views/views.feature
-  - backend/tests/bdd/steps/test_views.py
 depends-on:
   - feat-evals
 status: covered
@@ -44,14 +40,6 @@ org/`days` to keep the landing page fast.
       status with default/custom `days` bounds (`test_daily_run_counts.py`)
 - [x] HITL volume / rejection-rate / correlation series over the trend window (§8.20)
       are asserted by `hitl_trends.feature`
-- [x] Saved Views ship end to end as the admin CRUD surface: `/admin/views` renders
-      `AdminViewsView.vue` over `GET/POST/PATCH/DELETE /api/v1/views` (gated by the plan
-      `view_modes` feature flag) – name, view type, custom filters (JSON), column
-      layouts, and sort-by/order configuration for create/edit/delete, locked by
-      `views.feature` BDD + `test_view_endpoint.py`. The route is a `private_preview`
-      surface (hidden from the sidebar nav, FAR-546) and the plan `saved_views` toggle
-      defaults off; the `ViewToggle` 'apply to list' frontend component ships but is not
-      yet wired into the runs/pipelines list pages.
 - [x] All summary/trend endpoints are org-RLS scoped and permission-gated
       (`dashboard.summary` / `dashboard.trends`)
 
@@ -62,6 +50,12 @@ org/`days` to keep the landing page fast.
   headline pass rate does not reflect guardrail-blocked runs.
 
 ## QA History
+- 2026-10-29: **Saved Views removed (FAR-2233)**: the `saved_views` / `view_modes`
+  plan flags, the `/api/v1/views` CRUD API, the `SavedView` model + CRUD, the
+  `GET /api/v1/viewmodel/views` read model, and the `/admin/views` page
+  (`AdminViewsView.vue`), `ViewToggle.vue` and the `useViews` composable were all
+  deleted. The `saved_views` table remains in migration history; no ORM model maps
+  it. This entry is dashboard-only again.
 - 2026-09-26: **Improve Architecture product-map walk**: closed `feat-dashboard`'s
   stale "Saved Views are configurable with custom filters and column layouts" gap:
   the surface ships as the admin CRUD page `AdminViewsView.vue` over the full

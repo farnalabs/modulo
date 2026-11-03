@@ -53,12 +53,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     FeatureFlag(
-        name="saved_views",
-        description="Persistent saved views for run and pipeline lists",
-        tier="community",
-        org_admin_settable=True,
-    ),
-    FeatureFlag(
         name="dashboard_charts",
         description="Dashboard trend charts (run activity sparklines)",
         tier="community",
@@ -113,13 +107,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="admin_cost_controls",
         description="Budget overview, team budgets, alert thresholds, and billing settings",
-        tier="team",
-    ),
-    FeatureFlag(
-        name="view_modes",
-        description=(
-            "Multiple named UI views with admin-defined feature visibility per view and user/team/role assignment"
-        ),
         tier="team",
     ),
     FeatureFlag(
@@ -190,13 +177,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
         org_admin_settable=True,
     ),
-    # ── Community tier — mobile icon-rail experiment (default OFF) ──────────
-    FeatureFlag(
-        name="mobile_sidebar_rail",
-        description="Mobile icon-rail sidebar (experimental)",
-        tier="community",
-        org_admin_settable=True,
-    ),
     # ── Community tier — user-scoped MCP keys (default ON, FAR-2301) ────────
     # Default ON since FAR-2301: a human-linked user-scoped key is already
     # quota-limited, TTL-capped, live-role clamped and attribution-bearing, so
@@ -239,7 +219,7 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Beta System Maps (Delivery System Maps)",
         tier="community",
     ),
-    # ── Community tier — webhook notification delivery log (default OFF, FAR-656) ──
+    # ── Community tier — webhook notification delivery log (default ON, FAR-2235) ──
     FeatureFlag(
         name="webhook_notification_log",
         description="Webhook notification delivery log (admin delivery-log UI)",
@@ -289,9 +269,8 @@ TIER_RANK: dict[str, int] = {"community": 0, "team": 1}
 # Flags shipped default-OFF on every tier regardless of tier rank. Each is
 # listed in the catalog for per-org toggling AND hardcoded here so the
 # community-tier tier-rank fallback in ``FeatureFlagRegistry._refresh`` can
-# never activate it (the "two-mechanism" precedent started by
-# ``mobile_sidebar_rail``). Orgs enable them per-org via
-# ``feature_overrides``; a system-level ``set_override`` also wins.
+# never activate it. Orgs enable them per-org via ``feature_overrides``; a
+# system-level ``set_override`` also wins.
 # Retained only in persisted data for backwards compatibility; it is not a
 # customer-configurable flag. Internal Lifecycle Map access is controlled by the
 # route's dev-mode visibility gate instead of an org feature override.
@@ -311,10 +290,6 @@ INTERNAL_FLAGS: frozenset[str] = frozenset(
 
 DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
     {
-        "mobile_sidebar_rail",
-        "dashboard_charts",
-        "saved_views",
-        "webhook_notification_log",
         "library_collection",
         "sso_unrestricted_provisioning",
         "api_key_grants",
@@ -762,7 +737,7 @@ class FeatureFlagRegistry:
         if db_flags:
             # Keep ALL catalog rows, including ``is_active=false`` ones, so the
             # admin UI can list and toggle them. Rows seeded inactive (e.g. the
-            # ``mobile_sidebar_rail`` experiment) are tracked in
+            # Inactive catalog flags are tracked in
             # ``_inactive_flags`` and stay ``currently_active=False`` in
             # ``_refresh`` unless an override exists.
             self._flags = [

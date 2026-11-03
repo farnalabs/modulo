@@ -140,7 +140,6 @@ from modulo.api.routes.triggers import router as triggers_router
 from modulo.api.routes.variant_batches import router as variant_batches_router
 from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
-from modulo.api.routes.views import router as views_router
 from modulo.api.routes.webhooks import router as webhooks_router
 from modulo.api.schemas.system_maps import PublishValidationErrorHTTP
 from modulo.auth.sso import SsoCallbackError
@@ -1329,7 +1328,6 @@ app.include_router(pipeline_triggers_router)
 app.include_router(webhooks_router)
 app.include_router(slack_router)
 app.include_router(stripe_webhook_router)
-app.include_router(views_router)
 app.include_router(viewmodel_router)
 app.include_router(api_keys_router)
 app.include_router(audit_router)

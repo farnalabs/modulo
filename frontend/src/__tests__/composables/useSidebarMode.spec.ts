@@ -1,15 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createPinia, setActivePinia } from 'pinia'
 import { useSidebarMode } from '../../composables/useSidebarMode'
-import { usePlanStore } from '../../stores/planStore'
-import { flagCacheKey, serializeFlagCache } from '../../config/flagCache'
-
-vi.mock('../../lib/api/client', () => ({
-  api: { GET: vi.fn().mockResolvedValue({ data: null, error: undefined }) },
-  getAccessToken: vi.fn().mockReturnValue(null),
-  clearAccessToken: vi.fn(),
-  isDemoSession: vi.fn().mockReturnValue(false),
-}))
 
 function mockMatchMedia(desktop: boolean) {
   window.matchMedia = vi.fn().mockImplementation((query: string) => ({
@@ -24,110 +14,25 @@ function mockMatchMedia(desktop: boolean) {
   }))
 }
 
-describe('useSidebarMode (FAR-1237 — resolved-mode first paint)', () => {
-  beforeEach(() => {
-    localStorage.clear()
-    setActivePinia(createPinia())
-    mockMatchMedia(false) // mobile viewport unless a test overrides
-  })
+describe('useSidebarMode', () => {
+  beforeEach(() => mockMatchMedia(false))
 
   afterEach(() => {
     delete (window as unknown as { matchMedia?: unknown }).matchMedia
   })
 
-  it('is pending on mobile while no flag value has ever resolved', () => {
-    const mode = useSidebarMode()
-    expect(mode.mobileNavMode.value).toBe('pending')
-    // The placeholder occupies the header slot, so the offset still applies.
-    expect(mode.showMobileHeader.value).toBe(true)
-  })
-
-  it('resolves to the rail as soon as the flag is true', () => {
-    usePlanStore().features['mobile_sidebar_rail'] = true
-    const mode = useSidebarMode()
-    expect(mode.mobileNavMode.value).toBe('rail')
-    expect(mode.showMobileHeader.value).toBe(false)
-  })
-
-  it('resolves to the legacy drawer when a payload applied with the flag OFF (empty map = known, not unknown)', () => {
-    usePlanStore().flagsSource = 'server'
-    const mode = useSidebarMode()
-    expect(mode.mobileNavMode.value).toBe('drawer')
-    expect(mode.showMobileHeader.value).toBe(true)
-  })
-
-  it('a persisted cache resolves the mode synchronously — rail at first paint, before any fetch (primary UI)', () => {
-    localStorage.setItem(flagCacheKey(null), serializeFlagCache({ mobile_sidebar_rail: true }))
-    setActivePinia(createPinia()) // fresh store re-reads the cache
-
+  it('always selects the rail on mobile without consulting plan flags', () => {
     const mode = useSidebarMode()
 
-    expect(usePlanStore().loaded).toBe(false) // no request has resolved
-    expect(mode.mobileNavMode.value).toBe('rail')
-    expect(mode.showMobileHeader.value).toBe(false)
+    expect(mode.isDesktop.value).toBe(false)
+    expect(mode.mobileNavMode).toBe('rail')
   })
 
-  it('a persisted cache resolves the mode synchronously for the secondary UI too (drawer at first paint)', () => {
-    localStorage.setItem(flagCacheKey(null), serializeFlagCache({ mobile_sidebar_rail: false }))
-    setActivePinia(createPinia())
-
-    const mode = useSidebarMode()
-
-    expect(mode.mobileNavMode.value).toBe('drawer')
-    expect(mode.showMobileHeader.value).toBe(true)
-  })
-
-  it('never falls back to pending once resolved — a failed refresh keeps the resolved mode', () => {
-    const store = usePlanStore()
-    store.flagsSource = 'cache'
-    store.features = {} // refresh produced nothing new
-    expect(useSidebarMode().mobileNavMode.value).toBe('drawer')
-  })
-
-  it("a fetch that settles unreadable resolves to the drawer, not a permanent pending (FAR-1805)", async () => {
-    // The mock resolves {data: null, error: undefined} — the no-payload branch
-    // that records no apiError. After it settles the store is terminal
-    // 'unavailable', which is KNOWN, so the mode must leave 'pending' and fall
-    // back to the flag default (drawer) with the header slot occupied.
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      const store = usePlanStore()
-      await store.fetchPlan()
-
-      expect(store.flagsSource).toBe('unavailable')
-
-      const mode = useSidebarMode()
-      expect(mode.mobileNavMode.value).toBe('drawer')
-      expect(mode.showMobileHeader.value).toBe(true)
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('[plan] Feature flags request settled without a payload'),
-        null,
-      )
-    } finally {
-      warn.mockRestore()
-    }
-  })
-
-  it("'unavailable' still renders the drawer chrome after a cache miss (store state, no fetch needed)", () => {
-    usePlanStore().flagsSource = 'unavailable'
-    const mode = useSidebarMode()
-    expect(mode.mobileNavMode.value).toBe('drawer')
-    expect(mode.showMobileHeader.value).toBe(true)
-  })
-
-  it('desktop never shows the mobile header chrome, pending or not', () => {
+  it('always selects the rail on desktop', () => {
     mockMatchMedia(true)
     const mode = useSidebarMode()
-    expect(mode.isDesktop.value).toBe(true)
-    expect(mode.showMobileHeader.value).toBe(false)
-  })
 
-  it('desktop resolves no mobile header even when the rail flag is ON', () => {
-    mockMatchMedia(true)
-    usePlanStore().features['mobile_sidebar_rail'] = true
-    const mode = useSidebarMode()
     expect(mode.isDesktop.value).toBe(true)
-    expect(mode.mobileNavMode.value).toBe('rail')
-    expect(mode.showMobileHeader.value).toBe(false)
+    expect(mode.mobileNavMode).toBe('rail')
   })
 })

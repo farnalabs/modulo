@@ -37,6 +37,13 @@ from modulo.launcher.upgrade import (
 )
 from tests.unit.launcher.test_launcher_shared import clock_steps
 
+#: This module EXECUTES the shipped installer under a real POSIX shell (and
+#: asserts on Linux-host behaviour), so it needs a POSIX shell rather than the
+#: Windows WSL launcher stub. The platform requirement is declared once, as a
+#: marker; the gate that skips it on Windows lives in ``backend/tests/conftest.py``
+#: (``POSIX_ONLY_MARKER``) and Linux CI executes this suite for real.
+pytestmark = pytest.mark.posix_only
+
 _RESTORE_MANIFEST_NAME = "backup-info.json"
 
 _HMAC_KEY = bytes(range(32))

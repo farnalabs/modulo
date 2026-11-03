@@ -134,7 +134,6 @@ def test_initial_schema_contains_required_tables() -> None:
         "run_node_outputs",
         "runner_probe_cache",
         "runs",
-        "saved_views",
         "scheduled_reports",
         "snapshot_schema_pins",
         "schema_folders",

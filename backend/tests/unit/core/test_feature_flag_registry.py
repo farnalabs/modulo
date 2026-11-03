@@ -345,83 +345,6 @@ class TestDbCatalogTeamTierFlags:
             assert ctx.feature_enabled(name) is False, f"{name} should be locked on community tier"
 
 
-class TestInactiveCatalogFlags:
-    """Flags seeded ``is_active=false`` (e.g. the ``mobile_sidebar_rail``
-    experiment) must be LISTED in the registry but stay ``currently_active``
-    False on every tier unless an override exists."""
-
-    @staticmethod
-    def _db_flags() -> list[dict[str, object]]:
-        return [
-            {
-                "name": "mobile_sidebar_rail",
-                "description": "Mobile icon-rail sidebar (experimental)",
-                "tier_id": "community",
-                "depends_on": None,
-                "is_active": False,
-            },
-            {
-                "name": "eval_system",
-                "description": "Built-in eval runner for LLM output quality gates",
-                "tier_id": "community",
-                "depends_on": None,
-                "is_active": True,
-            },
-        ]
-
-    @staticmethod
-    def _db_tiers() -> list[dict[str, object]]:
-        return [
-            {"tier_id": "community", "rank": 0},
-            {"tier_id": "team", "rank": 1},
-        ]
-
-    async def test_inactive_flag_is_listed_but_inactive_on_team_tier(self) -> None:
-        session = _make_session()
-        with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=self._db_tiers()),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=self._db_flags()),
-        ):
-            registry = await FeatureFlagRegistry.from_db(session, current_tier="team", has_license_key=True)
-
-        flag = registry.get_flag("mobile_sidebar_rail")
-        assert flag is not None, "inactive catalog flags must still be listed"
-        assert flag.currently_active is False
-        # A community-tier flag seeded active still activates normally.
-        assert registry.get_flag("eval_system") is not None
-        assert registry.get_flag("eval_system").currently_active is True  # type: ignore[union-attr]
-
-    async def test_inactive_flag_stays_inactive_on_community_tier(self) -> None:
-        session = _make_session()
-        with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=self._db_tiers()),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=self._db_flags()),
-        ):
-            registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
-
-        flag = registry.get_flag("mobile_sidebar_rail")
-        assert flag is not None
-        assert flag.currently_active is False
-
-    async def test_inactive_flag_can_be_activated_via_override(self) -> None:
-        session = _make_session()
-        with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=self._db_tiers()),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=self._db_flags()),
-        ):
-            registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
-
-        flag = registry.get_flag("mobile_sidebar_rail")
-        assert flag is not None
-        assert flag.currently_active is False
-        try:
-            registry.set_override("mobile_sidebar_rail", True)
-            assert flag.currently_active is True
-        finally:
-            registry.clear_override("mobile_sidebar_rail")
-        assert flag.currently_active is False
-
-
 class TestRetiredInternalFlags:
     def test_lifecycle_map_journeys_is_retained_for_compatibility_but_not_customer_configurable(self) -> None:
         registry = FeatureFlagRegistry()
@@ -437,9 +360,8 @@ class TestRetiredInternalFlags:
 
 
 class TestDefaultOffFlags:
-    """Flags shipped default-OFF on every tier (the ``mobile_sidebar_rail``
-    two-mechanism precedent). Each is listed in the catalog for per-org
-    toggling AND hardcoded in ``_refresh``'s inactive set
+    """Flags shipped default-OFF on every tier. Each is listed in the catalog
+    for per-org toggling AND hardcoded in ``_refresh``'s inactive set
     (``DEFAULT_OFF_FLAGS``), so the community-tier tier-rank fallback can
     never activate it and only an explicit override can turn it on.
 

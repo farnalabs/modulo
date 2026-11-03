@@ -34,7 +34,11 @@ _EXPECTED_COUNT = 84
 # enumerated from ``Base.metadata``, so it is named here explicitly: the
 # metadata count is one lower than the frozen migration's statement count, and a
 # further model deletion/addition still trips the drift guard.
-_NO_ORM_MODEL_UUID_PKS = frozenset({("eval_definitions", "id")})
+#
+# FAR-2233 deleted the ``SavedView`` ORM entity along with the saved-views
+# feature; its physical ``saved_views`` table is still targeted by 0194's frozen
+# statements, so it is named here for the same reason.
+_NO_ORM_MODEL_UUID_PKS = frozenset({("eval_definitions", "id"), ("saved_views", "id")})
 _EXPECTED_METADATA_COUNT = _EXPECTED_COUNT - len(_NO_ORM_MODEL_UUID_PKS)
 
 # Tables introduced by migrations AFTER 0194_uuid_pk_server_defaults own their own

@@ -209,7 +209,7 @@ def _patch_plan_deps(org: MagicMock | None, plan_ctx: MagicMock) -> object:
 def test_plan_bootstrap_200_for_non_system_admin() -> None:
     """The whole point: a viewer (not a system admin) reads the plan, not a 403."""
     org = _make_org()
-    plan_ctx = _plan_context([_flag("eval_system", active=True), _flag("mobile_sidebar_rail", active=False)])
+    plan_ctx = _plan_context([_flag("eval_system", active=True)])
 
     with _plan_client_as(_VIEWER) as client, _patch_plan_deps(org, plan_ctx):
         resp = client.get("/api/v1/plan")
@@ -220,23 +220,18 @@ def test_plan_bootstrap_200_for_non_system_admin() -> None:
     assert body["dev_mode"] is True
     names = [f["name"] for f in body["flags"]]
     assert "eval_system" in names
-    assert "mobile_sidebar_rail" in names
 
 
 def test_plan_bootstrap_includes_inactive_flags_with_currently_active_false() -> None:
     """Inactive flags must be PRESENT (an active-only payload is the bug being fixed)."""
     org = _make_org()
-    plan_ctx = _plan_context([_flag("eval_system", active=True), _flag("mobile_sidebar_rail", active=False)])
+    plan_ctx = _plan_context([_flag("eval_system", active=True)])
 
     with _plan_client_as(_VIEWER) as client, _patch_plan_deps(org, plan_ctx):
         resp = client.get("/api/v1/plan")
 
     assert resp.status_code == 200
     by_name = {f["name"]: f for f in resp.json()["flags"]}
-    mobile = by_name["mobile_sidebar_rail"]
-    assert mobile["currently_active"] is False
-    assert mobile["description"]
-    assert mobile["tier"] == "community"
     assert by_name["eval_system"]["currently_active"] is True
 
 
@@ -244,12 +239,11 @@ def test_plan_bootstrap_applies_org_feature_overrides() -> None:
     """Org overrides flip BOTH directions: default-off -> on, default-on -> off."""
     org = _make_org(
         settings_json={
-            "feature_overrides": {"mobile_sidebar_rail": True, "analytics_page": False},
+            "feature_overrides": {"analytics_page": False},
         }
     )
     plan_ctx = _plan_context(
         [
-            _flag("mobile_sidebar_rail", active=False),
             _flag("analytics_page", active=True),
         ]
     )
@@ -259,7 +253,6 @@ def test_plan_bootstrap_applies_org_feature_overrides() -> None:
 
     assert resp.status_code == 200
     by_name = {f["name"]: f for f in resp.json()["flags"]}
-    assert by_name["mobile_sidebar_rail"]["currently_active"] is True
     assert by_name["analytics_page"]["currently_active"] is False
 
 
@@ -320,14 +313,12 @@ def test_plan_bootstrap_unauthenticated_returns_4xx() -> None:
 
 def test_plan_bootstrap_orgless_system_admin_still_resolves() -> None:
     """A system admin with no org still gets a payload — no overlay, no crash."""
-    plan_ctx = _plan_context([_flag("mobile_sidebar_rail", active=False)])
+    plan_ctx = _plan_context([])
 
     with _plan_client_as(_ORGLESS_SYSTEM_ADMIN) as client, _patch_plan_deps(None, plan_ctx):
         resp = client.get("/api/v1/plan")
 
     assert resp.status_code == 200
-    by_name = {f["name"]: f for f in resp.json()["flags"]}
-    assert by_name["mobile_sidebar_rail"]["currently_active"] is False
 
 
 # ---------------------------------------------------------------------------

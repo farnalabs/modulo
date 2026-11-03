@@ -34,6 +34,13 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _INSTALL_SH = _REPO_ROOT / "scripts" / "install.sh"
 
+#: This module EXECUTES the shipped installer under a real POSIX shell, so it
+#: needs a POSIX shell rather than the Windows WSL launcher stub. The platform
+#: requirement is declared once, as a marker; the gate that skips it on Windows
+#: lives in ``backend/tests/conftest.py`` (``POSIX_ONLY_MARKER``) and Linux CI
+#: executes this suite for real.
+pytestmark = pytest.mark.posix_only
+
 _BLOCK_START = re.compile(r"^----- Modulo install failed: support reference (?P<ref>[0-9a-f]{8}) -----$")
 _BLOCK_END = "----- end of Modulo install support block -----"
 _REF_PATTERN = re.compile(r"^[0-9a-f]{8}$")

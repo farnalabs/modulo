@@ -867,11 +867,7 @@ async def test_viewmodel_arms_guard_session_contract() -> None:
             current_user=user,
             settings=_settings(),
             view_as_team=None,
-            current_view_id=None,
         )
-    )
-    await _assert_500(
-        viewmodel.viewmodel_list_views(session=_RaisingSession(), current_user=user, page=1, page_size=100)
     )
 
 

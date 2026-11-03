@@ -48,10 +48,8 @@ test.describe('Dashboard', () => {
     await page.reload()
 
     const runActivity = page.locator('[data-testid="dashboard-run-activity"]')
-    // The card is behind the dashboard_charts feature flag — only assert when present
-    if (await runActivity.count() > 0) {
-      await expect(runActivity).toContainText('Avg approval time')
-      await expect(runActivity).toContainText('Rejection rate')
-    }
+    await expect(runActivity).toBeVisible()
+    await expect(runActivity).toContainText('Avg approval time')
+    await expect(runActivity).toContainText('Rejection rate')
   })
 })

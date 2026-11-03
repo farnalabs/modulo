@@ -116,14 +116,16 @@ describe('SidebarNav', () => {
     expect(hrefs).not.toContain('/pipelines')
   })
 
-  it('hides the flag-gated Webhook Notifications item while webhook_notification_log is disabled (FAR-656)', async () => {
-    const { wrapper } = mountSidebar({ isSystemAdmin: true, userRole: 'admin' })
+  it('shows the Webhook Notifications item to team admins by default (FAR-2235)', async () => {
+    const { wrapper, store } = mountSidebar({ isSystemAdmin: true, userRole: 'admin' })
+    store.currentTier = 'team'
+    store.features['webhook_notification_log'] = true
     await flushPromises()
     const hrefs = wrapper.findAll('a[data-testid="router-link-stub"]').map((l) => l.attributes('href'))
-    expect(hrefs).not.toContain('/admin/notification-delivery')
+    expect(hrefs).toContain('/admin/notification-delivery')
   })
 
-  it('shows the flag-gated Webhook Notifications item to team admins when the flag is enabled (FAR-656)', async () => {
+  it('shows the Webhook Notifications item when the community flag is explicitly enabled (FAR-656)', async () => {
     const { wrapper, store } = mountSidebar({ isSystemAdmin: true, userRole: 'admin' })
     store.currentTier = 'team'
     store.features['webhook_notification_log'] = true

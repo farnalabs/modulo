@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from tests.bdd.conftest import ORG_ID, USER_ID, _active_client, _shared_state
+from tests.bdd.conftest import ORG_ID, _active_client, _shared_state
 
 from modulo.db.crud.base import PageResult
 
@@ -83,24 +83,6 @@ def _make_run(pipeline_id: uuid.UUID) -> MagicMock:
     return run
 
 
-def _make_view(name: str, view_type: str = "run_list") -> MagicMock:
-    view = MagicMock()
-    view.id = uuid.uuid4()
-    view.organisation_id = ORG_ID
-    view.name = name
-    view.description = None
-    view.view_type = view_type
-    view.filters = {}
-    view.columns = None
-    view.sort_by = None
-    view.sort_order = "desc"
-    view.created_by = USER_ID
-    view.account_id = USER_ID
-    view.created_at = _NOW
-    view.updated_at = _NOW
-    return view
-
-
 def _make_hitl(pipeline_id: uuid.UUID) -> MagicMock:
     hitl = MagicMock()
     hitl.id = uuid.uuid4()
@@ -136,8 +118,6 @@ def _get_viewmodel(client: Any, ctx: dict[str, Any], params: dict[str, str] | No
     memberships = ctx.get("memberships", [])
     pipelines = ctx.get("pipelines", [])
     runs = ctx.get("runs", [])
-    views = ctx.get("views", [])
-    current_view = ctx.get("current_view")
     org_side_effect: Exception | None = ctx.get("org_exc")
 
     feature_flags = ctx.get("feature_flags") or ["eval_system"]
@@ -175,12 +155,6 @@ def _get_viewmodel(client: Any, ctx: dict[str, Any], params: dict[str, str] | No
             new_callable=AsyncMock,
             return_value=PageResult(items=runs, total=len(runs), page=1, page_size=10),
         ),
-        patch(
-            "modulo.api.routes.viewmodel.list_views",
-            new_callable=AsyncMock,
-            return_value=PageResult(items=views, total=len(views), page=1, page_size=100),
-        ),
-        patch("modulo.api.routes.viewmodel.get_view", new_callable=AsyncMock, return_value=current_view),
         patch(
             "modulo.api.routes.viewmodel.resolve_plan_context",
             new_callable=AsyncMock,
@@ -260,19 +234,6 @@ def _given_pending_hitl(name: str, ctx, mock_session) -> None:
     ctx["_session"] = mock_session
 
 
-@given(parsers.parse('a saved view "{name}" of type "{view_type}" exists'))
-def _given_saved_view(name: str, view_type: str, ctx) -> None:
-    view = _make_view(name, view_type)
-    ctx["views"] = [view]
-    ctx["view"] = view
-
-
-@given(parsers.parse('I select the saved view "{name}"'))
-def _given_select_view(name: str, ctx) -> None:
-    view = ctx.get("view") or _make_view(name)
-    ctx["current_view"] = view
-
-
 @given("the organisation does not exist")
 def _given_org_missing(ctx) -> None:
     ctx["org"] = None
@@ -328,13 +289,6 @@ def _when_get_viewmodel_unknown_team(request, ctx, mock_session) -> None:
     ctx["team_lookup_missing"] = True
     ctx.setdefault("_session", mock_session)
     request.node._resp = _get_viewmodel(_active_client(request), ctx, {"view_as_team": str(uuid.uuid4())})
-
-
-@when("I GET /api/v1/viewmodel/current with the selected view")
-def _when_get_viewmodel_selected_view(request, ctx, mock_session) -> None:
-    ctx.setdefault("_session", mock_session)
-    view = ctx.get("view") or _make_view("Deployments")
-    request.node._resp = _get_viewmodel(_active_client(request), ctx, {"current_view_id": str(view.id)})
 
 
 # ---------------------------------------------------------------------------
@@ -406,19 +360,3 @@ def _then_pending_hitl(count: str, request) -> None:
     assert len(gates) == count, f"Expected {count} pending gate(s), got {len(gates)}"
     if gates:
         assert gates[0]["review_id"] == "approval_gate"
-
-
-@then(parsers.parse('the response includes a saved view named "{name}"'))
-def _then_saved_views(name: str, request) -> None:
-    body = request.node._resp.json()
-    assert body["views"] is not None, "Response 'views' is null"
-    names = [v["name"] for v in body["views"]]
-    assert name in names, f"Expected saved view {name!r} in {names}"
-
-
-@then(parsers.parse('the response includes the selected current view named "{name}"'))
-def _then_current_view(name: str, request) -> None:
-    body = request.node._resp.json()
-    current = body["current_view"]
-    assert current is not None, "Response 'current_view' is null"
-    assert current["name"] == name, f"Expected current view {name!r}, got {current['name']!r}"

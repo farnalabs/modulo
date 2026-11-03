@@ -23,7 +23,6 @@ from modulo.db.crud.library_primitive import get_library_primitive
 from modulo.db.crud.node_category import list_node_categories
 from modulo.db.crud.observability import update_otel_config
 from modulo.db.crud.pipeline import list_pipelines
-from modulo.db.crud.view import get_view, list_views
 
 
 def _result(*, scalar: Any = None, scalars: list[Any] | None = None) -> MagicMock:
@@ -84,30 +83,6 @@ async def test_list_node_categories_include_deleted() -> None:
     result = await list_node_categories(session, org_id=uuid.uuid4(), include_deleted=True)
 
     assert result.total == 1
-
-
-# ---------------------------------------------------------------------------
-# view
-# ---------------------------------------------------------------------------
-
-
-async def test_get_view_include_deleted() -> None:
-    view = MagicMock()
-    session = AsyncMock()
-    session.execute = AsyncMock(return_value=_result(scalar=view))
-
-    result = await get_view(session, uuid.uuid4(), include_deleted=True)
-
-    assert result is view
-
-
-async def test_list_views_include_deleted() -> None:
-    session = AsyncMock()
-    session.execute = AsyncMock(side_effect=[_result(scalar=4), _result(scalars=[])])
-
-    result = await list_views(session, include_deleted=True)
-
-    assert result.total == 4
 
 
 # ---------------------------------------------------------------------------

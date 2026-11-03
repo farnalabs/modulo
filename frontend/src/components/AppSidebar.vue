@@ -39,8 +39,8 @@
     />
   </aside>
 
-  <!-- Mobile + flag ON: 64px icon rail in-flow + full sidebar as fixed overlay panel -->
-  <template v-if="!isDesktop && mobileNavMode === 'rail'">
+  <!-- Mobile: 64px icon rail in-flow + full sidebar as fixed overlay panel -->
+  <template v-else>
     <aside
       class="h-screen sticky top-0 border-r bg-background flex flex-col overflow-hidden w-16"
       :aria-label="$t('components.AppLayout.main_navigation')"
@@ -64,11 +64,6 @@
       />
     </aside>
 
-    <!-- A native modal <dialog> opened with showModal(): the browser provides
-         the inert background, focus containment, Escape (`cancel` -> `close`)
-         and focus restore to the rail expand button. `::backdrop` is the
-         scrim, and the id stays stable for the mobile e2e specs. No
-         `role="dialog"`/`aria-modal` — the element IS the dialog. -->
     <dialog
       v-if="mobileExpanded"
       id="mobile-nav-panel"
@@ -98,157 +93,17 @@
       />
     </dialog>
   </template>
-
-  <!-- Mobile + flag UNRESOLVED (FAR-1237): a neutral placeholder occupies the
-       header slot. Rendering the legacy top-nav while awaiting the flag is what
-       caused the slow-mobile flash of the wrong layout — neither chrome mounts
-       until the mode is known (persisted cache or flags payload). The box is
-       the same 3.5rem as the legacy header, so resolving to the drawer causes
-       no shift, and <main>'s pt-14 offset applies to both.
-
-       Review finding: the placeholder must read as pending NAV, not a blank
-       slot. It now mirrors the drawer header's hamburger geometry (same 22px
-       Menu glyph in the same 44px rounded box, but non-interactive with a muted
-       tone) and is a labelled live region (`<output>` + `aria-busy`) so
-       attempted activation gets visible wait feedback instead of silence. The
-       header is position:fixed, so neither it nor <main>'s offset shifts when
-       the resolved chrome mounts. -->
-  <template v-if="!isDesktop && mobileNavMode === 'pending'">
-    <output
-      :data-testid="MOBILE_NAV_PENDING_TESTID"
-      aria-busy="true"
-      :aria-label="$t('components.AppLayout.loading_navigation')"
-      class="md:hidden fixed top-0 left-0 right-0 z-50 flex items-center border-b bg-background px-4 h-14"
-    >
-      <span
-        data-testid="mobile-nav-pending-hamburger"
-        class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground/50"
-        aria-hidden="true"
-      >
-        <Menu class="h-[22px] w-[22px]" />
-      </span>
-      <span class="ml-2 block h-5 w-28 rounded-md bg-muted animate-pulse" aria-hidden="true" />
-    </output>
-  </template>
-
-  <!-- Mobile + flag OFF: hamburger header + slide-in drawer + backdrop (restored from main) -->
-  <template v-if="!isDesktop && mobileNavMode === 'drawer'">
-    <header
-      class="md:hidden fixed top-0 left-0 right-0 z-50 flex items-center justify-between gap-2 border-b bg-background px-4 h-14"
-    >
-      <button type="button"
-        ref="mobileButtonRef"
-        @click="mobileOpen = !mobileOpen"
-        class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors motion-reduce:transition-none"
-        :aria-label="mobileOpen ? $t('components.AppLayout.close_navigation') : $t('components.AppLayout.open_navigation')"
-        :aria-expanded="mobileOpen"
-        aria-controls="mobile-sidebar"
-      >
-        <Menu v-if="!mobileOpen" class="h-[22px] w-[22px]" aria-hidden="true" />
-        <X v-else class="h-[22px] w-[22px]" aria-hidden="true" />
-      </button>
-      <div class="flex items-center gap-1.5 ml-auto min-w-0" :inert="mobileOpen">
-        <NotificationBell size="touch" />
-        <button type="button"
-          @click="$emit('open-command-palette')"
-          class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors motion-reduce:transition-none"
-          :title="$t('components.AppLayout.search_pages_hint', { modifier: isMac ? 'Cmd' : 'Ctrl' })"
-          :aria-label="$t('components.AppLayout.search_pages')"
-        >
-          <Search class="h-[22px] w-[22px]" aria-hidden="true" />
-        </button>
-        <label for="applayout-field-1" class="toggle-switch h-11 w-11 shrink-0 justify-center" :class="isLight ? 'light' : 'dark'">
-          <span class="track">
-            <span class="thumb" />
-          </span>
-          <input
-            id="applayout-field-1"
-            type="checkbox"
-            class="sr-only"
-            :aria-label="$t('components.AppLayout.toggle_theme')"
-            @change="$emit('toggle-theme')"
-            :checked="isLight"
-          />
-        </label>
-        <router-link to="/" class="flex items-center gap-1.5 min-w-0">
-          <div
-            class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5 shrink-0"
-          >
-            <LogoMark :size="24" transparent />
-          </div>
-          <h2 class="hidden min-[360px]:inline min-w-0 truncate text-lg font-bold tracking-tight">{{ $t('components.AppLayout.modulo') }}</h2>
-          <Badge v-if="planStore.currentTier" severity="secondary" class="shrink-0 border border-border hidden! min-[440px]:inline-flex! text-[10px] px-1.5 py-0 leading-none">
-            {{ planStore.getTierLabel(planStore.currentTier) }}
-          </Badge>
-        </router-link>
-      </div>
-    </header>
-
-    <div
-      v-if="mobileOpen"
-      class="md:hidden fixed inset-0 z-30 bg-black/50"
-      @click="mobileOpen = false"
-      @keydown.escape="mobileOpen = false"
-      aria-hidden="true"
-    />
-
-    <aside
-      id="mobile-sidebar"
-      ref="mobileSidebarRef"
-      class="md:hidden fixed top-14 left-0 z-40 h-[calc(100vh-3.5rem)] w-64 border-r bg-background p-4 flex flex-col transition-[transform,visibility] motion-reduce:transition-none overflow-y-auto"
-      :class="mobileOpen ? 'translate-x-0' : '-translate-x-full invisible'"
-      :inert="!mobileOpen"
-      :aria-label="$t('components.AppLayout.mobile_navigation')"
-      :aria-hidden="!mobileOpen || undefined"
-    >
-      <div class="flex items-center gap-2 pt-2 pb-2 border-b mb-2">
-        <div class="avatar-ring">
-          <div
-            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary-text"
-            :title="userEmail"
-          >
-            {{ userInitial }}
-          </div>
-        </div>
-        <router-link
-          to="/admin/my-profile"
-          class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors motion-reduce:transition-none flex-1 min-w-0"
-          :aria-label="$t('components.AppLayout.user_profile_link', { label: userEmail })"
-        >
-          {{ userEmail }}
-        </router-link>
-      </div>
-
-      <SidebarNav
-        class="flex-1"
-        :is-system-admin="isSystemAdmin"
-        :user-role="userRole"
-        :user-permissions="userPermissions"
-        @navigate="mobileOpen = false"
-      />
-
-      <SidebarFooter @logout="$emit('logout')" />
-    </aside>
-  </template>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { FOCUSABLE_SELECTOR, trapTabInElement } from "../composables/useFocusTrap";
-import { usePlanStore } from "../stores/planStore";
-import Badge from "primevue/badge";
-import LogoMark from "./LogoMark.vue";
-import NotificationBell from "./NotificationBell.vue";
-import SidebarFooter from "./SidebarFooter.vue";
-import SidebarFull from "./SidebarFull.vue";
-import SidebarNav from "./SidebarNav.vue";
-import SidebarRail from "./SidebarRail.vue";
 import { useSidebar } from "../composables/useSidebar";
-import { MOBILE_NAV_PENDING_TESTID, useSidebarMode } from "../composables/useSidebarMode";
-import { Menu, Search, X } from "@lucide/vue";
+import { useSidebarMode } from "../composables/useSidebarMode";
+import SidebarFull from "./SidebarFull.vue";
+import SidebarRail from "./SidebarRail.vue";
 
-const props = defineProps<{
+defineProps<{
   isSystemAdmin: boolean;
   userRole?: string | null;
   userPermissions?: string[];
@@ -263,40 +118,13 @@ const emit = defineEmits<{
   "open-command-palette": [];
 }>();
 
-const planStore = usePlanStore();
-const { isDesktop, mobileNavMode } = useSidebarMode();
+const { isDesktop } = useSidebarMode();
 const { collapsed, setCollapsed } = useSidebar();
-
 const route = useRoute();
 
-// Flag-ON mobile path: 64px rail + overlay panel state.
 const mobileExpanded = ref(false);
 const mobilePanelRef = ref<HTMLDialogElement | null>(null);
 const railRef = ref<InstanceType<typeof SidebarRail> | null>(null);
-
-// Flag-OFF mobile path: hamburger drawer state.
-const mobileOpen = ref(false);
-const mobileSidebarRef = ref<HTMLElement | null>(null);
-const mobileButtonRef = ref<HTMLElement | null>(null);
-
-const isMac = computed(() =>
-  typeof navigator !== "undefined" && navigator.platform.includes("Mac"),
-);
-
-// The rail's overlay panel exists only in rail mode — the same resolved
-// mobileNavMode that gates the chrome, so it can never open in drawer/pending.
-const showMobilePanel = computed(
-  () => !isDesktop.value && mobileExpanded.value && mobileNavMode.value === 'rail',
-);
-
-function handleDrawerKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    mobileOpen.value = false;
-    return;
-  }
-  if (e.key !== "Tab") return;
-  trapTabInElement(e, mobileSidebarRef.value);
-}
 
 function focusRailExpandButton() {
   const railEl = railRef.value?.$el;
@@ -305,34 +133,23 @@ function focusRailExpandButton() {
   }
 }
 
-/** A click whose target is the dialog itself landed on `::backdrop`. */
 function onMobilePanelBackdropClick(event: MouseEvent) {
   if (event.target === event.currentTarget) closeMobilePanel();
 }
 
-/**
- * Close through the native dialog, which restores focus to the element that
- * was focused when showModal() ran (the rail expand button). State is cleared
- * eagerly too: the `close` event is queued as a task, and every caller needs
- * the panel to be gone from the next render.
- */
 function closeMobilePanel(): void {
   mobileExpanded.value = false;
   const dialog = mobilePanelRef.value;
   if (dialog?.open) dialog.close();
 }
 
-/** The palette is a second modal layer: closing the first avoids a stacked,
- *  inert panel underneath it. */
 function onOpenCommandPalette(): void {
   closeMobilePanel();
   emit("open-command-palette");
 }
 
-// flush:'post' waits for the v-if branch to render the <dialog>; showModal()
-// makes it a real modal (inert background, focus containment, native Escape).
 watch(
-  showMobilePanel,
+  () => !isDesktop.value && mobileExpanded.value,
   (open) => {
     if (open) {
       const dialog = mobilePanelRef.value;
@@ -344,31 +161,14 @@ watch(
   { flush: "post" },
 );
 
-watch(mobileOpen, (open) => {
-  nextTick(() => {
-    if (open && mobileSidebarRef.value) {
-      const firstFocusable = mobileSidebarRef.value.querySelector<HTMLElement>(
-        FOCUSABLE_SELECTOR,
-      );
-      firstFocusable?.focus();
-      document.addEventListener("keydown", handleDrawerKeydown);
-    } else if (!open && mobileButtonRef.value) {
-      mobileButtonRef.value.focus();
-      document.removeEventListener("keydown", handleDrawerKeydown);
-    }
-  });
-});
-
 watch(
   () => route.path,
   () => {
-    if (showMobilePanel.value) {
-      mobileExpanded.value = false;
-    }
+    if (mobileExpanded.value) closeMobilePanel();
   },
 );
 
 onUnmounted(() => {
-  document.removeEventListener("keydown", handleDrawerKeydown);
+  mobileExpanded.value = false;
 });
 </script>

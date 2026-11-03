@@ -14,7 +14,7 @@ vi.mock('vue-router', async () => {
 // featureEnabled/loaded so the flag-gated redirect branch (and the plan-fetch
 // branch when the plan is not yet loaded) is exercised without a live backend.
 const { planStoreStub, featureEnabled } = vi.hoisted(() => {
-  const featureEnabled = vi.fn((_name: string) => false)
+  const featureEnabled = vi.fn((_name: string) => true)
   const planStoreStub = {
     loaded: true,
     features: {} as Record<string, unknown>,
@@ -56,7 +56,7 @@ beforeEach(() => {
   localStorage.clear()
   setActivePinia(createPinia())
   clearAccessToken()
-  featureEnabled.mockReturnValue(false)
+  featureEnabled.mockReturnValue(true)
   planStoreStub.loaded = true
   planStoreStub.devMode = false
   planStoreStub.userPermissions = []
@@ -81,24 +81,28 @@ describe('FAR-2200: Lifecycle Map internal route guard', () => {
 })
 
 describe('FAR-656: manifest route feature_flag guard', () => {
-  it('redirects a feature-flagged route to the dashboard when its flag is disabled', async () => {
+  it('allows the route through when the community-tier flag is enabled by default', async () => {
     setAccessToken(adminToken())
+    await router.push({ name: 'dashboard' })
     await router.push({ name: 'admin-notification-delivery' })
-    expect(router.currentRoute.value.name).toBe('dashboard')
+    expect(router.currentRoute.value.name).toBe('admin-notification-delivery')
   }, 20_000)
 
-  it('triggers a plan fetch (and still redirects) when the flag is disabled and the plan is not yet loaded', async () => {
+  it('triggers a plan fetch when the flag is not yet resolved', async () => {
     setAccessToken(adminToken())
+    await router.push({ name: 'dashboard' })
     planStoreStub.loaded = false
+    featureEnabled.mockReturnValue(false)
     await router.push({ name: 'admin-notification-delivery' })
     expect(router.currentRoute.value.name).toBe('dashboard')
     expect(planStoreStub.fetchPlan).toHaveBeenCalled()
   }, 20_000)
 
-  it('allows the route through when its flag is enabled', async () => {
+  it('redirects the route when an explicit override disables the flag', async () => {
     setAccessToken(adminToken())
-    featureEnabled.mockReturnValue(true)
+    await router.push({ name: 'dashboard' })
+    featureEnabled.mockReturnValue(false)
     await router.push({ name: 'admin-notification-delivery' })
-    expect(router.currentRoute.value.name).toBe('admin-notification-delivery')
+    expect(router.currentRoute.value.name).toBe('dashboard')
   }, 20_000)
 })

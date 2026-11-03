@@ -30,6 +30,13 @@ RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
 NATIVE_SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "native-release-smoke.yml"
 MANIFEST_SOURCE = REPO_ROOT / "backend" / "src" / "modulo" / "launcher" / "manifest.py"
 
+#: This module EXECUTES the workflows' shipped shell fragments under a real
+#: POSIX shell, so it needs a POSIX shell rather than the Windows WSL launcher
+#: stub. The platform requirement is declared once, as a marker; the gate that
+#: skips it on Windows lives in ``backend/tests/conftest.py``
+#: (``POSIX_ONLY_MARKER``) and Linux CI executes this suite for real.
+pytestmark = pytest.mark.posix_only
+
 _REHEARSAL_STEP_NAME = "Pre-deploy REHEARSAL migrations (one-off machine — always rolls back)"
 _REAL_STEP_NAME = "Pre-deploy migrations (one-off machine)"
 _REHEARSAL_DESTROY_NAME = "Destroy pre-rehearsal machine"

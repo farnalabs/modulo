@@ -47,19 +47,6 @@ Feature: ViewModel Current
     Then the response status is 200
     And the response includes 1 pending approval gate
 
-  Scenario: Returns saved views
-    Given a saved view "Deployments" of type "run_list" exists
-    When I GET /api/v1/viewmodel/current
-    Then the response status is 200
-    And the response includes a saved view named "Deployments"
-
-  Scenario: Returns the selected saved view as the current view
-    Given a saved view "Deployments" of type "run_list" exists
-    And I select the saved view "Deployments"
-    When I GET /api/v1/viewmodel/current with the selected view
-    Then the response status is 200
-    And the response includes the selected current view named "Deployments"
-
   Scenario: Non-admin cannot use view_as_team
     Given I am authenticated as a viewer in org "acme"
     When I GET /api/v1/viewmodel/current with view_as_team

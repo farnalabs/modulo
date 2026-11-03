@@ -39,7 +39,6 @@ from modulo.db.crud.schema import list_schema_versions
 from modulo.db.crud.team import list_teams
 from modulo.db.crud.team_membership import list_team_members
 from modulo.db.crud.template import list_templates
-from modulo.db.crud.view import list_views
 from modulo.db.models.agent import Agent
 from modulo.db.models.base import Base
 from modulo.db.models.composite_template import CompositeTemplate
@@ -59,7 +58,6 @@ from modulo.db.models.run import Run
 from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
-from modulo.db.models.view import SavedView
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -88,7 +86,6 @@ _TABLES: list[Table] = [
     SchemaVersion.__table__,
     Team.__table__,
     TeamMembership.__table__,
-    SavedView.__table__,
 ]
 
 # A setup function seeds _COUNT rows and returns a caller(page, page_size).
@@ -290,20 +287,6 @@ async def _setup_publishers(session: AsyncSession) -> PageCall:
     return lambda page, page_size: list_publishers(session, org_id=_ORG, page=page, page_size=page_size)
 
 
-async def _setup_views(session: AsyncSession) -> PageCall:
-    for i in range(_COUNT):
-        session.add(
-            SavedView(
-                organisation_id=_ORG,
-                name=f"view {i}",
-                view_type="run_list",
-                account_id=_ACCOUNT,
-            )
-        )
-    await session.flush()
-    return lambda page, page_size: list_views(session, page=page, page_size=page_size)
-
-
 async def _setup_templates(session: AsyncSession) -> PageCall:
     for i in range(_COUNT):
         session.add(
@@ -412,7 +395,6 @@ _CASES: list[tuple[str, SetupFn]] = [
     ("rating_for_primitive", _setup_ratings),
     ("abuse_report", _setup_abuse_reports),
     ("publisher", _setup_publishers),
-    ("view", _setup_views),
     ("template", _setup_templates),
     ("team_membership", _setup_team_members),
     ("team", _setup_teams),

@@ -424,8 +424,9 @@ async def test_non_admin_past_grace_gets_no_team_capability(sso_client: AsyncCli
     """Past grace a non-admin can sign in but receives Community, not Team.
 
     The identity exchange is not the paid capability, so login succeeds; a
-    Team-gated route (``view_modes``) still answers 402, which is the settled
-    non-admin experience (the interstitial/messaging is a separate ticket).
+    Team-gated route (``team_rbac`` — ``GET /api/v1/teams``) still answers 402,
+    which is the settled non-admin experience (the interstitial/messaging is a
+    separate ticket).
     """
     from modulo.core.license import LICENCE_GRACE_DAYS
 
@@ -443,7 +444,7 @@ async def test_non_admin_past_grace_gets_no_team_capability(sso_client: AsyncCli
     await _create_membership(db_engine, org_id=org_id, account_id=viewer_id, role="viewer")
 
     token = await _login(sso_client, viewer_email)
-    resp = await sso_client.get("/api/v1/views", headers={"Authorization": f"Bearer {token}"})
+    resp = await sso_client.get("/api/v1/teams", headers={"Authorization": f"Bearer {token}"})
 
     assert resp.status_code == 402, resp.text
     assert "not available on your plan" in resp.text.lower()
