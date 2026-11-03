@@ -546,6 +546,36 @@ describe('AdminAuditView — exports', () => {
     expect(exportCalls[1][1].params.query.page).toBe(2)
   })
 
+  it('applies the target-type filter to the export query and omits it for __all__', async () => {
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/admin/audit/export') {
+        return pagePayload([auditEvent('export-1')], { total: 1 })
+      }
+      return pagePayload([auditEvent('evt-1')])
+    })
+    const wrapper = mountView()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-audit-export-csv"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { filterTargetType: string }
+    vm.filterTargetType = 'pipeline'
+    await nextTick()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="admin-audit-export-csv"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+
+    const exportCalls = (api.GET as Mock).mock.calls.filter((c: unknown[]) => c[0] === '/api/v1/admin/audit/export')
+    expect(exportCalls).toHaveLength(2)
+    // The UI's __all__ sentinel must never reach the export endpoint.
+    expect(exportCalls[0][1].params.query.entity_type).toBeUndefined()
+    expect(exportCalls[1][1].params.query.entity_type).toBe('pipeline')
+  })
+
   it('export CSV surfaces the failure from the error envelope', async () => {
     ;(api.GET as Mock).mockImplementation(async (url: string) => {
       if (url === '/api/v1/admin/audit/export') {

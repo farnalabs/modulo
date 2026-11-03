@@ -931,7 +931,7 @@ async function fetchAllExportEvents(format: 'csv' | 'jsonl'): Promise<AuditEvent
           page_size: pageSize,
           event_type: filterEventType.value || undefined,
           user_id: filterActor.value || undefined,
-          entity_type: filterTargetType.value || undefined,
+          entity_type: filterTargetType.value !== '__all__' ? filterTargetType.value : undefined,
           from_date: filterDateFrom.value || undefined,
           to_date: filterDateTo.value || undefined,
         } as any,
