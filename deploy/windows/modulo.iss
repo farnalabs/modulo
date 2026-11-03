@@ -102,7 +102,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; from turning a missing runtime into a partial installation.
 Source: "{#BUNDLE_DIR}\modulo.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BUNDLE_DIR}\modulo-runtime.json"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "modulo.exe,modulo-runtime.json"
+; Everything else the bundle ships. skipifsourcedoesntexist is deliberate: the
+; declared bundle contract is exactly the two files above, so a conforming
+; bundle leaves this wildcard with nothing to copy, which Inno Setup otherwise
+; rejects as "No files found matching ...".
+Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "modulo.exe,modulo-runtime.json"
 
 [Icons]
 Name: "{group}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"
