@@ -249,6 +249,12 @@ class TestShouldRateLimit:
         mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
         assert mw._should_rate_limit(make_mock_request(method="GET", path="/api/v1/runs/x/hitl/y")) is False
 
+    @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH"])
+    def test_rate_limits_demo_auto_login(self, method):
+        """FAR-535: every non-GET demo request is gated by the 10/hour rule."""
+        mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
+        assert mw._should_rate_limit(make_mock_request(method=method, path="/api/v1/auth/demo")) is True
+
 
 # NOTE: _rule_for prefix/no-match branches are covered by
 # test_middleware_internals.py::TestRuleFor (plus HITL precedence) — not repeated here.
