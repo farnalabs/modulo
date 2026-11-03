@@ -225,7 +225,8 @@ try {
     }
 
     # --- Proof 0: the preprocessor can read these lines --------------------
-    # Two preprocessor traps, neither of which needs a compiler to detect:
+    # Three outer-parser traps inside [Code], none of which needs a compiler to
+    # detect:
     #   a) ISPP treats a line whose first non-blank character is "#" as a
     #      directive (Projects/ISPP/IsppPreprocessor.pas: ParsePreprocCommand),
     #      and an unknown directive aborts the compile. A Pascal character-code
@@ -235,18 +236,32 @@ try {
     #      argument is parsed as an ISPP expression, so `#ifexist "{#DIR}\x"`
     #      tests for a file literally named "{#DIR}\x" and is always false.
     #      #error is exempt: its text is documented as not parsed.
+    #   c) Inno Setup treats any trimmed line starting with "[" as a section tag
+    #      (Projects/Compile.pas: `if (L <> '') and (L[1] = '[')`), so a "[Run]"
+    #      at the start of a comment line inside [Code] is "Invalid section tag".
     Write-Output "=== Proof 0: the preprocessor can read these lines ==="
     $issPreprocText = Get-Content -LiteralPath $issPath -Raw
+    $preprocLines = @($issPreprocText -split "`r?`n")
     $directiveViolations = @()
     $inlineViolations = @()
+    $sectionTagViolations = @()
     $lineNumber = 0
-    foreach ($line in ($issPreprocText -split "`r?`n")) {
+    $inCodeSection = $false
+    foreach ($line in $preprocLines) {
         $lineNumber++
+        $trimmed = $line.Trim()
+        if ($trimmed -eq '[Code]') {
+            $inCodeSection = $true
+            continue
+        }
         if ($line -match '^\s*#[0-9$]') {
-            $directiveViolations += "line ${lineNumber}: $($line.Trim())"
+            $directiveViolations += "line ${lineNumber}: $trimmed"
         }
         if (($line -match '^\s*#') -and ($line -notmatch '^\s*#error\b') -and ($line -match '\{#')) {
-            $inlineViolations += "line ${lineNumber}: $($line.Trim())"
+            $inlineViolations += "line ${lineNumber}: $trimmed"
+        }
+        if ($inCodeSection -and ($trimmed.StartsWith('['))) {
+            $sectionTagViolations += "line ${lineNumber}: $trimmed"
         }
     }
     if ($directiveViolations.Count -gt 0) {
@@ -255,7 +270,10 @@ try {
     if ($inlineViolations.Count -gt 0) {
         throw ("A preprocessor directive uses inline {#name} substitution, which ISPP does not expand inside a directive - use the name as an expression instead: " + ($inlineViolations -join '; '))
     }
-    Write-Output "PASS: no line starts with a character-code literal, and no directive relies on inline substitution."
+    if ($sectionTagViolations.Count -gt 0) {
+        throw ("A [Code] line starts with '[', which Inno Setup parses as a section tag: " + ($sectionTagViolations -join '; ') + ". Keep the bracket away from the start of the line.")
+    }
+    Write-Output "PASS: no line confuses the preprocessor or the section parser."
     Write-Output ""
 
     # --- Proof 1: the script compiles, and fails closed on a broken bundle ---

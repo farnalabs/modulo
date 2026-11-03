@@ -438,8 +438,8 @@ begin
   WriteInstallLog('FAILURE: ' + Detail);
 end;
 
-{ Registers the Windows service and reports whether it actually started. The
-  [Run] section cannot report a failing sc.exe, so this is done in code. }
+{ Registers the Windows service and reports whether it actually started, because
+  the [Run] section cannot report a failing sc.exe. }
 function RegisterService: Boolean;
 var
   ResultCode: Integer;
