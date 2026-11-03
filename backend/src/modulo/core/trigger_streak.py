@@ -52,7 +52,7 @@ from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from modulo.core.pipeline_engine.classify import RunClassificationValue
+from modulo.core.pipeline_engine.classify import REASON_NO_WORK, RunClassificationValue
 from modulo.db.models.run import TERMINAL_STATUSES
 
 _log = logging.getLogger(__name__)
@@ -200,6 +200,12 @@ _STREAK_STATUSES_SQL = ",".join(f"'{s}'" for s in sorted(TERMINAL_STATUSES))
 # walk's countable / stop predicates.
 _STREAK_NO_DELIVERY_VALUE = RunClassificationValue.no_delivery.value
 _STREAK_DELIVERED_VALUE = RunClassificationValue.delivered.value
+# FAR-2276 — a no_delivery run whose reason is ``no_work`` (a poller that had
+# nothing to do) is NEUTRAL to the streak: it is neither counted nor does it
+# reset/stop the walk, so a healthy idle poller never raises the cron alert or
+# auto-deactivates, and an idle run between real failures does not hide them.
+# Every other no_delivery reason (and a NULL reason) still counts.
+_STREAK_NEUTRAL_REASON = REASON_NO_WORK
 _STREAK_STOP_VALUES_SQL = ",".join(
     f"'{v.value}'"
     for v in (RunClassificationValue.delivered, RunClassificationValue.excluded, RunClassificationValue.unclassified)
@@ -245,6 +251,7 @@ _STREAK_COUNT_SQL = (
         "  AND r.completed_at IS NOT NULL "
         "  AND r.completed_at >= __BOUNDARY__ "
         "  AND r.run_classification ->> 'value' = '__NO_DELIVERY__' "
+        "  AND COALESCE(r.run_classification ->> 'reason', '') <> '__NEUTRAL_REASON__' "
         "  AND NOT EXISTS ("
         "    SELECT 1 FROM runs r3 "
         "    WHERE r3.organisation_id = r.organisation_id "
@@ -260,6 +267,7 @@ _STREAK_COUNT_SQL = (
     .replace("__STATUSES__", _STREAK_STATUSES_SQL)
     .replace("__BOUNDARY__", _STREAK_BOUNDARY_SQL)
     .replace("__NO_DELIVERY__", _STREAK_NO_DELIVERY_VALUE)
+    .replace("__NEUTRAL_REASON__", _STREAK_NEUTRAL_REASON)
     .replace("__STOP__", _STREAK_STOP_VALUES_SQL)
 )
 
@@ -302,6 +310,7 @@ _STREAK_NEWEST_REASON_SQL = (
         "  AND r.completed_at IS NOT NULL "
         "  AND r.completed_at >= __BOUNDARY__ "
         "  AND r.run_classification ->> 'value' = '__NO_DELIVERY__' "
+        "  AND COALESCE(r.run_classification ->> 'reason', '') <> '__NEUTRAL_REASON__' "
         "  AND NOT EXISTS ("
         "    SELECT 1 FROM runs r3 "
         "    WHERE r3.organisation_id = r.organisation_id "
@@ -318,6 +327,7 @@ _STREAK_NEWEST_REASON_SQL = (
     .replace("__STATUSES__", _STREAK_STATUSES_SQL)
     .replace("__BOUNDARY__", _STREAK_BOUNDARY_SQL)
     .replace("__NO_DELIVERY__", _STREAK_NO_DELIVERY_VALUE)
+    .replace("__NEUTRAL_REASON__", _STREAK_NEUTRAL_REASON)
     .replace("__STOP__", _STREAK_STOP_VALUES_SQL)
 )
 

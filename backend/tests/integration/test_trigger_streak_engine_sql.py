@@ -693,7 +693,7 @@ async def test_get_trigger_streak_status_surfaces_own_no_delivery_run(
         status="failed",
         completed_at=own_completed,
         classification_value="no_delivery",
-        reason="no_work",
+        reason="source_error",
     )
 
     async with app_factory() as session, session.begin():
@@ -708,8 +708,154 @@ async def test_get_trigger_streak_status_surfaces_own_no_delivery_run(
     outcome = status["last_outcomes"][0]
     assert outcome["run_id"] == str(run_id)
     assert outcome["classification"] == "no_delivery"
-    assert outcome["reason"] == "no_work"
+    assert outcome["reason"] == "source_error"
     assert outcome["completed_at"] == own_completed.isoformat()
+
+
+async def _seed_reasoned_runs(
+    db_engine: AsyncEngine,
+    *,
+    org: uuid.UUID,
+    pipeline: uuid.UUID,
+    snapshot: uuid.UUID,
+    trigger_id: uuid.UUID,
+    reasons: list[str],
+) -> None:
+    """Insert failed no_delivery runs oldest -> newest, one per reason."""
+    base = _now() - timedelta(days=1)
+    for i, reason in enumerate(reasons):
+        await _insert_run(
+            db_engine,
+            org_id=org,
+            pipeline_id=pipeline,
+            snapshot_id=snapshot,
+            trigger_id=trigger_id,
+            status="complete",
+            completed_at=base + timedelta(minutes=i),
+            classification_value="no_delivery",
+            reason=reason,
+        )
+
+
+async def _read_count(app_factory: async_sessionmaker[AsyncSession], org: uuid.UUID, trigger_id: uuid.UUID) -> int:
+    from modulo.core import cron_helpers as ch
+
+    async with app_factory() as session, session.begin():
+        await ch._set_rls_org(session, org)
+        return await ts._read_streak_count(session, org, trigger_id)
+
+
+@pytest.mark.asyncio
+async def test_all_no_work_history_has_zero_streak_and_never_deactivates(
+    db_engine: AsyncEngine,
+    app_factory: async_sessionmaker[AsyncSession],
+    org: uuid.UUID,
+    pipeline: uuid.UUID,
+    snapshot: uuid.UUID,
+    user: uuid.UUID,
+) -> None:
+    """FAR-2276 — a healthy idle poller (only no_work runs) has streak 0 and is
+    never auto-deactivated, however many idle runs accumulate."""
+    trigger_id = await _seed_ongoing_trigger(
+        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
+    )
+    await _seed_reasoned_runs(
+        db_engine, org=org, pipeline=pipeline, snapshot=snapshot, trigger_id=trigger_id, reasons=["no_work"] * 8
+    )
+
+    assert await _read_count(app_factory, org, trigger_id) == 0
+    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(
+        app_factory, org_id=org, trigger_id=trigger_id, threshold=1, window_cutoff=_now()
+    )
+    assert deactivated is None
+
+
+@pytest.mark.asyncio
+async def test_no_work_between_real_failures_is_neutral(
+    db_engine: AsyncEngine,
+    app_factory: async_sessionmaker[AsyncSession],
+    org: uuid.UUID,
+    pipeline: uuid.UUID,
+    snapshot: uuid.UUID,
+    user: uuid.UUID,
+) -> None:
+    """FAR-2276 — no_work runs interleaved with real failures neither count nor
+    reset the streak: 3 source_error runs with 2 idle runs between them -> 3."""
+    trigger_id = await _seed_ongoing_trigger(
+        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
+    )
+    await _seed_reasoned_runs(
+        db_engine,
+        org=org,
+        pipeline=pipeline,
+        snapshot=snapshot,
+        trigger_id=trigger_id,
+        reasons=["source_error", "no_work", "source_error", "no_work", "source_error", "no_work"],
+    )
+
+    assert await _read_count(app_factory, org, trigger_id) == 3
+    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(
+        app_factory, org_id=org, trigger_id=trigger_id, threshold=3, window_cutoff=_now()
+    )
+    assert deactivated is not None
+    assert int(deactivated["streak"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_other_no_delivery_reasons_still_count(
+    db_engine: AsyncEngine,
+    app_factory: async_sessionmaker[AsyncSession],
+    org: uuid.UUID,
+    pipeline: uuid.UUID,
+    snapshot: uuid.UUID,
+    user: uuid.UUID,
+) -> None:
+    """FAR-2276 — a different no_delivery reason (needs_human, parse_error,
+    source_error) counts exactly as before; only no_work is skipped."""
+    trigger_id = await _seed_ongoing_trigger(
+        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
+    )
+    await _seed_reasoned_runs(
+        db_engine,
+        org=org,
+        pipeline=pipeline,
+        snapshot=snapshot,
+        trigger_id=trigger_id,
+        reasons=["needs_human", "no_work", "parse_error", "source_error"],
+    )
+
+    assert await _read_count(app_factory, org, trigger_id) == 3
+
+
+@pytest.mark.asyncio
+async def test_newest_reason_skips_no_work(
+    db_engine: AsyncEngine,
+    app_factory: async_sessionmaker[AsyncSession],
+    org: uuid.UUID,
+    pipeline: uuid.UUID,
+    snapshot: uuid.UUID,
+    user: uuid.UUID,
+) -> None:
+    """FAR-2276 — the audit/notify reason is the newest COUNTED run's reason, so
+    a trailing idle run never masks the real failure reason."""
+    from modulo.core import cron_helpers as ch
+
+    trigger_id = await _seed_ongoing_trigger(
+        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
+    )
+    await _seed_reasoned_runs(
+        db_engine,
+        org=org,
+        pipeline=pipeline,
+        snapshot=snapshot,
+        trigger_id=trigger_id,
+        reasons=["source_error", "no_work"],
+    )
+
+    async with app_factory() as session, session.begin():
+        await ch._set_rls_org(session, org)
+        reason = await ts._newest_streak_no_delivery_reason(session, org, trigger_id)
+    assert reason == "source_error"
 
 
 @pytest.mark.asyncio

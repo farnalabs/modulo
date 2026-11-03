@@ -846,9 +846,10 @@ function streakBadgeClass(trigger: TriggerItem): string {
   // the tier reads as "tripped / needs attention". Colour only — no copy here
   // claims deactivation; that wording lives on the state-driven badge above.
   // FAR-2274: a streak made only of `no_work` outcomes (the poller had nothing
-  // to do) is not a failure, so it stays neutral. Display only: the backend
-  // still counts these toward alerting / auto-deactivation unchanged. An empty
-  // outcome window gives no evidence, so it keeps the tiered colours.
+  // to do) is not a failure, so it stays neutral. FAR-2276: the backend now
+  // skips `no_work` runs in the streak itself (no alert, no auto-deactivation),
+  // so this only guards the window of recent outcomes. An empty outcome window
+  // gives no evidence, so it keeps the tiered colours.
   const outcomes = s.last_outcomes ?? []
   if (outcomes.length > 0 && outcomes.every((o) => o.reason === STREAK_REASON_NO_WORK)) {
     return 'bg-muted text-muted-foreground'
