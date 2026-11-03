@@ -85,12 +85,16 @@ class ReleasePreflightChecker:
         repo_root: Path | str | None = None,
         env: dict[str, str] | None = None,
         run_cmd: Callable[..., tuple[int, str, str]] | None = None,
+        windows_native_in_scope: bool = False,
     ) -> None:
         self.mode = mode.strip()
         self.version = version.strip()
         self.freeze = freeze
         self.env = env if env is not None else dict(os.environ)
         self.run_cmd = run_cmd if run_cmd is not None else default_run_cmd
+        self.windows_native_in_scope = (
+            windows_native_in_scope or self.env.get("WINDOWS_NATIVE_IN_SCOPE", "false").lower() == "true"
+        )
 
         if repo_root is not None:
             self.repo_root = Path(repo_root).resolve()
@@ -151,8 +155,8 @@ class ReleasePreflightChecker:
         if self.mode in ("cut", "recut"):
             return PreflightCheckResult(
                 name,
-                False,
-                f"No CI run found for commit {target_sha[:7]} in repository {gh_repo}",
+                True,
+                f"No CI run found yet for commit {target_sha[:7]} in repository {gh_repo}; downstream schema-freshness step will wait for CI",
             )
         return None
 
@@ -276,7 +280,7 @@ class ReleasePreflightChecker:
             )
 
         conclusion = job_data.get("conclusion")
-        status = job_data.get("status")
+        status = str(job_data.get("status") or "").lower()
         if conclusion == "success":
             return PreflightCheckResult(
                 name,
@@ -288,6 +292,12 @@ class ReleasePreflightChecker:
                 name,
                 False,
                 f"Schema freshness gate failed on commit {target_sha[:7]} (run {run_id})",
+            )
+        if status in ("in_progress", "queued", "waiting") and conclusion != "failure":
+            return PreflightCheckResult(
+                name,
+                True,
+                f"Schema freshness gate is in progress on commit {target_sha[:7]} (run {run_id}, status: {status}); downstream schema-freshness step will wait for completion",
             )
         return PreflightCheckResult(
             name,
@@ -735,6 +745,13 @@ class ReleasePreflightChecker:
                 f"Windows native artifacts available from successful windows-artifacts.yml run ({run_id})",
             )
 
+        if not self.windows_native_in_scope:
+            return PreflightCheckResult(
+                name,
+                True,
+                "Windows native packaging is Beta scope, planned after Alpha (FAR-2213); does not gate an Alpha release",
+            )
+
         return PreflightCheckResult(
             name,
             False,
@@ -796,21 +813,20 @@ class ReleasePreflightChecker:
             "AZURE_TENANT_ID",
             "AZURE_SUBSCRIPTION_ID",
         ]
-        other_release_secrets = [
+        alpha_required_secrets = [
             "BUNDLE_MANIFEST_SIGNING_KEY",
             "MODULO_RELEASE_PR_TOKEN",
         ]
-        all_required = signing_secrets + other_release_secrets
-
-        # Never print secret values: check boolean presence only
-        missing = [secret_name for secret_name in all_required if not self.env.get(secret_name)]
+        missing_alpha = [s for s in alpha_required_secrets if not self.env.get(s)]
+        missing_azure = [s for s in signing_secrets if not self.env.get(s)]
 
         if self.mode == "dry-run":
-            if missing:
+            all_missing = missing_alpha + missing_azure
+            if all_missing:
                 return PreflightCheckResult(
                     name,
                     True,
-                    f"Dry-run mode: signing secrets not required (unconfigured: {', '.join(missing)}; values redacted)",
+                    f"Dry-run mode: signing secrets not required (unconfigured: {', '.join(all_missing)}; values redacted)",
                 )
             return PreflightCheckResult(
                 name,
@@ -818,11 +834,34 @@ class ReleasePreflightChecker:
                 "All signing and release secrets configured (values redacted)",
             )
 
-        if missing:
+        if self.windows_native_in_scope:
+            all_missing = missing_alpha + missing_azure
+            if all_missing:
+                return PreflightCheckResult(
+                    name,
+                    False,
+                    f"Missing required release secret(s): {', '.join(all_missing)} (values redacted)",
+                )
+            return PreflightCheckResult(
+                name,
+                True,
+                "All required Azure Trusted Signing and release secrets are configured (values redacted)",
+            )
+
+        # Alpha release: Windows native packaging is Beta scope (FAR-2213).
+        # Only bundle manifest signing key and release PR token are strictly required.
+        if missing_alpha:
             return PreflightCheckResult(
                 name,
                 False,
-                f"Missing required release secret(s): {', '.join(missing)} (values redacted)",
+                f"Missing required release secret(s): {', '.join(missing_alpha)} (values redacted)",
+            )
+
+        if missing_azure:
+            return PreflightCheckResult(
+                name,
+                True,
+                f"Required release secrets configured (values redacted); Azure Trusted Signing secrets unconfigured ({', '.join(missing_azure)}; values redacted, optional for Alpha release as Windows native packaging is Beta scope)",
             )
 
         return PreflightCheckResult(
@@ -1042,6 +1081,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Release freeze flag (default: $RELEASE_FREEZE == true)",
     )
     parser.add_argument(
+        "--windows-native-in-scope",
+        action="store_true",
+        default=os.environ.get("WINDOWS_NATIVE_IN_SCOPE", "false").lower() == "true",
+        help="Windows native packaging is in scope (Beta scope; default: false)",
+    )
+    parser.add_argument(
         "--repo-root",
         default=None,
         help="Path to repository root",
@@ -1059,6 +1104,7 @@ def main(argv: list[str] | None = None) -> int:
         version=args.version,
         freeze=args.freeze,
         repo_root=args.repo_root,
+        windows_native_in_scope=args.windows_native_in_scope,
     )
 
     print(

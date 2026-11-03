@@ -146,7 +146,7 @@ def test_schema_freshness_fails_closed_when_ci_query_errors(tmp_path: Path):
     assert "Could not query CI runs" in res.details
 
 
-def test_schema_freshness_fails_in_cut_mode_when_no_ci_run_exists(tmp_path: Path):
+def test_schema_freshness_passes_in_cut_mode_when_no_ci_run_exists_yet(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
     env = {
         "GH_TOKEN": "token-123",
@@ -161,11 +161,12 @@ def test_schema_freshness_fails_in_cut_mode_when_no_ci_run_exists(tmp_path: Path
 
     checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env=env, run_cmd=fake_run)
     res = checker.check_schema_freshness()
-    assert not res.passed
-    assert "No CI run found" in res.details
+    assert res.passed
+    assert "No CI run found yet" in res.details
+    assert "downstream schema-freshness step will wait" in res.details
 
 
-def test_schema_freshness_fails_when_job_is_not_green(tmp_path: Path):
+def test_schema_freshness_passes_when_job_is_in_progress(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
     env = {
         "GH_TOKEN": "token-123",
@@ -182,9 +183,52 @@ def test_schema_freshness_fails_when_job_is_not_green(tmp_path: Path):
 
     checker = ReleasePreflightChecker(mode="recut", version="0.1.0", repo_root=repo, env=env, run_cmd=fake_run)
     res = checker.check_schema_freshness()
+    assert res.passed
+    assert "in progress" in res.details
+    assert "downstream schema-freshness step will wait" in res.details
+
+
+def test_schema_freshness_passes_when_job_is_queued_or_waiting(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+    env = {
+        "GH_TOKEN": "token-123",
+        "GITHUB_REPOSITORY": "farnalabs/modulo",
+        "GITHUB_SHA": "abc1234",
+    }
+
+    def fake_run(cmd, **kwargs):
+        if "run" in cmd and "list" in cmd:
+            return 0, json.dumps([{"databaseId": 42}]), ""
+        if "api" in cmd and any("jobs" in arg for arg in cmd):
+            return 0, json.dumps({"conclusion": None, "status": "queued"}), ""
+        return 0, "", ""
+
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env=env, run_cmd=fake_run)
+    res = checker.check_schema_freshness()
+    assert res.passed
+    assert "queued" in res.details
+
+
+def test_schema_freshness_fails_when_job_is_not_green_and_completed(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+    env = {
+        "GH_TOKEN": "token-123",
+        "GITHUB_REPOSITORY": "farnalabs/modulo",
+        "GITHUB_SHA": "abc1234",
+    }
+
+    def fake_run(cmd, **kwargs):
+        if "run" in cmd and "list" in cmd:
+            return 0, json.dumps([{"databaseId": 42}]), ""
+        if "api" in cmd and any("jobs" in arg for arg in cmd):
+            return 0, json.dumps({"conclusion": "cancelled", "status": "completed"}), ""
+        return 0, "", ""
+
+    checker = ReleasePreflightChecker(mode="recut", version="0.1.0", repo_root=repo, env=env, run_cmd=fake_run)
+    res = checker.check_schema_freshness()
     assert not res.passed
     assert "not green" in res.details
-    assert "in_progress" in res.details
+    assert "cancelled" in res.details
 
 
 def _schema_ci_env() -> dict[str, str]:
@@ -621,9 +665,19 @@ def test_windows_native_artifacts_dry_run_passes(tmp_path: Path):
     assert "Dry-run mode" in res.details
 
 
-def test_windows_native_artifacts_non_dry_run_fails_when_missing(tmp_path: Path):
+def test_windows_native_artifacts_passes_for_alpha_with_beta_scope_message(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
     checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo)
+    res = checker.check_windows_native_artifacts()
+    assert res.passed
+    assert "Beta scope" in res.details
+    assert "FAR-2213" in res.details
+    assert "Alpha" in res.details
+
+
+def test_windows_native_artifacts_fails_when_missing_and_in_scope(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, windows_native_in_scope=True)
     res = checker.check_windows_native_artifacts()
     assert not res.passed
     assert "missing" in res.details
@@ -652,6 +706,35 @@ def test_azure_signing_secrets_dry_run_passes_even_if_missing(tmp_path: Path):
 def test_azure_signing_secrets_cut_fails_when_missing(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
     checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env={})
+    res = checker.check_azure_signing_secrets()
+    assert not res.passed
+    assert "Missing required release secret(s)" in res.details
+    assert "BUNDLE_MANIFEST_SIGNING_KEY" in res.details
+    assert "MODULO_RELEASE_PR_TOKEN" in res.details
+
+
+def test_azure_signing_secrets_missing_azure_does_not_fail_alpha_release(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+    env = {
+        "BUNDLE_MANIFEST_SIGNING_KEY": "key-123",
+        "MODULO_RELEASE_PR_TOKEN": "token-123",
+    }
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env=env)
+    res = checker.check_azure_signing_secrets()
+    assert res.passed
+    assert "AZURE_CLIENT_ID" in res.details
+    assert "Beta scope" in res.details
+
+
+def test_azure_signing_secrets_cut_fails_when_missing_azure_and_windows_in_scope(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+    env = {
+        "BUNDLE_MANIFEST_SIGNING_KEY": "key-123",
+        "MODULO_RELEASE_PR_TOKEN": "token-123",
+    }
+    checker = ReleasePreflightChecker(
+        mode="cut", version="0.1.0", repo_root=repo, env=env, windows_native_in_scope=True
+    )
     res = checker.check_azure_signing_secrets()
     assert not res.passed
     assert "Missing required release secret(s)" in res.details
