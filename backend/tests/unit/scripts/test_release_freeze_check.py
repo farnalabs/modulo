@@ -2,8 +2,9 @@
 
 These prove the shared release-freeze gate used by both the merge-queue
 `freeze-gate` job and the pre-merge TOCTOU re-verify step:
-  * detects an active freeze (tag present) on the first successful response,
-  * treats a missing tag as open (gate clear),
+  * queries the `release-freeze` branch namespace, not the tag namespace,
+  * detects an active freeze (branch present) on the first successful response,
+  * treats a missing branch as open (gate clear),
   * retries transient gh failures/blips and only FAILS CLOSED once every attempt
     is exhausted (so a single 503 cannot abort the tick or lift the freeze),
   * skips the backoff sleep on the final attempt (no pointless trailing delay),
@@ -42,14 +43,35 @@ def _gh(rc: int, out: str, err: str):
     return _run
 
 
-def test_frozen_when_tag_present():
+def test_queries_the_branch_namespace(monkeypatch):
+    mod = _load()
+    commands: list[str] = []
+
+    class _Result:
+        returncode = 0
+        stdout = "0"
+        stderr = ""
+
+    def _fake_run(args, **_kwargs):
+        commands.append(" ".join(args))
+        return _Result()
+
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run)
+    verdict, _msg = mod.query_release_freeze("o/r", 1, 1)
+    assert verdict == "open"
+    assert len(commands) == 1
+    assert "matching-refs/heads/release-freeze" in commands[0]
+    assert "matching-refs/tags/release-freeze" not in commands[0]
+
+
+def test_frozen_when_branch_present():
     mod = _load()
     verdict, msg = mod.query_release_freeze("o/r", 5, 5, _gh(0, "1", ""))
     assert verdict == "frozen"
     assert "present" in msg
 
 
-def test_open_when_no_tag():
+def test_open_when_no_branch():
     mod = _load()
     verdict, _msg = mod.query_release_freeze("o/r", 5, 5, _gh(0, "0", ""))
     assert verdict == "open"
