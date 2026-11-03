@@ -277,10 +277,12 @@ describe('SystemMapDetailView authoring actions', () => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
       return Promise.resolve({ data: { revision: { id: 'rev-9', revision_number: 9, status: 'draft' }, nodes: [], relationships: [] } })
     })
-    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    // A successful switch clears the previous failure banner without the
+    // operator having to dismiss it first.
     wrapper.findComponent(RevisionStub).vm.$emit('select-revision', 'rev-9')
     await flushPromises()
     expect(store.activeRevision?.id).toBe('rev-9')
+    expect(wrapper.text()).not.toContain('Could not load map revision')
   })
 
   it('switches to the current revision and reports failures', async () => {

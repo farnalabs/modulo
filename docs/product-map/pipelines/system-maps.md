@@ -343,11 +343,27 @@ The map is stored in dedicated System Maps tables (migration
       agent cannot create or update a map, author a revision, publish / archive
       / diff / restore a revision, read a revision or its history, or read the
       overview through MCP (`api/mcp_server.py`)
-- [ ] The routed UI does not use the version-aware revision reads: the revision
-      sidebar lists revisions loaded in the current session and switches with
-      `GET /revisions/{rev_id}`; nothing calls `revisions/current`,
-      `revisions/by-time` or `revisions/history`, and diff and restore-as-new
-      have no UI affordance (`frontend/src/stores/systemMaps.ts`,
+- [x] The revision sidebar switches between the current and a historical
+      revision through the version-aware read model: "View current" calls
+      `GET /revisions/current`, and a `datetime-local` picker calls
+      `GET /revisions/by-time?at=<ISO8601>` after converting the local value to
+      an absolute instant client-side; the matched revision loads through the
+      shared per-revision read path and becomes the active revision, the
+      currently published revision is badged Current, and the 404 that
+      `by-time` raises for an unmatched instant surfaces as a distinct
+      "No revision was active at that time" error instead of silently leaving
+      the previous graph on screen (`frontend/src/stores/systemMaps.ts`,
+      `frontend/src/views/SystemMapDetailView.vue`,
+      `frontend/src/components/system-maps/SystemMapRevisionSidebar.vue`;
+      `systemMapsStoreCrud.spec.ts`, `SystemMapDetailView.spec.ts`,
+      `SystemMapComponents.coverage.spec.ts`)
+- [ ] The revision sidebar still does not read `GET /revisions/history`, and
+      diff and restore-as-new have no UI affordance: it lists the revisions
+      loaded in the current session (the published revision from `loadMap`
+      plus any draft or explicitly selected revision) and switches with
+      `GET /revisions/{rev_id}`, so an archived revision that was not loaded
+      this session is invisible until it is read by id
+      (`frontend/src/stores/systemMaps.ts`,
       `frontend/src/components/system-maps/SystemMapRevisionSidebar.vue`)
 - [ ] Discovery cannot re-scan into an existing map: there is no re-scan
       endpoint and each successful discovery creates a map (a repeat with a
@@ -388,10 +404,12 @@ The map is stored in dedicated System Maps tables (migration
   inventory scan and persist an unpublished draft, but there is no MCP tool to
   author a map, publish / archive / diff / restore a revision, read a revision
   or its history, or read the overview; those remain REST-only.
-- **Version-aware reads are backend-only.** `revisions/current`,
-  `revisions/by-time`, `revisions/history`, `revisions/{rev_id}/diff` and
-  `restore-as-new` all ship and are tested, but the routed UI still lists only
-  the revisions the session has loaded and offers no diff or restore affordance.
+- **Version-aware reads are only partly wired into the UI.**
+  `revisions/current` and `revisions/by-time` now drive the revision sidebar,
+  but `revisions/history` is still unread and `revisions/{rev_id}/diff` /
+  `restore-as-new` have no UI affordance. The sidebar lists only the revisions
+  the session has loaded, so an archived revision that was never selected in
+  this session does not appear until it is read by id.
 - **Discovery is create-only.** Each discovery persists a new map plus a draft
   revision; a repeat with a colliding name is a 409. There is no re-scan into an
   existing draft, so the "added / removed / ambiguous" reconciliation described
@@ -402,6 +420,19 @@ The map is stored in dedicated System Maps tables (migration
   concurrency are not enforced (deferred to Beta 3).
 
 ## QA History
+
+- 2026-11-03: **Improve Architecture product-map walk (gap freshness)** -
+  re-verified the remaining UI gap against `origin/main` after PR #2803 wired
+  the revision sidebar's "View current" and by-time switching. The unchecked
+  bullet and Known Gap that claimed `revisions/current` and `revisions/by-time`
+  were uncalled were false: both are now read from the store and exercised by
+  the sidebar, so the behaviour is checked and the remaining gap is narrowed to
+  the unread `revisions/history` endpoint and the missing diff / restore-as-new
+  affordances. Also fixed a stale-error bug in `SystemMapDetailView.selectRevision`:
+  it did not clear a previous action error before a revision switch, unlike the
+  current and by-time selectors, so a successful selection could leave the prior
+  failure banner over a healthy graph. Added a regression test that selects a
+  revision after a failed action and asserts the error clears.
 
 - 2026-11-03: **Improve Architecture product-map walk** - re-verified this entry
   against `origin/main` after FAR-2288's MCP-discovery + BDD PR (#2761) and the
