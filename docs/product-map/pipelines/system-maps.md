@@ -33,7 +33,7 @@ unit-tests:
 bdd: []
 depends-on:
   - feat-lifecycle-maps
-status: covered
+status: partial
 ---
 
 # System Maps (Beta, internal dogfood)
@@ -201,8 +201,10 @@ automatically.
   report's source/node/edge counts, draft revision, warnings and skipped
   sources with an explicit not-published note. New testids are registered in
   the manifest `/` elements inventory and the review component is pinned in the
-  reverse testid-coverage guard. Status moves to `covered`; the remaining
-  Known Gaps (BDD, dedicated schema, MCP tool) are unchanged.
+  reverse testid-coverage guard. The entry stays `status: partial` to match the
+  manifest `feat-system-maps` registry, which still tracks the deferred re-scan
+  behaviour (and the manifest remains the source of truth for this status); the
+  remaining Known Gaps (BDD, dedicated schema, MCP tool) are unchanged.
 
 - 2026-10-31: **Improve Architecture product-map walk** - closed the feature-graph
   gap left by FAR-2244 (backend discovery) and FAR-2245 (dashboard draft-review
