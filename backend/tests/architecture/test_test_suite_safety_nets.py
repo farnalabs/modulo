@@ -235,9 +235,10 @@ def _quarantine_violations(quarantine_file: Path, backend: Path, repo: Path) -> 
     """Return the list of stale/incomplete ``.quarantine.yml`` entry violations.
 
     Extracted from :func:`test_quarantine_registry_entries_resolve` so it can be
-    exercised directly by unit tests against a synthetic registry (the real
-    ``.quarantine.yml`` holds only commented examples, so the lens iterates an
-    empty list and the symbol-resolution code paths never run in CI).
+    exercised directly by unit tests against a synthetic registry. The real
+    ``.quarantine.yml`` carries live entries, so the lens resolves them in CI;
+    the synthetic registry exists to cover the malformed and stale entry classes
+    the live file does not contain.
     """
     violations: list[str] = []
     for entry in _quarantine_entries(quarantine_file):

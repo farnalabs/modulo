@@ -2,13 +2,15 @@
 
 These lock in the behaviour introduced alongside the quarantine registry safety
 net in ``tests/architecture/test_test_suite_safety_nets.py``. The real repo
-``.quarantine.yml`` holds only commented examples, so the lens iterates an empty
-list and the symbol-resolution code paths (``_stripped_symbol`` /
+``.quarantine.yml`` is not empty: it carries live flaky-test entries (13 at the
+time of writing), so that lens resolves them in CI. These tests additionally
+exercise the symbol-resolution helpers (``_stripped_symbol`` /
 ``_collect_definitions`` / ``_resolves_definitions`` / ``_resolve_quarantine_target``
-/ ``_is_bdd_scenario_module``) never run in CI. A regression such as
-``_collect_definitions`` returning ``set()`` or ``_resolves_definitions`` always
-returning ``True`` would be silently invisible — these tests exercise the helpers
-against synthetic temp modules so that can no longer happen.
+/ ``_is_bdd_scenario_module``) against synthetic temp modules, covering the
+malformed and stale entry classes the live registry does not contain. Without
+them a regression such as ``_collect_definitions`` returning ``set()`` or
+``_resolves_definitions`` always returning ``True`` would stay invisible until a
+live entry happened to hit it.
 
 They also prove the improvement over a file-existence-only check: a registry
 entry pointing at a real file but a renamed/missing symbol is now FLAGGED, which

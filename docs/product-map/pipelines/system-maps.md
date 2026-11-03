@@ -47,6 +47,7 @@ unit-tests:
   - backend/tests/unit/db/test_system_map_models.py
   - backend/tests/unit/db/test_migration_0347_system_maps_version_aware.py
   - backend/tests/unit/cli/apply/test_system_map_apply.py
+  - backend/tests/unit/mcp/test_mcp_system_map_discovery.py
   - backend/tests/integration/test_system_maps_discovery.py
   - backend/tests/integration/test_system_maps_version_aware.py
   - backend/tests/integration/test_system_maps_overview_metrics.py
@@ -63,7 +64,10 @@ unit-tests:
   - frontend/src/__tests__/SystemMapDraftReview.spec.ts
   - frontend/src/__tests__/DashboardSystemOverview.spec.ts
   - frontend/src/__tests__/DashboardView.spec.ts
-bdd: []
+bdd:
+  - backend/tests/bdd/features/system_maps/access_and_discovery.feature
+  - backend/tests/bdd/features/system_maps/revisions.feature
+  - backend/tests/bdd/steps/test_system_maps.py
 status: partial
 ---
 
@@ -319,9 +323,24 @@ The map is stored in dedicated System Maps tables (migration
       `tests/unit/mcp/test_mcp_config_tools.py` -
       `TestSystemMapsInternalFlagMCP` and
       `TestSystemMapsAccessUsesSharedGrantCheck::test_ungranted_jwt_caller_keeps_role_behaviour`)
-- [ ] No MCP System Maps tool: the MCP layer only hides/shows the flag. There is
-      no MCP equivalent of discovery, authoring, publishing or the overview read
-      (`api/mcp_server.py`)
+- [x] Discovery is exposed over MCP: the `discover_system_map` tool drives the
+      SAME `POST /api/v1/system-maps/discover` handler the REST surface uses, so
+      the inventory read, deterministic inference and persistence stay one
+      implementation. It re-applies the internal gate server-side (developer
+      mode, operator/admin role floor, `system_maps_access` grant and the
+      `system_maps` feature, each before any inventory read), refuses team- and
+      user-scoped credentials because the scan covers the whole organisation,
+      and returns the discovery report as JSON. It calls the route's undecorated
+      handler and classifies DB failures itself (session contract, lock timeout,
+      conflict, migration required, unavailable) instead of inheriting the REST
+      wrapper's generic mapping (`api/mcp_server.py::discover_system_map`,
+      `core/mcp/scope_validator.py`;
+      `tests/unit/mcp/test_mcp_system_map_discovery.py`)
+- [ ] No MCP authoring, publish or read surface beyond discovery:
+      `discover_system_map` is the only System Maps MCP tool. An agent cannot
+      create or update a map, author a revision, publish / archive / diff /
+      restore a revision, read a revision or its history, or read the overview
+      through MCP (`api/mcp_server.py`)
 - [ ] The routed UI does not use the version-aware revision reads: the revision
       sidebar lists revisions loaded in the current session and switches with
       `GET /revisions/{rev_id}`; nothing calls `revisions/current`,
@@ -344,16 +363,26 @@ The map is stored in dedicated System Maps tables (migration
       available from the routed list and detail pages instead
       (`frontend/src/components/dashboard/DashboardSystemOverview.vue`,
       `frontend/src/components/system-maps/SystemMapDraftReview.vue`)
-- [ ] No BDD coverage: discovery, persistence, the revision lifecycle, the
-      version-aware reads, apply and the frontend are covered by unit tests and
-      Postgres integration tests, but there is no Gherkin feature file for the
-      System Maps surface (`bdd:` is empty)
+- [x] BDD coverage ships for the access gate and the revision lifecycle:
+      `access_and_discovery.feature` drives the real router through
+      `TestClient` for an authorised discovery (201, the report names the
+      unpublished draft, infers suggested edges, records honest stage types and
+      reads tenant-scoped) plus the four refusals (viewer 403, grantless key
+      403, developer mode off 403, feature off 402);
+      `revisions.feature` drives an invalid publish returning validation errors
+      without publishing, a diff naming the added node, restore-as-new from an
+      archived revision (and the draft 409), and the `by-time` read including
+      its 404-before-first-publish case
+      (`tests/bdd/steps/test_system_maps.py`;
+      `backend/tests/bdd/features/system_maps/access_and_discovery.feature`,
+      `backend/tests/bdd/features/system_maps/revisions.feature`)
 
 ## Known Gaps
 
-- **No MCP System Maps surface.** The MCP layer only hides or shows the
-  `system_maps` flag; an agent cannot discover, author, publish or read a map
-  through MCP.
+- **MCP exposes discovery only.** `discover_system_map` lets an agent run the
+  inventory scan and persist an unpublished draft, but there is no MCP tool to
+  author a map, publish / archive / diff / restore a revision, read a revision
+  or its history, or read the overview.
 - **Version-aware reads are backend-only.** `revisions/current`,
   `revisions/by-time`, `revisions/history`, `revisions/{rev_id}/diff` and
   `restore-as-new` all ship and are tested, but the routed UI still lists only
@@ -369,8 +398,6 @@ The map is stored in dedicated System Maps tables (migration
 - **The dashboard card is a metrics readout, not an authoring entry point.** Its
   discover button stays disabled and its no-overview fallback is static copy;
   the working discovery and authoring surfaces are the two routed pages.
-- **No BDD coverage.** There is no Gherkin feature file for the surface, so
-  end-to-end behaviour is pinned by unit and Postgres integration tests only.
 
 ## QA History
 
@@ -440,3 +467,20 @@ The map is stored in dedicated System Maps tables (migration
   as implemented. The intro gate sentence carried the same
   grant-for-everyone assumption and was reworded with it. Status stays
   `partial`; the remaining-gaps list is unchanged.
+- 2026-11-03: **MCP discovery and BDD coverage landed after the refresh** -
+  PR #2761 merged three seconds after the doc refresh in #2762, so two gap
+  claims written here had already gone stale. Verified against `origin/main`
+  and corrected: (1) "No MCP System Maps tool" - `api/mcp_server.py` now
+  registers `discover_system_map`, a thin transport wrapper over the same
+  `POST /api/v1/system-maps/discover` handler (it re-applies the internal gate,
+  refuses team- and user-scoped credentials, and classifies DB failures itself),
+  pinned by `tests/unit/mcp/test_mcp_system_map_discovery.py`; the remaining
+  gap is the absence of an MCP authoring / publish / revision-read / overview
+  tool. (2) "No BDD coverage" / `bdd: []` -
+  `tests/bdd/features/system_maps/access_and_discovery.feature` and
+  `revisions.feature` execute through `steps/test_system_maps.py`, so both are
+  now cited in `bdd:` and the coverage is a ticked behaviour. Re-verified and
+  kept the gaps that genuinely remain: version-aware revision reads are still
+  backend-only, discovery is still create-only, loop dispatch still has no
+  runtime, and the dashboard discover button is still disabled. Status stays
+  `partial` (matching the manifest registry) because those gaps are real.
