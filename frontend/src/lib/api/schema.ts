@@ -971,7 +971,19 @@ export interface paths {
         /** Set Org Flag Override */
         put: operations["set_org_flag_override_api_v1_admin_feature_flags__flag_name__org_override_put"];
         post?: never;
-        /** Clear Org Flag Override */
+        /**
+         * Clear Org Flag Override
+         * @description Clear the caller organisation's override for one flag.
+         *
+         *     FAR-2309: the clear is atomic. ``nested_delete`` removes ONLY this flag's
+         *     entry from the stored ``feature_overrides`` object inside the same UPDATE
+         *     that composes the settings patch, so two concurrent clears of different
+         *     flags both persist and a concurrent SET of another flag cannot be clobbered
+         *     by a stale map. The handler no longer reads the map at all — the previous
+         *     read-pop-write shape lost updates between the read and the write — and a
+         *     missing/soft-deleted organisation is refused as a 404 (fail closed) by the
+         *     shared patch wrapper instead of optimistically reporting success.
+         */
         delete: operations["clear_org_flag_override_api_v1_admin_feature_flags__flag_name__org_override_delete"];
         options?: never;
         head?: never;
@@ -1466,11 +1478,13 @@ export interface paths {
          * Clear Org Feature Flag
          * @description Clear this org's override for an org-settable flag (revert to default).
          *
-         *     The ``feature_overrides`` map has no per-entry delete in the atomic patch
-         *     helper, so this reads the map, removes the key and writes the map back
-         *     through the same patch helper the other org-settings writers use — the
-         *     existing clear path's shape. Only the one map is rewritten; no other
-         *     settings key is touched.
+         *     FAR-2309: the clear is atomic. ``nested_delete`` removes ONLY this flag's
+         *     entry from the stored ``feature_overrides`` object inside the same UPDATE
+         *     that composes the settings patch, so two concurrent clears of different
+         *     flags both persist and a concurrent SET of another flag can never be
+         *     clobbered by a stale map. (The earlier shape read the map, popped the key
+         *     and wrote the whole map back — a lost update between the read and the
+         *     write.) Only the one map is touched; no other settings key is rewritten.
          */
         delete: operations["clear_org_feature_flag_api_v1_admin_org_feature_flags__flag_name__delete"];
         options?: never;
