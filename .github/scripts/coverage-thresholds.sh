@@ -22,12 +22,13 @@
 #              report.
 #
 # Why the shards exist: the unit suite is MEMORY-bound, not CPU-bound. Each
-# xdist worker holds a large in-process fixture graph, so four workers on a
-# 16 GB runner already peak at ~11.7 GB RSS - adding workers to one runner does
+# xdist worker holds a large in-process fixture graph (four workers on one
+# 16 GB runner peaked at ~11.7 GB RSS), so adding workers to one runner does
 # not cut wall-clock, it only swaps CPU idling for swap. Three independent
-# 16 GB runners in parallel each run the same 4 workers on a third of the tree,
-# which is the only lever that shortens the critical path without raising the
-# per-runner memory ceiling. (FAR-2081's earlier two-shard split was reverted
+# runners in parallel (ubicloud-standard-2, 8 GB, 2 workers each - FAR-2325) each
+# run a third of the tree, which is the only lever that shortens the critical
+# path without raising the per-runner memory ceiling.
+# (FAR-2081's earlier two-shard split was reverted
 # because those halves ran SEQUENTIALLY in one runner: two pytest start-ups for
 # no wall-clock win. These three run concurrently, which is the point.)
 #
