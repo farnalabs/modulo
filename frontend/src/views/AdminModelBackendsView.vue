@@ -125,6 +125,7 @@
                 <label for="adminmodelbackendsview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</label>
                 <Select
   :aria-label="$t('views.AdminModelBackendsView.provider')"
+  input-id="adminmodelbackendsview-field-12"
   v-model="formData.provider"
   :placeholder="$t('views.AdminModelBackendsView.provider_placeholder')"
   data-testid="admin-model-backends-provider-select"
@@ -193,6 +194,7 @@
                 <label for="adminmodelbackendsview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
                 <Select
   :aria-label="$t('views.AdminModelBackendsView.visibility')"
+  input-id="adminmodelbackendsview-field-7"
   v-model="formData.visibility"
   :placeholder="$t('views.AdminModelBackendsView.visibility_placeholder')"
   data-testid="admin-model-backends-visibility-select"
@@ -476,6 +478,7 @@
                 <label for="adminmodelbackendsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
                 <Select
   :aria-label="$t('views.AdminModelBackendsView.visibility')"
+  input-id="adminmodelbackendsview-field-1"
   v-model="formData.visibility"
   :placeholder="$t('views.AdminModelBackendsView.visibility_placeholder')"
   data-testid="admin-model-backends-edit-visibility"

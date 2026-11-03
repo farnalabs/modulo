@@ -997,3 +997,36 @@ class TestGoldenSnapshot:
         assert not report["updated"]
         assert not report["blocked"]
         assert not report["failed"]
+
+
+_SYSTEM_MAPS_ONLY_CONFIG_TEXT = """
+api_version: modulo.dev/v1
+entities:
+  system_maps:
+    - name: alpha
+"""
+
+
+class TestSystemMapFetch:
+    @respx.mock
+    def test_fetch_current_fetches_system_maps_when_declared(self) -> None:
+        """A declared system map triggers the lazy /system-maps list fetch."""
+        _mock_current([], [])
+        route = respx.get("https://api.test/api/v1/system-maps", params={"page": "1", "page_size": "100"}).respond(
+            json={
+                "items": [
+                    {"id": "00000000-0000-0000-0000-000000000001", "name": "alpha"},
+                    {"id": "00000000-0000-0000-0000-000000000002", "name": "alpha"},
+                ],
+                "total": 2,
+                "page": 1,
+                "page_size": 100,
+            }
+        )
+        config = parse_apply_documents(_SYSTEM_MAPS_ONLY_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            current = executor.fetch_current(config)
+        assert route.called
+        assert not current["system_map"]
+        assert current["ambiguous_system_map_names"] == {"alpha": 2}

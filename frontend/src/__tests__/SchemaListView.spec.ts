@@ -150,8 +150,8 @@ describe('SchemaListView', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="folder-tree"]').exists()).toBe(true)
-    const main = wrapper.find('main')
-    expect(main.classes()).toEqual(expect.arrayContaining(['flex-1', 'page-wide', 'min-w-0', 'overflow-y-auto']))
+    const content = wrapper.find('section')
+    expect(content.classes()).toEqual(expect.arrayContaining(['flex-1', 'page-wide', 'min-w-0', 'overflow-y-auto']))
     expect(wrapper.find('.h-\\[calc\\(100vh-3\\.5rem\\)\\] > .flex.flex-1.min-h-0').exists()).toBe(true)
   })
 

@@ -600,6 +600,15 @@ jobs:
             exit 1
           fi
 
+      # FAR-2290: Zoho raises 'new login activity' alerts for SMTP logins from
+      # runner IPs (expected on Ubicloud/GitHub runners). Logging the egress IP
+      # lets such an alert be matched to this run. Non-fatal; logs only the IP.
+      - name: Log runner egress IP (for Zoho login alerts)
+        if: always()
+        shell: bash
+        run: |
+          echo "runner egress IP: $(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo unknown)" || true
+
       # One email per transition. The driver renders the exact payload (unit
       # tested) and reuses the Zoho SMTP send issue-notify.yml uses. Unconfigured
       # SMTP is a loud warning, not a silent green; the Linear ticket is the

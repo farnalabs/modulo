@@ -1,22 +1,37 @@
 """Unit tests for the System Maps repository (FAR-2236).
 
-The repository is exercised against a mocked ``AsyncSession``: ``execute``
-returns pre-shaped result objects, so the tests assert the query/return
-contract without a live database. Every public method is driven through both
-its success and its not-found/error arms so the changed-lines coverage gate
-sees the full branch surface.
+Most of the repository is exercised against a mocked ``AsyncSession``:
+``execute`` returns pre-shaped result objects, so the tests assert the
+query/return contract without a live database. Every public method is driven
+through both its success and its not-found/error arms so the changed-lines
+coverage gate sees the full branch surface.
+
+The overview aggregates are the exception: their correctness lives in the SQL
+predicates (canonical failure semantics, the half-open window, benign
+exclusion, budget/cooldown evidence), and a mocked session cannot execute a
+predicate. Those tests run the real queries against an in-memory SQLite
+database with the real models, which is the repo's established pattern for
+predicate-level repository coverage.
 """
 
 import uuid
-from datetime import UTC, datetime
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Self
+from typing import Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import Table
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.db.models.base import Base
+from modulo.db.models.organisation import Organisation
+from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.run import Run
+from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.system_map import (
     SystemMap,
     SystemMapAttributionBinding,
@@ -89,12 +104,17 @@ def _map(map_id: uuid.UUID = _MAP, **kwargs: object) -> SystemMap:
     return obj
 
 
-def _revision(rev_id: uuid.UUID = _REV, map_id: uuid.UUID = _MAP) -> SystemMapRevision:
+def _revision(
+    rev_id: uuid.UUID = _REV,
+    map_id: uuid.UUID = _MAP,
+    revision_number: int = 1,
+    status: str = "draft",
+) -> SystemMapRevision:
     obj = SystemMapRevision(
         organisation_id=_ORG,
         system_map_id=map_id,
-        revision_number=1,
-        status="draft",
+        revision_number=revision_number,
+        status=status,
         content_json={},
     )
     obj.id = rev_id
@@ -1145,6 +1165,582 @@ class TestAcyclicity:
         assert repo._is_acyclic(edges) is True
 
 
+_WINDOW_END = datetime(2026, 6, 8, 12, 0, tzinfo=UTC)
+_WINDOW_START = _WINDOW_END - timedelta(days=7)
+_PIPELINE_B = uuid.UUID("88888888-8888-8888-8888-888888888888")
+_LOOP_A = uuid.UUID("99999999-9999-9999-9999-999999999999")
+_LOOP_B = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+_OVERVIEW_TABLES: list[Table] = cast(
+    list[Table],
+    [
+        Organisation.__table__,
+        Pipeline.__table__,
+        Run.__table__,
+        RunDailyFact.__table__,
+        SystemMapLoopAdmissionAttempt.__table__,
+        SystemMapLoopReservation.__table__,
+    ],
+)
+
+
+@pytest.fixture
+async def overview_session() -> AsyncGenerator[AsyncSession, None]:
+    """A real in-memory database so the overview SQL predicates actually run."""
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite://", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_OVERVIEW_TABLES))
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        yield session
+    await engine.dispose()
+
+
+def _aware(value: datetime) -> datetime:
+    """SQLite drops the offset; normalise for comparison against aware bounds."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _add_pipeline(session: AsyncSession, pipeline_id: uuid.UUID, *, max_concurrent_runs: int = 4) -> None:
+    session.add(
+        Pipeline(
+            id=pipeline_id,
+            organisation_id=_ORG,
+            name=f"pipeline-{pipeline_id.hex[:6]}",
+            account_id=_ACCOUNT,
+            max_concurrent_runs=max_concurrent_runs,
+        )
+    )
+
+
+def _add_run(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    status: str = "pending",
+    cancellation_requested: bool = False,
+) -> None:
+    session.add(
+        Run(
+            id=run_id,
+            organisation_id=_ORG,
+            pipeline_id=pipeline_id,
+            snapshot_id=uuid.uuid4(),
+            trigger_type="manual",
+            status=status,
+            run_number=uuid.uuid4().int % 2_000_000_000,
+            input_hash="a" * 64,
+            langgraph_thread_id=f"thread-{run_id.hex}",
+            cancellation_requested=cancellation_requested,
+        )
+    )
+
+
+def _add_fact(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    status: str,
+    created_at: datetime,
+    benign: bool | None = None,
+    telemetry_bytes: int | None = None,
+    total_cost_usd: Decimal | None = None,
+    completed_at: datetime | None = None,
+    run_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    fact_run_id = run_id or uuid.uuid4()
+    session.add(
+        RunDailyFact(
+            run_id=fact_run_id,
+            organisation_id=_ORG,
+            pipeline_id=pipeline_id,
+            run_date=created_at.date(),
+            trigger_type="manual",
+            status=status,
+            benign=benign,
+            telemetry_bytes=telemetry_bytes,
+            total_cost_usd=total_cost_usd,
+            completed_at=completed_at,
+            created_at=created_at,
+        )
+    )
+    return fact_run_id
+
+
+async def _pipeline_metrics(session: AsyncSession, *, pipeline_ids: set[uuid.UUID]) -> dict[uuid.UUID, dict]:
+    return await SystemMapRepository(session_factory=MagicMock()).get_overview_pipeline_metrics(
+        session,
+        organisation_id=_ORG,
+        pipeline_ids=pipeline_ids,
+        window_start=_WINDOW_START,
+        window_end=_WINDOW_END,
+    )
+
+
+class TestOverviewPipelineMetrics:
+    async def test_empty_pipeline_set_returns_no_metrics(self, overview_session: AsyncSession) -> None:
+        assert not await _pipeline_metrics(overview_session, pipeline_ids=set())
+
+    async def test_canonical_failure_semantics_and_benign_exclusion(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        _add_pipeline(session, _PIPELINE)
+        # Non-benign failures: only failed/stalled count.
+        _add_fact(session, pipeline_id=_PIPELINE, status="failed", created_at=_WINDOW_START + timedelta(hours=1))
+        _add_fact(session, pipeline_id=_PIPELINE, status="stalled", created_at=_WINDOW_START + timedelta(hours=2))
+        # Deliberate terminal outcomes are NOT failures.
+        _add_fact(session, pipeline_id=_PIPELINE, status="cancelled", created_at=_WINDOW_START + timedelta(hours=3))
+        _add_fact(session, pipeline_id=_PIPELINE, status="rejected", created_at=_WINDOW_START + timedelta(hours=4))
+        # A benign failure is a business-expected outcome, never a fault.
+        _add_fact(
+            session,
+            pipeline_id=_PIPELINE,
+            status="failed",
+            benign=True,
+            created_at=_WINDOW_START + timedelta(hours=5),
+        )
+        # One success.
+        _add_fact(session, pipeline_id=_PIPELINE, status="complete", created_at=_WINDOW_START + timedelta(hours=6))
+        await session.flush()
+
+        metrics = await _pipeline_metrics(session, pipeline_ids={_PIPELINE})
+
+        item = metrics[_PIPELINE]
+        assert item["run_count"] == 6
+        # 5 non-benign runs, 2 failures.
+        assert item["failure_rate"] == pytest.approx(0.4)
+
+    async def test_all_benign_runs_have_no_defined_failure_rate(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        _add_pipeline(session, _PIPELINE)
+        _add_fact(session, pipeline_id=_PIPELINE, status="failed", benign=True, created_at=_WINDOW_START)
+        await session.flush()
+
+        item = (await _pipeline_metrics(session, pipeline_ids={_PIPELINE}))[_PIPELINE]
+
+        assert item["run_count"] == 1
+        assert item["failure_rate"] is None
+
+    async def test_window_is_half_open_inclusive_start_exclusive_end(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        _add_pipeline(session, _PIPELINE)
+        _add_fact(session, pipeline_id=_PIPELINE, status="complete", created_at=_WINDOW_START)
+        _add_fact(session, pipeline_id=_PIPELINE, status="complete", created_at=_WINDOW_END)
+        _add_fact(session, pipeline_id=_PIPELINE, status="complete", created_at=_WINDOW_START - timedelta(seconds=1))
+        await session.flush()
+
+        item = (await _pipeline_metrics(session, pipeline_ids={_PIPELINE}))[_PIPELINE]
+
+        assert item["run_count"] == 1
+
+    async def test_telemetry_null_is_unobserved_but_zero_is_observed(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        _add_pipeline(session, _PIPELINE)
+        _add_fact(session, pipeline_id=_PIPELINE, status="complete", created_at=_WINDOW_START, telemetry_bytes=0)
+        _add_fact(session, pipeline_id=_PIPELINE, status="complete", created_at=_WINDOW_START, telemetry_bytes=None)
+        await session.flush()
+
+        item = (await _pipeline_metrics(session, pipeline_ids={_PIPELINE}))[_PIPELINE]
+
+        assert item["telemetry_coverage"] == pytest.approx(0.5)
+
+    async def test_queue_depth_excludes_cancellation_requested_runs(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        _add_pipeline(session, _PIPELINE, max_concurrent_runs=8)
+        _add_run(session, run_id=uuid.uuid4(), pipeline_id=_PIPELINE)
+        _add_run(session, run_id=uuid.uuid4(), pipeline_id=_PIPELINE)
+        _add_run(session, run_id=uuid.uuid4(), pipeline_id=_PIPELINE, cancellation_requested=True)
+        _add_run(session, run_id=uuid.uuid4(), pipeline_id=_PIPELINE, status="complete")
+        await session.flush()
+
+        item = (await _pipeline_metrics(session, pipeline_ids={_PIPELINE}))[_PIPELINE]
+
+        assert item["queue_depth"] == 2
+        assert item["capacity_pressure"] == pytest.approx(0.25)
+
+    async def test_queue_only_pipeline_has_no_floating_capacity_pressure(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        # The pipeline row is gone (deleted/purged), so no capacity is observed.
+        _add_run(session, run_id=uuid.uuid4(), pipeline_id=_PIPELINE)
+        await session.flush()
+
+        item = (await _pipeline_metrics(session, pipeline_ids={_PIPELINE}))[_PIPELINE]
+
+        assert item["queue_depth"] == 1
+        assert item["capacity_pressure"] is None
+        assert item.get("run_count") is None
+
+    async def test_pipelines_are_isolated(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        _add_pipeline(session, _PIPELINE)
+        _add_pipeline(session, _PIPELINE_B)
+        _add_fact(session, pipeline_id=_PIPELINE, status="failed", created_at=_WINDOW_START)
+        _add_fact(session, pipeline_id=_PIPELINE_B, status="complete", created_at=_WINDOW_START)
+        await session.flush()
+
+        metrics = await _pipeline_metrics(session, pipeline_ids={_PIPELINE, _PIPELINE_B})
+
+        assert metrics[_PIPELINE]["failure_rate"] == pytest.approx(1.0)
+        assert metrics[_PIPELINE_B]["failure_rate"] == pytest.approx(0.0)
+
+
+def _add_reservation(
+    session: AsyncSession,
+    *,
+    loop_config_id: uuid.UUID,
+    run_id: uuid.UUID,
+    status: str,
+    reserved_at: datetime,
+    cooldown_until: datetime | None = None,
+) -> None:
+    session.add(
+        SystemMapLoopReservation(
+            organisation_id=_ORG,
+            loop_config_id=loop_config_id,
+            run_id=run_id,
+            idempotency_key=f"key-{uuid.uuid4().hex}",
+            reserved_at=reserved_at,
+            cooldown_until=cooldown_until or reserved_at + timedelta(hours=1),
+            status=status,
+        )
+    )
+
+
+def _add_admission(
+    session: AsyncSession,
+    *,
+    loop_config_id: uuid.UUID,
+    status: str,
+    created_at: datetime,
+) -> None:
+    session.add(
+        SystemMapLoopAdmissionAttempt(
+            organisation_id=_ORG,
+            loop_config_id=loop_config_id,
+            idempotency_key=f"key-{uuid.uuid4().hex}",
+            status=status,
+            created_at=created_at,
+        )
+    )
+
+
+async def _loop_metrics(session: AsyncSession, *, loop_config_ids: set[uuid.UUID]) -> dict[uuid.UUID, dict]:
+    return await SystemMapRepository(session_factory=MagicMock()).get_overview_loop_metrics(
+        session,
+        organisation_id=_ORG,
+        loop_config_ids=loop_config_ids,
+        window_start=_WINDOW_START,
+        window_end=_WINDOW_END,
+    )
+
+
+class TestOverviewLoopMetrics:
+    async def test_empty_loop_set_returns_no_metrics(self, overview_session: AsyncSession) -> None:
+        assert not await _loop_metrics(overview_session, loop_config_ids=set())
+
+    async def test_latest_admission_wins_within_the_window(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        _add_admission(
+            session, loop_config_id=_LOOP_A, status="rejected", created_at=_WINDOW_START + timedelta(hours=1)
+        )
+        _add_admission(
+            session, loop_config_id=_LOOP_A, status="admitted", created_at=_WINDOW_START + timedelta(hours=2)
+        )
+        # Outside the window — must not be reported as the latest admission.
+        _add_admission(
+            session, loop_config_id=_LOOP_A, status="duplicate", created_at=_WINDOW_END + timedelta(minutes=1)
+        )
+        await session.flush()
+
+        item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
+
+        assert item["last_admission_status"] == "admitted"
+        assert _aware(item["last_admission_at"]) == _WINDOW_START + timedelta(hours=2)
+
+    async def test_budget_sums_only_budget_consuming_reservations(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        consumed_run = _add_fact(
+            session,
+            pipeline_id=_PIPELINE,
+            status="complete",
+            created_at=_WINDOW_START,
+            total_cost_usd=Decimal("1.500000"),
+        )
+        active_run = _add_fact(
+            session,
+            pipeline_id=_PIPELINE,
+            status="complete",
+            created_at=_WINDOW_START,
+            total_cost_usd=Decimal("2.250000"),
+        )
+        released_run = _add_fact(
+            session,
+            pipeline_id=_PIPELINE,
+            status="complete",
+            created_at=_WINDOW_START,
+            total_cost_usd=Decimal("9.000000"),
+        )
+        expired_run = _add_fact(
+            session,
+            pipeline_id=_PIPELINE,
+            status="complete",
+            created_at=_WINDOW_START,
+            total_cost_usd=Decimal("9.000000"),
+        )
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=consumed_run,
+            status="consumed",
+            reserved_at=_WINDOW_START + timedelta(hours=1),
+        )
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=active_run,
+            status="active",
+            reserved_at=_WINDOW_START + timedelta(hours=2),
+        )
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=released_run,
+            status="released",
+            reserved_at=_WINDOW_START + timedelta(hours=3),
+        )
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=expired_run,
+            status="expired",
+            reserved_at=_WINDOW_START + timedelta(hours=4),
+        )
+        await session.flush()
+
+        item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
+
+        assert item["budget_used_usd"] == Decimal("3.750000")
+        # No budget period is recorded, so the window is not reported as one.
+        assert "budget_period_start" not in item
+
+    async def test_reservations_outside_the_window_are_not_budget(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        old_run = _add_fact(
+            session,
+            pipeline_id=_PIPELINE,
+            status="complete",
+            created_at=_WINDOW_START - timedelta(days=1),
+            total_cost_usd=Decimal("5.000000"),
+        )
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=old_run,
+            status="consumed",
+            reserved_at=_WINDOW_START - timedelta(days=1),
+        )
+        await session.flush()
+
+        item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
+
+        assert item["budget_used_usd"] is None
+        assert item["cooldown_active"] is False
+
+    async def test_unobserved_cost_leaves_budget_null(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        observed_run = _add_fact(
+            session,
+            pipeline_id=_PIPELINE,
+            status="complete",
+            created_at=_WINDOW_START,
+            total_cost_usd=Decimal("1.000000"),
+        )
+        unobserved_run = _add_fact(
+            session,
+            pipeline_id=_PIPELINE,
+            status="complete",
+            created_at=_WINDOW_START,
+            total_cost_usd=None,
+        )
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=observed_run,
+            status="consumed",
+            reserved_at=_WINDOW_START + timedelta(hours=1),
+        )
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=unobserved_run,
+            status="consumed",
+            reserved_at=_WINDOW_START + timedelta(hours=2),
+        )
+        await session.flush()
+
+        item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
+
+        assert item["budget_used_usd"] is None
+
+    async def test_reservation_without_a_fact_leaves_budget_null(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=uuid.uuid4(),
+            status="consumed",
+            reserved_at=_WINDOW_START + timedelta(hours=1),
+        )
+        await session.flush()
+
+        item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
+
+        assert item["budget_used_usd"] is None
+
+    async def test_no_reservation_yet_returns_no_route_fields(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        _add_admission(session, loop_config_id=_LOOP_A, status="pending", created_at=_WINDOW_START)
+        await session.flush()
+
+        item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
+
+        assert item["last_admission_status"] == "pending"
+        assert "cooldown_active" not in item
+        assert "budget_used_usd" not in item
+
+    async def test_expired_cooldown_is_explicitly_inactive(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=uuid.uuid4(),
+            status="active",
+            reserved_at=_WINDOW_START + timedelta(hours=1),
+            cooldown_until=_WINDOW_END - timedelta(minutes=1),
+        )
+        await session.flush()
+
+        item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
+
+        assert item["cooldown_active"] is False
+        assert "cooldown_until" not in item
+
+    async def test_active_cooldown_reports_until(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        cooldown_until = _WINDOW_END + timedelta(hours=2)
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=uuid.uuid4(),
+            status="active",
+            reserved_at=_WINDOW_START + timedelta(hours=1),
+            cooldown_until=cooldown_until,
+        )
+        await session.flush()
+
+        item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
+
+        assert item["cooldown_active"] is True
+        assert _aware(item["cooldown_until"]) == cooldown_until
+
+    async def test_cooldown_reports_the_latest_active_until(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        earlier = _WINDOW_END + timedelta(hours=1)
+        later = _WINDOW_END + timedelta(hours=3)
+        # The most recently reserved row cools down sooner; the older row's
+        # later deadline must still win, so the reported state is the maximum.
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=uuid.uuid4(),
+            status="active",
+            reserved_at=_WINDOW_START + timedelta(hours=1),
+            cooldown_until=later,
+        )
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=uuid.uuid4(),
+            status="active",
+            reserved_at=_WINDOW_START + timedelta(hours=2),
+            cooldown_until=earlier,
+        )
+        await session.flush()
+
+        item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
+
+        assert item["cooldown_active"] is True
+        assert _aware(item["cooldown_until"]) == later
+
+    async def test_cooldown_ignores_an_older_row_with_a_sooner_deadline(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        later = _WINDOW_END + timedelta(hours=3)
+        earlier = _WINDOW_END + timedelta(hours=1)
+        # The most recently reserved row cools down last; the older row's
+        # earlier deadline must not overwrite it.
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=uuid.uuid4(),
+            status="active",
+            reserved_at=_WINDOW_START + timedelta(hours=2),
+            cooldown_until=later,
+        )
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=uuid.uuid4(),
+            status="active",
+            reserved_at=_WINDOW_START + timedelta(hours=1),
+            cooldown_until=earlier,
+        )
+        await session.flush()
+
+        item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
+
+        assert item["cooldown_active"] is True
+        assert _aware(item["cooldown_until"]) == later
+
+    async def test_cooldown_is_current_state_outside_the_budget_window(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        cooldown_until = _WINDOW_END + timedelta(hours=3)
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_A,
+            run_id=uuid.uuid4(),
+            status="active",
+            # Reserved before the budget window but still cooling down now.
+            reserved_at=_WINDOW_START - timedelta(days=1),
+            cooldown_until=cooldown_until,
+        )
+        await session.flush()
+
+        item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
+
+        assert item["budget_used_usd"] is None
+        assert item["cooldown_active"] is True
+        assert _aware(item["cooldown_until"]) == cooldown_until
+
+    async def test_loops_are_isolated(self, overview_session: AsyncSession) -> None:
+        session = overview_session
+        _add_admission(session, loop_config_id=_LOOP_A, status="admitted", created_at=_WINDOW_START)
+        _add_reservation(
+            session,
+            loop_config_id=_LOOP_B,
+            run_id=uuid.uuid4(),
+            status="active",
+            reserved_at=_WINDOW_START,
+            cooldown_until=_WINDOW_END + timedelta(hours=1),
+        )
+        await session.flush()
+
+        metrics = await _loop_metrics(session, loop_config_ids={_LOOP_A, _LOOP_B})
+
+        # No reservation evidence for A, so its cooldown is unreported (null).
+        assert "cooldown_active" not in metrics[_LOOP_A]
+        assert metrics[_LOOP_B]["cooldown_active"] is True
+
+
 class TestFullRevisionGraph:
     async def test_missing_revision_returns_none(self, repo: SystemMapRepository) -> None:
         assert (
@@ -1170,3 +1766,376 @@ class TestFullRevisionGraph:
             "relationships": [rel],
             "loop_configs": [loop],
         }
+
+
+class TestVersionAwareRevisionMethods:
+    """Tests for FAR-2288 version-aware revision methods."""
+
+    def _revision_with_effective(
+        self,
+        *,
+        rev_id: uuid.UUID = _REV,
+        revision_number: int = 1,
+        status: str = "published",
+        effective_from: datetime | None = None,
+        effective_to: datetime | None = None,
+    ) -> SystemMapRevision:
+        rev = _revision(rev_id=rev_id, revision_number=revision_number, status=status)
+        rev.effective_from = effective_from
+        rev.effective_to = effective_to
+        return rev
+
+    async def test_get_revision_by_time_found(self, repo: SystemMapRepository) -> None:
+        at = datetime(2026, 1, 15, tzinfo=UTC)
+        rev = self._revision_with_effective(
+            effective_from=datetime(2026, 1, 1, tzinfo=UTC),
+            effective_to=None,
+        )
+        db = _session(_result(one=rev))
+        result = await repo.get_revision_by_time(db, organisation_id=_ORG, system_map_id=_MAP, at=at)
+        assert result is rev
+
+    async def test_get_revision_by_time_not_found(self, repo: SystemMapRepository) -> None:
+        at = datetime(2026, 1, 15, tzinfo=UTC)
+        db = _session(_result(one=None))
+        result = await repo.get_revision_by_time(db, organisation_id=_ORG, system_map_id=_MAP, at=at)
+        assert result is None
+
+    async def test_get_current_revision_alias(self, repo: SystemMapRepository) -> None:
+        rev = self._revision_with_effective(status="published", effective_from=datetime.now(UTC), effective_to=None)
+        db = _session(_result(one=rev))
+        result = await repo.get_current_revision(db, organisation_id=_ORG, system_map_id=_MAP)
+        assert result is rev
+
+    async def test_list_revisions_history(self, repo: SystemMapRepository) -> None:
+        rev1 = self._revision_with_effective(
+            rev_id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            revision_number=1,
+            status="archived",
+            effective_from=datetime(2026, 1, 1, tzinfo=UTC),
+            effective_to=datetime(2026, 2, 1, tzinfo=UTC),
+        )
+        rev2 = self._revision_with_effective(
+            rev_id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+            revision_number=2,
+            status="published",
+            effective_from=datetime(2026, 2, 1, tzinfo=UTC),
+            effective_to=None,
+        )
+        db = _session(_result(rows=[rev1, rev2]))
+        result = await repo.list_revisions_history(db, organisation_id=_ORG, system_map_id=_MAP)
+        assert result == [rev1, rev2]
+        # Verify order is ascending by revision_number
+        assert result[0].revision_number == 1
+        assert result[1].revision_number == 2
+
+    async def test_archive_revision_missing_or_foreign(self, repo: SystemMapRepository) -> None:
+        assert (
+            await repo.archive_revision(
+                _session(_result(one=None)), organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV
+            )
+            is None
+        )
+
+        foreign = _revision(map_id=uuid.uuid4())
+        assert (
+            await repo.archive_revision(
+                _session(_result(one=foreign)), organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV
+            )
+            is None
+        )
+
+    async def test_archive_revision_closes_open_window(self, repo: SystemMapRepository) -> None:
+        rev = self._revision_with_effective(effective_from=datetime(2026, 1, 1, tzinfo=UTC), effective_to=None)
+        db = _session(_result(one=rev))
+        result = await repo.archive_revision(db, organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV)
+        assert result is rev
+        assert rev.status == "archived"
+        assert rev.effective_to is not None
+        assert db.flush.await_count == 1
+
+    async def test_archive_revision_leaves_unpublished_window_unset(self, repo: SystemMapRepository) -> None:
+        rev = self._revision_with_effective(status="draft", effective_from=None, effective_to=None)
+        db = _session(_result(one=rev))
+        result = await repo.archive_revision(db, organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV)
+        assert result is rev
+        assert rev.status == "archived"
+        assert rev.effective_to is None
+
+    async def test_archive_revision_preserves_existing_window(self, repo: SystemMapRepository) -> None:
+        closed_at = datetime(2026, 2, 1, tzinfo=UTC)
+        rev = self._revision_with_effective(
+            status="archived",
+            effective_from=datetime(2026, 1, 1, tzinfo=UTC),
+            effective_to=closed_at,
+        )
+        db = _session(_result(one=rev))
+        result = await repo.archive_revision(db, organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV)
+        assert result is rev
+        assert rev.effective_to == closed_at
+
+    async def test_publish_revision_sets_effective_dates(self, repo: SystemMapRepository) -> None:
+        """Test that publish_revision sets effective_from on new and effective_to on old."""
+        revision = _revision()
+        old_revision = _revision(rev_id=uuid.uuid4(), revision_number=1)
+        old_revision.status = "published"
+        old_revision.published_at = datetime(2026, 1, 1, tzinfo=UTC)
+        old_revision.effective_from = datetime(2026, 1, 1, tzinfo=UTC)
+        old_revision.effective_to = None
+        map_obj = _map()
+
+        # First call returns old published revision, second returns new revision to publish
+        db = _session(_result(one=old_revision), _result(), _result(one=revision), _result(one=map_obj))
+        result = await repo.publish_revision(db, organisation_id=_ORG, system_map_id=_MAP, revision_id=revision.id)
+
+        assert result is not None
+        assert result.status == "published"
+        assert result.published_at is not None
+        assert result.effective_from is not None
+        assert result.effective_to is None  # Current revision has no end
+        # Note: The mock doesn't actually apply the update statement to old_revision,
+        # so we can't verify old_revision changes here. The important thing is that
+        # the new revision gets effective_from set and effective_to=None.
+        assert db.flush.await_count >= 2
+
+
+class TestRevisionDiff:
+    async def test_missing_base_graph_returns_none(self, repo: SystemMapRepository) -> None:
+        # Both graph lookups run; each returns None after its first query.
+        assert (
+            await repo.diff_revisions(
+                _session(_result(one=None), _result(one=None)),
+                organisation_id=_ORG,
+                base_revision_id=_REV,
+                target_revision_id=_REV,
+            )
+            is None
+        )
+
+    async def test_missing_target_graph_returns_none(self, repo: SystemMapRepository) -> None:
+        revision = _revision()
+        db = _session(
+            _result(one=revision),
+            _result(rows=[]),
+            _result(rows=[]),
+            _result(rows=[]),
+            _result(one=None),
+        )
+        assert (
+            await repo.diff_revisions(
+                db,
+                organisation_id=_ORG,
+                base_revision_id=_REV,
+                target_revision_id=_REV,
+            )
+            is None
+        )
+
+    async def test_identical_revisions_have_empty_diff(self, repo: SystemMapRepository) -> None:
+        revision = _revision()
+        node = _node("n1")
+        rel = _relationship("n1", "n2")
+        loop = _loop_config("loop")
+        db = _session(
+            _result(one=revision),
+            _result(rows=[node]),
+            _result(rows=[rel]),
+            _result(rows=[loop]),
+            _result(one=revision),
+            _result(rows=[node]),
+            _result(rows=[rel]),
+            _result(rows=[loop]),
+        )
+        diff = await repo.diff_revisions(db, organisation_id=_ORG, base_revision_id=_REV, target_revision_id=_REV)
+        assert diff is not None
+        assert not diff["nodes_added"]
+        assert not diff["nodes_removed"]
+        assert not diff["nodes_modified"]
+        assert not diff["relationships_added"]
+        assert not diff["relationships_removed"]
+        assert not diff["relationships_modified"]
+        assert not diff["loop_configs_added"]
+        assert not diff["loop_configs_removed"]
+        assert not diff["loop_configs_modified"]
+        assert diff["content_json_changed"] is False
+
+    async def test_diff_reports_added_removed_and_modified(self, repo: SystemMapRepository) -> None:
+        base_revision = _revision()
+        base_revision.content_json = {"a": 1}
+        target_revision = _revision()
+        target_revision.content_json = {"b": 2}
+
+        base_n1 = _node("n1")
+        target_n1 = _node("n1", position_y=Decimal(5))
+        base_n2 = _node("n2")
+        target_n3 = _node("n3")
+
+        base_rel_flow = _relationship("n1", "n2", "flow")
+        base_rel_data = _relationship("n1", "n2", "data")
+        target_rel_flow = _relationship("n1", "n2", "flow")
+        target_rel_flow.config_json = {"x": 1}
+        target_rel_new = _relationship("n1", "n3", "flow")
+
+        base_loop = _loop_config("loop")
+        base_loop_gone = _loop_config("gone")
+        target_loop = _loop_config("loop", outcome_metric="latency")
+        target_loop_new = _loop_config("new")
+
+        db = _session(
+            _result(one=base_revision),
+            _result(rows=[base_n1, base_n2]),
+            _result(rows=[base_rel_flow, base_rel_data]),
+            _result(rows=[base_loop, base_loop_gone]),
+            _result(one=target_revision),
+            _result(rows=[target_n1, target_n3]),
+            _result(rows=[target_rel_flow, target_rel_new]),
+            _result(rows=[target_loop, target_loop_new]),
+        )
+        diff = await repo.diff_revisions(db, organisation_id=_ORG, base_revision_id=_REV, target_revision_id=_REV)
+        assert diff is not None
+        assert diff["base_revision_id"] == base_revision.id
+        assert diff["target_revision_id"] == target_revision.id
+        assert diff["nodes_added"] == ["n3"]
+        assert diff["nodes_removed"] == ["n2"]
+        assert diff["nodes_modified"] == ["n1"]
+        assert diff["relationships_added"] == ["n1->n3:flow"]
+        assert diff["relationships_removed"] == ["n1->n2:data"]
+        assert diff["relationships_modified"] == ["n1->n2:flow"]
+        assert diff["loop_configs_added"] == ["new"]
+        assert diff["loop_configs_removed"] == ["gone"]
+        assert diff["loop_configs_modified"] == ["loop"]
+        assert diff["content_json_changed"] is True
+
+
+class TestRestoreRevisionAsNewDraft:
+    async def test_missing_source_returns_none(self, repo: SystemMapRepository) -> None:
+        assert (
+            await repo.restore_revision_as_new_draft(
+                _session(_result(one=None)),
+                organisation_id=_ORG,
+                system_map_id=_MAP,
+                source_revision_id=_REV,
+                notes="Restored",
+            )
+            is None
+        )
+
+    async def test_foreign_source_returns_none(self, repo: SystemMapRepository) -> None:
+        foreign = _revision(map_id=uuid.uuid4())
+        assert (
+            await repo.restore_revision_as_new_draft(
+                _session(_result(one=foreign)),
+                organisation_id=_ORG,
+                system_map_id=_MAP,
+                source_revision_id=_REV,
+                notes="Restored",
+            )
+            is None
+        )
+
+    async def test_draft_source_returns_none(self, repo: SystemMapRepository) -> None:
+        draft = _revision()
+        draft.status = "draft"
+        assert (
+            await repo.restore_revision_as_new_draft(
+                _session(_result(one=draft)),
+                organisation_id=_ORG,
+                system_map_id=_MAP,
+                source_revision_id=_REV,
+                notes="Restored",
+            )
+            is None
+        )
+
+    async def test_missing_source_graph_returns_none(self, repo: SystemMapRepository) -> None:
+        published = _revision()
+        published.status = "published"
+        db = _session(
+            _result(one=published),
+            _result(rows=[published]),
+            _result(one=None),
+        )
+        assert (
+            await repo.restore_revision_as_new_draft(
+                db,
+                organisation_id=_ORG,
+                system_map_id=_MAP,
+                source_revision_id=_REV,
+                notes="Restored",
+            )
+            is None
+        )
+
+    async def test_copies_graph_into_new_draft(self, repo: SystemMapRepository) -> None:
+        published = _revision()
+        published.status = "published"
+        published.content_json = {"stored": True}
+        node = _node("n1")
+        rel = _relationship("n1", "n2")
+        loop = _loop_config("loop")
+        db = _session(
+            _result(one=published),
+            _result(rows=[published]),
+            _result(one=published),
+            _result(rows=[node]),
+            _result(rows=[rel]),
+            _result(rows=[loop]),
+        )
+        new_revision = await repo.restore_revision_as_new_draft(
+            db,
+            organisation_id=_ORG,
+            system_map_id=_MAP,
+            source_revision_id=_REV,
+            notes="Restored",
+        )
+        assert new_revision is not None
+        assert new_revision.status == "draft"
+        assert new_revision.revision_number == 2
+        assert new_revision.content_json == {"stored": True, "notes": "Restored"}
+        # The source revision's stored content must not be mutated by the copy.
+        assert published.content_json == {"stored": True}
+        assert db.add.call_count == 4
+
+    async def test_restored_notes_round_trip_into_content_json(self, repo: SystemMapRepository) -> None:
+        published = _revision()
+        published.status = "published"
+        published.content_json = {"stored": True}
+        db = _session(
+            _result(one=published),
+            _result(rows=[published]),
+            _result(one=published),
+            _result(rows=[]),
+            _result(rows=[]),
+            _result(rows=[]),
+        )
+        new_revision = await repo.restore_revision_as_new_draft(
+            db,
+            organisation_id=_ORG,
+            system_map_id=_MAP,
+            source_revision_id=_REV,
+            notes="Restored from revision 2",
+        )
+        assert new_revision is not None
+        assert new_revision.content_json["notes"] == "Restored from revision 2"
+        assert new_revision.content_json["stored"] is True
+
+    async def test_empty_source_graph_creates_only_revision(self, repo: SystemMapRepository) -> None:
+        published = _revision()
+        published.status = "published"
+        db = _session(
+            _result(one=published),
+            _result(rows=[published]),
+            _result(one=published),
+            _result(rows=[]),
+            _result(rows=[]),
+            _result(rows=[]),
+        )
+        new_revision = await repo.restore_revision_as_new_draft(
+            db,
+            organisation_id=_ORG,
+            system_map_id=_MAP,
+            source_revision_id=_REV,
+            notes="Restored",
+        )
+        assert new_revision is not None
+        assert db.add.call_count == 1

@@ -73,8 +73,9 @@ Requesting `GET /api/v1/pipelines/{pipeline_id}/graph?include_schema_warnings=tr
 returns a graph response whose `schema_translation_report` lists which keywords
 would be stripped for each node's target provider, so operators can preview the
 impact before running a pipeline. The flag is read-only: it is a query
-parameter on the graph GET only, and the save (`PATCH .../graph`) response
-never populates a report - re-GET the graph with the flag after saving.
+parameter on the graph GET only, and neither graph write (the whole-graph
+`PUT .../graph` nor the single-node `PATCH .../graph/nodes/{node_id}`)
+populates a report - re-GET the graph with the flag after saving.
 
 ### Migration safety
 

@@ -581,6 +581,15 @@ jobs:
               "Production was behind origin/main and the watchdog re-dispatched deploy.yml, so it is no longer escalating. No action is needed unless production stays stale."
           fi
 
+      # FAR-2290: Zoho raises 'new login activity' alerts for SMTP logins from
+      # runner IPs (expected on Ubicloud/GitHub runners). Logging the egress IP
+      # lets such an alert be matched to this run. Non-fatal; logs only the IP.
+      - name: Log runner egress IP (for Zoho login alerts)
+        if: always()
+        shell: bash
+        run: |
+          echo "runner egress IP: $(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo unknown)" || true
+
       # FAR-2139: the human channel. During the 2026-10-23..25 outage this
       # watchdog hit its cap ten times; every escalation was a red run plus a
       # comment on a three-week-old Backlog ticket, and nobody was told. This

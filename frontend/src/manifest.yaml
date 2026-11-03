@@ -948,6 +948,39 @@ routes:
         required_permissions: [library.search.in_dev]
         deprecated: false
 
+    /system-maps:
+        name: system-maps
+        breadcrumb: System Maps
+        parent: /
+        product_map: [feat-system-maps]
+        sidebar_group: build
+        sidebar_order: 5
+        type: list_page
+        pattern: /system-maps
+        exact: true
+        visibility: private_preview
+        <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [system_maps_access]
+        deprecated: false
+
+    /system-maps/:id:
+        name: system-map-detail
+        breadcrumb: System Map
+        parent: /system-maps
+        product_map: [feat-system-maps]
+        sidebar_group:
+        sidebar_order:
+        type: detail_page
+        pattern: /system-maps/:id
+        dynamic_params:
+          - id
+        visibility: private_preview
+        <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [system_maps_access]
+        deprecated: false
+
     /admin/runners/profiles:
         name: admin-runners-profiles
         breadcrumb: Runners
@@ -1043,6 +1076,21 @@ elements:
       - testid: dashboard-system-overview
         type: element
         dynamic_testid: false
+      - testid: system-map-overview-loading
+        type: element
+        dynamic_testid: false
+      - testid: system-map-overview-error
+        type: element
+        dynamic_testid: false
+      - testid: system-map-overview-empty
+        type: element
+        dynamic_testid: false
+      - testid: system-map-overview-metrics
+        type: element
+        dynamic_testid: false
+      - testid: system-map-node
+        type: element
+        dynamic_testid: false
       - testid: dashboard-system-discover
         type: button
         dynamic_testid: false
@@ -1107,6 +1155,146 @@ elements:
         type: element
         dynamic_testid: false
       - testid: page-header-right
+        type: element
+        dynamic_testid: false
+
+    /system-maps:
+      - testid: system-maps-create
+        type: button
+        dynamic_testid: false
+      - testid: system-map-create-dialog
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-create-name
+        type: input
+        dynamic_testid: false
+      - testid: system-map-create-description
+        type: textarea
+        dynamic_testid: false
+      - testid: system-map-create-cancel
+        type: button
+        dynamic_testid: false
+      - testid: system-map-create-submit
+        type: button
+        dynamic_testid: false
+      - testid: system-maps-pagination
+        type: element
+        dynamic_testid: false
+      - testid: system-maps-prev
+        type: button
+        dynamic_testid: false
+      - testid: system-maps-next
+        type: button
+        dynamic_testid: false
+      - testid: system-maps-loading
+        type: element
+        dynamic_testid: false
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+
+    /system-maps/:id:
+      - testid: system-map-detail-back
+        type: link
+        dynamic_testid: false
+      - testid: system-map-detail-header
+        type: header
+        dynamic_testid: false
+      - testid: system-map-header-toggle-history
+        type: button
+        dynamic_testid: false
+      - testid: system-map-save-draft
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discover
+        type: button
+        dynamic_testid: false
+      - testid: system-map-publish
+        type: button
+        dynamic_testid: false
+      - testid: system-map-archive
+        type: button
+        dynamic_testid: false
+      - testid: system-map-graph-editor
+        type: element
+        dynamic_testid: false
+      - testid: system-map-graph-canvas
+        type: element
+        dynamic_testid: false
+      - testid: system-map-empty-state
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-sidebar
+        type: aside
+        dynamic_testid: false
+      - testid: system-map-new-draft
+        type: button
+        dynamic_testid: false
+      - testid: system-map-sidebar-discover
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-panel
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-discovery-backdrop
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-close
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-cancel
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-save
+        type: button
+        dynamic_testid: false
+      - testid: system-map-relationship-type
+        type: select
+        dynamic_testid: false
+      - testid: system-map-relationship-source
+        type: select
+        dynamic_testid: false
+      - testid: system-map-relationship-target
+        type: select
+        dynamic_testid: false
+      - testid: system-map-add-relationship
+        type: button
+        dynamic_testid: false
+      - testid: system-map-relationships
+        type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+    /governance:
+      - testid: governance-stack
+        type: element
+        dynamic_testid: false
+      - testid: governance-levels
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-disabled
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
+      - testid: lock-icon
         type: element
         dynamic_testid: false
     /library/collections/:id:
@@ -4225,6 +4413,15 @@ elements:
       - testid: progressive-autonomy-error
         type: element
         dynamic_testid: false
+      - testid: pipeline-editor-owner-team
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-editor-owner-team-error
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-owner-team-status
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-environment-profile
         type: select
         dynamic_testid: false
@@ -5921,6 +6118,9 @@ elements:
       - testid: settings-mcp-create-key-role
         type: select
         dynamic_testid: false
+      - testid: settings-mcp-create-key-scope
+        type: select
+        dynamic_testid: false
       - testid: api-key-grants-selector
         type: element
         dynamic_testid: false
@@ -7002,6 +7202,7 @@ features:
             - "[x] The sandbox_agent dispatch branches on the PIPELINE-LEVEL bound profile's provider (the same-org-enforced PipelineSnapshot.environment_profile_id): runner_docker routes through the hub-resolved Docker provider with both sandbox_mode values; e2b keeps its path and gains a LOUD dispatch-time timeout validation at <=3300 (GraphValidator parity, no silent clamp); local / legacy-inert local_docker bindings raise the typed SandboxDispatchUnboundError at dispatch instead of silently activating (the D4 upgrade rule); an unregistered runner_docker (no MODULO_DOCKER_HOST / DOCKER_HOST env) fails with remediation copy naming MODULO_DOCKER_HOST (FAR-996: unrelated MODULO_RUNNER_* variables do not register Docker)"
             - "[x] The pipeline -> profile binding is settable per-pipeline (FAR-1558 slice 1): PATCH /api/v1/pipelines/{pipeline_id} accepts environment_profile_id (omit to leave unchanged, null clears and restores the default route), validated in the route against the EFFECTIVE post-update owner team - the profile must exist in the caller's organisation and be either org-visible or a team profile owned by that team; a foreign or cross-team id is 422 (never 404, which would confirm it exists) and a team/visibility change re-validates a STORED binding so a move can never strand an ineligible profile. The binding is frozen onto every snapshot created afterwards (db/crud/pipeline_snapshot.create_snapshot_from_live_graph), which is the value dispatch reads; NULL keeps the historical default behaviour. The team rule is enforced at ALL THREE writers of the invariant (FAR-1558 F2): bind time, a pipeline scope change (stored-binding re-validation), and a PROFILE scope change - PUT /api/v1/environment-profiles/{profile_id} refuses a visibility/owner_team_id change that would strand an existing binding with 422 environment_profile_binding_team_mismatch BEFORE any write (org-visible changes are never checked, since they cannot strand anything), so a team-private profile can never be used by a mismatched pipeline. The team rule itself is ONE shared predicate + shared wire-code constants in core/team_visibility.py (FAR-1558 minor: the three writers cannot drift), and the profile-side bound-pipelines scan runs team-blind through db.crud.team_scope.team_blind_org_scope - the FAR-1515 CRITICAL-1 mechanism - because a non-admin operator caller cannot see another team's team-private pipeline in their own RLS context, so a caller-context scan would return nothing and pass vacuously (proved against real Postgres RLS in backend/tests/integration/test_environment_profile_scope_rls_guard.py). The bind-time 422 detail is deliberately generic (FAR-1558 F3): it carries the typed code only and never the profile's name, id or owner team, because a pipeline-PATCH caller need not be a member of the profile's team. Column + FK + index + same-org tenant trigger: migration 0289 (backend/src/modulo/api/routes/pipelines.py _assert_environment_profile_bindable, backend/src/modulo/api/routes/environment_profiles.py _assert_scope_change_keeps_bindings_eligible, backend/tests/unit/api/test_pipeline_environment_profile_binding.py, backend/tests/unit/api/test_environment_profiles_routes.py)"
             - "[x] The pipeline editor binds or clears the profile from a labelled Environment profile select in the toolbar settings group (FAR-1558 slice 2, PipelineEditorViewEnvironmentProfile.spec.ts): options are the org's environment profiles each labelled with its provider tier (components.RunnerTier), an untouched select sends nothing so the stored binding stays omitted and unchanged, the None (default route) option sends an explicit environment_profile_id null that clears the binding and restores the default route, and a chosen profile id sends the bind; the control renders only while the environment_profiles plan feature is on (the list endpoint is feature-gated), a bound profile missing from the team-scoped list still renders as an unresolvable option so the select never misrepresents the binding, a refused or failed write reverts the control to the stored value and surfaces an alert region with the API error, and a successful write announces the outcome through a status region"
+            - "[x] The pipeline editor assigns or clears the pipeline owner team from a labelled Owner team select in the toolbar settings group (FAR-2279, PipelineEditorViewOwnerTeam.spec.ts): options are the teams from GET /api/v1/teams after a None (org-wide) option, an untouched select sends nothing, choosing a team PATCHes owner_team_id with its id, None sends an explicit owner_team_id null, and the control never changes visibility; the server enforces membership of the current and new team and re-validates the bound environment profile, so a refused write (422/403) reverts the control and surfaces an alert region with the API error, and a connector_rebind_required response adds a re-save-the-graph notice to the status region (frontend/src/views/PipelineEditorView.vue; backend PATCH /api/v1/pipelines/{pipeline_id})"
             # Dispatch-time team-scope backstop (FAR-1598) + read / non-REST surface exposure (FAR-1599)
             - "[x] The FAR-1558 team rule has a dispatch-time backstop as its last line of defence (FAR-1598): when the snapshot-bound environment profile is loaded for dispatch, runner_dispatch re-validates it with the SAME shared predicate (core.team_visibility.environment_profile_team_mismatch) against the pipeline's EFFECTIVE owner team, read team-blind through set_rls_execution_context + include_soft_deleted so a team-private pipeline or profile is never hidden from the internal execution context - a team-private profile not owned by that team raises the typed SandboxDispatchUnboundError carrying the named environment_profile_team_mismatch code BEFORE any provider or hub is selected, so a binding forged or drifted outside the three REST writers (a direct DB write, a race) can never silently fall back to another provider or the default route; org-visible profiles and NULL bindings resolve exactly as before, and an unresolvable owner team is fail-closed (treated as 'no owner team', so a team-private profile mismatches every pipeline). Locked by backend/tests/integration/test_dispatch_team_scope_backstop.py, which exercises the PRODUCTION consumption chain (executor ctx seeding -> node_runner _resolve_sandbox_dispatch_route_for_run -> shared predicate) under real Postgres RLS: it asserts the premise first (an org-only session cannot see the team-private profile), then the typed refusal with no provider selected, then the same-team mirror resolving the e2b route - the test fails if the dispatch enforcement is removed"
             - "[x] The binding is exposed on the read and non-REST surfaces (FAR-1599): SnapshotResponse carries environment_profile_id (additive and nullable - legacy and partial stand-in snapshots serialise as null) so a snapshot's frozen binding is readable through the API; the MCP update_pipeline tool accepts the field so MCP / org-API-key callers can set it; and cli/apply takes an environment_profile_id key on pipelines, managed ONLY when declared (an omitted key is neither hashed nor written so a UI/API-set binding survives untouched, a declared id is hashed in UUID-string id-space so --diff reports drift, and an explicit null clears back to the default route), with a created pipeline's binding riding the follow-up PATCH because PipelineCreate cannot carry the field (backend/src/modulo/api/mcp_server.py, backend/src/modulo/cli/apply/{models,plan,pipeline_apply}.py, backend/tests/unit/cli/test_apply_environment_profile.py)"
@@ -7489,6 +7690,28 @@ features:
             - "[x] POST /api/v1/admin/orgs/{org_id}/users creates a user within a target org with cross-tenant account-takeover protection (an account already a member of the org or a local account holding a password in another org is 409), boundary role/password validation (invalid org_role or a weak password is 422), a missing org is 404, and a regular admin is 403 (system_admin_users.feature)"
             - "[x] DELETE /api/v1/admin/orgs/{org_id} deletes an organisation — 404 for a missing org, 403 for a regular admin (system_admin_orgs.feature)"
             - "[x] Org-level license management: GET/PUT/DELETE on /api/v1/admin/orgs/{org_id}/license resolves/stores/clears the org's settings_json.license_key via parse_and_verify, falls back to the system license, and is role-gated (GET org.license.view / PUT+DELETE org.license.manage) — BDD: system_admin_orgs.feature"
+    feat-system-maps:
+        description: Bounded visual authoring of delivery system maps
+        status: partial
+        behaviours:
+            - "[x] System Maps list page (/system-maps) with create, view, edit, delete, discover actions"
+            - "[x] Map detail page (/system-maps/:id) with bounded visual graph editor for the backend node/relationship vocabularies, connected edges, endpoint selection, and drag/keyboard repositioning"
+            - "[ ] Revision history sidebar with current/historical revision switching via /revisions/current and /revisions/by-time (deferred: the version-aware read-model API lands separately; this branch shows revisions created in the current session)"
+            - "[x] Draft revision creation and save with node/relationship/loop-config payload"
+            - "[x] Publish revision (validation + status change to published)"
+            - "[x] Archive revision (status change to archived)"
+            - "[x] Discover My System integration (POST /api/v1/system-maps/discover) with accept/reject review panel that applies accepted nodes/relationships to the draft"
+            - "[ ] Re-scan existing organisation resources into existing draft with added/removed/ambiguous diff and operator edit preservation (deferred: no re-scan endpoint exists on this branch; the mock re-scan was removed rather than shipped as a no-op)"
+            - "[x] No auto-publish — operator must explicitly publish"
+            - "[x] Access gated by system_maps feature + developer mode + operator/admin + system_maps_access permission"
+            - "[x] i18n keys and product-map test IDs registered"
+            - "[x] Accessibility: STATE-1/2/6, A11Y-1/2/4, I18N-1, TYPE-1, VIS-4"
+        deferrals:
+            - "Current/historical revision switching (/revisions/current, /revisions/by-time) depends on the version-aware read-model API"
+            - "Re-scan into an existing draft depends on a re-scan endpoint; the UI is withheld until it exists"
+            - "No per-ticket tracking UI (Beta 3 scope)"
+            - "No loop dispatch runtime/budgets/concurrency (Beta 3 scope)"
+            - "No broad arbitrary graph/cycle editor (Beta 2 scope: only bounded node/relationship types)"
     feat-teams:
         description: Users, teams, and role-based access
         status: covered

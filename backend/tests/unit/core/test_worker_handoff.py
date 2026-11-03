@@ -29,6 +29,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import literal_column, select
+from sqlalchemy.dialects import postgresql
 
 import modulo.core.pipeline_execution as pipeline_execution
 import modulo.core.saq_worker as sw
@@ -46,7 +48,7 @@ from modulo.core.worker_handoff import (
     handback_inflight_runs,
     track_inflight_run,
 )
-from modulo.db.crud import row_lock
+from modulo.db.crud import row_lock, run_node_outputs
 
 
 def test_registry_register_discard_snapshot() -> None:
@@ -245,6 +247,7 @@ def _row(**overrides: object) -> SimpleNamespace:
         "started_at": datetime.now(UTC) - timedelta(seconds=10),
         "dispatched_at": datetime.now(UTC) - timedelta(seconds=10),
         "sandbox_dispatch_state": None,
+        "observed_activity": False,
         "retry_policy": {},
         "outputs_absent": True,
         "checkpoints_absent": True,
@@ -280,6 +283,71 @@ def test_gate_requeues_zero_node_run_even_on_non_idempotent_graph() -> None:
     from modulo.core.worker_handoff import _handback_decision
 
     decision = _handback_decision(_row(dispatch_phase="claimed"), {"nodes": [{"id": "n1", "idempotent": False}]})
+    assert decision.may_requeue is True
+
+
+def _compiled_evidence_sql() -> tuple[str, list[object]]:
+    """Compile the FAR-2285 evidence clause (it lives in the blob chokepoint)."""
+    statement = select(
+        run_node_outputs.observed_activity_expr(
+            run_id_column=literal_column("run_id"),
+            organisation_id_column=literal_column("organisation_id"),
+        )
+    )
+    compiled = statement.compile(dialect=postgresql.dialect())
+    return str(compiled), list(compiled.params.values())
+
+
+def test_engine_evidence_accepts_dict_shaped_artifact_pointers() -> None:
+    sql, params = _compiled_evidence_sql()
+
+    assert "jsonb_each" in sql
+    assert "stdout_artifact" in params
+    assert "stderr_artifact" in params
+
+
+def test_engine_evidence_excludes_self_reported_output_json() -> None:
+    _sql, params = _compiled_evidence_sql()
+
+    assert "output_json" not in params
+    assert "provenance" not in params
+
+
+def test_gate_terminalises_node_started_run_with_observed_sandbox_activity() -> None:
+    """Observed sandbox evidence must not be discarded by a re-claim."""
+    from modulo.core.worker_handoff import _handback_decision
+
+    decision = _handback_decision(
+        _row(observed_activity=True),
+        {"nodes": [{"id": "n1"}]},
+    )
+
+    assert decision.may_requeue is False
+    assert "durable sandbox activity" in decision.reason
+
+
+def test_gate_terminalises_nodeless_run_with_observed_sandbox_activity() -> None:
+    """Durable evidence wins before the zero-node requeue arm."""
+    from modulo.core.worker_handoff import _handback_decision
+
+    decision = _handback_decision(
+        _row(dispatch_phase="claimed", observed_activity=True),
+        {"nodes": [{"id": "n1", "idempotent": False}]},
+    )
+
+    assert decision.may_requeue is False
+    assert "durable sandbox activity" in decision.reason
+
+
+def test_gate_requeues_nodeless_self_report_only_run() -> None:
+    """A self-reported-only envelope is not durable engine evidence."""
+    from modulo.core.worker_handoff import _handback_decision
+
+    decision = _handback_decision(
+        _row(dispatch_phase="claimed", observed_activity=False),
+        {"nodes": [{"id": "n1", "idempotent": False}]},
+    )
+
     assert decision.may_requeue is True
 
 
@@ -575,12 +643,13 @@ async def test_handback_skips_run_not_visible(monkeypatch: pytest.MonkeyPatch) -
     assert result == {"handed_back": 0, "terminalised": 0, "skipped": 1}
 
 
-async def test_handback_terminalises_refused_run(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_handback_terminalises_observed_activity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Observed E2B work gets a durable terminal failure, not a silent re-claim."""
     run_id, org_id = uuid.uuid4(), uuid.uuid4()
     reg = _observed_registry(run_id, org_id)
     engine = _handback_engine()
     monkeypatch.setattr(
-        wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
+        wh, "_load_handback_row", _load_returning(_row(observed_activity=True), {"nodes": [{"id": "n1"}]})
     )
     monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
     fail = AsyncMock(return_value=True)
@@ -714,6 +783,7 @@ async def test_load_handback_row_builds_row_and_graph() -> None:
         "started_at": None,
         "dispatched_at": None,
         "sandbox_dispatch_state": None,
+        "observed_activity": 1,
         "retry_policy": {},
         "graph_json": {"nodes": []},
         "outputs_absent": 0,
@@ -726,6 +796,20 @@ async def test_load_handback_row_builds_row_and_graph() -> None:
     assert row.outputs_absent is False
     assert row.checkpoints_absent is True
     assert graph == {"nodes": []}
+
+
+async def test_load_handback_row_reads_evidence_through_the_blob_chokepoint() -> None:
+    """The durable-evidence read is the repo module's clause, never a local one."""
+    conn = MagicMock()
+    conn.execute = AsyncMock(return_value=_row_load_result(None))
+
+    await wh._load_handback_row(conn, run_id=uuid.uuid4(), org_id=uuid.uuid4())
+
+    statement = conn.execute.await_args.args[0]
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+    assert "run_node_outputs" in compiled
+    assert "jsonb_each" in compiled
+    assert "observed_activity" in compiled
 
 
 # ---------------------------------------------------------------------------

@@ -123,6 +123,22 @@ class TestDeletePipelineAuditEvent(_AuthContext):
         assert kwargs["resource_type"] == "pipeline"
         assert kwargs["payload_json"] == {"tool": "delete_pipeline", "outcome": "success"}
 
+    async def test_human_linked_user_key_is_attributed_to_the_human(self, audit_env) -> None:
+        """FAR-2281: a user-scoped key owned by a live human records the human
+        principal kind BESIDE the credential class, never a collapsed api_key."""
+        _session, append = audit_env
+        ms._ctx_principal_kind.set("human")
+        try:
+            p1, p2, p3 = _delete_pipeline_patches()
+            with p1, p2, p3:
+                await ms.delete_pipeline(pipeline_id=str(_PIPELINE_ID))
+        finally:
+            ms._ctx_principal_kind.set(None)
+
+        payload = append.await_args.kwargs["payload_json"]
+        assert payload["principal_kind"] == "human"
+        assert payload["credential_class"] == ms._ctx_auth_type.get(None)
+
     async def test_error_outcome_is_recorded_as_error(self, audit_env) -> None:
         _session, append = audit_env
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):

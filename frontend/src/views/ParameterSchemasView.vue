@@ -283,7 +283,10 @@
                       </div>
                     </div>
                     <div v-if="param.type === 'select'">
-                      <label :for="'paramschema-param-options-' + idx" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_options') }}</label>
+                      <!-- Group heading, not a <label>: it has no single control
+                           to associate with (each option input carries its own
+                           aria-label), so a `for` here pointed at nothing. -->
+                      <span class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_options') }}</span>
                       <div class="space-y-1">
                         <div v-for="(_, oi) in (param.options || [])" :key="oi" class="flex items-center gap-1">
                           <input
@@ -625,9 +628,13 @@
               <div v-if="!references.agents?.length" class="text-sm text-muted-foreground">—</div>
               <ul v-else class="space-y-1">
                 <li v-for="agent in references.agents" :key="agent.id" class="text-sm">
-                  <router-link :to="`/admin/agents/${agent.id}`" class="text-primary-text hover:underline" :data-testid="`paramschema-ref-agent-${agent.id}`">
+                  <!-- No agent-detail route exists: /admin/agents/:id is not
+                       registered, so the catch-all redirect silently sent the
+                       operator to the dashboard. Show the reference as text
+                       rather than promising navigation that cannot happen. -->
+                  <span :data-testid="`paramschema-ref-agent-${agent.id}`">
                     {{ agent.name || shortId(agent.id) }}
-                  </router-link>
+                  </span>
                 </li>
               </ul>
 

@@ -41,6 +41,7 @@
     <div>
       <label for="nodecategoryeditor-field-2" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.icon') }}</label>
       <Select
+  id="nodecategoryeditor-field-2"
   aria-label="Icon"
   v-model="form.icon"
   :placeholder="$t('components.NodeCategoryEditor.select_icon')"

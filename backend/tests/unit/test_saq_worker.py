@@ -2623,10 +2623,10 @@ class TestFireSuiteRunTriggerEnqueueFailure:
         # ``MagicMock(return_value=...)`` (not ``AsyncMock``) so calling it
         # returns the inner async-CM directly instead of wrapping it in a
         # coroutine.
-        term_session.begin = MagicMock(return_value=AsyncMock())
         term_cm = AsyncMock()
         term_cm.__aenter__.return_value = term_session
         term_cm.__aexit__.return_value = False
+        term_session.begin = MagicMock(return_value=term_cm)
         factory = MagicMock(return_value=term_cm)
 
         fail_calls: list[tuple[object, str]] = []

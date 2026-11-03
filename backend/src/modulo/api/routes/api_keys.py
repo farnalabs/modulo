@@ -21,11 +21,13 @@ from modulo.api.dependencies import deny_break_glass_mint, get_db_session, requi
 from modulo.auth.api_key import (
     _UNSET,
     KEY_SCOPES,
+    KNOWN_API_KEY_ROLES,
     USER_KEY_MAX_TTL_DAYS,
     ApiKeyGrantsUnavailableError,
     ApiKeyScopeError,
     ApiKeyTtlError,
     api_key_grants_enabled,
+    api_key_role_violation,
     create_api_key,
     list_api_keys,
     revoke_api_key,
@@ -378,17 +380,21 @@ async def _validate_create_request(req: ApiKeyCreate, principal: TenantPrincipal
 
     FAR-620: 'org' (or omitted) keeps the pre-flag behaviour; 'user' is gated
     by the org flag (OFF ⇒ 422, never a silent downgrade to an org key).
+    FAR-2281: the role ceiling is scope-aware — ``admin`` is permitted only for
+    a user-scoped (human-linked) key; org/team/service/run keys keep the
+    operator/runner ceiling.
     """
-    if req.role not in ("operator", "runner"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="role must be 'operator' or 'runner'. admin keys are prohibited.",
-        )
     requested_scope = req.scope if req.scope is not None else "org"
     if requested_scope not in KEY_SCOPES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"scope must be one of {sorted(KEY_SCOPES)}",
+        )
+    role_violation = api_key_role_violation(req.role, requested_scope)
+    if role_violation is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=role_violation,
         )
     if requested_scope == "user" and not await _user_keys_flag_enabled(principal.organisation_id):
         logger.warning(
@@ -642,11 +648,17 @@ async def list_api_keys_endpoint(
 
 
 def _validate_update_payload(req: ApiKeyUpdate) -> None:
-    """Reject invalid roles and immutable-scope mutations on an update payload."""
-    if req.role is not None and req.role not in ("operator", "runner"):
+    """Reject invalid roles and immutable-scope mutations on an update payload.
+
+    FAR-2281: ``admin`` is accepted at the payload-shape level; the key's OWN
+    immutable scope decides whether it is allowed (checked in
+    ``auth.api_key.update_api_key``), so an org-scoped key still cannot be
+    promoted to admin.
+    """
+    if req.role is not None and req.role not in KNOWN_API_KEY_ROLES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="role must be 'operator' or 'runner'.",
+            detail="role must be 'operator', 'runner', or 'admin' (admin only for user-scoped keys).",
         )
     # FAR-620: the caller scope is IMMUTABLE post-mint — an update payload
     # carrying an explicit ``scope`` is rejected (422), never applied or
@@ -735,10 +747,12 @@ async def _apply_key_update(
     """Apply the key update, mapping DB errors to the route's HTTP error contract."""
     try:
         return await _apply_key_update_tx(session, key_id, principal, role, name, team_id, expires_at)
-    except ApiKeyTtlError as exc:
+    except (ApiKeyTtlError, ApiKeyScopeError) as exc:
         # FAR-1478: a >365d expiry on a service-owned key is a client error on
         # the payload — same 422 contract as the create path, never a silent
-        # clamp and never applied.
+        # clamp and never applied. FAR-2281: the same 422 contract covers a
+        # role that is not permitted for the key's own immutable scope (e.g.
+        # promoting an org-scoped key to admin).
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),

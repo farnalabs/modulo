@@ -230,6 +230,29 @@
           >{{ $t('views.SettingsMcpView.key_name_is_required') }}</p>
         </div>
         <div>
+          <label for="settingsmcpview-scope" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsMcpView.key_scope') }}</label>
+          <Select
+  aria-label="Key scope"
+  v-model="createKeyScope"
+  :placeholder="$t('views.SettingsMcpView.key_scope')"
+  data-testid="settings-mcp-create-key-scope"
+  id="settingsmcpview-scope"
+  class="w-full"
+  :options="createKeyScopeOptions"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+          <p class="mt-1 text-xs text-muted-foreground">
+            {{ createKeyScope === 'user'
+              ? $t('views.SettingsMcpView.scope_user_hint')
+              : $t('views.SettingsMcpView.scope_org_hint') }}
+          </p>
+        </div>
+        <div>
           <label for="settingsmcpview-role" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsMcpView.role') }}</label>
           <Select
   aria-label="Role"
@@ -238,7 +261,7 @@
   data-testid="settings-mcp-create-key-role"
   id="settingsmcpview-role"
   class="w-full"
-  :options="[{ value: 'operator', label: $t('views.SettingsMcpView.operator') }, { value: 'runner', label: $t('views.SettingsMcpView.runner') }]"
+  :options="createKeyRoleOptions"
   option-label="label"
   option-value="value"
 >
@@ -325,7 +348,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -565,7 +588,40 @@ async function refreshAfterOauthMutation(): Promise<void> {
 const createKeyDialogOpen = ref(false)
 const createKeyName = ref('')
 const createKeyNameTouched = ref(false)
+// FAR-2281: the key's caller scope decides its role ceiling. An org-scoped
+// key is an unattributed machine identity (operator/runner only); a
+// user-scoped key acts as its creator and may carry admin.
+const createKeyScope = ref<'org' | 'user'>('org')
 const createKeyRole = ref('operator')
+const createKeyScopeOptions = computed(() => {
+  const options = [{ value: 'org', label: t('views.SettingsMcpView.scope_org_label') }]
+  if (planStore.featureEnabled('user_scoped_mcp_keys')) {
+    options.push({ value: 'user', label: t('views.SettingsMcpView.scope_user_label') })
+  }
+  return options
+})
+const createKeyRoleOptions = computed(() => {
+  const options = [
+    { value: 'operator', label: t('views.SettingsMcpView.operator') },
+    { value: 'runner', label: t('views.SettingsMcpView.runner') },
+  ]
+  if (createKeyScope.value === 'user') {
+    options.push({ value: 'admin', label: t('views.SettingsMcpView.admin') })
+  }
+  return options
+})
+// Switching back to an org-scoped key must not leave an admin role selected:
+// the backend would refuse it, and the select no longer offers it.
+watch(createKeyScope, (scope) => {
+  if (scope !== 'user' && createKeyRole.value === 'admin') {
+    createKeyRole.value = 'operator'
+  }
+})
+watch(() => planStore.featureEnabled('user_scoped_mcp_keys'), (enabled) => {
+  if (!enabled && createKeyScope.value === 'user') {
+    createKeyScope.value = 'org'
+  }
+})
 const creatingKey = ref(false)
 // FAR-1477: optional grant-set. `grantsEnabled` mirrors the org's
 // `api_key_grants` flag as reported by the backend (false = selector hidden and
@@ -781,6 +837,7 @@ function openCreateKeyDialog() {
   void loadGrantablePermissions()
   createKeyName.value = ''
   createKeyNameTouched.value = false
+  createKeyScope.value = 'org'
   createKeyRole.value = 'operator'
   createKeyError.value = null
   createKeyDialogOpen.value = true
@@ -797,6 +854,10 @@ async function createKey() {
       body: {
         name: createKeyName.value.trim(),
         role: createKeyRole.value,
+        // The backend defaults omitted scope to 'org'; keep the legacy wire
+        // shape for the default org-scoped key, while sending the explicit
+        // field for the new user-scoped path.
+        ...(createKeyScope.value === 'user' ? { scope: createKeyScope.value } : {}),
         // Omitted (not []) unless the user explicitly restricted the key: an
         // empty list would mean deny-all on the backend.
         ...(grantsEnabled.value && grantsRestricted.value && grantsSelected.value.length > 0

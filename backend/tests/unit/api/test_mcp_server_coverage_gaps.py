@@ -134,6 +134,7 @@ from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
 from modulo.db.capacity import StorageExhaustedError
+from modulo.db.crud.pipeline import ManualNodeOutputSchemaError
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -574,6 +575,7 @@ class TestAuthenticateApiKey:
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch.object(ms, "validate_api_key", new=AsyncMock(return_value=_mock_api_key())),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="operator")),
+            patch.object(ms, "resolve_live_role_and_kind", new=AsyncMock(return_value=("operator", "human"))),
         ):
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
         assert handled is True
@@ -599,6 +601,7 @@ class TestAuthenticateApiKey:
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch.object(ms, "validate_api_key", new=AsyncMock(return_value=_mock_api_key())),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value=None)),
+            patch.object(ms, "resolve_live_role_and_kind", new=AsyncMock(return_value=None)),
         ):
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
         assert handled is False
@@ -615,6 +618,7 @@ class TestAuthenticateApiKey:
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch.object(ms, "validate_api_key", new=AsyncMock(return_value=_mock_api_key("operator"))),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="runner")),
+            patch.object(ms, "resolve_live_role_and_kind", new=AsyncMock(return_value=("runner", "human"))),
         ):
             handled, _err = await _authenticate_api_key(_mock_request(), _API_KEY)
         assert handled is True
@@ -642,6 +646,7 @@ class TestAuthenticateApiKey:
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch.object(ms, "validate_api_key", new=AsyncMock(return_value=_mock_api_key())),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="operator")),
+            patch.object(ms, "resolve_live_role_and_kind", new=AsyncMock(return_value=("operator", "human"))),
             patch.object(ms, "resolve_key_grants", new=AsyncMock(side_effect=ApiKeyGrantsUnavailableError)),
         ):
             handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
@@ -1508,6 +1513,33 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await create_model_backend(name="n", display_name="d", provider="openai", model_id="m")
         assert result["error"] == "server_error"
 
+    async def test_create_model_backend_stores_pending_setup_and_returns_stored_status(self) -> None:
+        """FAR-2280: the row must be created pending_setup, or the setup route refuses with already_configured."""
+        stored = SimpleNamespace(
+            id=uuid.uuid4(),
+            name="n",
+            display_name="d",
+            provider="openai",
+            model_id="m",
+            status="pending_setup",
+            visibility="org",
+        )
+        create_mock = AsyncMock(return_value=stored)
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session") as session_cm,
+            patch.object(ms, "db_create_model_backend", new=create_mock),
+            patch(
+                "modulo.core.mcp_setup_handoff.create_handoff",
+                new=AsyncMock(return_value={"setup_url": "https://x/setup"}),
+            ),
+        ):
+            session_cm.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
+            session_cm.return_value.__aexit__ = AsyncMock(return_value=False)
+            result = await create_model_backend(name="n", display_name="d", provider="openai", model_id="m")
+        assert create_mock.await_args.kwargs["status"] == "pending_setup"
+        assert result["status"] == "pending_setup"
+
     async def test_create_model_backend_stub_provider_rejected_with_validation_error(self) -> None:
         """The stub provider is a test double: 500 DB-constraint errors replaced by a 4xx-style envelope."""
         with (
@@ -1541,6 +1573,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         mb.provider = "openai"
         mb.model_id = "m"
         mb.visibility = "org"
+        mb.status = "pending_setup"
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "db_create_model_backend", new=AsyncMock(return_value=mb)),
@@ -1789,6 +1822,25 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         # The not-found envelope must come from the WRITE returning None, not
         # from short-circuiting on the row lock re-read.
         replace.assert_awaited_once()
+
+    async def test_manual_node_output_schema_error_returns_validation_failed(self) -> None:
+        """FAR-2283: the stored-graph-aware manual-node guard is enforced under
+        the row lock in ``replace_pipeline_graph``, so its rejection reaches the
+        MCP tool through the transaction. It must surface as ``validation_failed``
+        (REST parity) instead of the wrapper's generic ``server_error``."""
+        nodes, edges = self._valid_graph()
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(
+                ms,
+                "_replace_pipeline_graph_txn",
+                new=AsyncMock(side_effect=ManualNodeOutputSchemaError("legacy-node")),
+            ),
+        ):
+            result = await update_pipeline_graph(pipeline_id=str(uuid.uuid4()), nodes=nodes, edges=edges)
+
+        assert result["error"] == "validation_failed", result
+        assert "requires an output schema" in result["detail"], result
 
     async def test_pipeline_gone_before_the_row_lock_returns_not_found(self) -> None:
         """FAR-1845: the transaction re-reads the pipeline under ``FOR UPDATE``.

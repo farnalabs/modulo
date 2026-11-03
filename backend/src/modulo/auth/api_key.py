@@ -90,7 +90,41 @@ _MK_PREFIX = "mk_"
 # FAR-620: caller-scope axis. 'org' = org-level caller (historical default,
 # covers org-wide AND team-scoped AND per-run keys); 'user' = per-user key
 # that acts as its creator's identity. IMMUTABLE post-mint.
-KEY_SCOPES: frozenset[str] = frozenset({"org", "user"})
+KEY_SCOPE_ORG = "org"
+KEY_SCOPE_USER = "user"
+KEY_SCOPES: frozenset[str] = frozenset({KEY_SCOPE_ORG, KEY_SCOPE_USER})
+
+# FAR-2281: the role ceiling is split by credential PROVENANCE, not transport.
+# An org-scoped key is an unattributed machine identity, so it stays capped at
+# operator/runner. A user-scoped key is human-linked (its owner's live org role
+# is the ceiling), so it may carry admin. The DB CHECK
+# (``ck_org_api_keys_role``) enforces the same split.
+ORG_KEY_ROLES: frozenset[str] = frozenset({"operator", "runner"})
+USER_KEY_ROLES: frozenset[str] = ORG_KEY_ROLES | {"admin"}
+KNOWN_API_KEY_ROLES: frozenset[str] = USER_KEY_ROLES
+
+
+def api_key_role_violation(role: str, scope: str, team_id: uuid.UUID | None = None) -> str | None:
+    """Return the user-facing refusal when *role* is invalid for *scope*/*team_id*, else ``None``.
+
+    The ONE rule both mint surfaces (REST ``POST /api/v1/api-keys`` and the MCP
+    ``create_api_key`` tool) and the update choke point share. ``admin`` is
+    permitted only for a ``user``-scoped (human-linked) key, and never for a
+    team-scoped key (a team boundary must not carry org-wide admin). Every
+    other scope keeps the operator/runner ceiling. An unknown role is refused
+    for every scope. Returning a message rather than raising keeps the REST
+    (HTTP 422) and MCP (error envelope) wrappers thin and their wording
+    identical.
+    """
+    if team_id is not None and role == "admin":
+        return "team-scoped API keys cannot have admin role"
+    allowed = USER_KEY_ROLES if scope == KEY_SCOPE_USER else ORG_KEY_ROLES
+    if role in allowed:
+        return None
+    if role == "admin":
+        return "role 'admin' is permitted only for user-scoped API keys"
+    return "role must be 'operator', 'runner', or 'admin' (admin only for user-scoped keys)"
+
 
 # FAR-1477 / ADR 058: org-level flag gating API-key grant-sets (default OFF).
 FLAG_API_KEY_GRANTS = "api_key_grants"
@@ -171,16 +205,6 @@ def _hash_key(full_key: str) -> str:
     return hashlib.sha256(full_key.encode()).hexdigest()
 
 
-def _validate_team_key_role(key: OrgApiKey) -> None:
-    """Reject admin roles on team-scoped keys.
-
-    Team-scoped keys must use operator or runner roles — admin
-    is reserved for org-wide keys without team_id.
-    """
-    if key.team_id is not None and key.role == "admin":
-        raise ApiKeyInvalidError("team-scoped API keys cannot have admin role")
-
-
 async def _enforce_service_key_ttl(
     session: AsyncSession,
     account_id: uuid.UUID,
@@ -230,6 +254,14 @@ async def create_api_key(
     """
     if scope not in KEY_SCOPES:
         raise ApiKeyScopeError(f"Invalid API key scope '{scope}': must be one of {sorted(KEY_SCOPES)}")
+    # FAR-2281: the role ceiling is scope- and team-aware. Enforced here as
+    # well as at the REST/MCP validators so every future mint surface
+    # (on-behalf mints included) refuses the same way; the DB CHECK is the
+    # final backstop. A team-scoped key can never carry admin, even when its
+    # user scope would otherwise allow it.
+    role_violation = api_key_role_violation(role, scope, team_id)
+    if role_violation is not None:
+        raise ApiKeyScopeError(role_violation)
     # FAR-1478 / ADR 058 tiered TTL: a key owned by a SERVICE principal may
     # live at most SERVICE_KEY_MAX_TTL_DAYS. Checked at this choke point so
     # REST, MCP, on-behalf mints and any future surface all refuse the same
@@ -251,8 +283,6 @@ async def create_api_key(
         team_id=team_id,
         expires_at=expires_at,
     )
-    if team_id is not None:
-        _validate_team_key_role(key)
     session.add(key)
     await session.flush()
     return key, full_key
@@ -655,6 +685,27 @@ async def list_api_keys(
     return [_serialize_key_with_account(k, kind, display_name, email) for k, kind, display_name, email in rows]
 
 
+def _updated_key_role_violation(
+    key: OrgApiKey,
+    role: str | None,
+    team_id: uuid.UUID | object | None,
+) -> str | None:
+    """Return the role refusal for a key's POST-update scope/role, else ``None``.
+
+    The effective values are the post-update state, so setting a team on an
+    existing admin-role user key is refused as well as promoting a team-scoped
+    key to admin. The key's own immutable scope is read, never the caller's.
+    """
+    key_scope = getattr(key, "scope", None)
+    effective_role = role if role is not None else key.role
+    effective_team_id = key.team_id if team_id is _UNSET else team_id
+    return api_key_role_violation(
+        effective_role,
+        key_scope if isinstance(key_scope, str) else KEY_SCOPE_ORG,
+        cast(uuid.UUID | None, effective_team_id),
+    )
+
+
 async def update_api_key(
     session: AsyncSession,
     key_id: uuid.UUID,
@@ -697,15 +748,15 @@ async def update_api_key(
         # reads the key OWNER's kind, not the caller's, and runs BEFORE any
         # mutation so a refusal leaves the key completely untouched.
         await _enforce_service_key_ttl(session, key.account_id, expires_at)
+    if role is not None or team_id is not _UNSET:
+        # FAR-2281: a role change OR a team-scope change is held to the same
+        # scope- and team-aware ceiling as mint. Checked before any mutation
+        # so a refusal leaves the row untouched.
+        role_violation = _updated_key_role_violation(key, role, team_id)
+        if role_violation is not None:
+            raise ApiKeyScopeError(role_violation)
     if name is not None:
         key.name = name
-    if role is not None or team_id is not _UNSET:
-        effective_role = role if role is not None else key.role
-        # team_id is the NEW scope when provided: None clears it (org-wide),
-        # a UUID scopes it; _UNSET keeps the current scope.
-        effective_team_id = key.team_id if team_id is _UNSET else team_id
-        if effective_team_id is not None and effective_role == "admin":
-            raise ApiKeyInvalidError("team-scoped API keys cannot have admin role")
     if role is not None:
         key.role = role
     if team_id is not _UNSET:

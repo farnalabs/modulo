@@ -20,6 +20,7 @@
               <div class="flex items-center gap-2">
                 <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">{{ $t('views.LifecycleMapView.version_label') }}</label>
                 <Select
+                  id="lifecyclemapview-field-1"
                   :aria-label="$t('views.LifecycleMapView.version_label')"
                   v-model="selectedVersion"
                   @update:model-value="onVersionChange"
@@ -55,7 +56,7 @@
       </div>
     </header>
 
-    <main class="page-wide">
+    <section class="page-wide">
       <div v-if="isLoadingDetail" class="flex items-center justify-center py-20">
         <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
       </div>
@@ -297,7 +298,7 @@
       <div v-else class="text-center py-20 text-muted-foreground">
         Lifecycle map not found.
       </div>
-    </main>
+    </section>
 
     <!-- Import dialog -->
     <Dialog :visible="showImportDialog" :modal="true" :dismissable-mask="true" class="sm:max-w-lg" data-testid="lifecycle-map-import-dialog" @update:visible="showImportDialog = $event">

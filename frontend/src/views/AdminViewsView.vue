@@ -29,6 +29,7 @@
             <label for="adminviewsview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.view_type') }}</label>
             <Select
   aria-label="View type"
+  input-id="adminviewsview-field-5"
   v-model="form.view_type"
   placeholder="table"
   data-testid="admin-views-type-select"
@@ -75,6 +76,7 @@
               <label for="adminviewsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
             <Select
   aria-label="Sort order"
+  input-id="adminviewsview-field-1"
   v-model="form.sort_order"
   placeholder="desc"
   data-testid="admin-views-sort-order-select"

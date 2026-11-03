@@ -21,6 +21,7 @@ unit-tests:
   - backend/tests/unit/db/crud/test_team_membership.py
   - backend/tests/unit/db/crud/test_team_scope.py
   - backend/tests/unit/mcp/test_team_scope_enforcement.py
+  - backend/tests/unit/api/test_mcp_set_resource_owner_team.py
   - backend/tests/integration/test_rls_isolation.py
   - backend/tests/unit/db/test_migration_team_visibility_rls.py
   - backend/tests/architecture/test_team_scope_wiring.py
@@ -130,6 +131,16 @@ org profile, and is the product-map home for user roles.
       (`tests/integration/test_rls_isolation.py`,
       `tests/unit/db/test_migration_team_visibility_rls.py`,
       `tests/architecture/test_team_scope_wiring.py`)
+- [x] MCP `set_resource_owner_team` (FAR-2298) sets or clears `owner_team_id` on a
+      pipeline, model backend or connector (`resource_type`, `resource_id`,
+      nullable `owner_team_id`). It reuses the REST PATCH team gates (team exists in
+      the org even for admins, non-admins must belong to the current and new team, a
+      team-visibility resource cannot lose its owner team, pipelines with active runs
+      are refused, a connector re-scope cannot strand a bound pipeline) and returns
+      `validation_failed` with the detail instead of dropping an ineligible team.
+      Operator role, same as the REST update permissions; team-scoped keys cannot
+      move another team's resource
+      (`backend/tests/unit/api/test_mcp_set_resource_owner_team.py`)
 
 ## Known Gaps
 

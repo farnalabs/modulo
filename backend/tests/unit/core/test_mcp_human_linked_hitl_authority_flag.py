@@ -1,8 +1,10 @@
 """ADR 063 step 1 (FAR-1957): the org-wide ``mcp_human_linked_hitl_authority`` flag.
 
-Default ON; an org admin may disable it (restoring the pre-ADR-063 blanket MCP
-denial). The resolver fails CLOSED to OFF on any read error — a flag-resolution
-failure must never widen the human_only auth boundary.
+Default OFF; an org admin may enable it to permit verified human-linked
+credentials to decide human_only gates by persona. The resolver fails CLOSED to
+OFF on any read error — a flag-resolution failure must never widen the human_only
+auth boundary.
+
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,18 +22,18 @@ class TestFlagRegistration:
         assert flag is not None
         assert flag.tier == "community"
 
-    def test_flag_is_default_on(self) -> None:
+    def test_flag_is_default_off(self) -> None:
         registry = FeatureFlagRegistry(current_tier="community")
         flag = registry.get_flag("mcp_human_linked_hitl_authority")
         assert flag is not None
-        assert flag.currently_active is True
+        assert flag.currently_active is False
 
 
 class TestResolver:
-    async def test_defaults_on_without_an_org_override(self) -> None:
+    async def test_defaults_off_without_an_org_override(self) -> None:
         assert (
             await resolve_mcp_human_linked_hitl_authority(org_id=None, flag_name="mcp_human_linked_hitl_authority")
-            is True
+            is False
         )
 
     async def test_org_override_disables_it(self) -> None:
