@@ -75,6 +75,18 @@ class _FakeSession:
         self.flushed += 1
 
 
+class _RecordingSession(_FakeSession):
+    """A fake session that keeps the statement it was asked to execute."""
+
+    def __init__(self, *, rows: list[object] | None = None, identity_map: object = _UNSET) -> None:
+        super().__init__(rows=rows, identity_map=identity_map)
+        self.stmt: object | None = None
+
+    async def execute(self, *args: object, **kwargs: object) -> _FakeResult:
+        self.stmt = args[0]
+        return await super().execute(*args, **kwargs)
+
+
 class _IdentityMap:
     def __init__(self, org: object) -> None:
         self._org = org
@@ -372,6 +384,127 @@ def test_nested_patch_settings_postgres_statement_shape() -> None:
     assert "jsonb_typeof" in sql
     assert "case when" in sql
     assert "= 'object'" in sql
+    # FAR-2309: the SAME statement carries the atomic sub-key delete, so the
+    # merge and the delete are one write path, not two.
+    assert ":nested_delete_keys" in sql
+
+
+# ---------------------------------------------------------------------------
+# FAR-2309: nested_delete — atomic per-entry clear inside one top-level object
+# ---------------------------------------------------------------------------
+
+
+async def test_nested_delete_rejects_more_than_one_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """At most ONE top-level key per call — the statement composes one
+    jsonb_set, so a second key would silently not be cleared."""
+    _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
+    with pytest.raises(ValueError, match="nested_delete supports at most one top-level key"):
+        await update_org_settings_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            nested_delete={"a": ["x"], "b": ["y"]},
+        )
+
+
+async def test_nested_delete_rejects_an_empty_sub_key_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty list is a no-op that would still create/heal the parent object
+    — refused rather than writing a block the caller did not ask for."""
+    _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
+    with pytest.raises(ValueError, match="must name at least one sub-key"):
+        await update_org_settings_patch(_FakeSession(), uuid.uuid4(), nested_delete={"block": []})
+
+
+async def test_nested_delete_rejects_overlap_with_patch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replacing a whole key AND deleting a sub-key of it in one call is an
+    ambiguous compose — refused rather than resolved implicitly."""
+    _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
+    with pytest.raises(ValueError, match=r"nested_delete key.*also appear in patch"):
+        await update_org_settings_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            {"block": {"whole": True}},
+            nested_delete={"block": ["sub"]},
+        )
+
+
+async def test_nested_delete_rejects_overlap_with_nested_patch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Merging and deleting sub-fields of the same key is expressible but has
+    no caller, so the ambiguity is refused."""
+    _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
+    with pytest.raises(ValueError, match="also appear in nested_delete"):
+        await update_org_settings_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            nested_patch={"block": {"sub": 1}},
+            nested_delete={"block": ["other"]},
+        )
+
+
+async def test_nested_delete_rejects_overlap_with_delete_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Removing the whole top-level key AND a sub-key of it is ambiguous."""
+    _stub_dependencies(monkeypatch, dialect="sqlite", bound_org=uuid.uuid4())
+    with pytest.raises(ValueError, match="appear in both delete_keys and patch/nested_patch/nested_delete"):
+        await update_org_settings_patch(
+            _FakeSession(),
+            uuid.uuid4(),
+            nested_delete={"block": ["sub"]},
+            delete_keys=["block"],
+        )
+
+
+async def test_apply_postgres_nested_delete_binds_the_sub_keys() -> None:
+    """The delete reuses the nested statement and binds the sub-keys plus an
+    empty merge, so the atomic clear is a jsonb ``- text[]`` on one object."""
+    session = _RecordingSession(rows=[({"feature_overrides": {"flag_b": False}},)])
+    await _apply_json_column_patch_postgres(
+        session,
+        uuid.uuid4(),
+        {},
+        [],
+        nested_delete={"feature_overrides": ["flag_a"]},
+    )
+    sql = str(session.stmt)
+    assert ":nested_delete_keys" in sql
+    assert ":nested_patch" in sql
+    compiled = session.stmt.compile().params
+    assert compiled["nested_key"] == "feature_overrides"
+    assert compiled["nested_delete_keys"] == ["flag_a"]
+    assert compiled["nested_patch"] == "{}"
+
+
+async def test_apply_generic_nested_delete_removes_only_named_sub_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Generic-dialect parity: only the named entry is removed from the named
+    object; sibling entries and other top-level keys survive."""
+    org = MagicMock()
+    org.settings_json = {"feature_overrides": {"flag_a": True, "flag_b": False}, "keep": 1}
+    monkeypatch.setattr(organisation_mod, "get_organisation", AsyncMock(return_value=org))
+    session = _FakeSession()
+    result = await _apply_json_column_patch_generic(
+        session,
+        uuid.uuid4(),
+        {},
+        [],
+        nested_delete={"feature_overrides": ["flag_a"]},
+    )
+    assert result == {"feature_overrides": {"flag_b": False}, "keep": 1}
+    assert org.settings_json == {"feature_overrides": {"flag_b": False}, "keep": 1}
+    assert session.flushed == 1
+
+
+async def test_apply_generic_nested_delete_heals_a_non_object_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-object stored block heals to ``{}`` exactly like the nested merge
+    (and the Postgres CASE), never corrupting it into a list."""
+    org = MagicMock()
+    org.settings_json = {"feature_overrides": ["not", "an", "object"]}
+    monkeypatch.setattr(organisation_mod, "get_organisation", AsyncMock(return_value=org))
+    result = await _apply_json_column_patch_generic(
+        _FakeSession(),
+        uuid.uuid4(),
+        {},
+        [],
+        nested_delete={"feature_overrides": ["flag_a"]},
+    )
+    assert result == {"feature_overrides": {}}
 
 
 async def test_update_org_json_column_patch_rejects_forbidden_column_live_row_pair() -> None:
