@@ -678,6 +678,70 @@ jobs:
 
           echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
 
+      # A failure after the freeze is established must not strand the release
+      # boundary: merge-queue.yml's freeze gate pauses main while
+      # refs/heads/release-freeze exists, so a failed cut/recut would otherwise
+      # stop every merge until someone deleted the branch by hand. A published
+      # bundle is never un-frozen here - that freeze belongs to the promote path.
+      - name: Clear release freeze after a failed cut or recut
+        if: always() && (inputs.mode == 'cut' || inputs.mode == 'recut') && failure()
+        env:
+          # The delete must run as the trusted bot identity, consistent with the
+          # other release branch/PR-driving steps - never as github-actions[bot].
+          GH_TOKEN: ${{ secrets.MODULO_RELEASE_PR_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          CUT_OUTCOME: ${{ steps.cut.outcome }}
+          RECUT_OUTCOME: ${{ steps.recut.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${CUT_OUTCOME:-}" != "success" ] && [ "${RECUT_OUTCOME:-}" != "success" ]; then
+            echo "Neither cut nor recut succeeded (cut=${CUT_OUTCOME:-<none>}, recut=${RECUT_OUTCOME:-<none>}); this run never established a freeze, so there is nothing to clear."
+            exit 0
+          fi
+
+          # A published bundle tag means the release genuinely shipped; keep the
+          # freeze for promotion. A failed query is never treated as absence.
+          bundle_rc=0
+          git ls-remote --exit-code origin "refs/tags/bundle-v${VERSION}" >/dev/null 2>/tmp/release-freeze-bundle-error || bundle_rc=$?
+          case "$bundle_rc" in
+            0)
+              echo "bundle-v${VERSION} is published; keeping release-freeze until promotion completes."
+              exit 0
+              ;;
+            2)
+              ;;
+            *)
+              echo "::error::Could not query refs/tags/bundle-v${VERSION}; preserving release-freeze rather than lifting it on unknown state."
+              cat /tmp/release-freeze-bundle-error
+              exit 1
+              ;;
+          esac
+
+          freeze_rc=0
+          git ls-remote --exit-code origin refs/heads/release-freeze >/dev/null 2>/tmp/release-freeze-error || freeze_rc=$?
+          case "$freeze_rc" in
+            0)
+              if [ -z "${GH_TOKEN:-}" ]; then
+                echo "::error::MODULO_RELEASE_PR_TOKEN is missing or empty; refusing to clear release-freeze as github-actions[bot]."
+                exit 1
+              fi
+              if ! git push origin --delete refs/heads/release-freeze; then
+                echo "::error::Could not clear release-freeze after a failed cut or recut; the merge queue stays paused until it is removed."
+                exit 1
+              fi
+              echo "Cleared release-freeze: the cut or recut failed before publishing bundle-v${VERSION}, so the merge queue may resume."
+              ;;
+            2)
+              echo "No release-freeze branch is present; nothing to clear."
+              ;;
+            *)
+              echo "::error::Could not query refs/heads/release-freeze after a failed cut or recut; preserving unknown freeze state."
+              cat /tmp/release-freeze-error
+              exit 1
+              ;;
+          esac
+
       # -----------------------------------------------------------------------
       # PROMOTE: promote RC to GA + lift freeze
       # -----------------------------------------------------------------------

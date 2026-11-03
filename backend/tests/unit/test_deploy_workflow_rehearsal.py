@@ -1433,6 +1433,158 @@ def test_release_publication_hold_cleanup_is_explicitly_fail_closed(
         assert "git push origin --delete refs/heads/release-publication-hold" not in commands
 
 
+_FREEZE_CLEANUP_STEP = "Clear release freeze after a failed cut or recut"
+
+
+def _freeze_cleanup_script() -> str:
+    script = _release_step(_FREEZE_CLEANUP_STEP).get("run")
+    assert isinstance(script, str)
+    return script
+
+
+def _run_freeze_cleanup(
+    tmp_path: Path,
+    *,
+    cut_outcome: str = "success",
+    recut_outcome: str = "",
+    bundle_lookup_rc: int = 2,
+    freeze_lookup_rc: int = 0,
+    delete_rc: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    """Execute the freeze-cleanup step with a git stub that scripts each query."""
+    bin_dir = tmp_path / "freeze-bin"
+    bin_dir.mkdir()
+    log = tmp_path / "freeze-commands.log"
+    _write_executable(
+        bin_dir / "git",
+        f"""#!/usr/bin/env bash
+set -u
+printf 'git %s\\n' "$*" >> {shlex.quote(str(log))}
+case "$*" in
+  'ls-remote --exit-code origin refs/tags/bundle-v'*) exit "${{BUNDLE_LOOKUP_RC}}" ;;
+  'ls-remote --exit-code origin refs/heads/release-freeze') exit "${{FREEZE_LOOKUP_RC}}" ;;
+  'push origin --delete refs/heads/release-freeze') exit "${{DELETE_RC}}" ;;
+  *) printf 'unexpected git command: %s\\n' "$*" >&2; exit 1 ;;
+esac
+""",
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "BUNDLE_LOOKUP_RC": str(bundle_lookup_rc),
+        "FREEZE_LOOKUP_RC": str(freeze_lookup_rc),
+        "DELETE_RC": str(delete_rc),
+        "CUT_OUTCOME": cut_outcome,
+        "RECUT_OUTCOME": recut_outcome,
+        "VERSION": "1.2.3",
+        "GH_TOKEN": "test-release-pr-token",
+    }
+    result = _run_bash(_freeze_cleanup_script(), cwd=tmp_path, env=env)
+    commands = log.read_text(encoding="utf-8") if log.exists() else ""
+    return result, commands
+
+
+@pytest.mark.parametrize(
+    ("cut_outcome", "recut_outcome"),
+    [("success", ""), ("skipped", "success")],
+    ids=("failed-cut", "failed-recut"),
+)
+def test_failed_cut_clears_the_freeze_when_no_bundle_was_published(
+    tmp_path: Path, cut_outcome: str, recut_outcome: str
+) -> None:
+    result, commands = _run_freeze_cleanup(
+        tmp_path,
+        cut_outcome=cut_outcome,
+        recut_outcome=recut_outcome,
+        bundle_lookup_rc=2,
+        freeze_lookup_rc=0,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "git push origin --delete refs/heads/release-freeze" in commands
+    assert "Cleared release-freeze" in result.stdout
+
+
+def test_failed_cut_keeps_the_freeze_when_the_bundle_is_published(tmp_path: Path) -> None:
+    result, commands = _run_freeze_cleanup(tmp_path, bundle_lookup_rc=0, freeze_lookup_rc=0)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "keeping release-freeze until promotion completes" in result.stdout
+    assert "git push origin --delete refs/heads/release-freeze" not in commands
+
+
+def test_failed_cut_without_a_freeze_branch_is_a_noop(tmp_path: Path) -> None:
+    result, commands = _run_freeze_cleanup(tmp_path, bundle_lookup_rc=2, freeze_lookup_rc=2)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "No release-freeze branch is present" in result.stdout
+    assert "git push origin --delete refs/heads/release-freeze" not in commands
+
+
+def test_failed_cut_freeze_query_error_fails_closed(tmp_path: Path) -> None:
+    result, commands = _run_freeze_cleanup(tmp_path, bundle_lookup_rc=2, freeze_lookup_rc=17)
+    assert result.returncode != 0
+    assert "::error::Could not query refs/heads/release-freeze" in result.stdout
+    assert "preserving unknown freeze state" in result.stdout
+    assert "git push origin --delete refs/heads/release-freeze" not in commands
+
+
+def test_failed_cut_bundle_query_error_fails_closed(tmp_path: Path) -> None:
+    result, commands = _run_freeze_cleanup(tmp_path, bundle_lookup_rc=17, freeze_lookup_rc=0)
+    assert result.returncode != 0
+    assert "::error::Could not query refs/tags/bundle-v1.2.3" in result.stdout
+    assert "git push origin --delete refs/heads/release-freeze" not in commands
+
+
+def test_failed_cut_reports_a_refused_freeze_delete(tmp_path: Path) -> None:
+    result, commands = _run_freeze_cleanup(tmp_path, bundle_lookup_rc=2, freeze_lookup_rc=0, delete_rc=1)
+    assert result.returncode != 0
+    assert "::error::Could not clear release-freeze" in result.stdout
+    assert "git push origin --delete refs/heads/release-freeze" in commands
+
+
+@pytest.mark.parametrize(
+    ("cut_outcome", "recut_outcome"),
+    [("", ""), ("skipped", ""), ("failure", "skipped"), ("skipped", "failure")],
+    ids=("no-outcomes", "recut-mode-pending", "cut-failed-only", "recut-failed-only"),
+)
+def test_freeze_cleanup_is_a_noop_when_the_run_never_established_a_freeze(
+    tmp_path: Path, cut_outcome: str, recut_outcome: str
+) -> None:
+    result, commands = _run_freeze_cleanup(
+        tmp_path,
+        cut_outcome=cut_outcome,
+        recut_outcome=recut_outcome,
+        bundle_lookup_rc=0,
+        freeze_lookup_rc=0,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "never established a freeze" in result.stdout
+    assert "git push origin --delete refs/heads/release-freeze" not in commands
+
+
+def test_release_freeze_cleanup_is_gated_on_a_failed_cut_or_recut() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    names = _step_names(steps)
+    cut_idx = names.index("Cut release candidate and freeze main")
+    recut_idx = names.index("Recut from current main")
+    cleanup_idx = names.index(_FREEZE_CLEANUP_STEP)
+    step = steps[cleanup_idx]
+
+    # Both step outcomes must already be recorded when the cleanup is evaluated,
+    # or a failed recut would be judged "no freeze established".
+    assert cleanup_idx > cut_idx
+    assert cleanup_idx > recut_idx
+    assert step["if"] == "always() && (inputs.mode == 'cut' || inputs.mode == 'recut') && failure()"
+    assert "success()" not in step["if"]
+    assert step["env"]["GH_TOKEN"] == _RELEASE_PR_TOKEN_SECRET
+    assert step["env"]["VERSION"] == "${{ inputs.version }}"
+    assert step["env"]["CUT_OUTCOME"] == "${{ steps.cut.outcome }}"
+    assert step["env"]["RECUT_OUTCOME"] == "${{ steps.recut.outcome }}"
+    script = step["run"]
+    assert "set -euo pipefail" in script
+    assert "|| true" not in script
+    assert "git push origin --delete refs/heads/release-freeze" in script
+
+
 def _promote_step() -> dict[str, Any]:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["release"]["steps"]
