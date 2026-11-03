@@ -391,6 +391,67 @@ async def update_org_settings_patch(
     return settings
 
 
+def _validate_json_patch_args(
+    patch: dict[str, Any],
+    delete_keys: list[str],
+    nested_patch: dict[str, dict[str, Any]] | None,
+    nested_delete: dict[str, list[str]] | None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, list[str]]]:
+    """Refuse ambiguous compose arguments before any organisation JSON write.
+
+    Every mechanism (top-level ``patch``, ``nested_patch``, ``nested_delete``,
+    ``delete_keys``) may name a key at most once: the compose order between
+    overlapping mechanisms was never a documented contract, so an overlap is
+    refused rather than resolved implicitly. Also bounds each nested mechanism
+    to one top-level key per call and refuses an empty ``nested_delete`` list
+    (a no-op that would still create/heal the parent object).
+    """
+    nested = dict(nested_patch or {})
+    sub_delete = dict(nested_delete or {})
+    if len(nested) > 1:
+        raise ValueError(f"nested_patch supports at most one top-level key per call, got {sorted(nested)!r}")
+    if len(sub_delete) > 1:
+        raise ValueError(f"nested_delete supports at most one top-level key per call, got {sorted(sub_delete)!r}")
+    for sub_key, sub_keys in sub_delete.items():
+        if not sub_keys:
+            # An empty list is a no-op that would still create/heal the parent
+            # object — a caller with nothing to remove has a bug, so refuse
+            # rather than write a block it did not ask for.
+            raise ValueError(f"nested_delete[{sub_key!r}] must name at least one sub-key to delete")
+    overlap = set(nested) & set(patch)
+    if overlap:
+        raise ValueError(
+            f"nested_patch key(s) {sorted(overlap)!r} also appear in patch — the compose order would be ambiguous"
+        )
+    # QA F13c: a key in BOTH delete_keys and patch/nested_patch is equally
+    # ambiguous (delete-wins was never a documented contract), so it is refused
+    # for the same reason the patch/nested overlap is — rather than silently
+    # letting the delete win.
+    delete_overlap = set(delete_keys) & (set(patch) | set(nested) | set(sub_delete))
+    if delete_overlap:
+        raise ValueError(
+            f"key(s) {sorted(delete_overlap)!r} appear in both delete_keys and patch/nested_patch/nested_delete — "
+            "the compose order would be ambiguous"
+        )
+    # FAR-2309: a key may be composed by exactly ONE nested mechanism. Merging
+    # sub-fields and removing sibling sub-fields of the same block in one call
+    # is expressible (merge then delete) but has no caller, so the ambiguity is
+    # refused rather than resolved implicitly.
+    nested_overlap = set(nested) & set(sub_delete)
+    if nested_overlap:
+        raise ValueError(
+            f"nested_patch key(s) {sorted(nested_overlap)!r} also appear in nested_delete — "
+            "the compose order would be ambiguous"
+        )
+    patch_overlap = set(patch) & set(sub_delete)
+    if patch_overlap:
+        raise ValueError(
+            f"nested_delete key(s) {sorted(patch_overlap)!r} also appear in patch — "
+            "the compose order would be ambiguous"
+        )
+    return nested, sub_delete
+
+
 async def update_org_json_column_patch(
     session: AsyncSession,
     organisation_id: uuid.UUID,
@@ -450,49 +511,7 @@ async def update_org_json_column_patch(
             f"require_live_row={require_live_row!r} — settings_json requires "
             f"require_live_row=True and otel_config_json requires require_live_row=False"
         )
-    nested = dict(nested_patch or {})
-    sub_delete = dict(nested_delete or {})
-    if len(nested) > 1:
-        raise ValueError(f"nested_patch supports at most one top-level key per call, got {sorted(nested)!r}")
-    if len(sub_delete) > 1:
-        raise ValueError(f"nested_delete supports at most one top-level key per call, got {sorted(sub_delete)!r}")
-    for sub_key, sub_keys in sub_delete.items():
-        if not sub_keys:
-            # An empty list is a no-op that would still create/heal the parent
-            # object — a caller with nothing to remove has a bug, so refuse
-            # rather than write a block it did not ask for.
-            raise ValueError(f"nested_delete[{sub_key!r}] must name at least one sub-key to delete")
-    overlap = set(nested) & set(patch)
-    if overlap:
-        raise ValueError(
-            f"nested_patch key(s) {sorted(overlap)!r} also appear in patch — the compose order would be ambiguous"
-        )
-    # QA F13c: a key in BOTH delete_keys and patch/nested_patch is equally
-    # ambiguous (delete-wins was never a documented contract), so it is refused
-    # for the same reason the patch/nested overlap is — rather than silently
-    # letting the delete win.
-    delete_overlap = set(delete_keys) & (set(patch) | set(nested) | set(sub_delete))
-    if delete_overlap:
-        raise ValueError(
-            f"key(s) {sorted(delete_overlap)!r} appear in both delete_keys and patch/nested_patch/nested_delete — "
-            "the compose order would be ambiguous"
-        )
-    # FAR-2309: a key may be composed by exactly ONE nested mechanism. Merging
-    # sub-fields and removing sibling sub-fields of the same block in one call
-    # is expressible (merge then delete) but has no caller, so the ambiguity is
-    # refused rather than resolved implicitly.
-    nested_overlap = set(nested) & set(sub_delete)
-    if nested_overlap:
-        raise ValueError(
-            f"nested_patch key(s) {sorted(nested_overlap)!r} also appear in nested_delete — "
-            "the compose order would be ambiguous"
-        )
-    patch_overlap = set(patch) & set(sub_delete)
-    if patch_overlap:
-        raise ValueError(
-            f"nested_delete key(s) {sorted(patch_overlap)!r} also appear in patch — "
-            "the compose order would be ambiguous"
-        )
+    nested, sub_delete = _validate_json_patch_args(patch, delete_keys, nested_patch, nested_delete)
 
     # Normalise the target to a ``UUID``: callers occasionally pass the id as a
     # string, and both the tenant-mismatch comparison and the bound SQL /
