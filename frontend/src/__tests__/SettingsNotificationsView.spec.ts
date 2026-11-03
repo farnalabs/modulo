@@ -16,6 +16,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import SettingsNotificationsView from '../views/SettingsNotificationsView.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 import enUS from '../locales/en-US.js'
 import { getVisibleNavGroups } from '../config/navigation'
 import type { NavVisibilityContext } from '../config/navigation'
@@ -52,11 +53,11 @@ function switchByCategory(wrapper: ReturnType<typeof mount>, category: string) {
 }
 
 function levelSelect(wrapper: ReturnType<typeof mount>) {
-  return wrapper.find('[data-testid="settings-notifications-level"]')
+  return wrapper.findComponent(AppSelect)
 }
 
 function selectedLevel(wrapper: ReturnType<typeof mount>): string {
-  return (levelSelect(wrapper).element as HTMLSelectElement).value
+  return levelSelect(wrapper).props('modelValue') as string
 }
 
 // The backend is the single source of truth for the category set
@@ -262,7 +263,7 @@ describe('SettingsNotificationsView', () => {
     })
     const wrapper = await mountView()
 
-    await wrapper.find('[data-testid="settings-notifications-level"]').setValue('error')
+    await levelSelect(wrapper).vm.$emit('update:modelValue', 'error')
     await flushPromises()
 
     expect(mockApi.PUT).toHaveBeenCalledTimes(1)
@@ -403,15 +404,14 @@ describe('SettingsNotificationsView', () => {
     const select = levelSelect(wrapper)
 
     // A value outside DASHBOARD_LEVELS is rejected before any request is made.
-    ;(select.element as HTMLSelectElement).value = 'nonsense'
-    await select.trigger('change')
+    await select.vm.$emit('update:modelValue', 'nonsense')
     expect(mockApi.PUT).not.toHaveBeenCalled()
 
     // A change that arrives while another save is in flight is dropped.
     const pendingPut = deferred<{ data: Record<string, never>, error: undefined }>()
     mockApi.PUT.mockReturnValue(pendingPut.promise)
     void switchByCategory(wrapper, 'run.failed').trigger('click')
-    await select.setValue('error')
+    await select.vm.$emit('update:modelValue', 'error')
     expect(mockApi.PUT).toHaveBeenCalledTimes(1)
 
     pendingPut.resolve({ data: {}, error: undefined })
@@ -427,7 +427,7 @@ describe('SettingsNotificationsView', () => {
     mockApi.PUT.mockResolvedValue({ data: undefined, error: { detail: 'save rejected' } })
     const wrapper = await mountView()
 
-    await levelSelect(wrapper).setValue('error')
+    await levelSelect(wrapper).vm.$emit('update:modelValue', 'error')
     await flushPromises()
 
     const saveError = wrapper.find('[data-testid="settings-notifications-save-error"]')

@@ -3,12 +3,7 @@
     <PageHeader
       :title="$t('views.AdminCostBreakdownView.spend_limits')"
       :subtitle="$t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level')"
-      :tabs="[
-        { label: 'Overview', to: '/admin/costs' },
-        { label: 'Spend Limits', to: '/admin/costs/limits' },
-        { label: 'Cost Components', to: '/admin/costs/components' },
-        { label: 'Cost Controls', to: '/admin/costs/controls' },
-      ]"
+       :tabs="costPageTabs"
     />
 
     <FeatureGate feature-name="admin_spend_limits" required-tier="team" show-disabled>
@@ -18,31 +13,33 @@
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
 
       <template v-else>
-        <Card>
-          <template #title>{{ $t('views.AdminSpendLimitsView.org_level_daily_spend_limit') }}</template>
-<template #subtitle>{{ $t('views.AdminSpendLimitsView.maximum_daily_spend_across_all_teams_in_usd') }}</template>
-
-          <template #content>
+         <DataCard
+           heading-level="h2"
+           :title="$t('views.AdminSpendLimitsView.org_level_daily_spend_limit')"
+          :description="$t('views.AdminSpendLimitsView.maximum_daily_spend_across_all_teams_in_usd')"
+        >
+          <template #default>
             <div class="flex items-end gap-3">
               <div class="flex-1">
                 <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.daily_limit_usd') }}</span>
-                <InputText aria-label="Form control" :model-value="orgLimit == null ? '' : String(orgLimit)" @update:model-value="(v: any) => orgLimit = v === '' ? null : Number(v)" type="number" min="0" step="0.01" placeholder="No limit" data-testid="admin-spend-limits-org-limit" />
+                <InputText :aria-label="$t('views.AdminSpendLimitsView.form_control')" :model-value="orgLimit == null ? '' : String(orgLimit)" @update:model-value="onUpdateOrgLimit" type="number" min="0" step="0.01" :placeholder="$t('views.AdminSpendLimitsView.no_limit')" data-testid="admin-spend-limits-org-limit" />
               </div>
               <Button :disabled="savingOrg" data-testid="admin-spend-limits-org-save" @click="saveOrgLimit">
-                {{ savingOrg ? 'Saving...' : 'Save' }}
+                {{ savingOrg ? $t('views.AdminSpendLimitsView.saving') : $t('views.AdminSpendLimitsView.save') }}
               </Button>
             </div>
             <p v-if="orgSaveError" class="mt-2 text-xs text-destructive">{{ orgSaveError }}</p>
             <p v-if="orgSaveSuccess" class="mt-2 text-xs text-success-text">{{ $t('views.AdminSpendLimitsView.org_limit_updated') }}</p>
-          </template>
-        </Card>
+           </template>
+         </DataCard>
 
         <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
-          <Card>
-            <template #title>{{ $t('views.AdminSpendLimitsView.hard_spend_ceilings') }}</template>
-            <template #subtitle>{{ $t('views.AdminSpendLimitsView.hard_spend_ceilings_subtitle') }}</template>
-
-            <template #content>
+           <DataCard
+             heading-level="h2"
+             :title="$t('views.AdminSpendLimitsView.hard_spend_ceilings')"
+            :description="$t('views.AdminSpendLimitsView.hard_spend_ceilings_subtitle')"
+          >
+            <template #default>
               <LoadingSpinner v-if="ceilingLoading" />
               <ErrorAlert v-else-if="ceilingLoadError" :message="ceilingLoadError" :on-retry="loadCeiling" />
 
@@ -85,7 +82,7 @@
                   <div class="flex items-center justify-between rounded-lg border bg-muted p-4">
                     <span class="text-sm font-medium">{{ $t('views.AdminSpendLimitsView.remaining_budget') }}</span>
                     <span class="text-lg font-semibold" :class="ceilingRemaining === null ? '' : (ceilingRemaining === 0 ? 'text-destructive' : 'text-success-text')">
-                      {{ ceilingRemaining === null ? '—' : formatMoney(ceilingRemaining, currencyCode) }}
+                      {{ ceilingRemaining === null ? $t('views.AdminSpendLimitsView.no_value') : formatMoney(ceilingRemaining, currencyCode) }}
                     </span>
                   </div>
 
@@ -99,16 +96,17 @@
                 </div>
               </template>
             </template>
-          </Card>
+          </DataCard>
         </FeatureGate>
 
-        <Card>
-          <template #title>{{ $t('views.AdminSpendLimitsView.per_team_spend_limits') }}</template>
-<template #subtitle>{{ $t('views.AdminSpendLimitsView.override_the_org_level_limit_for_specific_teams') }}</template>
-
-          <template #content>
+         <DataCard
+           heading-level="h2"
+           :title="$t('views.AdminSpendLimitsView.per_team_spend_limits')"
+          :description="$t('views.AdminSpendLimitsView.override_the_org_level_limit_for_specific_teams')"
+        >
+          <template #default>
             <div v-if="teams.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-              No teams found.
+              {{ $t('views.AdminSpendLimitsView.no_teams_found') }}
             </div>
             <table v-else class="w-full text-sm">
               <thead>
@@ -122,12 +120,12 @@
                 <tr v-for="team in teams" :key="team.id" class="border-b last:border-b-0">
                   <td class="table-cell font-medium">{{ team.name }}</td>
                   <td class="table-cell">
-                    <InputText aria-label="Form control"
+                    <InputText :aria-label="$t('views.AdminSpendLimitsView.form_control')"
                       :model-value="team.editingLimit == null ? '' : String(team.editingLimit)" @update:model-value="(v: any) => team.editingLimit = v === '' ? null : Number(v)"
                       type="number"
                       min="0"
                       step="0.01"
-                      placeholder="Inherit org limit"
+                      :placeholder="$t('views.AdminSpendLimitsView.inherit_org_limit')"
                       class="max-w-40"
                       :data-testid="'admin-spend-limits-team-limit-' + team.id"
                     />
@@ -135,20 +133,21 @@
                   </td>
                   <td class="table-cell-numeric">
                     <Button size="small" :disabled="team.saving" :data-testid="'admin-spend-limits-team-save-' + team.id" @click="saveTeamLimit(team)">
-                      {{ team.saving ? 'Saving...' : 'Save' }}
+                      {{ team.saving ? $t('views.AdminSpendLimitsView.saving') : $t('views.AdminSpendLimitsView.save') }}
                     </Button>
                   </td>
                 </tr>
               </tbody>
             </table>
           </template>
-        </Card>
+        </DataCard>
 
-        <Card>
-          <template #title>{{ $t('views.AdminSpendLimitsView.current_spend') }}</template>
-<template #subtitle>{{ $t('views.AdminSpendLimitsView.todays_accrued_costs_across_all_teams') }}</template>
-
-          <template #content>
+         <DataCard
+           heading-level="h2"
+           :title="$t('views.AdminSpendLimitsView.current_spend')"
+          :description="$t('views.AdminSpendLimitsView.todays_accrued_costs_across_all_teams')"
+        >
+          <template #default>
             <LoadingSpinner v-if="costsLoading" />
             <div v-else-if="costsError" class="text-sm text-destructive">{{ costsError }}</div>
             <div v-else class="space-y-4">
@@ -173,7 +172,7 @@
               <p v-else class="text-sm text-muted-foreground">{{ $t('views.AdminSpendLimitsView.no_team_cost_data_available') }}</p>
             </div>
           </template>
-        </Card>
+        </DataCard>
       </template>
       </div>
     </FeatureGate>
@@ -183,6 +182,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
@@ -190,14 +190,17 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import Card from 'primevue/card'
+import DataCard from '../components/ui/DataCard.vue'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 import type { components } from '../lib/api/schema'
+import { useCostPageTabs } from '../composables/useCostPageTabs'
 
+const { t } = useI18n()
 const planStore = usePlanStore()
+const costPageTabs = useCostPageTabs()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 
 interface SpendLimitData {
@@ -254,6 +257,10 @@ const { data: limitsData, loading, error: loadError, load: loadData } = useDataF
 const orgLimit = ref<number | null>(null)
 const teams = ref<TeamRow[]>([])
 
+function onUpdateOrgLimit(v: any) {
+  orgLimit.value = v === '' || v == null ? null : Number(v)
+}
+
 watch(() => limitsData.value, (data) => {
   if (data) {
     const resp = data as SpendLimitData
@@ -305,7 +312,7 @@ async function loadCeiling() {
   try {
     const { data, error: err } = await api.GET('/api/v1/admin/costs/ceiling')
     if (err) {
-      ceilingLoadError.value = `Failed to load: ${formatApiError(err)}`
+      ceilingLoadError.value = t('views.AdminSpendLimitsView.failed_to_load', { detail: formatApiError(err) })
     } else if (data) {
       const resp: components['schemas']['SpendCeilingResponse'] = data
       ceilingMaxRun.value = resp.max_run_cost ?? null
@@ -313,7 +320,7 @@ async function loadCeiling() {
       ceilingRemaining.value = resp.remaining_budget_usd ?? null
     }
   } catch (e: unknown) {
-    ceilingLoadError.value = `Failed to load: ${formatApiError(e)}`
+    ceilingLoadError.value = t('views.AdminSpendLimitsView.failed_to_load', { detail: formatApiError(e) })
   } finally {
     ceilingLoading.value = false
   }
@@ -328,13 +335,13 @@ async function saveCeiling() {
       body: { max_run_cost: ceilingMaxRun.value, spend_ceiling: ceilingSpend.value },
     })
     if (err) {
-      ceilingSaveError.value = `Failed to save: ${formatApiError(err)}`
+      ceilingSaveError.value = t('views.AdminSpendLimitsView.failed_to_save', { detail: formatApiError(err) })
     } else {
       ceilingSaveSuccess.value = true
       await loadCeiling()
     }
   } catch (e: unknown) {
-    ceilingSaveError.value = `Failed to save: ${formatApiError(e)}`
+    ceilingSaveError.value = t('views.AdminSpendLimitsView.failed_to_save', { detail: formatApiError(e) })
   } finally {
     savingCeiling.value = false
   }
@@ -354,12 +361,12 @@ async function saveOrgLimit() {
       body: { daily_limit_usd: orgLimit.value },
     })
     if (err) {
-      orgSaveError.value = `Failed to save: ${formatApiError(err)}`
+      orgSaveError.value = t('views.AdminSpendLimitsView.failed_to_save', { detail: formatApiError(err) })
     } else {
       orgSaveSuccess.value = true
     }
   } catch (e: unknown) {
-    orgSaveError.value = `Failed to save: ${formatApiError(e)}`
+    orgSaveError.value = t('views.AdminSpendLimitsView.failed_to_save', { detail: formatApiError(e) })
   } finally {
     savingOrg.value = false
   }
@@ -373,12 +380,12 @@ async function saveTeamLimit(team: TeamRow) {
       body: { daily_limit_usd: team.editingLimit },
     })
     if (err) {
-      team.saveError = `Failed to save: ${formatApiError(err)}`
+      team.saveError = t('views.AdminSpendLimitsView.failed_to_save', { detail: formatApiError(err) })
     } else {
       team.daily_limit_usd = team.editingLimit
     }
   } catch (e: unknown) {
-    team.saveError = `Failed to save: ${formatApiError(e)}`
+    team.saveError = t('views.AdminSpendLimitsView.failed_to_save', { detail: formatApiError(e) })
   } finally {
     team.saving = false
   }

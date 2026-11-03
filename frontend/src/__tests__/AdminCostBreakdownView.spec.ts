@@ -616,7 +616,7 @@ describe('AdminCostBreakdownView', () => {
     ]
 
     for (const [testId, labelText] of metricLabels) {
-      const card = wrapper.get(`[data-testid="${testId}"]`).element.closest('.p-card')
+      const card = wrapper.get(`[data-testid="${testId}"]`).element.closest('.card-base')
       expect(card).not.toBeNull()
       const label = Array.from(card!.querySelectorAll('p, span')).find(
         (element) => element.textContent?.trim() === labelText,

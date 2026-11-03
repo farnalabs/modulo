@@ -1,5 +1,8 @@
 """Tests for create_secrets_backend factory."""
 
+import contextlib
+import importlib
+from collections.abc import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -12,104 +15,90 @@ from modulo.core.secrets_backend.fernet import FernetSecretsBackend
 _KEY = Fernet.generate_key().decode()
 
 
+class _ExternalBackendSpec:
+    """How to configure and stub one optional external backend in the factory."""
+
+    def __init__(self, env: dict[str, str], module: str, class_name: str, sdk_patch: str) -> None:
+        self.env = env
+        self.module = module
+        self.class_name = class_name
+        self.sdk_patch = sdk_patch
+
+
+_EXTERNAL_BACKENDS: dict[str, _ExternalBackendSpec] = {
+    "vault": _ExternalBackendSpec(
+        env={"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"},
+        module="modulo.core.secrets_backend.vault",
+        class_name="VaultSecretsBackend",
+        sdk_patch="modulo.core.secrets_backend.vault._hvac",
+    ),
+    "aws": _ExternalBackendSpec(
+        env={"AWS_REGION": "us-east-1", "AWS_ACCESS_KEY_ID": "x", "AWS_SECRET_ACCESS_KEY": "y"},
+        module="modulo.core.secrets_backend.aws",
+        class_name="AWSSecretsManagerBackend",
+        sdk_patch="modulo.core.secrets_backend.aws._boto3",
+    ),
+}
+
+
+@contextlib.contextmanager
+def _stub_external_backend(monkeypatch: pytest.MonkeyPatch, name: str) -> Iterator[type]:
+    """Configure *name*'s env vars and stub its optional SDK, yielding the class.
+
+    The backend constructor reads its configuration from the environment and
+    refuses to build without the optional SDK module, so every external-backend
+    factory test needs both; keeping that setup in one place stops the env/patch
+    block being copy-pasted into each test.
+    """
+    spec = _EXTERNAL_BACKENDS[name]
+    for key, value in spec.env.items():
+        monkeypatch.setenv(key, value)
+    with patch(f"{spec.module}._MODULE_AVAILABLE", True), patch(spec.sdk_patch):
+        yield getattr(importlib.import_module(spec.module), spec.class_name)
+
+
+@pytest.fixture(params=sorted(_EXTERNAL_BACKENDS))
+def external_backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, type]]:
+    """Yield ``(backend_name, expected_class)`` for each optional external backend."""
+    with _stub_external_backend(monkeypatch, request.param) as expected_cls:
+        yield request.param, expected_cls
+
+
 @pytest.mark.parametrize("backend_name", [None, "fernet", "  Fernet  ", "FERNET"])
-def test_fernet_backend_created(backend_name):
+def test_fernet_backend_created(backend_name: str | None) -> None:
     backend = create_secrets_backend(fernet_key=_KEY, backend_name=backend_name)
     assert isinstance(backend, FernetSecretsBackend)
 
 
-def test_vault_backend_created_by_name(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.secrets_backend.vault import VaultSecretsBackend
+def test_external_backend_created_by_name(external_backend: tuple[str, type]) -> None:
+    backend_name, expected_cls = external_backend
 
-    monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
-    monkeypatch.setenv("VAULT_TOKEN", "x")
-    with (
-        patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
-        patch("modulo.core.secrets_backend.vault._hvac"),
-    ):
-        backend = create_secrets_backend(fernet_key=_KEY, backend_name="vault")
-        assert isinstance(backend, VaultSecretsBackend)
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name=backend_name)
+
+    assert isinstance(backend, expected_cls)
 
 
-def test_aws_backend_created_by_name(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
-
-    monkeypatch.setenv("AWS_REGION", "us-east-1")
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "x")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "y")
-    with (
-        patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
-        patch("modulo.core.secrets_backend.aws._boto3"),
-    ):
-        backend = create_secrets_backend(fernet_key=_KEY, backend_name="aws")
-        assert isinstance(backend, AWSSecretsManagerBackend)
-
-
-def test_unknown_backend_raises_value_error():
+def test_unknown_backend_raises_value_error() -> None:
     with pytest.raises(ValueError, match="Unknown"):
         create_secrets_backend(fernet_key=_KEY, backend_name="nonexistent")
 
 
-@pytest.mark.parametrize("backend_name", ["vault", "aws"])
-def test_configured_external_backend_is_constructed_on_every_tier(
-    monkeypatch: pytest.MonkeyPatch, backend_name: str
+@pytest.mark.parametrize("fernet_key", [pytest.param(_KEY, id="fernet-key"), pytest.param(None, id="no-fernet-key")])
+def test_external_backend_constructed_regardless_of_fernet_key(
+    external_backend: tuple[str, type], fernet_key: str | None
 ) -> None:
-    """FAR-2059 / FAR-2100: the factory never consults licence or tier state.
+    """FAR-2059 / FAR-2100: a configured external backend is always constructed.
 
-    External backends are available on every tier and a configured backend is
-    always constructed - a licence lapse must not switch it to fernet.
+    External backends are available on every tier and there is no fernet
+    fallback any more, so the factory neither requires a fernet key for them nor
+    consults licence/tier state (it has no such input) - a licence lapse must
+    not switch a vault/aws deployment to fernet.
     """
-    if backend_name == "vault":
-        from modulo.core.secrets_backend.vault import VaultSecretsBackend
+    backend_name, expected_cls = external_backend
 
-        monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
-        monkeypatch.setenv("VAULT_TOKEN", "x")
-        with (
-            patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
-            patch("modulo.core.secrets_backend.vault._hvac"),
-        ):
-            backend = create_secrets_backend(fernet_key=_KEY, backend_name=backend_name)
-        assert isinstance(backend, VaultSecretsBackend)
-        return
+    backend = create_secrets_backend(fernet_key=fernet_key, backend_name=backend_name)
 
-    from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
-
-    monkeypatch.setenv("AWS_REGION", "us-east-1")
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "x")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "y")
-    with (
-        patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
-        patch("modulo.core.secrets_backend.aws._boto3"),
-    ):
-        backend = create_secrets_backend(fernet_key=_KEY, backend_name=backend_name)
-    assert isinstance(backend, AWSSecretsManagerBackend)
-
-
-@pytest.mark.parametrize("backend_name", ["vault", "aws"])
-def test_external_backend_does_not_require_a_fernet_key(monkeypatch: pytest.MonkeyPatch, backend_name: str) -> None:
-    """No fernet fallback exists any more, so the external path needs no fernet key."""
-    if backend_name == "vault":
-        from modulo.core.secrets_backend.vault import VaultSecretsBackend
-
-        monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
-        monkeypatch.setenv("VAULT_TOKEN", "x")
-        with (
-            patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
-            patch("modulo.core.secrets_backend.vault._hvac"),
-        ):
-            backend = create_secrets_backend(fernet_key=None, backend_name=backend_name)
-        assert isinstance(backend, VaultSecretsBackend)
-        return
-
-    from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
-
-    monkeypatch.setenv("AWS_REGION", "us-east-1")
-    with (
-        patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
-        patch("modulo.core.secrets_backend.aws._boto3"),
-    ):
-        backend = create_secrets_backend(fernet_key=None, backend_name=backend_name)
-    assert isinstance(backend, AWSSecretsManagerBackend)
+    assert isinstance(backend, expected_cls)
 
 
 def test_unconfigured_vault_backend_fails_hard_not_silently(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -119,47 +108,47 @@ def test_unconfigured_vault_backend_fails_hard_not_silently(monkeypatch: pytest.
     different backend: a silent switch is exactly the failure this ticket
     removes.
     """
-    monkeypatch.delenv("VAULT_ADDR", raising=False)
-    with (
-        patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
-        patch("modulo.core.secrets_backend.vault._hvac"),
-        pytest.raises(ValueError, match="VAULT_ADDR is not set"),
-    ):
-        create_secrets_backend(fernet_key=_KEY, backend_name="vault")
+    with _stub_external_backend(monkeypatch, "vault"):
+        monkeypatch.delenv("VAULT_ADDR", raising=False)
+        with pytest.raises(ValueError, match="VAULT_ADDR is not set"):
+            create_secrets_backend(fernet_key=_KEY, backend_name="vault")
 
 
-def test_external_secrets_flag_is_not_registered():
+def test_external_secrets_flag_is_not_registered() -> None:
     """FAR-2100: the entitlement is retired — there is no runtime surface to gate."""
     registry = FeatureFlagRegistry()
     assert registry.get_flag("external_secrets") is None
     assert "external_secrets" not in {flag.name for flag in _KNOWN_FLAGS}
 
 
-def test_external_secrets_flag_absent_from_seed_catalog():
+def test_external_secrets_flag_absent_from_seed_catalog() -> None:
     """The tier catalog seed is derived from ``_KNOWN_FLAGS``; the flag is gone there too."""
     from modulo.core.seed_data.catalog import FLAGS
 
     assert "external_secrets" not in {entry["name"] for entry in FLAGS}
 
 
-def test_external_secrets_flag_absent_on_community_tier():
-    registry = FeatureFlagRegistry(current_tier="community", has_license_key=False)
+@pytest.mark.parametrize(
+    ("tier", "has_license_key"),
+    [
+        pytest.param("community", False, id="community"),
+        pytest.param("team", True, id="team"),
+    ],
+)
+def test_external_secrets_flag_absent_on_every_tier(tier: str, has_license_key: bool) -> None:
+    registry = FeatureFlagRegistry(current_tier=tier, has_license_key=has_license_key)
+
     assert registry.get_flag("external_secrets") is None
 
 
-def test_external_secrets_flag_absent_on_team_tier():
-    registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
-    assert registry.get_flag("external_secrets") is None
-
-
-def test_external_secrets_licence_helper_is_removed():
+def test_external_secrets_licence_helper_is_removed() -> None:
     """The factory must not consult licence state for backend construction."""
     import modulo.core.secrets_backend as secrets_module
 
     assert not hasattr(secrets_module, "_check_external_secrets_licensed")
 
 
-def test_env_var_used_when_no_backend_name(monkeypatch: pytest.MonkeyPatch):
+def test_env_var_used_when_no_backend_name(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MODULO_SECRETS_BACKEND", "fernet")
     backend = create_secrets_backend(fernet_key=_KEY)
     assert isinstance(backend, FernetSecretsBackend)
@@ -174,61 +163,19 @@ def test_env_var_used_when_no_backend_name(monkeypatch: pytest.MonkeyPatch):
         pytest.param("vault", "env", id="env_var-plain"),
     ],
 )
-def test_backend_name_normalized(monkeypatch: pytest.MonkeyPatch, name: str, source: str):
+def test_backend_name_normalized(monkeypatch: pytest.MonkeyPatch, name: str, source: str) -> None:
     """Both ``backend_name`` and ``MODULO_SECRETS_BACKEND`` are lowercased/stripped before matching."""
-    from modulo.core.secrets_backend.vault import VaultSecretsBackend
-
-    monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
-    monkeypatch.setenv("VAULT_TOKEN", "x")
-    with (
-        patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
-        patch("modulo.core.secrets_backend.vault._hvac"),
-    ):
+    with _stub_external_backend(monkeypatch, "vault") as expected_cls:
         if source == "env":
             monkeypatch.setenv("MODULO_SECRETS_BACKEND", name)
             backend = create_secrets_backend(fernet_key=None)
         else:
             backend = create_secrets_backend(fernet_key=None, backend_name=name)
-        assert isinstance(backend, VaultSecretsBackend), f"Expected VaultSecretsBackend for name={name!r}"
+
+        assert isinstance(backend, expected_cls), f"Expected {expected_cls.__name__} for name={name!r}"
 
 
-@pytest.mark.parametrize(
-    ("backend_name", "env_vars", "module_patch", "lib_patch"),
-    [
-        pytest.param(
-            "vault",
-            {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"},
-            "modulo.core.secrets_backend.vault",
-            "modulo.core.secrets_backend.vault._hvac",
-            id="vault",
-        ),
-        pytest.param(
-            "aws",
-            {"AWS_REGION": "us-east-1", "AWS_ACCESS_KEY_ID": "x", "AWS_SECRET_ACCESS_KEY": "y"},
-            "modulo.core.secrets_backend.aws",
-            "modulo.core.secrets_backend.aws._boto3",
-            id="aws",
-        ),
-    ],
-)
-def test_fernet_key_optional_for_external_backend(
-    monkeypatch: pytest.MonkeyPatch, backend_name, env_vars, module_patch, lib_patch
-):
-    if backend_name == "vault":
-        from modulo.core.secrets_backend.vault import VaultSecretsBackend as expected_cls  # noqa: N813
-    else:
-        from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend as expected_cls  # noqa: N813
-    for k, v in env_vars.items():
-        monkeypatch.setenv(k, v)
-    with (
-        patch(f"{module_patch}._MODULE_AVAILABLE", True),
-        patch(lib_patch),
-    ):
-        backend = create_secrets_backend(fernet_key=None, backend_name=backend_name)
-        assert isinstance(backend, expected_cls)
-
-
-def test_fernet_key_required_when_backend_is_fernet():
+def test_fernet_key_required_when_backend_is_fernet() -> None:
     with pytest.raises(ValueError, match="fernet_key is required"):
         create_secrets_backend(fernet_key=None)
 
@@ -241,11 +188,11 @@ def test_fernet_key_required_when_backend_is_fernet():
         pytest.param("   ", id="whitespace-only"),
     ],
 )
-def test_validate_key_rejects_blank_keys(key):
+def test_validate_key_rejects_blank_keys(key: str | None) -> None:
     """Empty, None and whitespace-only keys are all rejected as non-empty violations."""
     with pytest.raises(ValueError, match="non-empty"):
-        validate_key(key)
+        validate_key(key)  # type: ignore[arg-type]
 
 
-def test_validate_key_strips_whitespace():
+def test_validate_key_strips_whitespace() -> None:
     assert validate_key("  my-key  ") == "my-key"

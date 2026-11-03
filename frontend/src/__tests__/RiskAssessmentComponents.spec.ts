@@ -19,6 +19,7 @@ import {
 import { formatDateFilename, formatDateShort, formatDateShortWithTime, formatRelativeTime } from '../lib/formatDate'
 import {
   RISK_ACTIONS,
+  RISK_WINDOW_CHOICES,
   defaultRiskAssessmentFilters,
   type EvidenceRow,
 } from '../lib/riskAssessment'
@@ -295,18 +296,23 @@ describe('RiskAssessmentSummaryCard', () => {
         totalRows: 9,
         actionCounts: { block: 1, warn: 2, continue: 3, escalate: 4 },
         facetDegraded: true,
-        timeWindow: 30,
-      },
+         timeWindow: 30,
+         dataTestId: 'custom-risk-summary',
+       },
     })
 
-    expect(wrapper.find('[data-testid="risk-assessment-total"]').text()).toBe('9')
+     expect(wrapper.find('[data-testid="custom-risk-summary"]').exists()).toBe(true)
+     expect(wrapper.find('[data-testid="risk-assessment-summary-card"]').exists()).toBe(false)
+     expect(wrapper.find('[data-testid="risk-assessment-total"]').text()).toBe('9')
     expect(wrapper.find('[data-testid="risk-assessment-block-count"]').text()).toBe('1')
     expect(wrapper.find('[data-testid="risk-assessment-warn-count"]').text()).toBe('2')
     expect(wrapper.find('[data-testid="risk-assessment-continue-count"]').text()).toBe('3')
     expect(wrapper.find('[data-testid="risk-assessment-escalate-count"]').text()).toBe('4')
     expect(wrapper.find('[data-testid="risk-assessment-facet-degraded"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="risk-assessment-time-window"]').text()).toContain('30')
-  })
+      expect(wrapper.find('[data-testid="risk-assessment-time-window"]').text()).toContain('30')
+      expect(wrapper.find('h2').text()).toBe('Summary')
+      expect(wrapper.find('h3').exists()).toBe(false)
+   })
 
   it('defaults missing counts to zero and hides chrome when healthy', () => {
     const wrapper = mountWithI18n(RiskAssessmentSummaryCard, {
@@ -349,6 +355,14 @@ describe('RiskAssessmentFacets', () => {
       .findAll('option')
       .map((o) => o.attributes('value'))
     expect(actionValues).toEqual(['', ...RISK_ACTIONS])
+
+    // The rendered windows ARE the shared deep-link vocabulary — the facet and
+    // the route hydration read one source, so neither can drift from the other.
+    const dayValues = wrapper
+      .find('[data-testid="risk-assessment-days"]')
+      .findAll('option')
+      .map((o) => Number(o.attributes('value')))
+    expect(dayValues).toEqual(RISK_WINDOW_CHOICES.map((choice) => choice.value))
   })
 
   it('emits the updated filters as the operator edits', async () => {

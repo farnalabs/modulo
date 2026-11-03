@@ -35,6 +35,10 @@
     <!-- Full-page error -->
     <ErrorAlert v-else-if="error && !summary" :message="error" :on-retry="dashboardStore.fetchSummary" />
     <template v-else-if="summary">
+      <DashboardSystemOverview
+        v-if="systemMapsStore.accessLoaded && systemMapsStore.systemMapsEnabled"
+        class="mb-4"
+      />
       <!-- Row 1: Summary stat cards -->
       <div :class="['grid gap-4 sm:grid-cols-2 lg:grid-cols-4 transition-opacity duration-200', periodRefreshing ? 'opacity-60' : 'opacity-100']">
         <StatCard :label="$t('views.DashboardView.pipelines')" :value="cardValue(summary.period?.metrics?.active_pipelines?.current, summary.active_pipelines)" color="primary" to="/pipelines" :delta="periodMetrics?.active_pipelines ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined" :neutral-trend="true">
@@ -179,7 +183,7 @@
             <Sparkline class="h-16 w-full" :data="trendRejectionRate" :labels="trendLabels" unit="%" color="hsl(var(--destructive-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
         </div>
-        <div v-else class="flex items-center justify-center py-12">
+        <div v-else class="flex items-center justify-center min-h-[200px]">
           <p class="text-sm italic text-muted-foreground">{{ $t('views.DashboardView.no_data_trends') }}</p>
         </div>
       </div>
@@ -226,7 +230,9 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import DashboardNotificationsPanel from '../components/DashboardNotificationsPanel.vue'
+import DashboardSystemOverview from '../components/dashboard/DashboardSystemOverview.vue'
 import { usePlanStore } from '../stores/planStore'
+import { useSystemMapsStore } from '../stores/systemMaps'
 import { useDashboardStore } from '../stores/dashboard'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Sparkline from '../components/shared/Sparkline.vue'
@@ -243,6 +249,7 @@ const { t } = useI18n()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 
 const planStore = usePlanStore()
+const systemMapsStore = useSystemMapsStore()
 const dashboardStore = useDashboardStore()
 
 const loading = computed(() => dashboardStore.loading)
@@ -505,6 +512,7 @@ onMounted(async () => {
   if (!planStore.currentTier || planStore.currentTier === 'community') {
     promises.push(planStore.fetchPlan());
   }
+  promises.push(systemMapsStore.fetchAccess())
   await Promise.all(promises);
 })
 </script>

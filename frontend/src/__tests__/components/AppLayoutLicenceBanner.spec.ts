@@ -52,9 +52,8 @@ const { mockRoute, routerPush, mockRouter } = vi.hoisted(() => {
   return { mockRoute, routerPush, mockRouter }
 })
 
-// The app router module is imported transitively (useUiCommandExecutor) and
-// builds a router at module scope, so createRouter/createWebHistory must exist
-// on the mock as well.
+// Modules imported transitively by AppLayout build a router at module scope,
+// so createRouter/createWebHistory must exist on the mock as well.
 vi.mock('vue-router', () => ({
   useRoute: () => mockRoute,
   useRouter: () => mockRouter,

@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-
-pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 from modulo.connectors.shell import ShellConnector
 from modulo.core.runtime_provider import ExecResult, WorkspaceSpec
 from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 from modulo.core.runtime_provider.local_docker import LocalDockerRuntimeProvider
+
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 
 @pytest.fixture
@@ -91,6 +91,24 @@ async def test_execute_command_without_cwd_or_env(canonical_provider: MagicMock)
     canonical_provider.exec_command.assert_awaited_once_with(
         "workspace-ref",
         ["sh", "-c", "echo hi"],
+        cmd_timeout=60,
+    )
+
+
+async def test_execute_command_shell_quotes_cwd_and_env_values(canonical_provider: MagicMock) -> None:
+    """cwd and env values are quoted: metacharacters must not escape the shell."""
+    adapter = LocalDockerRuntimeProvider(provider=canonical_provider)
+
+    await adapter.execute_command(
+        "workspace-ref",
+        "echo hi",
+        cwd="/workspace/it's here",
+        env={"MSG": "a b; rm -rf /"},
+    )
+
+    canonical_provider.exec_command.assert_awaited_once_with(
+        "workspace-ref",
+        ["sh", "-c", "cd '/workspace/it'\"'\"'s here' && env MSG='a b; rm -rf /' echo hi"],
         cmd_timeout=60,
     )
 

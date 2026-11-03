@@ -4,14 +4,22 @@ All HITL operations are scoped to the authenticated user's organisation.
 Claim, approve, and reject require the run to be in ``awaiting_human`` status.
 
 Claim-token-based approve/reject require the token returned from a successful
-claim.  ``human_only`` gates additionally reject claim/decisions made with a
-non-browser credential: the claim route AND the resume routes (approve /
+claim.  ``human_only`` gates additionally reject claim and decisions made with
+a non-browser credential: the claim route AND the resume routes (approve /
 approve-with-modification / deliver-manual / submit-manual) resolve the gate's
-actual edge config and raise 403 for API-key principals (FAR-610 — the routes
-previously performed no ``human_only`` check at all; FAR-609 extended the same
-check to claim). When the config cannot be resolved but the gate fired (a
-claim row exists), API-key principals are denied too — fail closed, since the
-policy cannot be verified.
+actual edge config and raise 403 for a non-browser principal (FAR-610 — the
+routes previously performed no ``human_only`` check at all; FAR-609 extended
+the same check to claim). When the config cannot be resolved but the gate
+fired (a claim row exists), non-browser principals are denied too — fail
+closed, since the policy cannot be verified.
+
+These routes resolve principals from browser-login JWTs only
+(``get_current_tenant_user`` decodes a user JWT; an ``mk_`` API key is an MCP
+credential), so the non-browser case here is a programmatic JWT (FAR-634).
+There is deliberately NO human-linked authority on the REST surface: the
+user-scoped human-linked API-key path is an MCP credential and is evaluated
+only by the MCP gate under the default-OFF ``mcp_human_linked_hitl_authority``
+flag (ADR 063 step 1).
 
 ``reject_gate`` requires a claim_token, and that token can no longer be
 obtained by a non-browser principal on a ``human_only`` (now the default)
@@ -19,12 +27,13 @@ gate, so non-browser principals can neither claim, decide, NOR reject such a
 gate. Only a principal already holding a claim (e.g. claimed before the
 policy change) can reject; agent-only runs on default ``human_only`` gates
 require browser-human intervention — that is the intended policy, NOT an
-agent escape hatch. The MCP surface (``mcp_server.py``) denies ``human_only``
-claim, approve and deliver-manual to every credential except a consent-derived,
-human-linked OAuth credential (ADR 063 step 1, gated by the org-wide
-``mcp_human_linked_hitl_authority`` flag); ``mk_`` API keys and non-OAuth JWTs
-are never browser sessions and stay denied. ``deliver_manual`` stays
-browser-only regardless.
+agent escape hatch. The MCP surface (``mcp_server.py``) permits a verified,
+eligible consent-derived human-linked OAuth credential or user-scoped
+human-linked API key only when an organisation admin has explicitly enabled
+the default-OFF ``mcp_human_linked_hitl_authority`` flag (ADR 063 step 1).
+Org-, team-, service- and run-scoped API keys and non-OAuth JWTs remain
+denied; normal possession and claim-token requirements still apply.
+``deliver_manual`` stays browser-only regardless.
 """
 
 from __future__ import annotations
@@ -60,12 +69,6 @@ from modulo.api.hitl_answer_validation import (
 )
 from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.human_linkage import (
-    AUTH_TYPE_API_KEY,
-    AUTH_TYPE_JWT,
-    required_permission_for_action,
-    resolve_human_linkage,
-)
 from modulo.auth.jwt import CLIENT_KIND_BROWSER, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
@@ -97,6 +100,7 @@ from modulo.db.crud.hitl_review_config import (
     snapshot_review_config_map,
 )
 from modulo.db.crud.run import get_run, transition_run
+from modulo.db.crud.team_scope import account_team_scope_clause, viewer_run_scope_visible
 from modulo.db.models.account import Account
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
@@ -379,28 +383,16 @@ async def _enforce_human_only_gate(
     default gates require browser-human intervention — that is the intended
     policy, not an agent escape hatch.
 
-    Credential semantics (FAR-610 finding + FAR-634 hardening): REST resolves
-    principals from browser-login JWTs today — org API keys (``mk_``) are
-    accepted solely by the MCP server and the few
-    ``require_permission_any_credential`` routes. FAR-634 extends the
-    credential marker to the JWT-level ``client_kind`` claim (stamped at mint
-    time; legacy tokens without the claim decode as ``browser``): the denial
-    rule is now ``via_api_key OR client_kind != "browser"`` — a future
-    programmatic JWT mint path is denied by construction, and unknown claim
-    values fail closed. HONEST LIMITATION (defense-in-depth, not absolute):
-    in this org agent sessions hold the admin password and mint through the
-    same login endpoint, so a password-minted JWT is indistinguishable from a
-    browser login at issuance — the FAR-611 sweep alarm is the detective
-    control for that residual. Step-up re-auth is a separate product
-    decision (deliberately NOT attempted here). MCP approvals — the observed
-    attack path — were denied outright for ``human_only`` gates in
-    ``mcp_server._check_human_only_gate`` (FAR-634); ADR 063 step 1 (FAR-1957)
-    replaces that hard-coded deny with the SAME shared authority resolver this
-    function now calls, so only a consent-derived, human-linked OAuth credential
-    (when the org-wide ``mcp_human_linked_hitl_authority`` flag is ON) may decide
-    such a gate over MCP. This REST path's own behaviour is unchanged: its
-    credentials are never consent-derived OAuth tokens, so the resolver always
-    reports not-human-linked and the verdict is identical.
+    Credential semantics (FAR-610 finding + FAR-634 hardening): these routes
+    resolve principals from browser-login JWTs only, so a non-browser principal
+    here is a programmatic JWT (FAR-634), and the browser-class short-circuit
+    above remains the UI enforcement surface. There is deliberately NO
+    human-linked authority on REST: the user-scoped human-linked API-key path
+    is an MCP credential, evaluated only by the MCP gate under the default-OFF
+    ``mcp_human_linked_hitl_authority`` flag (ADR 063 step 1). ``deliver_manual``
+    remains browser-only on every surface. Normal possession requirements are
+    unchanged: claim, approve, reject and deliver-manual still require the
+    applicable claim token and gate rules.
 
     Every denial emits a warning log + the ``hitl.human_only_denied`` audit
     event (FAR-634) via :func:`_emit_human_only_denial_audit`, invoked by the
@@ -430,22 +422,16 @@ async def _enforce_human_only_gate(
             review_id=review_id,
             org_id=principal.organisation_id,
         )
-    # ADR 063 step 1: one shared authority resolver for REST and MCP. REST
-    # resolves principals from browser-login JWTs / ``mk_`` API keys — neither
-    # is a consent-derived OAuth access token — so the resolver always reports
-    # not-human-linked here and the verdict is unchanged. Wiring it keeps the
-    # two surfaces on ONE resolver rather than a second bespoke rule; the
-    # browser-class short-circuit above is deliberately NOT reinterpreted.
-    linkage = await resolve_human_linkage(
-        session,
-        org_id=principal.organisation_id,
-        auth_type=AUTH_TYPE_API_KEY if principal.via_api_key else AUTH_TYPE_JWT,
-        account_id=principal.account_id,
-        token_family=None,
-        grants=principal.key_grants,
-        required_permission=required_permission_for_action(action),
+    # No human-linked authority is resolved here: REST principals are
+    # browser-login JWTs, and a non-browser one is always a programmatic JWT
+    # (FAR-634). The user-scoped human-linked API-key path is an MCP credential
+    # handled by ``mcp_server._check_human_only_gate`` under the default-OFF
+    # ``mcp_human_linked_hitl_authority`` flag (ADR 063 step 1).
+    verdict = human_only_denial(
+        config,
+        non_browser_credential=non_browser_credential,
+        gate_fired=gate_fired,
     )
-    verdict = human_only_denial(config, non_browser_credential=not linkage.linked, gate_fired=gate_fired)
     if verdict is not None:
         raise HumanOnlyDenied(
             verdict,
@@ -1458,12 +1444,27 @@ async def _describe_gates_from_snapshot(
     return review_label_map, review_description_map
 
 
+def _viewer_account_scope_id(principal: TenantPrincipal) -> uuid.UUID | None:
+    """Return the account id when a viewer read must be team-membership clamped.
+
+    ``hitl.list`` is viewer-reachable and ``hitl_claims`` carries only the
+    org-only RLS policy (migration 0110), so without an explicit predicate a
+    viewer would enumerate gates on team-private pipelines. Org-level and
+    owning-team rows stay visible; the membership clause is the only boundary.
+    """
+    return principal.account_id if principal.org_role == "viewer" else None
+
+
 async def _load_pending_run_data(
     session: AsyncSession,
     principal: TenantPrincipal,
     run_id: uuid.UUID,
 ) -> _PendingRunData:
-    """Resolve the run's pending gates and their render maps."""
+    """Resolve the run's pending gates and their render maps.
+
+    A viewer is bounded to the runs its team memberships cover; a run outside
+    that boundary is rendered as not-found (never as an empty-gate 200).
+    """
     # Defence-in-depth org predicate (FAR-328): RLS is the backstop, the
     # explicit filter makes cross-tenant access impossible even if RLS
     # were misconfigured.
@@ -1471,13 +1472,27 @@ async def _load_pending_run_data(
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-    result = await session.execute(
-        select(HitlClaim).where(
-            HitlClaim.run_id == run_id,
-            HitlClaim.organisation_id == principal.organisation_id,
-            HitlClaim.decision.is_(None),
-        )
+    viewer_account_id = _viewer_account_scope_id(principal)
+    if viewer_account_id is not None and not await viewer_run_scope_visible(session, run_id, viewer_account_id):
+        # Mirror the MCP ``get_hitl_review`` not-found mapping: the unclamped
+        # existence check above would otherwise answer 200-with-empty-gates for
+        # a foreign team-private run, i.e. a cross-team run-existence oracle.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    gate_stmt = select(HitlClaim).where(
+        HitlClaim.run_id == run_id,
+        HitlClaim.organisation_id == principal.organisation_id,
+        HitlClaim.decision.is_(None),
     )
+    if viewer_account_id is not None:
+        gate_stmt = (
+            gate_stmt.join(Run, HitlClaim.run_id == Run.id)
+            .join(Pipeline, Run.pipeline_id == Pipeline.id)
+            .where(
+                account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id)
+            )
+        )
+    result = await session.execute(gate_stmt)
     gates = list(result.scalars())
 
     pipeline_name = await _load_pending_pipeline_name(session, gates)
@@ -1579,8 +1594,14 @@ async def list_org_pending_reviews(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             # include_claimed (FAR-686): claimed-but-undecided gates stay on
-            # the review page so the reviewer can still act on them.
-            gates = await mgr.list_pending(session, principal.organisation_id, include_claimed=True)
+            # the review page so the reviewer can still act on them. The
+            # account clamp is mandatory for viewer-level hitl.list.
+            gates = await mgr.list_pending(
+                session,
+                principal.organisation_id,
+                include_claimed=True,
+                account_id=_viewer_account_scope_id(principal),
+            )
 
             pipeline_ids = list({g.pipeline_id for g in gates})
             pipeline_map: dict[uuid.UUID, str] = {}
@@ -1715,6 +1736,7 @@ async def list_org_reviews(
                 fenced_to_actionable_runs=fenced_to_actionable_runs,
                 page=page,
                 effective_page_size=effective_page_size,
+                account_id=_viewer_account_scope_id(principal),
             )
             pipeline_map, description_by_review, review_label_map, claimant_names = await _load_review_page_enrichment(
                 session, gates=gates, organisation_id=principal.organisation_id
@@ -1794,24 +1816,38 @@ async def _fetch_review_page(
     fenced_to_actionable_runs: bool,
     page: int,
     effective_page_size: int,
+    account_id: uuid.UUID | None = None,
 ) -> tuple[int, list[HitlClaim]]:
     """Run the count + page queries for ``/hitl/reviews`` in the caller's transaction.
 
     Count and page derive from the SAME composed filters; the runs join is
     part of both so the count matches the fenced page. The page query is
     skipped entirely when the count is zero.
+
+    *account_id* applies the viewer account-team membership clamp to BOTH
+    statements (the count and the page must agree — ``hitl_claims`` has no
+    team RLS policy, so the app-layer clause is the only boundary).
     """
     count_stmt = select(func.count()).select_from(HitlClaim)
     if fenced_to_actionable_runs:
         count_stmt = count_stmt.join(Run, HitlClaim.run_id == Run.id)
     count_stmt = count_stmt.where(*decision_filters)
+    gates_stmt = select(HitlClaim)
+    if fenced_to_actionable_runs:
+        gates_stmt = gates_stmt.join(Run, HitlClaim.run_id == Run.id)
+    if account_id is not None:
+        if not fenced_to_actionable_runs:
+            count_stmt = count_stmt.join(Run, HitlClaim.run_id == Run.id)
+            gates_stmt = gates_stmt.join(Run, HitlClaim.run_id == Run.id)
+        membership_clause = account_team_scope_clause(
+            func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id
+        )
+        count_stmt = count_stmt.join(Pipeline, Run.pipeline_id == Pipeline.id).where(membership_clause)
+        gates_stmt = gates_stmt.join(Pipeline, Run.pipeline_id == Pipeline.id).where(membership_clause)
     total = (await session.execute(count_stmt)).scalar_one()
 
     gates: list[HitlClaim] = []
     if total:
-        gates_stmt = select(HitlClaim)
-        if fenced_to_actionable_runs:
-            gates_stmt = gates_stmt.join(Run, HitlClaim.run_id == Run.id)
         gates_stmt = (
             gates_stmt.where(*decision_filters)
             .order_by(

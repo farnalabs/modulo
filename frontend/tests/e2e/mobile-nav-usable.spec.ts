@@ -8,21 +8,22 @@ import { getTarget, type TestEnv } from './setup/env'
 // (`mobile-nav-flash.spec.ts`) and viewport layout invariants
 // (`mobile-layout.spec.ts`). Neither proves that the chrome a mobile session
 // actually gets settles to exactly one nav component AND can be used to
-// navigate. The flags read (the caller-scoped `GET /api/v1/plan` bootstrap
-// since FAR-1809) is not guaranteed readable for the e2e identity on every
-// target; FAR-1805's terminal fallback (flagsSource 'unavailable' →
-// hamburger drawer) is what makes the mobile nav workable there, so this spec
-// is written chrome-agnostic: it derives the chrome from the DOM and accepts
-// either the drawer or the icon rail, asserting against the LIVE claim (the
-// flag payload) only when that payload is actually readable.
+// navigate.
+//
+// FAR-2234 retired the `mobile_sidebar_rail` experiment: the icon rail is now
+// the unconditional mobile navigation chrome, so the legacy hamburger top-nav
+// and the flag-driven `pending` placeholder are both gone. These tests pin that
+// reality - the rail is the ONLY chrome, anything transient drains, and the
+// rail navigates - and the flag read is kept only to prove the retired flag can
+// no longer flip the layout back to the drawer.
 //
 // Design constraints:
 //  - the settle waits are auto-retrying assertions, never fixed sleeps;
 //  - the pending placeholder may legitimately never paint (rail from cache),
 //    so first paint is logged, not asserted — the discriminator is that it
 //    must DRAIN (never park forever, the pre-fix failure mode);
-//  - the mode-consistency test skips LOUDLY (reason written to stdout) while
-//    the flags endpoint is unreadable for the e2e identity — a documented
+//  - the retired-flag check skips LOUDLY (reason written to stdout) while the
+//    flags endpoint is unreadable for the e2e identity - a documented
 //    capability gate, not a silent skip.
 
 test.describe.configure({ retries: 0 })
@@ -110,19 +111,20 @@ async function boot(page: Page, env: TestEnv): Promise<void> {
 }
 
 /**
- * Wait for the mobile nav to resolve: the placeholder must be GONE and exactly
- * one chrome (hamburger drawer OR icon rail) present. Returns the settled
- * counts. Failure messages name the pre-FAR-1805 failure mode explicitly.
+ * Wait for the mobile nav to resolve: the placeholder must be GONE and the
+ * icon rail - the only mobile chrome since FAR-2234 - must be present. Returns
+ * the settled counts. Failure messages name the pre-FAR-1805 failure mode and
+ * the retired drawer explicitly.
  */
 async function settleChrome(page: Page): Promise<ChromeCounts> {
   await expect(
     page.locator(PENDING),
-    'the pending placeholder must drain once the flags read settles — never parked forever (the pre-FAR-1805 failure mode)',
+    'the pending placeholder must drain once the flags read settles - never parked forever (the pre-FAR-1805 failure mode)',
   ).toHaveCount(0, { timeout: SETTLE_TIMEOUT_MS })
 
   await expect.poll(() => chromeNavSum(page), {
     timeout: SETTLE_TIMEOUT_MS,
-    message: 'exactly one mobile chrome (hamburger drawer OR icon rail) must settle — never zero, never both',
+    message: 'exactly one mobile chrome (the icon rail) must settle - never zero',
   }).toBe(1)
 
   const settled = await chromeCounts(page)
@@ -249,30 +251,29 @@ test.describe('FAR-1805 — the mobile nav is usable, not just present', { tag: 
     expect(settled.pending, 'the placeholder must be gone once resolved').toBe(0)
   })
 
-  test('the settled mobile chrome can navigate to another page', { tag: ['@regression', '@mobile'] }, async ({ page, env }) => {
+  test('the icon rail is the only mobile chrome, and it navigates to another page', { tag: ['@regression', '@mobile'] }, async ({ page, env }) => {
     await boot(page, env)
     const settled = await settleChrome(page)
 
-    // settleChrome guaranteed hamburger+rail === 1, so the mode is exactly
-    // whichever selector is mounted.
-    const mode: 'rail' | 'drawer' = settled.rail > 0 ? 'rail' : 'drawer'
-    await openAndNavigate(page, mode)
+    // FAR-2234: the legacy hamburger top-nav is gone, so the rail is the only
+    // chrome a mobile session can get.
+    expect(settled, 'the icon rail must be the only mobile chrome').toEqual({ hamburger: 0, rail: 1, pending: 0 })
+    await openAndNavigate(page, 'rail')
   })
 
-  test('the settled chrome matches the live mobile_sidebar_rail flag when the flag is readable', { tag: ['@regression', '@mobile'] }, async ({ page, env }) => {
+  test('the rail is the settled chrome even when the retired mobile_sidebar_rail flag reads false', { tag: ['@regression', '@mobile'] }, async ({ page, env }) => {
     await boot(page, env)
     const settled = await settleChrome(page)
 
     const read = await readRailFlag(page)
     if (!read.readable) {
       process.stdout.write(`[far-1805] SKIP (flag unreadable): ${read.reason}\n`)
-      test.skip(true, `feature flags unreadable — mode check stays skipped until it is readable: ${read.reason}`)
+      test.skip(true, `feature flags unreadable - retired-flag check stays skipped until it is readable: ${read.reason}`)
       return
     }
-    const expected = read.railActive
-      ? { hamburger: 0, rail: 1, pending: 0 }
-      : { hamburger: 1, rail: 0, pending: 0 }
-    expect(settled, `the settled chrome must match the live flag (railActive=${read.railActive})`)
-      .toEqual(expected)
+    // A stale org payload may still carry the flag, but it no longer selects
+    // the layout: the rail is unconditional (FAR-2234).
+    expect(settled, `the rail must win regardless of the retired flag (railActive=${read.railActive})`)
+      .toEqual({ hamburger: 0, rail: 1, pending: 0 })
   })
 })

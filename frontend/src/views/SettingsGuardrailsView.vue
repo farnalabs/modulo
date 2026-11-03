@@ -40,7 +40,7 @@
       </div>
 
       <template v-else>
-        <div class="overflow-x-auto rounded-lg border bg-card shadow-sm">
+        <DataCard variant="bordered" padding="none" elevation="sm" card-class="overflow-x-auto">
           <table class="w-full text-left text-sm">
             <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
               <tr>
@@ -74,7 +74,7 @@
               </tr>
             </tbody>
           </table>
-        </div>
+        </DataCard>
       </template>
 
       <FormDialog
@@ -276,6 +276,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { usePlanStore } from '../stores/planStore'
 import { shortId } from '../utils/format'
 import Select from '../components/shared/AppSelect.vue'

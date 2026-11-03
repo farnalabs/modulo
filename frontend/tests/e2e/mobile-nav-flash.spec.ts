@@ -32,8 +32,14 @@ import { flagCacheKey, serializeFlagCache } from '../../src/config/flagCache'
 // time-delayed, so both phases are deterministic: phase 1 samples chrome
 // while the response is held (mount is structurally impossible then, e.g.
 // during the 15s `withTimeout` budget), phase 2 releases, waits for the app
-// mount, and asserts the resolved layout. `flushTwoFrames` uses rAF only —
+// mount, and asserts the resolved layout. `flushTwoFrames` uses rAF only -
 // never a fixed sleep.
+//
+// FAR-2234 retired the `mobile_sidebar_rail` experiment: the icon rail is the
+// unconditional mobile chrome, so every case below now expects the rail - the
+// stale-flag cases exist to prove the retired flag (live payload OR persisted
+// cache) can never resurrect the legacy drawer.
+
 //
 // Local-only: relies on the mock API plus an overriding route.
 
@@ -350,7 +356,9 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
     await openAndNavigate(page, 'rail')
   })
 
-  test('first visit (drawer org): nothing paints while the flag is unknown; the drawer paints once it resolves', { tag: '@mobile' }, async ({ page }) => {
+  test('first visit (stale flag OFF): nothing paints while flags are unknown; the rail still paints once they resolve', { tag: '@mobile' }, async ({ page }) => {
+    // FAR-2234 retired the flag: an org whose payload still reports OFF must
+    // get the rail, never the legacy hamburger drawer.
     const gate = await boot(page, { rail: false, waitForMount: false })
 
     const whileFlagsUnknown = await chrome(page)
@@ -373,9 +381,12 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
     const settled = await chrome(page)
     process.stdout.write(`[far-1237] after flags resolve OFF: ${JSON.stringify(settled)}\n`)
 
-    expect(settled, 'the resolved layout must paint once the flag lands').toEqual({ hamburger: 1, rail: 0, pending: 0 })
+    expect(
+      settled,
+      'the rail is unconditional (FAR-2234) - a stale OFF flag must not resurrect the drawer',
+    ).toEqual({ hamburger: 0, rail: 1, pending: 0 })
 
-    await openAndNavigate(page, 'drawer')
+    await openAndNavigate(page, 'rail')
   })
 
   test('returning rail user: the left rail paints first from the persisted cache, even while flags are slow', { tag: '@mobile' }, async ({ page }) => {
@@ -398,11 +409,11 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
     await openAndNavigate(page, 'rail')
   })
 
-  test('returning drawer user (secondary UI): the top-nav paints first from cache and is never swapped for the rail', { tag: '@mobile' }, async ({ page }) => {
+  test('returning user with a cached flag=false: the rail paints first and is never swapped', { tag: '@mobile' }, async ({ page }) => {
     const gate = await boot(page, { rail: false, cachedRail: false })
 
     const firstPaint = await chrome(page)
-    process.stdout.write(`[far-1237] first paint, cached drawer: ${JSON.stringify(firstPaint)}\n`)
+    process.stdout.write(`[far-1237] first paint, cached flag=false: ${JSON.stringify(firstPaint)}\n`)
 
     gate.release()
     await gate.response
@@ -411,10 +422,11 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
     const settled = await chrome(page)
     process.stdout.write(`[far-1237] after slow flags resolve OFF: ${JSON.stringify(settled)}\n`)
 
-    expect(firstPaint, 'the secondary UI must also paint its resolved layout first')
-      .toEqual({ hamburger: 1, rail: 0, pending: 0 })
-    expect(settled, 'the secondary layout must not be replaced by the rail').toEqual({ hamburger: 1, rail: 0, pending: 0 })
+    expect(firstPaint, 'the resolved layout itself must paint first - no placeholder, no legacy top-nav')
+      .toEqual({ hamburger: 0, rail: 1, pending: 0 })
+    expect(settled, 'a stale cached OFF value must not flip the layout to the drawer')
+      .toEqual({ hamburger: 0, rail: 1, pending: 0 })
 
-    await openAndNavigate(page, 'drawer')
+    await openAndNavigate(page, 'rail')
   })
 })

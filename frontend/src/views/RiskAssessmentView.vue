@@ -46,6 +46,7 @@ import { api } from '../lib/api/client'
 import {
   defaultRiskAssessmentFilters,
   riskAssessmentRouteQuery,
+  riskFiltersFromRouteQuery,
   type RiskAssessmentFilters,
 } from '../lib/riskAssessment'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -143,16 +144,7 @@ function resetFilters(): void {
 }
 
 function filtersFromRoute(): RiskAssessmentFilters {
-  const filters = defaultRiskAssessmentFilters()
-  const { key_prefix: keyPrefix, pipeline_id: pipelineId, days, action } = route.query
-  if (typeof keyPrefix === 'string') filters.keyPrefix = keyPrefix
-  if (typeof pipelineId === 'string') filters.pipelineId = pipelineId
-  if (typeof days === 'string') {
-    const parsed = Number.parseInt(days, 10)
-    if (!Number.isNaN(parsed)) filters.days = parsed
-  }
-  if (typeof action === 'string') filters.action = action
-  return filters
+  return riskFiltersFromRouteQuery(route.query)
 }
 
 onMounted(async () => {

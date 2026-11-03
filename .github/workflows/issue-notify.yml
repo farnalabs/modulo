@@ -35,6 +35,15 @@ jobs:
        github.event.issue.user.login != 'app/github-actions' &&
        !endsWith(github.event.issue.user.login, '[bot]'))
     steps:
+      # FAR-2290: Zoho raises 'new login activity' alerts for SMTP logins from
+      # runner IPs (expected on Ubicloud/GitHub runners). Logging the egress IP
+      # lets such an alert be matched to this run. Non-fatal; logs only the IP.
+      - name: Log runner egress IP (for Zoho login alerts)
+        if: always()
+        shell: bash
+        run: |
+          echo "runner egress IP: $(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo unknown)" || true
+
       - name: Email maintainer via Zoho SMTP
         env:
           ZOHO_SMTP_USER: ${{ secrets.ZOHO_SMTP_USER }}

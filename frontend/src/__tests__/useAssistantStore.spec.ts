@@ -544,121 +544,6 @@ describe('useAssistantStore API methods', () => {
     expect(store.isStreaming).toBe(true)
   })
 
-  it('approvePermission posts the response and clears the pending request', async () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 's-1'
-    store.pendingPermission = { request_id: 'req-1', tools: [] }
-    apiPost.mockResolvedValue({ data: undefined })
-
-    await store.approvePermission('req-1', 'approve')
-
-    expect(apiPost).toHaveBeenCalledWith(
-      '/api/v1/assistant/sessions/{session_id}/permission-response',
-      {
-        params: { path: { session_id: 's-1' } },
-        body: { request_id: 'req-1', action: 'approve' },
-      },
-    )
-    expect(store.pendingPermission).toBeNull()
-    expect(store.error).toBeNull()
-  })
-
-  it('approvePermission without an active session sets an error and never posts', async () => {
-    const store = useAssistantStore()
-
-    await store.approvePermission('req-1', 'approve')
-
-    expect(apiPost).not.toHaveBeenCalled()
-    expect(store.error).toContain('no active session')
-  })
-
-  it('approvePermission surfaces API errors and clears the pending request', async () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 's-1'
-    store.pendingPermission = { request_id: 'req-1', tools: [] }
-    apiPost.mockResolvedValue({ error: { detail: 'expired request' } })
-
-    await store.approvePermission('req-1', 'reject')
-
-    expect(store.error).toBe('expired request')
-    expect(store.pendingPermission).toBeNull()
-  })
-
-  it('approvePermission surfaces thrown errors and clears the pending request', async () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 's-1'
-    store.pendingPermission = { request_id: 'req-1', tools: [] }
-    apiPost.mockRejectedValue(new Error('socket hang-up'))
-
-    await store.approvePermission('req-1', 'approve_for_session')
-
-    expect(store.error).toBe('socket hang-up')
-    expect(store.pendingPermission).toBeNull()
-  })
-
-  it('approvePermission formats non-Error thrown values', async () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 's-1'
-    store.pendingPermission = { request_id: 'req-1', tools: [] }
-    apiPost.mockRejectedValue('socket hang-up')
-
-    await store.approvePermission('req-1', 'approve')
-
-    expect(store.error).toBe('socket hang-up')
-    expect(store.pendingPermission).toBeNull()
-  })
-
-  it('resetSessionPermissions posts to the reset endpoint', async () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 's-1'
-    apiPost.mockResolvedValue({ data: undefined })
-
-    await store.resetSessionPermissions()
-
-    expect(apiPost).toHaveBeenCalledWith('/api/v1/assistant/sessions/{session_id}/reset-permissions', {
-      params: { path: { session_id: 's-1' } },
-    })
-  })
-
-  it('resetSessionPermissions no-ops without an active session', async () => {
-    const store = useAssistantStore()
-
-    await store.resetSessionPermissions()
-
-    expect(apiPost).not.toHaveBeenCalled()
-  })
-
-  it('resetSessionPermissions surfaces API and thrown errors', async () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 's-1'
-    apiPost.mockResolvedValue({ error: { detail: 'not allowed' } })
-
-    await store.resetSessionPermissions()
-    expect(store.error).toBe('not allowed')
-
-    apiPost.mockRejectedValue(new Error('reset blew up'))
-    await store.resetSessionPermissions()
-    expect(store.error).toBe('reset blew up')
-  })
-
-  it('resetSessionPermissions formats non-Error thrown values', async () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 's-1'
-    apiPost.mockRejectedValue('reset blew up')
-
-    await store.resetSessionPermissions()
-
-    expect(store.error).toBe('reset blew up')
-  })
-
-  it('pauseAssistant and resumeAssistant toggle the paused flag', () => {
-    const store = useAssistantStore()
-    store.pauseAssistant()
-    expect(store.isPaused).toBe(true)
-    store.resumeAssistant()
-    expect(store.isPaused).toBe(false)
-  })
-
   it('append summary messages use an empty session id when none is active', () => {
     const store = useAssistantStore()
     store.appendSystemMessage('System notice')
@@ -691,12 +576,8 @@ describe('useAssistantStore API methods', () => {
     expect(store.messages[1].session_id).toBe('')
   })
 
-  it('setPendingPermission and setPageContext store their payloads', () => {
+  it('setPageContext stores its payload', () => {
     const store = useAssistantStore()
-    const req = { request_id: 'r-9', tools: [{ name: 'click', args: {} }] }
-    store.setPendingPermission(req)
-    expect(store.pendingPermission).toEqual(req)
-
     store.setPageContext({ route: '/pipelines', params: { id: 'p-1' }, entities: ['pipeline'] })
     expect(store.pageContext).toEqual({ route: '/pipelines', params: { id: 'p-1' }, entities: ['pipeline'] })
   })

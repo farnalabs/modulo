@@ -706,12 +706,11 @@ def test_logout_missing_cookie_returns_401(client: tuple[TestClient, AsyncMock])
     assert resp.json()["detail"] == "Invalid or expired refresh token"
 
 
-def test_logout_happy_path_blacklists_family_and_clears_approvals(client: tuple[TestClient, AsyncMock]) -> None:
+def test_logout_happy_path_blacklists_family(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with (
         patch(f"{_PREFIX}decode_refresh_token_claims", return_value=_claims()),
         patch(f"{_PREFIX}blacklist_family", new=AsyncMock(return_value=True)) as blacklist,
-        patch(f"{_PREFIX}clear_session_approvals_for_account") as clear_approvals,
     ):
         _arm_cookies(http, _refresh_token())
         resp = _post_logout(http)
@@ -719,7 +718,6 @@ def test_logout_happy_path_blacklists_family_and_clears_approvals(client: tuple[
     assert resp.status_code == 200, resp.text
     assert resp.json()["detail"] == "Logged out"
     blacklist.assert_awaited_once()
-    clear_approvals.assert_called_once()
 
 
 def test_logout_claims_without_family_skip_blacklist(client: tuple[TestClient, AsyncMock]) -> None:
@@ -727,14 +725,12 @@ def test_logout_claims_without_family_skip_blacklist(client: tuple[TestClient, A
     with (
         patch(f"{_PREFIX}decode_refresh_token_claims", return_value={"sub": "x"}),
         patch(f"{_PREFIX}blacklist_family", new_callable=AsyncMock) as blacklist,
-        patch(f"{_PREFIX}clear_session_approvals_for_account") as clear_approvals,
     ):
         _arm_cookies(http, _refresh_token())
         resp = _post_logout(http)
 
     assert resp.status_code == 200, resp.text
     blacklist.assert_not_awaited()
-    clear_approvals.assert_not_called()
 
 
 def test_logout_invalid_family_uuid_is_tolerated(client: tuple[TestClient, AsyncMock]) -> None:
@@ -742,14 +738,12 @@ def test_logout_invalid_family_uuid_is_tolerated(client: tuple[TestClient, Async
     with (
         patch(f"{_PREFIX}decode_refresh_token_claims", return_value=_claims(token_family="not-a-uuid")),
         patch(f"{_PREFIX}blacklist_family", new_callable=AsyncMock) as blacklist,
-        patch(f"{_PREFIX}clear_session_approvals_for_account") as clear_approvals,
     ):
         _arm_cookies(http, _refresh_token())
         resp = _post_logout(http)
 
     assert resp.status_code == 200, resp.text
     blacklist.assert_not_awaited()
-    clear_approvals.assert_called_once_with("00000000-0000-0000-0000-000000000002")
 
 
 def test_logout_family_not_found_still_succeeds(client: tuple[TestClient, AsyncMock]) -> None:
@@ -757,7 +751,6 @@ def test_logout_family_not_found_still_succeeds(client: tuple[TestClient, AsyncM
     with (
         patch(f"{_PREFIX}decode_refresh_token_claims", return_value=_claims()),
         patch(f"{_PREFIX}blacklist_family", new=AsyncMock(return_value=False)),
-        patch(f"{_PREFIX}clear_session_approvals_for_account"),
     ):
         _arm_cookies(http, _refresh_token())
         resp = _post_logout(http)
@@ -955,7 +948,6 @@ def test_logout_family_not_found_log_truncates_family_id(
         caplog.at_level(logging.WARNING),
         patch(f"{_PREFIX}decode_refresh_token_claims", return_value=_claims(token_family=family)),
         patch(f"{_PREFIX}blacklist_family", new=AsyncMock(return_value=False)),
-        patch(f"{_PREFIX}clear_session_approvals_for_account"),
     ):
         _arm_cookies(http, _refresh_token())
         resp = _post_logout(http)
@@ -977,7 +969,6 @@ def test_logout_invalid_family_log_truncates_token_family(
         caplog.at_level(logging.WARNING),
         patch(f"{_PREFIX}decode_refresh_token_claims", return_value=_claims(token_family=bad_family)),
         patch(f"{_PREFIX}blacklist_family", new_callable=AsyncMock),
-        patch(f"{_PREFIX}clear_session_approvals_for_account"),
     ):
         _arm_cookies(http, _refresh_token())
         resp = _post_logout(http)

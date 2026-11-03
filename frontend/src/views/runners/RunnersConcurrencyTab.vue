@@ -5,11 +5,12 @@
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
 
     <template v-else>
-      <Card>
-        <template #title>{{ $t('views.RunnersConcurrencyTab.max_concurrent_runner_runs') }}</template>
-        <template #subtitle>{{ $t('views.RunnersConcurrencyTab.semantics_hint') }}</template>
-
-        <template #content>
+       <DataCard
+         heading-level="h2"
+         :title="$t('views.RunnersConcurrencyTab.max_concurrent_runner_runs')"
+        :description="$t('views.RunnersConcurrencyTab.semantics_hint')"
+      >
+        <template #default>
           <div class="flex items-end gap-3">
             <div class="flex-1 sm:max-w-xs">
               <label for="runner-concurrency-limit" class="mb-1.5 block text-xs font-medium text-muted-foreground">
@@ -51,7 +52,7 @@
             <p v-if="preflightDetail" class="mt-1 text-xs text-muted-foreground">{{ preflightDetail }}</p>
           </div>
         </template>
-      </Card>
+      </DataCard>
     </template>
   </div>
 </template>
@@ -59,7 +60,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import Card from 'primevue/card'
+import DataCard from '../../components/ui/DataCard.vue'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
 import LoadingSpinner from '../../components/shared/LoadingSpinner.vue'

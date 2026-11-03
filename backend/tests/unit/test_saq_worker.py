@@ -160,6 +160,7 @@ class TestFunctionsWiring:
         with patch.object(sw, "get_settings", return_value=_settings()):
             jobs = {c.function.__name__: c for c in sw._system_cron_jobs()}
         assert set(jobs) == {
+            "demo_daily_refresh",
             "fire_due_triggers",
             "dispatcher_reconcile",
             "claim_expiry",
@@ -2622,10 +2623,10 @@ class TestFireSuiteRunTriggerEnqueueFailure:
         # ``MagicMock(return_value=...)`` (not ``AsyncMock``) so calling it
         # returns the inner async-CM directly instead of wrapping it in a
         # coroutine.
-        term_session.begin = MagicMock(return_value=AsyncMock())
         term_cm = AsyncMock()
         term_cm.__aenter__.return_value = term_session
         term_cm.__aexit__.return_value = False
+        term_session.begin = MagicMock(return_value=term_cm)
         factory = MagicMock(return_value=term_cm)
 
         fail_calls: list[tuple[object, str]] = []

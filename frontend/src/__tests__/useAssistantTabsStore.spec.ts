@@ -15,13 +15,6 @@ vi.mock('@/lib/api/client', () => ({
   },
 }))
 
-vi.mock('../composables/useUiCommandExecutor', () => ({
-  pauseUiCommands: vi.fn(),
-  resumeUiCommands: vi.fn(),
-  executeCommandBatch: vi.fn(),
-  isPaused: vi.fn(() => false),
-  abortUiCommands: vi.fn(),
-}))
 
 function makeSession(id: string, name: string) {
   return {

@@ -839,6 +839,63 @@ def test_get_journey_missing_map_returns_404(client: tuple[TestClient, _Harness]
     assert resp.status_code == 404
 
 
+def test_viewer_account_scope_id_is_the_account_for_a_viewer() -> None:
+    from modulo.api.routes.lifecycle_maps import _viewer_account_scope_id
+
+    principal = TenantPrincipal(username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
+
+    assert _viewer_account_scope_id(principal) == _USER_ID
+
+
+def test_viewer_account_scope_id_is_none_for_an_admin() -> None:
+    from modulo.api.routes.lifecycle_maps import _viewer_account_scope_id
+
+    principal = TenantPrincipal(username="admin", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+
+    assert _viewer_account_scope_id(principal) is None
+
+
+def test_list_journeys_passes_the_account_team_scope_id(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    stub = AsyncMock(return_value=([(_journey_row(), False)], None))
+    harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
+    harness.stub("list_map_journeys", stub)
+
+    with patch("modulo.api.routes.lifecycle_maps._viewer_account_scope_id", return_value=_USER_ID):
+        resp = http.get(f"{_BASE}/{_MAP_ID}/journeys")
+
+    assert resp.status_code == 200, resp.text
+    assert stub.call_args.kwargs["viewer_account_id"] == _USER_ID
+
+
+def test_list_journeys_admin_passes_no_account_team_scope_id(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    stub = AsyncMock(return_value=([(_journey_row(), False)], None))
+    harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
+    harness.stub("list_map_journeys", stub)
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/journeys")
+
+    assert resp.status_code == 200, resp.text
+    assert stub.call_args.kwargs["viewer_account_id"] is None
+
+
+def test_get_journey_passes_the_account_team_scope_id(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    journey_stub = AsyncMock(return_value=(_journey_row(), False))
+    runs_stub = AsyncMock(return_value=[_run_row()])
+    harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
+    harness.stub("get_map_journey", journey_stub)
+    harness.stub("list_journey_runs", runs_stub)
+
+    with patch("modulo.api.routes.lifecycle_maps._viewer_account_scope_id", return_value=_USER_ID):
+        resp = http.get(f"{_BASE}/{_MAP_ID}/journeys/issue/FAR-100")
+
+    assert resp.status_code == 200, resp.text
+    assert journey_stub.call_args.kwargs["viewer_account_id"] == _USER_ID
+    assert runs_stub.call_args.kwargs["viewer_account_id"] == _USER_ID
+
+
 def test_self_report_returns_counters(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))

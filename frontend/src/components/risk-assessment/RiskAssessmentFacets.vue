@@ -51,10 +51,9 @@
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
           data-testid="risk-assessment-days"
         >
-          <option :value="1">{{ $t('views.RiskAssessmentView.last_1_day') }}</option>
-          <option :value="7">{{ $t('views.RiskAssessmentView.last_7_days') }}</option>
-          <option :value="30">{{ $t('views.RiskAssessmentView.last_30_days') }}</option>
-          <option :value="90">{{ $t('views.RiskAssessmentView.last_90_days') }}</option>
+          <option v-for="choice in RISK_WINDOW_CHOICES" :key="choice.value" :value="choice.value">
+            {{ $t(`views.RiskAssessmentView.${choice.labelKey}`) }}
+          </option>
         </select>
       </div>
 
@@ -118,6 +117,7 @@ import { reactive, watch } from 'vue'
 import Button from 'primevue/button'
 import {
   RISK_ACTIONS,
+  RISK_WINDOW_CHOICES,
   defaultRiskAssessmentFilters,
   type RiskAssessmentFilters,
 } from '../../lib/riskAssessment'

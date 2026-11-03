@@ -3,40 +3,42 @@
     <PageHeader
       :title="$t('views.AdminCostBreakdownView.cost_controls')"
       :subtitle="$t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se')"
-      :tabs="[
-        { label: 'Overview', to: '/admin/costs' },
-        { label: 'Spend Limits', to: '/admin/costs/limits' },
-        { label: 'Cost Components', to: '/admin/costs/components' },
-        { label: 'Cost Controls', to: '/admin/costs/controls' },
-      ]"
+       :tabs="costPageTabs"
     />
 
     <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
       <div class="space-y-6">
       <LoadingSpinner v-if="loading" />
       <template v-else>
-        <Card>
-          <template #title>{{ $t('views.AdminCostControlsView.budget_overview') }}</template>
-<template #subtitle>{{ $t('views.AdminCostControlsView.current_billing_period_spend_vs_budget') }}</template>
-
-          <template #content>
+        <DataCard
+          :title="$t('views.AdminCostControlsView.budget_overview')"
+          :description="$t('views.AdminCostControlsView.current_billing_period_spend_vs_budget')"
+          padding="none"
+        >
+          <template #default>
             <LoadingSpinner v-if="costsLoading" />
             <div v-else-if="costsError" class="text-sm text-destructive">{{ costsError }}</div>
-            <div v-else class="space-y-4">
-              <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <div class="rounded-lg border bg-muted p-4">
-                  <p class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_spend') }}</p>
-                  <p class="mt-1 text-2xl font-semibold tabular-nums" data-testid="cc-total-spend">{{ formatMoney(totalSpend, settings.currency) }}</p>
-                </div>
-                <div class="rounded-lg border bg-muted p-4">
-                  <p class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.budget') }}</p>
-                  <p class="mt-1 text-2xl font-semibold tabular-nums" data-testid="cc-budget">{{ formatMoney(settings.budget, settings.currency) }}</p>
-                </div>
-                <div class="rounded-lg border bg-muted p-4">
-                  <p class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.remaining') }}</p>
-                  <p class="mt-1 text-2xl font-semibold tabular-nums" :class="remainingClass" data-testid="cc-remaining">{{ formatMoney(remainingBudget, settings.currency) }}</p>
-                </div>
-              </div>
+             <div v-else class="space-y-4 p-6">
+               <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                 <MetricCard
+                   :label="$t('views.AdminCostBreakdownView.total_spend')"
+                   :value="formatMoney(totalSpend, settings.currency)"
+                   color="muted"
+                   data-testid="cc-total-spend"
+                 />
+                 <MetricCard
+                   :label="$t('views.AdminCostControlsView.budget')"
+                   :value="formatMoney(settings.budget, settings.currency)"
+                   color="muted"
+                   data-testid="cc-budget"
+                 />
+                 <MetricCard
+                   :label="$t('views.AdminCostControlsView.remaining')"
+                   :value="formatMoney(remainingBudget, settings.currency)"
+                   :color="remainingColor"
+                   data-testid="cc-remaining"
+                 />
+               </div>
               <div>
                 <div class="mb-1 flex items-center justify-between text-xs text-muted-foreground">
                   <span>{{ $t('views.AdminCostControlsView.percent_used', { percent: percentUsed.toFixed(1) }) }}</span>
@@ -53,13 +55,16 @@
               </div>
             </div>
           </template>
-        </Card>
+         </DataCard>
 
-        <Card>
-          <template #title>{{ $t('views.AdminCostControlsView.team_budgets') }}</template>
-<template #subtitle>{{ $t('views.AdminCostControlsView.set_per_team_budget_caps') }}</template>
+         <DataCard
+           :title="$t('views.AdminCostControlsView.team_budgets')"
+           :description="$t('views.AdminCostControlsView.set_per_team_budget_caps')"
 
-          <template #content>
+           padding="none"
+           heading-level="h2"
+         >
+           <template #default>
             <EmptyState v-if="teams.length === 0" :title="$t('views.AdminCostControlsView.no_teams_found')" />
             <DataTable
               v-else
@@ -96,13 +101,13 @@
               </template>
             </DataTable>
           </template>
-        </Card>
+         </DataCard>
 
-        <Card>
-          <template #title>{{ $t('views.AdminCostControlsView.alert_thresholds') }}</template>
-<template #subtitle>{{ $t('views.AdminCostControlsView.receive_notifications_when_spend_reaches_thresholds') }}</template>
-
-          <template #content>
+         <DataCard
+           :title="$t('views.AdminCostControlsView.alert_thresholds')"
+           :description="$t('views.AdminCostControlsView.receive_notifications_when_spend_reaches_thresholds')"
+         >
+           <template #default>
             <div class="space-y-3">
               <label for="admincostcontrolsview-field-7" class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-50">
                 <input id="admincostcontrolsview-field-7" type="checkbox" :checked="settings.alertThresholds.includes(50)" @change="toggleThreshold(50)" class="h-4 w-4 rounded border-muted-foreground" />
@@ -135,13 +140,13 @@
               <p v-if="thresholdSaveError" class="text-xs text-destructive">{{ thresholdSaveError }}</p>
             </div>
           </template>
-        </Card>
+         </DataCard>
 
-        <Card>
-          <template #title>{{ $t('views.AdminCostControlsView.circuit_breaker') }}</template>
-<template #subtitle>{{ $t('views.AdminCostControlsView.automatically_stop_agent_runs_when_budget_exceeded') }}</template>
-
-          <template #content>
+         <DataCard
+           :title="$t('views.AdminCostControlsView.circuit_breaker')"
+           :description="$t('views.AdminCostControlsView.automatically_stop_agent_runs_when_budget_exceeded')"
+         >
+           <template #default>
             <div class="flex items-center justify-between rounded-lg border p-4">
               <div>
                 <p class="text-sm font-medium">{{ $t('views.AdminCostControlsView.auto_stop_on_budget_exceeded') }}</p>
@@ -156,13 +161,13 @@
             </div>
             <p v-if="circuitBreakerSaveError" class="mt-2 text-xs text-destructive">{{ circuitBreakerSaveError }}</p>
           </template>
-        </Card>
+         </DataCard>
 
-        <Card>
-          <template #title>{{ $t('views.AdminCostControlsView.billing_settings') }}</template>
-<template #subtitle>{{ $t('views.AdminCostControlsView.configure_currency_and_billing_period') }}</template>
-
-          <template #content>
+         <DataCard
+           :title="$t('views.AdminCostControlsView.billing_settings')"
+           :description="$t('views.AdminCostControlsView.configure_currency_and_billing_period')"
+         >
+           <template #default>
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div>
                 <label for="admincostcontrolsview-field-2" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.currency') }}</label>
@@ -225,8 +230,8 @@
               <p v-if="budgetSaveSuccess" class="mt-2 text-xs text-success-text">{{ $t('views.AdminCostControlsView.budget_updated') }}</p>
             </div>
           </template>
-        </Card>
-      </template>
+         </DataCard>
+       </template>
       </div>
     </FeatureGate>
   </div>
@@ -243,14 +248,17 @@ import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
-import Card from 'primevue/card'
+import DataCard from '../components/ui/DataCard.vue'
+import MetricCard from '../components/ui/MetricCard.vue'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
 import { DataTable } from '../components/ui/data-table'
 import Select from '../components/shared/AppSelect.vue'
 import { formatMoney } from '../lib/money'
+import { useCostPageTabs } from '../composables/useCostPageTabs'
 
 const planStore = usePlanStore()
+const costPageTabs = useCostPageTabs()
 const { t } = useI18n()
 
 interface CostReportComponent {
@@ -376,12 +384,12 @@ const percentUsed = computed(() => {
   return (totalSpend.value / settings.value.budget) * 100
 })
 
-const remainingClass = computed(() => {
-  if (settings.value.budget <= 0) return ''
+const remainingColor = computed<'success' | 'warning' | 'destructive' | 'muted'>(() => {
+  if (settings.value.budget <= 0) return 'muted'
   const pct = percentUsed.value
-  if (pct >= 100) return 'text-destructive'
-  if (pct >= 90) return 'text-warning-text'
-  return 'text-success-text'
+  if (pct >= 100) return 'destructive'
+  if (pct >= 90) return 'warning'
+  return 'success'
 })
 
 const progressBarClass = computed(() => {

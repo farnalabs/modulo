@@ -72,10 +72,11 @@
         :description="$t('views.FeedbackInboxView.all_feedback_records_have_been_resolved_or_no_evaluations_ha')"
       />
       <div v-else class="space-y-2">
-        <div
+        <DataCard
           v-for="record in records"
           :key="record.id"
-          class="rounded-lg border bg-card shadow-sm"
+          padding="none"
+          elevation="sm"
         >
           <button
             type="button"
@@ -185,7 +186,7 @@
               </div>
             </template>
           </div>
-        </div>
+        </DataCard>
       </div>
     </template>
   </div>
@@ -205,6 +206,7 @@ import Select from '../components/shared/AppSelect.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { ChevronRight } from '@lucide/vue'
 

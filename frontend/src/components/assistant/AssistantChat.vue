@@ -203,41 +203,6 @@
         </div>
       </div>
 
-      <div v-if="!assistantOnly && uiDrivingEnabled && store.pendingPermission" class="assistant-permission-card">
-        <div class="assistant-permission-header">
-          <ShieldAlertIcon class="h-4 w-4" />
-          <span>{{ $t('components.assistant.AssistantChat.permission_request') }}</span>
-        </div>
-        <div class="assistant-permission-tools">
-          <div
-            v-for="tool in store.pendingPermission.tools"
-            :key="tool.name"
-            class="assistant-permission-tool"
-            :class="{ 'assistant-permission-tool-nogo': tool.nogo }"
-          >
-            <div class="flex items-center gap-2 min-w-0">
-              <span class="font-mono text-xs truncate">{{ tool.name }}</span>
-              <span v-if="tool.nogo" class="assistant-nogo-badge">?? Destructive Page</span>
-            </div>
-            <span class="text-xs text-muted-foreground">{{ describeArgs(tool) }}</span>
-          </div>
-        </div>
-        <div class="assistant-permission-actions">
-          <Button severity="secondary" outlined size="small" :disabled="nogoCountdown > 0" class="relative" @click="store.approvePermission(store.pendingPermission.request_id, 'reject')">Deny{{ nogoCountdown > 0 ? ` (${nogoCountdown}s)` : '' }}</Button>
-          <Button severity="secondary" size="small" :disabled="nogoCountdown > 0" @click="store.approvePermission(store.pendingPermission.request_id, 'approve')">Allow Once{{ nogoCountdown > 0 ? ` (${nogoCountdown}s)` : '' }}</Button>
-          <Button size="small" :disabled="nogoCountdown > 0" @click="store.approvePermission(store.pendingPermission.request_id, 'approve_for_session')">Allow for Session{{ nogoCountdown > 0 ? ` (${nogoCountdown}s)` : '' }}</Button>
-        </div>
-      </div>
-
-      <div v-if="!assistantOnly && uiDrivingEnabled && store.isExecutingUi" class="assistant-executing-indicator">
-        <LoaderIcon class="h-3 w-3 animate-spin" />
-        <span>{{ store.isPaused ? 'Assistant is paused. Resume or stop?' : 'Assistant is performing actions in the browser...' }}</span>
-        <div class="flex gap-2">
-          <Button v-if="!store.isPaused" severity="secondary" size="small" @click="pauseAssistant">? Pause</Button>
-          <Button v-if="store.isPaused" severity="secondary" size="small" @click="resumeAssistant">? Resume</Button>
-          <Button severity="danger" size="small" @click="abortUiCommands">{{ store.isPaused ? '? Stop' : 'Stop' }}</Button>
-        </div>
-      </div>
     </div>
 
     <div class="assistant-input-area border-t p-3 relative">
@@ -277,10 +242,10 @@
             @keydown="onInputKeydown"
             @input="onInput"
             @scroll="syncHighlightScroll"
-            :disabled="store.isStreaming || store.isExecutingUi"
+            :disabled="store.isStreaming"
           />
         </div>
-        <Button :disabled="!inputText.trim() || store.isStreaming || store.isExecutingUi" @click="handleSend" :aria-label="$t('components.assistant.send_message')">
+        <Button :disabled="!inputText.trim() || store.isStreaming" @click="handleSend" :aria-label="$t('components.assistant.send_message')">
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="16"
@@ -316,21 +281,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, reactive, onUnmounted } from "vue";
+import { ref, watch, nextTick, computed, reactive } from "vue";
 import { useRouter } from "vue-router";
 import { useAssistantStore } from "@/composables/useAssistantStore";
-import { usePlanStore } from "@/stores/planStore";
 import { useAssistantStream } from "@/composables/useAssistantStream";
-import { abortUiCommands } from "@/composables/useUiCommandExecutor";
 import Button from 'primevue/button'
 import { getAccessToken } from "@/lib/api/client";
-import { ShieldAlertIcon, LoaderIcon } from "@lucide/vue";
 import AnalyticsChart from "../analytics/AnalyticsChart.vue";
 import { MEASURES, type AnalyticsBucket, type AnalyticsMeasure } from "../../stores/analytics";
 import type { ChatMessage, ToolResult } from "@/types/assistant";
 
 const store = useAssistantStore();
-const planStore = usePlanStore();
 const router = useRouter();
 const props = defineProps<{ assistantOnly?: boolean }>();
 const { connectStream, disconnectStream } = useAssistantStream();
@@ -515,8 +476,6 @@ async function deleteCurrentSession() {
   }
 }
 
-const uiDrivingEnabled = computed(() => planStore.featureEnabled('assistant_ui_driving'))
-
 const expandedTools = ref(new Set<string>())
 
 function toggleToolExpand(id: string) {
@@ -589,53 +548,6 @@ function navigateToAnalytics(link: string | undefined): void {
   if (link) router.push(link)
 }
 
-const nogoCountdown = ref(0)
-let nogoCountdownTimer: ReturnType<typeof setInterval> | null = null
-
-function hasNogoTool(): boolean {
-  return store.pendingPermission?.tools.some((t) => t.nogo) ?? false
-}
-
-function startNogoCountdown() {
-  stopNogoCountdown()
-  if (!hasNogoTool()) return
-  nogoCountdown.value = 3
-  nogoCountdownTimer = setInterval(() => {
-    nogoCountdown.value--
-    if (nogoCountdown.value <= 0) {
-      stopNogoCountdown()
-    }
-  }, 1000)
-}
-
-function stopNogoCountdown() {
-  if (nogoCountdownTimer) {
-    clearInterval(nogoCountdownTimer)
-    nogoCountdownTimer = null
-  }
-  nogoCountdown.value = 0
-}
-
-watch(() => store.pendingPermission, (val) => {
-  if (val && hasNogoTool()) {
-    startNogoCountdown()
-  } else {
-    stopNogoCountdown()
-  }
-}, { immediate: true })
-
-async function pauseAssistant() {
-  await store.pauseAssistant()
-}
-
-async function resumeAssistant() {
-  await store.resumeAssistant()
-}
-
-onUnmounted(() => {
-  stopNogoCountdown()
-})
-
 defineExpose({ disconnect: disconnectStream })
 
 const userEmail = computed(() => {
@@ -655,40 +567,6 @@ const userInitial = computed(() => {
   return email.charAt(0).toUpperCase();
 });
 
-function friendlySelector(sel: string): string {
-  const m = sel.match(/\[data-testid="([^"]+)"\]/)
-  return m ? m[1].replaceAll('-', ' ') : sel
-}
-
-function describeArgs(tool: { name: string; args: Record<string, unknown> }): string {
-  switch (tool.name) {
-    case 'navigate':
-      return `Navigate to ${tool.args.path}`
-    case 'click':
-      return `Click '${friendlySelector(tool.args.selector as string)}'`
-    case 'fill':
-      return `Type into ${friendlySelector(tool.args.selector as string)}: '${tool.args.value}'`
-    case 'select':
-      return `Select '${tool.args.value}' from ${friendlySelector(tool.args.selector as string)}`
-    case 'extract':
-      return `Read text from ${friendlySelector(tool.args.selector as string)}`
-    case 'extract_all':
-      return `Read text from all '${tool.args.selector}' elements`
-    case 'get_page_interactables':
-      return 'Discover all clickable elements on the page'
-    case 'wait':
-      return tool.args.selector ? `Wait for '${tool.args.selector}' to appear` : `Wait ${tool.args.ms ?? ''}ms`
-    case 'go_back':
-      return 'Go back to previous page'
-    case 'get_url':
-      return 'Get current page URL'
-    case 'press':
-      return `Press '${tool.args.key}' key`
-    default:
-      return ''
-  }
-}
-
 function scrollToBottom() {
   nextTick(() => {
     if (scrollRef.value) {
@@ -697,7 +575,7 @@ function scrollToBottom() {
   });
 }
 
-watch(() => [store.messages.length, store.isStreaming, store.isExecutingUi], scrollToBottom);
+watch(() => [store.messages.length, store.isStreaming], scrollToBottom);
 
 async function handleSend() {
   const text = inputText.value.trim();
@@ -707,7 +585,7 @@ async function handleSend() {
   await store.sendMessage(text);
   if (store.activeSessionId) {
     try {
-      connectStream(store.activeSessionId, { excludeUiTools: !!props.assistantOnly });
+      connectStream(store.activeSessionId, { excludeNavigationTools: !!props.assistantOnly });
     } catch (e) {
       console.error("Failed to start Assistant stream:", e);
     }
@@ -934,43 +812,6 @@ function renderMarkdown(text: string): string {
 .assistant-turn-label {
   @apply text-xs font-medium shrink-0;
   color: hsl(var(--muted-foreground));
-}
-.assistant-permission-card {
-  @apply rounded-lg border p-3 space-y-3 text-sm;
-  background-color: hsl(var(--card));
-  border-color: hsl(var(--border));
-}
-.assistant-permission-header {
-  @apply flex items-center gap-2 font-medium;
-  color: hsl(var(--warning-text));
-}
-.assistant-permission-tools {
-  @apply space-y-1;
-}
-.assistant-permission-tool {
-  @apply flex items-center gap-2 rounded-md px-2 py-1;
-  background-color: hsl(var(--muted));
-}
-.assistant-permission-tool-nogo {
-  border: 1px solid hsl(0 72% 51% / 0.3);
-  background-color: hsl(0 72% 51% / 0.05);
-}
-.assistant-nogo-badge {
-  @apply text-[10px] font-semibold px-1.5 py-0.5 rounded;
-  --assistant-nogo-text: 0 72% 72%;
-  background-color: hsl(0 72% 51% / 0.15);
-  color: hsl(var(--assistant-nogo-text));
-}
-.light .assistant-nogo-badge {
-  --assistant-nogo-text: 0 72% 40%;
-}
-.assistant-permission-actions {
-  @apply flex items-center gap-2;
-}
-.assistant-executing-indicator {
-  @apply flex items-center gap-2 rounded-lg border px-3 py-2 text-sm;
-  background-color: hsl(var(--muted));
-  border-color: hsl(var(--border));
 }
 .assistant-tool-card {
   @apply rounded-lg border text-sm overflow-hidden;

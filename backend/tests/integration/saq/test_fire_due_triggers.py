@@ -50,9 +50,10 @@ async def _seed_due_cron_trigger(
             )
             await conn.execute(
                 text(
-                    "INSERT INTO triggers (id, organisation_id, pipeline_id, account_id, trigger_type, active, "
+                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, account_id, trigger_type, active, "
                     "max_concurrent_runs, config_json, cron_expression, next_fire_at) "
-                    "VALUES (:id, :oid, :pid, :uid, 'cron', true, 5, '{}'::json, :cron, now() - interval '1 second')"
+                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, :uid, 'cron', true, 5, '{}'::json, :cron, "
+                    "now() - interval '1 second')"
                 ),
                 {
                     "id": str(trigger_id),
