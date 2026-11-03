@@ -197,12 +197,50 @@ jobs:
       - name: Install Inno Setup
         run: |
           $ErrorActionPreference = 'Stop'
-          choco install innosetup --version=6.2.2 --yes --no-progress
-          $isccDir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6'
-          if (-not (Test-Path -LiteralPath (Join-Path $isccDir 'ISCC.exe'))) {
-            throw "ISCC.exe was not installed under $isccDir"
+
+          # FAR-2315: the windows-latest image ships a newer Inno Setup already
+          # installed, and Chocolatey refuses the pinned 6.2.2 without an
+          # explicit downgrade - which killed this release-path job before it
+          # ever reached ISCC. Allow the downgrade so the build leg resolves
+          # the same compiler the compile-check leg does.
+          choco install innosetup --version=6.2.2 --yes --no-progress --allow-downgrade
+          $chocoExit = $LASTEXITCODE
+          if ($chocoExit -ne 0) {
+            Write-Warning "choco install innosetup 6.2.2 exited $chocoExit; continuing only if ISCC.exe is present."
           }
-          Add-Content -Path $env:GITHUB_PATH -Value $isccDir
+
+          # Same resolution order as the compile-check job: the install
+          # directory first, then PATH. The pre-installed copy the image ships
+          # lives in the same directory, so a failed downgrade still leaves a
+          # working compiler.
+          $isccCandidates = @()
+          foreach ($programFiles in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+            if ($programFiles) {
+              $isccCandidates += (Join-Path $programFiles 'Inno Setup 6\ISCC.exe')
+            }
+          }
+          $isccPath = $null
+          foreach ($candidate in $isccCandidates) {
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+              $isccPath = $candidate
+              break
+            }
+          }
+          if (-not $isccPath) {
+            $isccCommand = Get-Command -Name 'ISCC.exe' -ErrorAction SilentlyContinue
+            if ($isccCommand) {
+              $isccPath = $isccCommand.Source
+            }
+          }
+
+          if (-not $isccPath) {
+            throw ("ISCC.exe is not available after installing Inno Setup 6.2.2.`n" +
+                   "Looked for: $($isccCandidates -join ', ')`n" +
+                   "PATH lookup: Get-Command ISCC.exe found nothing")
+          }
+
+          Write-Host "ISCC: $isccPath"
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path -Parent $isccPath)
       - name: Validate launcher helper contract
         run: |
           $ErrorActionPreference = 'Stop'
