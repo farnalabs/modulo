@@ -73,6 +73,10 @@ jobs:
             throw "ISCC.exe was not installed under $isccDir"
           }
           Add-Content -Path $env:GITHUB_PATH -Value $isccDir
+      - name: Test installer contract
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "$env:GITHUB_WORKSPACE/scripts/test-windows-installer.ps1" -Version $env:VERSION_NUM
       - name: Validate launcher helper contract
         run: |
           $ErrorActionPreference = 'Stop'
@@ -80,6 +84,11 @@ jobs:
           if (Test-Path -LiteralPath (Join-Path $env:RUNNER_TEMP 'modulo.exe')) {
             throw 'launcher helper created a fake executable'
           }
+      - name: Verify launcher command contract
+        if: ${{ inputs.mode != 'dry-run' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "$env:GITHUB_WORKSPACE/scripts/verify-windows-launcher-contract.ps1" -Version $env:VERSION_NUM -ExePath (Join-Path $env:RUNNER_TEMP 'modulo.exe')
       - name: Refuse packaging without native bundle
         if: ${{ inputs.mode != 'dry-run' }}
         run: |

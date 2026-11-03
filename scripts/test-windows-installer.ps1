@@ -2,10 +2,11 @@
 .SYNOPSIS
 Validate the Windows Inno Setup installer contract locally.
 .DESCRIPTION
-Runs compile checks against temporary fixture bundles and validates the
-installer script contains the log capture and support reference features
-(FAR-2315). Also validates the create-windows-launcher.ps1 contract checks.
-Run this on Windows with Inno Setup 6.2+ installed.
+Compiles temporary fixture bundles with the pinned Inno Setup release and
+asserts the installer script still fails closed without a native bundle. Also
+checks that the installer script carries the FAR-2315 log capture and support
+reference features. Run this on Windows with Inno Setup 6.2.2 installed; the
+Windows installer CI workflow invokes it on the pinned compiler.
 #>
 
 [CmdletBinding()]
@@ -22,13 +23,13 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = (Get-Location).Path
 $issPath = Join-Path $repoRoot "deploy\windows\modulo.iss"
-$launcherScriptPath = Join-Path $repoRoot "scripts\create-windows-launcher.ps1"
+$launcherContractScriptPath = Join-Path $repoRoot "scripts\verify-windows-launcher-contract.ps1"
 
 if (-not (Test-Path -LiteralPath $issPath -PathType Leaf)) {
     throw "Cannot find deploy\windows\modulo.iss. Run from repo root."
 }
-if (-not (Test-Path -LiteralPath $launcherScriptPath -PathType Leaf)) {
-    throw "Cannot find scripts\create-windows-launcher.ps1. Run from repo root."
+if (-not (Test-Path -LiteralPath $launcherContractScriptPath -PathType Leaf)) {
+    throw "Cannot find scripts\verify-windows-launcher-contract.ps1. Run from repo root."
 }
 
 $isccPath = $null
@@ -88,7 +89,11 @@ function Invoke-Iscc {
 
 try {
     Write-Output "=== Modulo Windows Installer Contract Test (FAR-2315) ==="
-    Write-Output "Inno Setup: $($isccPath ?? 'NOT FOUND - skipping compilation tests')"
+    if ($isInnoSetupAvailable) {
+        Write-Output "Inno Setup: $isccPath"
+    } else {
+        Write-Output "Inno Setup: NOT FOUND - skipping compilation tests"
+    }
     Write-Output "Installer source: $issPath"
     Write-Output ""
 
@@ -146,7 +151,8 @@ try {
         @{ Name = "Max log bytes constant"; Pattern = "MAX_LOG_BYTES.*=.*1048576" }
         @{ Name = "Max install logs constant"; Pattern = "MAX_INSTALL_LOGS.*=.*5" }
         @{ Name = "Log directory LocalAppData"; Pattern = '{localappdata}.*LOG_DIR_NAME' }
-        @{ Name = "Redaction of URL credentials"; Pattern = '://\[redacted\]@' }
+        @{ Name = "Redaction of URL credentials"; Pattern = "function RedactUrlUserInfo" }
+        @{ Name = "Redaction of credential values"; Pattern = "function RedactAfterMarker" }
         @{ Name = "Support block delimiter"; Pattern = '----- Modulo install failed: support reference' }
         @{ Name = "GitHub issues URL in support block"; Pattern = 'github.com/farnalabs/modulo/issues' }
     )
@@ -166,37 +172,10 @@ try {
 
     Write-Output "All FAR-2315 patterns verified in installer script."
 
-    # --- FAR-2315: Verify create-windows-launcher.ps1 validates doctor --report and support ---
-    Write-Output ""
-    Write-Output "=== Verifying create-windows-launcher.ps1 contract checks ==="
-    $launcherContent = Get-Content -LiteralPath $launcherScriptPath -Raw
-
-    $launcherRequiredPatterns = @(
-        @{ Name = "doctor --report flag check"; Pattern = '--report' }
-        @{ Name = "support command check"; Pattern = '\bsupport\b' }
-        @{ Name = "Required commands list"; Pattern = 'start.*stop.*status.*doctor.*support.*version.*env.*logs' }
-    )
-
-    $missingLauncherPatterns = @()
-    foreach ($p in $launcherRequiredPatterns) {
-        if ($launcherContent -notmatch $p.Pattern) {
-            $missingLauncherPatterns += $p.Name
-        } else {
-            Write-Output "  PASS: $($p.Name) found in launcher validation script"
-        }
-    }
-
-    if ($missingLauncherPatterns.Count -gt 0) {
-        throw "Launcher validation script missing FAR-2315 patterns: $($missingLauncherPatterns -join ', ')"
-    }
-
-    Write-Output "All create-windows-launcher.ps1 contract checks verified."
-
     Write-Output ""
     Write-Output "PASS: missing required runtime files fail closed."
     Write-Output "PASS: declared marker/executable contract compiles without committing a fake bundle."
     Write-Output "PASS: FAR-2315 log capture + support reference features present in installer script."
-    Write-Output "PASS: FAR-2315 launcher command validation present in create-windows-launcher.ps1."
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot) {
