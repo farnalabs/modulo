@@ -8,6 +8,7 @@ Every test here fails with the OLD whole-column read-modify-write: the second
 writer wrote the whole stale column back and dropped the first writer's key.
 """
 
+import asyncio
 import json
 import uuid
 from typing import Any
@@ -913,6 +914,180 @@ async def test_nested_patch_heals_a_non_object_stored_block(db_engine: AsyncEngi
     assert returned["product_analytics"] == {"level": "all"}
     settings = await _read_settings(db_engine, org_id)
     assert settings["product_analytics"] == {"level": "all"}
+
+
+# ---------------------------------------------------------------------------
+# FAR-2309: nested_delete — one atomic per-entry clear, proven against real
+# Postgres (the lost-update guarantee is a property of the SQL statement, so a
+# mocked session cannot prove it)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_overrides(db_engine: AsyncEngine, org_id: uuid.UUID, overrides: dict[str, bool]) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    session = factory()
+    await session.begin()
+    await set_rls_org(session, org_id)
+    await update_org_settings_patch(session, org_id, {"feature_overrides": overrides})
+    await session.commit()
+    await session.close()
+
+
+async def test_nested_delete_removes_only_the_named_sub_key(db_engine: AsyncEngine) -> None:
+    """A per-entry clear removes that entry and nothing else: sibling overrides
+    and every other top-level settings key survive."""
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    session = factory()
+    await session.begin()
+    await set_rls_org(session, org_id)
+    await update_org_settings_patch(
+        session,
+        org_id,
+        {"feature_overrides": {"flag_a": True, "flag_b": False}, "logo_url": "https://x/l.png"},
+    )
+    returned = await update_org_settings_patch(
+        session,
+        org_id,
+        nested_delete={"feature_overrides": ["flag_a"]},
+    )
+    await session.commit()
+    await session.close()
+
+    assert returned["feature_overrides"] == {"flag_b": False}
+    settings = await _read_settings(db_engine, org_id)
+    assert settings["feature_overrides"] == {"flag_b": False}
+    assert settings["logo_url"] == "https://x/l.png"
+
+
+async def test_nested_delete_on_a_missing_block_keeps_the_rest_of_the_settings(db_engine: AsyncEngine) -> None:
+    """Clearing a flag that was never overridden leaves the other settings
+    untouched (it does not wipe the column or any sibling key)."""
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    session = factory()
+    await session.begin()
+    await set_rls_org(session, org_id)
+    await update_org_settings_patch(session, org_id, {"logo_url": "https://x/l.png"})
+    await update_org_settings_patch(
+        session,
+        org_id,
+        nested_delete={"feature_overrides": ["never_set"]},
+    )
+    await session.commit()
+    await session.close()
+
+    settings = await _read_settings(db_engine, org_id)
+    assert settings["logo_url"] == "https://x/l.png"
+    assert not settings["feature_overrides"]
+
+
+async def test_two_concurrent_clears_of_different_flags_both_persist(db_engine: AsyncEngine) -> None:
+    """FAR-2309: the lost-update race the read-modify-write clear had.
+
+    Session 1 takes the read half of the OLD shape (it snapshots the whole
+    ``feature_overrides`` map) and only then writes its clear. Session 2 clears
+    a DIFFERENT flag and commits in that window. The OLD code wrote session 1's
+    stale map back, resurrecting the flag session 2 had just cleared; the
+    atomic nested delete composes against the row's current value, so both
+    removals persist.
+    """
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    await _seed_overrides(db_engine, org_id, {"flag_a": True, "flag_b": True})
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    session1 = factory()
+    await session1.begin()
+    await set_rls_org(session1, org_id)
+    stale_org = await get_organisation(session1, org_id)
+    assert stale_org is not None
+    stale_map = dict((stale_org.settings_json or {})["feature_overrides"])
+    assert stale_map == {"flag_a": True, "flag_b": True}
+
+    session2 = factory()
+    await session2.begin()
+    await set_rls_org(session2, org_id)
+    await update_org_settings_patch(session2, org_id, nested_delete={"feature_overrides": ["flag_a"]})
+    await session2.commit()
+    await session2.close()
+
+    # Session 1's clear must not write its stale map back. (Pre-FAR-2309 it
+    # wrote ``{"feature_overrides": {"flag_a": True}}`` here and lost the clear
+    # of flag_a.)
+    await update_org_settings_patch(
+        session1,
+        org_id,
+        nested_delete={"feature_overrides": ["flag_b"]},
+    )
+    await session1.commit()
+    await session1.close()
+
+    settings = await _read_settings(db_engine, org_id)
+    assert "flag_a" not in settings["feature_overrides"], (
+        f"the concurrent clear of flag_a was lost: {settings['feature_overrides']!r}"
+    )
+    assert "flag_b" not in settings["feature_overrides"], (
+        f"the second clear of flag_b was lost: {settings['feature_overrides']!r}"
+    )
+
+
+async def test_a_set_racing_a_clear_cannot_lose_the_set(db_engine: AsyncEngine) -> None:
+    """FAR-2309: a concurrent SET of another flag survives a clear.
+
+    Session 1 clears flag_a (having already read the old map, exactly as the
+    removed read-modify-write did). Session 2 enables flag_b and commits inside
+    that window. The atomic delete drops only flag_a's entry from the CURRENT
+    map, so the set of flag_b is not clobbered.
+    """
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    await _seed_overrides(db_engine, org_id, {"flag_a": True})
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    session1 = factory()
+    await session1.begin()
+    await set_rls_org(session1, org_id)
+    stale_org = await get_organisation(session1, org_id)
+    assert stale_org is not None
+    stale_map = dict((stale_org.settings_json or {})["feature_overrides"])
+    assert "flag_b" not in stale_map
+
+    session2 = factory()
+    await session2.begin()
+    await set_rls_org(session2, org_id)
+    await update_org_settings_patch(session2, org_id, nested_patch={"feature_overrides": {"flag_b": True}})
+    await session2.commit()
+    await session2.close()
+
+    await update_org_settings_patch(session1, org_id, nested_delete={"feature_overrides": ["flag_a"]})
+    await session1.commit()
+    await session1.close()
+
+    settings = await _read_settings(db_engine, org_id)
+    assert "flag_a" not in settings["feature_overrides"]
+    assert settings["feature_overrides"]["flag_b"] is True, (
+        f"the concurrent set of flag_b was lost: {settings['feature_overrides']!r}"
+    )
+
+
+async def test_parallel_clears_of_different_flags_are_lossless(db_engine: AsyncEngine) -> None:
+    """Two clears issued genuinely in parallel both apply (one waits on the
+    other's row lock, then composes against the committed value)."""
+    org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
+    await _seed_overrides(db_engine, org_id, {"flag_a": True, "flag_b": True, "flag_c": True})
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async def _clear(flag_name: str) -> None:
+        session = factory()
+        await session.begin()
+        await set_rls_org(session, org_id)
+        await update_org_settings_patch(session, org_id, nested_delete={"feature_overrides": [flag_name]})
+        await session.commit()
+        await session.close()
+
+    await asyncio.gather(_clear("flag_a"), _clear("flag_b"))
+
+    settings = await _read_settings(db_engine, org_id)
+    assert settings["feature_overrides"] == {"flag_c": True}
 
 
 # ---------------------------------------------------------------------------
