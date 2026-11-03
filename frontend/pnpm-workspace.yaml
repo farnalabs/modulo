@@ -12,6 +12,8 @@ strictPeerDependencies: false
 auditConfig:
   ignoreGhsas:
     - GHSA-vfj7-8cjw-p6xm
+# pnpm >= 10 reads overrides ONLY from this file; an `overrides` block in
+# package.json is silently ignored (adding one leaves pnpm-lock.yaml identical).
 overrides:
   esbuild: ">=0.28.1"
   qs: ">=6.15.3"
