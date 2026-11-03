@@ -84,16 +84,9 @@ jobs:
     steps:
       - id: normalize
         env:
-          # Read `inputs.*` ONLY. Both entry points populate it: a direct
+          # Prefer `inputs.*`: both entry points populate it, a direct
           # workflow_dispatch (this workflow rehearsed by hand) and a reusable
           # workflow_call (release-unified.yml cut/recut).
-          #
-          # Never read `github.event.inputs` here. In a called workflow that
-          # payload belongs to the CALLER, and release-unified.yml is itself a
-          # workflow_dispatch that declares neither rc_tag nor ref - so reading
-          # it blanked both, failed with "rc_tag input is required", and would
-          # otherwise have built from refs/heads/main instead of the RC tag
-          # (observed in run 41616355636).
           CALL_VERSION: ${{ inputs.version }}
           CALL_RC_TAG: ${{ inputs.rc_tag }}
           CALL_REF: ${{ inputs.ref }}
@@ -102,36 +95,72 @@ jobs:
           # manual-rehearsal switch: empty on a reusable call, true/false on a
           # dispatch. It never overrides a release call.
           CALL_BUILD_NATIVE: ${{ inputs.build_native }}
+          # `github.event.inputs` belongs to the CALLER inside a reusable
+          # workflow_call, and release-unified.yml is itself a workflow_dispatch
+          # that declares neither rc_tag nor ref. These are therefore consulted
+          # ONLY after the normalize step has positively identified a direct
+          # dispatch (via build_native presence) - never on the call path, where
+          # reading them blanked rc_tag/ref and failed with "rc_tag input is
+          # required" (observed in run 41616355636).
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          DISPATCH_RC_TAG: ${{ github.event.inputs.rc_tag }}
+          DISPATCH_REF: ${{ github.event.inputs.ref }}
+          DISPATCH_MODE: ${{ github.event.inputs.mode }}
+          DISPATCH_BUILD_NATIVE: ${{ github.event.inputs.build_native }}
         run: |
           set -euo pipefail
           version="$CALL_VERSION"
           rc_tag="$CALL_RC_TAG"
           ref="$CALL_REF"
           mode="${CALL_MODE:-dry-run}"
-          # A direct dispatch may leave `ref` blank to mean "build the dispatched
-          # ref". A reusable call always supplies it (required input).
-          [[ -n "$ref" ]] || ref="${GITHUB_REF:-}"
-          # Two callers, two native-build rules:
-          #  - a reusable cut/recut call always runs the real native build;
-          #  - a manual rehearsal is dry-run only and opts in via build_native.
-          if [[ "$mode" != "dry-run" ]]; then
-            run_native_build=true
+          run_native_build=false
+          # Inside a reusable-workflow call GITHUB_EVENT_NAME is still the CALLER's event,
+          # so a dispatched release-unified run reports workflow_dispatch too. build_native is
+          # declared on THIS workflow's own dispatch only, so its presence identifies a direct
+          # manual dispatch; a call (even from a dispatched caller) never carries it (FAR-2327).
+          # Only a positively identified direct dispatch may read the DISPATCH_* event payload;
+          # the call path stays on the workflow's own `inputs.*` (CALL_*).
+          direct_dispatch=false
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -n "${DISPATCH_BUILD_NATIVE:-}" ]]; then
+            direct_dispatch=true
+          fi
+          if [[ "$direct_dispatch" == true ]]; then
+            version="${DISPATCH_VERSION:-$version}"
+            rc_tag="${DISPATCH_RC_TAG:-$rc_tag}"
+            ref="$DISPATCH_REF"
+            mode="${DISPATCH_MODE:-dry-run}"
+            run_native_build="${DISPATCH_BUILD_NATIVE:-false}"
+            # A direct dispatch may leave `ref` blank to mean "build the dispatched ref".
+            [[ -n "$ref" ]] || ref="${GITHUB_REF:-}"
           else
-            run_native_build="${CALL_BUILD_NATIVE:-false}"
+            # Two reusable-call rules:
+            #  - a cut/recut call always runs the real native build;
+            #  - a manual rehearsal is dry-run only and opts in via build_native.
+            if [[ "$mode" != "dry-run" ]]; then
+              run_native_build=true
+            else
+              run_native_build="${CALL_BUILD_NATIVE:-false}"
+            fi
           fi
           [[ -n "$version" ]] || { echo '::error::version input is required' >&2; exit 1; }
           [[ -n "$rc_tag" ]] || { echo '::error::rc_tag input is required' >&2; exit 1; }
           [[ -n "$ref" ]] || { echo '::error::ref input is required' >&2; exit 1; }
-          # No "unsupported manual dispatch mode" check: `mode` is a choice list
-          # whose only option is dry-run, so it could only ever fire on a
-          # reusable cut/recut call. It also keyed on the GITHUB_EVENT_NAME
-          # environment variable, which carries the CALLER's event name (still
-          # workflow_dispatch here), so it rejected every cut/recut as though it
-          # were a manual dispatch.
+          # Keyed on direct_dispatch (DISPATCH_BUILD_NATIVE presence), never on
+          # GITHUB_EVENT_NAME: inside a reusable call that variable carries the
+          # CALLER's event name (still workflow_dispatch), which previously
+          # rejected every cut/recut as though it were a manual dispatch.
+          if [[ "$direct_dispatch" == true && "$mode" != "dry-run" ]]; then
+            echo "::error::unsupported manual dispatch mode: $mode" >&2
+            exit 1
+          fi
           case "$run_native_build" in
             true|false) ;;
             *) echo "::error::build_native must normalize to true or false, got: $run_native_build" >&2; exit 1 ;;
           esac
+          if [[ "$mode" != "dry-run" && "$run_native_build" != true ]]; then
+            echo '::error::reusable non-dry-run calls must enable the native build' >&2
+            exit 1
+          fi
           {
             printf 'version=%s\n' "$version"
             printf 'rc_tag=%s\n' "$rc_tag"
