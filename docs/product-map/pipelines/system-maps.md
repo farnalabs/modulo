@@ -40,6 +40,7 @@ code:
 unit-tests:
   - backend/tests/unit/api/test_system_maps_routes.py
   - backend/tests/unit/api/test_system_maps_discovery_routes.py
+  - backend/tests/unit/mcp/test_mcp_system_map_discovery.py
   - backend/tests/unit/core/test_system_maps_discovery.py
   - backend/tests/unit/core/test_system_map_persistence.py
   - backend/tests/unit/core/test_system_map_validation.py
@@ -63,7 +64,9 @@ unit-tests:
   - frontend/src/__tests__/SystemMapDraftReview.spec.ts
   - frontend/src/__tests__/DashboardSystemOverview.spec.ts
   - frontend/src/__tests__/DashboardView.spec.ts
-bdd: []
+bdd:
+  - backend/tests/bdd/features/system_maps/access_and_discovery.feature
+  - backend/tests/bdd/features/system_maps/revisions.feature
 status: partial
 ---
 
@@ -319,8 +322,13 @@ The map is stored in dedicated System Maps tables (migration
       `tests/unit/mcp/test_mcp_config_tools.py` -
       `TestSystemMapsInternalFlagMCP` and
       `TestSystemMapsAccessUsesSharedGrantCheck::test_ungranted_jwt_caller_keeps_role_behaviour`)
-- [ ] No MCP System Maps tool: the MCP layer only hides/shows the flag. There is
-      no MCP equivalent of discovery, authoring, publishing or the overview read
+- [x] MCP exposes System Maps discovery (FAR-2288): `discover_system_map`
+      reuses the REST discovery handler in a fresh session, is gated by the same
+      internal access predicate, and returns the discovery report or a
+      branchable error code (`api/mcp_server.py`, `core/mcp/scope_validator.py`;
+      `test_mcp_system_map_discovery.py`)
+- [ ] MCP authoring, publish, diff, restore and overview are not exposed:
+      discovery is the only System Maps capability available to MCP callers
       (`api/mcp_server.py`)
 - [ ] The routed UI does not use the version-aware revision reads: the revision
       sidebar lists revisions loaded in the current session and switches with
@@ -339,21 +347,25 @@ The map is stored in dedicated System Maps tables (migration
       guard at runtime, and the admission / reservation repository methods have
       no production caller (`db/repositories/system_map.py`;
       `0341_system_maps.py`)
-- [ ] The dashboard card's "Discover My System" button is still disabled and the
-      card falls back to static copy when no published map exists; discovery is
-      available from the routed list and detail pages instead
+- [x] The dashboard card's "Discover My System" control runs the real
+      discovery operation and deep-links to the created draft with
+      `?discovery=1`, where the detail view opens the review panel on arrival;
+      a failure is surfaced in place while the overview states stay visible
       (`frontend/src/components/dashboard/DashboardSystemOverview.vue`,
-      `frontend/src/components/system-maps/SystemMapDraftReview.vue`)
-- [ ] No BDD coverage: discovery, persistence, the revision lifecycle, the
-      version-aware reads, apply and the frontend are covered by unit tests and
-      Postgres integration tests, but there is no Gherkin feature file for the
-      System Maps surface (`bdd:` is empty)
+      `frontend/src/views/SystemMapDetailView.vue`,
+      `frontend/src/components/system-maps/SystemMapDraftReview.vue`;
+      `DashboardSystemOverview.spec.ts`, `SystemMapDetailView.spec.ts`)
+- [x] BDD coverage executes the internal access and discovery contract plus the
+      revision lifecycle (`backend/tests/bdd/features/system_maps/
+      access_and_discovery.feature`,
+      `backend/tests/bdd/features/system_maps/revisions.feature`;
+      `steps/test_system_maps.py`)
 
 ## Known Gaps
 
-- **No MCP System Maps surface.** The MCP layer only hides or shows the
-  `system_maps` flag; an agent cannot discover, author, publish or read a map
-  through MCP.
+- **MCP exposes discovery only.** An agent can discover a system map over MCP,
+  but cannot author, publish, diff, restore or read the overview through MCP;
+  those remain REST-only.
 - **Version-aware reads are backend-only.** `revisions/current`,
   `revisions/by-time`, `revisions/history`, `revisions/{rev_id}/diff` and
   `restore-as-new` all ship and are tested, but the routed UI still lists only
@@ -366,13 +378,21 @@ The map is stored in dedicated System Maps tables (migration
   metrics are read, and the admission-attempt / reservation tables and
   repository methods exist, but no runtime consumes them: budgets, cooldowns and
   concurrency are not enforced (deferred to Beta 3).
-- **The dashboard card is a metrics readout, not an authoring entry point.** Its
-  discover button stays disabled and its no-overview fallback is static copy;
-  the working discovery and authoring surfaces are the two routed pages.
-- **No BDD coverage.** There is no Gherkin feature file for the surface, so
-  end-to-end behaviour is pinned by unit and Postgres integration tests only.
 
 ## QA History
+
+- 2026-11-03: **Improve Architecture product-map walk** - re-verified this entry
+  against `origin/main` after FAR-2288's MCP-discovery + BDD PR (#2761) and the
+  product-map refresh (#2762). Corrected the now-false remaining gaps: MCP has
+  a `discover_system_map` tool (discovery only, not authoring/publish/overview),
+  so that behaviour is checked and the gap narrowed; the two BDD feature files
+  (`access_and_discovery.feature`, `revisions.feature`) now execute, so the
+  frontmatter cites them instead of leaving `bdd: []`. Wired the one real
+  remaining UI gap: the dashboard "Discover My System" button is enabled, runs
+  the shipped discovery endpoint and deep-links to the draft so the review panel
+  opens on arrival, with the stale "discovery is not available" copy replaced.
+  The version-aware-history UI, create-only re-scan and loop runtime stay
+  unchecked. `_ORPHANED_BDD_FEATURES` stays empty.
 
 - 2026-10-31: **Improve Architecture product-map walk** - closed the feature-graph
   gap left by FAR-2244 (backend discovery) and FAR-2245 (dashboard draft-review
