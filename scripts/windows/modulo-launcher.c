@@ -155,33 +155,44 @@ static BOOL quoted_arg_length(const wchar_t *arg, size_t *length) {
     return TRUE;
 }
 
-static wchar_t *append_quoted_arg(wchar_t *cursor, const wchar_t *arg) {
-    size_t backslashes = 0;
-    const wchar_t *source;
-    *cursor++ = L'"';
-    for (source = arg; *source != L'\0'; source++) {
-        if (*source == L'\\') {
-            backslashes++;
-        } else {
-            if (*source == L'"') {
-                while (backslashes > 0) {
-                    *cursor++ = L'\\';
-                    *cursor++ = L'\\';
-                    backslashes--;
-                }
-                *cursor++ = L'\\';
-            }
-            while (backslashes > 0) {
-                *cursor++ = L'\\';
-                backslashes--;
-            }
-            *cursor++ = *source;
-        }
-    }
+/* Emit a pending run of backslashes verbatim, as a literal character needs. */
+static wchar_t *emit_backslashes(wchar_t *cursor, size_t backslashes) {
     while (backslashes > 0) {
         *cursor++ = L'\\';
         backslashes--;
     }
+    return cursor;
+}
+
+/* Emit a pending run of backslashes doubled, as a literal quote requires so the
+ * child's argument parser reads the run back verbatim. */
+static wchar_t *emit_doubled_backslashes(wchar_t *cursor, size_t backslashes) {
+    while (backslashes > 0) {
+        *cursor++ = L'\\';
+        *cursor++ = L'\\';
+        backslashes--;
+    }
+    return cursor;
+}
+
+static wchar_t *append_quoted_arg(wchar_t *cursor, const wchar_t *arg) {
+    size_t backslashes = 0;
+    *cursor++ = L'"';
+    for (const wchar_t *source = arg; *source != L'\0'; source++) {
+        if (*source == L'\\') {
+            backslashes++;
+            continue;
+        }
+        if (*source == L'"') {
+            cursor = emit_doubled_backslashes(cursor, backslashes);
+            *cursor++ = L'\\';
+            backslashes = 0;
+        }
+        cursor = emit_backslashes(cursor, backslashes);
+        backslashes = 0;
+        *cursor++ = *source;
+    }
+    cursor = emit_backslashes(cursor, backslashes);
     *cursor++ = L'"';
     return cursor;
 }

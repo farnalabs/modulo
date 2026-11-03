@@ -96,7 +96,10 @@ function Invoke-WindowsLauncherBuild {
     & $compiler.Source @buildArgs
     if ($LASTEXITCODE -ne 0) { throw "Compilation failed with exit code $LASTEXITCODE" }
     if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) { throw "Output file not created: $OutputPath" }
-    Write-Host "Built $OutputPath with $compilerExe"
+    # The message goes to the information stream so a caller's pipeline output is
+    # untouched; -InformationAction Continue keeps it visible in the CI log,
+    # where the default SilentlyContinue preference would swallow it.
+    Write-Information -MessageData "Built $OutputPath with $compilerExe" -InformationAction Continue
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
