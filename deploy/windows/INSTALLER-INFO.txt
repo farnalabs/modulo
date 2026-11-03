@@ -1,6 +1,8 @@
 Modulo Windows installer
 
-Modulo is a self-hosted local installation. This installer places the native Windows runtime on your machine and registers it as a Windows service. Modulo does not provide a hosted SaaS service through this installer; you operate the installed instance and its data.
+Modulo is a self-hosted local installation. This installer places the native Windows runtime on your machine and creates a Start Menu shortcut that starts Modulo in the foreground. Modulo does not provide a hosted SaaS service through this installer; you operate the installed instance and its data.
+
+Windows service mode: Coming soon (Beta). This build does not register a Windows service and does not start automatically at boot. Start Modulo from the Start Menu shortcut.
 
 The native runtime bundle is built separately. The installer intentionally refuses to compile unless the bundle contains both bin\modulo.exe and modulo-runtime.json. This prevents publishing or installing a partial package.
 

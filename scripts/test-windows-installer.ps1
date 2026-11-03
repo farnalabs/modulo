@@ -593,7 +593,7 @@ end.
         @{ Name = "Redaction entry point"; Pattern = 'function Redact\(' }
         @{ Name = "Redaction source markers"; Pattern = 'BEGIN REDACT-SOURCE' }
         @{ Name = "Support block"; Pattern = 'procedure PrintSupportBlock' }
-        @{ Name = "Service registration in code"; Pattern = 'function RegisterService' }
+        @{ Name = "Deferred service mode notice"; Pattern = 'procedure WriteServiceModeNotice' }
         @{ Name = "Failure hook"; Pattern = 'procedure CurStepChanged' }
         @{ Name = "Failure state setter"; Pattern = 'procedure MarkFailure' }
         @{ Name = "Support reference in log filename"; Pattern = '(?s)LOG_PREFIX.*SupportRef.*LOG_EXT' }
@@ -651,6 +651,32 @@ end.
         throw "Installer script still references unsupported identifiers: $($forbiddenFound -join ', ')"
     }
     Write-Output "  PASS: no unsupported Pascal Script identifiers ($($forbiddenPatterns.Count) checks)."
+
+    # Windows service mode is deferred to Beta (FAR-2347): Alpha installs a
+    # foreground-start shortcut and records the limitation with
+    # WriteServiceModeNotice. The marker table above can only assert presence, so
+    # the absence of service registration is checked explicitly here - otherwise
+    # a future re-introduction of the deleted RegisterService (plus the sc.exe
+    # call and [UninstallRun] hook that go with it) would pass this gate silently.
+    # Scanned against the comment-stripped text, so the "No [UninstallRun]
+    # section" explanatory comment above can neither satisfy nor trip the check,
+    # while a real section header or Exec() call survives.
+    Write-Output "Checking that no Windows service registration has crept back in..."
+    $forbiddenServicePatterns = @(
+        @{ Name = "Service registration procedure"; Pattern = '\bRegisterService\b' }
+        @{ Name = "Service Control Manager invoked via sc.exe"; Pattern = '\bsc\.exe\b' }
+        @{ Name = "Service teardown hook section"; Pattern = '(?m)^[ \t]*\[UninstallRun\]' }
+    )
+    $serviceRegistrationFound = @()
+    foreach ($p in $forbiddenServicePatterns) {
+        if ($codeOnly -match $p.Pattern) {
+            $serviceRegistrationFound += $p.Name
+        }
+    }
+    if ($serviceRegistrationFound.Count -gt 0) {
+        throw "Installer script registers a Windows service, which is deferred to Beta (FAR-2347): $($serviceRegistrationFound -join ', '). Alpha must install the foreground-start shortcut and log the deferred notice instead."
+    }
+    Write-Output "  PASS: no Windows service registration ($($forbiddenServicePatterns.Count) checks)."
 
     # --- Launcher helper contract (behavioural, not text matching) -----------
     Write-Output ""
