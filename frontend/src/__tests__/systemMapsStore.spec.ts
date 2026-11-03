@@ -244,8 +244,6 @@ describe('useSystemMapsStore access', () => {
     expect(store.systemMapsEnabled).toBe(false)
     expect(store.error).toBeNull()
     expect(store.loaded).toBe(false)
-    expect(store.discoveryAvailable).toBe(false)
-    expect(store.draft).toBeNull()
   })
 
   it('fails closed when no access token is present', async () => {
@@ -343,6 +341,31 @@ describe('useSystemMapsStore access', () => {
     expect(store.discoveryAvailable).toBe(false)
     expect(store.discoveryError).toBe('discovery denied')
     expect(store.draft).toBeNull()
+  })
+})
+
+describe('useSystemMapsStore localized errors', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+  })
+
+  it('uses the localized fallback when listing maps fails with a non-Error', async () => {
+    mockGet.mockRejectedValueOnce('offline')
+
+    const store = useSystemMapsStore()
+    await store.fetchMaps()
+
+    expect(store.error).toBe('Could not load system maps')
+  })
+
+  it('uses the localized fallback when loading a map fails with a non-Error', async () => {
+    mockGet.mockRejectedValueOnce('offline')
+
+    const store = useSystemMapsStore()
+    await store.loadMap('map-1')
+
+    expect(store.error).toBe('Could not load system map')
   })
 })
 
