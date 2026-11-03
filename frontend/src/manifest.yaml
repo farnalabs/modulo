@@ -5416,6 +5416,9 @@ elements:
       - testid: diff-loading
         type: element
         dynamic_testid: false
+      - testid: diff-comparing
+        type: element
+        dynamic_testid: false
       - testid: diff-recent-runs-a
         type: select
         dynamic_testid: false

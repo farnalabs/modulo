@@ -219,7 +219,7 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Beta System Maps (Delivery System Maps)",
         tier="community",
     ),
-    # ── Community tier — webhook notification delivery log (default OFF, FAR-656) ──
+    # ── Community tier — webhook notification delivery log (default ON, FAR-2235) ──
     FeatureFlag(
         name="webhook_notification_log",
         description="Webhook notification delivery log (admin delivery-log UI)",

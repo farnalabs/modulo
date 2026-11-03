@@ -34,6 +34,13 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _INSTALL_SH = _REPO_ROOT / "scripts" / "install.sh"
 
+#: This module EXECUTES the shipped installer under a real POSIX shell, so it
+#: needs a POSIX shell rather than the Windows WSL launcher stub. The platform
+#: requirement is declared once, as a marker; the gate that skips it on Windows
+#: lives in ``backend/tests/conftest.py`` (``POSIX_ONLY_MARKER``) and Linux CI
+#: executes this suite for real.
+pytestmark = pytest.mark.posix_only
+
 _BLOCK_START = re.compile(r"^----- Modulo install failed: support reference (?P<ref>[0-9a-f]{8}) -----$")
 _BLOCK_END = "----- end of Modulo install support block -----"
 _REF_PATTERN = re.compile(r"^[0-9a-f]{8}$")
@@ -136,6 +143,11 @@ def _stub(tmp_path: Path, name: str, body: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
+# POSIX-only (this module is mixed): the tests below execute the shipped shell
+# script for real, so each carries ``pytest.mark.posix_only``. The gate that skips
+# them on Windows lives in ``backend/tests/conftest.py``; the module's remaining
+# tests assert on workflow/file text and still run on Windows.
+@pytest.mark.posix_only
 def test_help_exits_zero_without_a_support_block(tmp_path: Path) -> None:
     result = _run_installer(_INSTALL_SH, ["--help"], _install_env(tmp_path))
     assert result.returncode == 0
@@ -149,6 +161,7 @@ def test_help_exits_zero_without_a_support_block(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.posix_only
 def test_bad_version_prints_the_support_block_last(tmp_path: Path) -> None:
     result = _run_installer(_INSTALL_SH, [], _install_env(tmp_path), {"VERSION": "nonsense"})
     assert result.returncode == 1
@@ -157,6 +170,7 @@ def test_bad_version_prints_the_support_block_last(tmp_path: Path) -> None:
     assert _last_non_empty_line(combined) == _BLOCK_END
 
 
+@pytest.mark.posix_only
 def test_support_block_names_target_stage_log_and_reference(tmp_path: Path) -> None:
     result = _run_installer(_INSTALL_SH, [], _install_env(tmp_path), {"VERSION": "nonsense"})
     combined = _output(result)
@@ -175,6 +189,7 @@ def test_support_block_names_target_stage_log_and_reference(tmp_path: Path) -> N
     assert log_path.parent == _state_dir(tmp_path)
 
 
+@pytest.mark.posix_only
 def test_transcript_is_persisted_with_private_permissions(tmp_path: Path) -> None:
     result = _run_installer(_INSTALL_SH, [], _install_env(tmp_path), {"VERSION": "nonsense"})
     assert result.returncode == 1
@@ -197,6 +212,7 @@ def test_transcript_is_persisted_with_private_permissions(tmp_path: Path) -> Non
     ],
     ids=["bad-version", "missing-from-file", "unknown-argument"],
 )
+@pytest.mark.posix_only
 def test_failure_exit_codes_are_unchanged(tmp_path: Path, args: list[str], extra_env: dict[str, str]) -> None:
     """The support block must not change what the installer returns today."""
     result = _run_installer(_INSTALL_SH, args, _install_env(tmp_path), extra_env)
@@ -204,6 +220,7 @@ def test_failure_exit_codes_are_unchanged(tmp_path: Path, args: list[str], extra
     assert _BLOCK_END in _output(result)
 
 
+@pytest.mark.posix_only
 def test_unsupported_architecture_prints_the_block(tmp_path: Path) -> None:
     """A common early exit (not a `die` in a later stage) must still print it."""
     uname_stub = (
@@ -224,6 +241,7 @@ def test_unsupported_architecture_prints_the_block(tmp_path: Path) -> None:
     assert _block_field(combined, "Install target") == "latest (not yet resolved)"
 
 
+@pytest.mark.posix_only
 def test_download_failure_names_the_download_stage(tmp_path: Path) -> None:
     """`fetch` fails with a bare `exit 1` — not `die` — and must still be covered."""
     bin_dir = _stub(tmp_path, "curl", "#!/usr/bin/env bash\nexit 6\n")
@@ -241,6 +259,7 @@ def test_download_failure_names_the_download_stage(tmp_path: Path) -> None:
     assert _last_non_empty_line(combined) == _BLOCK_END
 
 
+@pytest.mark.posix_only
 def test_each_run_gets_its_own_support_reference(tmp_path: Path) -> None:
     env = _install_env(tmp_path)
     first = _run_installer(_INSTALL_SH, [], env, {"VERSION": "nonsense"})
@@ -255,6 +274,7 @@ def test_each_run_gets_its_own_support_reference(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.posix_only
 def test_only_the_newest_five_logs_are_kept(tmp_path: Path) -> None:
     state = _state_dir(tmp_path)
     state.mkdir(parents=True)
@@ -276,6 +296,7 @@ def test_only_the_newest_five_logs_are_kept(tmp_path: Path) -> None:
     assert new_log in remaining
 
 
+@pytest.mark.posix_only
 def test_oversized_transcript_is_capped_and_keeps_the_tail(tmp_path: Path) -> None:
     """The cap must keep the END of the transcript — that is where the failure is."""
     source = _INSTALL_SH.read_text(encoding="utf-8")
@@ -344,12 +365,14 @@ def _redact(text: str) -> str:
         ("https://host/x?X-Amz-Signature=deadbeefcafe", "deadbeefcafe"),
     ],
 )
+@pytest.mark.posix_only
 def test_redaction_withholds_credential_shaped_values(secret_text: str, leaked: str) -> None:
     redacted = _redact(secret_text)
     assert "[redacted]" in redacted
     assert leaked not in redacted
 
 
+@pytest.mark.posix_only
 def test_redaction_leaves_public_urls_and_paths_untouched() -> None:
     public = "https://github.com/farnalabs/modulo/releases/download/bundle-v1.0.0/modulo-1.0.0-linux-amd64.tar.gz"
     assert _redact(public) == public

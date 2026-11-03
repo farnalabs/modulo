@@ -19,7 +19,7 @@
   :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
   data-testid="diff-recent-runs-a"
   class="w-72"
-  :options="recentRuns.map(run => ({ value: run.id, label: run.pipeline_name + '—' + run.status + '(' + run.created_at + ')' }))"
+  :options="recentRunOptions"
   option-label="label"
   option-value="value"
 >
@@ -56,7 +56,7 @@
   :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
   data-testid="diff-recent-runs-b"
   class="w-72"
-  :options="recentRuns.map(run => ({ value: run.id, label: run.pipeline_name + '—' + run.status + '(' + run.created_at + ')' }))"
+  :options="recentRunOptions"
   option-label="label"
   option-value="value"
 >
@@ -74,16 +74,21 @@
             />
           </div>
         </div>
-        <Button :disabled="!canCompare || loading" data-testid="diff-compare-btn" class="px-5 py-2" @click="handleCompare">
+        <Button :disabled="!canCompare || loading" :loading="loading" data-testid="diff-compare-btn" class="px-5 py-2" @click="handleCompare">
           {{ $t('views.AgentOutputDiffView.compare') }}
         </Button>
       </div>
 
-      <div v-if="result" class="space-y-6">
+      <div v-if="loading" class="rounded-lg border bg-card p-6" data-testid="diff-comparing">
+        <div class="grid gap-4">
+          <div v-for="n in 3" :key="n" class="h-9 animate-pulse rounded-lg bg-muted" />
+        </div>
+      </div>
+      <div v-else-if="result" class="space-y-6">
         <div
           v-if="!result.has_diff"
           data-testid="diff-identical-banner"
-          class="rounded-lg border border-green-500/30 bg-green-500/10 p-4 text-center text-sm font-medium text-green-600"
+          class="rounded-lg border border-green-500/30 bg-green-500/10 p-4 text-center text-sm font-medium text-green-700 dark:text-green-400"
         >
           {{ $t('views.AgentOutputDiffView.outputs_identical') }}
         </div>
@@ -92,10 +97,10 @@
           <span class="rounded bg-muted px-2.5 py-1 tabular-nums text-muted-foreground">
             {{ $t('views.AgentOutputDiffView.lines_total', { count: totalLines }) }}
           </span>
-          <span class="rounded bg-green-500/10 px-2.5 py-1 tabular-nums text-green-600">
+          <span class="rounded bg-green-500/10 px-2.5 py-1 tabular-nums text-green-700 dark:text-green-400">
             {{ $t('views.AgentOutputDiffView.added', { count: addedCount }) }}
           </span>
-          <span class="rounded bg-red-500/10 px-2.5 py-1 tabular-nums text-red-600">
+          <span class="rounded bg-red-500/10 px-2.5 py-1 tabular-nums text-red-700 dark:text-red-400">
             {{ $t('views.AgentOutputDiffView.removed', { count: removedCount }) }}
           </span>
           <span class="rounded bg-muted px-2.5 py-1 tabular-nums text-muted-foreground">
@@ -123,7 +128,7 @@
 
         <DataCard padding="none" card-class="overflow-hidden">
           <div class="border-b bg-muted/50 px-4 py-2 text-xs font-medium text-muted-foreground">
-            {{ $t('views.AgentOutputDiffView.line_level_diff') }} <span class="ml-2 text-green-500">{{ $t('views.AgentOutputDiffView.plus_added') }}</span> <span class="ml-1 text-red-500">{{ $t('views.AgentOutputDiffView.minus_removed') }}</span>
+            {{ $t('views.AgentOutputDiffView.line_level_diff') }} <span class="ml-2 text-green-700 dark:text-green-400">{{ $t('views.AgentOutputDiffView.plus_added') }}</span> <span class="ml-1 text-red-700 dark:text-red-400">{{ $t('views.AgentOutputDiffView.minus_removed') }}</span>
           </div>
           <div class="overflow-x-auto">
             <table class="w-full text-left font-mono text-xs leading-relaxed">
@@ -147,9 +152,9 @@
                   :key="idx"
                   :class="diffRowClass(line)"
                 >
-                  <td class="w-12 select-none px-2 text-right text-muted-foreground/50">{{ line.line_a ?? '' }}</td>
-                  <td class="w-px select-none px-1 text-muted-foreground/30">{{ diffMarker(line) }}</td>
-                  <td class="w-12 select-none px-2 text-right text-muted-foreground/50">{{ line.line_b ?? '' }}</td>
+                  <td class="w-12 select-none px-2 text-right text-muted-foreground">{{ line.line_a ?? '' }}</td>
+                  <td class="w-px select-none px-1 text-muted-foreground">{{ diffMarker(line) }}</td>
+                  <td class="w-12 select-none px-2 text-right text-muted-foreground">{{ line.line_b ?? '' }}</td>
                   <td class="whitespace-pre px-2 py-0.5" :class="diffContentClass(line)">{{ line.content }}</td>
                 </tr>
               </tbody>
@@ -163,6 +168,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import { useApi } from '../composables/useApi'
@@ -199,6 +205,18 @@ const { loading: loadingRuns, data: summaryResp } = useDataFetch(
 
 const recentRuns = computed<RecentRun[]>(() => summaryResp.value?.recent_runs ?? [])
 
+const { t } = useI18n()
+const recentRunOptions = computed(() =>
+  recentRuns.value.map(run => ({
+    value: run.id,
+    label: t('views.AgentOutputDiffView.recent_run_option', {
+      pipeline: run.pipeline_name,
+      status: run.status,
+      createdAt: run.created_at,
+    }),
+  })),
+)
+
 
 
 const canCompare = computed(() => {
@@ -226,8 +244,8 @@ function diffRowClass(line: NodeOutputDiffLine): string {
 }
 
 function diffContentClass(line: NodeOutputDiffLine): string {
-  if (line.type === 'added') return 'text-green-600'
-  if (line.type === 'removed') return 'text-red-600'
+  if (line.type === 'added') return 'text-green-700 dark:text-green-400'
+  if (line.type === 'removed') return 'text-red-700 dark:text-red-400'
   return 'text-foreground'
 }
 

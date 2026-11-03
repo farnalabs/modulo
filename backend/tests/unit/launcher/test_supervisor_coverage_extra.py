@@ -458,9 +458,10 @@ def deterministic_signal_group(monkeypatch: pytest.MonkeyPatch) -> None:
         supervisor_module.os,
         "getpgid",
         lambda _pid: (_ for _ in ()).throw(OSError("no such process")),
+        raising=False,
     )
     monkeypatch.setattr(supervisor_module.os, "kill", lambda _pid, _signum: None)
-    monkeypatch.setattr(supervisor_module.os, "killpg", lambda _pgid, _signum: None)
+    monkeypatch.setattr(supervisor_module.os, "killpg", lambda _pgid, _signum: None, raising=False)
 
 
 def test_teardown_child_escalation_after_grace(deterministic_signal_group: None) -> None:
@@ -551,6 +552,7 @@ def test_signal_group_non_group_leader(monkeypatch: pytest.MonkeyPatch) -> None:
         supervisor_module.os,
         "getpgid",
         lambda _pid: (_ for _ in ()).throw(OSError("no such process")),
+        raising=False,
     )
     monkeypatch.setattr(
         supervisor_module.os,

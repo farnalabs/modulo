@@ -12,6 +12,10 @@ import pytest
 from tests.helpers.audit_session import install_audit_session_double
 from tests.unit._e2b_sandbox_bridge import install_bridge
 
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+os.environ.setdefault("SECRET_KEY", "a" * 32)
+os.environ.setdefault("MODULO_ADMIN_PASSWORD", "test")
+
 
 @pytest.fixture(autouse=True)
 def _restore_app_dependency_overrides() -> Generator[None, None, None]:

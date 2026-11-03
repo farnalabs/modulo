@@ -87,6 +87,17 @@ class TestTokenBucket:
         assert sum(results) == 10
         assert await bucket.consume() is False
 
+    async def test_consume_more_than_burst_never_succeeds(self) -> None:
+        """A request larger than ``burst`` can never be satisfied: refill caps at
+        burst, so waiting cannot accumulate enough tokens — and the failed
+        consume must leave the bucket's remainder intact."""
+        clock = FakeClock()
+        bucket = TokenBucket(rate=1.0, burst=4, clock=clock)
+        assert await bucket.consume(5) is False
+        clock.advance(3600.0)
+        assert await bucket.consume(5) is False
+        assert await bucket.consume(4) is True
+
     async def test_reset_restores_full_capacity(self) -> None:
         bucket = TokenBucket(rate=1.0, burst=4)
         for _ in range(4):
@@ -99,16 +110,17 @@ class TestTokenBucket:
 
 
 class TestTokenBucketRegistry:
-    async def test_lazy_bucket_creation_per_key(self) -> None:
-        registry = TokenBucketRegistry(rate=1.0, burst=2)
-        assert await registry.consume("client-a") is True
-        assert await registry.consume("client-a") is True
-        assert await registry.consume("client-a") is False
-        assert await registry.consume("client-b") is True
-
-    async def test_clients_are_isolated(self) -> None:
-        registry = TokenBucketRegistry(rate=1.0, burst=1)
-        assert await registry.consume("client-a") is True
+    @pytest.mark.parametrize(
+        ("burst", "drains"),
+        [(2, 2), (1, 1)],
+        ids=["burst-2", "burst-1"],
+    )
+    async def test_buckets_are_created_lazily_and_isolated_per_key(self, burst: int, drains: int) -> None:
+        """A key's bucket is created on first use and exhausting it never
+        affects another key (which gets its own full bucket on first use)."""
+        registry = TokenBucketRegistry(rate=1.0, burst=burst)
+        for _ in range(drains):
+            assert await registry.consume("client-a") is True
         assert await registry.consume("client-a") is False
         assert await registry.consume("client-b") is True
 

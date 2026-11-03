@@ -446,11 +446,12 @@ jobs:
   backend-test:
     name: Test (Backend) unit shard ${{ matrix.shard }}/3
     # The unit suite, split across three CONCURRENT shards (unit shard 1/3,
-    # 2/3, 3/3). The suite is memory-bound: 4 xdist workers peak at ~11.7 GB
-    # RSS on a 16 GB runner, so adding workers to one runner cannot shorten the
-    # run - only another runner can. Three parallel 16 GB shards each keep the
-    # same 4 workers over a third of the tree, cutting the critical path to
-    # roughly a third of the old single-job wall-clock.
+    # 2/3, 3/3), each on ubicloud-standard-2 (2 vCPU, 8 GB) with 2 xdist
+    # workers. The suite is memory-bound: each xdist worker holds a large
+    # in-process fixture graph (4 workers peaked at ~11.7 GB RSS on one 16 GB
+    # runner), so adding workers to one runner cannot shorten the run - only
+    # another runner can. Three parallel shards over a third of the tree each
+    # cut the critical path to roughly a third of the old single-job wall-clock.
     #
     # Each shard writes its OWN coverage data file (.coverage.unit-<n>, see
     # coverage-thresholds.sh "shard" mode) and enforces NO thresholds - it
@@ -464,25 +465,22 @@ jobs:
     # coverage-gate, Sonar) is skipped with it - the run still concludes FAILURE
     # because lint failed, and notify-pr-failure's needs-aware guard sees it.
     needs: [backend-lint]
-    # FAR-2106 memory ceiling (16 GB) is unchanged per shard; the parallelism,
-    # not the worker count, is what moves the wall-clock now.
-    #
-    # Runner choice, measured (FAR-2325, 2026-11-03, successful runs): standard-4
-    # (4 vCPU) was NOT chosen for CPU speed. The single un-sharded job on
-    # standard-4 took a median 35.8 min (n=15, 27.7-39.7), so 4 vCPU never gave
-    # the ~2x over standard-2's ~25 min that FAR-2106 assumed; the earlier
-    # "neutral cost" claim was wrong (at 2x the per-minute rate it cost ~1.4x).
-    # It is kept because the memory headroom is the real constraint: 4 xdist
-    # workers peak at ~11.7 GB RSS, which does not fit standard-2's 8 GB. Sharded
-    # (#2756) each shard takes a median 11.9 min (n=87, 7.0-17.1), ~36 runner-min
-    # for the three, i.e. the same billed minutes as the single job (~35) for
-    # roughly a third of the wall-clock. NOT measured: 3 shards on standard-2
-    # with -n 2 (memory fits, but wall-clock and cost are unknown); that
-    # comparison is the open follow-up before any downgrade.
+    # Runner choice, measured (FAR-2325, 2026-11-03). standard-4 was never a
+    # CPU-speed win: the single un-sharded job on standard-4 took a median
+    # 35.8 min (n=15, 27.7-39.7), not the ~2x over standard-2's ~25 min that
+    # FAR-2106 assumed, so the earlier "neutral cost" claim was wrong. Sharded
+    # on standard-4 with auto workers (#2756) each shard took a median 11.9 min
+    # (n=87, 7.0-17.1), ~36 runner-min for the three. With 2 workers per shard
+    # on standard-2, 3 CI runs (9 shards, all passed) gave a median shard time
+    # of 12.6 min, ~37 runner-min per run, slowest shard 13.3-15.3 min per run:
+    # about the same wall-clock and billed minutes at roughly half the
+    # per-minute rate, so about half the cost. NOT measured: peak RSS per shard
+    # (success on 8 GB is the only evidence it fits; watch for OOM kills) and
+    # runner queue wait.
     strategy:
       matrix:
         shard: [1, 2, 3]
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     timeout-minutes: 45
     defaults:
       run:
@@ -498,7 +496,7 @@ jobs:
       - run: uv sync --frozen
       - name: Run unit tests with coverage (shard ${{ matrix.shard }}/3)
         shell: bash
-        run: ../.github/scripts/coverage-thresholds.sh auto shard
+        run: ../.github/scripts/coverage-thresholds.sh 2 shard
         env:
           DATABASE_URL: "postgresql+asyncpg://unused:${{ secrets.POSTGRES_PASSWORD || 'unused' }}@localhost/unused"
           COVERAGE_SHARD: ${{ matrix.shard }}/3

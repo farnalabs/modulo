@@ -360,9 +360,8 @@ class TestRetiredInternalFlags:
 
 
 class TestDefaultOffFlags:
-    """Flags shipped default-OFF on every tier (the ``mobile_sidebar_rail``
-    two-mechanism precedent). Each is listed in the catalog for per-org
-    toggling AND hardcoded in ``_refresh``'s inactive set
+    """Flags shipped default-OFF on every tier. Each is listed in the catalog
+    for per-org toggling AND hardcoded in ``_refresh``'s inactive set
     (``DEFAULT_OFF_FLAGS``), so the community-tier tier-rank fallback can
     never activate it and only an explicit override can turn it on.
 
