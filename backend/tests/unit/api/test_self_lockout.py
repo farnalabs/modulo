@@ -21,7 +21,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.last_admin_guard import LastAdminLockoutError, assert_not_last_admin
 from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_rls_preamble
+from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -45,6 +45,15 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # ``AsyncSession.execute()`` returns a real synchronous ``Result``: its
+    # readers (``scalar_one_or_none`` / ``first`` / ``scalars`` ...) are NOT
+    # coroutines. On a bare ``AsyncMock`` child ``await session.execute(...)``
+    # yields another ``AsyncMock``, so a route that reads the result
+    # synchronously leaves a never-awaited coroutine behind (the 2026-11-01
+    # full-suite GC flake: ``get_membership_by_account_and_org`` read
+    # ``result.scalar_one_or_none()``, and the orphan survived inside the
+    # request frame / exception traceback until an arbitrary later test's GC).
+    session.execute = AsyncMock(return_value=make_empty_execute_result())
     return session
 
 
@@ -204,6 +213,10 @@ class TestSelfLockoutEndpoint:
 
     def test_self_demote_last_admin_returns_422(self, client: TestClient) -> None:
         """HTTP 422 when the guard rejects a last-admin self-demote."""
+        mock_membership = MagicMock()
+        mock_membership.role = "admin"
+        mock_membership.deactivated_at = None
+
         with (
             _patch_guard(
                 side_effect=LastAdminLockoutError(
@@ -212,6 +225,13 @@ class TestSelfLockoutEndpoint:
                 )
             ),
             patch("modulo.api.routes.admin.set_rls_org"),
+            # The session is a bare AsyncMock, so an unpatched membership lookup
+            # would call ``result.scalar_one_or_none()`` on the AsyncMock result
+            # and leak a never-awaited coroutine (FAR-2289).
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                return_value=mock_membership,
+            ),
         ):
             resp = client.put(
                 self.URL.format(user_id=_USER_ID),
@@ -318,11 +338,21 @@ class TestSelfLockoutEndpoint:
         """Break-glass accounts are 422-rejected on the admin update route."""
         mock_account = self._make_mock_account(_ANOTHER_USER_ID)
         mock_account.is_break_glass = True
+        mock_membership = MagicMock()
+        mock_membership.role = "operator"
+        mock_membership.deactivated_at = None
 
         with (
             _patch_guard(),
             patch("modulo.api.routes.admin.set_rls_org"),
             patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            # Bare-AsyncMock session: patch the membership lookup so its
+            # ``scalar_one_or_none()`` read cannot leak a never-awaited
+            # coroutine (FAR-2289).
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                return_value=mock_membership,
+            ),
         ):
             resp = client.put(
                 self.URL.format(user_id=_ANOTHER_USER_ID),

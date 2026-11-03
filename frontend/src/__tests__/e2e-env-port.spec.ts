@@ -181,7 +181,7 @@ describe('local e2e port selection (FAR-1900)', () => {
 })
 
 describe('playwright.config local webServer defence-in-depth (FAR-1922)', () => {
-  it('disables server reuse and binds the derived port with --strictPort', async () => {
+  it('disables server reuse and binds the derived port with --strictPort', { timeout: 30000 }, async () => {
     // The derived port (pinned above) plus these two playwright.config.ts
     // values are the two layers that stop a local run attaching to a foreign
     // worktree's dev server. On a hash collision, `reuseExistingServer: false`

@@ -89,6 +89,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-library-collections** - Install, uninstall, and manage library collection installs into runnable org entities (flag-gated behind `library_collection`; see FAR-760 / FAR-762 / FAR-764) - routes: `/library/collections/new`, `/library/collections/:id`
 - **feat-runs** - Run execution, history, and detail (Output Diff deferred from the MVP nav – hidden via private_preview; see FAR-542) - routes: `/runs`, `/runs/:id`
 - **feat-lifecycle-maps** - Internal lifecycle maps and stage workflows (dev-mode dogfood only; not Alpha-facing) - routes: `/lifecycle-maps`, `/lifecycle-maps/:id/editor`, `/lifecycle-maps/:id`
+- **feat-system-maps** - Bounded visual authoring of delivery system maps (private_preview, dev-mode dogfood only; not Alpha-facing) - routes: `/system-maps`, `/system-maps/:id`
 - **feat-governance-stack** - Read-only governance-hierarchy taxonomy readout over existing list APIs - routes: `/governance`
 
 ### Monitor

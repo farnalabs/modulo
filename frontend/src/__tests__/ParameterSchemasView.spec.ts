@@ -726,8 +726,11 @@ describe('ParameterSchemasView — references tab', () => {
     expect(wrapper.text()).toContain('Agents Using This Schema')
     expect(wrapper.text()).toContain('Deployer Agent')
     expect(wrapper.text()).toContain('Prod Values')
-    const agentLink = wrapper.find('a[href="/admin/agents/agent-1"]')
-    expect(agentLink.exists()).toBe(true)
+    // No agent-detail route is registered, so the reference is text rather
+    // than a link: /admin/agents/:id used to hit the catch-all redirect and
+    // silently send the operator to the dashboard.
+    expect(wrapper.find('a[href="/admin/agents/agent-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="paramschema-ref-agent-agent-1"]').text()).toBe('Deployer Agent')
   })
 
   it('shows (0) counts when nothing references the schema', async () => {
