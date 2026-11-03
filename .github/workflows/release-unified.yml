@@ -1085,7 +1085,12 @@ jobs:
                 docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
                 ;;
               frontend)
-                docker run --rm --entrypoint nginx "$IMAGE" -t
+                # The prod frontend config proxies to http://backend:8000 and
+                # nginx resolves upstream names at config-test time, so `-t`
+                # fails with "host not found in upstream" outside a compose
+                # network. publish-images.yml documents the same workaround;
+                # --add-host gives the name a resolvable address for the check.
+                docker run --rm --add-host backend:127.0.0.1 --entrypoint nginx "$IMAGE" -t
                 ;;
                runner-opencode)
                  docker run --rm --entrypoint opencode "$IMAGE" --version
