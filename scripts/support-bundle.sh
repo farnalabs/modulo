@@ -167,6 +167,7 @@ done
 
 case "$TAIL_LINES" in
   '' | *[!0-9]*) usage_error "--tail must be a non-negative integer" ;;
+  *) ;;
 esac
 
 # ---------------------------------------------------------------------------
