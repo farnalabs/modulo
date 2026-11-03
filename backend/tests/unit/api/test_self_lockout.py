@@ -225,6 +225,9 @@ class TestSelfLockoutEndpoint:
                 )
             ),
             patch("modulo.api.routes.admin.set_rls_org"),
+            # The session is a bare AsyncMock, so an unpatched membership lookup would
+            # call ``result.scalar_one_or_none()`` on an AsyncMock and leak a never-awaited
+            # coroutine (FAR-2289).
             patch(
                 "modulo.api.routes.admin.get_membership_by_account_and_org",
                 return_value=mock_membership,
