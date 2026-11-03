@@ -207,11 +207,11 @@ describe('DashboardSystemOverview', () => {
     expect(wrapper.find('[data-testid="system-map-overview-metrics"]').exists()).toBe(false)
   })
 
-  it('renders through the shared SectionCard with a live region', () => {
+  it('renders through the shared SectionCard without a live region', () => {
     const { wrapper } = mountOverview()
 
     const card = wrapper.get('[data-testid="dashboard-system-overview"]')
-    expect(card.attributes('aria-live')).toBe('polite')
+    expect(card.attributes('aria-live')).toBeUndefined()
     expect(card.get('h2').text()).toContain('System Overview')
   })
 })

@@ -16,6 +16,11 @@
 ;
 ; Build example:
 ;   iscc /DVERSION_NUM=0.4.0 /DBUNDLE_ARCH=amd64 /DBUNDLE_DIR=C:\bundle modulo.iss
+;
+; The [Code] section is Inno Setup 6.2.2 Pascal Script. Only documented support
+; functions are used; there is no WinAPI import. scripts/test-windows-installer.ps1
+; compiles this file with ISCC 6.2.2 in CI, so a script that cannot build fails
+; the build rather than shipping.
 
 #ifndef VERSION_NUM
   #error VERSION_NUM is required
@@ -93,10 +98,9 @@ Name: "{group}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"
 Name: "{commondesktop}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-; The service contract is modulo.exe service. Runtime readiness and the local
-; HTTP listener remain the native launcher's responsibility.
-Filename: "sc.exe"; Parameters: "create Modulo binPath= \"{app}\modulo.exe service\" start= auto"; StatusMsg: "Installing Modulo service..."; Flags: runhidden waituntilterminated
-Filename: "sc.exe"; Parameters: "start Modulo"; StatusMsg: "Starting Modulo service..."; Flags: runhidden waituntilterminated
+; Service registration lives in [Code] (RegisterService) rather than here, so
+; that a failed "sc.exe create/start" is observable and can be turned into a
+; support block instead of being silently ignored by the [Run] runner.
 Filename: "{#MODULO_URL}"; Description: "Open Modulo in your browser"; Flags: postinstall shellexec unchecked; Check: ShouldOpenModulo
 
 [UninstallRun]
@@ -109,44 +113,57 @@ Type: filesandordirs; Name: "{app}"
 [Code]
 const
   MAX_INSTALL_LOGS = 5;
-  MAX_LOG_BYTES = 1048576; { 1 MB }
+  MAX_LOG_BYTES = 1048576; { approximate cap on one install transcript }
   LOG_DIR_NAME = 'Modulo';
   LOG_PREFIX = 'install-';
   LOG_EXT = '.log';
+  SUPPORT_REF_LENGTH = 8;
+  HEX_CHARS = '0123456789abcdef';
 
 var
   SupportRef: string;
   LogFilePath: string;
   CurrentStage: string;
   LogActive: Boolean;
+  LogBytes: Integer;
+  TruncationNoted: Boolean;
   InstallFailed: Boolean;
-  InstallStarted: Boolean;
   InstallCompleted: Boolean;
   UserCancelled: Boolean;
-
-function BoolText(const Value: Boolean): string;
-begin
-  if Value then
-    Result := 'true'
-  else
-    Result := 'false';
-end;
-
-function WriteInstallLog(const Msg: string): Boolean;
-var
-  Line: string;
-begin
-  Result := False;
-  if (not LogActive) or (LogFilePath = '') then Exit;
-  Line := GetDateTimeString('yyyy-mm-dd"T"hh:nn:ss"Z"', '#', '#') + ' ' + Msg + #13#10;
-  Result := SaveStringToFile(LogFilePath, Line, True);
-  if not Result then
-    LogActive := False;
-end;
+  SupportBlockShown: Boolean;
 
 function GetLogDir: string;
 begin
   Result := ExpandConstant('{localappdata}\' + LOG_DIR_NAME);
+end;
+
+{ Named WriteInstallLog, not Log: "Log" is an Inno Setup built-in support
+  function and declaring our own would shadow it. }
+procedure WriteInstallLog(const Msg: string);
+var
+  Line: string;
+begin
+  if not LogActive then
+    Exit;
+  Line := GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') + ' ' + Msg + #13#10;
+  if LogBytes + Length(Line) > MAX_LOG_BYTES then
+  begin
+    if not TruncationNoted then
+    begin
+      TruncationNoted := True;
+      SaveStringToFile(LogFilePath,
+        GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') +
+        ' [log truncated: transcript capped at ' + IntToStr(MAX_LOG_BYTES) +
+        ' characters; later output discarded]' + #13#10, True);
+    end;
+    Exit;
+  end;
+  { Append via SaveStringToFile: Pascal Script has no file-handle API, and
+    opening one handle per write would leak it. }
+  if SaveStringToFile(LogFilePath, Line, True) then
+    LogBytes := LogBytes + Length(Line)
+  else
+    LogActive := False;
 end;
 
 function EnsureLogDir: Boolean;
@@ -158,204 +175,226 @@ begin
     Result := True
   else
     Result := ForceDirectories(LogDir);
-  if not Result then
-    Log('WARNING: cannot create log directory ' + LogDir);
 end;
 
 procedure PruneInstallLogs;
 var
   LogDir: string;
   FindRec: TFindRec;
-  Names: TArrayOfString;
-  I, J, KeepCount, DeleteCount: Integer;
-  Temp: string;
+  Names: array of string;
+  Count, I, J: Integer;
+  TempName: string;
 begin
   LogDir := GetLogDir;
-  if not DirExists(LogDir) then Exit;
-  SetArrayLength(Names, 0);
-  if FindFirst(LogDir + '\' + LOG_PREFIX + '*' + LOG_EXT, FindRec) then begin
+  if not DirExists(LogDir) then
+    Exit;
+  Count := 0;
+  if FindFirst(LogDir + '\' + LOG_PREFIX + '*' + LOG_EXT, FindRec) then
+  begin
     try
       repeat
-        SetArrayLength(Names, GetArrayLength(Names) + 1);
-        Names[GetArrayLength(Names) - 1] := FindRec.Name;
+        { FindFirst also returns directories; a directory is never a log file. }
+        if not DirExists(LogDir + '\' + FindRec.Name) then
+        begin
+          SetArrayLength(Names, Count + 1);
+          Names[Count] := FindRec.Name;
+          Count := Count + 1;
+        end;
       until not FindNext(FindRec);
     finally
       FindClose(FindRec);
     end;
   end;
-  if GetArrayLength(Names) > 1 then begin
-    for I := 0 to GetArrayLength(Names) - 2 do begin
-      for J := I + 1 to GetArrayLength(Names) - 1 do begin
-        if CompareText(Names[I], Names[J]) > 0 then begin
-          Temp := Names[I];
-          Names[I] := Names[J];
-          Names[J] := Temp;
-        end;
+
+  { Called before the current run creates its own log, so keep one slot free. }
+  if Count < MAX_INSTALL_LOGS then
+    Exit;
+
+  { Log names embed an ISO-8601 timestamp, so a descending string sort is a
+    newest-first sort. }
+  for I := 0 to Count - 2 do
+    for J := 0 to Count - 2 - I do
+      if CompareText(Names[J], Names[J + 1]) < 0 then
+      begin
+        TempName := Names[J];
+        Names[J] := Names[J + 1];
+        Names[J + 1] := TempName;
       end;
-    end;
-  end;
-  KeepCount := MAX_INSTALL_LOGS - 1;
-  if KeepCount < 1 then
-    KeepCount := 1;
-  DeleteCount := GetArrayLength(Names) - KeepCount;
-  if DeleteCount > 0 then begin
-    for I := 0 to DeleteCount - 1 do
-      DeleteFile(LogDir + '\' + Names[I]);
-  end;
+
+  for I := MAX_INSTALL_LOGS - 1 to Count - 1 do
+    DeleteFile(LogDir + '\' + Names[I]);
 end;
 
 function GenerateSupportRef: string;
 var
-  Stamp: string;
-begin
-  { Trailing 8 digits of the timestamp. Unique enough for a support
-    reference without depending on external WinAPI calls. }
-  Stamp := GetDateTimeString('yyyymmdd', '#', '#') + GetDateTimeString('hhnnss', '#', '#');
-  Result := Copy(Stamp, Length(Stamp) - 7, 8);
-end;
-
-function PosFrom(const SubStr, S: string; StartPos: Integer): Integer;
-begin
-  Result := Pos(SubStr, Copy(S, StartPos, Length(S) - StartPos + 1));
-  if Result > 0 then
-    Result := Result + StartPos - 1;
-end;
-
-function RedactUrlUserInfo(const Text: string): string;
-var
-  S, Rest: string;
-  SchemePos, AtPos, SlashPos: Integer;
-begin
-  S := Text;
-  SchemePos := Pos('://', S);
-  if SchemePos > 0 then begin
-    Rest := Copy(S, SchemePos + 3, Length(S) - SchemePos - 2);
-    AtPos := Pos('@', Rest);
-    SlashPos := Pos('/', Rest);
-    if (AtPos > 1) and ((SlashPos = 0) or (AtPos < SlashPos)) then begin
-      Delete(S, SchemePos + 3, AtPos - 1);
-      Insert('[redacted]', S, SchemePos + 3);
-    end;
-  end;
-  Result := S;
-end;
-
-function RedactAfterMarker(const Text, Marker: string): string;
-var
-  S: string;
-  P, ValueStart, ValueEnd: Integer;
-  Trimming, Scanning: Boolean;
-begin
-  S := Text;
-  P := Pos(Lowercase(Marker), Lowercase(S));
-  while P > 0 do begin
-    ValueStart := P + Length(Marker);
-    Trimming := True;
-    while (ValueStart <= Length(S)) and Trimming do begin
-      if (S[ValueStart] = ' ') or (S[ValueStart] = #9) then
-        ValueStart := ValueStart + 1
-      else
-        Trimming := False;
-    end;
-    if (ValueStart <= Length(S)) and ((S[ValueStart] = '=') or (S[ValueStart] = ':')) then begin
-      ValueStart := ValueStart + 1;
-      Trimming := True;
-      while (ValueStart <= Length(S)) and Trimming do begin
-        if (S[ValueStart] = ' ') or (S[ValueStart] = #9) then
-          ValueStart := ValueStart + 1
-        else
-          Trimming := False;
-      end;
-      ValueEnd := ValueStart;
-      Scanning := True;
-      while (ValueEnd <= Length(S)) and Scanning do begin
-        if (S[ValueEnd] = ' ') or (S[ValueEnd] = #9) or (S[ValueEnd] = #13) or
-           (S[ValueEnd] = #10) or (S[ValueEnd] = '"') or (S[ValueEnd] = '''') or
-           (S[ValueEnd] = ',') or (S[ValueEnd] = ';') then
-          Scanning := False
-        else
-          ValueEnd := ValueEnd + 1;
-      end;
-      if ValueEnd > ValueStart then begin
-        Delete(S, ValueStart, ValueEnd - ValueStart);
-        Insert('[redacted]', S, ValueStart);
-      end;
-      P := PosFrom(Lowercase(Marker), Lowercase(S), ValueStart + Length('[redacted]'));
-    end else begin
-      P := PosFrom(Lowercase(Marker), Lowercase(S), P + Length(Marker));
-    end;
-  end;
-  Result := S;
-end;
-
-function Redact(const Text: string): string;
-var
+  I: Integer;
   S: string;
 begin
-  S := RedactUrlUserInfo(Text);
-  S := RedactAfterMarker(S, 'authorization');
-  S := RedactAfterMarker(S, 'token');
-  S := RedactAfterMarker(S, 'secret');
-  S := RedactAfterMarker(S, 'password');
-  S := RedactAfterMarker(S, 'passwd');
-  S := RedactAfterMarker(S, 'api_key');
-  S := RedactAfterMarker(S, 'apikey');
-  S := RedactAfterMarker(S, 'api-key');
-  S := RedactAfterMarker(S, 'signature');
-  S := RedactAfterMarker(S, 'credential');
+  { A support reference is a correlation id printed in the log, not a secret,
+    so the pseudo-random generator is sufficient and needs no WinAPI. }
+  Randomize;
+  S := '';
+  for I := 1 to SUPPORT_REF_LENGTH do
+    S := S + Copy(HEX_CHARS, Random(16) + 1, 1);
   Result := S;
-end;
-
-procedure TrimLog;
-var
-  Lines, Kept: TArrayOfString;
-  I, Count, Total, Dest, LogSize: Integer;
-  Notice: string;
-  Fits: Boolean;
-begin
-  if (not LogActive) or (LogFilePath = '') or (not FileExists(LogFilePath)) then Exit;
-  if not FileSize(LogFilePath, LogSize) then Exit;
-  if LogSize <= MAX_LOG_BYTES then Exit;
-  if not LoadStringsFromFile(LogFilePath, Lines) then Exit;
-  Notice := '[log truncated: this transcript is capped at ' + IntToStr(MAX_LOG_BYTES) + ' bytes; earlier output was discarded]';
-  Count := GetArrayLength(Lines);
-  Total := Length(Notice) + 2;
-  I := Count - 1;
-  Fits := True;
-  while (I >= 0) and Fits do begin
-    if Total + Length(Lines[I]) + 2 > MAX_LOG_BYTES then
-      Fits := False
-    else begin
-      Total := Total + Length(Lines[I]) + 2;
-      I := I - 1;
-    end;
-  end;
-  { I now points at the last line that did not fit; keep I+1 .. Count-1. }
-  SetArrayLength(Kept, Count - I);
-  Kept[0] := Notice;
-  Dest := 1;
-  while I + Dest < Count do begin
-    Kept[Dest] := Lines[I + Dest];
-    Dest := Dest + 1;
-  end;
-  if not SaveStringsToFile(LogFilePath, Kept, False) then
-    LogActive := False;
 end;
 
 function GetTargetDescription: string;
 begin
+  { The version is known from the ISPP define }
   Result := 'bundle-v{#VERSION_NUM} (windows-{#BUNDLE_ARCH})';
 end;
 
+{ Everything between the REDACT-SOURCE markers is extracted verbatim by
+  scripts/test-windows-installer.ps1, compiled with Free Pascal and executed
+  against fixture cases. Keep this block free of Inno-only constructs. }
+{ BEGIN REDACT-SOURCE }
+function CharAt(const S: string; Index: Integer): Char;
+begin
+  if (Index >= 1) and (Index <= Length(S)) then
+    Result := S[Index]
+  else
+    Result := #0;
+end;
+
+function FindFrom(const Needle, Haystack: string; Start: Integer): Integer;
+var
+  P: Integer;
+begin
+  if (Start < 1) or (Start > Length(Haystack)) then
+  begin
+    Result := 0;
+    Exit;
+  end;
+  P := Pos(Needle, Copy(Haystack, Start, Length(Haystack) - Start + 1));
+  if P = 0 then
+    Result := 0
+  else
+    Result := Start + P - 1;
+end;
+
+function IsAuthorityDelimiter(C: Char): Boolean;
+begin
+  Result := (C = #0) or (C = '/') or (C = ' ') or (C = '@') or (C = '"') or
+            (C = #13) or (C = #10);
+end;
+
+function IsValueDelimiter(C: Char): Boolean;
+begin
+  Result := (C = #0) or (C = ' ') or (C = '"') or (C = '''') or (C = ',') or
+            (C = ';') or (C = ')') or (C = #13) or (C = #10);
+end;
+
+{ Replaces the value of one credential-shaped key ("key=value", "key: value")
+  with [redacted]. Case-insensitive on the key, literal on the value. }
+function RedactKeyValue(const Text, Token: string): string;
+var
+  S: string;
+  P, ValueStart, ValueEnd: Integer;
+begin
+  S := Text;
+  P := FindFrom(Token, Lowercase(S), 1);
+  while P > 0 do
+  begin
+    ValueStart := P + Length(Token);
+    while CharAt(S, ValueStart) = ' ' do
+      ValueStart := ValueStart + 1;
+    if (CharAt(S, ValueStart) = '=') or (CharAt(S, ValueStart) = ':') then
+    begin
+      ValueStart := ValueStart + 1;
+      while (CharAt(S, ValueStart) = ' ') or (CharAt(S, ValueStart) = '"') or
+            (CharAt(S, ValueStart) = '''') do
+        ValueStart := ValueStart + 1;
+      { Keep the authentication scheme visible; only the credential goes. }
+      if Copy(Lowercase(S), ValueStart, 7) = 'bearer ' then
+        ValueStart := ValueStart + 7
+      else if Copy(Lowercase(S), ValueStart, 6) = 'basic ' then
+        ValueStart := ValueStart + 6;
+      ValueEnd := ValueStart;
+      while not IsValueDelimiter(CharAt(S, ValueEnd)) do
+        ValueEnd := ValueEnd + 1;
+      if ValueEnd > ValueStart then
+      begin
+        Delete(S, ValueStart, ValueEnd - ValueStart);
+        Insert('[redacted]', S, ValueStart);
+        P := ValueStart + Length('[redacted]');
+      end
+      else
+        P := ValueStart + 1;
+    end
+    else
+      P := P + Length(Token);
+    P := FindFrom(Token, Lowercase(S), P);
+  end;
+  Result := S;
+end;
+
+{ Removes credentials from installer diagnostics before they reach the install
+  log or the support block. Two shapes are handled:
+    1. scheme://user:password@host  ->  scheme://[redacted]@host
+    2. key=value / key: value for a conservative list of credential keys.
+  StringChangeEx is literal-only, so this is a real scanner, not a regex. }
+function Redact(const Text: string): string;
+var
+  S: string;
+  P, Q: Integer;
+begin
+  S := Text;
+
+  P := FindFrom('://', S, 1);
+  while P > 0 do
+  begin
+    Q := P + 3;
+    while not IsAuthorityDelimiter(CharAt(S, Q)) do
+      Q := Q + 1;
+    if CharAt(S, Q) = '@' then
+    begin
+      { Only userinfo that carries a password separator is a credential. }
+      if Pos(':', Copy(S, P + 3, Q - (P + 3))) > 0 then
+      begin
+        Delete(S, P + 3, Q - (P + 3));
+        Insert('[redacted]', S, P + 3);
+        Q := P + 3 + Length('[redacted]');
+      end
+      else
+        Q := Q + 1;
+    end
+    else
+      Q := P + 3;
+    P := FindFrom('://', S, Q);
+  end;
+
+  S := RedactKeyValue(S, 'password');
+  S := RedactKeyValue(S, 'passwd');
+  S := RedactKeyValue(S, 'token');
+  S := RedactKeyValue(S, 'secret');
+  S := RedactKeyValue(S, 'api_key');
+  S := RedactKeyValue(S, 'apikey');
+  S := RedactKeyValue(S, 'api-key');
+  S := RedactKeyValue(S, 'authorization');
+  S := RedactKeyValue(S, 'access_key');
+  S := RedactKeyValue(S, 'signature');
+  S := RedactKeyValue(S, 'credential');
+  S := RedactKeyValue(S, 'credentials');
+
+  Result := S;
+end;
+{ END REDACT-SOURCE }
+
 procedure PrintSupportBlock;
 var
-  TargetDesc, LogDisplay, Msg: string;
+  TargetDesc: string;
+  LogDisplay: string;
+  Msg: string;
 begin
+  if SupportBlockShown then
+    Exit;
+  SupportBlockShown := True;
   TargetDesc := GetTargetDescription;
   if LogFilePath <> '' then
     LogDisplay := LogFilePath
   else
-    LogDisplay := '(no log was created - the installer failed before it could start logging)';
+    LogDisplay := '(no log was created - the installer failed before logging started)';
   Msg := #13#10 +
     '----- Modulo install failed: support reference ' + SupportRef + ' -----' + #13#10 +
     '  Install target   : ' + Redact(TargetDesc) + #13#10 +
@@ -367,6 +406,10 @@ begin
     'failure can be diagnosed: https://github.com/farnalabs/modulo/issues' + #13#10 +
     '----- end of Modulo install support block -----' + #13#10;
   WriteInstallLog(Msg);
+  { MsgBox from [Code] is not suppressible by /SUPPRESSMSGBOXES (Inno Setup
+    documents it among the five non-suppressible boxes), so an unattended
+    /SILENT install would block on it. The transcript above already carries the
+    support block; skip the dialog when Setup is running silently. }
   if not WizardSilent then
     MsgBox(Msg, mbError, MB_OK);
 end;
@@ -375,85 +418,145 @@ procedure SetStage(const Stage: string);
 begin
   CurrentStage := Stage;
   WriteInstallLog('Stage: ' + Stage);
-  TrimLog;
+end;
+
+procedure MarkFailure(const Stage, Detail: string);
+begin
+  InstallFailed := True;
+  CurrentStage := Stage;
+  WriteInstallLog('FAILURE: ' + Detail);
+end;
+
+{ Registers the Windows service and reports whether it actually started. The
+  [Run] section cannot report a failing sc.exe, so this is done in code. }
+function RegisterService: Boolean;
+var
+  ResultCode: Integer;
+  ServiceExe: string;
+begin
+  Result := False;
+  ServiceExe := ExpandConstant('{app}') + '\modulo.exe';
+
+  SetStage('service registration (create)');
+  if not Exec('sc.exe',
+    'create Modulo binPath= "' + ServiceExe + ' service" start= auto',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    WriteInstallLog('sc.exe create could not be started');
+    Exit;
+  end;
+  if ResultCode <> 0 then
+  begin
+    WriteInstallLog('sc.exe create failed with exit code ' + IntToStr(ResultCode));
+    Exit;
+  end;
+
+  SetStage('service registration (start)');
+  if not Exec('sc.exe', 'start Modulo', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    WriteInstallLog('sc.exe start could not be started');
+    Exit;
+  end;
+  if ResultCode <> 0 then
+  begin
+    WriteInstallLog('sc.exe start failed with exit code ' + IntToStr(ResultCode));
+    Exit;
+  end;
+
+  Result := True;
 end;
 
 function InitializeSetup: Boolean;
-var
-  Stamp: string;
 begin
   SupportRef := GenerateSupportRef;
   CurrentStage := 'starting up (reading arguments)';
+  LogFilePath := '';
   LogActive := False;
+  LogBytes := 0;
+  TruncationNoted := False;
   InstallFailed := False;
-  InstallStarted := False;
   InstallCompleted := False;
   UserCancelled := False;
+  SupportBlockShown := False;
 
-  if EnsureLogDir then begin
+  if EnsureLogDir then
+  begin
     PruneInstallLogs;
-    Stamp := GetDateTimeString('yyyymmdd"T"hhmmss"Z"', '#', '#');
-    LogFilePath := GetLogDir + '\' + LOG_PREFIX + Stamp + '-' + SupportRef + LOG_EXT;
+    LogFilePath := GetLogDir + '\' + LOG_PREFIX +
+      GetDateTimeString('yyyymmddThhnnssZ', '-', ':') + '-' + SupportRef + LOG_EXT;
+    if FileExists(LogFilePath) then
+      DeleteFile(LogFilePath);
     LogActive := True;
+    LogBytes := 0;
     WriteInstallLog('Modulo installer started. Support reference: ' + SupportRef);
     WriteInstallLog('Version: ' + '{#VERSION_NUM}');
     WriteInstallLog('Architecture: ' + '{#BUNDLE_ARCH}');
     WriteInstallLog('Stage: ' + CurrentStage);
-    if not FileExists(LogFilePath) then begin
-      Log('WARNING: cannot write install log: ' + LogFilePath);
-      LogActive := False;
-      LogFilePath := '';
-    end;
-  end else
-    Log('WARNING: cannot create log directory; install transcript will not be saved.');
+  end;
+  { Logging is best-effort: when the directory cannot be created the install
+    still proceeds, and PrintSupportBlock says no log was captured. }
+
   Result := True;
 end;
 
 procedure DeinitializeSetup;
 begin
-  if InstallStarted and (not InstallCompleted) and (not UserCancelled) then
-    InstallFailed := True;
-
   if InstallFailed then
+  begin
+    if not UserCancelled then
+      PrintSupportBlock;
+  end
+  else if InstallCompleted then
+    WriteInstallLog('Installer finished successfully.')
+  else if not UserCancelled then
+  begin
+    { Setup terminated without reaching ssDone: a fatal error, not a cancel. }
+    InstallFailed := True;
     PrintSupportBlock;
-
-  if LogActive then
-    WriteInstallLog('Installer finished. Success: ' + BoolText(not InstallFailed));
+  end;
   LogActive := False;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
-  case CurPageID of
-    wpWelcome: SetStage('welcome page');
-    wpLicense: SetStage('license agreement');
-    wpSelectDir: SetStage('select install directory');
-    wpSelectComponents: SetStage('select components');
-    wpSelectTasks: SetStage('select additional tasks');
-    wpReady: SetStage('ready to install');
-    wpInstalling: SetStage('installing files');
-    wpFinished: SetStage('finished');
-  end;
+  if CurPageID = wpWelcome then
+    SetStage('welcome page')
+  else if CurPageID = wpLicense then
+    SetStage('license agreement')
+  else if CurPageID = wpSelectDir then
+    SetStage('select install directory')
+  else if CurPageID = wpSelectTasks then
+    SetStage('select additional tasks')
+  else if CurPageID = wpReady then
+    SetStage('ready to install');
   Result := True;
 end;
 
 procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
 begin
+  { A user cancel is not an install failure and must not print the support block. }
   UserCancelled := True;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  case CurStep of
-    ssInstall: begin
-      InstallStarted := True;
-      SetStage('installing files');
+  if CurStep = ssInstall then
+    SetStage('installing files')
+  else if CurStep = ssPostInstall then
+  begin
+    SetStage('post-install (service registration)');
+    if not RegisterService then
+    begin
+      MarkFailure('post-install (service registration)',
+        'the Modulo service could not be registered or started');
+      PrintSupportBlock;
+      Abort;
     end;
-    ssPostInstall: SetStage('post-install (service registration)');
-    ssDone: begin
-      SetStage('finished');
-      InstallCompleted := True;
-    end;
+  end
+  else if CurStep = ssDone then
+  begin
+    SetStage('finished');
+    InstallCompleted := True;
   end;
 end;
 

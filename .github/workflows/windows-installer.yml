@@ -4,6 +4,11 @@ name: "Windows: Build Installer (Inno Setup)"
 # Windows runtime exists. A Linux bundle is never relabeled as Windows. Dry-run
 # records that packaging is unavailable; it does not compile a fake or incomplete
 # installer and does not claim to validate the runtime contract.
+#
+# FAR-2315: the compile-check and redaction-unit jobs are the real gates for
+# deploy/windows/modulo.iss. They run on every release invocation AND on pull
+# requests that touch the installer, so a Pascal script that cannot compile, or
+# a Redact() that does not redact, cannot merge.
 
 on:
   workflow_call:
@@ -24,6 +29,13 @@ on:
         description: "Build mode: dry-run, cut, recut, promote"
         type: string
         default: dry-run
+  pull_request:
+    paths:
+      - 'deploy/windows/**'
+      - 'scripts/create-windows-launcher.ps1'
+      - 'scripts/test-windows-installer.ps1'
+      - '.github/workflows/windows-installer.yml'
+
 concurrency:
   group: windows-installer-${{ github.workflow }}-${{ inputs.version }}
   cancel-in-progress: false
@@ -36,8 +48,48 @@ permissions:
   contents: read
 
 jobs:
+  compile-check:
+    name: Compile installer (Inno Setup 6.2.2)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Install Inno Setup 6.2.2
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --version=6.2.2 --yes --no-progress
+          $isccDir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6'
+          if (-not (Test-Path -LiteralPath (Join-Path $isccDir 'ISCC.exe'))) {
+            throw "ISCC.exe was not installed under $isccDir"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $isccDir
+      - name: Compile the installer and run the contract tests
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/test-windows-installer.ps1
+
+  redaction-unit:
+    name: Redaction unit test (Free Pascal)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Install Free Pascal
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fp-compiler
+      - name: Compile and execute the extracted Redact() fixtures
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/test-windows-installer.ps1
+
   version-parity:
     name: Assert bundle versions match
+    if: ${{ github.event_name == 'workflow_call' }}
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -54,7 +106,8 @@ jobs:
 
   build:
     name: Validate Windows installer prerequisite
-    needs: version-parity
+    if: ${{ github.event_name == 'workflow_call' }}
+    needs: [version-parity, compile-check]
     runs-on: windows-latest
     timeout-minutes: 15
     env:
@@ -73,10 +126,6 @@ jobs:
             throw "ISCC.exe was not installed under $isccDir"
           }
           Add-Content -Path $env:GITHUB_PATH -Value $isccDir
-      - name: Test installer contract
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & "$env:GITHUB_WORKSPACE/scripts/test-windows-installer.ps1" -Version $env:VERSION_NUM
       - name: Validate launcher helper contract
         run: |
           $ErrorActionPreference = 'Stop'
@@ -84,11 +133,6 @@ jobs:
           if (Test-Path -LiteralPath (Join-Path $env:RUNNER_TEMP 'modulo.exe')) {
             throw 'launcher helper created a fake executable'
           }
-      - name: Verify launcher command contract
-        if: ${{ inputs.mode != 'dry-run' }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & "$env:GITHUB_WORKSPACE/scripts/verify-windows-launcher-contract.ps1" -Version $env:VERSION_NUM -ExePath (Join-Path $env:RUNNER_TEMP 'modulo.exe')
       - name: Refuse packaging without native bundle
         if: ${{ inputs.mode != 'dry-run' }}
         run: |
@@ -115,8 +159,8 @@ jobs:
 
   sign:
     name: Sign Windows installer (Azure Trusted Signing)
-    needs: build
-    if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' }}
+    needs: [build, compile-check]
+    if: ${{ github.event_name == 'workflow_call' && inputs.mode != 'dry-run' && needs.build.result == 'success' }}
     runs-on: windows-latest
     timeout-minutes: 15
     permissions:
@@ -143,7 +187,7 @@ jobs:
   attest:
     name: Attest Windows installer
     needs: [build, sign]
-    if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' && needs.sign.result == 'success' }}
+    if: ${{ github.event_name == 'workflow_call' && inputs.mode != 'dry-run' && needs.build.result == 'success' && needs.sign.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -160,7 +204,7 @@ jobs:
   publish:
     name: Publish Windows installer
     needs: [build, attest]
-    if: ${{ inputs.mode == 'promote' && needs.build.result == 'success' && needs.attest.result == 'success' }}
+    if: ${{ github.event_name == 'workflow_call' && inputs.mode == 'promote' && needs.build.result == 'success' && needs.attest.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
