@@ -3226,7 +3226,16 @@ export default {
       "mcp_authority_save_failed": "Failed to save the setting: {error}",
       "mcp_authority_saved": "Setting saved.",
       "mcp_authority_status_enabled": "A human-linked credential may decide a human-only gate over MCP.",
-      "mcp_authority_status_disabled": "No MCP credential may decide a human-only gate; a person decides it in the browser."
+      "mcp_authority_status_disabled": "No MCP credential may decide a human-only gate; a person decides it in the browser.",
+      "org_feature_flags_title": "Organisation feature flags",
+      "org_feature_flags_description": "Turn optional capabilities on or off for this organisation. Sensitive and paid-tier flags stay with a system administrator.",
+      "org_feature_flags_load_failed": "Failed to load organisation feature flags: {error}",
+      "org_feature_flags_save_failed": "Failed to update the feature flag: {error}",
+      "org_feature_flags_saved": "Feature flag updated.",
+      "org_feature_flags_status_default": "Using the default",
+      "org_feature_flags_status_overridden": "Overridden for this organisation",
+      "org_feature_flags_empty": "No organisation-settable feature flags are available.",
+      "org_feature_flags_system_admin_note": "Other feature flags, including security, SSO, observability and other paid-tier settings, can only be changed by a system administrator."
     },
     "OnboardingWizard": {
       "wire_pipeline": "Wire Pipeline",

@@ -580,7 +580,9 @@ routes:
         # gates, so navigation stays admin-only while the tier stays
         # community. Every team-only section on the page remains behind the
         # in-page team_rbac FeatureGate (dimmed + upgrade overlay on
-        # Community); only the HITL review window card sits outside it.
+        # Community); three org-scoped, community-tier cards render OUTSIDE
+        # it so a community admin can use them: the HITL review window, the
+        # human-linked MCP HITL authority, and the organisation feature flags.
         <<: *community
         required_roles: [admin]
         deprecated: false
@@ -2427,6 +2429,33 @@ elements:
         type: element
         dynamic_testid: false
       - testid: org-mcp-authority-saved
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-loading
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-load-error
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-list
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flag-row
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flag-status
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-empty
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-note
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-error
+        type: element
+        dynamic_testid: false
+      - testid: org-feature-flags-saved
         type: element
         dynamic_testid: false
     /admin/parameter-schemas:
@@ -7247,7 +7276,7 @@ features:
             - "[x] run_daily_facts gains an autonomy_level column populated at fact-write time from the run's latest run.autonomy_level_applied audit event, so the analytics surface can bucket by autonomy without re-joining the audit chain"
             # FAR-1257 + FAR-1269: the configurable review window
             - "[x] The HITL review window is configurable at three levels (FAR-1257): a per-pipeline override, an org default (GET/PUT /api/v1/admin/org/hitl-review-window - whole seconds, 60 to 604800, explicit null clears back to inheritance) and the instance default (HITL_REVIEW_CANCEL_GRACE_SECONDS); the resolved window is stamped ONCE at gate fire time as an absolute hitl_claims.terminalize_at, so stamped rows ignore the env knob while legacy rows keep it verbatim"
-            - "[x] The org review window is editable on EVERY plan tier (FAR-1269): the org-hitl-review-window-* card on /admin/org renders OUTSIDE the team_rbac FeatureGate (the endpoint is not plan-gated) and the /admin/org route itself is community-tier with an explicit [admin] role (FAR-462 pattern), so a community admin reaches the control while every other section of the page stays behind the gate's disabled overlay"
+            - "[x] The org review window is editable on EVERY plan tier (FAR-1269): the org-hitl-review-window-* card on /admin/org renders OUTSIDE the team_rbac FeatureGate (the endpoint is not plan-gated) and the /admin/org route itself is community-tier with an explicit [admin] role (FAR-462 pattern), so a community admin reaches the control while the team-only sections (org info, data export, product analytics, community objects, delete org) stay behind the gate's disabled overlay; three org-scoped community-tier cards render outside that gate — the HITL review window, the human-linked MCP HITL authority, and the organisation feature flags (FAR-1972, FAR-2302)"
             # FAR-1487: reject terminates by default
             - "[x] A HITL rejection with no reject destination ENDS the run with the terminal `rejected` status (not `failed`, not `cancelled`) and error_code `hitl.rejected`: the gate compiles to a conditional edge whose router returns LangGraph END on a stamped rejection (the FAR-541 gate-identity check), and the executor finalize downgrades the would-be `complete` to `rejected` only when BOTH the gate artifact and the committed hitl_claims rejected row agree (backend/tests/integration/test_hitl_resume_roundtrip.py, backend/tests/unit/pipeline_engine/test_hitl_reject_terminate.py)"
             - "[x] Three reject dispositions share one resolver (resolve_reject_disposition): `route` when a reject target/edge exists, `terminate` (the default) otherwise, and `proceed` only when the gate explicitly sets `on_reject: proceed` (validated at graph save, edge-level and node-level); an automated correction_target wins over terminate, and the reviewer briefing (HitlBriefing, HitlReviewCard banners) states the reject consequence in all three states"
@@ -7435,9 +7464,10 @@ features:
         behaviours:
             - "[x] Organization settings are configurable with team management and member roles"
             - "[x] Feature flags can be toggled per organisation"
+            - "[x] Org admins manage the low-sensitivity community feature flags for their own organisation through GET/PUT/DELETE /api/v1/admin/org/feature-flags[/{flag_name}] (org.feature_flags.manage, admin, non-delegable) and the Organisation feature flags card on /admin/org; the set is fail-closed (FeatureFlag.org_admin_settable defaults False, team-tier flags and mcp_human_linked_hitl_authority are refused, and the DB catalog preserves the code-level classification), writes persist to the org feature_overrides map, invalidate the flag cache and emit the existing feature_flag_override_set / feature_flag_override_cleared audit events, and every other flag remains system-administrator-only (backend/src/modulo/api/routes/admin_org_feature_flags.py, backend/src/modulo/core/feature_flags.py, frontend/src/views/AdminOrgSettingsView.vue)"
             - "[x] Org-level feature-flag override governance is auditable end to end: every set/clear/toggle of an org feature_overrides entry (PUT /api/v1/admin/feature-flags/{flag}, PUT/DELETE /{flag}/org-override) appends a tamper-evident audit event to the org chain (feature_flag_override_set / feature_flag_override_cleared, resource_type org, payload {flag_name, enabled}) — fail-open, so a broken audit append never rolls back the already-committed override (backend/src/modulo/api/routes/admin_feature_flags.py, backend/tests/unit/api/test_admin_feature_flags.py)"
             - "[x] The org-settings UI ships at /admin/org: org delete requires a typed confirmation (org-delete-confirm-input), product-analytics (product-analytics-toggle) and community-objects (community-objects-toggle) toggles render, and the product-analytics error strip dismisses via shared ErrorAlert — surface documented in the manifest elements inventory; backend admin-org endpoints drive it (docs/product-map/admin/org.md)"
-            - "[x] The /admin/org page is reachable on every plan tier (FAR-1269): the route is community-tier with an explicit [admin] role list (required_roles and required_tier are enforced as separate guards), the team-only sections (org info, data export, product analytics, community objects, delete org) stay behind the team_rbac FeatureGate disabled overlay, and only the HITL review window card renders outside the gate so a community admin can configure the org review window"
+            - "[x] The /admin/org page is reachable on every plan tier (FAR-1269): the route is community-tier with an explicit [admin] role list (required_roles and required_tier are enforced as separate guards), the team-only sections (org info, data export, product analytics, community objects, delete org) stay behind the team_rbac FeatureGate disabled overlay, and three org-scoped community-tier cards render outside the gate so a community admin can use them on any tier: the HITL review window, the human-linked MCP HITL authority, and the organisation feature flags"
             - "[x] The org-management flows ship on the real REST surfaces: self-service org profile read/rename/delete + API-key regeneration are admin-gated unit coverage (api/routes/admin.py, tests/unit/api/test_admin.py — slug immutability and operator/viewer 403 pinned); member invites are BDD-executed (system_admin_users.feature); API-key create/revoke + non-admin 403 are BDD-executed (auth/api_keys.feature); viewer denial is BDD-executed at the org-context boundary (viewmodel_current.feature)"
     feat-pipelines:
         description: Visual pipeline editor, composite editor, and node categories

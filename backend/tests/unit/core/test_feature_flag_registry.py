@@ -214,6 +214,51 @@ class TestFromDb:
         assert flag.description == "From DB"
         assert flag.currently_active is True
 
+    async def test_db_catalog_preserves_code_level_org_settability(self) -> None:
+        """FAR-2302: ``org_admin_settable`` is a CODE classification, not a column.
+
+        The DB catalog supplies name/description/tier, so a DB-loaded registry
+        would otherwise lose the classification and report every flag as
+        system-admin-only (or, worse, if the default were True, open everything).
+        A catalog-only flag is not in ``ORG_ADMIN_SETTABLE_FLAGS`` and must
+        default to False.
+        """
+        session = _make_session()
+        db_flags = [
+            {
+                "name": "webhook_notification_log",
+                "description": "From DB",
+                "tier_id": "community",
+                "depends_on": None,
+                "is_active": True,
+            },
+            {
+                "name": "sso_unrestricted_provisioning",
+                "description": "From DB",
+                "tier_id": "community",
+                "depends_on": None,
+                "is_active": True,
+            },
+            {
+                "name": "catalog_only_flag",
+                "description": "Only in the DB",
+                "tier_id": "community",
+                "depends_on": None,
+                "is_active": True,
+            },
+        ]
+        db_tiers = [{"tier_id": "community", "rank": 0}]
+
+        with (
+            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
+        ):
+            registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
+
+        assert registry.get_flag("webhook_notification_log").org_admin_settable is True
+        assert registry.get_flag("sso_unrestricted_provisioning").org_admin_settable is False
+        assert registry.get_flag("catalog_only_flag").org_admin_settable is False
+
 
 class TestKnownFlags:
     """Ensure the registry exposes the product's durable flag contracts."""
