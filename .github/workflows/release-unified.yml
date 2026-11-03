@@ -579,11 +579,11 @@ jobs:
               break
             fi
             if [ -n "$LAST_LOOKUP_ERROR" ]; then
-              echo "gh run lookup failed (attempt ${poll}/${MAX_POLLS}); retrying: ${LAST_LOOKUP_ERROR}"
+              echo "gh run lookup failed (attempt ${poll}/${MAX_POLLS}): ${LAST_LOOKUP_ERROR}"
             elif [ -z "$RUN_ID" ]; then
-              echo "No CI workflow run for exact target ${TARGET_SHA} yet; waiting (attempt ${poll}/${MAX_POLLS}, ${SECONDS}s/${MAX_WAIT_SECONDS}s)."
+              echo "No CI workflow run for exact target ${TARGET_SHA} yet (attempt ${poll}/${MAX_POLLS}, ${SECONDS}s/${MAX_WAIT_SECONDS}s)."
             else
-              echo "CI run ${RUN_ID} is ${RUN_STATUS:-unknown}; waiting (attempt ${poll}/${MAX_POLLS}, ${SECONDS}s/${MAX_WAIT_SECONDS}s)."
+              echo "CI run ${RUN_ID} is ${RUN_STATUS:-unknown} (attempt ${poll}/${MAX_POLLS}, ${SECONDS}s/${MAX_WAIT_SECONDS}s)."
             fi
             if [ "$poll" -lt "$MAX_POLLS" ]; then
               sleep "$POLL_INTERVAL_SECONDS"

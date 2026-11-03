@@ -1333,7 +1333,7 @@ def test_schema_gate_waits_for_the_exact_commit_run_to_appear(tmp_path: Path) ->
 
     assert result.returncode == 0, output
     assert "No CI workflow run for exact target" in output
-    assert "CI run 123 is in_progress; waiting" in output
+    assert "CI run 123 is in_progress (attempt 2/3" in output
     assert f"Schema freshness passed on exact target {_SCHEMA_TARGET_SHA}" in output
     commands = log.read_text(encoding="utf-8")
     assert commands.count("run list") == 3
