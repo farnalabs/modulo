@@ -120,6 +120,8 @@ PERMISSIONS: dict[str, str] = {
     "system_map.revision.publish": "operator",
     "system_map.revision.archive": "operator",
     "system_map.revision.delete": "operator",
+    "system_map.revision.diff": "viewer",
+    "system_map.revision.restore_as_new": "operator",
     "system_map.overview": "viewer",
     "system_map.node.create": "operator",
     "system_map.relationship.create": "operator",
