@@ -55,7 +55,7 @@ jobs:
           STATUS="$(curl -sS -o /tmp/release-freeze.json -w '%{http_code}' \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/release-freeze")"
+            "https://api.github.com/repos/${{ github.repository }}/git/ref/heads/release-freeze")"
           case "$STATUS" in
             200)
               FREEZE_SHA="$(jq -r '.object.sha // empty' /tmp/release-freeze.json)"
@@ -70,7 +70,7 @@ jobs:
               HOLD_STATUS="$(curl -sS -o /tmp/release-publication-hold.json -w '%{http_code}' \
                 -H "Authorization: Bearer ${GH_TOKEN}" \
                 -H 'Accept: application/vnd.github+json' \
-                "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/release-publication-hold")"
+                "https://api.github.com/repos/${{ github.repository }}/git/ref/heads/release-publication-hold")"
               case "$HOLD_STATUS" in
                 200)
                   HOLD_SHA="$(jq -r '.object.sha // empty' /tmp/release-publication-hold.json)"
@@ -177,7 +177,7 @@ jobs:
           STATUS="$(curl -sS -o /tmp/release-freeze.json -w '%{http_code}' \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/release-freeze")"
+            "https://api.github.com/repos/${{ github.repository }}/git/ref/heads/release-freeze")"
           case "$STATUS" in
             200)
               FREEZE_SHA="$(jq -r '.object.sha // empty' /tmp/release-freeze.json)"
@@ -192,7 +192,7 @@ jobs:
               HOLD_STATUS="$(curl -sS -o /tmp/release-publication-hold.json -w '%{http_code}' \
                 -H "Authorization: Bearer ${GH_TOKEN}" \
                 -H 'Accept: application/vnd.github+json' \
-                "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/release-publication-hold")"
+                "https://api.github.com/repos/${{ github.repository }}/git/ref/heads/release-publication-hold")"
               case "$HOLD_STATUS" in
                 200)
                   HOLD_SHA="$(jq -r '.object.sha // empty' /tmp/release-publication-hold.json)"
@@ -287,7 +287,7 @@ jobs:
           STATUS="$(curl -sS -o /tmp/release-freeze.json -w '%{http_code}' \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/release-freeze")"
+            "https://api.github.com/repos/${{ github.repository }}/git/ref/heads/release-freeze")"
           case "$STATUS" in
             200)
               FREEZE_SHA="$(jq -r '.object.sha // empty' /tmp/release-freeze.json)"
@@ -302,7 +302,7 @@ jobs:
               HOLD_STATUS="$(curl -sS -o /tmp/release-publication-hold.json -w '%{http_code}' \
                 -H "Authorization: Bearer ${GH_TOKEN}" \
                 -H 'Accept: application/vnd.github+json' \
-                "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/release-publication-hold")"
+                "https://api.github.com/repos/${{ github.repository }}/git/ref/heads/release-publication-hold")"
               case "$HOLD_STATUS" in
                 200)
                   HOLD_SHA="$(jq -r '.object.sha // empty' /tmp/release-publication-hold.json)"
