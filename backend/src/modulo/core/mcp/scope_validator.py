@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from logging import getLogger
 
 from modulo.auth.permissions import (
+    SYSTEM_MAPS_ACCESS_PERMISSION,
     PermissionConfigurationError,
     PermissionDenied,
     assert_org_role,
@@ -180,6 +181,15 @@ _TOOL_REQUIREMENTS: dict[str, ToolRequirement] = {
     "update_trigger": ToolRequirement("trigger.update"),
     "delete_trigger": ToolRequirement("trigger.delete"),
     "set_org_triggers_paused": ToolRequirement("org.triggers.pause.manage"),
+    # FAR-2288: System Maps discovery over MCP. The REST surface is gated by
+    # ``_require_internal_system_maps_access`` (developer mode + operator/admin
+    # + the dedicated ``system_maps_access`` grant) AND ``require_feature``
+    # (``system_maps``). The role/grant legs are declared on this ONE entry; the
+    # handler re-applies the dev-mode leg via
+    # ``_require_mcp_internal_system_maps_access`` and the feature leg via
+    # ``_require_plan_feature``. Deny-by-default already refuses an ordinary
+    # caller (viewer) and a grant-set without the key.
+    "discover_system_map": ToolRequirement(SYSTEM_MAPS_ACCESS_PERMISSION),
     # FAR-1879/FAR-1930: both MCP housekeeping tools mirror their REST twins
     # (GET /api/v1/admin/housekeeping and POST /api/v1/admin/housekeeping/cleanup),
     # each gated by BOTH ``require_permission("housekeeping.manage")`` (admin

@@ -1,0 +1,423 @@
+"""Unit tests for the System Maps discovery MCP tool (FAR-2288).
+
+The tool is deliberately a thin transport wrapper: it drives the SAME
+``POST /api/v1/system-maps/discover`` handler the REST surface uses, so the
+inventory read, inference (``discover_draft``) and persistence
+(``SystemMapDiscoveryRepository``) are one implementation. These tests pin:
+
+* the four internal-gate legs (role, grant, developer mode, ``system_maps``
+  feature) each refuse on their own, before any discovery work;
+* tenant wiring (the principal the handler receives is the authenticated one);
+* the shared-service proof — the MCP path and the REST path persist the exact
+  same draft content for the same organisation inventory.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import AsyncGenerator, Generator, Iterator
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
+from modulo.api.main import app
+from modulo.api.mcp_server import discover_system_map
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core.system_map_persistence import SystemMapDiscoveryRepository
+from modulo.settings import Settings
+from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.mcp.helpers import ORG_ID, USER_ID
+
+_MAP_ID = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+_REVISION_ID = uuid.UUID("00000000-0000-0000-0000-0000000000a2")
+_PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
+_TRIGGER_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b2")
+_CONNECTOR_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b3")
+_FOLDER_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b4")
+
+_VALID_32 = "a" * 32
+
+
+def _make_settings(*, dev_mode: bool = True) -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_admin_password="testpass",
+        modulo_dev_mode=dev_mode,
+    )
+
+
+def _draft_map() -> SimpleNamespace:
+    return SimpleNamespace(id=_MAP_ID)
+
+
+def _inventory_rows() -> dict[str, list[SimpleNamespace]]:
+    """One pipeline, trigger, connector and folder — the confirmed edge class."""
+    pipeline = SimpleNamespace(
+        id=_PIPELINE_ID,
+        name="build",
+        folder_id=_FOLDER_ID,
+        run_context_defaults={},
+        organisation_id=ORG_ID,
+        deleted_at=None,
+        archived_at=None,
+    )
+    trigger = SimpleNamespace(
+        id=_TRIGGER_ID,
+        name="webhook",
+        pipeline_id=_PIPELINE_ID,
+        trigger_type="webhook",
+        organisation_id=ORG_ID,
+        deleted_at=None,
+    )
+    connector = SimpleNamespace(
+        id=_CONNECTOR_ID,
+        name="github",
+        connector_type_id="github",
+        organisation_id=ORG_ID,
+        deleted_at=None,
+    )
+    folder = SimpleNamespace(id=_FOLDER_ID, name="Build Folder", organisation_id=ORG_ID)
+    return {
+        "FROM pipelines": [pipeline],
+        "FROM triggers": [trigger],
+        "FROM connector_instances": [connector],
+        "FROM pipeline_folders": [folder],
+    }
+
+
+def _discovery_session(rows: dict[str, list[SimpleNamespace]] | None = None) -> AsyncMock:
+    """Session double that serves the four inventory SELECTs by table."""
+    inventory = rows if rows is not None else _inventory_rows()
+    session = configure_mock_session(AsyncMock())
+
+    def _dispatch(statement: object, *_args: object, **_kwargs: object) -> MagicMock:
+        text = str(statement)
+        if "organisations.authz_enforce" in text:
+            # require_permission's kill-switch read on the REST path.
+            result = MagicMock()
+            result.scalar_one_or_none = MagicMock(return_value=True)
+            return result
+        for snippet, table_rows in inventory.items():
+            if snippet in text:
+                result = MagicMock()
+                result.scalars = MagicMock(return_value=list(table_rows))
+                return result
+        raise AssertionError(f"unexpected discovery query: {text}")
+
+    session.execute = AsyncMock(side_effect=_dispatch)
+    return session
+
+
+def _patch_discovery_session(session: AsyncMock) -> Any:
+    """Patch the tool's session factory with an async context manager."""
+
+    @asynccontextmanager
+    async def _cm() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    return patch("modulo.api.mcp_server._system_maps_discovery_session", return_value=_cm())
+
+
+@pytest.fixture(autouse=True)
+def _mcp_auth_context(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Operator caller with the System Maps grant, as an org-scoped API key."""
+    from modulo.api.mcp_server import (
+        _ctx_auth_token,
+        _ctx_auth_type,
+        _ctx_key_grants,
+        _ctx_key_scope,
+        _ctx_org_id,
+        _ctx_role,
+        _ctx_user_id,
+    )
+
+    # Developer mode is part of the internal gate; the production default is
+    # OFF, so an authorised scenario must opt in explicitly.
+    monkeypatch.setattr("modulo.api.mcp_server.get_settings", lambda: _make_settings())
+    _ctx_org_id.set(ORG_ID)
+    _ctx_user_id.set(USER_ID)
+    _ctx_role.set("operator")
+    _ctx_auth_type.set("api_key")
+    _ctx_auth_token.set("mk_testprefix_testsecretkey1234567890abc")
+    _ctx_key_grants.set(frozenset({"system_maps_access"}))
+    _ctx_key_scope.set("org")
+    yield
+    _ctx_org_id.set(None)
+    _ctx_user_id.set(None)
+    _ctx_role.set(None)
+    _ctx_auth_type.set(None)
+    _ctx_auth_token.set(None)
+    _ctx_key_grants.set(None)
+    _ctx_key_scope.set(None)
+
+
+@pytest.mark.asyncio
+async def test_authorized_caller_gets_unpublished_draft_report() -> None:
+    """Operator + grant + dev mode + feature reaches inference and persistence."""
+    session = _discovery_session()
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=_draft_map())),
+        patch.object(
+            SystemMapDiscoveryRepository,
+            "save_discovery_revision",
+            new=AsyncMock(return_value=(_draft_map(), _REVISION_ID, 1)),
+        ),
+        _patch_discovery_session(session),
+    ):
+        result = await discover_system_map(name="draft", description="internal")
+
+    assert result["published"] is False
+    assert result["draft_map_id"] == str(_MAP_ID)
+    assert result["draft_revision_id"] == str(_REVISION_ID)
+    assert result["node_count"] == 4
+    assert result["edge_count"] == 2
+    relationship_types = {edge["relationship_type"] for edge in result["inferred_edges"]}
+    assert relationship_types == {"trigger", "flow"}
+    assert all(edge["config_json"]["suggested"] is True for edge in result["inferred_edges"])
+    kinds = {source["kind"] for source in result["sources_inspected"]}
+    assert kinds == {"pipeline", "trigger", "connector", "folder"}
+
+
+@pytest.mark.asyncio
+async def test_viewer_role_is_refused() -> None:
+    """An ordinary (viewer) caller is refused and no discovery work runs."""
+    from modulo.api.mcp_server import _ctx_role
+
+    _ctx_role.set("viewer")
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
+        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+    ):
+        result = await discover_system_map()
+
+    assert result["error"] == "insufficient_scope"
+    feature_gate.assert_not_awaited()
+    rest_handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_grant_set_without_system_maps_access_is_refused() -> None:
+    """A grant-bearing credential must carry the dedicated grant."""
+    from modulo.api.mcp_server import _ctx_key_grants
+
+    _ctx_key_grants.set(frozenset({"pipeline.list"}))
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
+        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+    ):
+        result = await discover_system_map()
+
+    assert result["error"] == "insufficient_scope"
+    feature_gate.assert_not_awaited()
+    rest_handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_developer_mode_off_is_refused() -> None:
+    """The dev-mode leg refuses even an operator holding the grant."""
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server.get_settings", return_value=_make_settings(dev_mode=False)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
+        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+    ):
+        result = await discover_system_map()
+
+    assert result["error"] == "insufficient_scope"
+    assert "restricted to internal operators" in result["detail"]
+    feature_gate.assert_not_awaited()
+    rest_handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_system_maps_feature_off_is_refused_before_discovery() -> None:
+    """The feature-flag leg (REST ``require_feature``) refuses with a branchable code."""
+    feature_error = {"error": "feature_required", "detail": "system_maps is not available on your plan"}
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=feature_error)) as feature_gate,
+        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+    ):
+        result = await discover_system_map()
+
+    assert result == feature_error
+    feature_gate.assert_awaited_once()
+    rest_handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_revoked_token_returns_auth_expired() -> None:
+    with patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=False)):
+        result = await discover_system_map()
+
+    assert result["error"] == "auth_expired"
+
+
+@pytest.mark.asyncio
+async def test_empty_name_is_a_validation_error() -> None:
+    """Input is validated before any session or discovery work is opened."""
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+    ):
+        result = await discover_system_map(name="")
+
+    assert result["error"] == "validation_failed"
+    rest_handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_discovery_uses_the_authenticated_tenant() -> None:
+    """The reused handler receives the MCP caller's org/account/role, not a default."""
+    rest_handler = AsyncMock(return_value=SimpleNamespace(model_dump=MagicMock(return_value={"ok": True})))
+    from modulo.api.mcp_server import _ctx_role
+
+    _ctx_role.set("admin")
+    session = _discovery_session()
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("modulo.api.routes.system_maps.discover_system_map", new=rest_handler),
+        _patch_discovery_session(session),
+    ):
+        result = await discover_system_map(name="scoped")
+
+    assert result == {"ok": True}
+    call_kwargs = rest_handler.await_args.kwargs
+    principal = call_kwargs["principal"]
+    assert principal.organisation_id == ORG_ID
+    assert principal.account_id == USER_ID
+    assert principal.org_role == "admin"
+    assert call_kwargs["request"].name == "scoped"
+
+
+@pytest.mark.asyncio
+async def test_discovery_queries_are_tenant_scoped() -> None:
+    """Inventory reads filter the caller's org and the RLS context is bound to it."""
+    session = _discovery_session()
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=_draft_map())),
+        patch.object(
+            SystemMapDiscoveryRepository,
+            "save_discovery_revision",
+            new=AsyncMock(return_value=(_draft_map(), _REVISION_ID, 1)),
+        ),
+        _patch_discovery_session(session),
+    ):
+        result = await discover_system_map()
+
+    assert "error" not in result
+    assert session.info["org_id"] == ORG_ID
+    assert session.info["user_id"] == USER_ID
+    statements = [call.args[0] for call in session.execute.await_args_list]
+    inventory_tables = ("FROM pipelines", "FROM triggers", "FROM connector_instances", "FROM pipeline_folders")
+    inventory_selects = [statement for statement in statements if any(t in str(statement) for t in inventory_tables)]
+    assert len(inventory_selects) == 4
+    for statement in inventory_selects:
+        assert "organisation_id" in str(statement)
+
+
+# ─── Shared-service proof: MCP and REST persist the same draft ───
+
+
+class _Plan:
+    """Plan context enabling only ``system_maps``."""
+
+    def feature_enabled(self, name: str) -> bool:
+        return name == "system_maps"
+
+    def list_enabled_features(self) -> list[str]:
+        return ["system_maps"]
+
+    def tier(self) -> str:
+        return "community"
+
+    def has_license_key(self) -> bool:
+        return False
+
+
+@pytest.fixture
+def rest_client() -> Generator[TestClient, None, None]:
+    """REST client wired to the same internal-gate context as the MCP caller."""
+    session = _discovery_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    principal = TenantPrincipal(
+        username="internal",
+        organisation_id=ORG_ID,
+        account_id=USER_ID,
+        org_role="operator",
+        key_grants=frozenset({"system_maps_access"}),
+    )
+    auth_user = AuthenticatedPrincipal(
+        username="internal",
+        organisation_id=ORG_ID,
+        account_id=USER_ID,
+        org_role="operator",
+        key_grants=frozenset({"system_maps_access"}),
+    )
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_plan_context] = lambda: _Plan()
+    app.dependency_overrides[get_current_user] = lambda: auth_user
+    app.dependency_overrides[get_current_tenant_user] = lambda: principal
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: principal
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_mcp_and_rest_paths_persist_the_same_draft(rest_client: TestClient) -> None:
+    """Both surfaces drive one discovery implementation for the same inventory."""
+    persisted: list[dict[str, Any]] = []
+
+    async def _save(*_args: object, **kwargs: Any) -> tuple[SimpleNamespace, uuid.UUID, int]:
+        persisted.append(kwargs["content"])
+        return _draft_map(), _REVISION_ID, 1
+
+    with (
+        patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=_draft_map())),
+        patch.object(SystemMapDiscoveryRepository, "save_discovery_revision", new=AsyncMock(side_effect=_save)),
+    ):
+        rest_response = rest_client.post("/api/v1/system-maps/discover", json={"name": "same-draft"})
+        assert rest_response.status_code == 201
+        rest_report = rest_response.json()
+
+        mcp_session = _discovery_session()
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+            _patch_discovery_session(mcp_session),
+        ):
+            mcp_report = await discover_system_map(name="same-draft")
+
+    assert len(persisted) == 2
+    rest_content, mcp_content = persisted
+    assert mcp_content == rest_content
+    assert mcp_report["draft_map_id"] == rest_report["draft_map_id"]
+    assert mcp_report["draft_revision_id"] == rest_report["draft_revision_id"]
+    assert mcp_report["inferred_nodes"] == rest_report["inferred_nodes"]
+    assert mcp_report["inferred_edges"] == rest_report["inferred_edges"]
+    assert mcp_report["skipped"] == rest_report["skipped"]
+    assert mcp_report["warnings"] == rest_report["warnings"]

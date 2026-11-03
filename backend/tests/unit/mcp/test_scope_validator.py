@@ -663,6 +663,8 @@ class TestConstants:
             "get_eval_suite",
             "get_schema_versions",
             "get_pipeline_diff",
+            # FAR-2288: internal-preview System Maps discovery.
+            "discover_system_map",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 
