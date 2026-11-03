@@ -1,6 +1,6 @@
 /**
  * AppSelect is the single wrapper around PrimeVue's Select (see
- * appselect-guard.spec.ts). Two behaviours matter and are easy to regress:
+ * appselect-guard.spec.ts). Three behaviours matter and are easy to regress:
  *
  * 1. Event forwarding — the wrapper declares the Select events in
  *    `defineEmits`, which removes their listeners from `$attrs`, so it MUST
@@ -10,6 +10,12 @@
  *    is invisible to SonarCloud's Web:InputWithoutLabelCheck, so the binding
  *    is written out and resolved from the consumer's `$attrs` (or a default).
  *    The inner Select is also wrapped in a `<label>` for the same reason.
+ * 3. Label association — a non-editable PrimeVue Select renders a
+ *    `<span role="combobox">`, which is NOT labelable, so `label[for]` alone
+ *    never associates or focuses it. The spec asserts the RENDERED DOM: the
+ *    combobox carries the consumer's id, its `aria-labelledby` resolves to the
+ *    visible label's text, the wrapper carries no duplicate id, and clicking
+ *    the label focuses the combobox. All four fail on the pre-fix component.
  */
 import { describe, it, expect } from 'vitest'
 import { defineComponent, nextTick } from 'vue'
@@ -85,6 +91,36 @@ describe('AppSelect (real Select)', () => {
   it('falls back to a generic aria-label when the consumer passes none', () => {
     const wrapper = mount(AppSelect, { props: { modelValue: '' } })
     expect(innerSelect(wrapper).props('ariaLabel')).toBe('Select')
+  })
+
+  it('maps a consumer id to the inner Select inputId so label[for] resolves', () => {
+    // PrimeVue puts a fallthrough `id` on its root <div> and gives the
+    // focusable combobox `id = labelId || inputId`. A label beside the Select
+    // would therefore point at a div unless the id is re-applied as inputId.
+    const wrapper = mount(AppSelect, {
+      props: { modelValue: '' },
+      attrs: { id: 'queue-filter' },
+    })
+    expect(innerSelect(wrapper).props('inputId')).toBe('queue-filter')
+  })
+
+  it('prefers an explicit input-id over a consumer id', () => {
+    const wrapper = mount(AppSelect, {
+      props: { modelValue: '' },
+      attrs: { id: 'legacy-id', inputId: 'combobox-id' },
+    })
+    expect(innerSelect(wrapper).props('inputId')).toBe('combobox-id')
+  })
+
+  it('passes the resolved control id as labelId so PrimeVue can find label[for]', () => {
+    // PrimeVue's own click bridge queries `label[for=<labelId>]`; leaving
+    // labelId unset makes that query `label[for="undefined"]` and the bridge
+    // binds nothing, which is the inert association this pins.
+    const wrapper = mount(AppSelect, {
+      props: { modelValue: '' },
+      attrs: { id: 'queue-filter' },
+    })
+    expect(innerSelect(wrapper).props('labelId')).toBe('queue-filter')
   })
 
   it('merges a function-form consumer pt listContainer and adds tabindex', () => {
@@ -165,6 +201,13 @@ describe('AppSelect (stubbed Select)', () => {
     expect(wrapper.find('.p-select').attributes('aria-label')).toBe('Select')
   })
 
+  it('forwards a consumer id as input-id and not as a root id', () => {
+    const wrapper = mountAppSelect({ attrs: { id: 'org-select' } })
+    const select = wrapper.find('.p-select')
+    expect(select.attributes('input-id')).toBe('org-select')
+    expect(select.attributes('id')).toBeUndefined()
+  })
+
   it('renders header and option slots passed through by the wrapper', () => {
     const wrapper = mountAppSelect({
       slots: {
@@ -174,5 +217,185 @@ describe('AppSelect (stubbed Select)', () => {
     })
     expect(wrapper.find('.hdr').text()).toBe('Filters')
     expect(wrapper.find('.opt').text()).toBe('Running')
+  })
+})
+
+/**
+ * The label association, asserted against the RENDERED DOM rather than the
+ * props handed to PrimeVue. `props('inputId')` being set proves only that a
+ * prop was passed: it is satisfied by the pre-fix component, whose combobox
+ * is a `<span role="combobox">` that a `label[for]` can neither associate with
+ * nor focus (a span is not labelable).
+ */
+const LabelHost = defineComponent({
+  components: { AppSelect },
+  props: { controlId: { type: String, required: true } },
+  template: `
+    <div>
+      <label :for="controlId">Level</label>
+      <AppSelect :id="controlId" :options="[]" aria-label="Level" />
+    </div>
+  `,
+})
+
+function mountWithLabel(controlId: string) {
+  return mount(LabelHost, { props: { controlId }, attachTo: document.body })
+}
+
+describe('AppSelect label association (rendered DOM)', () => {
+  it('puts the consumer id on the combobox, not on the wrapper label', async () => {
+    const wrapper = mountWithLabel('appselect-id-test')
+    await nextTick()
+
+    const combobox = wrapper.find('[role="combobox"]')
+    expect(combobox.exists()).toBe(true)
+    expect(combobox.attributes('id')).toBe('appselect-id-test')
+
+    // Exactly one element in the document carries the id: with attribute
+    // inheritance left on, the wrapper <label> would share it and
+    // `label[for]` would resolve to the wrapper instead of the control.
+    expect(document.querySelectorAll('#appselect-id-test')).toHaveLength(1)
+    expect(document.querySelector('#appselect-id-test')?.tagName).toBe('SPAN')
+
+    wrapper.unmount()
+  })
+
+  it('exposes the visible label as the combobox accessible name', async () => {
+    const wrapper = mountWithLabel('appselect-name-test')
+    await nextTick()
+
+    const combobox = wrapper.find('[role="combobox"]')
+    const labelledBy = combobox.attributes('aria-labelledby')
+    expect(labelledBy).toBeTruthy()
+
+    const labelEl = document.getElementById(labelledBy as string)
+    expect(labelEl?.tagName).toBe('LABEL')
+    expect(labelEl?.textContent?.trim()).toBe('Level')
+    // The label is the consumer's own element, not a copy.
+    expect(labelEl).toBe(wrapper.find('label[for="appselect-name-test"]').element)
+
+    wrapper.unmount()
+  })
+
+  it('focuses the combobox when the visible label is clicked', async () => {
+    const wrapper = mountWithLabel('appselect-click-test')
+    await nextTick()
+
+    const combobox = wrapper.find('[role="combobox"]')
+    // A <span role="combobox"> is not labelable, so jsdom's native label
+    // activation reaches no control - the click bridge is what makes the
+    // label work.
+    const labelEl = wrapper.find('label[for="appselect-click-test"]')
+      .element as HTMLLabelElement
+    expect(labelEl.control).toBeNull()
+    expect(document.activeElement).not.toBe(combobox.element)
+
+    await labelEl.click()
+    await nextTick()
+
+    expect(document.activeElement).toBe(combobox.element)
+
+    wrapper.unmount()
+  })
+
+  it('keeps a consumer aria-labelledby and never overwrites an existing label id', async () => {
+    const wrapper = mount(
+      defineComponent({
+        components: { AppSelect },
+        template: `
+          <div>
+            <label id="explicit-label-id" for="appselect-explicit-test">Owner</label>
+            <AppSelect id="appselect-explicit-test" aria-labelledby="explicit-label-id" />
+          </div>
+        `,
+      }),
+      { attachTo: document.body },
+    )
+    await nextTick()
+
+    const combobox = wrapper.find('[role="combobox"]')
+    expect(combobox.attributes('aria-labelledby')).toBe('explicit-label-id')
+    expect(wrapper.find('label[for="appselect-explicit-test"]').attributes('id')).toBe(
+      'explicit-label-id',
+    )
+
+    wrapper.unmount()
+  })
+})
+
+/**
+ * A host with two visible labels so the association can be MOVED when the
+ * control id changes after mount. `syncLabelAssociation` must detach the old
+ * label's click bridge before attaching the new one, or the stale label would
+ * keep focusing the control it no longer describes.
+ */
+const TwoLabelHost = defineComponent({
+  components: { AppSelect },
+  props: { controlId: { type: String, required: true } },
+  template: `
+    <div>
+      <label for="appselect-first-id">First</label>
+      <label for="appselect-second-id">Second</label>
+      <AppSelect :id="controlId" :options="[]" aria-label="Level" />
+    </div>
+  `,
+})
+
+describe('AppSelect label association when the control id changes', () => {
+  it('re-resolves the label and moves the click bridge after an id change', async () => {
+    const wrapper = mount(TwoLabelHost, {
+      props: { controlId: 'appselect-first-id' },
+      attachTo: document.body,
+    })
+    await nextTick()
+
+    const firstLabel = wrapper.find('label[for="appselect-first-id"]')
+      .element as HTMLLabelElement
+    const secondLabel = wrapper.find('label[for="appselect-second-id"]')
+      .element as HTMLLabelElement
+    expect(wrapper.find('[role="combobox"]').attributes('aria-labelledby')).toBe(firstLabel.id)
+
+    await wrapper.setProps({ controlId: 'appselect-second-id' })
+    await nextTick()
+    await nextTick()
+
+    const combobox = wrapper.find('[role="combobox"]').element as HTMLElement
+    expect(combobox.getAttribute('aria-labelledby')).toBe(secondLabel.id)
+
+    // The old label's listener is gone; the new one focuses the combobox.
+    firstLabel.click()
+    expect(document.activeElement).not.toBe(combobox)
+    secondLabel.click()
+    expect(document.activeElement).toBe(combobox)
+
+    wrapper.unmount()
+  })
+
+  it('falls back to manual id escaping when CSS.escape is unavailable', async () => {
+    const originalEscape = CSS.escape
+    const wrapper = mount(LabelHost, {
+      props: { controlId: 'appselect-escape-first' },
+      attachTo: document.body,
+    })
+    await nextTick()
+
+    Object.defineProperty(CSS, 'escape', { configurable: true, writable: true, value: undefined })
+    try {
+      await wrapper.setProps({ controlId: 'appselect-escape-second' })
+      await nextTick()
+      await nextTick()
+
+      const label = wrapper.find('label[for="appselect-escape-second"]')
+        .element as HTMLLabelElement
+      expect(label.id).toBeTruthy()
+      expect(wrapper.find('[role="combobox"]').attributes('aria-labelledby')).toBe(label.id)
+    } finally {
+      Object.defineProperty(CSS, 'escape', {
+        configurable: true,
+        writable: true,
+        value: originalEscape,
+      })
+      wrapper.unmount()
+    }
   })
 })

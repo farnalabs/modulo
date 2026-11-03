@@ -467,7 +467,7 @@ jobs:
 
       - name: Backend unit tests
         working-directory: backend
-        run: uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+        run: uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 -n 2 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
         env:
           DATABASE_URL: "postgresql+asyncpg://unused:${{ secrets.POSTGRES_PASSWORD || 'unused' }}@localhost/unused"
 
@@ -509,7 +509,7 @@ jobs:
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.9
+          version: 11.28.10
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -2388,7 +2388,7 @@ jobs:
           fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.9
+          version: 11.28.10
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -3699,7 +3699,7 @@ jobs:
           fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.9
+          version: 11.28.10
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"

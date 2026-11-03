@@ -11,6 +11,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import ComplianceEvidenceIndexView from '../views/ComplianceEvidenceIndexView.vue'
+import { formatDateShortWithTime } from '../lib/formatDate'
 
 type EvidenceIndex = components['schemas']['EvidenceIndex']
 type ArtifactEntry = components['schemas']['ArtifactEntry']
@@ -97,8 +98,12 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(wrapper.text()).toContain('1')
     expect(wrapper.text()).toContain('Present')
     expect(wrapper.text()).toContain('Observed')
-    expect(wrapper.text()).toContain('10/20/2026')
-    expect(wrapper.text()).toContain('10/22/2026')
+    // The view renders the shared formatter's output, which depends on the
+    // machine's timezone. Deriving the expected text from the same helper keeps
+    // the assertion about "the timestamp is rendered" instead of hardcoding a
+    // US-layout string that fails on a non-US machine.
+    expect(wrapper.text()).toContain(formatDateShortWithTime(payload().pack_published_at))
+    expect(wrapper.text()).toContain(formatDateShortWithTime(payload().generated_at))
     expect(wrapper.find('dl').exists()).toBe(true)
     expect(wrapper.findAll('dl dt')).not.toHaveLength(0)
     expect(wrapper.findAll('dl dd')).not.toHaveLength(0)

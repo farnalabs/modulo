@@ -42,6 +42,7 @@
           <div>
             <label :for="`schema-editor-field-${field._key}-type`" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
             <Select
+  :id="`schema-editor-field-${field._key}-type`"
   :aria-label="$t('views.SchemaEditorView.field_type_aria')"
   :model-value="field.type"
   @update:model-value="update({ type: String($event) })"

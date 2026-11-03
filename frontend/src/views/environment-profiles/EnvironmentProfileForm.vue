@@ -172,6 +172,7 @@
       <div>
         <label for="environmentprofileform-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.network_policy') }}</label>
         <Select
+  id="environmentprofileform-field-3"
   :aria-label="$t('views.EnvironmentProfileForm.network_policy')"
   v-model="form.network_policy"
   :placeholder="$t('views.EnvironmentProfileForm.select_network_policy')"
@@ -190,6 +191,7 @@
       <div>
         <label for="environmentprofileform-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.initialisation_strategy') }}</label>
         <Select
+  id="environmentprofileform-field-2"
   :aria-label="$t('views.EnvironmentProfileForm.initialisation_strategy')"
   v-model="form.initialisation_strategy"
   :placeholder="$t('views.EnvironmentProfileForm.select_initialisation_strategy')"
@@ -208,6 +210,7 @@
       <div>
         <label for="environmentprofileform-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.persistence_policy') }}</label>
         <Select
+  id="environmentprofileform-field-1"
   :aria-label="$t('views.EnvironmentProfileForm.persistence_policy')"
   v-model="form.persistence_policy"
   :placeholder="$t('views.EnvironmentProfileForm.select_persistence_policy')"
