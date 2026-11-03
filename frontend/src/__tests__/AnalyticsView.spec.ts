@@ -1058,6 +1058,10 @@ describe('AnalyticsView', () => {
     // Aggregated per key: manual=5 vs 4 (up), webhook=7 vs 11 (down).
     const arrows = wrapper.findAll('[data-testid="analytics-trend-arrow"]')
     expect(arrows.length).toBe(2)
+    // The visible glyph is aria-hidden, so the direction also needs a text
+    // equivalent for screen readers (WCAG 1.4.1 / 4.1.2).
+    expect(arrows[0].find('.sr-only').text()).toBe('increase')
+    expect(arrows[1].find('.sr-only').text()).toBe('decrease')
     expect(arrows[0].text()).toContain('▲')
     expect(arrows[1].text()).toContain('▼')
   })

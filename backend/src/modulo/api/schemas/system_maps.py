@@ -10,7 +10,9 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from modulo.core.system_map_validation import validate_system_map_graph_references
 
 # ─── Centralised vocabularies (mirror ORM CHECK constraints) ───
 
@@ -65,38 +67,7 @@ class SystemMapRevisionCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_graph_references(self) -> "SystemMapRevisionCreate":
-        node_keys = [node.node_key for node in self.nodes]
-        node_key_set = set(node_keys)
-        if len(node_keys) != len(node_key_set):
-            raise ValueError("node_key values must be unique within a revision")
-        relationship_keys = {
-            (rel.source_node_key, rel.target_node_key, rel.relationship_type) for rel in self.relationships
-        }
-        if len(relationship_keys) != len(self.relationships):
-            raise ValueError("relationships must be unique within a revision")
-        missing_relationship_nodes = sorted(
-            {
-                key
-                for rel in self.relationships
-                for key in (rel.source_node_key, rel.target_node_key)
-                if key not in node_key_set
-            }
-        )
-        if missing_relationship_nodes:
-            raise ValueError(f"relationships reference missing nodes: {', '.join(missing_relationship_nodes)}")
-        loop_keys = [loop.node_key for loop in self.loop_configs]
-        if len(loop_keys) != len(set(loop_keys)):
-            raise ValueError("loop_configs must be unique by node_key within a revision")
-        missing_loop_nodes = sorted(key for key in loop_keys if key not in node_key_set)
-        if missing_loop_nodes:
-            raise ValueError(f"loop_configs reference missing nodes: {', '.join(missing_loop_nodes)}")
-        wrong_loop_types = sorted(
-            loop.node_key
-            for loop in self.loop_configs
-            if next(node for node in self.nodes if node.node_key == loop.node_key).node_type != "improvement_loop"
-        )
-        if wrong_loop_types:
-            raise ValueError(f"loop_configs require improvement_loop nodes: {', '.join(wrong_loop_types)}")
+        validate_system_map_graph_references(self.nodes, self.relationships, self.loop_configs)
         return self
 
 
@@ -182,12 +153,43 @@ class SystemMapRevisionResponse(BaseModel):
     status: str
     content_json: dict[str, Any]
     published_at: datetime | None
+    # Version-aware fields (FAR-2288)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
     deleted_at: datetime | None
     deleted_by: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class SystemMapRevisionHistoryEntry(BaseModel):
+    """Single entry in the revision history with its effective time range."""
+
+    revision: SystemMapRevisionResponse
+    is_current: bool = False
+
+
+class SystemMapRevisionHistoryResponse(BaseModel):
+    """List of all revisions for a system map with their effective time ranges."""
+
+    system_map_id: uuid.UUID
+    revisions: list[SystemMapRevisionHistoryEntry]
+
+
+class SystemMapRevisionByTimeResponse(BaseModel):
+    """The revision active at a specific timestamp."""
+
+    revision: SystemMapRevisionResponse
+    requested_at: datetime
+    matched: bool = True
+
+
+class SystemMapCurrentRevisionResponse(BaseModel):
+    """Currently active (published) revision - alias for the published revision."""
+
+    revision: SystemMapRevisionResponse
 
 
 class SystemMapNodeResponse(BaseModel):
@@ -380,6 +382,59 @@ class PublishResponse(BaseModel):
     validation_errors: list[PublishValidationError] = Field(default_factory=list)
 
 
+# ─── Revision Lifecycle (FAR-2288) ───
+
+
+class SystemMapRevisionDiffRequest(BaseModel):
+    """Request to diff a revision against another revision or the current draft."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    against_revision_id: uuid.UUID | None = Field(
+        default=None,
+        description="Revision to diff against. If omitted, diffs against the current draft revision (if any).",
+    )
+
+
+class SystemMapRevisionDiffResponse(BaseModel):
+    """Diff result between two revisions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_revision_id: uuid.UUID
+    base_revision_number: int
+    target_revision_id: uuid.UUID
+    target_revision_number: int
+    nodes_added: list[str] = Field(default_factory=list)
+    nodes_removed: list[str] = Field(default_factory=list)
+    nodes_modified: list[str] = Field(default_factory=list)
+    relationships_added: list[str] = Field(default_factory=list)
+    relationships_removed: list[str] = Field(default_factory=list)
+    relationships_modified: list[str] = Field(default_factory=list)
+    loop_configs_added: list[str] = Field(default_factory=list)
+    loop_configs_removed: list[str] = Field(default_factory=list)
+    loop_configs_modified: list[str] = Field(default_factory=list)
+    content_json_changed: bool = False
+
+
+class SystemMapRevisionRestoreAsNewRequest(BaseModel):
+    """Request to restore a published/archived revision as a new draft revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    notes: str = Field(default="Restored from revision {revision_number}", max_length=4000)
+
+
+class SystemMapRevisionRestoreAsNewResponse(BaseModel):
+    """Response for restore-as-new operation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    new_revision: SystemMapRevisionResponse
+    source_revision_id: uuid.UUID
+    source_revision_number: int
+
+
 # Forward references for recursive types
 SystemMapRevisionCreate.model_rebuild()
 
@@ -398,6 +453,7 @@ __all__ = [
     "PublishValidationErrorHTTP",
     # Requests
     "SystemMapCreate",
+    "SystemMapCurrentRevisionResponse",
     "SystemMapDiscoveryReport",
     "SystemMapDiscoveryRequest",
     "SystemMapDiscoverySkipped",
@@ -415,9 +471,17 @@ __all__ = [
     "SystemMapRelationshipResponse",
     # Responses
     "SystemMapResponse",
+    "SystemMapRevisionByTimeResponse",
     "SystemMapRevisionCreate",
     "SystemMapRevisionDetailResponse",
+    # Revision Lifecycle (FAR-2288)
+    "SystemMapRevisionDiffRequest",
+    "SystemMapRevisionDiffResponse",
+    "SystemMapRevisionHistoryEntry",
+    "SystemMapRevisionHistoryResponse",
     "SystemMapRevisionResponse",
+    "SystemMapRevisionRestoreAsNewRequest",
+    "SystemMapRevisionRestoreAsNewResponse",
     "SystemMapUpdate",
 ]
 

@@ -9,6 +9,7 @@
           <label for="adminnotificationdeliverylogview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.AdminNotificationDeliveryLogView.status') }}</label>
           <Select
   :aria-label="$t('views.AdminNotificationDeliveryLogView.status')"
+  input-id="adminnotificationdeliverylogview-field-4"
   v-model="filterStatus"
   :placeholder="$t('views.AdminNotificationDeliveryLogView.status')"
   data-testid="admin-notification-log-status"
@@ -26,6 +27,7 @@
           <label for="adminnotificationdeliverylogview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
           <Select
   :aria-label="$t('views.AdminAuditView.event_type')"
+  input-id="adminnotificationdeliverylogview-field-3"
   v-model="filterEventType"
   :placeholder="$t('views.AdminAuditView.event_type')"
   data-testid="admin-notification-log-event-type"

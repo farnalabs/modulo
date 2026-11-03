@@ -49,13 +49,13 @@ check_module_thresholds() {
   echo "::group::Per-module coverage checks"
 
   echo "Checking modulo.auth (threshold: 93%)"
-  uv run --no-sync --no-build coverage report --include="src/modulo/auth/*" --fail-under=93
+  uv run --no-sync --frozen --no-build coverage report --include="src/modulo/auth/*" --fail-under=93
 
   echo "Checking modulo.core.pipeline_engine (threshold: 91%)"
-  uv run --no-sync --no-build coverage report --include="src/modulo/core/pipeline_engine/*" --fail-under=91
+  uv run --no-sync --frozen --no-build coverage report --include="src/modulo/core/pipeline_engine/*" --fail-under=91
 
   echo "Checking modulo.db.rls (threshold: 95%)"
-  uv run --no-sync --no-build coverage report --include="src/modulo/db/rls.py" --fail-under=95
+  uv run --no-sync --frozen --no-build coverage report --include="src/modulo/db/rls.py" --fail-under=95
 
   echo "::endgroup::"
   echo "All coverage thresholds met."
@@ -76,15 +76,15 @@ if [ "$MODE" = "combine" ]; then
   # coverage invocation writes, so concurrent writers can never clobber one
   # another. Both shapes match the `.coverage.*` glob `coverage combine` reads,
   # which folds them into the single .coverage the reports below consume.
-  uv run --no-sync --no-build coverage combine
+  uv run --no-sync --frozen --no-build coverage combine
   # --fail-under=0 on the XML: the whole-suite floor is enforced once, below, by
   # the explicit `coverage report` (the [tool.coverage.report] fail_under config
   # would otherwise also fire here, failing the job on the report step that only
   # exists to publish the artifact).
-  uv run --no-sync --no-build coverage xml -o coverage.xml --fail-under=0
+  uv run --no-sync --frozen --no-build coverage xml -o coverage.xml --fail-under=0
   # The whole-suite floor lives here (not in the shard runs), against the
   # merged report - the same 89% `run` mode enforces in-process.
-  uv run --no-sync --no-build coverage report --fail-under=89
+  uv run --no-sync --frozen --no-build coverage report --fail-under=89
   echo "::endgroup::"
   check_module_thresholds
   exit 0
@@ -127,7 +127,7 @@ echo "::group::Running unit tests (overall coverage threshold: 89%)"
 # (BlockingIOError: [Errno 11]) and took the 2026-10-21 merge queue down.
 # The same escalation is asserted by
 # tests/architecture/test_unit_unraisable_warning_gate.py.
-uv run --no-sync pytest tests/unit/ -n "$PARALLELISM" "${COV_ARGS[@]}" -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings ${SHARD_ARGS[@]+"${SHARD_ARGS[@]}"}
+uv run --no-sync --frozen pytest tests/unit/ -n "$PARALLELISM" "${COV_ARGS[@]}" -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings ${SHARD_ARGS[@]+"${SHARD_ARGS[@]}"}
 echo "::endgroup::"
 
 if [ "$MODE" = "run" ]; then
@@ -138,7 +138,7 @@ if [ "$MODE" = "run" ]; then
   # when there is something to combine, so the no-suffixed-file case does not
   # trip `set -e` on coverage's "No data to combine" exit.
   if compgen -G '.coverage.*' > /dev/null; then
-    uv run --no-sync --no-build coverage combine
+    uv run --no-sync --frozen --no-build coverage combine
   fi
   # The per-module floors belong to the modes that see the WHOLE tree: `run`
   # (single-job fallback, everything in one data file) and `combine` (enforced

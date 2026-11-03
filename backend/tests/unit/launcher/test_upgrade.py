@@ -950,31 +950,57 @@ def test_no_live_process_excludes_the_upgrading_process_itself(tmp_path, monkeyp
     cwd sits inside the scanned incumbent dir on every self-upgrade: without
     the self-exclusion the flow aborts on ITSELF. A real child process with
     cwd inside the scanned dir STILL refuses."""
+    import shutil
     import signal
     import subprocess as subprocess_module
+    import time
 
     inside = tmp_path / "incumbent"
     inside.mkdir()
-    live_child = subprocess_module.Popen(
-        ["/bin/sh", "-c", "sleep 5"],
+
+    # The self-exclusion first: the UPGRADING process's own cwd inside the dir
+    # is NOT an offender (would abort on its own cwd pre-fix). Asserting it
+    # before spawning the child keeps this half free of any child-teardown race.
+    monkeypatch.chdir(inside)
+    upgrade_module.no_live_process_inside(inside)
+
+    # A real child process with cwd inside the scanned dir STILL refuses.
+    # Spawn the sleep binary directly rather than via `sh -c`: the shell forks
+    # a grandchild that can still be dying in the fork->exec window after the
+    # direct child has been reaped, which made the follow-up scan flaky under
+    # xdist. A direct binary has no child of its own, so killpg + wait is a
+    # complete cleanup.
+    sleep_bin = shutil.which("sleep") or "/bin/sleep"
+    live_child = subprocess_module.Popen(  # noqa: S603 - fixed argv, trusted test driver
+        [sleep_bin, "5"],
         cwd=str(inside),
         stdout=subprocess_module.DEVNULL,
         stderr=subprocess_module.DEVNULL,
         start_new_session=True,
     )
     try:
-        with pytest.raises(upgrade_module.UpgradeError, match="live processes remain inside"):
-            upgrade_module.no_live_process_inside(inside)
+        # Poll briefly: between fork and exec the child's exe still matches the
+        # pytest process and is skipped by the self-exclusion, so a single scan
+        # can land in that window.
+        deadline = time.monotonic() + 5.0
+        refusal: upgrade_module.UpgradeError | None = None
+        while True:
+            try:
+                upgrade_module.no_live_process_inside(inside)
+            except upgrade_module.UpgradeError as exc:
+                refusal = exc
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.02)
+        assert refusal is not None, "live child process inside the target dir was never detected"
+        assert "live processes remain inside" in str(refusal)
     finally:
         try:
             subprocess_module.os.killpg(live_child.pid, signal.SIGKILL)
         except (ProcessLookupError, subprocess_module.OSError):
             live_child.kill()
         live_child.wait(timeout=10)
-    # The self-exclusion: the UPGRADING process's own cwd inside the dir is
-    # NOT an offender.
-    monkeypatch.chdir(inside)
-    upgrade_module.no_live_process_inside(inside)  # would abort on its own cwd pre-fix
 
 
 def test_perform_upgrade_skip_backup_runs_no_dump(tmp_path, monkeypatch, patched_trust_store):

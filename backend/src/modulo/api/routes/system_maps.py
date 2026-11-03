@@ -34,6 +34,7 @@ from modulo.api.schemas.system_maps import (
     PublishValidationError,
     PublishValidationErrorHTTP,
     SystemMapCreate,
+    SystemMapCurrentRevisionResponse,
     SystemMapDiscoveryReport,
     SystemMapDiscoveryRequest,
     SystemMapDiscoverySkipped,
@@ -47,9 +48,16 @@ from modulo.api.schemas.system_maps import (
     SystemMapOverviewResponse,
     SystemMapRelationshipResponse,
     SystemMapResponse,
+    SystemMapRevisionByTimeResponse,
     SystemMapRevisionCreate,
     SystemMapRevisionDetailResponse,
+    SystemMapRevisionDiffRequest,
+    SystemMapRevisionDiffResponse,
+    SystemMapRevisionHistoryEntry,
+    SystemMapRevisionHistoryResponse,
     SystemMapRevisionResponse,
+    SystemMapRevisionRestoreAsNewRequest,
+    SystemMapRevisionRestoreAsNewResponse,
     SystemMapUpdate,
 )
 from modulo.api.team_scope import validate_owner_team_for_create
@@ -66,7 +74,7 @@ from modulo.core.system_maps_discovery import (
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_folder import PipelineFolder
-from modulo.db.models.system_map import SystemMap
+from modulo.db.models.system_map import SystemMap, SystemMapRevision
 from modulo.db.models.trigger import Trigger
 from modulo.db.repositories.system_map import SystemMapRepository
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -82,6 +90,8 @@ _CODE_SYSTEM_MAP_REVISION_GET = "system_map.revision.get"
 _CODE_SYSTEM_MAP_REVISION_PUBLISH = "system_map.revision.publish"
 _CODE_SYSTEM_MAP_REVISION_ARCHIVE = "system_map.revision.archive"
 _CODE_SYSTEM_MAP_REVISION_DELETE = "system_map.revision.delete"
+_CODE_SYSTEM_MAP_REVISION_DIFF = "system_map.revision.diff"
+_CODE_SYSTEM_MAP_REVISION_RESTORE = "system_map.revision.restore_as_new"
 _CODE_SYSTEM_MAP_OVERVIEW = "system_map.overview"
 _CODE_SYSTEM_MAP_NODE_CREATE = "system_map.node.create"
 _CODE_SYSTEM_MAP_RELATIONSHIP_CREATE = "system_map.relationship.create"
@@ -115,6 +125,12 @@ _EP_CREATE_SYSTEM_MAP_REVISION = "system_maps.create_system_map_revision_endpoin
 _EP_PUBLISH_SYSTEM_MAP_REVISION = "system_maps.publish_system_map_revision_endpoint"
 _EP_ARCHIVE_SYSTEM_MAP_REVISION = "system_maps.archive_system_map_revision_endpoint"
 _EP_DELETE_SYSTEM_MAP_REVISION = "system_maps.delete_system_map_revision_endpoint"
+_EP_DIFF_SYSTEM_MAP_REVISION = "system_maps.diff_system_map_revision_endpoint"
+_EP_RESTORE_SYSTEM_MAP_REVISION = "system_maps.restore_system_map_revision_endpoint"
+# Version-aware endpoints (FAR-2288)
+_EP_GET_REVISION_BY_TIME = "system_maps.get_revision_by_time_endpoint"
+_EP_GET_CURRENT_REVISION = "system_maps.get_current_revision_endpoint"
+_EP_GET_REVISION_HISTORY = "system_maps.get_revision_history_endpoint"
 _EP_GET_SYSTEM_MAP_OVERVIEW = "system_maps.get_system_map_overview_endpoint"
 _EP_CREATE_ATTRIBUTION_BINDING = "system_maps.create_attribution_binding_endpoint"
 _EP_LIST_ATTRIBUTION_BINDINGS = "system_maps.list_attribution_bindings_endpoint"
@@ -544,6 +560,201 @@ async def delete_system_map_endpoint(
 # ─── SystemMapRevision CRUD ───
 
 
+# ─── Version-aware Revision Endpoints (FAR-2288) ───
+
+
+@router.get("/{map_id}/revisions/by-time")
+@handle_db_errors(_EP_GET_REVISION_BY_TIME)
+async def get_revision_by_time_endpoint(
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    at: datetime = Query(..., description="ISO8601 timestamp to find the active revision at"),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    repository: SystemMapRepository = Depends(get_repo),
+) -> SystemMapRevisionByTimeResponse:
+    """Get the revision active at a specific timestamp.
+
+    Returns the revision (published, or superseded/archived after a re-publish)
+    where effective_from <= at < effective_to (or effective_to IS NULL for the
+    current revision). Drafts have no effective_from and never match.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Verify map exists
+            system_map = await repository.get_map_by_id(
+                session, organisation_id=principal.organisation_id, map_id=map_id
+            )
+            if not system_map:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
+
+            revision = await repository.get_revision_by_time(
+                session, organisation_id=principal.organisation_id, system_map_id=map_id, at=at
+            )
+    except ProgrammingError as exc:
+        _log.exception(_EP_GET_REVISION_BY_TIME)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _EP_GET_REVISION_BY_TIME)
+        _log.exception(_EP_GET_REVISION_BY_TIME)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("system_maps.get_revision_by_time")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    if revision is None:
+        # No revision active at that time - return 404 with context
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No revision active at {at.isoformat()}",
+        )
+
+    return SystemMapRevisionByTimeResponse(
+        revision=SystemMapRevisionResponse.model_validate(revision),
+        requested_at=at,
+        matched=True,
+    )
+
+
+@router.get("/{map_id}/revisions/current")
+@handle_db_errors(_EP_GET_CURRENT_REVISION)
+async def get_current_revision_endpoint(
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    repository: SystemMapRepository = Depends(get_repo),
+) -> SystemMapCurrentRevisionResponse:
+    """Get the currently active (published) revision.
+
+    Alias for the existing published revision endpoint with clearer semantics.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Verify map exists
+            system_map = await repository.get_map_by_id(
+                session, organisation_id=principal.organisation_id, map_id=map_id
+            )
+            if not system_map:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
+
+            revision = await repository.get_current_revision(
+                session, organisation_id=principal.organisation_id, system_map_id=map_id
+            )
+    except ProgrammingError as exc:
+        _log.exception(_EP_GET_CURRENT_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _EP_GET_CURRENT_REVISION)
+        _log.exception(_EP_GET_CURRENT_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("system_maps.get_current_revision")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    if revision is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No published revision found for this map",
+        )
+
+    return SystemMapCurrentRevisionResponse(revision=SystemMapRevisionResponse.model_validate(revision))
+
+
+@router.get("/{map_id}/revisions/history")
+@handle_db_errors(_EP_GET_REVISION_HISTORY)
+async def get_revision_history_endpoint(
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    repository: SystemMapRepository = Depends(get_repo),
+) -> SystemMapRevisionHistoryResponse:
+    """List all revisions for a system map with their effective time ranges.
+
+    Returns all revisions (published, draft, archived) ordered by revision_number
+    so the caller can see the full history with effective_from/effective_to.
+    The current (published) revision is marked with is_current=True.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Verify map exists
+            system_map = await repository.get_map_by_id(
+                session, organisation_id=principal.organisation_id, map_id=map_id
+            )
+            if not system_map:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
+
+            revisions = await repository.list_revisions_history(
+                session, organisation_id=principal.organisation_id, system_map_id=map_id
+            )
+    except ProgrammingError as exc:
+        _log.exception(_EP_GET_REVISION_HISTORY)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _EP_GET_REVISION_HISTORY)
+        _log.exception(_EP_GET_REVISION_HISTORY)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("system_maps.get_revision_history")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    # Determine current revision ID
+    current_revision_id = system_map.published_revision_id
+
+    history_entries = [
+        SystemMapRevisionHistoryEntry(
+            revision=SystemMapRevisionResponse.model_validate(rev),
+            is_current=(rev.id == current_revision_id),
+        )
+        for rev in revisions
+    ]
+
+    return SystemMapRevisionHistoryResponse(
+        system_map_id=map_id,
+        revisions=history_entries,
+    )
+
+
 @router.get("/{map_id}/revisions/{rev_id}")
 @handle_db_errors(_EP_GET_SYSTEM_MAP_REVISION)
 async def get_system_map_revision_endpoint(
@@ -933,9 +1144,16 @@ async def archive_system_map_revision_endpoint(
             if revision.status == "archived":
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Revision is already archived")
 
-            # Archive the revision
-            revision.status = "archived"
-            await session.flush()
+            # Archive the revision and close its effective window (FAR-2288)
+            archived_revision = await repository.archive_revision(
+                session,
+                organisation_id=principal.organisation_id,
+                system_map_id=map_id,
+                revision_id=rev_id,
+            )
+            if archived_revision is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+            revision = archived_revision
 
             # If this was the published revision, clear the map's published_revision_id
             if system_map.published_revision_id == rev_id:
@@ -973,6 +1191,198 @@ async def archive_system_map_revision_endpoint(
         ) from None
 
     return SystemMapRevisionResponse.model_validate(revision)
+
+
+@router.post(
+    "/{map_id}/revisions/{rev_id}/diff",
+    response_model=SystemMapRevisionDiffResponse,
+)
+@handle_db_errors(_EP_DIFF_SYSTEM_MAP_REVISION)
+async def diff_system_map_revision_endpoint(
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    rev_id: uuid.UUID = Path(..., description=_DESC_REVISION_ID),
+    req: SystemMapRevisionDiffRequest = Body(default=SystemMapRevisionDiffRequest()),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_DIFF),
+    repository: SystemMapRepository = Depends(get_repo),
+) -> SystemMapRevisionDiffResponse:
+    """Diff a revision against another revision or the current draft."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Verify map exists
+            system_map = await repository.get_map_by_id(
+                session, organisation_id=principal.organisation_id, map_id=map_id
+            )
+            if not system_map:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
+
+            # Verify base revision exists and belongs to map
+            base_revision = await repository.get_revision_by_id(
+                session, organisation_id=principal.organisation_id, revision_id=rev_id
+            )
+            if not base_revision or base_revision.system_map_id != map_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+
+            # Determine target revision
+            target_revision_id = req.against_revision_id
+            if target_revision_id is None:
+                # Try to find the current draft revision
+                draft_revisions = await repository.list_revisions(
+                    session,
+                    organisation_id=principal.organisation_id,
+                    system_map_id=map_id,
+                    status="draft",
+                    limit=1,
+                )
+                if not draft_revisions:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="No draft revision found to diff against; specify against_revision_id",
+                    )
+                target_revision_id = draft_revisions[0].id
+            else:
+                # Verify target revision exists and belongs to map
+                target_revision = await repository.get_revision_by_id(
+                    session, organisation_id=principal.organisation_id, revision_id=target_revision_id
+                )
+                if not target_revision or target_revision.system_map_id != map_id:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+
+            diff_result = await repository.diff_revisions(
+                session,
+                organisation_id=principal.organisation_id,
+                base_revision_id=rev_id,
+                target_revision_id=target_revision_id,
+            )
+            if not diff_result:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Could not compute diff")
+    except HTTPException:
+        raise
+    except ProgrammingError as exc:
+        _log.exception(_EP_DIFF_SYSTEM_MAP_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _EP_DIFF_SYSTEM_MAP_REVISION)
+        _log.exception(_EP_DIFF_SYSTEM_MAP_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except Exception:
+        _log.exception("system_maps.diff_revision")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    return SystemMapRevisionDiffResponse(**diff_result)
+
+
+@router.post(
+    "/{map_id}/revisions/{rev_id}/restore-as-new",
+    response_model=SystemMapRevisionRestoreAsNewResponse,
+    dependencies=[
+        Depends(
+            audited(
+                "system_map_revision_restored_as_new",
+                "system_map_revision",
+                principal_dep=get_current_tenant_user_or_api_key,
+            )
+        )
+    ],
+)
+@handle_db_errors(_EP_RESTORE_SYSTEM_MAP_REVISION)
+async def restore_system_map_revision_endpoint(
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    rev_id: uuid.UUID = Path(..., description=_DESC_REVISION_ID),
+    req: SystemMapRevisionRestoreAsNewRequest = Body(default=SystemMapRevisionRestoreAsNewRequest()),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_RESTORE),
+    repository: SystemMapRepository = Depends(get_repo),
+) -> SystemMapRevisionRestoreAsNewResponse:
+    """Create a new draft revision from a published/archived revision."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Verify map exists
+            system_map = await repository.get_map_by_id(
+                session, organisation_id=principal.organisation_id, map_id=map_id
+            )
+            if not system_map:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
+
+            # Verify source revision exists and belongs to map
+            source_revision = await repository.get_revision_by_id(
+                session, organisation_id=principal.organisation_id, revision_id=rev_id, include_deleted=True
+            )
+            if not source_revision or source_revision.system_map_id != map_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+
+            if source_revision.status == "draft":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Cannot restore a draft revision as new; it is already editable",
+                )
+
+            # Create new draft from source
+            new_revision = await repository.restore_revision_as_new_draft(
+                session,
+                organisation_id=principal.organisation_id,
+                system_map_id=map_id,
+                source_revision_id=rev_id,
+                notes=req.notes.replace("{revision_number}", str(source_revision.revision_number)),
+            )
+            if not new_revision:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+
+            await _record_audit(
+                session,
+                org_id=principal.organisation_id,
+                event_type="system_map.revision.restored_as_new",
+                account_id=principal.account_id,
+                resource_id=new_revision.id,
+                payload_json={
+                    "system_map_id": str(map_id),
+                    "source_revision_id": str(rev_id),
+                    "source_revision_number": source_revision.revision_number,
+                    "new_revision_number": new_revision.revision_number,
+                },
+            )
+    except HTTPException:
+        raise
+    except ProgrammingError as exc:
+        _log.exception(_EP_RESTORE_SYSTEM_MAP_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _EP_RESTORE_SYSTEM_MAP_REVISION)
+        _log.exception(_EP_RESTORE_SYSTEM_MAP_REVISION)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from exc
+    except Exception:
+        _log.exception("system_maps.restore_revision")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    return SystemMapRevisionRestoreAsNewResponse(
+        new_revision=SystemMapRevisionResponse.model_validate(new_revision),
+        source_revision_id=rev_id,
+        source_revision_number=source_revision.revision_number,
+    )
 
 
 @router.delete(
@@ -1062,15 +1472,67 @@ async def delete_system_map_revision_endpoint(
 # ─── Overview (Aggregate Read Model) ───
 
 
+async def _resolve_overview_revision(
+    repository: SystemMapRepository,
+    session: AsyncSession,
+    *,
+    organisation_id: uuid.UUID,
+    map_id: uuid.UUID,
+    revision_id: uuid.UUID | None,
+    at: datetime | None,
+) -> SystemMapRevision:
+    """Resolve which revision an overview request targets (FAR-2288)."""
+    if revision_id:
+        revision = await repository.get_revision_by_id(
+            session, organisation_id=organisation_id, revision_id=revision_id
+        )
+        if not revision or revision.system_map_id != map_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+        return revision
+    if at:
+        revision = await repository.get_revision_by_time(
+            session, organisation_id=organisation_id, system_map_id=map_id, at=at
+        )
+        if not revision:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No revision active at {at.isoformat()}",
+            )
+        return revision
+    revision = await repository.get_published_revision(session, organisation_id=organisation_id, system_map_id=map_id)
+    # The repository already filters on status, but the route re-checks it so a
+    # malformed/draft row can never be aggregated and reported as published.
+    if not revision or revision.status != "published":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No published revision found for this map",
+        )
+    return revision
+
+
 @router.get("/{map_id}/overview")
 @handle_db_errors(_EP_GET_SYSTEM_MAP_OVERVIEW)
 async def get_system_map_overview_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    revision_id: uuid.UUID | None = Query(default=None, description="Specific revision ID to get overview for"),
+    at: datetime | None = Query(
+        default=None, description="ISO8601 timestamp to get overview for the revision active at that time"
+    ),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_OVERVIEW),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapOverviewResponse:
-    """Aggregate published-map metrics over the trailing seven UTC days."""
+    """Aggregate read model with node health, loop configs, and bottleneck detection.
+
+    Can optionally specify a revision_id or 'at' timestamp to get the overview
+    for a specific historical revision (FAR-2288 version-aware read model).
+    Metrics cover the trailing seven UTC days.
+    """
+    if revision_id and at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot specify both revision_id and at; choose one",
+        )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1083,27 +1545,25 @@ async def get_system_map_overview_endpoint(
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
-            # Get published revision. The repository already filters on status,
-            # but the route re-checks it so a malformed/draft row can never be
-            # aggregated and reported as published.
-            published_revision = await repository.get_published_revision(
-                session, organisation_id=principal.organisation_id, system_map_id=map_id
+            target_revision = await _resolve_overview_revision(
+                repository,
+                session,
+                organisation_id=principal.organisation_id,
+                map_id=map_id,
+                revision_id=revision_id,
+                at=at,
             )
-            if not published_revision or published_revision.status != "published":
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="No published revision found for this map",
-                )
 
-            # Get full graph
+            # Get full graph for the target revision
             graph = await repository.get_full_revision_graph(
-                session, organisation_id=principal.organisation_id, revision_id=published_revision.id
+                session, organisation_id=principal.organisation_id, revision_id=target_revision.id
             )
             if not graph:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
 
             nodes = graph["nodes"]
             loop_configs = graph["loop_configs"]
+
             window_end = datetime.now(UTC)
             window_start = window_end - timedelta(days=OVERVIEW_WINDOW_DAYS)
             pipeline_ids = {node.pipeline_id for node in nodes if node.pipeline_id is not None}
@@ -1124,8 +1584,8 @@ async def get_system_map_overview_endpoint(
 
             return SystemMapOverviewResponse(
                 system_map_id=map_id,
-                revision_id=published_revision.id,
-                revision_number=published_revision.revision_number,
+                revision_id=target_revision.id,
+                revision_number=target_revision.revision_number,
                 generated_at=window_end,
                 window_days=OVERVIEW_WINDOW_DAYS,
                 window_start=window_start,

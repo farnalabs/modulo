@@ -145,6 +145,7 @@
     <div
       v-if="bulkOutcomes"
       data-testid="hitl-review-bulk-outcomes"
+      aria-live="polite"
       class="mb-4 space-y-1 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm"
     >
       <p class="font-medium">{{ $t('views.SettingsHitlReviewView.bulk_outcomes_title') }}</p>
@@ -601,7 +602,11 @@ function matchesSearch(gate: GateItem): boolean {
   if (!searchQuery.value) return true
   const q = searchQuery.value.toLowerCase()
   const pName = pipelineDisplayName(gate).toLowerCase()
-  return pName.includes(q) || gate.review_id.toLowerCase().includes(q)
+  // The search placeholder promises "pipeline or node name": the node name is
+  // the gate's human label, which the row renders. Matching only the pipeline
+  // and the review id made searching for the visible node name return nothing.
+  const nodeName = (gate.label ?? '').toLowerCase()
+  return pName.includes(q) || nodeName.includes(q) || gate.review_id.toLowerCase().includes(q)
 }
 
 function matchesDate(gate: GateItem): boolean {

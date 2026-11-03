@@ -18,6 +18,18 @@
           :subtitle="$t('views.AdminErrorDetailView.subtitle')"
         />
       </div>
+      <!-- FAR-2304: the canonical support reference (group id, fingerprint,
+           level, count, source) in one copy action. Available in instance scope
+           too — copying is read-only. -->
+      <button
+        v-if="group"
+        type="button"
+        class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        data-testid="admin-error-detail-copy-support"
+        @click="copySupportReference"
+      >
+        {{ supportCopied ? $t('views.AdminErrorDetailView.support_reference_copied') : $t('views.AdminErrorDetailView.copy_support_reference') }}
+      </button>
     </header>
 
     <div v-if="loading" data-testid="admin-error-detail-loading">
@@ -281,6 +293,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
 import { formatErrorDate, levelBadgeClass, statusBadgeClass } from '../utils/errorGroupPresentation'
 import Select from '../components/shared/AppSelect.vue'
+import { buildErrorGroupSupportReference } from '../lib/supportReference'
 
 const route = useRoute()
 const router = useRouter()
@@ -323,6 +336,34 @@ const { data: groupData, loading, error, load: loadDetail } = useDataFetch(
 
 const group = computed(() => groupData.value ?? null)
 const sampleEvent = computed(() => groupData.value?.sample_event ?? null)
+
+// FAR-2304: one copy action for the canonical support reference. Built by the
+// shared helper so it can never drift from the error list's reference.
+const supportCopied = ref(false)
+
+const supportReference = computed(() => {
+  const g = groupData.value
+  if (!g) return ''
+  return buildErrorGroupSupportReference({
+    groupId: g.id,
+    fingerprint: g.fingerprint,
+    level: g.level_peak,
+    count: g.count,
+    source: g.sample_event?.source ?? null,
+  })
+})
+
+async function copySupportReference() {
+  const text = supportReference.value
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    supportCopied.value = true
+    setTimeout(() => { supportCopied.value = false }, 2000)
+  } catch (e) {
+    console.warn('Failed to copy support reference', e)
+  }
+}
 
 watch(() => groupData.value, (g) => {
   if (g) assigneeId.value = g.assigned_to || ''
