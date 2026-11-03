@@ -63,7 +63,7 @@ describe('RunDetailShare', () => {
     vi.clearAllMocks()
   })
 
-  it('renders Share Summary button when run loads', async () => {
+  it('renders the copy support reference button when run loads', async () => {
     const wrapper = mount(RunDetailView, {
       global: {
         mocks: { $t: (key: string) => key.split('.').pop() ?? key },
@@ -73,10 +73,10 @@ describe('RunDetailShare', () => {
     await new Promise(r => setTimeout(r, 0))
     const btn = wrapper.find('[data-testid="run-detail-share-summary"]')
     expect(btn.exists()).toBe(true)
-    expect(btn.text()).toBe('share_summary')
+    expect(btn.text()).toBe('support_reference')
   })
 
-  it('copies share summary to clipboard on click', async () => {
+  it('copies the canonical support reference to clipboard on click', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
 
@@ -92,10 +92,14 @@ describe('RunDetailShare', () => {
 
     expect(writeText).toHaveBeenCalledOnce()
     const text = writeText.mock.calls[0][0]
-    expect(text).toContain('Run: #test-run-id')
-    expect(text).toContain('Pipeline: #test')
-    expect(text).toContain('Status: complete')
-    expect(text).toContain('Cost: $1.230000')
+    expect(text).toContain('run test-run-id')
+    expect(text).toContain('pipeline test-pipeline')
+    expect(text).toContain('status complete')
+    expect(text).toContain('error none')
+    // One field group per line, no prose.
+    expect(text.split('\n')[0]).toBe(
+      'run test-run-id · pipeline test-pipeline · status complete · error none',
+    )
   })
 
   it('shows Copied! text after clicking share button', async () => {

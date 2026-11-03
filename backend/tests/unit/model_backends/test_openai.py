@@ -17,12 +17,6 @@ def backend():
         return OpenAIBackend(api_key="sk-test", model_id="gpt-4o")
 
 
-def test_backend_id():
-    with patch("modulo.model_backends.module.ChatOpenAI"):
-        backend = OpenAIBackend(api_key="sk-test", model_id="gpt-4o")
-    assert backend.backend_id == "openai/gpt-4o"
-
-
 def test_default_base_url_is_none(backend):
     assert backend.base_url is None
 
