@@ -1225,6 +1225,13 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > MCP flag-visibility gate. Its honest remaining gap - the UI never calls the
 > shipped discovery endpoint - keeps it `partial`; `_ORPHANED_BDD_FEATURES`
 > stays empty.
+>
+> **Superseded 2026-11-03:** the feature now has its own routed surface
+> (`/system-maps`, `/system-maps/:id`) and is registered in the manifest
+> `features:` registry as `feat-system-maps`, so it is no longer tracked here
+> "rather than" the registry. `pipelines/system-maps.md` was refreshed against
+> the dedicated System Maps schema, the revision lifecycle and the wired
+> discovery UI; the entry stays `partial` for the gaps that genuinely remain.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
