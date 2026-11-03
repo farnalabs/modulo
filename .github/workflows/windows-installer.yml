@@ -4,6 +4,11 @@ name: "Windows: Build Installer (Inno Setup)"
 # Windows runtime exists. A Linux bundle is never relabeled as Windows. Dry-run
 # records that packaging is unavailable; it does not compile a fake or incomplete
 # installer and does not claim to validate the runtime contract.
+#
+# FAR-2315: the compile-check and redaction-unit jobs are the real gates for
+# deploy/windows/modulo.iss. They run on every release invocation AND on pull
+# requests that touch the installer, so a Pascal script that cannot compile, or
+# a Redact() that does not redact, cannot merge.
 
 on:
   workflow_call:
@@ -24,6 +29,13 @@ on:
         description: "Build mode: dry-run, cut, recut, promote"
         type: string
         default: dry-run
+  pull_request:
+    paths:
+      - 'deploy/windows/**'
+      - 'scripts/create-windows-launcher.ps1'
+      - 'scripts/test-windows-installer.ps1'
+      - '.github/workflows/windows-installer.yml'
+
 concurrency:
   group: windows-installer-${{ github.workflow }}-${{ inputs.version }}
   cancel-in-progress: false
@@ -36,8 +48,138 @@ permissions:
   contents: read
 
 jobs:
+  compile-check:
+    name: Compile installer (Inno Setup 6.2.2)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Install Inno Setup 6.2.2
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # FAR-2315: the windows-latest image ships a newer Inno Setup
+          # already installed, and Chocolatey refuses the pinned 6.2.2
+          # without an explicit downgrade - which made this job die before
+          # it ever reached ISCC. Allow the downgrade so CI compiles with
+          # the exact version the release workflow pins.
+          choco install innosetup --version=6.2.2 --yes --no-progress --allow-downgrade
+          $chocoExit = $LASTEXITCODE
+          if ($chocoExit -ne 0) {
+            Write-Warning "choco install innosetup 6.2.2 exited $chocoExit; continuing only if ISCC.exe is present."
+          }
+
+          # Resolve ISCC from the install directory, then from PATH. The
+          # pre-installed copy the image ships lives in the same directory,
+          # so a failed downgrade still leaves a working compiler.
+          $isccCandidates = @()
+          foreach ($programFiles in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+            if ($programFiles) {
+              $isccCandidates += (Join-Path $programFiles 'Inno Setup 6\ISCC.exe')
+            }
+          }
+          $isccPath = $null
+          foreach ($candidate in $isccCandidates) {
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+              $isccPath = $candidate
+              break
+            }
+          }
+          if (-not $isccPath) {
+            $isccCommand = Get-Command -Name 'ISCC.exe' -ErrorAction SilentlyContinue
+            if ($isccCommand) {
+              $isccPath = $isccCommand.Source
+            }
+          }
+
+          # Every Inno Setup install registers a DisplayVersion; capturing it
+          # means the log records which version actually compiled the installer.
+          $registered = @()
+          foreach ($root in @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+          )) {
+            if (Test-Path -LiteralPath $root) {
+              $registered += Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue |
+                ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue } |
+                Where-Object { $_.DisplayName -like 'Inno Setup*' } |
+                ForEach-Object { "$($_.DisplayName) $($_.DisplayVersion)" }
+            }
+          }
+          $registeredText = if ($registered) { $registered -join '; ' } else { 'none' }
+
+          if (-not $isccPath) {
+            $chocoState = 'unavailable'
+            try {
+              $chocoState = (choco list --local-only innosetup 2>&1 | Out-String).Trim()
+            } catch {
+              $chocoState = "choco list failed: $_"
+            }
+            throw ("ISCC.exe is not available after installing Inno Setup 6.2.2.`n" +
+                   "Looked for: $($isccCandidates -join ', ')`n" +
+                   "Registered Inno Setup installs: $registeredText`n" +
+                   "choco list --local-only innosetup:`n$chocoState")
+          }
+
+          $fileVersion = $null
+          $versionInfo = (Get-Item -LiteralPath $isccPath).VersionInfo
+          foreach ($candidate in @($versionInfo.ProductVersion, $versionInfo.FileVersion)) {
+            if ($candidate) {
+              $fileVersion = ($candidate -replace '\s*\([^)]*\)\s*$', '').Trim()
+              break
+            }
+          }
+          $fileVersionText = if ($fileVersion) { $fileVersion } else { 'unknown' }
+          Write-Host "ISCC: $isccPath (file version: $fileVersionText)"
+          Write-Host "Registered Inno Setup installs: $registeredText"
+
+          if ($fileVersion -and ($fileVersion -notmatch '^6\.2\.2')) {
+            Write-Warning "ISCC reports $fileVersion, not the pinned 6.2.2 - compiling with the installed version instead. The log above records it."
+          } elseif (-not $fileVersion) {
+            Write-Warning 'Could not read the ISCC file version; the compile output below is the record of what ran.'
+          }
+
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path -Parent $isccPath)
+      - name: Compile the installer and run the contract tests
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # -RequireIscc: this job owns the compilation proof, so a missing
+          # ISCC must fail the job instead of silently skipping it. The
+          # script prints ISCC's own output on a non-zero exit and writes it to
+          # iscc-<case>.log, which the next step uploads as the diagnosis trail.
+          ./scripts/test-windows-installer.ps1 -RequireIscc
+      - name: Upload ISCC compiler output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iscc-output
+          path: iscc-*.log
+          if-no-files-found: ignore
+
+  redaction-unit:
+    name: Redaction unit test (Free Pascal)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Install Free Pascal
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fp-compiler
+      - name: Compile and execute the extracted Redact() fixtures
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # -RequireFpc: this job owns the fpc proofs (Redact() behaviour and
+          # the [Code] stub compile), so a missing compiler must fail the job.
+          ./scripts/test-windows-installer.ps1 -RequireFpc
+
   version-parity:
     name: Assert bundle versions match
+    if: ${{ github.event_name == 'workflow_call' }}
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -55,7 +197,8 @@ jobs:
 
   build:
     name: Validate Windows installer prerequisite
-    needs: version-parity
+    if: ${{ github.event_name == 'workflow_call' }}
+    needs: [version-parity, compile-check]
     runs-on: windows-latest
     timeout-minutes: 15
     env:
@@ -69,12 +212,50 @@ jobs:
       - name: Install Inno Setup
         run: |
           $ErrorActionPreference = 'Stop'
-          choco install innosetup --version=6.2.2 --yes --no-progress
-          $isccDir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6'
-          if (-not (Test-Path -LiteralPath (Join-Path $isccDir 'ISCC.exe'))) {
-            throw "ISCC.exe was not installed under $isccDir"
+
+          # FAR-2315: the windows-latest image ships a newer Inno Setup already
+          # installed, and Chocolatey refuses the pinned 6.2.2 without an
+          # explicit downgrade - which killed this release-path job before it
+          # ever reached ISCC. Allow the downgrade so the build leg resolves
+          # the same compiler the compile-check leg does.
+          choco install innosetup --version=6.2.2 --yes --no-progress --allow-downgrade
+          $chocoExit = $LASTEXITCODE
+          if ($chocoExit -ne 0) {
+            Write-Warning "choco install innosetup 6.2.2 exited $chocoExit; continuing only if ISCC.exe is present."
           }
-          Add-Content -Path $env:GITHUB_PATH -Value $isccDir
+
+          # Same resolution order as the compile-check job: the install
+          # directory first, then PATH. The pre-installed copy the image ships
+          # lives in the same directory, so a failed downgrade still leaves a
+          # working compiler.
+          $isccCandidates = @()
+          foreach ($programFiles in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+            if ($programFiles) {
+              $isccCandidates += (Join-Path $programFiles 'Inno Setup 6\ISCC.exe')
+            }
+          }
+          $isccPath = $null
+          foreach ($candidate in $isccCandidates) {
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+              $isccPath = $candidate
+              break
+            }
+          }
+          if (-not $isccPath) {
+            $isccCommand = Get-Command -Name 'ISCC.exe' -ErrorAction SilentlyContinue
+            if ($isccCommand) {
+              $isccPath = $isccCommand.Source
+            }
+          }
+
+          if (-not $isccPath) {
+            throw ("ISCC.exe is not available after installing Inno Setup 6.2.2.`n" +
+                   "Looked for: $($isccCandidates -join ', ')`n" +
+                   "PATH lookup: Get-Command ISCC.exe found nothing")
+          }
+
+          Write-Host "ISCC: $isccPath"
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path -Parent $isccPath)
       - name: Validate launcher helper contract
         run: |
           $ErrorActionPreference = 'Stop'
@@ -108,8 +289,8 @@ jobs:
 
   sign:
     name: Sign Windows installer (Azure Trusted Signing)
-    needs: build
-    if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' }}
+    needs: [build, compile-check]
+    if: ${{ github.event_name == 'workflow_call' && inputs.mode != 'dry-run' && needs.build.result == 'success' }}
     runs-on: windows-latest
     timeout-minutes: 15
     permissions:
@@ -136,7 +317,7 @@ jobs:
   attest:
     name: Attest Windows installer
     needs: [build, sign]
-    if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' && needs.sign.result == 'success' }}
+    if: ${{ github.event_name == 'workflow_call' && inputs.mode != 'dry-run' && needs.build.result == 'success' && needs.sign.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -153,7 +334,7 @@ jobs:
   publish:
     name: Publish Windows installer
     needs: [build, attest]
-    if: ${{ inputs.mode == 'promote' && needs.build.result == 'success' && needs.attest.result == 'success' }}
+    if: ${{ github.event_name == 'workflow_call' && inputs.mode == 'promote' && needs.build.result == 'success' && needs.attest.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
