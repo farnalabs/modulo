@@ -24,6 +24,10 @@ quarantine:
   # The attribution is non-deterministic under xdist, so every victim observed
   # so far is listed: the leak survives one GC pass and is collected in
   # whichever item runs next.
+  - test_id: "tests/unit/test_trigger_engine_pre_guardrail.py::test_handle_webhook_mechanism_error_fails_closed_for_block"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125622658533, run 41545972532, PR #2728); passes in isolation"
+    expiry: "2026-11-17"
+    owner: "platform-team"
   - test_id: "tests/unit/test_trigger_engine_pre_guardrail.py::test_handle_webhook_observe_is_advisory"
     reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI 2026-11-01)"
     expiry: "2026-11-15"

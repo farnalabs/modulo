@@ -419,6 +419,9 @@ jobs:
               # PR or overwrites a live ref.
               git checkout -B "$BRANCH" origin/main
               python3 scripts/bump-version.py --set "$VERSION"
+              # FAR-2308: backend/uv.lock records the project version too, and
+              # bump-version.py updates it. Staging it here keeps the release PR
+              # consistent with the always-on UV lockfile freshness CI gate.
               uv lock --project backend
               git add backend/pyproject.toml backend/uv.lock frontend/package.json deploy/helm/modulo/Chart.yaml
               if git diff --cached --quiet; then
