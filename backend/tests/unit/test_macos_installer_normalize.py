@@ -38,12 +38,12 @@ def _macos_normalize_script() -> str:
 def _run_macos_normalize(tmp_path: Path, **overrides: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
     out = tmp_path / "github_output"
     out.write_text("", encoding="utf-8")
-    env = {key: value for key, value in os.environ.items() if not key.startswith(("CALL_", "DISPATCH_", "GITHUB_"))}
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("CALL_", "GITHUB_"))}
     # Actions always defines every mapped env var (empty when unset), so default them all to "".
-    for name in ("VERSION", "RC_TAG", "REF", "MODE"):
+    # The normalize step reads `inputs.*` only (never github.event.inputs), which is
+    # correct for both a direct dispatch and a reusable call.
+    for name in ("VERSION", "RC_TAG", "REF", "MODE", "BUILD_NATIVE"):
         env[f"CALL_{name}"] = ""
-        env[f"DISPATCH_{name}"] = ""
-    env["DISPATCH_BUILD_NATIVE"] = ""
     env.update({"GITHUB_OUTPUT": str(out), "GITHUB_REF": "refs/heads/main"})
     env.update(overrides)
     result = _run_bash(_macos_normalize_script(), cwd=tmp_path, env=env)
@@ -59,11 +59,6 @@ def test_macos_normalize_uses_call_inputs_when_caller_was_dispatched(tmp_path: P
         CALL_RC_TAG="v0.3.324-rc5",
         CALL_REF="v0.3.324-rc5",
         CALL_MODE="recut",
-        DISPATCH_VERSION="",
-        DISPATCH_RC_TAG="",
-        DISPATCH_REF="",
-        DISPATCH_MODE="",
-        DISPATCH_BUILD_NATIVE="",
     )
     assert result.returncode == 0, result.stderr
     assert outputs["rc_tag"] == "v0.3.324-rc5"
@@ -78,11 +73,7 @@ def test_macos_normalize_direct_dispatch_dry_run_still_works(tmp_path: Path) -> 
         CALL_VERSION="0.3.324",
         CALL_RC_TAG="manual",
         CALL_MODE="dry-run",
-        DISPATCH_VERSION="0.3.324",
-        DISPATCH_RC_TAG="manual",
-        DISPATCH_REF="",
-        DISPATCH_MODE="dry-run",
-        DISPATCH_BUILD_NATIVE="true",
+        CALL_BUILD_NATIVE="true",
     )
     assert result.returncode == 0, result.stderr
     assert outputs["ref"] == "refs/heads/main"
@@ -93,11 +84,11 @@ def test_macos_normalize_direct_dispatch_rejects_non_dry_run(tmp_path: Path) -> 
     result, _outputs = _run_macos_normalize(
         tmp_path,
         GITHUB_EVENT_NAME="workflow_dispatch",
-        DISPATCH_VERSION="0.3.324",
-        DISPATCH_RC_TAG="manual",
-        DISPATCH_REF="",
-        DISPATCH_MODE="recut",
-        DISPATCH_BUILD_NATIVE="false",
+        CALL_VERSION="0.3.324",
+        CALL_RC_TAG="manual",
+        CALL_REF="",
+        CALL_MODE="recut",
+        CALL_BUILD_NATIVE="false",
     )
     assert result.returncode != 0
     assert "unsupported manual dispatch mode" in result.stderr
