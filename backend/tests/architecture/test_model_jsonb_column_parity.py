@@ -169,7 +169,13 @@ _DROPPED_0147_PAIRS: dict[tuple[str, str], str] = {
 #: the change that removed the model; the parity test asserts the table really
 #: is absent from ``Base.metadata`` so the entry cannot go stale while a model
 #: still exists.
-_NO_ORM_MODEL_0147_PAIRS: dict[tuple[str, str], str] = {}
+_NO_ORM_MODEL_0147_PAIRS: dict[tuple[str, str], str] = {
+    # FAR-2233 removed the saved-views feature and its ORM model. The physical
+    # table survives (no migration drops it yet), so there is no ORM declaration
+    # left for the parity check to compare against.
+    ("saved_views", "filters"): "FAR-2233 (saved views feature removed)",
+    ("saved_views", "columns"): "FAR-2233 (saved views feature removed)",
+}
 
 
 def _load_migration() -> ModuleType:

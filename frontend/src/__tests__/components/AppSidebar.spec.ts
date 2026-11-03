@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, useRoute } from 'vue-router'
 
 vi.mock('../../lib/api/client', () => ({
   api: { GET: vi.fn().mockResolvedValue({ data: null, error: undefined }) },
@@ -143,6 +143,35 @@ describe('AppSidebar', () => {
       await flushPromises()
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
+    })
+
+    it('closes the expanded full sidebar when the route changes', async () => {
+      const route = useRoute()
+      route.path = '/'
+      const wrapper = mountSidebar()
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(true)
+
+      route.path = '/notifications'
+      await flushPromises()
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('keeps the rail when the route changes with the full sidebar closed', async () => {
+      const route = useRoute()
+      route.path = '/'
+      const wrapper = mountSidebar()
+      await flushPromises()
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
+
+      route.path = '/admin/my-profile'
+      await flushPromises()
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
+      wrapper.unmount()
     })
   })
 
