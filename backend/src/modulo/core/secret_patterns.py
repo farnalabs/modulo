@@ -171,6 +171,41 @@ def is_sensitive_env_key(key: str) -> bool:
     return key in _SENSITIVE_ENV_KEYS or is_sensitive_key(key)
 
 
+# Whole-value redaction regardless of the canonical classifier: structured
+# values that embed credentials the token/classifier match cannot see
+# (``modulo_oidc_providers`` is a JSON array with client_secret values,
+# ``modulo_users`` an "email:password" list, the alert webhook URLs carry the
+# token in the URL PATH rather than userinfo). Single definition (FAR-2305):
+# ``modulo env``, the doctor report and the support bundle all import this set
+# instead of keeping their own copy.
+WHOLESALE_REDACT_FIELDS: frozenset[str] = frozenset(
+    {
+        "modulo_oidc_providers",
+        "modulo_users",
+        "alert_webhook_url",
+        "alert_teams_webhook_url",
+    }
+)
+
+
+def is_sensitive_field_name(name: str) -> bool:
+    """Canonical sensitive-FIELD classification (single source of truth).
+
+    The one classifier every redaction surface uses: ``modulo env``'s Settings
+    dump, ``modulo doctor --report``'s KEY=value scrub and the support
+    bundle's structural layer. A field is sensitive when it is in the
+    wholesale set, or when the shared env-key classifier matches it.
+
+    ``name`` is matched case-insensitively via :func:`is_sensitive_env_key`
+    (which normalises to upper case for the exact set and lower cases for the
+    substring patterns), so callers may pass a Settings field name or an
+    env-var spelling interchangeably.
+    """
+    if name.lower() in WHOLESALE_REDACT_FIELDS:
+        return True
+    return is_sensitive_env_key(name.upper())
+
+
 # The trigger-config keys whose VALUES are secrets encrypted at rest
 # (FAR-1732): the write-path helper
 # (``api.routes.triggers._encrypt_trigger_config_secrets``), the Fernet

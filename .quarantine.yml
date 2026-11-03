@@ -15,19 +15,74 @@
 
 quarantine:
   # Full-suite-only GC attribution (2026-11-01): an unrelated earlier unit test
-  # leaked a never-awaited AsyncMock coroutine, which CPython's generational GC
-  # collected while whichever test happened to be running. The attribution was
-  # non-deterministic under xdist, so every victim observed was listed.
+  # leaks a never-awaited AsyncMock coroutine. CPython's generational GC then
+  # collects it while whichever test happens to be running, so pytest's
+  # unraisable-warning gate attributes the failure there. The attribution is
+  # non-deterministic under xdist, so every victim observed is listed.
   #
-  # RETIRED 2026-11-03. The leak fixes on main (FAR-2273 dependency-override
-  # isolation, session-double hardening, #2725 MagicMock for sync result
-  # methods) removed the source. Evidence: `tests/unit/` run with xdist and
-  # `-W error::pytest.PytestUnraisableExceptionWarning` on 2026-11-03 gave
-  # 45116 passed / 11 skipped / 0 failed with the quarantine file bypassed;
-  # each former victim's full file also passed 3x serial and 3x under
-  # `-n auto` (24 / 151 / 20 / 92 / 38 tests). If the class recurs, re-add an
-  # entry with a fresh reason and expiry rather than restoring these without
-  # proof.
+  # The ORIGINAL victim set was RETIRED 2026-11-03 after the leak fixes on main
+  # (FAR-2273 dependency-override isolation, session-double hardening, #2725
+  # MagicMock for sync result methods): a `tests/unit/` run with xdist and
+  # `-W error::pytest.PytestUnraisableExceptionWarning` passed with the
+  # quarantine file bypassed, and each former victim's file also passed 3x
+  # serial and 3x under `-n auto`. The class has since recurred on main (new
+  # victims reported through 2026-11-03 13:00), so those newer observations are
+  # kept below with their own reason and expiry. Entries are non-strict xfail,
+  # so any test that no longer reproduces simply XPASSes.
+  - test_id: "tests/unit/test_trigger_engine_pre_guardrail.py::test_handle_webhook_mechanism_error_fails_closed_for_block"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125622658533, run 41545972532, PR #2728); passes in isolation"
+    expiry: "2026-11-17"
+    owner: "platform-team"
+  - test_id: "tests/unit/trigger_engine/test_trigger_engine.py::test_webhook_route[replay-success]"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (main CI run 41487626568 at 05d676b, 2026-11-02)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
+  - test_id: "tests/unit/scripts/test_run_coverage_gate.py::test_tiny_diff_exemption_withheld_when_production_lines_deleted"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (PR #2705 CI run 41520943457 at b60cd6077, 2026-11-02)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
+  - test_id: "tests/unit/test_saq_worker_startup.py::TestStartupHook::test_attribution_install_failure_is_fail_open"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd at setup in the full unit run (main CI run 41487169204, 2026-11-02)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
+  - test_id: "tests/unit/test_pipeline_node_conversion.py::TestRevertToManual::test_unexpected_exception_returns_500"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd at setup in the full unit run (main CI run 41487777782, 2026-11-02)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
+  - test_id: "tests/unit/scim/test_scim_provisioning.py::TestServiceProviderConfig::test_returns_200"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (deploy run 41510926766 at fe222a6f3, 2026-11-02)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
+  - test_id: "tests/unit/scim/test_scim_provisioning_programming_error.py::TestScimDatabaseErrors::test_error_returns_expected_status[replace_user_500]"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (deploy run 41518651845 at cc2a70de9, 2026-11-02)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
+  - test_id: "tests/unit/test_far2005_dead_heartbeat_reap.py::TestDeadHeartbeatReapScope::test_non_running_status_is_untouched"
+    reason: >-
+      Ambient pre-existing AsyncMock leak (FAR-2674 / FAR-2289): an unrelated
+      test's never-awaited coroutine is GC'd while this test runs in the full
+      unit run, so the escalated PytestUnraisableExceptionWarning fails this
+      innocent victim. Passes in isolation and under forced gc (PR #2719 CI run
+      41523847563, 2026-11-02).
+    expiry: "2026-11-17"
+    owner: "platform-team"
+  - test_id: "tests/unit/test_merge_queue_workflow_task_kind.py::test_workflow_file_exists_and_parses"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125612117549, run 41542674284, PR #2721)"
+    expiry: "2026-11-16"
+    owner: "platform-team"
+  - test_id: "tests/unit/scripts/test_branch_fixer_dispatch_retry.py::test_capacity_and_transient_failures_are_distinguishable"
+    reason: "Unrelated leaked AsyncMock coroutine is GC'd during this test in the full unit run (CI job 125649924673, run 41554109804, PR #2718); passes in isolation"
+    expiry: "2026-11-17"
+    owner: "platform-team"
+  - test_id: "tests/unit/test_mcp_structural_coverage.py::test_every_chokepoint_bypassing_tool_enforces_node_allowed_tools"
+    reason: >-
+      Ambient pre-existing AsyncMock leak (FAR-2674 / FAR-2289): an unrelated
+      test's never-awaited coroutine is GC'd while this AST-only guard runs in
+      the full unit run, so the escalated PytestUnraisableExceptionWarning
+      fails this innocent victim. Passes in isolation and alongside the PR's new
+      flag tests (PR #2719 CI run 41548873183, 2026-11-03).
+    expiry: "2026-11-17"
+    owner: "platform-team"
 
   # Example (illustrative — remove if no currently-quarantined tests):
   # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"

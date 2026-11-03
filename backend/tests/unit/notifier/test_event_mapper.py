@@ -139,121 +139,132 @@ async def test_known_event_maps_config(
 # ---------------------------------------------------------------------------
 
 
-async def test_hitl_awaiting_templates_resolved(mapper: NotificationEventMapper) -> None:
-    _, mock_create = await _call(mapper, "hitl_awaiting")
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "HITL review needed — my-pipeline"
-    assert kwargs["body"] == 'Pipeline "my-pipeline" is waiting for human review.'
-    assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
-
-
-async def test_run_failed_templates_resolved(mapper: NotificationEventMapper) -> None:
-    _, mock_create = await _call(mapper, "run_failed")
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "Run failed — my-pipeline"
-    assert kwargs["body"] == 'Run for "my-pipeline" failed with error: E_TIMEOUT.'
-    assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
-
-
-async def test_run_stalled_templates_resolved(mapper: NotificationEventMapper) -> None:
-    """run_stalled is a warning that tells orgs which pipeline went silent (FAR-98)."""
-    _, mock_create = await _call(mapper, "run_stalled")
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "Run stalled — my-pipeline"
-    assert kwargs["body"] == (
-        'Run for "my-pipeline" stalled — the agent produced no output for the configured stall timeout.'
-    )
-    assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
-
-
-async def test_eval_regression_templates_resolved(mapper: NotificationEventMapper) -> None:
-    _, mock_create = await _call(mapper, "eval_regression")
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "Eval regression detected — my-agent"
-    assert kwargs["body"] == 'Eval pass rate dropped for agent "my-agent".'
-    assert kwargs["action_url"] == "/evals"
-
-
-async def test_budget_exceeded_templates_resolved(mapper: NotificationEventMapper) -> None:
-    _, mock_create = await _call(mapper, "budget_exceeded")
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "Budget exceeded — my-pipeline"
-    assert kwargs["body"] == 'Run for "my-pipeline" exceeded its token budget.'
-    assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
-
-
-async def test_claim_expired_templates_resolved(mapper: NotificationEventMapper) -> None:
-    _, mock_create = await _call(mapper, "claim_expired")
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "HITL claim expired — my-pipeline"
-    assert kwargs["body"] == 'A HITL claim on "my-pipeline" has expired.'
-    assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
-
-
-async def test_eval_blocked_templates_resolved(mapper: NotificationEventMapper) -> None:
-    _, mock_create = await _call(mapper, "eval_blocked")
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "Eval blocked — my-pipeline"
-    assert kwargs["body"] == 'An eval check blocked pipeline "my-pipeline".'
-    assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
-
-
-async def test_hitl_overdue_templates_resolved(mapper: NotificationEventMapper) -> None:
-    _, mock_create = await _call(mapper, "hitl_overdue")
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "HITL overdue — my-pipeline"
-    assert kwargs["body"] == 'Pipeline "my-pipeline" has been awaiting human review for 12 minutes.'
-    assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
-
-
-async def test_hitl_deadline_warning_templates_resolved(mapper: NotificationEventMapper) -> None:
-    """hitl_deadline_warning (FAR-1295) names the gate, the pipeline and the
-    minutes remaining, and deep-links to the run."""
-    payload = {**_PAYLOAD, "gate_label": "Security sign-off", "minutes_remaining": 3}
-    _, mock_create = await _call(mapper, "hitl_deadline_warning", payload=payload)
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "HITL review deadline approaching — my-pipeline"
-    assert kwargs["body"] == (
+# event_type -> (payload overrides merged onto _PAYLOAD, title, body, action URL)
+_TEMPLATE_CASES: dict[str, tuple[dict[str, object], str, str, str | None]] = {
+    "hitl_awaiting": (
+        {},
+        "HITL review needed — my-pipeline",
+        'Pipeline "my-pipeline" is waiting for human review.',
+        f"/runs/{_PAYLOAD['run_id']}",
+    ),
+    "run_failed": (
+        {},
+        "Run failed — my-pipeline",
+        'Run for "my-pipeline" failed with error: E_TIMEOUT.',
+        f"/runs/{_PAYLOAD['run_id']}",
+    ),
+    # FAR-98: a warning that tells orgs which pipeline went silent.
+    "run_stalled": (
+        {},
+        "Run stalled — my-pipeline",
+        'Run for "my-pipeline" stalled — the agent produced no output for the configured stall timeout.',
+        f"/runs/{_PAYLOAD['run_id']}",
+    ),
+    "eval_regression": (
+        {},
+        "Eval regression detected — my-agent",
+        'Eval pass rate dropped for agent "my-agent".',
+        "/evals",
+    ),
+    "budget_exceeded": (
+        {},
+        "Budget exceeded — my-pipeline",
+        'Run for "my-pipeline" exceeded its token budget.',
+        f"/runs/{_PAYLOAD['run_id']}",
+    ),
+    "claim_expired": (
+        {},
+        "HITL claim expired — my-pipeline",
+        'A HITL claim on "my-pipeline" has expired.',
+        f"/runs/{_PAYLOAD['run_id']}",
+    ),
+    "eval_blocked": (
+        {},
+        "Eval blocked — my-pipeline",
+        'An eval check blocked pipeline "my-pipeline".',
+        f"/runs/{_PAYLOAD['run_id']}",
+    ),
+    "hitl_overdue": (
+        {},
+        "HITL overdue — my-pipeline",
+        'Pipeline "my-pipeline" has been awaiting human review for 12 minutes.',
+        f"/runs/{_PAYLOAD['run_id']}",
+    ),
+    # FAR-1295: names the gate, the pipeline and the minutes remaining.
+    "hitl_deadline_warning": (
+        {"gate_label": "Security sign-off", "minutes_remaining": 3},
+        "HITL review deadline approaching — my-pipeline",
         'HITL gate "Security sign-off" on "my-pipeline" is due in 3 minutes. '
-        "Unreviewed, the run is cancelled at the deadline."
-    )
-    assert kwargs["action_url"] == f"/runs/{payload['run_id']}"
-
-
-async def test_hitl_review_removed_templates_resolved(mapper: NotificationEventMapper) -> None:
-    """hitl_review_removed has no action URL and formats pipeline_name."""
-    _, mock_create = await _call(mapper, "hitl_review_removed")
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "HITL review weakened — my-pipeline"
-    assert kwargs["body"] == 'A HITL review on "my-pipeline" was weakened or removed.'
-    assert kwargs["action_url"] is None
-
-
-async def test_hitl_review_removal_denied_templates_resolved(mapper: NotificationEventMapper) -> None:
-    """hitl_review_removal_denied is fully static (no payload fields, no action URL)."""
-    _, mock_create = await _call(mapper, "hitl_review_removal_denied")
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "HITL review removal denied"
-    assert kwargs["body"] == "A non-privileged attempt to weaken a HITL review was denied."
-    assert kwargs["action_url"] is None
-
-
-async def test_hitl_approve_sweep_templates_resolved(mapper: NotificationEventMapper) -> None:
-    """hitl_approve_sweep_suspected (FAR-611) formats the sweep counts with no action URL."""
-    payload = {
-        "actor": str(_ACTOR),
-        "approve_count": 6,
-        "distinct_pipeline_count": 3,
-        "window_seconds": 60,
-    }
-    _, mock_create = await _call(mapper, "hitl_approve_sweep_suspected", payload=payload)
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "HITL approve sweep suspected"
-    assert kwargs["body"] == (
+        "Unreviewed, the run is cancelled at the deadline.",
+        f"/runs/{_PAYLOAD['run_id']}",
+    ),
+    # No action URL; formats pipeline_name.
+    "hitl_review_removed": (
+        {},
+        "HITL review weakened — my-pipeline",
+        'A HITL review on "my-pipeline" was weakened or removed.',
+        None,
+    ),
+    # Fully static (no payload fields, no action URL).
+    "hitl_review_removal_denied": (
+        {},
+        "HITL review removal denied",
+        "A non-privileged attempt to weaken a HITL review was denied.",
+        None,
+    ),
+    # FAR-611: formats the sweep counts with no action URL.
+    "hitl_approve_sweep_suspected": (
+        {"actor": str(_ACTOR), "approve_count": 6, "distinct_pipeline_count": 3, "window_seconds": 60},
+        "HITL approve sweep suspected",
         f"6 HITL reviews across 3 pipelines were approved by actor {_ACTOR} "
-        "within 60 seconds — possible bulk-approve sweep."
-    )
-    assert kwargs["action_url"] is None
+        "within 60 seconds — possible bulk-approve sweep.",
+        None,
+    ),
+    # The enforcement-gap alert pages the operator straight to the run.
+    "guardrail_enforcement_gap": (
+        {"guardrail": "no-secrets", "reason": "soft_deleted"},
+        "Guardrail enforcement gap — no-secrets",
+        'Guardrail "no-secrets" could not be evaluated (soft_deleted) and is not enforcing. See the run for details.',
+        f"/runs/{_PAYLOAD['run_id']}",
+    ),
+    # Static (no payload fields, no action URL).
+    "guardrail_kill_switch": (
+        {},
+        "Guardrails downgraded to observe (kill-switch enabled)",
+        "The org-wide guardrails kill-switch was enabled: every bound guardrail is now "
+        "observe-only (shadow mode). Guardrails are computed and logged but never block or redact.",
+        None,
+    ),
+    # An unexpected skip pages the operator straight to the run.
+    "guardrail_unexpected_skip": (
+        {"guardrail": "evaded", "reason": "cap_evaded"},
+        "Guardrail skipped unexpectedly — evaded",
+        'Guardrail "evaded" was skipped for an unexpected reason (cap_evaded) — not explained by '
+        "a soft-deleted pinned guardrail. See the run for details.",
+        f"/runs/{_PAYLOAD['run_id']}",
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("event_type", "payload_overrides", "expected_title", "expected_body", "expected_action_url"),
+    [(event_type, *case) for event_type, case in _TEMPLATE_CASES.items()],
+    ids=list(_TEMPLATE_CASES),
+)
+async def test_event_templates_resolved(
+    mapper: NotificationEventMapper,
+    event_type: str,
+    payload_overrides: dict[str, object],
+    expected_title: str,
+    expected_body: str,
+    expected_action_url: str | None,
+) -> None:
+    """Each shipped event renders its title, body and action URL from the payload."""
+    _, mock_create = await _call(mapper, event_type, payload={**_PAYLOAD, **payload_overrides})
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == expected_title
+    assert kwargs["body"] == expected_body
+    assert kwargs["action_url"] == expected_action_url
 
 
 @pytest.mark.parametrize("event_type", ["feedback_pending", "system_announcement"])
@@ -263,45 +274,6 @@ async def test_retired_event_is_an_unknown_event(mapper: NotificationEventMapper
     result, mock_create = await _call(mapper, event_type)
     assert result is None
     mock_create.assert_not_called()
-
-
-async def test_guardrail_enforcement_gap_templates_resolved(mapper: NotificationEventMapper) -> None:
-    """The enforcement-gap alert pages the operator straight to the run."""
-    run_id = str(uuid.uuid4())
-    payload = {"guardrail": "no-secrets", "reason": "soft_deleted", "run_id": run_id}
-    _, mock_create = await _call(mapper, "guardrail_enforcement_gap", payload=payload)
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "Guardrail enforcement gap — no-secrets"
-    assert kwargs["body"] == (
-        'Guardrail "no-secrets" could not be evaluated (soft_deleted) and is not enforcing. See the run for details.'
-    )
-    assert kwargs["action_url"] == f"/runs/{run_id}"
-
-
-async def test_guardrail_kill_switch_templates_resolved(mapper: NotificationEventMapper) -> None:
-    """The kill-switch alert is static (no payload fields, no action URL)."""
-    _, mock_create = await _call(mapper, "guardrail_kill_switch")
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "Guardrails downgraded to observe (kill-switch enabled)"
-    assert kwargs["body"] == (
-        "The org-wide guardrails kill-switch was enabled: every bound guardrail is now "
-        "observe-only (shadow mode). Guardrails are computed and logged but never block or redact."
-    )
-    assert kwargs["action_url"] is None
-
-
-async def test_guardrail_unexpected_skip_templates_resolved(mapper: NotificationEventMapper) -> None:
-    """An unexpected skip pages the operator straight to the run."""
-    run_id = str(uuid.uuid4())
-    payload = {"guardrail": "evaded", "reason": "cap_evaded", "run_id": run_id}
-    _, mock_create = await _call(mapper, "guardrail_unexpected_skip", payload=payload)
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "Guardrail skipped unexpectedly — evaded"
-    assert kwargs["body"] == (
-        'Guardrail "evaded" was skipped for an unexpected reason (cap_evaded) — not explained by '
-        "a soft-deleted pinned guardrail. See the run for details."
-    )
-    assert kwargs["action_url"] == f"/runs/{run_id}"
 
 
 # ---------------------------------------------------------------------------

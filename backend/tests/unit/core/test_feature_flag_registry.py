@@ -214,6 +214,51 @@ class TestFromDb:
         assert flag.description == "From DB"
         assert flag.currently_active is True
 
+    async def test_db_catalog_preserves_code_level_org_settability(self) -> None:
+        """FAR-2302: ``org_admin_settable`` is a CODE classification, not a column.
+
+        The DB catalog supplies name/description/tier, so a DB-loaded registry
+        would otherwise lose the classification and report every flag as
+        system-admin-only (or, worse, if the default were True, open everything).
+        A catalog-only flag is not in ``ORG_ADMIN_SETTABLE_FLAGS`` and must
+        default to False.
+        """
+        session = _make_session()
+        db_flags = [
+            {
+                "name": "webhook_notification_log",
+                "description": "From DB",
+                "tier_id": "community",
+                "depends_on": None,
+                "is_active": True,
+            },
+            {
+                "name": "sso_unrestricted_provisioning",
+                "description": "From DB",
+                "tier_id": "community",
+                "depends_on": None,
+                "is_active": True,
+            },
+            {
+                "name": "catalog_only_flag",
+                "description": "Only in the DB",
+                "tier_id": "community",
+                "depends_on": None,
+                "is_active": True,
+            },
+        ]
+        db_tiers = [{"tier_id": "community", "rank": 0}]
+
+        with (
+            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
+        ):
+            registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
+
+        assert registry.get_flag("webhook_notification_log").org_admin_settable is True
+        assert registry.get_flag("sso_unrestricted_provisioning").org_admin_settable is False
+        assert registry.get_flag("catalog_only_flag").org_admin_settable is False
+
 
 class TestKnownFlags:
     """Ensure the registry exposes the product's durable flag contracts."""
@@ -393,12 +438,14 @@ class TestRetiredInternalFlags:
 
 class TestDefaultOffFlags:
     """Flags shipped default-OFF on every tier (the ``mobile_sidebar_rail``
-    two-mechanism precedent, extended by ``user_scoped_mcp_keys`` FAR-620 and
-    each is listed in the catalog for per-org toggling AND hardcoded in
-     ``_refresh``'s inactive set
-
+    two-mechanism precedent). Each is listed in the catalog for per-org
+    toggling AND hardcoded in ``_refresh``'s inactive set
     (``DEFAULT_OFF_FLAGS``), so the community-tier tier-rank fallback can
     never activate it and only an explicit override can turn it on.
+
+    ``user_scoped_mcp_keys`` was extended into this set by FAR-620 and then
+    flipped default-ON by FAR-2301, so it is pinned separately in
+    ``TestUserScopedMcpKeysDefaultOn`` below.
 
     Regression (PR #1062 review): ``_refresh`` seeded the inactive set only
     from the DB catalog, so a registry built WITHOUT ``load_from_db()``
@@ -472,6 +519,76 @@ class TestDefaultOffFlags:
             new=AsyncMock(return_value=True),
         ):
             assert await registry.resolve_flag(flag_name, org_id=uuid.uuid4()) is True
+
+
+class TestUserScopedMcpKeysDefaultOn:
+    """FAR-2301: ``user_scoped_mcp_keys`` ships default-ON on every tier.
+
+    The flag is a per-org kill switch, not an opt-in gate: a human-linked
+    user-scoped key is already quota-limited, TTL-capped, live-role clamped
+    and attributed to its owner, so a new org can mint one without a
+    system-admin action. An explicit org override of ``false`` still
+    disables it.
+    """
+
+    _ORG = uuid.UUID("00000000-0000-0000-0000-000000000777")
+
+    def test_flag_not_in_default_off_flags(self) -> None:
+        assert "user_scoped_mcp_keys" not in DEFAULT_OFF_FLAGS
+
+    @pytest.mark.parametrize(("tier", "has_license_key"), [("community", False), ("team", True)])
+    def test_active_by_default_on_every_tier(self, tier: str, has_license_key: bool) -> None:
+        registry = _make_default_off_registry(tier, has_license_key=has_license_key)
+        flag = registry.get_flag("user_scoped_mcp_keys")
+        assert flag is not None, "user_scoped_mcp_keys must stay registered in _KNOWN_FLAGS"
+        assert flag.currently_active is True
+
+    async def test_resolve_flag_defaults_true_without_an_override(self) -> None:
+        registry = _make_default_off_registry()
+        with patch.object(
+            FeatureFlagRegistry,
+            "_get_org_override",
+            new=AsyncMock(return_value=None),
+        ):
+            assert await registry.resolve_flag("user_scoped_mcp_keys", org_id=self._ORG) is True
+
+    async def test_org_override_false_still_disables(self) -> None:
+        registry = _make_default_off_registry()
+        with patch.object(
+            FeatureFlagRegistry,
+            "_get_org_override",
+            new=AsyncMock(return_value=False),
+        ):
+            assert await registry.resolve_flag("user_scoped_mcp_keys", org_id=self._ORG) is False
+
+    async def test_org_override_true_wins_over_a_disabled_catalog_row(self) -> None:
+        """An org override is the enable path even when the row is inactive."""
+        session = _make_session()
+        db_flags = [
+            {
+                "name": "user_scoped_mcp_keys",
+                "description": "Per-user MCP API keys",
+                "tier_id": "community",
+                "depends_on": None,
+                "is_active": False,
+            },
+        ]
+        db_tiers = [
+            {"tier_id": "community", "rank": 0},
+            {"tier_id": "team", "rank": 1},
+        ]
+        with (
+            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
+        ):
+            registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
+        assert registry.get_flag("user_scoped_mcp_keys").currently_active is False  # type: ignore[union-attr]
+        with patch.object(
+            FeatureFlagRegistry,
+            "_get_org_override",
+            new=AsyncMock(return_value=True),
+        ):
+            assert await registry.resolve_flag("user_scoped_mcp_keys", org_id=self._ORG) is True
 
 
 class TestResolveSsoUnrestrictedProvisioning:

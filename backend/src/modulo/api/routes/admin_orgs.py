@@ -470,6 +470,21 @@ async def admin_delete_org(
 ) -> None:
     from modulo.core.system_audit_logger import append_system_audit_event
 
+    # The organisation the caller is signed in to can never be deleted: an
+    # organisation must be deleted from outside itself. Cross-organisation
+    # deletion stays available to a system admin for every OTHER org.
+    if principal.organisation_id is not None and org_id == principal.organisation_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You cannot delete the organisation you are signed in to",
+        )
+
+    # Reserved orgs are infrastructure sentinels (nil-UUID public-error ingest,
+    # modulo-library registry), never customer tenants - they are also hidden
+    # from the listing and must not be deletable.
+    if org_id in RESERVED_ORG_IDS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
+
     try:
         async with session.begin():
             org = await get_organisation(session, org_id)
