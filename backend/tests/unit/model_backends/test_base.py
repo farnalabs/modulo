@@ -7,6 +7,7 @@ direct unit coverage.
 
 import asyncio
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import httpx
@@ -16,6 +17,7 @@ from langchain_core.messages import AIMessage
 from modulo.model_backends.base import (
     HEALTH_DETAIL_MAX_LENGTH,
     ModelBackendBase,
+    _parse_server_time,
     openai_compatible_health_check,
 )
 
@@ -128,6 +130,21 @@ class TestOpenAICompatibleHealthCheck:
         assert result.ok is False
         assert len(result.detail) == HEALTH_DETAIL_MAX_LENGTH
 
+    async def test_invalid_endpoint_value_error_is_a_connection_failure(self):
+        """An unbuildable endpoint is a connection failure, not an uncaught error."""
+        with patch(
+            "modulo.model_backends.base.pinned_async_client_sync",
+            side_effect=ValueError("invalid base url"),
+        ):
+            result = await openai_compatible_health_check(
+                base_url="https://api.example.com/v1",
+                api_key="sk-test",
+            )
+        assert result.ok is False
+        assert result.error_kind == "connection"
+        assert result.detail == "invalid base url"
+        assert result.status_code is None
+
     async def test_trailing_slash_is_stripped_from_url(self):
         requested_urls = []
 
@@ -141,6 +158,20 @@ class TestOpenAICompatibleHealthCheck:
                 api_key=None,
             )
         assert requested_urls == ["https://api.example.com/v1/models"]
+
+
+class TestParseServerTime:
+    """The clock-drift reading is a bonus: a bad header never fails the probe."""
+
+    def test_malformed_date_header_is_ignored(self):
+        assert _parse_server_time(httpx.Headers({"date": "not-a-date"})) is None
+
+    def test_naive_date_header_is_treated_as_utc(self):
+        parsed = _parse_server_time(httpx.Headers({"date": "Tue, 03 Nov 2026 10:00:00"}))
+        assert parsed == datetime(2026, 11, 3, 10, 0, tzinfo=UTC)
+
+    def test_absent_date_header_is_none(self):
+        assert _parse_server_time(httpx.Headers({})) is None
 
 
 class TestModelBackendBaseHealthCheck:

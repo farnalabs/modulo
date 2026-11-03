@@ -1,24 +1,29 @@
 """Admin-only trigger event log endpoints."""
 
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.trigger import apply_trigger_event_cursor
+from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
+from modulo.db.soft_delete import include_soft_deleted
 
 _CODE_ADMIN_TRIGGERS_LIST_TRIGGER = "admin_triggers.list_trigger_events"
 
@@ -64,7 +69,29 @@ class TriggerEventItem(BaseModel):
     received_at: str | None = None
     created_at: str | None = None
     run_id: str | None = None
+    pipeline_id: str | None = None
+    pipeline_name: str | None = None
+    # True when the event's pipeline has been soft-deleted or archived. The
+    # event history is preserved either way (FAR-2226), but the UI must not
+    # offer a link into an editor the pipeline no longer has.
+    pipeline_deleted: bool = False
     error_detail: str | None = None
+
+
+class _TriggerEventRow(NamedTuple):
+    """One event plus its pipeline projection.
+
+    The joins are INNER joins: ``trigger_events.trigger_id`` and
+    ``triggers.pipeline_id`` are both non-nullable FKs, so neither side can be
+    NULL and the projection needs no nullable-name branching. The soft-delete
+    filters are opted out for this historical read (FAR-2226), so a
+    soft-deleted trigger or pipeline keeps its events reachable.
+    """
+
+    event: TriggerEvent
+    pipeline_id: uuid.UUID
+    pipeline_name: str
+    pipeline_deleted: bool
 
 
 class TriggerEventListResponse(BaseModel):
@@ -107,6 +134,19 @@ async def _run_trigger_event_query(query: Callable[[], Awaitable[Any]], fail_log
         ) from None
 
 
+def _event_query_scope(principal: TenantPrincipal) -> tuple[ColumnElement[bool], ...]:
+    """The org predicates shared by the page and total queries.
+
+    Kept in one place so the two statements can never drift apart — a
+    divergence is exactly what made ``total`` overstate the reachable rows.
+    """
+    return (
+        TriggerEvent.organisation_id == principal.organisation_id,
+        Trigger.organisation_id == principal.organisation_id,
+        Pipeline.organisation_id == principal.organisation_id,
+    )
+
+
 async def _fetch_trigger_event_rows(
     session: AsyncSession,
     principal: TenantPrincipal,
@@ -114,14 +154,17 @@ async def _fetch_trigger_event_rows(
     validation_result: str | None,
     cursor: str | None,
     limit: int,
-) -> list[TriggerEvent]:
+) -> list[_TriggerEventRow]:
     """Query trigger events with optional type/result filters and a keyset cursor."""
 
-    async def query() -> list[TriggerEvent]:
+    async def query() -> list[_TriggerEventRow]:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            q = select(TriggerEvent).where(
-                TriggerEvent.organisation_id == principal.organisation_id,
+            q = (
+                select(TriggerEvent)
+                .join(Trigger, Trigger.id == TriggerEvent.trigger_id)
+                .join(Pipeline, Pipeline.id == Trigger.pipeline_id)
+                .where(*_event_query_scope(principal))
             )
             if trigger_type:
                 q = q.where(TriggerEvent.trigger_type == trigger_type)
@@ -129,25 +172,53 @@ async def _fetch_trigger_event_rows(
                 q = q.where(TriggerEvent.validation_result == validation_result)
             if cursor:
                 q = apply_trigger_event_cursor(q, cursor)
-            q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
-            return list((await session.execute(q)).scalars().all())
+            # Historical read: an event must survive the soft-deletion of its
+            # trigger or pipeline, otherwise history silently disappears from
+            # the admin log (FAR-2226). The opt-out rides the statement through
+            # the generative calls below (verified: execution options survive).
+            q = include_soft_deleted(q)
+            # ``add_columns`` does not widen the statement's ReturnRows type in
+            # SQLAlchemy's stubs, so the projected row shape is asserted here
+            # instead of casting the statement to Any.
+            statement = cast(
+                "Select[TriggerEvent, uuid.UUID, str, bool]",
+                q.add_columns(
+                    Trigger.pipeline_id,
+                    Pipeline.name,
+                    sa.or_(Pipeline.deleted_at.is_not(None), Pipeline.archived_at.is_not(None)),
+                ),
+            )
+            statement = statement.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
+            rows = (await session.execute(statement)).all()
+            return [
+                _TriggerEventRow(event, pipeline_id, pipeline_name, deleted)
+                for event, pipeline_id, pipeline_name, deleted in rows
+            ]
 
     result: Any = await _run_trigger_event_query(query, "admin list_trigger_events failed")
-    rows: list[TriggerEvent] = cast("list[TriggerEvent]", result)
+    rows: list[_TriggerEventRow] = cast("list[_TriggerEventRow]", result)
     return rows
 
 
 async def _count_trigger_events_total(session: AsyncSession, principal: TenantPrincipal) -> int:
-    """Count every trigger event in the caller's org (independent of filters)."""
+    """Count every reachable trigger event in the caller's org (ignores filters).
+
+    "Reachable" must mean the same thing as the page query: the event's trigger
+    and pipeline still join, soft-deleted or not. Counting rows the page query
+    cannot return made ``showing X of N`` overstate N and left trailing pages
+    empty (FAR-2226).
+    """
 
     async def query() -> int:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            count_result = await session.execute(
-                select(func.count(TriggerEvent.id)).where(
-                    TriggerEvent.organisation_id == principal.organisation_id,
-                )
+            stmt = (
+                select(func.count(TriggerEvent.id))
+                .join(Trigger, Trigger.id == TriggerEvent.trigger_id)
+                .join(Pipeline, Pipeline.id == Trigger.pipeline_id)
+                .where(*_event_query_scope(principal))
             )
+            count_result = await session.execute(include_soft_deleted(stmt))
             return count_result.scalar() or 0
 
     result: Any = await _run_trigger_event_query(query, "admin list_trigger_events count query failed")
@@ -236,25 +307,28 @@ async def list_trigger_events(
 
     items = [
         TriggerEventItem(
-            id=str(e.id),
-            trigger_id=str(e.trigger_id),
-            trigger_type=e.trigger_type,
-            validation_result=e.validation_result,
-            received_at=e.received_at.isoformat() if e.received_at else None,
-            created_at=e.created_at.isoformat() if e.created_at else None,
-            run_id=str(e.run_id) if e.run_id else None,
-            error_detail=e.error_detail,
+            id=str(row.event.id),
+            trigger_id=str(row.event.trigger_id),
+            trigger_type=row.event.trigger_type,
+            validation_result=row.event.validation_result,
+            received_at=row.event.received_at.isoformat() if row.event.received_at else None,
+            created_at=row.event.created_at.isoformat() if row.event.created_at else None,
+            run_id=str(row.event.run_id) if row.event.run_id else None,
+            pipeline_id=str(row.pipeline_id) if row.pipeline_id else None,
+            pipeline_name=row.pipeline_name,
+            pipeline_deleted=bool(row.pipeline_deleted),
+            error_detail=row.event.error_detail,
         )
-        for e in rows
+        for row in rows
     ]
 
     next_cursor: str | None = None
     prev_cursor: str | None = None
     if has_more and rows:
-        last = rows[-1]
+        last = rows[-1].event
         next_cursor = f"{last.created_at.isoformat()}_{last.id}"
     if rows:
-        first = rows[0]
+        first = rows[0].event
         prev_cursor = f"{first.created_at.isoformat()}_{first.id}"
 
     total = await _count_trigger_events_total(session, principal)

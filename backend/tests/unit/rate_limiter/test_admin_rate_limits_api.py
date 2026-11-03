@@ -82,10 +82,10 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    original_redis_available = rl_mod.redis_available
+    # ``redis_available`` is reset by the package's autouse
+    # ``_isolate_module_state`` fixture, so no local save/restore is needed.
     rl_mod.redis_available = False
     yield TestClient(app)
-    rl_mod.redis_available = original_redis_available
     app.dependency_overrides.clear()
 
 
@@ -107,6 +107,14 @@ class TestGetRateLimits:
         assert data["rules"] == [_expected_rule_dict(r) for r in RateLimitMiddleware.RULES]
         assert data["rules"], "no rate limit rules returned"
         assert "/api/v1/runs" in [r["path_prefix"] for r in data["rules"]]
+
+    def test_get_reports_redis_mode_when_redis_is_available(self, client: TestClient, monkeypatch) -> None:
+        """``mode`` is the admin-visible health signal: with Redis configured the
+        route must report ``redis``, not the degraded ``in_memory``."""
+        monkeypatch.setattr("modulo.api.routes.admin_rate_limits.redis_available", True)
+        resp = client.get("/api/v1/admin/rate-limits")
+        assert resp.status_code == 200
+        assert resp.json()["mode"] == "redis"
 
 
 class TestUpdateRateLimits:
@@ -138,3 +146,17 @@ class TestUpdateRateLimits:
         resp = client.put("/api/v1/admin/rate-limits", json={"rules": []})
         assert resp.status_code == 400
         assert "At least one rate limit rule is required" in resp.json()["detail"]
+
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            {"path_prefix": "/api/v1/limited", "max_requests": 0, "window_s": 60},
+            {"path_prefix": "/api/v1/limited", "max_requests": 5, "window_s": 0},
+        ],
+        ids=["zero-max-requests", "zero-window"],
+    )
+    def test_put_rejects_non_positive_limits(self, client: TestClient, rule: dict[str, object]) -> None:
+        """A zero/negative budget would either block all traffic or divide the
+        window math — the request model rejects it with a 422."""
+        resp = client.put("/api/v1/admin/rate-limits", json={"rules": [rule]})
+        assert resp.status_code == 422

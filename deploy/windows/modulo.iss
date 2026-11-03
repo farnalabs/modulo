@@ -9,9 +9,11 @@
 ;   MODULO_URL  - local URL opened by the post-install checkbox
 ;
 ; Bundle contract:
-;   BUNDLE_DIR\modulo.exe
+;   BUNDLE_DIR\bin\modulo.exe
 ;   BUNDLE_DIR\modulo-runtime.json
-; The marker is part of the native launcher contract. It must be shipped by
+; The launcher lives in bin\ because it resolves the bundle root as the parent of
+; its own directory (runtime\, backend\, pg\, redis\ are siblings of bin\), so it
+; installs to {app}\bin\modulo.exe. The marker is part of the native launcher contract. It must be shipped by
 ; the real runtime build and is deliberately required at compile time.
 ;
 ; Build example:
@@ -50,9 +52,9 @@
 ; an ISPP expression - inline {#name} substitution only happens on ordinary
 ; lines. So the bundle checks below use BUNDLE_DIR as an expression rather than
 ; "{#BUNDLE_DIR}", which would test for a file literally named {#BUNDLE_DIR}.
-#ifexist BUNDLE_DIR + "\modulo.exe"
+#ifexist BUNDLE_DIR + "\bin\modulo.exe"
 #else
-  #error Required native runtime executable is missing from the bundle (BUNDLE_DIR\modulo.exe)
+  #error Required native runtime executable is missing from the bundle (BUNDLE_DIR\bin\modulo.exe)
 #endif
 #ifexist BUNDLE_DIR + "\modulo-runtime.json"
 #else
@@ -73,8 +75,17 @@ OutputBaseFilename=modulo-{#VERSION_NUM}-windows-{#BUNDLE_ARCH}
 Compression=lzma2/ultra64
 SolidCompression=yes
 PrivilegesRequired=admin
+; x64compatible was introduced by Inno Setup 6.3, which deprecated x64. The
+; release workflow still pins 6.2.2, which only knows x64, so the identifier is
+; version-gated rather than swapped: the newer compiler then emits no
+; deprecation warning and the older one still compiles.
+#if VER >= EncodeVer(6,3,0)
+ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed=x64compatible
+#else
 ArchitecturesInstallIn64BitMode=x64
 ArchitecturesAllowed=x64
+#endif
 DisableProgramGroupPage=yes
 DisableDirPage=auto
 DisableReadyMemo=yes
@@ -85,7 +96,7 @@ AppId={{7B7A9F3B-69DA-4EA0-9EB8-0D8F2D4B8A6B}}
 LicenseFile={#SourcePath}\..\..\LICENSE
 InfoBeforeFile={#SourcePath}\INSTALLER-INFO.txt
 Uninstallable=yes
-UninstallDisplayIcon={app}\modulo.exe
+UninstallDisplayIcon={app}\bin\modulo.exe
 UninstallDisplayName=Modulo {#VERSION_NUM}
 CloseApplications=yes
 RestartApplications=yes
@@ -100,17 +111,17 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; The compile-time contract above is the primary guard. These explicit entries
 ; keep the installer payload contract visible and prevent optional-source flags
 ; from turning a missing runtime into a partial installation.
-Source: "{#BUNDLE_DIR}\modulo.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BUNDLE_DIR}\bin\modulo.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "{#BUNDLE_DIR}\modulo-runtime.json"; DestDir: "{app}"; Flags: ignoreversion
 ; Everything else the bundle ships. skipifsourcedoesntexist is deliberate: the
 ; declared bundle contract is exactly the two files above, so a conforming
 ; bundle leaves this wildcard with nothing to copy, which Inno Setup otherwise
 ; rejects as "No files found matching ...".
-Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "modulo.exe,modulo-runtime.json"
+Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "bin\modulo.exe,modulo-runtime.json"
 
 [Icons]
-Name: "{group}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"
-Name: "{commondesktop}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Modulo"; Filename: "{app}\bin\modulo.exe"; WorkingDir: "{app}"
+Name: "{commondesktop}\Modulo"; Filename: "{app}\bin\modulo.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
 ; Service registration lives in [Code] (RegisterService) rather than here, so
@@ -119,8 +130,8 @@ Name: "{commondesktop}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}
 Filename: "{#MODULO_URL}"; Description: "Open Modulo in your browser"; Flags: postinstall shellexec unchecked; Check: ShouldOpenModulo
 
 [UninstallRun]
-Filename: "sc.exe"; Parameters: "stop Modulo"; StatusMsg: "Stopping Modulo service..."; Flags: runhidden waituntilterminated
-Filename: "sc.exe"; Parameters: "delete Modulo"; StatusMsg: "Removing Modulo service..."; Flags: runhidden waituntilterminated
+Filename: "sc.exe"; Parameters: "stop Modulo"; StatusMsg: "Stopping Modulo service..."; Flags: runhidden waituntilterminated; RunOnceId: "StopModuloService"
+Filename: "sc.exe"; Parameters: "delete Modulo"; StatusMsg: "Removing Modulo service..."; Flags: runhidden waituntilterminated; RunOnceId: "DeleteModuloService"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -146,6 +157,9 @@ var
   InstallCompleted: Boolean;
   UserCancelled: Boolean;
   SupportBlockShown: Boolean;
+  { Non-empty when the install completed but is known to be limited. The
+    support block reports it as a limitation instead of a fatal failure. }
+  KnownLimitation: string;
 
 function GetLogDir: string;
 begin
@@ -411,6 +425,26 @@ begin
     LogDisplay := LogFilePath
   else
     LogDisplay := '(no log was created - the installer failed before logging started)';
+  if KnownLimitation <> '' then
+  begin
+    { The install completed; this block records a known limitation rather than
+      a fatal failure. It is still written to the log and still shown when
+      Setup is interactive, because a limitation the operator never sees is a
+      silent failure. }
+    Msg := #13#10 +
+      '----- Modulo installed with a known limitation: reference ' + SupportRef + ' -----' + #13#10 +
+      '  Install target   : ' + Redact(TargetDesc) + #13#10 +
+      '  Limitation       : ' + Redact(KnownLimitation) + #13#10 +
+      '  Install log      : ' + Redact(LogDisplay) + #13#10 +
+      '  Support reference: ' + SupportRef + #13#10 + #13#10 +
+      'Modulo is installed. Start it from the Start Menu shortcut.' + #13#10 +
+      'The limitation above is expected in this build; there is nothing to fix.' + #13#10 +
+      '----- end of Modulo install support block -----' + #13#10;
+    WriteInstallLog(Msg);
+    if not WizardSilent then
+      MsgBox(Msg, mbInformation, MB_OK);
+    Exit;
+  end;
   Msg := #13#10 +
     '----- Modulo install failed: support reference ' + SupportRef + ' -----' + #13#10 +
     '  Install target   : ' + Redact(TargetDesc) + #13#10 +
@@ -442,19 +476,51 @@ begin
   WriteInstallLog('FAILURE: ' + Detail);
 end;
 
-{ Registers the Windows service and reports whether it actually started, because
-  the [Run] section cannot report a failing sc.exe. }
-function RegisterService: Boolean;
+{ Removes a registration that could not be started. A service registered with
+  start= auto that cannot start is retried by the Service Control Manager at
+  every boot and fails every time, so leaving it behind would be a worse state
+  than not registering it at all. The deletion is best-effort and loud: a
+  failure to remove it is recorded rather than ignored. }
+procedure RemoveServiceRegistration(const Because: string);
+var
+  ResultCode: Integer;
+begin
+  WriteInstallLog('sc.exe delete Modulo: ' + Because);
+  if not Exec('sc.exe', 'delete Modulo', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    WriteInstallLog('sc.exe delete could not be started; the service entry was left in place');
+    Exit;
+  end;
+  if ResultCode <> 0 then
+    WriteInstallLog('sc.exe delete failed with exit code ' + IntToStr(ResultCode) +
+      '; the service entry was left in place');
+end;
+
+{ Registers the Windows service. Returns True once the service has been
+  CREATED; ServiceStarted reports whether it was also started. The two
+  outcomes are separate because the launcher has no Windows service mode yet
+  (TODO(P3) in backend/src/modulo/launcher/entry.py), so a start failure is a
+  known limitation, not a reason to abandon a completed install. }
+function RegisterService(var ServiceStarted: Boolean): Boolean;
 var
   ResultCode: Integer;
   ServiceExe: string;
 begin
   Result := False;
-  ServiceExe := ExpandConstant('{app}') + '\modulo.exe';
+  ServiceStarted := False;
+  ServiceExe := ExpandConstant('{app}') + '\bin\modulo.exe';
 
   SetStage('service registration (create)');
+  { sc.exe accepts only `key= value` options. A bare `service` after the quoted
+    path is a positional token that sc.exe rejects with 1639
+    (ERROR_INVALID_COMMAND_LINE): it prints its usage block and creates
+    nothing. The launcher argument therefore belongs INSIDE the binPath value,
+    and the quotes around the executable must be escaped as \" so the SCM
+    stores ImagePath as `"<path>" service`. The quotes matter: without them a
+    path containing a space is ambiguous to the SCM and becomes a
+    local-privilege-escalation shape. }
   if not Exec('sc.exe',
-    'create Modulo binPath= "' + ServiceExe + ' service" start= auto',
+    'create Modulo binPath= "\"' + ServiceExe + '\" service" start= auto',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
     WriteInstallLog('sc.exe create could not be started');
@@ -466,19 +532,43 @@ begin
     Exit;
   end;
 
+  { The registration exists from here on, so report it even when the start
+    below fails - the caller tells the two outcomes apart. }
+  Result := True;
+
   SetStage('service registration (start)');
   if not Exec('sc.exe', 'start Modulo', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
     WriteInstallLog('sc.exe start could not be started');
+    RemoveServiceRegistration('the service could not be started');
     Exit;
   end;
   if ResultCode <> 0 then
   begin
     WriteInstallLog('sc.exe start failed with exit code ' + IntToStr(ResultCode));
+    RemoveServiceRegistration('the service could not be started');
     Exit;
   end;
 
-  Result := True;
+  ServiceStarted := True;
+end;
+
+{ Reports the deferred Windows service seam. The service is registered but
+  `modulo.exe service` is not implemented yet, so it cannot start. That is
+  LOUD - a stage, a log line, MarkFailure and the support block - but it does
+  NOT abort: everything the operator can use today (the files and the Start
+  Menu shortcut) is already in place, and failing an install over an
+  unimplemented P3 feature would be worse than a completed install with a
+  clearly stated limitation. }
+procedure ReportServiceModeDeferred;
+begin
+  KnownLimitation := 'Windows service mode is not available yet in this build, so Modulo ' +
+    'was installed but is not registered to start as a Windows service. ' +
+    'Start Modulo from the Start Menu shortcut.';
+  SetStage('post-install (service start deferred)');
+  WriteInstallLog('LIMITATION: ' + KnownLimitation);
+  MarkFailure('post-install (service start)', KnownLimitation);
+  PrintSupportBlock;
 end;
 
 function InitializeSetup: Boolean;
@@ -493,6 +583,7 @@ begin
   InstallCompleted := False;
   UserCancelled := False;
   SupportBlockShown := False;
+  KnownLimitation := '';
 
   if EnsureLogDir then
   begin
@@ -520,6 +611,8 @@ begin
   begin
     if not UserCancelled then
       PrintSupportBlock;
+    if InstallCompleted then
+      WriteInstallLog('Installer finished with a known limitation (see the support block above).');
   end
   else if InstallCompleted then
     WriteInstallLog('Installer finished successfully.')
@@ -554,19 +647,26 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ServiceStarted: Boolean;
 begin
   if CurStep = ssInstall then
     SetStage('installing files')
   else if CurStep = ssPostInstall then
   begin
     SetStage('post-install (service registration)');
-    if not RegisterService then
+    if not RegisterService(ServiceStarted) then
     begin
       MarkFailure('post-install (service registration)',
-        'the Modulo service could not be registered or started');
+        'the Modulo service could not be registered');
       PrintSupportBlock;
       Abort;
     end;
+    { Registration succeeded but the service could not be started: the launcher
+      has no Windows service mode yet. Report it loudly and carry on - a
+      deferred feature must not throw away a completed install. }
+    if not ServiceStarted then
+      ReportServiceModeDeferred;
   end
   else if CurStep = ssDone then
   begin
