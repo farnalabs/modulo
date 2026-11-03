@@ -242,6 +242,8 @@ jobs:
       - name: Checkout repository (for the gate scripts)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.pr-details.outputs.ready == 'true'
+        with:
+          persist-credentials: false
 
       # Dedup: do not re-review a head SHA the reviewer already reviewed.
       # FAR-2111: this runs on EVERY automatic path, not just workflow_run. The

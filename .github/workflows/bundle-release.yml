@@ -55,6 +55,7 @@ jobs:
           # happens to be: a recut after main moved must publish artefacts that
           # match the tagged/validated RC.
           ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Assert bundle-versions.env majors match docker-compose.yml tags
         run: |
@@ -105,6 +106,7 @@ jobs:
         with:
           # Build from the RC commit (see version-parity above).
           ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Resolve pinned versions (scripts/bundle-versions.env)
         run: |
