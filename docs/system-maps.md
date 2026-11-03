@@ -789,7 +789,7 @@ System Maps is a first-class operational view integrated into the Dashboard.
 1. **Navigation Entry:** System Maps is positioned in the primary navigation under the **BUILD** group as a tab/section within the existing **Dashboard** page at `/dashboard#system-maps`. The standalone `/system-maps` route is not used.
 2. **Default Home View:** When an organization has a published System Map marked as default (`is_default = TRUE`), the Dashboard (`/dashboard`) automatically displays the **System Overview** tab as the active section instead of the generic runs list.
 3. **Empty / First-Run State:** If no System Map has been published, the Dashboard's System Overview tab renders a guided onboarding layout offering four options:
-   - **Discover my system** — automatically scan existing pipelines, connectors, triggers, folders, and improvement-loop pipelines to produce a draft System Map for review, correction, and publication.
+   - **Discover my system** – automatically scan existing pipelines, connectors, triggers, folders, and improvement-loop pipelines to produce a draft System Map for review, correction, and publication.
    - Select an opinionated system template (e.g. "Agentic PR Delivery with Autonomous Review").
    - Import an existing System Map specification via YAML or JSON.
    - Continue to the raw Pipelines management view.
@@ -799,11 +799,11 @@ System Maps is a first-class operational view integrated into the Dashboard.
 The **Discover my system** flow scans the organization's existing Modulo resources to generate an initial draft System Map:
 
 1. **Scan Sources:**
-   - **Pipelines** — all active pipelines with their node types, triggers, and connector bindings.
-   - **Connectors** — configured connector instances and their operational status.
-   - **Triggers** — webhook, cron, polling, and agent-signal triggers with their target pipelines.
-   - **Folders** — pipeline folder hierarchy for logical grouping.
-   - **Improvement-loop pipelines** — pipelines tagged or configured as improvement loops (via `improvement_loop` node type or metadata).
+   - **Pipelines** – all active pipelines with their node types, triggers, and connector bindings.
+   - **Connectors** – configured connector instances and their operational status.
+   - **Triggers** – webhook, cron, polling, and agent-signal triggers with their target pipelines.
+   - **Folders** – pipeline folder hierarchy for logical grouping.
+   - **Improvement-loop pipelines** – pipelines tagged or configured as improvement loops (via `improvement_loop` node type or metadata).
 
 2. **Inference Rules:**
    - Each pipeline becomes a `pipeline` node.
@@ -1014,7 +1014,7 @@ Several underlying technical components remain sound and will be retained.
   - Attribution column additions to `run_daily_facts`.
   - Read-only System Overview **tab within the Dashboard** displaying published system topography.
   - Node Inspector showing aggregated throughput, latency, and failure metrics derived from `run_daily_facts`.
-  - **Empty-state onboarding with "Discover my system" flow** — scans pipelines, connectors, triggers, folders, and improvement-loop pipelines to generate a draft System Map for review and publication.
+  - **Empty-state onboarding with "Discover my system" flow** – scans pipelines, connectors, triggers, folders, and improvement-loop pipelines to generate a draft System Map for review and publication.
 - **Exit Criteria:** A predefined system map renders live operational metrics without modifying running pipelines; a new organization can discover, review, and publish their first System Map (including improvement loops) from the Dashboard.
 
 ### Beta 2: Visual Authoring, Revision Lifecycle & Draft/Publish
@@ -1024,7 +1024,7 @@ Several underlying technical components remain sound and will be retained.
   - Graph validation engine enforcing DAG delivery flow and control constraints.
   - Draft, publish, diff, and rollback revision workflow.
   - `modulo apply` declarative YAML support for System Maps.
-  - **"Discover my system" re-scan action** — re-run the automatic topology discovery on an existing draft to incorporate newly created pipelines, connectors, or folders.
+  - **"Discover my system" re-scan action** – re-run the automatic topology discovery on an existing draft to incorporate newly created pipelines, connectors, or folders.
 - **Exit Criteria:** Platform engineers can create, validate, publish, and update custom system maps via UI and CLI; automatic discovery can be re-run on drafts to stay current.
 
 ### Beta 3: Improvement Loop Sidecars and Autonomous Feedback Metrics
@@ -1066,7 +1066,7 @@ Several underlying technical components remain sound and will be retained.
 
 ### 11.3 Open Architecture & Product Decisions
 
-#### Decision 1: Default Landing Page Behavior — RESOLVED
+#### Decision 1: Default Landing Page Behavior – RESOLVED
 - **Resolution:** System Maps is integrated as a **System Overview tab within the existing Dashboard page** (`/dashboard#system-maps`), not a separate route. When a default map exists, the Dashboard activates the System Overview tab by default. Individual users can toggle their preferred Dashboard default tab (`System Overview` vs `Runs List`) in account preferences.
 - **Trade-offs:**
   - Integrating into Dashboard preserves the existing navigation structure and avoids a standalone route.
@@ -1084,7 +1084,7 @@ Several underlying technical components remain sound and will be retained.
   - **Enterprise Tier:** Declarative GitOps sync (`modulo apply`), compliance autonomy attestation export, and cross-organization boundaries.
 - **Reasoning:** This allows any self-hoster to model and observe their delivery pipeline for free, while charging for multi-team scale, long-term trend retention, and automated governance controls.
 
-#### Decision 3: Automatic Topology Discovery — RESOLVED
+#### Decision 3: Automatic Topology Discovery – RESOLVED
 - **Resolution:** Automatic topology discovery is **adopted** as the "Discover my system" flow. It scans existing pipelines, connectors, triggers, folders, and improvement-loop pipelines to produce a draft System Map. The user reviews, corrects, and publishes the draft. Available in the empty-state onboarding (Beta 1) and as a re-scan action on drafts (Beta 2).
 - **Trade-offs:**
   - Reduces initial setup friction by generating a meaningful starting point from real resources.
