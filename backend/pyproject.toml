@@ -679,7 +679,7 @@ dev = [
     # pytest 9.2 renamed FixtureManager._arg2fixturedefs, which the pinned
     # pytest-bdd commit below still reads; hold pytest <9.2 until a
     # pytest-bdd release supports the rename.
-    "pytest>=9.1.1,<9.2.0",
+    "pytest>=9.2.0,<9.3.0",
     "pytest-asyncio>=1.4.0",
     # Pinned to the pytest-9.1 fix for the _register_fixture(nodeid=...) deprecation
     # (pytest-dev/pytest-bdd#823): no PyPI release carries it yet (8.1.0 is latest).
