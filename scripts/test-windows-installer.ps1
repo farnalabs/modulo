@@ -1,113 +1,324 @@
+#Requires -Version 5.1
 <#
 .SYNOPSIS
-Validate the Windows Inno Setup installer contract locally.
+Gate deploy/windows/modulo.iss on a real Inno Setup compile.
+
 .DESCRIPTION
-Runs two compile checks against temporary fixture bundles: a bundle missing
-required runtime files must fail, while a minimal contract fixture containing
-modulo.exe and modulo-runtime.json may compile. The fixture and installer are
-never written to the repository.
-Run this on Windows with Inno Setup 6.2+ installed.
+FAR-2319: the Windows installer source was reviewed by humans who cannot run
+the Inno Setup compiler in their heads, and scripts/test-windows-installer.ps1
+existed but no CI job invoked it. This script makes the compiler the reviewer.
+
+It runs three checks against temporary fixture bundles (nothing is written into
+the repository):
+
+  1. FAIL-CLOSED PRESENCE: an empty bundle must NOT compile. This preserves the
+     installer's existing fail-closed bundle-presence contract, whatever the
+     current bundle layout is.
+  2. POSITIVE: the real installer source must compile against a minimal,
+     structurally-valid fixture bundle, and must produce an installer artifact.
+     It then asserts the compiled source's service Parameters double-quote the
+     service executable and contain no backslash-escaped quotes (Inno Setup
+     rejects \" in parameter values - only "" is valid).
+  3. PROVE-THE-FIX (negative): a copy of the same source whose service
+     Parameters use backslash-escaped quotes MUST FAIL to compile. Without this
+     the gate cannot discriminate between a valid installer and a broken one.
+
+This is a COMPILE-LEVEL gate only. It never manufactures a runnable Modulo
+product bundle and never claims a bundle exists. The installer still refuses to
+compile unless its required bundle inputs are present.
+
+The script fails closed: if the Inno Setup command-line compiler cannot be
+found it throws and never skips or passes vacuously.
+
+Run from anywhere; paths resolve from the repository root. Set ISCC_PATH to
+override compiler discovery. Inno Setup 6 and 7 under Program Files are both
+recognised.
 #>
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)]
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = "0.3.323",
+    [string]$Version = '0.0.0',
 
     [Parameter(Mandatory = $false)]
-    [ValidateSet("amd64")]
-    [string]$Arch = "amd64"
+    [ValidateSet('amd64')]
+    [string]$Arch = 'amd64',
+
+    # Override the installer source. CI ALWAYS uses the default (the real
+    # deploy/windows/modulo.iss). The override exists only so the gate's own
+    # positive/negative discrimination can be proven against a corrected copy.
+    [Parameter(Mandatory = $false)]
+    [string]$IssPath
 )
 
-$ErrorActionPreference = "Stop"
-$repoRoot = (Get-Location).Path
-$issPath = Join-Path $repoRoot "deploy\windows\modulo.iss"
-if (-not (Test-Path -LiteralPath $issPath -PathType Leaf)) {
-    throw "Cannot find deploy\windows\modulo.iss. Run from repo root."
+$ErrorActionPreference = 'Stop'
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+$defaultIssPath = Join-Path $repoRoot 'deploy\windows\modulo.iss'
+$selfTestMode = $false
+if ([string]::IsNullOrWhiteSpace($IssPath)) {
+    $IssPath = $defaultIssPath
+}
+else {
+    $IssPath = (Resolve-Path -LiteralPath $IssPath).Path
+    $selfTestMode = $IssPath -ne (Resolve-Path -LiteralPath $defaultIssPath).Path
+}
+if (-not (Test-Path -LiteralPath $IssPath -PathType Leaf)) {
+    throw "Installer source not found: $IssPath"
 }
 
-$isccCandidates = @(
-    (Join-Path ${env:ProgramFiles} "Inno Setup 6\ISCC.exe"),
-    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe")
-)
-$isccPath = $isccCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-if (-not $isccPath) {
-    throw "Inno Setup 6 not found. Install from https://jrsoftware.org/isdl.php"
+function Resolve-Iscc {
+    $override = $env:ISCC_PATH
+    if (-not [string]::IsNullOrWhiteSpace($override)) {
+        if (-not (Test-Path -LiteralPath $override -PathType Leaf)) {
+            throw "ISCC_PATH is set to '$override' but no file exists there. Failing closed."
+        }
+        return (Resolve-Path -LiteralPath $override).Path
+    }
+
+    $searchRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $candidates = foreach ($major in @('7', '6')) {
+        foreach ($root in $searchRoots) {
+            Join-Path $root "Inno Setup $major\ISCC.exe"
+        }
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+
+    throw (
+        'Inno Setup command-line compiler (ISCC.exe) was not found under ' +
+        '"Inno Setup 7" or "Inno Setup 6" in Program Files. Install Inno Setup ' +
+        '6.2+ (or 7) or set ISCC_PATH. This gate fails closed: it never skips ' +
+        'and never passes without a real compile.'
+    )
 }
 
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("modulo-installer-contract-" + [guid]::NewGuid().ToString("N"))
-$missingExeBundle = Join-Path $tempRoot "missing-exe"
-$missingMarkerBundle = Join-Path $tempRoot "missing-marker"
-$validBundle = Join-Path $tempRoot "valid"
-$outputDir = Join-Path $tempRoot "output"
-New-Item -ItemType Directory -Path $missingExeBundle, $missingMarkerBundle, $validBundle, $outputDir | Out-Null
+function Write-Utf8NoBom {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Content
+    )
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $encoding)
+}
 
-[System.IO.File]::WriteAllText((Join-Path $missingExeBundle "modulo-runtime.json"), '{"contract":"native-windows-v1"}')
-[System.IO.File]::WriteAllText((Join-Path $missingMarkerBundle "modulo.exe"), "placeholder")
+# A copy of the installer source in a throwaway tree that mirrors the relative
+# paths it uses ({#SourcePath}\..\..\LICENSE, {#SourcePath}\INSTALLER-INFO.txt).
+function New-IssMirror {
+    param(
+        [Parameter(Mandatory = $true)][string]$DestinationRoot,
+        [Parameter(Mandatory = $true)][string]$SourceIss
+    )
+    $mirrorWindows = Join-Path $DestinationRoot 'deploy\windows'
+    New-Item -ItemType Directory -Path $mirrorWindows -Force | Out-Null
+
+    $licensePath = Join-Path $repoRoot 'LICENSE'
+    if (-not (Test-Path -LiteralPath $licensePath -PathType Leaf)) {
+        throw "Cannot find LICENSE at $licensePath (required by LicenseFile={#SourcePath}\..\..\LICENSE)."
+    }
+    Copy-Item -LiteralPath $licensePath -Destination (Join-Path $DestinationRoot 'LICENSE')
+
+    $repoWindowsDir = Join-Path $repoRoot 'deploy\windows'
+    $supportFiles = @()
+    if (Test-Path -LiteralPath $repoWindowsDir -PathType Container) {
+        $supportFiles += Get-ChildItem -LiteralPath $repoWindowsDir -File
+    }
+    $sourceDir = Split-Path -Parent $SourceIss
+    if ((Resolve-Path -LiteralPath $sourceDir).Path -ne (Resolve-Path -LiteralPath $repoWindowsDir).Path) {
+        $supportFiles += Get-ChildItem -LiteralPath $sourceDir -File
+    }
+    foreach ($file in $supportFiles) {
+        if ($file.Extension -eq '.iss') {
+            continue
+        }
+        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $mirrorWindows $file.Name) -Force
+    }
+
+    return $mirrorWindows
+}
 
 function Invoke-Iscc {
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$bundleDir,
-        [Parameter(Mandatory = $true)]
-        [string]$outputName
+        [Parameter(Mandatory = $true)][string]$IssFile,
+        [Parameter(Mandatory = $true)][string]$BundleDir,
+        [Parameter(Mandatory = $true)][string]$OutputName
     )
-
     $arguments = @(
-        "/Qp",
-        "/O$outputDir",
-        "/F$outputName",
+        '/Qp',
+        "/O$script:outputDir",
+        "/F$OutputName",
         "/DVERSION_NUM=$Version",
         "/DBUNDLE_ARCH=$Arch",
-        "/DBUNDLE_DIR=$bundleDir",
-        "/DMODULO_URL=http://127.0.0.1:8000",
-        $issPath
+        "/DBUNDLE_DIR=$BundleDir",
+        '/DMODULO_URL=http://127.0.0.1:8000',
+        $IssFile
     )
-    $compilerOutput = & $isccPath @arguments 2>&1
+    # Windows PowerShell 5.1 turns a native command's redirected stderr into a
+    # terminating error while $ErrorActionPreference is 'Stop', so relax it for
+    # the compiler invocation only. The compiler's exit code is the contract.
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $compilerOutput = & $script:isccPath @arguments 2>&1
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
     $exitCode = [int]$LASTEXITCODE
-    $compilerOutput | ForEach-Object { Write-Information -MessageData $_ -InformationAction Continue }
+    $script:lastCompilerOutput = @($compilerOutput | ForEach-Object { [string]$_ })
+    # Host stream, not the success stream: the only value this function returns
+    # is the compiler exit code.
+    $script:lastCompilerOutput | ForEach-Object { Write-Host $_ }
     return $exitCode
 }
 
+$script:isccPath = Resolve-Iscc
+$script:outputDir = $null
+$script:lastCompilerOutput = @()
+$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('modulo-inno-compile-' + [guid]::NewGuid().ToString('N'))
+$emptyBundle = Join-Path $tempRoot 'empty-bundle'
+$validBundle = Join-Path $tempRoot 'valid-bundle'
+$outputDir = Join-Path $tempRoot 'output'
+$mirrorRoot = Join-Path $tempRoot 'mirror'
+
 try {
-    Write-Output "=== Modulo Windows Installer Contract Test ==="
-    Write-Output "Inno Setup: $isccPath"
-    Write-Output "Installer source: $issPath"
+    New-Item -ItemType Directory -Path $emptyBundle, $validBundle, $outputDir, $mirrorRoot -Force | Out-Null
+    $script:outputDir = $outputDir
 
-    Write-Output "Checking that a bundle missing modulo.exe fails compilation..."
-    $missingExeExit = Invoke-Iscc $missingExeBundle "missing-exe-contract"
-    Write-Output "Missing modulo.exe compile exit code: $missingExeExit"
-    if ($missingExeExit -eq 0) {
-        throw "Installer compiled despite missing modulo.exe."
+    # A structurally-valid fixture bundle. The installer does not validate PE
+    # semantics, so placeholders are honest here: this is a compile-level gate,
+    # not a runtime bundle. The fixture carries the union of the native bundle
+    # inputs the installer source has required across the current layout
+    # transition, plus one unexcluded payload file so the [Files] wildcard
+    # always has something to copy.
+    $itemFiles = @(
+        'modulo.exe',
+        'modulo-runtime.json',
+        'launcher',
+        'RELEASE_MANIFEST.json',
+        'RELEASE_MANIFEST.json.sig'
+    )
+    foreach ($name in $itemFiles) {
+        Write-Utf8NoBom -Path (Join-Path $validBundle $name) -Content 'compile-gate fixture (not a runnable runtime)'
+    }
+    $payloadDirs = @('runtime', 'pg', 'redis', 'bin', 'frontend-dist', 'backend\.venv')
+    foreach ($dir in $payloadDirs) {
+        $full = Join-Path $validBundle $dir
+        New-Item -ItemType Directory -Path $full -Force | Out-Null
+        Write-Utf8NoBom -Path (Join-Path $full 'fixture.txt') -Content 'compile-gate fixture'
+    }
+    Write-Utf8NoBom -Path (Join-Path $validBundle 'payload.txt') -Content 'compile-gate fixture'
+
+    Write-Output '=== Modulo Windows installer compile gate ==='
+    Write-Output "Inno Setup: $script:isccPath"
+    Write-Output "Installer source: $IssPath"
+    Write-Output "Fixture bundle: $validBundle"
+    if ($selfTestMode) {
+        Write-Output "SELF-TEST MODE: compiling '$IssPath' instead of the repository installer source."
     }
 
-    Write-Output "Checking that a bundle missing modulo-runtime.json fails compilation..."
-    $missingMarkerExit = Invoke-Iscc $missingMarkerBundle "missing-marker-contract"
-    Write-Output "Missing modulo-runtime.json compile exit code: $missingMarkerExit"
-    if ($missingMarkerExit -eq 0) {
-        throw "Installer compiled despite missing modulo-runtime.json."
+    # 1. Fail-closed presence contract.
+    Write-Output 'Asserting an empty bundle fails closed...'
+    $emptyExit = Invoke-Iscc -IssFile $IssPath -BundleDir $emptyBundle -OutputName 'empty-bundle'
+    Write-Output "Empty bundle compile exit code: $emptyExit"
+    if ($emptyExit -eq 0) {
+        throw 'Installer compiled against an empty bundle; the fail-closed bundle-presence contract is broken.'
     }
 
-    # Inno Setup validates source presence, not PE semantics. This deliberately
-    # minimal fixture proves the installer contract without pretending to be a
-    # runnable native runtime.
-    [System.IO.File]::WriteAllText((Join-Path $validBundle "modulo.exe"), "placeholder")
-    [System.IO.File]::WriteAllText((Join-Path $validBundle "modulo-runtime.json"), '{"contract":"native-windows-v1"}')
+    # 2. Positive: the real installer source must compile.
+    Write-Output 'Compiling the installer against a structurally-valid fixture bundle...'
+    $validExit = Invoke-Iscc -IssFile $IssPath -BundleDir $validBundle -OutputName 'valid-contract'
+    Write-Output "Valid bundle compile exit code: $validExit"
+    if ($validExit -ne 0) {
+        $hint = ''
+        if (($script:lastCompilerOutput -join "`n") -match 'is missing: \{\#') {
+            # Verified on Inno Setup 6.7.4 and 7.1.1: ISPP does not expand an
+            # inline directive ({#...}) inside a preprocessor directive, so a
+            # guard written #ifexist "{#BUNDLE_DIR}\file" compares against the
+            # literal text and can never match - the compiler then reports a
+            # present file as missing. Name the real cause instead of leaving
+            # the misleading compiler message alone.
+            $hint = (
+                ' The compiler reported a required bundle input as missing while ' +
+                'printing a literal "{#...}" macro. ISPP does not expand inline ' +
+                'directives inside preprocessor directives, so a guard written ' +
+                '#ifexist "{#BUNDLE_DIR}\file" can never match. Use the expression ' +
+                'form instead: #ifexist BUNDLE_DIR + "\file".'
+            )
+        }
+        throw ('Installer source failed to compile against a structurally-valid fixture bundle.' + $hint)
+    }
+    $artifact = Join-Path $outputDir 'valid-contract.exe'
+    if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+        throw "Compile reported success but produced no installer artifact at $artifact."
+    }
+    Write-Output "Installer artifact: $artifact"
 
-    Write-Output "Checking that the minimal declared contract compiles..."
-    $validExit = Invoke-Iscc $validBundle "valid-contract"
-    Write-Output "Valid contract compile exit code: $validExit"
-    $installerPath = Join-Path $outputDir "valid-contract.exe"
-    if ($validExit -ne 0 -or -not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
-        throw "Installer failed to compile the minimal declared contract."
+    # 3. Service Parameters must use doubled quotes.
+    $issText = [System.IO.File]::ReadAllText($IssPath, [System.Text.Encoding]::UTF8)
+    $sourceLines = @($issText -split "\r?\n")
+    $serviceIndex = -1
+    for ($i = 0; $i -lt $sourceLines.Count; $i++) {
+        $line = $sourceLines[$i]
+        if ($line -match '(?i)^\s*Filename:\s*"sc\.exe"' -and
+            $line -match '(?i)\bParameters:' -and
+            $line -match '(?i)\bcreate\s+Modulo\b') {
+            $serviceIndex = $i
+            break
+        }
+    }
+    if ($serviceIndex -lt 0) {
+        throw 'Installer source has no [Run] "sc.exe" "create Modulo" entry to validate.'
+    }
+    $serviceLine = $sourceLines[$serviceIndex]
+    Write-Output "Service Parameters: $serviceLine"
+    if ($serviceLine -notmatch 'binPath=\s+""[^"]+""') {
+        throw (
+            'Service Parameters must double-quote the service executable ' +
+            '(binPath= ""...""). Inno Setup rejects single-level quoting for a ' +
+            'path containing spaces.'
+        )
+    }
+    if ($serviceLine.Contains('\"')) {
+        throw (
+            'Service Parameters contain backslash-escaped quotes (\"). Inno ' +
+            'Setup rejects them with "Mismatched or misplaced quotes on ' +
+            'parameter Parameters"; use doubled quotes ("").'
+        )
     }
 
-    Write-Output "PASS: missing required runtime files fail closed."
-    Write-Output "PASS: declared marker/executable contract compiles without committing a fake bundle."
+    # 4. Prove-the-fix: the malformed form must NOT compile.
+    $malformedLines = [string[]]$sourceLines.Clone()
+    $malformedLines[$serviceIndex] = $serviceLine.Replace('""', '\"')
+    if ($malformedLines[$serviceIndex] -eq $serviceLine) {
+        throw 'Could not construct the malformed Parameters fixture; the gate cannot prove it discriminates.'
+    }
+    $mirrorWindows = New-IssMirror -DestinationRoot $mirrorRoot -SourceIss $IssPath
+    $malformedIss = Join-Path $mirrorWindows 'malformed-parameters.iss'
+    Write-Utf8NoBom -Path $malformedIss -Content ($malformedLines -join "`r`n")
+
+    Write-Output 'Compiling a deliberately malformed installer source (backslash-escaped Parameters)...'
+    $malformedExit = Invoke-Iscc -IssFile $malformedIss -BundleDir $validBundle -OutputName 'malformed-parameters'
+    Write-Output "Malformed Parameters compile exit code: $malformedExit"
+    if ($malformedExit -eq 0) {
+        throw (
+            'The gate cannot discriminate: an installer whose service Parameters ' +
+            'use backslash-escaped quotes compiled successfully.'
+        )
+    }
+    Write-Output 'Compiler rejected the malformed Parameters as expected.'
+
+    Write-Output 'PASS: empty bundle fails closed.'
+    Write-Output 'PASS: the installer source compiles and produces an artifact.'
+    Write-Output 'PASS: service Parameters double-quote the executable and contain no backslash-escaped quotes.'
+    Write-Output 'PASS: a malformed Parameters value fails to compile (gate discriminates).'
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot) {
-        Remove-Item -LiteralPath $tempRoot -Recurse -Force
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

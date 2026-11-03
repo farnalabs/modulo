@@ -1,0 +1,101 @@
+# FAR-2319: gate Windows installer changes on a real Inno Setup compile.
+#
+# deploy/windows/modulo.iss had five separate review rounds each catch a
+# genuine, compiler-level defect (most recently a service Parameters value
+# using backslash-escaped quotes, which Inno Setup rejects). Every review pass
+# was a human reading the file and guessing at compiler semantics.
+# scripts/test-windows-installer.ps1 already encoded the compile checks, but no
+# CI job invoked it, so the defects survived. This job makes the compiler the
+# reviewer.
+#
+# It is a COMPILE-LEVEL gate only: it never manufactures a runnable Modulo
+# product bundle. The installer's own fail-closed bundle-presence contract is
+# still authoritative and is exercised (an empty bundle must not compile).
+#
+# Fails closed: if Inno Setup cannot be provisioned or its pinned hash does not
+# match, the job fails. It never skips and never passes without a real compile.
+
+name: "Windows: Installer compile gate (Inno Setup)"
+
+on:
+  pull_request:
+    paths:
+      - "deploy/windows/**"
+      - "scripts/test-windows-installer.ps1"
+      - ".github/workflows/windows-installer-compile.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "deploy/windows/**"
+      - "scripts/test-windows-installer.ps1"
+      - ".github/workflows/windows-installer-compile.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: windows-installer-compile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Compile deploy/windows/modulo.iss
+    runs-on: windows-latest
+    timeout-minutes: 20
+    # Job-level permissions, never workflow-level (Sonar S8233/S8264).
+    permissions:
+      contents: read
+    env:
+      # Pinned Inno Setup release, verified against its own sha256 below.
+      # Bump INNO_SETUP_VERSION and INNO_SETUP_SHA256 together, from a fresh
+      # official download of the exact version.
+      INNO_SETUP_VERSION: "6.7.4"
+      INNO_SETUP_SHA256: "a549929319f9120716677c685535ca4671e4b937b5fdc87e2585f32d8eb30e8c"
+      INNO_SETUP_URL: "https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Inno Setup (pinned, sha256-verified)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP "innosetup-$env:INNO_SETUP_VERSION.exe"
+          Write-Host "Downloading Inno Setup $env:INNO_SETUP_VERSION from $env:INNO_SETUP_URL"
+          Invoke-WebRequest -Uri $env:INNO_SETUP_URL -OutFile $installer -UseBasicParsing
+
+          $actual = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:INNO_SETUP_SHA256) {
+            throw "Inno Setup download hash mismatch: expected $env:INNO_SETUP_SHA256, got $actual. Failing closed."
+          }
+          Write-Host "Verified Inno Setup installer sha256: $actual"
+
+          # Portable extraction into the runner's temp directory: deterministic,
+          # no Program Files/UAC dependency, and it puts ISCC.exe exactly where
+          # the next step expects it.
+          $installDir = Join-Path $env:RUNNER_TEMP "inno-setup-$env:INNO_SETUP_VERSION"
+          $arguments = @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-',
+            '/CURRENTUSER', '/PORTABLE=1', ('/DIR="{0}"' -f $installDir)
+          )
+          $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Inno Setup extraction exited $($process.ExitCode). Failing closed."
+          }
+
+          $iscc = Join-Path $installDir 'ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
+            throw "ISCC.exe was not provisioned at $iscc. The compile gate cannot run and must not pass vacuously."
+          }
+          "ISCC_PATH=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Provisioned Inno Setup compiler: $iscc"
+
+      - name: Compile the installer and prove the gate discriminates
+        shell: pwsh
+        run: |
+          # The script fails closed: it throws when the compiler is missing,
+          # when an empty bundle compiles, when the real source fails to
+          # compile, when the service Parameters do not use doubled quotes, or
+          # when the deliberately malformed source compiles anyway.
+          & ./scripts/test-windows-installer.ps1 -Version 0.0.0
