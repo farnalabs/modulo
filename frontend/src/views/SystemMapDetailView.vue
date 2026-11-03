@@ -187,6 +187,7 @@ async function loadData(): Promise<void> {
 
 async function selectRevision(revisionId: string): Promise<void> {
   if (!activeMap.value) return
+  actionError.value = null
   try {
     await store.loadRevision(activeMap.value.id, revisionId)
   } catch (err) {
