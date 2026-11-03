@@ -116,6 +116,8 @@ jobs:
     steps:
       - name: Checkout (scripts/install.sh must exist for the from-file install)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Fetch the artifact to smoke + enforce the integrity gates
         env:
@@ -383,6 +385,8 @@ jobs:
     steps:
       - name: Checkout (scripts/install.sh must exist for the from-file install)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # FAR-1736 skip-with-clear-reason. Scheduled-only (an explicit
       # canary_version is a human asking for a specific artifact - never
