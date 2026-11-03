@@ -281,6 +281,8 @@ _MSG_EVAL_DEF_CREATE_FAILED = "create_eval_definition failed"
 _MSG_EVAL_DEF_UPDATE_FAILED = "update_eval_definition failed"
 _MSG_EVAL_DEF_DELETE_FAILED = "delete_eval_definition failed"
 _MSG_DB_OPERATION_FAILED = "Database operation failed. Please try again."
+_MSG_DISCOVER_SYSTEM_MAP_FAILED = "discover_system_map failed"
+_SYSTEM_MAP_DISCOVERY_SCOPE = "mcp.discover_system_map"
 # FAR-1825: SQLSTATE 55P03 from a bounded row-lock wait is a busy-row CONFLICT,
 # not an outage: the engine is healthy and re-issuing once the other change
 # commits may succeed. The message is imported from ``db_error_handling`` (the
@@ -10929,7 +10931,7 @@ async def discover_system_map(
     except StarletteHTTPException as exc:
         return _system_maps_http_error_payload(exc)
     except ProgrammingError:
-        _log.exception("discover_system_map failed")
+        _log.exception(_MSG_DISCOVER_SYSTEM_MAP_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError as exc:
         # Classify the DB failure HERE (the REST wrapper was bypassed above):
@@ -10939,13 +10941,13 @@ async def discover_system_map(
         # anything else -> database_unavailable. The contract guard stays the
         # arm's FIRST statement so the static FAR-1464/FAR-1482 architecture
         # guard sees it.
-        if (contract_error := _tool_session_contract_error(exc, "mcp.discover_system_map")) is not None:
+        if (contract_error := _tool_session_contract_error(exc, _SYSTEM_MAP_DISCOVERY_SCOPE)) is not None:
             return contract_error
-        _log.exception("discover_system_map failed")
-        return _sqlalchemy_exception_response(exc, _MSG_DB_OPERATION_FAILED, "mcp.discover_system_map")
+        _log.exception(_MSG_DISCOVER_SYSTEM_MAP_FAILED)
+        return _sqlalchemy_exception_response(exc, _MSG_DB_OPERATION_FAILED, _SYSTEM_MAP_DISCOVERY_SCOPE)
     except Exception as exc:
-        _log.exception("discover_system_map failed")
-        return _tool_exception_error("Failed to discover system map", exc, "mcp.discover_system_map")
+        _log.exception(_MSG_DISCOVER_SYSTEM_MAP_FAILED)
+        return _tool_exception_error("Failed to discover system map", exc, _SYSTEM_MAP_DISCOVERY_SCOPE)
 
 
 @mcp.tool(

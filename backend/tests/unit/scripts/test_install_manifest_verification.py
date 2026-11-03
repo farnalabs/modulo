@@ -205,6 +205,11 @@ def _run_signature_parser(
         '{"key_id":"modulo-2026-a","signature":"not-hex"}',
     ],
 )
+# POSIX-only (this module is mixed): the tests below execute the shipped shell
+# script for real, so each carries ``pytest.mark.posix_only``. The gate that skips
+# them on Windows lives in ``backend/tests/conftest.py``; the module's remaining
+# tests assert on workflow/file text and still run on Windows.
+@pytest.mark.posix_only
 def test_installer_signature_parser_executes_rejection_for_malformed_envelopes(
     signature_text: str, tmp_path: Path
 ) -> None:
@@ -215,6 +220,7 @@ def test_installer_signature_parser_executes_rejection_for_malformed_envelopes(
 
 
 @pytest.mark.parametrize("key_id", ["modulo-2026-a", "modulo-2026-a-next"])
+@pytest.mark.posix_only
 def test_installer_signature_parser_accepts_current_and_next_key_ids(key_id: str, tmp_path: Path) -> None:
     signature_text = '{"key_id":"' + key_id + '","signature":"' + "a" * 128 + '"}'
     result = _run_signature_parser(signature_text, tmp_path)

@@ -34,6 +34,7 @@ from modulo.api.dependencies import (
     require_system_permission,
     resolve_audit_principal,
 )
+from modulo.api.routes._org_settings import apply_org_settings_patch_or_404
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
@@ -831,6 +832,17 @@ async def clear_org_flag_override(
     current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
+    """Clear the caller organisation's override for one flag.
+
+    FAR-2309: the clear is atomic. ``nested_delete`` removes ONLY this flag's
+    entry from the stored ``feature_overrides`` object inside the same UPDATE
+    that composes the settings patch, so two concurrent clears of different
+    flags both persist and a concurrent SET of another flag cannot be clobbered
+    by a stale map. The handler no longer reads the map at all — the previous
+    read-pop-write shape lost updates between the read and the write — and a
+    missing/soft-deleted organisation is refused as a 404 (fail closed) by the
+    shared patch wrapper instead of optimistically reporting success.
+    """
     _require_internal_flag_access_if_needed(flag_name, current_user, settings=settings)
     if current_user.organisation_id is None:
         raise HTTPException(
@@ -840,14 +852,11 @@ async def clear_org_flag_override(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            org = await get_organisation(session, current_user.organisation_id)
-            if not org or not org.settings_json:
-                return {"override": None}
-            overrides = dict(org.settings_json.get("feature_overrides", {}))
-            overrides.pop(flag_name, None)
-            # FAR-1830: emit ONLY the ``feature_overrides`` key via the atomic
-            # patch — never write the whole settings_json column back.
-            await update_org_settings_patch(session, current_user.organisation_id, {"feature_overrides": overrides})
+            await apply_org_settings_patch_or_404(
+                session,
+                current_user.organisation_id,
+                nested_delete={"feature_overrides": [flag_name]},
+            )
         await _invalidate_cache(settings, current_user.organisation_id)
         await _emit_org_flag_override_audit(
             session,

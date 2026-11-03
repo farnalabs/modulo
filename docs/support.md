@@ -281,5 +281,6 @@ or to `support@modulo.run`, never to anyone who asks for it unprompted.
 - [Deployment guide](./deployment.md) - Compose and Kubernetes deployment.
 - [Upgrade process](./upgrade-process.md) - upgrading an existing instance.
 
-This page currently ships in the repository only. Publishing it on modulo.run
-is a follow-up.
+This page is also published at
+[modulo.run/docs/support](https://modulo.run/docs/support). Where the two
+differ, this page wins: it ships with the version you are running.

@@ -48,6 +48,14 @@ _RESTORE_MANIFEST_NAME = "backup-info.json"
 
 _HMAC_KEY = bytes(range(32))
 
+#: This module runs the shipped Linux installer/upgrade shell scripts under a
+#: real POSIX shell, so it needs executable-bit semantics, a POSIX PATH and
+#: ``jq``, none of which a Windows host provides (the installer refuses to run
+#: on a non-Linux host at all). The platform requirement is declared once, as a
+#: marker; the gate that skips it on Windows lives in ``backend/tests/conftest.py``
+#: (``POSIX_ONLY_MARKER``) and Linux CI executes this suite for real.
+pytestmark = pytest.mark.posix_only
+
 
 def _seed_data_dir(tmp_path: Path) -> Path:
     """A bootstrapped-looking data dir (state.json + secrets + pgdata)."""
@@ -1616,6 +1624,21 @@ def test_installer_uses_portable_commands_and_fails_closed_for_darwin():
     assert "scripts/macos/install.sh" in source
 
 
+def _system_tar() -> str | None:
+    """Resolve a ``tar`` that understands native Windows paths.
+
+    The first ``tar`` on ``PATH`` under a git hook can be MSYS/Git's
+    ``usr/bin/tar``, which reads ``-C C:\\...`` as a remote host spec
+    (``tar (child): Cannot connect to C: resolve failed``). Prefer the
+    OS-provided bsdtar on Windows so the archive fixtures are always built.
+    """
+    if sys.platform == "win32":
+        native = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "tar.exe"
+        if native.is_file():
+            return str(native)
+    return shutil.which("tar")
+
+
 def _installer_probe(
     tmp_path: Path,
     archive_name: str,
@@ -1654,7 +1677,7 @@ def _installer_probe(
         (source_root / "SHA256SUMS").write_text(f"{digest}  nested/artifact.txt\n", encoding="utf-8")
     else:
         (source_root / "SHA256SUMS").write_text("", encoding="utf-8")
-    tar_bin = shutil.which("tar")
+    tar_bin = _system_tar()
     bash_bin = shutil.which("bash")
     assert tar_bin is not None
     assert bash_bin is not None
@@ -1697,12 +1720,18 @@ def _installer_probe(
     )
 
 
+# POSIX-only (this module is mixed): the tests below execute the shipped shell
+# script for real, so each carries ``pytest.mark.posix_only``. The gate that skips
+# them on Windows lives in ``backend/tests/conftest.py``; the module's remaining
+# tests assert on workflow/file text and still run on Windows.
+@pytest.mark.posix_only
 def test_installer_rejects_linux_host_with_darwin_archive(tmp_path: Path) -> None:
     result = _installer_probe(tmp_path, "modulo-1.2.3-darwin-amd64.tar.gz", "modulo-1.2.3-darwin-amd64")
     assert result.returncode != 0
     assert "archive OS 'darwin' does not match detected host OS 'linux'" in result.stderr
 
 
+@pytest.mark.posix_only
 def test_installer_accepts_linux_archive_shape_before_manifest_gate(tmp_path: Path) -> None:
     result = _installer_probe(tmp_path, "modulo-1.2.3-linux-amd64.tar.gz", "modulo-1.2.3-linux-amd64")
     assert result.returncode != 0
@@ -1711,6 +1740,7 @@ def test_installer_accepts_linux_archive_shape_before_manifest_gate(tmp_path: Pa
     assert "archive top-level directory" not in result.stderr
 
 
+@pytest.mark.posix_only
 def test_installer_rejects_mismatched_archive_root_before_install_mutation(tmp_path: Path) -> None:
     result = _installer_probe(tmp_path, "modulo-1.2.3-linux-amd64.tar.gz", "unexpected-root", bypass_manifest=True)
     assert result.returncode != 0
@@ -1718,6 +1748,7 @@ def test_installer_rejects_mismatched_archive_root_before_install_mutation(tmp_p
     assert not (tmp_path / "install").exists()
 
 
+@pytest.mark.posix_only
 def test_installer_rejects_hidden_top_level_entry_before_install_mutation(tmp_path: Path) -> None:
     result = _installer_probe(
         tmp_path,
@@ -1747,6 +1778,7 @@ def test_installer_rejects_symlinked_checksum_parent_before_install_mutation(tmp
 @pytest.mark.parametrize(
     "listed_name", ["foo\\bar", "C:relative/artifact.txt", "C:\\foo", "C:/foo", "\\\\server\\share"]
 )
+@pytest.mark.posix_only
 def test_shell_checksum_verifier_rejects_windows_manifest_paths_before_filesystem_access(
     tmp_path: Path, listed_name: str
 ) -> None:

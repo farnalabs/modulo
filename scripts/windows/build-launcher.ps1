@@ -43,6 +43,8 @@ function Invoke-WindowsBundleStaging {
         [Parameter(Mandatory)] [string]$SitePackagesSource,
         [Parameter(Mandatory)] [string]$FrontendDistSource,
         [Parameter(Mandatory)] [string]$LauncherPath,
+        # Release version recorded in modulo-runtime.json; omitted when unknown.
+        [string]$Version,
         [switch]$PreserveExisting
     )
 
@@ -79,6 +81,14 @@ function Invoke-WindowsBundleStaging {
     )) {
         if (-not (Test-Path -LiteralPath $required)) { throw "Bundle staging output missing: $required" }
     }
+    # deploy/windows/modulo.iss requires this marker at the bundle root and
+    # nothing else writes it. "contract" is the field scripts/test-windows-installer.ps1
+    # pins; the .iss only checks that the file exists.
+    $marker = [ordered]@{ contract = 'native-windows-v1'; arch = 'amd64' }
+    if ($Version) { $marker['version'] = $Version }
+    $markerPath = Join-Path $StagePath 'modulo-runtime.json'
+    [System.IO.File]::WriteAllText($markerPath, (($marker | ConvertTo-Json -Compress) + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { throw "Bundle staging output missing: $markerPath" }
     return $StagePath
 }
 
