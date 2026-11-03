@@ -175,8 +175,8 @@ def test_builder_defers_full_validation_until_bundle_exists() -> None:
 
 def test_inno_service_command_quotes_executable_independently() -> None:
     iss = (_ROOT / "deploy/windows/modulo.iss").read_text(encoding="utf-8")
-    assert 'binPath= \\"\\"{app}\\launcher\\" start\\"' in iss
-    assert "{app}\\launcher start" in iss
+    assert r'binPath= ""{app}\launcher"" start= auto' in iss
+    assert r"{app}\launcher start" in iss
     assert "modulo" + ".exe service" not in iss
 
 
