@@ -258,22 +258,41 @@ def _patch_org_settings_writer() -> Generator[None, None, None]:
     ``update_org_settings_patch`` writes through the real DB (a JSONB statement
     the mocked session cannot run) and its fail-closed tenant guard needs a
     bound RLS context. The unit tier has neither, so this mirrors the helper's
-    top-level merge semantics onto whichever org the route's (patched)
-    ``get_organisation`` returns. The real helper is covered by
-    ``tests/integration/crud/test_org_settings_patch.py``.
+    top-level merge / nested merge / nested delete semantics onto whichever org
+    the route's (patched) ``get_organisation`` returns. The real helper is
+    covered by ``tests/integration/crud/test_org_settings_patch.py``.
+
+    Both call seams are patched: the module-level import the toggle writer uses
+    (``admin_feature_flags.update_org_settings_patch``) and the shared
+    ``_org_settings`` import the clear path reaches through
+    ``apply_org_settings_patch_or_404`` (FAR-2309).
     """
 
-    async def _apply(session, organisation_id, patch=None, delete_keys=None, **_kwargs):
+    async def _apply(session, organisation_id, patch=None, delete_keys=None, **kwargs):
         org = await admin_feature_flags.get_organisation(session, organisation_id)
         settings = dict(org.settings_json or {}) if org is not None and isinstance(org.settings_json, dict) else {}
         settings.update(patch or {})
+        for nested_key, nested_sub in (kwargs.get("nested_patch") or {}).items():
+            existing = settings.get(nested_key)
+            merged = dict(existing) if isinstance(existing, dict) else {}
+            merged.update(nested_sub)
+            settings[nested_key] = merged
+        for nested_key, nested_keys in (kwargs.get("nested_delete") or {}).items():
+            existing = settings.get(nested_key)
+            merged = dict(existing) if isinstance(existing, dict) else {}
+            for sub_key in nested_keys:
+                merged.pop(sub_key, None)
+            settings[nested_key] = merged
         for key in delete_keys or []:
             settings.pop(key, None)
         if org is not None:
             org.settings_json = settings
         return settings
 
-    with patch("modulo.api.routes.admin_feature_flags.update_org_settings_patch", new=_apply):
+    with (
+        patch("modulo.api.routes.admin_feature_flags.update_org_settings_patch", new=_apply),
+        patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_apply),
+    ):
         yield
 
 
@@ -1195,15 +1214,9 @@ class TestRetiredOrgOverrideAccess:
         assert response.status_code == 403
 
     def test_clear_system_maps_override_succeeds_for_internal_caller(self, internal_client: TestClient) -> None:
-        org = _org_with_overrides(system_maps=True)
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
-                new_callable=AsyncMock,
-                return_value=org,
-            ),
-            patch(
-                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                "modulo.api.routes.admin_feature_flags.apply_org_settings_patch_or_404",
                 new_callable=AsyncMock,
             ),
             patch(
@@ -1224,7 +1237,7 @@ class TestRetiredOrgOverrideAccess:
                 new_callable=AsyncMock,
             ) as get_org,
             patch(
-                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                "modulo.api.routes.admin_feature_flags.apply_org_settings_patch_or_404",
                 new_callable=AsyncMock,
             ) as update_settings,
         ):
@@ -1238,16 +1251,10 @@ class TestRetiredOrgOverrideAccess:
 
     def test_internal_caller_can_clear_retired_override(self, ordinary_internal_flag_client: TestClient) -> None:
         """Caller with library.search.in_dev can clear lifecycle_map_journeys override."""
-        org = _org_with_overrides(lifecycle_map_journeys=True)
         redis_mock = AsyncMock()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
-                new_callable=AsyncMock,
-                return_value=org,
-            ),
-            patch(
-                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                "modulo.api.routes.admin_feature_flags.apply_org_settings_patch_or_404",
                 new_callable=AsyncMock,
             ) as update_settings,
             patch(
@@ -1261,7 +1268,10 @@ class TestRetiredOrgOverrideAccess:
             )
         assert response.status_code == 200
         assert response.json()["override"] is None
-        update_settings.assert_awaited_once()
+        # FAR-2309: the clear is a per-entry atomic delete, never a whole-map
+        # read-modify-write.
+        assert update_settings.await_args.kwargs["nested_delete"] == {"feature_overrides": ["lifecycle_map_journeys"]}
+        assert "patch" not in update_settings.await_args.kwargs
 
 
 class TestOrgSettingsPatchScope:
@@ -1274,8 +1284,10 @@ class TestOrgSettingsPatchScope:
     def _capture_patch(self) -> tuple[dict, Any]:
         captured: dict = {}
 
-        async def _capture(session, organisation_id, patch=None, delete_keys=None, **_kwargs):
+        async def _capture(session, organisation_id, patch=None, delete_keys=None, **kwargs):
             captured["patch"] = patch
+            captured["nested_patch"] = kwargs.get("nested_patch")
+            captured["nested_delete"] = kwargs.get("nested_delete")
             return patch or {}
 
         return captured, _capture
@@ -1314,16 +1326,10 @@ class TestOrgSettingsPatchScope:
             assert str(call.args[1]) == self._ORG_ID
 
     def test_clear_patches_only_feature_overrides(self, client: TestClient) -> None:
-        org = _org_with_overrides(webhook_trigger=True)
         captured, capture = self._capture_patch()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
-                new_callable=AsyncMock,
-                return_value=org,
-            ),
-            patch(
-                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                "modulo.api.routes._org_settings.update_org_settings_patch",
                 new=capture,
             ),
             patch(
@@ -1334,8 +1340,10 @@ class TestOrgSettingsPatchScope:
         ):
             resp = client.delete("/api/v1/admin/feature-flags/webhook_trigger/org-override")
         assert resp.status_code == 200
-        assert set(captured["patch"]) == {"feature_overrides"}
-        assert not captured["patch"]["feature_overrides"]
+        # FAR-2309: only the one flag's entry is removed, atomically — the
+        # handler never reads and rewrites the whole ``feature_overrides`` map.
+        assert captured["patch"] is None
+        assert captured["nested_delete"] == {"feature_overrides": ["webhook_trigger"]}
 
 
 class TestOrgOverrideOrgIdGuard:
@@ -2038,15 +2046,9 @@ class TestOrgOverrideLockTimeout:
         assert "another change is in progress" in resp.json()["detail"]
 
     def test_clear_org_flag_override_lock_timeout_is_409(self, client: TestClient) -> None:
-        org = _org_with_overrides(webhook_trigger=True)
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
-                new_callable=AsyncMock,
-                return_value=org,
-            ),
-            patch(
-                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                "modulo.api.routes._org_settings.update_org_settings_patch",
                 side_effect=_lock_timeout_operational(),
             ),
         ):

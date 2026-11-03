@@ -80,9 +80,14 @@ jobs:
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
+          # FAR-2326: how long the marker may exist before the tick ALSO warns
+          # that the freeze looks stranded. Overridable via the
+          # RELEASE_FREEZE_MAX_HOURS repo variable. Advisory only - the freeze
+          # itself never expires (see docs/release-process.md).
+          FREEZE_MAX_HOURS: ${{ vars.RELEASE_FREEZE_MAX_HOURS || '4' }}
         shell: bash
         run: |
-          # Alpha release process: while the 'release-freeze' branch exists,
+          # Alpha release process: while the 'release-freeze' BRANCH exists,
           # main is frozen and the merge queue must not merge anything.
           # Manual escape: delete the 'release-freeze' branch. Do NOT use Release ->
           # release as an escape - that promotes GA prematurely.
@@ -93,13 +98,63 @@ jobs:
           # cannot masquerade as a freeze; we still FAIL CLOSED, but only after
           # the call persists in failing across retries. A genuine release freeze
           # (branch present) is detected on the very first successful response.
+          #
+          # The helper prints the verdict on the FIRST line and, when frozen,
+          # `sha=` / `age_seconds=` / `stale=` / `max_freeze_hours=` lines after
+          # it. Only the first line decides the gate; the rest exist so a
+          # halted queue is visible (FAR-2326: on 2026-11-02/03 the marker sat
+          # for ~12h, 20 approved green PRs waited, and every run still
+          # concluded SUCCESS because the queue job was skipped).
           OUT=$(python3 .github/scripts/release-freeze-check.py) || true
-          VERDICT="${OUT%%|*}"
-          MSG="${OUT#*|}"
+          VERDICT_LINE="$(printf '%s\n' "$OUT" | sed -n '1p')"
+          VERDICT="${VERDICT_LINE%%|*}"
+          MSG="${VERDICT_LINE#*|}"
+          MARKER_SHA="$(printf '%s\n' "$OUT" | sed -n 's/^sha=//p')"
+          MARKER_AGE="$(printf '%s\n' "$OUT" | sed -n 's/^age_seconds=//p')"
+          MARKER_STALE="$(printf '%s\n' "$OUT" | sed -n 's/^stale=//p')"
+          MARKER_MAX_H="$(printf '%s\n' "$OUT" | sed -n 's/^max_freeze_hours=//p')"
           case "$VERDICT" in
             frozen)
               echo "frozen=true" >> "$GITHUB_OUTPUT"
-              echo "::notice::Release freeze ACTIVE ('release-freeze' branch present) - merge queue paused." ;;
+              SHORT_SHA="${MARKER_SHA:0:7}"
+              if [ -z "$SHORT_SHA" ]; then
+                SHORT_SHA="unknown"
+              fi
+              if [ -n "$MARKER_AGE" ]; then
+                AGE_H="$(awk -v s="$MARKER_AGE" 'BEGIN { printf "%.1f", s / 3600 }')"
+              else
+                AGE_H="unknown"
+              fi
+              echo "::notice::Release freeze ACTIVE ('release-freeze' branch present) - merge queue PAUSED, nothing will merge this tick. Marker commit ${SHORT_SHA}, age ${AGE_H}h (max intended ${MARKER_MAX_H:-4}h)."
+              # Run-level summary: visible on the run page without expanding
+              # any job's steps, so a skipped queue job cannot be mistaken for a
+              # healthy idle queue.
+              if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                {
+                  echo "### Release freeze ACTIVE - merge queue PAUSED"
+                  echo ""
+                  echo "The \`release-freeze\` branch exists, so the merge job is **skipped**"
+                  echo "and nothing merges on this tick. This run concluding success means the"
+                  echo "gate worked, NOT that the queue is healthy."
+                  echo ""
+                  echo "| Field | Value |"
+                  echo "| --- | --- |"
+                  echo "| Marker commit | \`${SHORT_SHA}\` |"
+                  echo "| Marker age | ${AGE_H}h |"
+                  echo "| Max intended | ${MARKER_MAX_H:-4}h |"
+                  echo "| Stale | ${MARKER_STALE:-unknown} |"
+                  echo ""
+                  echo "Manual escape (only when the freeze is genuinely abandoned):"
+                  echo "\`git push origin --delete refs/heads/release-freeze\`"
+                } >> "$GITHUB_STEP_SUMMARY"
+              fi
+              if [ "$MARKER_STALE" = "true" ]; then
+                # Advisory only: releases legitimately take hours, so this never
+                # fails the tick. It is here so a stranded marker is visible at
+                # the run level; the operator alert is raised by
+                # merge-queue-watchdog.yml (FAR-2326).
+                echo "::warning::Release freeze has been active for ${AGE_H}h (threshold ${MARKER_MAX_H:-4}h) at marker commit ${SHORT_SHA} - the merge queue is halted. If no release is in flight, delete refs/heads/release-freeze; a failed cut/recut usually leaves it behind."
+              fi ;;
             open)
               echo "frozen=false" >> "$GITHUB_OUTPUT" ;;
             fail-closed)
@@ -2032,12 +2087,18 @@ jobs:
           # Same shared helper + fail-closed policy as freeze-gate, so the two
           # safety-critical checks cannot diverge (a single gh blip mid-tick
           # must not abort the merge, but a persistent outage must).
+          # The verdict is the FIRST output line; any detail lines after it
+          # (sha/age) are decoration and never affect this decision.
           OUT=$(python3 .github/scripts/release-freeze-check.py) || true
-          VERDICT="${OUT%%|*}"
-          MSG="${OUT#*|}"
+          VERDICT_LINE="$(printf '%s\n' "$OUT" | sed -n '1p')"
+          VERDICT="${VERDICT_LINE%%|*}"
+          MSG="${VERDICT_LINE#*|}"
+          MARKER_SHA="$(printf '%s\n' "$OUT" | sed -n 's/^sha=//p')"
+          MARKER_AGE="$(printf '%s\n' "$OUT" | sed -n 's/^age_seconds=//p')"
+          SHORT_SHA="${MARKER_SHA:0:7}"
           case "$VERDICT" in
             frozen)
-              echo "::error::Release freeze became ACTIVE after this tick passed the gate - aborting merge."
+              echo "::error::Release freeze became ACTIVE after this tick passed the gate - aborting merge (marker commit ${SHORT_SHA:-unknown}, age ${MARKER_AGE:-unknown}s)."
               echo "aborted=true" >> "$GITHUB_OUTPUT" ;;
             open)
               echo "Freeze re-check clean - proceeding to merge." ;;

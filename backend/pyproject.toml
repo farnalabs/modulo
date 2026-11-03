@@ -627,12 +627,16 @@ parallel = true
 # correct code (FAR-247). ``thread`` is retained for the TestClient portal.
 concurrency = ["thread", "greenlet"]
 source = ["src/modulo"]
-# ``_far252_dead_probe.py`` is a TRANSIENT file the vulture dead-code gate writes
-# into ``src/modulo`` and unlinks again (backend/tests/unit/scripts/test_vulture_gate.py).
-# Coverage's un-executed-source scan can list it while it exists, record it, and
-# leave a reference to a now-missing file in the shard data; the combine job's
-# ``coverage xml`` then fails with "No source for code" and kills CI. Omitting the
-# probe keeps a test fixture that is never product source out of the report.
+# ``_far252_dead_probe.py`` is a TRANSIENT fixture the vulture dead-code gate
+# writes into ``src/modulo`` and unlinks again
+# (backend/tests/unit/scripts/test_vulture_gate.py). Coverage's
+# un-executed-source scan (``find_possibly_unexecuted_files``) walks every ``.py``
+# under ``source`` when a worker saves its data, so if one xdist worker saves
+# while another is running a probe test the probe can be listed while it exists,
+# recorded, and left as a reference to a now-missing file in the shard data; the
+# combine job's ``coverage xml`` then fails with "No source for code" and kills
+# CI. Omitting the probe keeps a transient test fixture that is never product
+# source out of the report and the coverage data.
 omit = ["*/tests/*", "*/migrations/*", "*/stub/*", "*/_far252_dead_probe.py"]
 
 [tool.coverage.report]

@@ -466,6 +466,19 @@ jobs:
     needs: [backend-lint]
     # FAR-2106 memory ceiling (16 GB) is unchanged per shard; the parallelism,
     # not the worker count, is what moves the wall-clock now.
+    #
+    # Runner choice, measured (FAR-2325, 2026-11-03, successful runs): standard-4
+    # (4 vCPU) was NOT chosen for CPU speed. The single un-sharded job on
+    # standard-4 took a median 35.8 min (n=15, 27.7-39.7), so 4 vCPU never gave
+    # the ~2x over standard-2's ~25 min that FAR-2106 assumed; the earlier
+    # "neutral cost" claim was wrong (at 2x the per-minute rate it cost ~1.4x).
+    # It is kept because the memory headroom is the real constraint: 4 xdist
+    # workers peak at ~11.7 GB RSS, which does not fit standard-2's 8 GB. Sharded
+    # (#2756) each shard takes a median 11.9 min (n=87, 7.0-17.1), ~36 runner-min
+    # for the three, i.e. the same billed minutes as the single job (~35) for
+    # roughly a third of the wall-clock. NOT measured: 3 shards on standard-2
+    # with -n 2 (memory fits, but wall-clock and cost are unknown); that
+    # comparison is the open follow-up before any downgrade.
     strategy:
       matrix:
         shard: [1, 2, 3]
