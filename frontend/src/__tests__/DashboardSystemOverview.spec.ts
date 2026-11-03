@@ -123,6 +123,52 @@ describe('DashboardSystemOverview', () => {
     expect(mockPush).not.toHaveBeenCalled()
   })
 
+  it('falls back to the localized message when discovery rejects with a non-Error value', async () => {
+    const { wrapper, store } = mountOverview()
+    vi.spyOn(store, 'discover').mockRejectedValue('inventory unavailable')
+    mockPush.mockResolvedValue(undefined)
+
+    await wrapper.get('[data-testid="dashboard-system-discover"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[role="alert"]').text()).toContain(
+      'Could not discover your system. Try again from System Maps.',
+    )
+    expect(mockPush).not.toHaveBeenCalled()
+  })
+
+  it('clears a discovery failure when the operator dismisses it', async () => {
+    const { wrapper, store } = mountOverview()
+    vi.spyOn(store, 'discover').mockRejectedValue(new Error('inventory unavailable'))
+    mockPush.mockResolvedValue(undefined)
+
+    await wrapper.get('[data-testid="dashboard-system-discover"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it('ignores a second click while a discovery request is already in flight', async () => {
+    const { wrapper, store } = mountOverview()
+    let resolveDiscover: (value: never) => void = () => {}
+    const discover = vi.spyOn(store, 'discover').mockReturnValue(
+      new Promise((resolve) => { resolveDiscover = resolve as (value: never) => void }) as never,
+    )
+    mockPush.mockResolvedValue(undefined)
+
+    const button = wrapper.get('[data-testid="dashboard-system-discover"]')
+    await button.trigger('click')
+    button.element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    resolveDiscover({ draft_map_id: 'map-9' } as never)
+    await flushPromises()
+
+    expect(discover).toHaveBeenCalledTimes(1)
+    expect(mockPush).toHaveBeenCalledWith('/system-maps/map-9?discovery=1')
+  })
+
   it('renders observed metrics with interpolated window, rates and localized health', async () => {
     const { wrapper, store } = mountOverview()
     store.overview = overview as never
