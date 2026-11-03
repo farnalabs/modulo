@@ -212,6 +212,12 @@ jobs:
           git config user.name "modulo-release-bot"
           git config user.email "bot@modulo.run"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
       - name: Validate version input
         shell: bash
         env:
@@ -413,7 +419,8 @@ jobs:
               # PR or overwrites a live ref.
               git checkout -B "$BRANCH" origin/main
               python3 scripts/bump-version.py --set "$VERSION"
-              git add backend/pyproject.toml frontend/package.json deploy/helm/modulo/Chart.yaml
+              uv lock --project backend
+              git add backend/pyproject.toml backend/uv.lock frontend/package.json deploy/helm/modulo/Chart.yaml
               if git diff --cached --quiet; then
                 echo "::error::bump-version.py changed nothing - refusing to create an empty release PR."
                 exit 1
