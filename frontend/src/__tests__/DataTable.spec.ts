@@ -127,3 +127,39 @@ describe('DataTable horizontal scroll region', () => {
     expect(wrapper.get('div.overflow-x-auto').attributes('tabindex')).toBe('0')
   })
 })
+
+describe('DataTable responsive fit (FAR-2365)', () => {
+  const responsiveColumns: Column[] = [
+    { key: 'name', label: 'Name', width: '40%' },
+    { key: 'value', label: 'Value', width: '10%', hideBelow: 'xl' },
+  ]
+
+  it('keeps the existing min-width scroll layout by default', () => {
+    const wrapper = mount(DataTable, { props: { columns: responsiveColumns, rows } })
+    const table = wrapper.get('table')
+    expect(table.classes()).toContain('min-w-max')
+    expect(table.classes()).not.toContain('lg:table-fixed')
+  })
+
+  it('opt-in fit allows the table to shrink from lg up', () => {
+    const wrapper = mount(DataTable, { props: { columns: responsiveColumns, rows, fit: true } })
+    const table = wrapper.get('table')
+    expect(table.classes()).toContain('table-auto')
+    expect(table.classes()).toContain('lg:table-fixed')
+    expect(table.classes()).toContain('lg:min-w-0')
+  })
+
+  it('applies the declared width to both the header and body cells', () => {
+    const wrapper = mount(DataTable, { props: { columns: responsiveColumns, rows, fit: true } })
+    expect(wrapper.findAll('thead th')[0].attributes('style')).toContain('width: 40%')
+    expect(wrapper.findAll('tbody tr')[0].findAll('td')[0].attributes('style')).toContain('width: 40%')
+  })
+
+  it('hides the same column in the header and body below its breakpoint', () => {
+    const wrapper = mount(DataTable, { props: { columns: responsiveColumns, rows, fit: true } })
+    for (const cell of [wrapper.findAll('thead th')[1], wrapper.findAll('tbody tr')[0].findAll('td')[1]]) {
+      expect(cell.classes()).toContain('hidden')
+      expect(cell.classes()).toContain('xl:table-cell')
+    }
+  })
+})

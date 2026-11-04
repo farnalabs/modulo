@@ -895,6 +895,30 @@ describe('SettingsHitlReviewView', () => {
     expect(headers.text()).toContain('Created')
   })
 
+  it('reserves the expand-chevron track in the column header so labels align with body values (FAR-2365)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const headers = wrapper!.find('[data-testid="hitl-review-column-headers"]')
+    const spacer = headers.find('[data-testid="hitl-review-header-expand-spacer"]')
+    expect(spacer.exists()).toBe(true)
+    expect(spacer.classes()).toContain('h-4')
+    expect(spacer.classes()).toContain('w-4')
+    expect(spacer.classes()).toContain('flex-shrink-0')
+    // The body's chevron is the same size, sits after the checkbox and inside
+    // the row button — the spacer is the header's equivalent track.
+    const bodyChevron = wrapper!.find('[data-testid="hitl-review-toggle-expand"] svg')
+    expect(bodyChevron.exists()).toBe(true)
+    expect(bodyChevron.classes()).toContain('h-4')
+    expect(bodyChevron.classes()).toContain('w-4')
+  })
+
   it('renders the server-resolved pipeline name even when the cached pipelines list is empty (FAR-727)', async () => {
     // THE reported bug: rows rendered `#d6b2c25b` because the name was
     // resolved client-side from the (paginated) /pipelines list. The

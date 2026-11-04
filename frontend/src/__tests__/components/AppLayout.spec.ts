@@ -462,3 +462,26 @@ describe('AppLayout', () => {
     })
   })
 })
+
+describe('AppLayout main-window scrolling (FAR-2365)', () => {
+  it('makes <main> the shell scroll region instead of letting the document scroll', async () => {
+    const wrapper = mount(AppLayout, {
+      global: {
+        plugins: [createPinia(), router],
+        stubs: { LogoMark: true },
+      },
+    })
+    await nextTick()
+    await nextTick()
+    const shell = wrapper.element as HTMLElement
+    const main = wrapper.find('main')
+    // The outer flex row must own the viewport height and clip, otherwise
+    // <main>'s overflow container grows to content height and never scrolls.
+    expect(shell.classList.contains('h-screen')).toBe(true)
+    expect(shell.classList.contains('overflow-hidden')).toBe(true)
+    expect(shell.classList.contains('min-h-screen')).toBe(false)
+    expect(main.classes()).toContain('min-h-0')
+    expect(main.classes()).toContain('overflow-y-auto')
+    wrapper.unmount()
+  })
+})

@@ -321,6 +321,52 @@ describe('RunsListView', () => {
     }
   })
 
+  it('fits the table to the available width and keeps the trailing action column visible (FAR-2365)', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'running' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    // The fit table switches from min-w-max to a fixed layout at lg, and the
+    // action column carries an explicit width so it can never be pushed out by
+    // the preceding columns.
+    const table = wrapper.find('table')
+    expect(table.classes()).toContain('lg:table-fixed')
+    const headers = wrapper.findAll('thead th')
+    expect(headers[headers.length - 1].attributes('style')).toContain('width: 15%')
+    expect(headers[headers.length - 1].classes()).not.toContain('hidden')
+    expect(wrapper.find('[data-testid="runs-list-cancel-run1"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('drops low-priority columns on narrower screens while keeping their data available (FAR-2365)', async () => {
+    mockResponses['/api/v1/runs'] = listWith([baseRun])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const headers = wrapper.findAll('thead th')
+    const heartbeat = headers.find(h => h.text().toLowerCase().includes('heartbeat'))
+    const end = headers.find(h => h.text().toLowerCase().includes('end'))
+    const warnings = headers.find(h => h.text().toLowerCase().includes('warnings'))
+    for (const header of [heartbeat, end, warnings]) {
+      expect(header).toBeDefined()
+      expect(header!.classes()).toContain('hidden')
+      expect(header!.classes()).toContain('xl:table-cell')
+    }
+    wrapper.unmount()
+  })
+
+  it('lays the action buttons out in a wrapping, right-aligned group (FAR-2365)', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'running' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const actionGroup = wrapper.find('[data-testid="runs-list-cancel-run1"]').element.parentElement
+    expect(actionGroup?.className).toContain('justify-end')
+    expect(actionGroup?.className).toContain('flex-wrap')
+    wrapper.unmount()
+  })
+
   it('shows Start, End and Duration columns instead of Created / Last Run', async () => {
     mockResponses['/api/v1/runs'] = listWith([baseRun])
     const wrapper = mountView()
