@@ -55,9 +55,13 @@ The script fails loudly (non-zero exit, nothing written) if any mirror has drift
 ### Native single-install (Linux and macOS arm64)
 
 The native single-install path supports the published Linux bundle and the
-signed, notarized macOS arm64 `.dmg`. Windows native support is Beta scope, planned
-after Alpha: no native Windows installer is published yet, so there is no native
-Windows upgrade path today. Linux uses
+signed, notarized macOS arm64 `.dmg`. Windows native installer support is Alpha
+scope (FAR-2337 / FAR-2338): the release pipeline builds the native payload,
+compiles, signs (Azure Trusted Signing) and attests the installer, and includes it
+in `SHA256SUMS` and the release manifest when `include_windows` is enabled (the
+default). Publication only happens when a release runs, so no signed Windows
+installer is published yet: there is no published native Windows upgrade path
+today, and real-host validation is outstanding under FAR-2250. Linux uses
 `scripts/install.sh`; macOS uses `scripts/macos/install.sh` and installs the
 LaunchAgent seam from the app bundle. See the platform support matrix in
 [`docs/system-requirements.md`](./system-requirements.md).

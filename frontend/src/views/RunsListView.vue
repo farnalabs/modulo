@@ -70,9 +70,10 @@
           :columns="runColumns"
           :rows="runs"
           :row-clickable="false"
+          fit
         >
           <template #cell-pipeline_name="{ row }">
-            <div class="flex flex-wrap items-center gap-1">
+            <div class="flex min-w-0 flex-wrap items-center gap-1">
               <!-- FAR-1813: the pipeline name opens the VERSION this run
                    executed (?snapshot= from the run's own snapshot_id). The
                    run itself stays reachable through the adjacent link — the
@@ -82,7 +83,7 @@
                 :pipeline-name="(row as RunListItem).pipeline_name"
                 :snapshot-id="snapshotIdOf(row)"
                 :snapshot-version="snapshotVersionOf(row)"
-                class="font-medium"
+                class="min-w-0 max-w-full truncate font-medium"
                 :data-testid="`runs-list-view-${row.run_id}`"
               >{{ row.pipeline_name || $t('views.RunsListView.deleted_pipeline') }}</RunPipelineVersionLink>
               <router-link
@@ -182,7 +183,7 @@
             />
           </template>
           <template #cell-actions="{ row }">
-            <div class="text-right">
+            <div class="flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 v-if="isNonTerminalStatus(row.status as string)"
@@ -202,7 +203,7 @@
                 :disabled="rerunningIds.has(row.run_id as string)"
                 :data-testid="`runs-list-rerun-${row.run_id}`"
                 :aria-label="$t('views.RunsListView.rerun')"
-                class="ml-2 inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-input bg-background px-2 py-1 text-xs font-medium text-foreground hover:bg-accent disabled:opacity-50"
+                class="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-input bg-background px-2 py-1 text-xs font-medium text-foreground hover:bg-accent disabled:opacity-50"
                 @click.stop="rerunRun(row as RunListItem)"
                 @keydown.stop
               >
@@ -214,13 +215,13 @@
                 v-if="cancelErrors[row.run_id as string]"
                 :data-testid="`runs-list-cancel-error-${row.run_id}`"
                 role="alert"
-                class="ml-2 text-xs text-destructive"
+                class="text-xs text-destructive"
               >{{ cancelErrors[row.run_id as string] }}</span>
               <span
                 v-if="rerunErrors[row.run_id as string]"
                 :data-testid="`runs-list-rerun-error-${row.run_id}`"
                 role="alert"
-                class="ml-2 text-xs text-destructive"
+                class="text-xs text-destructive"
               >{{ rerunErrors[row.run_id as string] }}</span>
             </div>
           </template>
@@ -294,17 +295,21 @@ const { t } = useI18n()
 // header from this array and the STATE-3 loading skeleton takes its column
 // count from the same array, so the two can never silently desync.
 const runColumns = computed<Column[]>(() => [
-  { key: 'pipeline_name', label: t('views.RunsListView.pipeline'), sortable: true },
-  { key: 'status', label: t('views.RunsListView.status'), sortable: true },
-  { key: 'trigger_type', label: t('views.RunsListView.trigger'), sortable: true },
-  { key: 'heartbeat', label: t('views.RunsListView.heartbeat'), sortable: false },
-  { key: 'run_number', label: '#', numeric: true, sortable: true },
-  { key: 'started_at', label: t('views.RunsListView.start'), sortable: true },
-  { key: 'completed_at', label: t('views.RunsListView.end'), sortable: true },
-  { key: 'duration', label: t('views.RunsListView.duration') },
-  { key: 'total_cost_usd', label: t('views.RunsListView.cost'), numeric: true, sortable: true },
-  { key: 'warnings', label: t('views.RunsListView.warnings'), sortable: false },
-  { key: 'actions', label: '', sortable: false },
+  // FAR-2365: percentage widths sum to 100 so the `fit` table (fixed layout
+  // from `lg` up) compresses instead of pushing the trailing action column
+  // off-screen. Low-priority columns drop out on narrower screens while the
+  // table keeps its existing horizontal-scroll behaviour below `lg`.
+  { key: 'pipeline_name', label: t('views.RunsListView.pipeline'), sortable: true, width: '13%' },
+  { key: 'status', label: t('views.RunsListView.status'), sortable: true, width: '9%' },
+  { key: 'trigger_type', label: t('views.RunsListView.trigger'), sortable: true, width: '8%' },
+  { key: 'heartbeat', label: t('views.RunsListView.heartbeat'), sortable: false, width: '9%', hideBelow: 'xl' },
+  { key: 'run_number', label: '#', numeric: true, sortable: true, width: '4%', hideBelow: '2xl' },
+  { key: 'started_at', label: t('views.RunsListView.start'), sortable: true, width: '10%' },
+  { key: 'completed_at', label: t('views.RunsListView.end'), sortable: true, width: '10%', hideBelow: 'xl' },
+  { key: 'duration', label: t('views.RunsListView.duration'), width: '8%' },
+  { key: 'total_cost_usd', label: t('views.RunsListView.cost'), numeric: true, sortable: true, width: '9%' },
+  { key: 'warnings', label: t('views.RunsListView.warnings'), sortable: false, width: '5%', hideBelow: 'xl' },
+  { key: 'actions', label: '', sortable: false, width: '15%' },
 ])
 
 /**
