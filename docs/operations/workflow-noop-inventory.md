@@ -68,7 +68,7 @@ replaces a marker with a job output silently disarms the signal – the guard su
 | `pr-review.yml` | Dispatch the PR reviewer | Draft / dedup / superseded / manual-delivery / fork → no dispatch | `ready=false` output + `::notice::` | Log | PR Housekeeper re-drives from the **review artefact** | Legitimate (consumer measures the artefact) |
 | `publish-images.yml` | Publish container images to GHCR | None | Fails loud | n/a | Operator | Legitimate |
 | `rc-validate.yml` | Pen-test an RC against prod | None (missing secrets exit 1) | Fails loud | n/a | Operator | Legitimate |
-| `release-unified.yml` | Cut / recut / promote / dry-run | None – each mode has its jobs | Fails loud on every guard | Yes | Operator | Legitimate |
+| `release-unified.yml` | Cut / recut / promote / dry-run | (a) `publish-release` was **skipped** while every direct need reported success (run `41786063745`, 2026-11-04: the run concluded success with no GitHub Release); (b) each mode otherwise fails loud on its own guards | **Added:** the `Validate publication dependencies` gate step names the unsatisfied need; publication runs under `!cancelled()` (so a skipped need becomes a named failure and an operator cancel cannot publish); the terminal `Assert the release and bundle tag exist` step verifies the release **and** the `bundle-v*` tag | **Added:** every failure names the dependency, the missing release, or the missing tag | Operator / run history; `native-release-smoke.yml` consumes the published release | **Masking – fixed (run 41786063745)** |
 | `release.yml` | (retired entry point) | n/a | **Fails loudly**, naming the replacement | Log | Operator | Legitimate (deliberately red) |
 | `runner-ci-backstop.yml` | Weekly forced harness run | None | Fails loud | n/a | Operator | Legitimate |
 | `runner-ci-harness.yml` | Bundled-runner harness | Path filter skips when the surface is untouched | Skip documented; the weekly backstop forces it | Log | `runner-ci-backstop.yml` | Legitimate |
@@ -93,6 +93,11 @@ Notes:
   were the ticket's strongest candidates and each was *verified*, not assumed:
   their no-ops are covered by a consumer that measures the artefact (the review
   comment, the suite step conclusion, the merged PR), so no marker was added.
+* **`release-unified.yml` release identity:** the GitHub Release that
+  `publish-release` creates is tagged `bundle-v<VERSION>`; the same value is
+  also pushed as a git tag. The terminal assertion checks both GitHub objects
+  separately, so a change to either publication path fails loudly instead of
+  being inferred from the other.
 
 ## Fixes and their guards
 
@@ -103,3 +108,4 @@ Notes:
 | Audit-chain monitor blind cycle was green silence | `authenticated` output + NOT RUN marker step + summary | `test_audit_chain_monitor_missing_credentials_is_marked_not_run` |
 | Conflict reconciler blind cycle was silent | NOTHING RECONCILED summary on the API-failure path | `test_pr_conflict_reconcile_api_failure_is_marked` |
 | `native-release-smoke.yml` green run with no target | `dispatch-guard` job rejects an argument-free manual dispatch with an `::error::` naming `canary_version` / `rollback_version`; push and schedule paths untouched | `test_native_release_smoke_rejects_an_argument_free_dispatch`, `test_native_release_smoke_dispatch_paths_keep_their_own_gates` |
+| `release-unified.yml` cut/recut concluded success with no GitHub Release (run 41786063745) | `publish-release` runs under `!cancelled()` rather than `always()` (a skipped need is a named failure; an operator cancel never publishes), gates on an explicit dependency step, and ends with a terminal assertion that the GitHub Release and the `bundle-v*` tag exist — absence and an unverifiable query fail with distinct messages | `test_publish_release_if_runs_despite_skipped_needs_and_never_after_cancel`, `test_publish_release_guard_covers_exactly_its_needs`, `test_publish_release_assertion_is_the_last_step_after_the_tag_push`, `test_publish_release_assertion_exits_zero_when_release_and_tag_exist`, `test_publish_release_assertion_fails_naming_an_absent_release_and_tag`, `test_publish_release_assertion_reports_an_unknown_state_not_absence` |

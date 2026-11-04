@@ -1740,9 +1740,13 @@ jobs:
     # intentionally not a dependency of Alpha publication. When include_windows=true
     # (Beta path), the Windows artifact is included via final-release-manifest.
     # GitHub skipped Create GitHub Release while every direct need reported
-    # success; always() plus an explicit guard makes that impossible to reproduce
-    # silently and converts any bad state into a named failure.
-    if: always() && (inputs.mode == 'cut' || inputs.mode == 'recut')
+    # success (run 41786063745), so this job must run and report for itself when
+    # a need did not succeed. It deliberately does NOT use always(): that would
+    # also publish after an operator cancelled the run. !cancelled() keeps the
+    # "run despite a skipped/failed need" property while refusing to publish
+    # into a cancelled workflow - the first step then names the unsatisfied
+    # need and fails the job.
+    if: ${{ !cancelled() && (inputs.mode == 'cut' || inputs.mode == 'recut') }}
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
     permissions:
@@ -1880,7 +1884,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
-          TAG: ${{ needs.release.outputs.rc_tag }}
+          TAG: bundle-v${{ inputs.version }}
+          RC_TAG: ${{ needs.release.outputs.rc_tag }}
           INCLUDE_WINDOWS: ${{ inputs.include_windows }}
         shell: bash
         run: |
@@ -1888,13 +1893,13 @@ jobs:
 
           # Generate changelog and release notes
           NOTES_FILE="$(mktemp)"
-          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          PREV="$(git describe --tags --abbrev=0 "${RC_TAG}^" 2>/dev/null || true)"
           if [ -z "$PREV" ]; then
-            PREV="$(git rev-list --max-parents=0 "$TAG" | tail -n1)"
+            PREV="$(git rev-list --max-parents=0 "$RC_TAG" | tail -n1)"
           fi
 
           python3 scripts/generate_changelog.py \
-            --from "$PREV" --to "$TAG" \
+            --from "$PREV" --to "$RC_TAG" \
             --version "$VERSION" \
             --output CHANGELOG.md > "$NOTES_FILE"
 
@@ -1946,6 +1951,64 @@ jobs:
           git tag -a "$BUNDLE_TAG" -m "Bundle release $BUNDLE_TAG"
           git push origin "$BUNDLE_TAG"
           echo "Pushed $BUNDLE_TAG at $(git rev-parse --short HEAD)"
+
+      - name: Assert the release and bundle tag exist
+        # Terminal post-condition for the "concluded success having done
+        # nothing" class (docs/operations/workflow-noop-inventory.md). Run
+        # 41786063745 skipped Create GitHub Release entirely and still concluded
+        # success, so a green run is not evidence that publication happened.
+        #
+        # The GitHub Release and git tag this job publishes both use the
+        # bundle-v* identity. They are asserted separately, and each failure
+        # names exactly what is missing rather than warning.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_TAG="bundle-v${VERSION}"
+          missing=0
+
+          # 1. The GitHub Release must exist. `gh release view` fails both when
+          #    the release is absent and when the query itself failed, so the
+          #    two states are separated rather than collapsed into one message.
+          release_rc=0
+          release_out="$(gh release view "bundle-v${VERSION}" --repo "${{ github.repository }}" 2>&1)" || release_rc=$?
+          if [ "$release_rc" -eq 0 ]; then
+            echo "GitHub Release 'bundle-v${VERSION}' exists."
+          elif grep -qiE 'release not found|not found \\(http 404\\)' <<<"$release_out"; then
+            echo "::error::GitHub Release 'bundle-v${VERSION}' is ABSENT - the publication step reported success but produced no release."
+            missing=1
+          else
+            echo "::error::GitHub Release 'bundle-v${VERSION}' could not be confirmed (gh release view exit ${release_rc}) - state UNKNOWN, not proof of absence: $(printf '%s' "$release_out" | tr '\\n' ' ')"
+            missing=1
+          fi
+
+          # 2. The bundle tag must be on origin. `git ls-remote --exit-code`
+          #    exits 2 when no ref matches (absent); any other non-zero is a
+          #    query failure whose state is unknown, never evidence of absence.
+          tag_rc=0
+          git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}" >/dev/null 2>&1 || tag_rc=$?
+          case "$tag_rc" in
+            0)
+              echo "Bundle tag '${BUNDLE_TAG}' is present on origin."
+              ;;
+            2)
+              echo "::error::Bundle tag '${BUNDLE_TAG}' is ABSENT from origin - the bundle tag push reported success but published no tag."
+              missing=1
+              ;;
+            *)
+              echo "::error::Bundle tag '${BUNDLE_TAG}' could not be confirmed (git ls-remote exit ${tag_rc}, neither 0 nor 2) - state UNKNOWN, not proof of absence."
+              missing=1
+              ;;
+          esac
+
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Publication post-condition failed: this run must not conclude successfully without publishing."
+            exit 1
+          fi
+          echo "Publication verified: GitHub Release 'bundle-v${VERSION}' and bundle tag '${BUNDLE_TAG}' both exist."
 
   # ---------------------------------------------------------------------------
   # PyPI package publish (promote only). This is the repository's sole live

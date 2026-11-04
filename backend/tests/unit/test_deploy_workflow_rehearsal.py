@@ -3283,19 +3283,27 @@ set -euo pipefail
 
 
 # ---------------------------------------------------------------------------
-# Publish-release gate: always() + explicit dependency validation
+# Publish-release gate: never skip publication silently + terminal post-condition
 # ---------------------------------------------------------------------------
 
+_PUBLISH_RELEASE_CONDITION = "${{ !cancelled() && (inputs.mode == 'cut' || inputs.mode == 'recut') }}"
+_ASSERT_STEP_NAME = "Assert the release and bundle tag exist"
 
-def test_publish_release_if_uses_always_and_restricts_to_cut_recut() -> None:
-    """publish-release must run via always() to prevent silent skipping, but still
-    only for cut/recut modes."""
+
+def test_publish_release_if_runs_despite_skipped_needs_and_never_after_cancel() -> None:
+    """publish-release must still be evaluated when a need was skipped or failed, so
+    the dependency guard can report it, and must not publish otherwise.
+
+    Pinning the whole expression - not a literal prefix - is the contract: a switch
+    back to always() would also publish after an operator cancelled the run, and a
+    switch to the implicit success() would restore the silent skip that run
+    41786063745 exposed.
+    """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["publish-release"]
-    if_expr = job["if"]
-    assert if_expr.startswith("always()"), f"publish-release if must start with always(): {if_expr}"
-    assert "inputs.mode == 'cut'" in if_expr
-    assert "inputs.mode == 'recut'" in if_expr
+    if_expr = re.sub(r"\s+", " ", str(job["if"])).strip()
+    assert "always()" not in if_expr, f"publication must not run after cancellation: {if_expr}"
+    assert if_expr == _PUBLISH_RELEASE_CONDITION, f"unexpected publish-release condition: {if_expr}"
 
 
 def test_publish_release_guard_step_exists_and_validates_dependencies() -> None:
@@ -3336,17 +3344,53 @@ def _extract_publish_release_guard_script() -> str:
     return script
 
 
+def _extract_publish_release_step_script(name: str) -> str:
+    """Extract any publish-release step's run script from the workflow."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["publish-release"]["steps"]
+    script = steps[_step_names(steps).index(name)]["run"]
+    assert isinstance(script, str)
+    return script
+
+
+def test_publish_release_guard_covers_exactly_its_needs() -> None:
+    """The set of jobs the guard checks must equal the set of ``needs``.
+
+    A job added to ``needs`` without a matching check is a dependency whose
+    failure (or skip) can no longer be reported by the guard, and a check left
+    behind for a job that is no longer a need reads an empty result forever. The
+    guard's ``for job in ...`` list is the single enumeration, so drifting it
+    from ``needs`` fails here instead of silently weakening the gate.
+    """
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["publish-release"]
+    declared = job["needs"]
+    needs = {declared} if isinstance(declared, str) else set(declared)
+
+    script = _extract_publish_release_guard_script()
+    match = re.search(r"for job in (?P<items>[^;\n]+); do", script)
+    assert match is not None, "guard must enumerate its dependencies in one `for job in ...; do` list"
+    guarded: dict[str, str] = {}
+    for pair in shlex.split(match.group("items")):
+        name, _, variable = pair.partition("=")
+        assert name, f"guard entry {pair!r} must be name=$VAR"
+        assert variable.startswith("$"), f"guard entry {pair!r} must map to an env variable"
+        guarded[name] = variable.lstrip("$")
+    assert set(guarded) == needs, f"guard and needs: drifted - needs={sorted(needs)} guard={sorted(guarded)}"
+
+    env = job["steps"][0].get("env") or {}
+    for name, variable in guarded.items():
+        assert env.get(variable) == "${{ needs." + name + ".result }}", (
+            f"guard variable {variable} must read needs.{name}.result"
+        )
+
+
 @pytest.mark.posix_only
 def test_publish_release_guard_all_success_exits_zero(tmp_path: Path) -> None:
     """Guard script with all four dependencies as 'success' must exit 0."""
     script = _extract_publish_release_guard_script()
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _write_executable(bin_dir / "echo", '#!/usr/bin/env bash\necho "$@"')
     env = {
         **os.environ,
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "RELEASE_RESULT": "success",
         "MANIFEST_RESULT": "success",
         "ATTEST_RESULT": "success",
@@ -3361,13 +3405,8 @@ def test_publish_release_guard_all_success_exits_zero(tmp_path: Path) -> None:
 def test_publish_release_guard_final_manifest_failure_fails_and_names_it(tmp_path: Path) -> None:
     """Guard script with final-release-manifest=failure must exit non-zero and name it."""
     script = _extract_publish_release_guard_script()
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _write_executable(bin_dir / "echo", '#!/usr/bin/env bash\necho "$@"')
     env = {
         **os.environ,
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "RELEASE_RESULT": "success",
         "MANIFEST_RESULT": "failure",
         "ATTEST_RESULT": "success",
@@ -3384,13 +3423,8 @@ def test_publish_release_guard_final_manifest_failure_fails_and_names_it(tmp_pat
 def test_publish_release_guard_attest_skipped_fails_and_names_it(tmp_path: Path) -> None:
     """Guard script with attest-artefacts=skipped must exit non-zero and name it."""
     script = _extract_publish_release_guard_script()
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _write_executable(bin_dir / "echo", '#!/usr/bin/env bash\necho "$@"')
     env = {
         **os.environ,
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "RELEASE_RESULT": "success",
         "MANIFEST_RESULT": "success",
         "ATTEST_RESULT": "skipped",
@@ -3401,3 +3435,80 @@ def test_publish_release_guard_attest_skipped_fails_and_names_it(tmp_path: Path)
     assert "attest-artefacts" in result.stdout + result.stderr
     assert "skipped" in result.stdout + result.stderr
     assert "refusing to publish" in result.stdout + result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Terminal post-condition: the run must not go green without publishing
+# ---------------------------------------------------------------------------
+
+
+def _post_condition_script() -> str:
+    return _extract_publish_release_step_script(_ASSERT_STEP_NAME).replace('"${{ github.repository }}"', '"$GH_REPO"')
+
+
+def _post_condition_env(tmp_path: Path, *, gh_body: str, gh_rc: int, git_rc: int) -> dict[str, str]:
+    """Stub ``gh`` and ``git`` on PATH - both are external binaries here, so the
+    script's real invocations observe the injected exit codes."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(bin_dir / "gh", f"#!/usr/bin/env bash\nprintf '%s\\n' {shlex.quote(gh_body)}\nexit {gh_rc}\n")
+    _write_executable(bin_dir / "git", f"#!/usr/bin/env bash\nexit {git_rc}\n")
+    return {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "VERSION": "0.1.0",
+        "TAG": "bundle-v0.1.0",
+        "GH_REPO": "farnalabs/modulo",
+    }
+
+
+def test_publish_release_assertion_is_the_last_step_after_the_tag_push() -> None:
+    """The verification must be terminal: after the release create and tag push,
+    and the final step of the job so nothing after it can mask a failure."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    names = _step_names(workflow["jobs"]["publish-release"]["steps"])
+    assert _ASSERT_STEP_NAME in names, "release/bundle-tag assertion step missing"
+    assert names.index(_ASSERT_STEP_NAME) > names.index("Push the bundle tag")
+    assert names[-1] == _ASSERT_STEP_NAME, "the assertion must be the job's final step"
+
+    script = _post_condition_script()
+    raw_script = _extract_publish_release_step_script(_ASSERT_STEP_NAME)
+    assert 'gh release view "bundle-v${VERSION}" --repo "${{ github.repository }}"' in raw_script
+    assert 'git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}"' in script
+    assert "::error::" in script, "the assertion must fail with an ::error:: annotation"
+    assert "|| true" not in script, "the assertion must never swallow a failure"
+    assert "::warning::" not in script, "absence must fail, not warn"
+
+
+@pytest.mark.posix_only
+def test_publish_release_assertion_exits_zero_when_release_and_tag_exist(tmp_path: Path) -> None:
+    env = _post_condition_env(tmp_path, gh_body="v0.1.0-rc1", gh_rc=0, git_rc=0)
+    result = _run_bash(_post_condition_script(), cwd=tmp_path, env=env)
+    assert result.returncode == 0, f"present release and tag must pass: {result.stdout} {result.stderr}"
+    assert "Publication verified" in result.stdout
+    assert "bundle-v0.1.0" in result.stdout
+
+
+@pytest.mark.posix_only
+def test_publish_release_assertion_fails_naming_an_absent_release_and_tag(tmp_path: Path) -> None:
+    env = _post_condition_env(tmp_path, gh_body="release not found", gh_rc=1, git_rc=2)
+    result = _run_bash(_post_condition_script(), cwd=tmp_path, env=env)
+    assert result.returncode != 0, "an absent release and tag must fail the job"
+    assert "GitHub Release 'bundle-v0.1.0' is ABSENT" in result.stdout
+    assert "Bundle tag 'bundle-v0.1.0' is ABSENT" in result.stdout
+    assert "Publication post-condition failed" in result.stdout
+    assert "Publication verified" not in result.stdout
+
+
+@pytest.mark.posix_only
+def test_publish_release_assertion_reports_an_unknown_state_not_absence(tmp_path: Path) -> None:
+    """A transient query failure is not proof of absence: ls-remote rc 2 means no
+    such ref, any other non-zero means the state is unknown, and both fail with a
+    message that says which one happened."""
+    env = _post_condition_env(tmp_path, gh_body="HTTP 502: Server Error", gh_rc=1, git_rc=128)
+    result = _run_bash(_post_condition_script(), cwd=tmp_path, env=env)
+    assert result.returncode != 0, "an unverifiable publication must fail the job"
+    assert "could not be confirmed" in result.stdout
+    assert "state UNKNOWN, not proof of absence" in result.stdout
+    assert "is ABSENT" not in result.stdout
+    assert "Publication post-condition failed" in result.stdout
