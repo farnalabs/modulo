@@ -43,7 +43,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NoReturn, cast
+from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -73,6 +73,7 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import CLIENT_KIND_BROWSER, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.cron_helpers import _awaiting_human_has_committed_decision
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
@@ -97,6 +98,7 @@ from modulo.db.crud.hitl_review_config import (
     resolve_review_descriptions,
     snapshot_review_config_map,
 )
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import get_run, transition_run
 from modulo.db.crud.team_scope import account_team_scope_clause, viewer_run_scope_visible
 from modulo.db.models.account import Account
@@ -320,6 +322,49 @@ def _is_sandbox_capacity_exceeded(exc: BaseException) -> bool:
     return isinstance(exc, SandboxCapacityExceededError)
 
 
+async def _session_row_is_f6a_reconcile_candidate(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> bool:
+    """Whether *run_id* is in the F6a reconcile-recoverable shape.
+
+    Recovery is a property of the ROW, not of whether a repair UPDATE matched:
+    a resume that fails BEFORE its claim transaction commits leaves the run in
+    its committed HITL state, which is already a valid F6a candidate. The
+    row must be in an actionable HITL status, dispatched by SAQ, and carry a
+    committed gate decision the reconcile guard accepts.
+    """
+    row = (
+        await session.execute(
+            select(Run.status, Run.dispatcher).where(
+                Run.id == run_id,
+                Run.organisation_id == org_id,
+            )
+        )
+    ).first()
+    if row is None:
+        return False
+    status, dispatcher = row
+    if status not in HITL_ACTIONABLE_RUN_STATUSES or dispatcher != "saq":
+        return False
+    return await _awaiting_human_has_committed_decision(session, org_id, run_id)
+
+
+async def _run_is_f6a_reconcile_candidate(
+    *,
+    engine: AsyncEngine,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> bool:
+    """Open a short RLS session and evaluate the F6a reconcile-candidate state."""
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        return await _session_row_is_f6a_reconcile_candidate(session, org_id=org_id, run_id=run_id)
+
+
 async def _restore_failed_mcp_resume_for_reconcile(
     *,
     engine: AsyncEngine,
@@ -336,13 +381,22 @@ async def _restore_failed_mcp_resume_for_reconcile(
     fenced to the exact executor claim token. A later executor/reconcile claim
     therefore wins the row and this stale failure cannot rewrite it back to
     ``awaiting_human``.
+
+    Returns whether the row is NOW an F6a reconcile candidate. A pre-claim
+    failure matches no UPDATE (the run never left its HITL status) but is
+    still recoverable, so the row is re-read rather than judging recovery by
+    the UPDATE's rowcount.
     """
     stale_seconds = max(1, int(get_settings().saq_job_heartbeat) * 2)
     stale_heartbeat = datetime.now(UTC) - timedelta(seconds=stale_seconds)
     factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
-        result = await session.execute(
+        # FAR-1584/1592/1601/1610 caller-bound convention: this is a
+        # request-path hot-row write, so bound the lock wait at the top of the
+        # transaction — before the repair UPDATE's first lock.
+        await set_mutation_row_lock_timeout(session)
+        await session.execute(
             update(Run)
             .where(
                 Run.id == run_id,
@@ -357,7 +411,7 @@ async def _restore_failed_mcp_resume_for_reconcile(
                 completed_at=None,
             )
         )
-    return bool(cast(Any, result).rowcount == 1)
+        return await _session_row_is_f6a_reconcile_candidate(session, org_id=org_id, run_id=run_id)
 
 
 def _capacity_deferred_response(run_id: uuid.UUID, action: str) -> dict[str, str]:

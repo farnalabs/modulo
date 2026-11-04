@@ -99,6 +99,7 @@ from modulo.api.routes.hitl import (
     _capacity_deferred_response,
     _is_sandbox_capacity_exceeded,
     _restore_failed_mcp_resume_for_reconcile,
+    _run_is_f6a_reconcile_candidate,
 )
 from modulo.api.routes.oauth_metadata import protected_resource_metadata_url
 from modulo.api.routes.triggers import (
@@ -7611,24 +7612,22 @@ async def _resume_run_after_mcp_approval(
             deferred["review_id"] = review_id
             return deferred
         try:
-            restored = await _restore_failed_mcp_resume_for_reconcile(
+            recoverable = await _restore_failed_mcp_resume_for_reconcile(
                 engine=get_or_create_engine(get_settings()),
                 org_id=org_id,
                 run_id=run_id,
                 claim_token=claim_token,
             )
-        except asyncio.CancelledError:
-            raise
         except Exception:
-            restored = False
+            recoverable = False
             _log.exception("mcp.review_hitl.approve_resume_reconcile_restore_failed", extra={"run_id": str(run_id)})
         _log.exception(
             "mcp.review_hitl.approve_resume_failed",
-            extra={"run_id": str(run_id), "reconcile_restored": restored},
+            extra={"run_id": str(run_id), "reconcile_recoverable": recoverable},
         )
         recovery_detail = (
             "The reconciliation sweep will retry the resume."
-            if restored
+            if recoverable
             else "Automatic recovery could not restore the run for reconciliation; operator intervention is required."
         )
         return {
@@ -7636,7 +7635,7 @@ async def _resume_run_after_mcp_approval(
             "review_id": review_id,
             "run_id": str(run_id),
             "resume_status": "failed",
-            "reconcile_status": "queued" if restored else "failed",
+            "reconcile_status": "queued" if recoverable else "failed",
             "detail": (
                 f"Approval recorded, but resuming the pipeline failed. The decision is committed; {recovery_detail}"
             ),
@@ -7776,15 +7775,38 @@ async def _review_hitl_impl(
     if action == "approve" and decision.get("status") == "approved":
         resume_claim_token = getattr(run, "claim_token", None)
         if not isinstance(resume_claim_token, str) or not resume_claim_token:
-            _log.error("mcp.review_hitl.approve_resume_missing_claim_token", extra={"run_id": str(rid)})
+            try:
+                recoverable = await _run_is_f6a_reconcile_candidate(
+                    engine=get_or_create_engine(get_settings()),
+                    org_id=org_id,
+                    run_id=rid,
+                )
+            except SQLAlchemyError:
+                recoverable = False
+                _log.exception(
+                    "mcp.review_hitl.approve_resume_missing_claim_token_reconcile_check_failed",
+                    extra={"run_id": str(rid)},
+                )
+            _log.log(
+                logging.INFO if recoverable else logging.ERROR,
+                "mcp.review_hitl.approve_resume_missing_claim_token",
+                extra={"run_id": str(rid), "reconcile_recoverable": recoverable},
+            )
+            recovery_detail = (
+                "The reconciliation sweep will retry the resume."
+                if recoverable
+                else (
+                    "Automatic recovery could not restore the run for reconciliation; "
+                    "operator intervention is required."
+                )
+            )
             return {
                 **decision,
                 "run_id": str(rid),
                 "resume_status": "failed",
-                "reconcile_status": "failed",
+                "reconcile_status": "queued" if recoverable else "failed",
                 "detail": (
-                    "Approval recorded, but the resume claim fence could not be established; "
-                    "operator intervention is required."
+                    "Approval recorded, but the resume claim fence could not be established; " + recovery_detail
                 ),
             }
         return await _resume_run_after_mcp_approval(

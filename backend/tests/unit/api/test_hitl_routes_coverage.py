@@ -23,6 +23,11 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.api.models.problem import ProblemType
+from modulo.api.routes.hitl import (
+    _restore_failed_mcp_resume_for_reconcile,
+    _run_is_f6a_reconcile_candidate,
+    _session_row_is_f6a_reconcile_candidate,
+)
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.hitl_manager import (
@@ -1611,3 +1616,116 @@ def test_viewer_reviews_unfenced_status_still_carries_account_team_scope(
 
     assert resp.status_code == 200, resp.text
     assert any("team_memberships" in str(stmt) for stmt in captured)
+
+
+def _candidate_session(row: tuple[str, str | None] | None) -> AsyncMock:
+    session = AsyncMock()
+    result = MagicMock()
+    result.first.return_value = row
+    session.execute = AsyncMock(return_value=result)
+    return session
+
+
+def _async_session_context(session: AsyncMock) -> MagicMock:
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=session)
+    context.__aexit__ = AsyncMock(return_value=False)
+    return context
+
+
+async def test_f6a_candidate_false_when_run_missing() -> None:
+    assert (
+        await _session_row_is_f6a_reconcile_candidate(_candidate_session(None), org_id=_ORG_ID, run_id=_RUN_ID) is False
+    )
+
+
+async def test_f6a_candidate_false_for_non_hitl_status() -> None:
+    session = _candidate_session(("running", "saq"))
+    with patch("modulo.api.routes.hitl._awaiting_human_has_committed_decision", new_callable=AsyncMock) as guard:
+        assert await _session_row_is_f6a_reconcile_candidate(session, org_id=_ORG_ID, run_id=_RUN_ID) is False
+    guard.assert_not_awaited()
+
+
+async def test_f6a_candidate_false_for_non_saq_dispatcher() -> None:
+    session = _candidate_session(("awaiting_human", None))
+    with patch("modulo.api.routes.hitl._awaiting_human_has_committed_decision", new_callable=AsyncMock) as guard:
+        assert await _session_row_is_f6a_reconcile_candidate(session, org_id=_ORG_ID, run_id=_RUN_ID) is False
+    guard.assert_not_awaited()
+
+
+async def test_f6a_candidate_requires_committed_decision() -> None:
+    session = _candidate_session(("awaiting_human", "saq"))
+    with patch(
+        "modulo.api.routes.hitl._awaiting_human_has_committed_decision",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        assert await _session_row_is_f6a_reconcile_candidate(session, org_id=_ORG_ID, run_id=_RUN_ID) is False
+
+
+async def test_f6a_candidate_true_for_decided_claimable_row() -> None:
+    session = _candidate_session(("hitl_parked", "saq"))
+    with patch(
+        "modulo.api.routes.hitl._awaiting_human_has_committed_decision",
+        new_callable=AsyncMock,
+        return_value=True,
+    ) as guard:
+        assert await _session_row_is_f6a_reconcile_candidate(session, org_id=_ORG_ID, run_id=_RUN_ID) is True
+    guard.assert_awaited_once()
+
+
+async def test_run_is_f6a_candidate_wrapper_opens_rls_session() -> None:
+    session = AsyncMock()
+    session.begin = MagicMock(return_value=_async_session_context(session))
+    with (
+        patch("modulo.api.routes.hitl.async_sessionmaker") as sessionmaker,
+        patch(
+            "modulo.api.routes.hitl._session_row_is_f6a_reconcile_candidate",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as candidate,
+        patch("modulo.api.routes.hitl.set_rls_org", new_callable=AsyncMock) as set_rls,
+    ):
+        sessionmaker.return_value = MagicMock(return_value=_async_session_context(session))
+        assert await _run_is_f6a_reconcile_candidate(engine=MagicMock(), org_id=_ORG_ID, run_id=_RUN_ID) is True
+
+    candidate.assert_awaited_once()
+    set_rls.assert_awaited_once()
+
+
+async def test_restore_bounds_lock_and_reports_row_recoverability() -> None:
+    """The repair transaction issues the caller-bound lock timeout FIRST.
+
+    The decision is already committed, so recovery is judged on the re-read
+    row (the production F6a candidate check), never on the UPDATE rowcount.
+    """
+    session = AsyncMock()
+    update_result = MagicMock()
+    session.execute = AsyncMock(return_value=update_result)
+    session.begin = MagicMock(return_value=_async_session_context(session))
+    with (
+        patch("modulo.api.routes.hitl.async_sessionmaker") as sessionmaker,
+        patch("modulo.api.routes.hitl.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.hitl.set_mutation_row_lock_timeout", new_callable=AsyncMock) as bound,
+        patch(
+            "modulo.api.routes.hitl._session_row_is_f6a_reconcile_candidate",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        sessionmaker.return_value = MagicMock(return_value=_async_session_context(session))
+        assert (
+            await _restore_failed_mcp_resume_for_reconcile(
+                engine=MagicMock(),
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+                claim_token="claim-old",
+            )
+            is True
+        )
+
+    bound.assert_awaited_once_with(session)
+    update_statement = session.execute.await_args.args[0]
+    params = dict(update_statement.compile().params)
+    assert "claim-old" in params.values()
+    assert params["status"] == "awaiting_human"
