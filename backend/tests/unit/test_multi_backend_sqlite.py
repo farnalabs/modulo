@@ -1,14 +1,12 @@
-import os
-
 """Smoke test: SQLite backend with create_all, CRUD, and tenant filtering.
 
 Verifies that core ORM operations work on the sqlite+aiosqlite driver
 without any Postgres-specific features (RLS, advisory locks, etc.).
 """
 
+import os
 import uuid
 
-import anyio
 import pytest
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -26,11 +24,8 @@ from modulo.db.models.organisation import Organisation
 
 
 @pytest.fixture(scope="module")
-def engine(request):
-    import os
-
-    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
-    db_path = f"./test_multi_backend_{worker_id}.db"
+def engine(tmp_path_factory):
+    db_path = tmp_path_factory.mktemp("multi_backend") / "test.db"
     db_url = f"sqlite+aiosqlite:///{db_path}"
     return create_async_engine(db_url, echo=False)
 
@@ -38,12 +33,7 @@ def engine(request):
 @pytest.fixture(scope="module")
 async def _tables(engine):
     # SQLite does not support ARRAY type - skip tables that use it
-    import os
-
     from sqlalchemy import ARRAY
-
-    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
-    db_path = f"./test_multi_backend_{worker_id}.db"
 
     tables_to_create = [t for t in Base.metadata.sorted_tables if not any(isinstance(c.type, ARRAY) for c in t.columns)]
     async with engine.begin() as conn:
@@ -52,8 +42,6 @@ async def _tables(engine):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
-    if await anyio.to_thread.run_sync(os.path.exists, db_path):
-        await anyio.to_thread.run_sync(os.remove, db_path)
 
 
 @pytest.fixture(autouse=True)
