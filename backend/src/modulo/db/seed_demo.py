@@ -38,9 +38,10 @@ Creates (idempotently, NO Alembic migrations):
 * a webhook trigger (GitHub PR events), a cron trigger (weekly release
   notes) and a "Ticket ready" webhook trigger on the governance pipeline,
 
-* RunDailyFact rows for analytics surface seeding.
-Lifecycle Maps remain supported by the product, but are intentionally not seeded
-into the public demo organisation.
+* RunDailyFact rows for analytics surface seeding,
+* an idempotent default published System Map (Demo Delivery System) with
+  pipeline-backed nodes, external intake, improvement loops, and relationships
+  so the Dashboard System Overview and /system-maps surfaces render live metrics.
 
 
 Convergence: every spec-owned field (pipeline graph, edges, snapshot graph,
@@ -100,6 +101,13 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.schema import Schema, SchemaVersion
+from modulo.db.models.system_map import (
+    SystemMap,
+    SystemMapLoopConfig,
+    SystemMapNode,
+    SystemMapRelationship,
+    SystemMapRevision,
+)
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
@@ -2339,6 +2347,305 @@ async def _derive_lifecycle_map_stages(session: AsyncSession, lifecycle_map: Lif
     await session.flush()
 
 
+_DEMO_SYSTEM_MAP_NAME = "Demo Delivery System"
+
+
+def _system_map_content(
+    pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
+) -> dict[str, Any]:
+    """Canonical content for the demo System Map with live pipeline nodes and loops."""
+    gov_pipeline, _ = pipeline_lookup[DEMO_PIPELINE_NAME]
+    review_pipeline, _ = pipeline_lookup[PR_REVIEW_PIPELINE_NAME]
+    release_notes_pipeline, _ = pipeline_lookup[RELEASE_NOTES_PIPELINE_NAME]
+    docs_sync_pipeline, _ = pipeline_lookup[DOCS_SYNC_PIPELINE_NAME]
+
+    return {
+        "nodes": [
+            {
+                "node_key": "intake",
+                "display_name": "Intake (Linear)",
+                "node_type": "external_system",
+                "config_json": {"source_kind": "folder"},
+                "pipeline_id": None,
+                "position_x": 0,
+                "position_y": 120,
+            },
+            {
+                "node_key": "implementation",
+                "display_name": "Governance & Implementation",
+                "node_type": "pipeline",
+                "config_json": {},
+                "pipeline_id": str(gov_pipeline.id),
+                "position_x": 260,
+                "position_y": 120,
+            },
+            {
+                "node_key": "review",
+                "display_name": "PR Review & Triage",
+                "node_type": "pipeline",
+                "config_json": {},
+                "pipeline_id": str(review_pipeline.id),
+                "position_x": 520,
+                "position_y": 120,
+            },
+            {
+                "node_key": "release",
+                "display_name": "Release Notes Generator",
+                "node_type": "pipeline",
+                "config_json": {},
+                "pipeline_id": str(release_notes_pipeline.id),
+                "position_x": 780,
+                "position_y": 120,
+            },
+            {
+                "node_key": "docs",
+                "display_name": "Docs Sync",
+                "node_type": "pipeline",
+                "config_json": {},
+                "pipeline_id": str(docs_sync_pipeline.id),
+                "position_x": 1040,
+                "position_y": 120,
+            },
+            {
+                "node_key": "improve_security",
+                "display_name": "Improve Security",
+                "node_type": "improvement_loop",
+                "config_json": {
+                    "target_signal": "security_findings",
+                    "observation_window_seconds": 604800,
+                    "action_pipeline_id": str(gov_pipeline.id),
+                    "budget_limit_usd": 50.0,
+                    "cooldown_seconds": 86400,
+                    "outcome_metric": "vulnerabilities_remediated",
+                },
+                "pipeline_id": None,
+                "position_x": 520,
+                "position_y": 300,
+            },
+            {
+                "node_key": "improve_architecture",
+                "display_name": "Improve Architecture",
+                "node_type": "improvement_loop",
+                "config_json": {
+                    "target_signal": "architecture_violations",
+                    "observation_window_seconds": 604800,
+                    "action_pipeline_id": str(gov_pipeline.id),
+                    "budget_limit_usd": 50.0,
+                    "cooldown_seconds": 86400,
+                    "outcome_metric": "violations_resolved",
+                },
+                "pipeline_id": None,
+                "position_x": 780,
+                "position_y": 300,
+            },
+        ],
+        "relationships": [
+            {
+                "source_node_key": "intake",
+                "target_node_key": "implementation",
+                "relationship_type": "flow",
+                "config_json": {},
+            },
+            {
+                "source_node_key": "implementation",
+                "target_node_key": "review",
+                "relationship_type": "flow",
+                "config_json": {},
+            },
+            {
+                "source_node_key": "review",
+                "target_node_key": "release",
+                "relationship_type": "flow",
+                "config_json": {},
+            },
+            {
+                "source_node_key": "release",
+                "target_node_key": "docs",
+                "relationship_type": "flow",
+                "config_json": {},
+            },
+            {
+                "source_node_key": "improve_security",
+                "target_node_key": "implementation",
+                "relationship_type": "trigger",
+                "config_json": {},
+            },
+            {
+                "source_node_key": "improve_architecture",
+                "target_node_key": "implementation",
+                "relationship_type": "trigger",
+                "config_json": {},
+            },
+        ],
+        "loop_configs": [
+            {
+                "node_key": "improve_security",
+                "target_signal": "security_findings",
+                "observation_window_seconds": 604800,
+                "action_pipeline_id": str(gov_pipeline.id),
+                "budget_limit_usd": "50.000000",
+                "cooldown_seconds": 86400,
+                "outcome_metric": "vulnerabilities_remediated",
+            },
+            {
+                "node_key": "improve_architecture",
+                "target_signal": "architecture_violations",
+                "observation_window_seconds": 604800,
+                "action_pipeline_id": str(gov_pipeline.id),
+                "budget_limit_usd": "50.000000",
+                "cooldown_seconds": 86400,
+                "outcome_metric": "violations_resolved",
+            },
+        ],
+    }
+
+
+async def _seed_demo_system_map(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
+) -> None:
+    """Idempotent System Maps demo map for /system-maps and Dashboard overview.
+
+    Creates and publishes the default System Map for the demo organisation.
+    Keyed on (organisation, name) among live maps; content and graph elements
+    converge idempotently across boots.
+    """
+    try:
+        content = _system_map_content(pipeline_lookup)
+        now = datetime.now(UTC)
+        async with session.begin_nested():
+            result = await session.execute(
+                select(SystemMap)
+                .where(
+                    SystemMap.organisation_id == org.id,
+                    SystemMap.name == _DEMO_SYSTEM_MAP_NAME,
+                    SystemMap.deleted_at.is_(None),
+                )
+                .order_by(SystemMap.created_at)
+                .limit(1)
+            )
+            system_map = result.scalars().first()
+
+            if system_map is None:
+                system_map = SystemMap(
+                    organisation_id=org.id,
+                    name=_DEMO_SYSTEM_MAP_NAME,
+                    description="Delivery system map demonstrating the full System Maps feature set.",
+                    visibility="org",
+                    default_map=True,
+                    account_id=account.id,
+                    updated_by=account.id,
+                )
+                session.add(system_map)
+                await session.flush()
+
+                revision = SystemMapRevision(
+                    organisation_id=org.id,
+                    system_map_id=system_map.id,
+                    revision_number=1,
+                    status="published",
+                    content_json=content,
+                    published_at=now,
+                    effective_from=now,
+                    effective_to=None,
+                )
+                session.add(revision)
+                await session.flush()
+
+                system_map.published_revision_id = revision.id
+                await _seed_demo_system_map_elements(session, org.id, revision.id, content)
+                _log.info("demo_seed.system_map_created", extra={"map_id": str(system_map.id)})
+                return
+
+            # Converge default_map flag
+            if not system_map.default_map:
+                system_map.default_map = True
+
+            # If no published revision exists, create and publish one
+            if system_map.published_revision_id is None:
+                rev_res = await session.execute(
+                    select(SystemMapRevision)
+                    .where(
+                        SystemMapRevision.organisation_id == org.id,
+                        SystemMapRevision.system_map_id == system_map.id,
+                        SystemMapRevision.deleted_at.is_(None),
+                    )
+                    .order_by(SystemMapRevision.revision_number.desc())
+                    .limit(1)
+                )
+                latest_rev = rev_res.scalars().first()
+                rev_num = (latest_rev.revision_number + 1) if latest_rev else 1
+                revision = SystemMapRevision(
+                    organisation_id=org.id,
+                    system_map_id=system_map.id,
+                    revision_number=rev_num,
+                    status="published",
+                    content_json=content,
+                    published_at=now,
+                    effective_from=now,
+                    effective_to=None,
+                )
+                session.add(revision)
+                await session.flush()
+                system_map.published_revision_id = revision.id
+                await _seed_demo_system_map_elements(session, org.id, revision.id, content)
+                _log.info("demo_seed.system_map_published", extra={"map_id": str(system_map.id)})
+    except Exception as exc:
+        _log.warning("demo_seed.system_map_write_failed: %s", _safe_exc_text(exc))
+
+
+async def _seed_demo_system_map_elements(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    revision_id: uuid.UUID,
+    content: dict[str, Any],
+) -> None:
+    """Seed nodes, relationships, and loop configs for a System Map revision."""
+    for node_data in content.get("nodes", []):
+        p_id = uuid.UUID(node_data["pipeline_id"]) if node_data.get("pipeline_id") else None
+        node = SystemMapNode(
+            organisation_id=org_id,
+            revision_id=revision_id,
+            node_key=node_data["node_key"],
+            node_type=node_data["node_type"],
+            display_name=node_data["display_name"],
+            config_json=node_data.get("config_json", {}),
+            pipeline_id=p_id,
+            position_x=Decimal(str(node_data.get("position_x") if node_data.get("position_x") is not None else 0)),
+            position_y=Decimal(str(node_data.get("position_y") if node_data.get("position_y") is not None else 0)),
+        )
+        session.add(node)
+
+    for edge_data in content.get("relationships", []):
+        edge = SystemMapRelationship(
+            organisation_id=org_id,
+            revision_id=revision_id,
+            source_node_key=edge_data["source_node_key"],
+            target_node_key=edge_data["target_node_key"],
+            relationship_type=edge_data["relationship_type"],
+            config_json=edge_data.get("config_json", {}),
+        )
+        session.add(edge)
+
+    for loop_data in content.get("loop_configs", []):
+        loop_cfg = SystemMapLoopConfig(
+            organisation_id=org_id,
+            revision_id=revision_id,
+            node_key=loop_data["node_key"],
+            target_signal=loop_data["target_signal"],
+            observation_window_seconds=loop_data["observation_window_seconds"],
+            action_pipeline_id=uuid.UUID(loop_data["action_pipeline_id"]),
+            budget_limit_usd=Decimal(str(loop_data["budget_limit_usd"])),
+            cooldown_seconds=loop_data["cooldown_seconds"],
+            outcome_metric=loop_data["outcome_metric"],
+        )
+        session.add(loop_cfg)
+
+    await session.flush()
+
+
 async def _seed_demo_lifecycle_map(  # vulture: ignore - retained internal dogfood helper
     session: AsyncSession,
     org: Organisation,
@@ -2881,6 +3188,7 @@ async def seed_demo(session: AsyncSession) -> str | None:
     await _seed_demo_evals(session, org, account, pipeline_lookup)
     await _seed_demo_triggers(session, org, account, pipeline_lookup)
     await _seed_demo_governance_surfaces(session, org, account, pipeline_lookup)
+    await _seed_demo_system_map(session, org, account, pipeline_lookup)
 
     return f"org={DEMO_ORG_SLUG} user={email}"
 
