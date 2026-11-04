@@ -2837,8 +2837,8 @@ def test_release_rc_tag_callers_read_the_release_job_output() -> None:
 def test_release_workflow_has_include_windows_input() -> None:
     """The unified release workflow must declare the include_windows input.
 
-    Windows is Alpha scope (FAR-2338), so the default is true: an Alpha cut
-    ships the signed Windows installer unless an operator explicitly opts out.
+    Windows is Beta scope, so the default is false: the Alpha cut does not ship
+    the signed Windows installer unless an operator explicitly opts in.
     """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     # 'on' is a YAML boolean keyword; quoted key ensures correct parsing
@@ -2847,8 +2847,8 @@ def test_release_workflow_has_include_windows_input() -> None:
     assert "include_windows" in inputs
     inp = inputs["include_windows"]
     assert inp["type"] == "boolean"
-    assert inp["default"] is True
-    assert "Alpha" in inp["description"]
+    assert inp["default"] is False
+    assert "Beta" in inp["description"]
 
 
 def test_windows_installer_job_gated_on_include_windows() -> None:
@@ -2864,15 +2864,26 @@ def test_windows_installer_job_gated_on_include_windows() -> None:
 def test_final_release_manifest_needs_windows_installer_when_in_scope() -> None:
     """final-release-manifest must depend on windows-installer (FAR-2338).
 
-    The manifest downloads the ``windows-installer-<version>`` artefact, so the
-    producing job has to be a dependency. The job-level ``if`` keeps the
-    ``include_windows=false`` path working when that job is skipped.
+    The manifest downloads the ``windows-installer-<version>`` artefact when the
+    Beta-only ``include_windows`` opt-in is true, so the producing job has to be
+    a dependency. The job-level ``if`` is fail-closed: the Linux/macOS jobs must
+    succeed, Windows must succeed when opted in, and Windows must be exactly
+    ``skipped`` when it is out of scope.
     """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     final_job = workflow["jobs"]["final-release-manifest"]
     assert "windows-installer" in final_job["needs"]
     assert "macos-installer" in final_job["needs"]
-    assert "inputs.include_windows == false || needs.windows-installer.result == 'success'" in final_job["if"]
+    # Folded scalars join most lines with spaces but keep a newline before the
+    # more-indented continuation, so normalise whitespace before asserting.
+    condition = " ".join(final_job["if"].split())
+    assert "always()" in condition
+    assert "inputs.mode == 'cut' || inputs.mode == 'recut'" in condition
+    assert "needs.release.result == 'success'" in condition
+    assert "needs.bundle.result == 'success'" in condition
+    assert "needs.macos-installer.result == 'success'" in condition
+    assert "inputs.include_windows && needs.windows-installer.result == 'success'" in condition
+    assert "!inputs.include_windows && needs.windows-installer.result == 'skipped'" in condition
 
 
 def test_publish_release_needs_excludes_windows_installer() -> None:
