@@ -619,3 +619,36 @@ class TestSystemEnginePoolRecycle:
         finally:
             deps._SYSTEM_ASYNC_ENGINE = saved_engine
             deps._SYSTEM_ENGINE_IS_FALLBACK = saved_flag
+
+
+class TestSystemMapsReadDependencies:
+    """The published-read gate and the internal-access probe (FAR-2363)."""
+
+    def test_published_read_allows_a_viewer(self) -> None:
+        from modulo.api.dependencies import _require_published_system_maps_read
+
+        principal = _tenant("viewer")
+        assert _require_published_system_maps_read(principal) is principal
+
+    def test_published_read_below_viewer_is_denied_403(self) -> None:
+        from modulo.api.dependencies import _require_published_system_maps_read
+
+        with pytest.raises(HTTPException) as excinfo:
+            _require_published_system_maps_read(_tenant(""))
+        assert excinfo.value.status_code == 403
+
+    def test_internal_access_true_when_the_internal_gate_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies as deps
+
+        principal = _tenant("operator")
+        monkeypatch.setattr(deps, "_require_internal_system_maps_access", lambda *_a, **_k: principal)
+        assert deps._system_maps_internal_access(principal) is True
+
+    def test_internal_access_false_when_the_internal_gate_denies(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies as deps
+
+        def _deny(*_a: object, **_k: object) -> None:
+            raise HTTPException(status_code=403, detail="denied")
+
+        monkeypatch.setattr(deps, "_require_internal_system_maps_access", _deny)
+        assert deps._system_maps_internal_access(_tenant("viewer")) is False

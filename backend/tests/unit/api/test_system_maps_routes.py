@@ -1538,6 +1538,21 @@ def test_overview_viewer_cannot_read_draft_by_revision_id() -> None:
     assert response.json()["detail"] == "Revision not found"
 
 
+def test_overview_viewer_by_time_hides_a_draft() -> None:
+    """A viewer's point-in-time read never aggregates a draft revision."""
+    harness = _Harness()
+    _install_overrides(harness, org_role="viewer", internal_access=False)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_time", AsyncMock(return_value=_revision_row(status="draft")))
+    try:
+        response = TestClient(app).get(f"{_BASE}/{_MAP_ID}/overview", params={"at": "2026-01-01T00:00:00Z"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert "No revision active at" in response.json()["detail"]
+
+
 def test_overview_non_published_revision_returns_404(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
@@ -3327,6 +3342,20 @@ def test_viewer_diffs_only_published_revisions(viewer_client: tuple[TestClient, 
     assert resp.status_code == 200, resp.text
     assert not harness.repository.list_revisions.called
     assert harness.repository.diff_revisions.await_args.kwargs["target_revision_id"] == _REV_ID
+
+
+def test_viewer_diff_with_no_published_revision_returns_404(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """With nothing published there is no viewer-safe diff target."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("get_published_revision", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff", json={})
+
+    assert resp.status_code == 404
+    assert "No published revision found" in resp.json()["detail"]
+    harness.repository.diff_revisions.assert_not_awaited()
 
 
 def test_viewer_cannot_diff_against_a_draft(viewer_client: tuple[TestClient, _Harness]) -> None:

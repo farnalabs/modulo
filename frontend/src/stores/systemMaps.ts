@@ -200,6 +200,53 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   }
 
   /**
+   * Page through the map list and collect only published maps.
+   *
+   * The caller may be superseded by a newer request (``stale``) or refused for
+   * entitlement reasons (``feature_required``); both must stop pagination
+   * without surfacing an error. Kept separate so ``fetchDefaultOverview`` owns
+   * the settle/fetch flow while this function owns the pagination invariants.
+   */
+  async function collectPublishedMapItems(
+    request: { generation: number; token: string | null },
+  ): Promise<
+    | { kind: 'ok'; items: SystemMapList['items'] }
+    | { kind: 'stale' }
+    | { kind: 'feature_required' }
+  > {
+    const publishedItems: SystemMapList['items'] = []
+    let nextPage = 1
+    let listTotal = Number.POSITIVE_INFINITY
+
+    while (publishedItems.length < listTotal && nextPage <= MAX_SYSTEM_MAP_PAGES) {
+      const response = await withRequestDeadline(
+        (signal) =>
+          api.GET('/api/v1/system-maps', {
+            params: { query: { page: nextPage, page_size: SYSTEM_MAP_PAGE_SIZE } },
+            signal,
+          }),
+        OVERVIEW_REQUEST_TIMEOUT_MS,
+      )
+      if (!isCurrentOverviewRequest(request.generation, request.token)) return { kind: 'stale' }
+      if (response.error || !response.data) {
+        if (isFeatureRequiredResult(response.error, response.response)) return { kind: 'feature_required' }
+        throw new Error(apiErrorMessage(response.error, 'System map list request failed'))
+      }
+
+      const pageData = response.data as SystemMapList
+      publishedItems.push(...pageData.items.filter((item) => item.published_revision_id != null))
+      listTotal = pageData.total
+      if (pageData.items.length === 0 || pageData.items.length < pageData.page_size) break
+      nextPage += 1
+    }
+
+    if (nextPage > MAX_SYSTEM_MAP_PAGES) {
+      throw new Error('System map list pagination exceeded its safety limit')
+    }
+    return { kind: 'ok', items: publishedItems }
+  }
+
+  /**
    * Load the overview for the caller's default map.
    *
    * Only a map with a published revision can be aggregated, so drafts are never
@@ -209,42 +256,16 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   async function fetchDefaultOverview(): Promise<void> {
     const request = beginOverviewRequest()
     try {
-      const publishedItems: SystemMapList['items'] = []
-      let nextPage = 1
-      let listTotal = Number.POSITIVE_INFINITY
-
-      while (publishedItems.length < listTotal && nextPage <= MAX_SYSTEM_MAP_PAGES) {
-        const response = await withRequestDeadline(
-          (signal) =>
-            api.GET('/api/v1/system-maps', {
-              params: { query: { page: nextPage, page_size: SYSTEM_MAP_PAGE_SIZE } },
-              signal,
-            }),
-          OVERVIEW_REQUEST_TIMEOUT_MS,
-        )
-        if (!isCurrentOverviewRequest(request.generation, request.token)) return
-        if (response.error || !response.data) {
-          if (isFeatureRequiredResult(response.error, response.response)) {
-            overview.value = null
-            overviewEmpty.value = false
-            overviewError.value = null
-            overviewUnavailable.value = true
-            return
-          }
-          throw new Error(apiErrorMessage(response.error, 'System map list request failed'))
-        }
-
-        const pageData = response.data as SystemMapList
-        publishedItems.push(...pageData.items.filter((item) => item.published_revision_id != null))
-        listTotal = pageData.total
-        if (pageData.items.length === 0 || pageData.items.length < pageData.page_size) break
-        nextPage += 1
+      const outcome = await collectPublishedMapItems(request)
+      if (outcome.kind === 'stale') return
+      if (outcome.kind === 'feature_required') {
+        overview.value = null
+        overviewEmpty.value = false
+        overviewError.value = null
+        overviewUnavailable.value = true
+        return
       }
-
-      if (nextPage > MAX_SYSTEM_MAP_PAGES) {
-        throw new Error('System map list pagination exceeded its safety limit')
-      }
-      const map = publishedItems.find((item) => item.default_map) ?? publishedItems[0]
+      const map = outcome.items.find((item) => item.default_map) ?? outcome.items[0]
       if (!map) {
         overview.value = null
         overviewEmpty.value = true
