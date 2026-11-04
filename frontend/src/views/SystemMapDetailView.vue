@@ -17,10 +17,10 @@
           :active-map="activeMap"
           @select-revision="selectRevision"
           @select-current="selectCurrentRevision"
-           @select-by-time="selectRevisionByTime"
-           :read-only="readOnly"
-           @new-draft="createNewDraft"
-           @discover="runDiscovery"
+          @select-by-time="selectRevisionByTime"
+          :read-only="readOnly"
+          @new-draft="createNewDraft"
+          @discover="runDiscovery"
         />
       </div>
 
@@ -56,9 +56,9 @@
           @toggle-sidebar="showSidebar = !showSidebar"
           @save="saveDraft"
           @publish="publishRevision"
-           @archive="archiveRevision"
-           :read-only="readOnly"
-           @discover="runDiscovery"
+          @archive="archiveRevision"
+          :read-only="readOnly"
+          @discover="runDiscovery"
           data-testid="system-map-detail-header"
         />
 

@@ -5,8 +5,8 @@
       <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.SystemMapDetailView.revision_history_hint') }}</p>
     </div>
     <div class="flex gap-2 border-b p-3">
-       <button v-if="!props.readOnly" type="button" class="flex-1 rounded border px-2 py-1.5 text-xs" @click="$emit('new-draft')" data-testid="system-map-new-draft">{{ $t('views.SystemMapDetailView.new_draft') }}</button>
-       <button v-if="!props.readOnly" type="button" class="flex-1 rounded border px-2 py-1.5 text-xs" @click="$emit('discover')" data-testid="system-map-sidebar-discover">{{ $t('views.SystemMapDetailView.discover') }}</button>
+      <button v-if="!props.readOnly" type="button" class="flex-1 rounded border px-2 py-1.5 text-xs" @click="$emit('new-draft')" data-testid="system-map-new-draft">{{ $t('views.SystemMapDetailView.new_draft') }}</button>
+      <button v-if="!props.readOnly" type="button" class="flex-1 rounded border px-2 py-1.5 text-xs" @click="$emit('discover')" data-testid="system-map-sidebar-discover">{{ $t('views.SystemMapDetailView.discover') }}</button>
     </div>
     <div class="space-y-2 border-b p-3">
       <button type="button" class="w-full rounded border px-2 py-1.5 text-xs" @click="$emit('select-current')" data-testid="system-map-revision-current">{{ $t('views.SystemMapDetailView.view_current') }}</button>

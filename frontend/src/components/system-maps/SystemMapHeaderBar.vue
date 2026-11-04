@@ -12,16 +12,16 @@
       <button type="button" class="rounded border px-2.5 py-1.5 text-sm" :aria-label="$t('views.SystemMapDetailView.toggle_history')" @click="$emit('toggle-sidebar')" data-testid="system-map-header-toggle-history">
         {{ $t('views.SystemMapDetailView.history') }}
       </button>
-       <button type="button" class="rounded border px-2.5 py-1.5 text-sm" :disabled="readOnly || saving" @click="$emit('save')" data-testid="system-map-save-draft">
+      <button type="button" class="rounded border px-2.5 py-1.5 text-sm" :disabled="readOnly || saving" @click="$emit('save')" data-testid="system-map-save-draft">
         {{ saving ? $t('views.SystemMapDetailView.saving') : $t('views.SystemMapDetailView.save_draft') }}
       </button>
-       <button type="button" class="rounded border px-2.5 py-1.5 text-sm" :disabled="props.readOnly" @click="$emit('discover')" data-testid="system-map-discover">
+      <button type="button" class="rounded border px-2.5 py-1.5 text-sm" :disabled="props.readOnly" @click="$emit('discover')" data-testid="system-map-discover">
         {{ $t('views.SystemMapDetailView.discover') }}
       </button>
-       <button type="button" class="rounded bg-primary px-2.5 py-1.5 text-sm text-primary-foreground" :disabled="props.readOnly || !revision || revision.status !== 'draft'" @click="$emit('publish')" data-testid="system-map-publish">
+      <button type="button" class="rounded bg-primary px-2.5 py-1.5 text-sm text-primary-foreground" :disabled="props.readOnly || !revision || revision.status !== 'draft'" @click="$emit('publish')" data-testid="system-map-publish">
         {{ $t('views.SystemMapDetailView.publish') }}
       </button>
-       <button v-if="revision?.status === 'published'" type="button" class="rounded border px-2.5 py-1.5 text-sm" :disabled="props.readOnly" @click="$emit('archive')" data-testid="system-map-archive">
+      <button v-if="revision?.status === 'published'" type="button" class="rounded border px-2.5 py-1.5 text-sm" :disabled="props.readOnly" @click="$emit('archive')" data-testid="system-map-archive">
         {{ $t('views.SystemMapDetailView.archive') }}
       </button>
     </div>
