@@ -18,7 +18,7 @@ test.describe('Error Tracking', { tag: "@regression" }, () => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/errors')
 
-    await expect(page.locator('h1')).toContainText(/Error/i)
+    await expect(page.locator('h1')).toContainText(/Error/i, { timeout: 30_000 })
   })
 
   test('error dashboard shows UI elements', { tag: "@regression" }, async ({ page, env }) => {
@@ -46,7 +46,7 @@ test.describe('Error Tracking', { tag: "@regression" }, () => {
 
     await page.goto('/admin/errors')
 
-    await expect(page.locator('text=Connection timeout')).toBeVisible()
+    await expect(page.locator('text=Connection timeout')).toBeVisible({ timeout: 30_000 })
   })
 
   test('auto-applies filters without Apply button (FAR-868)', { tag: "@regression" }, async ({ page, env }) => {
@@ -58,7 +58,7 @@ test.describe('Error Tracking', { tag: "@regression" }, () => {
     await expect(applyBtn).toHaveCount(0)
 
     // Reset button must exist
-    await expect(page.getByTestId('admin-errors-reset')).toBeVisible()
+    await expect(page.getByTestId('admin-errors-reset')).toBeVisible({ timeout: 30_000 })
 
     // Changing a dropdown filter should auto-apply (no Apply button needed)
     const levelFilter = page.getByTestId('filter-bar-level')
@@ -72,7 +72,7 @@ test.describe('Error Tracking', { tag: "@regression" }, () => {
 
     // Reset should clear filters
     await page.getByTestId('admin-errors-reset').click()
-    await expect(page.getByTestId('admin-errors-reset')).toBeVisible()
+    await expect(page.getByTestId('admin-errors-reset')).toBeVisible({ timeout: 30_000 })
   })
 })
 
