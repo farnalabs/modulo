@@ -36,12 +36,12 @@ If a `cut` or `recut` fails, a dedicated finalizer job clears `release-freeze` a
 
 ### How long a freeze may last
 
-A freeze is deliberate, but it is **not unbounded**: the intended maximum is **4 hours** from the moment `release-freeze` is pushed until `promote` deletes it. That window covers the RC soak, the forced deploy and `rc-validate`; a `recut` starts it again from the new RC. It exists because the marker is the one piece of release state with no expiry — on 2026-11-02/03 a release failed four times on an unrelated CI flag and the marker survived for about 12 hours, during which 20 approved green PRs sat unmerged while every merge-queue run still concluded success (the queue job is skipped while the marker exists).
+A freeze is deliberate, but it is **not unbounded**: the intended maximum is **4 hours** from the moment `release-freeze` is pushed until `promote` deletes it. That window covers the RC soak, the forced deploy and `rc-validate`; a `recut` starts it again from the new RC. It exists because the marker is the one piece of release state with no expiry - on 2026-11-02/03 a release failed four times on an unrelated CI flag and the marker survived for about 12 hours, during which 20 approved green PRs sat unmerged while every merge-queue run still concluded success (the queue job is skipped while the marker exists).
 
 **Nothing opens the gate when the maximum is exceeded.** A release that legitimately overruns must not be un-frozen mid-flight: merging into `main` while an RC is being validated would change the commit that gets promoted. An overrun instead becomes visible, and the decision stays with a human:
 
 - `merge-queue.yml`'s freeze gate reports the marker's commit and age on every tick (a `::notice::` plus a run-summary block) and adds a `::warning::` once the marker is older than the maximum. The gate still fails closed and never lifts a freeze by itself.
-- `merge-queue-watchdog.yml` (every 10 minutes) raises an operator alert through the existing watchdog escalation path — one deduplicated Linear ticket per condition, `RELEASE FREEZE STALE`, naming the marker commit, its age and the threshold. The alert fires on the **watchdog** run, never on the merge-queue tick: a halt somebody chose is not a queue failure, and failing the tick would make every frozen pass look like a broken queue.
+- `merge-queue-watchdog.yml` (every 10 minutes) raises an operator alert through the existing watchdog escalation path - one deduplicated Linear ticket per condition, `RELEASE FREEZE STALE`, naming the marker commit, its age and the threshold. The alert fires on the **watchdog** run, never on the merge-queue tick: a halt somebody chose is not a queue failure, and failing the tick would make every frozen pass look like a broken queue.
 - The threshold defaults to 4 hours and is overridden with the `RELEASE_FREEZE_MAX_HOURS` repository variable; the watchdog also accepts a `max_freeze_hours` `workflow_dispatch` input for a one-off re-check.
 - The reported age is measured from the commit the marker points at, because GitHub exposes no ref-creation time. It is therefore a **lower bound**: an alert can arrive late, never early.
 
@@ -52,7 +52,7 @@ git ls-remote --exit-code origin refs/heads/release-freeze   # confirm it exists
 git push origin --delete refs/heads/release-freeze            # lift the freeze
 ```
 
-Do that only when the freeze is genuinely abandoned — a `cut`/`recut` that failed in a way the finalizer above could not clear, or a `promote` that was abandoned. Deleting a live freeze lets the merge queue land commits on `main` mid-release, and the GA tag then points at a commit nobody validated. Do **not** promote a release just to clear a stale marker, and do not add an automatic lift: a late merge is recoverable, a wrongly-lifted freeze is a wrong release.
+Do that only when the freeze is genuinely abandoned - a `cut`/`recut` that failed in a way the finalizer above could not clear, or a `promote` that was abandoned. Deleting a live freeze lets the merge queue land commits on `main` mid-release, and the GA tag then points at a commit nobody validated. Do **not** promote a release just to clear a stale marker, and do not add an automatic lift: a late merge is recoverable, a wrongly-lifted freeze is a wrong release.
 
 ### Recut runbook
 

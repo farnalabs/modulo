@@ -481,6 +481,15 @@ The compose file pulls the all-in-one image from GHCR. To build that image
 yourself from source (for example as a continuity plan), see
 [Continuity and Escrow](continuity-and-escrow.md).
 
+Each release also publishes the stack as a downloadable asset,
+`modulo-<version>-compose.tar.gz`. It contains `docker-compose.prod.yml` with
+the image hard-pinned to that release's immutable tag, a copy named
+`docker-compose.yml`, a working `.env.example`, `init-env.sh` (copies the
+example env file into place), `quickstart.md` and `SHA256SUMS`; the bundle is
+standalone (the repository-internal health
+watchdog service is removed), so you do not need a checkout to run it. The
+asset is listed in the release `SHA256SUMS` and `RELEASE_MANIFEST.json`.
+
 **1. Create the environment file.** The stack will not start without it: compose
 refuses to run (naming the variable) until `MODULO_DB_PASSWORD`, `SECRET_KEY`,
 `FERNET_KEY`, `SAQ_AUTH_USERNAME` and `SAQ_AUTH_PASSWORD` are set.
