@@ -85,6 +85,7 @@ jobs:
           RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_FREEZE: ${{ inputs.freeze }}
+          RELEASE_INCLUDE_WINDOWS: ${{ inputs.include_windows }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -95,10 +96,15 @@ jobs:
           if [ "${RELEASE_FREEZE}" = "true" ]; then
             freeze_arg="--freeze"
           fi
+          windows_arg=""
+          if [ "${RELEASE_INCLUDE_WINDOWS}" = "true" ]; then
+            windows_arg="--include-windows"
+          fi
           uv run --no-project --no-build python scripts/run_release_preflight.py \
             --mode "${RELEASE_MODE}" \
             --version "${RELEASE_VERSION}" \
-            $freeze_arg
+            $freeze_arg \
+            $windows_arg
 
   # ---------------------------------------------------------------------------
   # Dry-run rehearsal

@@ -8,14 +8,22 @@ rendered in one run.
 Checks included:
   1. Schema freshness: verify schema freshness gate status or check schema drift.
   2. macOS installer inputs: check workflow inputs contract (semver, mode).
-  3. Inno Setup availability on Windows.
+  3. Inno Setup availability on Windows, required only when Windows is included.
   4. GHCR auth / buildx context / tag availability.
   5. rc_tag output defined and propagated.
   6. uv.lock freshness for release version bump.
   7. Release-freeze marker state valid and movable (FAR-2317 tag ruleset).
-  8. Windows native artifacts payload present.
-  9. Azure Trusted Signing + release secret presence check, required for cut/recut (values never printed!).
- 10. Branch merge-conflict check against main.
+  8. Windows native artifacts payload present, required only when Windows is included.
+  9. Release secret presence check (always required for cut/recut/promote) plus the
+     Azure Trusted Signing secrets, required only when Windows is included
+     (values never printed!).
+ 10. Helm chart artefact validation (files always required; ``helm lint`` only when
+     a local ``helm`` binary is available, otherwise deferred to CI).
+ 11. Branch merge-conflict check against main.
+
+Windows native packaging is Beta scope: every Windows-only check is skipped with an
+explicit result unless ``include_windows`` is enabled (``--include-windows`` /
+``RELEASE_INCLUDE_WINDOWS=true``).
 """
 
 from __future__ import annotations
@@ -82,6 +90,7 @@ class ReleasePreflightChecker:
         mode: str = "dry-run",
         version: str = "",
         freeze: bool = False,
+        include_windows: bool = False,
         repo_root: Path | str | None = None,
         env: dict[str, str] | None = None,
         run_cmd: Callable[..., tuple[int, str, str]] | None = None,
@@ -89,6 +98,7 @@ class ReleasePreflightChecker:
         self.mode = mode.strip()
         self.version = version.strip()
         self.freeze = freeze
+        self.include_windows = include_windows
         self.env = env if env is not None else dict(os.environ)
         self.run_cmd = run_cmd if run_cmd is not None else default_run_cmd
 
@@ -347,6 +357,13 @@ class ReleasePreflightChecker:
     # -------------------------------------------------------------------------
     def check_inno_setup_availability(self) -> PreflightCheckResult:
         name = "Inno Setup availability on Windows"
+        if not self.include_windows:
+            return PreflightCheckResult(
+                name,
+                True,
+                "Skipped: the Windows native installer is Beta scope and include_windows=false, "
+                "so no Inno Setup inputs are required",
+            )
         iss_path = self.repo_root / "deploy" / "windows" / "modulo.iss"
         if not iss_path.exists():
             return PreflightCheckResult(name, False, "deploy/windows/modulo.iss is missing")
@@ -714,10 +731,17 @@ class ReleasePreflightChecker:
         )
 
     # -------------------------------------------------------------------------
-    # 8. Windows native artifacts payload present
+    # 8. Windows native artifacts payload present when Windows is included
     # -------------------------------------------------------------------------
     def check_windows_native_artifacts(self) -> PreflightCheckResult:
         name = "Windows native artifacts payload present"
+        if not self.include_windows:
+            return PreflightCheckResult(
+                name,
+                True,
+                "Skipped: the Windows native installer is Beta scope and include_windows=false, "
+                "so no windows-artifacts payload is required",
+            )
         if self.mode == "dry-run":
             return PreflightCheckResult(
                 name,
@@ -741,16 +765,17 @@ class ReleasePreflightChecker:
                 f"Windows native artifacts available from successful windows-artifacts.yml run ({run_id})",
             )
 
-        # Windows native packaging is Alpha scope: the packaging job (FAR-2338)
-        # consumes this zip and real-host validation (FAR-2250) runs the installer
-        # it produces, so a cut/recut without the payload would fail later in the
-        # release instead of here.
+        # Windows native packaging is Beta scope and is included only on opt-in:
+        # the packaging job (FAR-2338) consumes this zip and real-host validation
+        # (FAR-2250) runs the installer it produces, so an included cut/recut
+        # without the payload would fail later in the release instead of here.
         return PreflightCheckResult(
             name,
             False,
             f"Windows native artifacts payload '{_WINDOWS_ARTIFACTS_ZIP}' is missing: no local zip and no "
-            f"successful windows-artifacts.yml run found. The Alpha Windows package (FAR-2338) requires it for "
-            f"mode '{self.mode}'; real-host validation (FAR-2250) runs the installer it produces",
+            f"successful windows-artifacts.yml run found. The Windows package (FAR-2338) is Beta scope and "
+            f"requires it when include_windows=true for mode '{self.mode}'; real-host validation (FAR-2250) "
+            f"runs the installer it produces",
         )
 
     def _find_local_windows_payload(self) -> Path | None:
@@ -799,11 +824,11 @@ class ReleasePreflightChecker:
         return None
 
     # -------------------------------------------------------------------------
-    # 9. Azure Trusted Signing resource / secrets presence check
+    # 9. Release secrets (always) + Azure Trusted Signing secrets (Windows only)
     # -------------------------------------------------------------------------
     def check_azure_signing_secrets(self) -> PreflightCheckResult:
         name = "Azure Trusted Signing secrets presence"
-        signing_secrets = [
+        windows_signing_secrets = [
             "AZURE_CLIENT_ID",
             "AZURE_TENANT_ID",
             "AZURE_SUBSCRIPTION_ID",
@@ -814,7 +839,7 @@ class ReleasePreflightChecker:
         ]
 
         if self.mode == "dry-run":
-            all_missing = [s for s in signing_secrets + release_secrets if not self.env.get(s)]
+            all_missing = [s for s in windows_signing_secrets + release_secrets if not self.env.get(s)]
             if all_missing:
                 return PreflightCheckResult(
                     name,
@@ -828,24 +853,37 @@ class ReleasePreflightChecker:
                 "All signing and release secrets configured (values redacted)",
             )
 
-        # Windows native packaging is Alpha scope (FAR-2338) and the Windows
-        # signing job (windows-installer.yml) fails closed without the Azure
-        # Trusted Signing credentials. A cut/recut that passed this gate
-        # without them would only fail later, at the signing job - the
-        # serial-unveiling failure this preflight exists to prevent. Promote
-        # does not build or sign a Windows installer, so it only requires the
-        # release secrets.
-        required = list(release_secrets)
-        if self.mode in ("cut", "recut"):
-            required = signing_secrets + release_secrets
+        # The two release secrets are required on EVERY release path, whether or
+        # not Windows is included: bundle-release.yml hard-fails on an unsigned
+        # manifest, and MODULO_RELEASE_PR_TOKEN drives the cut/promote PRs.
+        # Only the Azure Trusted Signing secrets belong to the Windows job
+        # (windows-installer.yml), which runs only when Windows is included.
+        windows_packaging_required = self.include_windows and self.mode in ("cut", "recut")
 
-        all_missing = [s for s in required if not self.env.get(s)]
-        if all_missing:
+        missing_release = [s for s in release_secrets if not self.env.get(s)]
+        missing_windows = (
+            [s for s in windows_signing_secrets if not self.env.get(s)] if windows_packaging_required else []
+        )
+        missing = missing_windows + missing_release
+        if missing:
             return PreflightCheckResult(
                 name,
                 False,
-                f"Missing required release secret(s): {', '.join(all_missing)} (values redacted)",
+                f"Missing required release secret(s): {', '.join(missing)} (values redacted)",
             )
+
+        if not windows_packaging_required:
+            reason = (
+                "Windows native signing is Beta scope and include_windows=false"
+                if not self.include_windows
+                else f"mode '{self.mode}' does not build or sign a Windows installer"
+            )
+            return PreflightCheckResult(
+                name,
+                True,
+                f"Release secrets present (values redacted); Azure Trusted Signing secrets not required: {reason}",
+            )
+
         return PreflightCheckResult(
             name,
             True,
@@ -853,7 +891,42 @@ class ReleasePreflightChecker:
         )
 
     # -------------------------------------------------------------------------
-    # 10. Branch merge-conflict check against main
+    # 10. Helm chart artefact validation
+    # -------------------------------------------------------------------------
+    def check_helm_chart(self) -> PreflightCheckResult:
+        name = "Helm chart artefact validation"
+        chart_dir = self.repo_root / "deploy" / "helm" / "modulo"
+        if not chart_dir.is_dir():
+            return PreflightCheckResult(name, False, "deploy/helm/modulo chart directory is missing")
+
+        required_files = ("Chart.yaml", "values.yaml")
+        missing = [filename for filename in required_files if not (chart_dir / filename).is_file()]
+        if missing:
+            return PreflightCheckResult(
+                name,
+                False,
+                f"Helm chart is malformed: missing required file(s): {', '.join(missing)}",
+            )
+
+        # `helm lint` needs a local helm binary; like k8s-conformance.yml, the
+        # lint is deferred to CI when it is absent rather than treated as a
+        # failure. No live cluster is required or contacted.
+        helm_bin = shutil.which("helm")
+        if not helm_bin:
+            return PreflightCheckResult(
+                name,
+                True,
+                "Helm chart files are present; helm is not installed locally, so helm lint is deferred to CI",
+            )
+
+        rc, stdout, stderr = self.run_cmd([helm_bin, "lint", str(chart_dir)], cwd=self.repo_root, timeout=180)
+        if rc != 0:
+            reason = (stderr or stdout).strip() or f"exit code {rc}"
+            return PreflightCheckResult(name, False, f"helm lint failed for deploy/helm/modulo: {reason}")
+        return PreflightCheckResult(name, True, "Helm chart files are present and helm lint passed")
+
+    # -------------------------------------------------------------------------
+    # 11. Branch merge-conflict check against main
     # -------------------------------------------------------------------------
     def check_merge_conflicts(self) -> PreflightCheckResult:
         name = "Branch merge-conflict check against main"
@@ -967,7 +1040,7 @@ class ReleasePreflightChecker:
     # Orchestration & Summary
     # -------------------------------------------------------------------------
     def run_all_checks(self) -> list[PreflightCheckResult]:
-        """Execute all 10 preflight checks unconditionally."""
+        """Execute all 11 preflight checks and report every result."""
         checks: list[Callable[[], PreflightCheckResult]] = [
             self.check_schema_freshness,
             self.check_macos_installer_inputs,
@@ -978,6 +1051,7 @@ class ReleasePreflightChecker:
             self.check_release_freeze_state,
             self.check_windows_native_artifacts,
             self.check_azure_signing_secrets,
+            self.check_helm_chart,
             self.check_merge_conflicts,
         ]
 
@@ -1072,6 +1146,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Release freeze flag (default: $RELEASE_FREEZE == true)",
     )
     parser.add_argument(
+        "--include-windows",
+        action="store_true",
+        default=os.environ.get("RELEASE_INCLUDE_WINDOWS", "false").lower() == "true",
+        help="Require the Beta-scope Windows native installer inputs (default: $RELEASE_INCLUDE_WINDOWS == true)",
+    )
+    parser.add_argument(
         "--repo-root",
         default=None,
         help="Path to repository root",
@@ -1088,11 +1168,13 @@ def main(argv: list[str] | None = None) -> int:
         mode=args.mode,
         version=args.version,
         freeze=args.freeze,
+        include_windows=args.include_windows,
         repo_root=args.repo_root,
     )
 
     print(
-        f"--- Starting Release Preflight Gate (mode={checker.mode}, version={checker.version or 'unset'}) ---",
+        f"--- Starting Release Preflight Gate (mode={checker.mode}, version={checker.version or 'unset'}, "
+        f"include_windows={str(checker.include_windows).lower()}) ---",
         file=sys.stderr,
     )
 
