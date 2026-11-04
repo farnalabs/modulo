@@ -739,18 +739,32 @@ class TestRecordFactForTerminalFailedRun:
 # ---------------------------------------------------------------------------
 
 
+_METRICS_HANDLE_GLOBALS = (
+    "_facts_write_failed_total",
+    "_backfill_last_run_ts",
+    "_backfill_rows",
+    "_reconcile_alert_total",
+    "_retention_lag",
+    "_facts_skip_non_pg_total",
+)
+
+
+def _reset_metrics_handle_globals() -> None:
+    for name in _METRICS_HANDLE_GLOBALS:
+        setattr(metrics_mod, name, None)
+
+
 @pytest.fixture(autouse=True)
 def _reset_metrics_handles() -> None:
+    # Reset BEFORE each test as well as after: the metric handles are
+    # process-global, and another module sharing this xdist worker can lazily
+    # initialise the REAL OTel handles (e.g. a live record_run_facts failure
+    # path). Those ``_ProxyGauge``/``_ProxyCounter`` objects have no ``.calls``
+    # list, so a test that assumed a clean slate then fails on a redistributed
+    # shard. Resetting first makes each test independent of worker ordering.
+    _reset_metrics_handle_globals()
     yield
-    for name in (
-        "_facts_write_failed_total",
-        "_backfill_last_run_ts",
-        "_backfill_rows",
-        "_reconcile_alert_total",
-        "_retention_lag",
-        "_facts_skip_non_pg_total",
-    ):
-        setattr(metrics_mod, name, None)
+    _reset_metrics_handle_globals()
 
 
 class TestGetMeter:
