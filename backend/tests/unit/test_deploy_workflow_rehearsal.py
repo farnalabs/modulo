@@ -151,8 +151,9 @@ def test_release_signature_heredocs_compile_as_python() -> None:
             for step in job.get("steps", [])
             if "verify_signature" in step.get("run", "") and "MANIFEST_SIGNING_KEY" in step.get("run", "")
         ]
-        assert len(scripts) == 1, f"expected one signing script in {workflow_path}"
-        compile(_python_heredoc(scripts[0], marker), str(workflow_path), "exec")
+        assert scripts, f"expected at least one signing script in {workflow_path}"
+        for script in scripts:
+            compile(_python_heredoc(script, marker), str(workflow_path), "exec")
 
 
 def test_rehearsal_step_exists_before_real_migrations_per_leg() -> None:
