@@ -227,7 +227,7 @@ test.describe('WCAG AA audit (CI — Vite dev server)', { tag: "@regression" }, 
 // character, which axe treats as non-human-interpretable and reports as
 // `incomplete`, never as a violation. The tests below drive the authenticated
 // shell with a real `sub`, which is the state every real session is in.
-const AUTHENTICATED_ROUTES = ['/runs', '/', '/pipelines', '/admin/my-profile', '/settings/triggers', '/admin/users'] as const
+const AUTHENTICATED_ROUTES = ['/runs', '/', '/pipelines', '/admin/my-profile', '/settings/triggers', '/admin/users', '/admin/trigger-events', '/admin/audit'] as const
 
 // Tagged @local-mock rather than @regression: these tests drive the
 // setupLocalMockApi target, so they run in the `Frontend and WCAG` CI job
@@ -340,6 +340,63 @@ test.describe('authenticated light-theme contrast (FAR-1938)', { tag: "@regressi
       const violations = filterViolations(results.violations)
       logViolations(`${path} (authenticated, light)`, violations)
       expect(violations).toEqual([])
+    })
+  }
+})
+
+// FAR-2351 — the neutral PrimeVue badge (`.p-badge-secondary`, the sidebar's
+// plan-tier chip) measured 1.11:1 on /admin/trigger-events and /admin/audit:
+// `#d4d4d8` ink on a `#dbe0e6` fill, 10px bold. The finding only reproduces in
+// the state the light-mode audit above cannot reach, because our palette and
+// PrimeVue's colour scheme flip on DIFFERENT switches: the page is light when
+// `.light` is present, while PrimeVue picks its palette from `.dark`
+// (`darkModeSelector: '.dark'` in main.ts, and `index.html` ships
+// `class="dark"`). A page that has `.light` but still carries `.dark` — which is
+// exactly how a light-mode audit that only ADDS `.light` measures it (see
+// json-viewer.spec.ts) — therefore read the badge ink from PrimeVue's dark
+// scheme (`--p-surface-300` = zinc-300 `#d4d4d8`) while its fill came from our
+// light palette (the token bridge maps `--p-surface-800` to
+// `hsl(var(--muted))` = `#dbe0e6`).
+//
+// So this scan deliberately reproduces that mixed state, and asserts the
+// `color-contrast` rule is clean. Reverting the `html.light .p-badge-secondary`
+// override in style.css brings the violation straight back, which the
+// drop-`.dark` light-theme loop above would not catch.
+test.describe('light page with a stale .dark class — PrimeVue badges (FAR-2351)', { tag: "@regression" }, () => {
+  for (const path of ['/admin/trigger-events', '/admin/audit']) {
+    test(`${path} has no color-contrast violations when .light is added over .dark`, { tag: "@regression" }, async ({ page, env }) => {
+      const { setupLocalMockApi, loginAsAdmin } = await import('./setup/fixtures')
+      await setupLocalMockApi(page)
+      await page.addInitScript(() => { try { localStorage.setItem('assistant-panel-state', 'closed') } catch (err) { console.warn(err) } })
+      await loginAsAdmin(page, env)
+
+      await page.goto(path)
+      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+
+      await page.addStyleTag({ content: SUPPRESS_TRANSITIONS_CSS })
+      await page.evaluate(() => {
+        document.documentElement.classList.add('light')
+        // Deliberately KEEP .dark: the two theme switches are independent, and
+        // the reported finding lives exactly in their disagreement.
+      })
+      await page.evaluate(() => new Promise(r => requestAnimationFrame(r)))
+
+      // Guard the harness: the page must be light AND still carry the stale
+      // class, otherwise the scan below audits a different state than the one
+      // the finding was reported in.
+      const classes = await page.evaluate(() => Array.from(document.documentElement.classList))
+      expect(classes, 'the light theme must be active').toContain('light')
+      expect(classes, 'the stale dark class must still be present').toContain('dark')
+
+      // Guard the target: without a rendered neutral badge the scan would be
+      // vacuously clean.
+      const badges = page.locator('.p-badge')
+      await expect(badges.first()).toBeVisible()
+
+      const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()
+      const contrastViolations = filterViolations(results.violations).filter(v => v.id === 'color-contrast')
+      logViolations(`${path} (light + stale .dark)`, contrastViolations)
+      expect(contrastViolations).toEqual([])
     })
   }
 })
