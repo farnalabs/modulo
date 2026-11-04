@@ -163,6 +163,26 @@ describe('useSystemMapsStore CRUD', () => {
     await expect(store.loadRevision('map-1', 'rev-2')).rejects.toThrow('Could not load map revision')
   })
 
+  it('loads the complete revision history', async () => {
+    mockGet.mockResolvedValue({ data: { system_map_id: 'map-1', revisions: [
+      { revision: { id: 'rev-1', revision_number: 1 } },
+      { revision: { id: 'rev-2', revision_number: 2 } },
+    ] } })
+    const store = useSystemMapsStore()
+
+    await store.loadRevisionHistory('map-1')
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/history', { params: { path: { map_id: 'map-1' } } })
+    expect(store.revisions.map((item) => item.id)).toEqual(['rev-1', 'rev-2'])
+  })
+
+  it('reports revision history failures', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'down' } })
+    const store = useSystemMapsStore()
+
+    await expect(store.loadRevisionHistory('map-1')).rejects.toThrow('Could not load revision history')
+  })
+
   it('loads the current revision through the version-aware endpoint', async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/system-maps/{map_id}/revisions/current') {

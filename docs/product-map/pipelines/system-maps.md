@@ -357,14 +357,17 @@ The map is stored in dedicated System Maps tables (migration
       `frontend/src/components/system-maps/SystemMapRevisionSidebar.vue`;
       `systemMapsStoreCrud.spec.ts`, `SystemMapDetailView.spec.ts`,
       `SystemMapComponents.coverage.spec.ts`)
-- [ ] The revision sidebar still does not read `GET /revisions/history`, and
-      diff and restore-as-new have no UI affordance: it lists the revisions
-      loaded in the current session (the published revision from `loadMap`
-      plus any draft or explicitly selected revision) and switches with
-      `GET /revisions/{rev_id}`, so an archived revision that was not loaded
-      this session is invisible until it is read by id
+- [x] The revision sidebar reads `GET /revisions/history` when a map opens and
+      replaces its session list with every tenant-scoped published, draft and
+      archived revision, ordered newest first; selecting an entry loads its
+      graph through `GET /revisions/{rev_id}`
       (`frontend/src/stores/systemMaps.ts`,
-      `frontend/src/components/system-maps/SystemMapRevisionSidebar.vue`)
+      `frontend/src/views/SystemMapDetailView.vue`,
+      `frontend/src/components/system-maps/SystemMapRevisionSidebar.vue`;
+      `frontend/src/__tests__/systemMapsStoreCrud.spec.ts`)
+- [ ] Diff and restore-as-new have no UI affordance: the sidebar does not yet
+      expose the existing revision diff or restore actions
+      (`frontend/src/components/system-maps/SystemMapRevisionSidebar.vue`)
 - [ ] Discovery cannot re-scan into an existing map: there is no re-scan
       endpoint and each successful discovery creates a map (a repeat with a
       colliding name is 409), so the added / removed / ambiguous
