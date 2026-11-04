@@ -1,29 +1,38 @@
 name: "Main: Integration tests"
 
-# Run the full integration suite on main post-merge. The deploy gate's
-# integration job is the same suite, but it only runs when the deploy
-# throttle fires — a PR can be green while an untouched integration test
-# is red (ci.yml's integration job is changed-files-scoped). Running on
-# main post-merge surfaces the same red immediately after the merge
-# (minutes) instead of at the next deploy attempt (hours).
+# The full integration suite against main, once a day.
 #
-# This job does NOT gate merges — it runs AFTER the merge. On failure or
+# What changed and why (FAR-2369, breadth over speed): this used to run on
+# EVERY push to main. That re-validated an unchanged suite dozens of times a
+# day at full cost, and it does not gate anything - it runs AFTER the merge.
+# A once-daily pass still surfaces a red integration test within ~24h, and it
+# is not the product's safety net: the deploy gate's integration job runs the
+# SAME suite on every deploy, so nothing is promoted without it. This workflow
+# is the early-warning net; the deploy gate is the real pre-production check.
+# Slower detection of a pre-existing red integration test is the accepted cost.
+#
+# This job does NOT gate merges - it runs AFTER the merge. On failure or
 # timeout it is LOUD: fail the run, post a Linear comment if LINEAR_API_KEY
-# is available (fail-open on the comment only).
+# is available (fail-open on the comment only), and the notify job fails too.
 #
-# NO high-frequency schedule: this repo has documented evidence that
-# GitHub drops high-frequency crons under load (AGENTS.md: "GitHub's
-# scheduler DROPS high-frequency cron events on high-activity repos").
-# A push-triggered workflow is reliable; a cron here would not be.
-# workflow_dispatch is provided for manual re-runs.
+# Why a 1/day cron is safe here (and why the old header said otherwise): the
+# documented evidence is that GitHub DROPS HIGH-FREQUENCY cron events under
+# load on this repo (AGENTS.md: "GitHub's scheduler DROPS high-frequency cron
+# events on high-activity repos" - a */15 collapsed to 2-4 runs/day). Low-
+# frequency crons were never observed dropping, so 1/day is reliable where a
+# frequent schedule would not be. The minute is deliberately off-boundary
+# (:17 past, not :00/:15/:30/:45) so it does not queue behind the repo's many
+# high-frequency crons. workflow_dispatch is provided for manual re-runs.
 
 on:
-  push:
-    branches: [main]
+  schedule:
+    # 05:17 UTC daily - off-peak and off-boundary (see above).
+    - cron: '17 5 * * *'
   workflow_dispatch:
 
-# One run per push — overlapping pushes cancel the previous run rather
-# than piling up.
+# One run per branch at a time: a manual workflow_dispatch supersedes an
+# in-progress scheduled run (or another dispatch) rather than both running.
+# The push trigger this replaced used the same group, so nothing else changes.
 concurrency:
   group: main-integration-${{ github.ref_name }}
   cancel-in-progress: true

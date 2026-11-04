@@ -18,7 +18,7 @@
 # check critical but does NOT restart the machine on a failing check -
 # observed 2026-09-02: the production app machine sat in this state for over
 # two hours until a manual `fly machine restart`.
-# This workflow closes that gap: every 5 minutes it looks for a STARTED machine
+# This workflow closes that gap: every 15 minutes it looks for a STARTED machine
 # in the "app" process group whose app_liveness check is critical, and
 # restarts those machines if both guards below pass. Matches are deduplicated
 # by machine id, so a machine with several critical checks is restarted at
@@ -58,7 +58,7 @@
 #    queued (a queued deploy can transition to running between the check and
 #    the restart) - never restart a machine mid-rolling-deploy. If the
 #    deploy-run query itself fails, the restart is skipped too (fail-closed
-#    for a state-changing action; the next scheduled run retries in 5 minutes).
+#    for a state-changing action; the next scheduled run retries in 15 minutes).
 #
 # Every handled outcome exits 0 and writes its reason to the job summary; the
 # next scheduled run retries naturally. GitHub runs scheduled workflows only
@@ -68,7 +68,20 @@ name: "Recover: Web Machine"
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    # Every 15 minutes, on an off-boundary minute (FAR-2369, breadth over
+    # speed): this was */5, i.e. two thirds of these runs (288/day) are no
+    # longer bought. Detection latency rises from up to ~5 minutes to up to
+    # ~15 (one schedule tick); the 15-minute freshness guard above is
+    # unchanged and can add one more tick for a machine that was updated
+    # moments before a run. This workflow only acts on an already-wedged
+    # machine, so the extra latency is an accepted cost, not a new outage.
+    # :05/:20/:35/:50 keeps it off the :00/:15/:30/:45 boundary the rest of
+    # the repo's crons cluster on. Risk, stated rather than hidden: a
+    # 15-minute cadence is the band AGENTS.md records GitHub dropping
+    # scheduled events from on high-volume repos (FAR-492) - a missed tick
+    # only delays the next recovery attempt (this job is idempotent and
+    # fail-closed), and workflow_dispatch is available for an immediate run.
+    - cron: '5,20,35,50 * * * *'
   workflow_dispatch:
 
 concurrency:
