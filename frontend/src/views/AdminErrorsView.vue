@@ -112,6 +112,7 @@
         <DataTable
           :columns="columns"
           :rows="groups"
+          row-testid="admin-errors-row"
           @row-click="row => navigateToDetail(errorGroupRowId(row))"
         >
           <template #cell-level_peak="{ value }">
