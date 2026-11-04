@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document owner | Security Team |
-| Applies to | Modulo (AI SDLC Agentic Delivery Governance platform) |
+| Applies to | Modulo (self-hosted Agentic Delivery Governance platform and autonomous software factory) |
 | Classification | Internal (Confidential) |
 | Version | 1.0 |
 | Last updated | 2026-06-28 |
