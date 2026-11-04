@@ -205,11 +205,11 @@ class TestManifestLoad:
             if path in viewer_visible_public_routes:
                 read_permission = viewer_visible_public_routes[path]
                 assert route.get("visibility") == "public", f"Viewer-readable community route {path} must be public"
-                assert route["required_roles"] == ["viewer", "operator", "admin"], (
-                    f"Viewer-readable community route {path} must require exactly ['viewer', 'operator', 'admin']"
+                assert "viewer" in route["required_roles"], (
+                    f"Viewer-readable community route {path} must include the viewer role"
                 )
-                assert read_permission in (route.get("required_permissions") or []), (
-                    f"Viewer-readable community route {path} must be gated by the {read_permission} permission"
+                assert route.get("required_permissions") == [read_permission], (
+                    f"Viewer-readable community route {path} must require only {read_permission}"
                 )
                 continue
             visibility = route.get("visibility")

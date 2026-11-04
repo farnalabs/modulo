@@ -300,6 +300,7 @@ def _install_overrides(
     dev_mode: bool = True,
     org_id: uuid.UUID = _ORG_ID,
     account_id: uuid.UUID = _USER_ID,
+    internal_access: bool = True,
 ) -> None:
     """Install FastAPI dependency overrides for testing."""
     from modulo.api.dependencies import get_current_tenant_user, get_db_session, get_settings
@@ -361,7 +362,10 @@ def _install_overrides(
 
     app.dependency_overrides[get_repo] = lambda: harness.repository
     # Override the internal system maps access gate
-    from modulo.api.routes.system_maps import _require_internal_system_maps_access
+    from modulo.api.routes.system_maps import (
+        _require_internal_system_maps_access,
+        _system_maps_internal_access,
+    )
 
     async def _mock_require_internal_system_maps_access(
         principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
@@ -370,6 +374,7 @@ def _install_overrides(
         return principal
 
     app.dependency_overrides[_require_internal_system_maps_access] = _mock_require_internal_system_maps_access
+    app.dependency_overrides[_system_maps_internal_access] = lambda: internal_access
     from modulo.api.routes.system_maps import _require_system_maps_feature, _require_system_maps_read_feature
 
     async def _mock_system_maps_feature() -> None:
@@ -729,6 +734,35 @@ def test_delete_system_map_missing_returns_404(client: tuple[TestClient, _Harnes
 
 
 # ─── Revision CRUD tests ───
+
+
+@pytest.mark.parametrize("dev_mode", [True, False])
+def test_operator_without_internal_access_cannot_read_draft_revision(dev_mode: bool) -> None:
+    harness = _Harness()
+    _install_overrides(harness, dev_mode=dev_mode, internal_access=False)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="draft")))
+    try:
+        response = TestClient(app).get(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Revision not found"
+
+
+def test_operator_with_internal_access_can_read_draft_revision() -> None:
+    harness = _Harness()
+    _install_overrides(harness, internal_access=True)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="draft")))
+    try:
+        response = TestClient(app).get(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "draft"
 
 
 def test_get_revision_returns_200(client: tuple[TestClient, _Harness]) -> None:
@@ -1488,6 +1522,20 @@ def test_overview_unknown_loop_facts_stay_null(client: tuple[TestClient, _Harnes
     assert loop["budget_used_usd"] is None
     assert loop["budget_period_start"] is None
     assert loop["last_admission_at"] is None
+
+
+def test_overview_viewer_cannot_read_draft_by_revision_id() -> None:
+    harness = _Harness()
+    _install_overrides(harness, org_role="viewer", internal_access=False)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="draft")))
+    try:
+        response = TestClient(app).get(f"{_BASE}/{_MAP_ID}/overview", params={"revision_id": str(_REV_ID)})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Revision not found"
 
 
 def test_overview_non_published_revision_returns_404(client: tuple[TestClient, _Harness]) -> None:
@@ -2624,6 +2672,31 @@ def test_get_revision_history_missing_map_returns_404(client: tuple[TestClient, 
     assert resp.status_code == 404
 
 
+def test_overview_internal_author_can_read_draft_by_revision_id(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    draft = _revision_row(status="draft", revision_number=2)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=draft))
+    harness.stub(
+        "get_full_revision_graph",
+        AsyncMock(
+            return_value={
+                "revision": draft,
+                "nodes": [],
+                "relationships": [],
+                "loop_configs": [],
+            }
+        ),
+    )
+
+    response = http.get(f"{_BASE}/{_MAP_ID}/overview", params={"revision_id": str(draft.id)})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["revision_id"] == str(draft.id)
+
+
 def test_overview_with_revision_id_returns_200(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     rev = _revision_row_with_effective(status="published", revision_number=2)
@@ -2648,6 +2721,33 @@ def test_overview_with_revision_id_returns_200(client: tuple[TestClient, _Harnes
     assert body["revision_id"] == str(rev.id)
     assert body["revision_number"] == 2
     harness.repository.get_revision_by_id.assert_awaited_once()
+
+
+def test_overview_internal_author_passes_unfiltered_at_lookup(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    at = datetime(2026, 1, 15, tzinfo=UTC)
+    draft = _revision_row(status="draft", revision_number=2)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_time", AsyncMock(return_value=draft))
+    harness.stub(
+        "get_full_revision_graph",
+        AsyncMock(
+            return_value={
+                "revision": draft,
+                "nodes": [],
+                "relationships": [],
+                "loop_configs": [],
+            }
+        ),
+    )
+
+    response = http.get(f"{_BASE}/{_MAP_ID}/overview", params={"at": at.isoformat()})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["revision_id"] == str(draft.id)
+    assert harness.repository.get_revision_by_time.await_args.kwargs["published_only"] is False
 
 
 def test_overview_with_at_timestamp_returns_200(client: tuple[TestClient, _Harness]) -> None:

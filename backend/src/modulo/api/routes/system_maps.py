@@ -777,6 +777,7 @@ async def get_system_map_revision_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
+    internal_access: bool = Depends(_system_maps_internal_access),
 ) -> SystemMapRevisionResponse | SystemMapRevisionDetailResponse:
     """Get specific revision."""
     graph: dict[str, Any] | None = None
@@ -795,7 +796,7 @@ async def get_system_map_revision_endpoint(
             revision = await repository.get_revision_by_id(
                 session, organisation_id=principal.organisation_id, revision_id=rev_id
             )
-            if revision is not None and revision.status == "draft" and principal.org_role in {"viewer", "runner"}:
+            if revision is not None and revision.status == "draft" and not internal_access:
                 revision = None
             if include_graph and revision is not None:
                 graph = await repository.get_full_revision_graph(
@@ -1516,21 +1517,28 @@ async def _resolve_overview_revision(
     map_id: uuid.UUID,
     revision_id: uuid.UUID | None,
     at: datetime | None,
+    internal_access: bool,
 ) -> SystemMapRevision:
     """Resolve which revision an overview request targets (FAR-2288)."""
     if revision_id:
         revision = await repository.get_revision_by_id(
             session, organisation_id=organisation_id, revision_id=revision_id
         )
-        if revision is not None and revision.status == "draft":
+        if revision is not None and revision.status == "draft" and not internal_access:
             revision = None
         if not revision or revision.system_map_id != map_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
         return revision
     if at:
         revision = await repository.get_revision_by_time(
-            session, organisation_id=organisation_id, system_map_id=map_id, at=at, published_only=True
+            session,
+            organisation_id=organisation_id,
+            system_map_id=map_id,
+            at=at,
+            published_only=not internal_access,
         )
+        if revision is not None and revision.status == "draft" and not internal_access:
+            revision = None
         if not revision:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1559,6 +1567,7 @@ async def get_system_map_overview_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
+    internal_access: bool = Depends(_system_maps_internal_access),
 ) -> SystemMapOverviewResponse:
     """Aggregate read model with node health, loop configs, and bottleneck detection.
 
@@ -1590,6 +1599,7 @@ async def get_system_map_overview_endpoint(
                 map_id=map_id,
                 revision_id=revision_id,
                 at=at,
+                internal_access=internal_access,
             )
 
             # Get full graph for the target revision
