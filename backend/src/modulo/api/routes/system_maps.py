@@ -768,6 +768,22 @@ async def get_revision_history_endpoint(
     )
 
 
+def _hide_draft_revision(
+    revision: SystemMapRevision | None,
+    *,
+    internal_access: bool,
+) -> SystemMapRevision | None:
+    """Hide a draft revision from any caller without internal authoring access.
+
+    Drafts are an authoring concept: a viewer (or a non-dev-mode operator) must
+    see the same 404 as a missing revision, so callers pass the result through
+    the same not-found guard. Internal authors keep the draft.
+    """
+    if revision is not None and revision.status == "draft" and not internal_access:
+        return None
+    return revision
+
+
 @published_router.get("/{map_id}/revisions/{rev_id}")
 @handle_db_errors(_EP_GET_SYSTEM_MAP_REVISION)
 async def get_system_map_revision_endpoint(
@@ -793,11 +809,12 @@ async def get_system_map_revision_endpoint(
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
-            revision = await repository.get_revision_by_id(
-                session, organisation_id=principal.organisation_id, revision_id=rev_id
+            revision = _hide_draft_revision(
+                await repository.get_revision_by_id(
+                    session, organisation_id=principal.organisation_id, revision_id=rev_id
+                ),
+                internal_access=internal_access,
             )
-            if revision is not None and revision.status == "draft" and not internal_access:
-                revision = None
             if include_graph and revision is not None:
                 graph = await repository.get_full_revision_graph(
                     session, organisation_id=principal.organisation_id, revision_id=rev_id
@@ -1209,6 +1226,59 @@ async def archive_system_map_revision_endpoint(
     return SystemMapRevisionResponse.model_validate(revision)
 
 
+async def _resolve_diff_target(
+    repository: SystemMapRepository,
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    map_id: uuid.UUID,
+    requested_revision_id: uuid.UUID | None,
+    *,
+    internal_access: bool,
+) -> uuid.UUID:
+    """Resolve the revision a diff compares against.
+
+    Internal authors default to the current draft. Everyone else defaults to
+    the currently published revision, and a requested draft is hidden as a
+    404, so the diff surface can never expose an unpublished revision to a
+    viewer.
+    """
+    if requested_revision_id is not None:
+        target = _hide_draft_revision(
+            await repository.get_revision_by_id(
+                session, organisation_id=principal.organisation_id, revision_id=requested_revision_id
+            ),
+            internal_access=internal_access,
+        )
+        if not target or target.system_map_id != map_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+        return target.id
+
+    if internal_access:
+        draft_revisions = await repository.list_revisions(
+            session,
+            organisation_id=principal.organisation_id,
+            system_map_id=map_id,
+            status="draft",
+            limit=1,
+        )
+        if not draft_revisions:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No draft revision found to diff against; specify against_revision_id",
+            )
+        return draft_revisions[0].id
+
+    published_revision = await repository.get_published_revision(
+        session, organisation_id=principal.organisation_id, system_map_id=map_id
+    )
+    if not published_revision:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No published revision found to diff against",
+        )
+    return published_revision.id
+
+
 @published_router.post(
     "/{map_id}/revisions/{rev_id}/diff",
     response_model=SystemMapRevisionDiffResponse,
@@ -1241,52 +1311,25 @@ async def diff_system_map_revision_endpoint(
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
-            # Verify base revision exists and belongs to map
-            base_revision = await repository.get_revision_by_id(
-                session, organisation_id=principal.organisation_id, revision_id=rev_id
+            # Verify the base revision exists, belongs to the map, and is
+            # visible to the caller (a draft is hidden from non-internal reads).
+            base_revision = _hide_draft_revision(
+                await repository.get_revision_by_id(
+                    session, organisation_id=principal.organisation_id, revision_id=rev_id
+                ),
+                internal_access=internal_access,
             )
             if not base_revision or base_revision.system_map_id != map_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
-            if not internal_access and base_revision.status == "draft":
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
 
-            # Determine target revision
-            target_revision_id = req.against_revision_id
-            if target_revision_id is None:
-                if internal_access:
-                    # Try to find the current draft revision
-                    draft_revisions = await repository.list_revisions(
-                        session,
-                        organisation_id=principal.organisation_id,
-                        system_map_id=map_id,
-                        status="draft",
-                        limit=1,
-                    )
-                    if not draft_revisions:
-                        raise HTTPException(
-                            status_code=status.HTTP_404_NOT_FOUND,
-                            detail="No draft revision found to diff against; specify against_revision_id",
-                        )
-                    target_revision_id = draft_revisions[0].id
-                else:
-                    published_revision = await repository.get_published_revision(
-                        session, organisation_id=principal.organisation_id, system_map_id=map_id
-                    )
-                    if not published_revision:
-                        raise HTTPException(
-                            status_code=status.HTTP_404_NOT_FOUND,
-                            detail="No published revision found to diff against",
-                        )
-                    target_revision_id = published_revision.id
-            else:
-                # Verify target revision exists and belongs to map
-                target_revision = await repository.get_revision_by_id(
-                    session, organisation_id=principal.organisation_id, revision_id=target_revision_id
-                )
-                if not target_revision or target_revision.system_map_id != map_id:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
-                if not internal_access and target_revision.status == "draft":
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+            target_revision_id = await _resolve_diff_target(
+                repository,
+                session,
+                principal,
+                map_id,
+                req.against_revision_id,
+                internal_access=internal_access,
+            )
 
             diff_result = await repository.diff_revisions(
                 session,
@@ -1521,11 +1564,10 @@ async def _resolve_overview_revision(
 ) -> SystemMapRevision:
     """Resolve which revision an overview request targets (FAR-2288)."""
     if revision_id:
-        revision = await repository.get_revision_by_id(
-            session, organisation_id=organisation_id, revision_id=revision_id
+        revision = _hide_draft_revision(
+            await repository.get_revision_by_id(session, organisation_id=organisation_id, revision_id=revision_id),
+            internal_access=internal_access,
         )
-        if revision is not None and revision.status == "draft" and not internal_access:
-            revision = None
         if not revision or revision.system_map_id != map_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
         return revision
@@ -1537,8 +1579,7 @@ async def _resolve_overview_revision(
             at=at,
             published_only=not internal_access,
         )
-        if revision is not None and revision.status == "draft" and not internal_access:
-            revision = None
+        revision = _hide_draft_revision(revision, internal_access=internal_access)
         if not revision:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

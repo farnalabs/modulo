@@ -507,6 +507,29 @@ describe('SystemMapsView fallback branches', () => {
     expect((wrapper.findComponent(MenuStub).props('model') as unknown[]).length).toBe(5)
   })
 
+  it('narrows an open action menu to view-only when authoring access is lost', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve(listResponse([map()]))
+    })
+    const store = useSystemMapsStore()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="system-map-action-map-1"]').trigger('click')
+    expect((wrapper.findComponent(MenuStub).props('model') as unknown[]).length).toBe(5)
+
+    // The entitlement can be revoked while the menu is open; the reactive
+    // menu must then expose only the read action and never a mutation.
+    store.systemMapsEnabled = false
+    await wrapper.vm.$nextTick()
+
+    const model = wrapper.findComponent(MenuStub).props('model') as Array<{ label: string }>
+    expect(model).toHaveLength(1)
+    expect(model[0].label).toBe('View')
+  })
+
   it('uses the localized delete fallback for a non-Error rejection', async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())

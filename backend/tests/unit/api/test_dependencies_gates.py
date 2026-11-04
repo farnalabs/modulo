@@ -619,3 +619,108 @@ class TestSystemEnginePoolRecycle:
         finally:
             deps._SYSTEM_ASYNC_ENGINE = saved_engine
             deps._SYSTEM_ENGINE_IS_FALLBACK = saved_flag
+
+
+class TestPublishedSystemMapsReadGate:
+    """The viewer read gate: ``system_maps.read`` is viewer-level.
+
+    It is deliberately separate from the internal authoring gate, so the tests
+    pin both the allowed viewer and the two refusal shapes (role floor and an
+    API key without the grant).
+    """
+
+    def test_viewer_is_allowed(self) -> None:
+        from modulo.api.dependencies import _require_published_system_maps_read
+
+        principal = _tenant("viewer")
+
+        assert _require_published_system_maps_read(principal) is principal
+
+    def test_unknown_role_is_denied_403(self) -> None:
+        from modulo.api.dependencies import _require_published_system_maps_read
+
+        with pytest.raises(HTTPException) as exc_info:
+            _require_published_system_maps_read(_tenant("guest"))
+
+        assert exc_info.value.status_code == 403
+        assert "system_maps.read" in exc_info.value.detail
+
+    def test_api_key_without_the_grant_is_denied_403(self) -> None:
+        from modulo.api.dependencies import _require_published_system_maps_read
+
+        principal = TenantPrincipal(
+            username="key",
+            organisation_id=_ORG,
+            account_id=_ACCOUNT,
+            org_role="viewer",
+            is_system_admin=False,
+            via_api_key=True,
+            client_kind="api_key",
+            key_grants=frozenset(["pipeline.list"]),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _require_published_system_maps_read(principal)
+
+        assert exc_info.value.status_code == 403
+        assert "is not granted to this API key" in exc_info.value.detail
+
+
+class TestSystemMapsInternalAccess:
+    """``_system_maps_internal_access`` is the draft-aware read predicate.
+
+    It reuses the internal authoring gate and converts a refusal into ``False``
+    rather than a 403, because the same endpoint serves viewers (published only)
+    and internal authors (drafts included).
+    """
+
+    @staticmethod
+    def _settings(*, dev_mode: bool) -> object:
+        from modulo.settings import Settings
+
+        return Settings(
+            modulo_dev_mode=dev_mode,
+            modulo_public_url="http://test",
+            fernet_key="test" * 8,
+            secret_key="test" * 8,
+            redis_url="redis://localhost:6379/0",
+            database_url="postgresql+asyncpg://test:test@localhost/test",
+        )
+
+    def test_operator_in_dev_mode_has_internal_access(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies
+
+        monkeypatch.setattr(dependencies, "get_settings", lambda: self._settings(dev_mode=True))
+
+        assert dependencies._system_maps_internal_access(_tenant("operator")) is True
+
+    def test_viewer_never_has_internal_access(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies
+
+        monkeypatch.setattr(dependencies, "get_settings", lambda: self._settings(dev_mode=True))
+
+        assert dependencies._system_maps_internal_access(_tenant("viewer")) is False
+
+    def test_dev_mode_off_denies_even_an_operator(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies
+
+        monkeypatch.setattr(dependencies, "get_settings", lambda: self._settings(dev_mode=False))
+
+        assert dependencies._system_maps_internal_access(_tenant("operator")) is False
+
+    def test_api_key_without_the_grant_has_no_internal_access(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies
+
+        monkeypatch.setattr(dependencies, "get_settings", lambda: self._settings(dev_mode=True))
+        principal = TenantPrincipal(
+            username="key",
+            organisation_id=_ORG,
+            account_id=_ACCOUNT,
+            org_role="operator",
+            is_system_admin=False,
+            via_api_key=True,
+            client_kind="api_key",
+            key_grants=frozenset(["pipeline.list"]),
+        )
+
+        assert dependencies._system_maps_internal_access(principal) is False

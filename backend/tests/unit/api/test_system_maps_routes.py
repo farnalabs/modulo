@@ -3359,3 +3359,164 @@ def test_viewer_cannot_use_a_draft_as_the_diff_base(viewer_client: tuple[TestCli
     )
 
     assert resp.status_code == 404
+
+
+# ─── Published-only read contract (FAR-2363) ───
+
+
+def test_viewer_diff_without_a_published_revision_returns_404(
+    viewer_client: tuple[TestClient, _Harness],
+) -> None:
+    """A viewer's default diff target is the published revision; none is a 404."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("get_published_revision", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff", json={})
+
+    assert resp.status_code == 404
+    assert "No published revision found" in resp.json()["detail"]
+
+
+def test_overview_viewer_hides_a_draft_returned_by_time(
+    viewer_client: tuple[TestClient, _Harness],
+) -> None:
+    """Defence in depth: a draft row returned for a viewer's at-lookup is a 404."""
+    http, harness = viewer_client
+    at = datetime(2026, 1, 15, tzinfo=UTC)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_time", AsyncMock(return_value=_revision_row(status="draft")))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/overview", params={"at": at.isoformat()})
+
+    assert resp.status_code == 404
+    assert harness.repository.get_revision_by_time.await_args.kwargs["published_only"] is True
+
+
+class _CaptureSession:
+    """Minimal session double that records the statement the repository builds."""
+
+    def __init__(self, *, one: object = None, rows: list[object] | None = None) -> None:
+        self.statements: list[object] = []
+        self._one = one
+        self._rows: list[object] = [] if rows is None else rows
+
+    async def execute(self, statement: object) -> MagicMock:
+        self.statements.append(statement)
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = self._one
+        scalars = MagicMock()
+        scalars.all.return_value = self._rows
+        result.scalars.return_value = scalars
+        return result
+
+
+class TestPublishedOnlyRepositoryPredicates:
+    """The published-only filter must be a real SQL predicate, not a route hint.
+
+    A mocked session cannot prove the repository applies the filter, and the
+    integration suite does not feed the changed-lines coverage gate - so these
+    unit tests compile the emitted statement and assert the predicate.
+    """
+
+    def _repo(self) -> SystemMapRepository:
+        return SystemMapRepository(session_factory=MagicMock())
+
+    async def test_list_maps_by_org_excludes_unpublished_maps(self) -> None:
+        session = _CaptureSession(rows=[])
+        await self._repo().list_maps_by_org(session, organisation_id=_ORG_ID, published_only=True)
+
+        assert "published_revision_id IS NOT NULL" in str(session.statements[0])
+
+    async def test_list_maps_by_org_keeps_unpublished_maps_without_the_filter(self) -> None:
+        session = _CaptureSession(rows=[])
+        await self._repo().list_maps_by_org(session, organisation_id=_ORG_ID)
+
+        assert "published_revision_id IS NOT NULL" not in str(session.statements[0])
+
+    async def test_get_revision_by_time_published_only_excludes_drafts(self) -> None:
+        session = _CaptureSession(one=None)
+        await self._repo().get_revision_by_time(
+            session,
+            organisation_id=_ORG_ID,
+            system_map_id=_MAP_ID,
+            at=datetime(2026, 1, 15, tzinfo=UTC),
+            published_only=True,
+        )
+
+        compiled = str(session.statements[0])
+        assert "system_map_revisions.status IN" in compiled
+
+    async def test_get_revision_by_time_without_the_filter_allows_drafts(self) -> None:
+        session = _CaptureSession(one=None)
+        await self._repo().get_revision_by_time(
+            session,
+            organisation_id=_ORG_ID,
+            system_map_id=_MAP_ID,
+            at=datetime(2026, 1, 15, tzinfo=UTC),
+        )
+
+        assert "system_map_revisions.status IN" not in str(session.statements[0])
+
+    async def test_list_revisions_history_published_only_excludes_drafts(self) -> None:
+        session = _CaptureSession(rows=[])
+        await self._repo().list_revisions_history(
+            session,
+            organisation_id=_ORG_ID,
+            system_map_id=_MAP_ID,
+            published_only=True,
+        )
+
+        assert "system_map_revisions.status IN" in str(session.statements[0])
+
+    async def test_list_revisions_history_without_the_filter_keeps_drafts(self) -> None:
+        session = _CaptureSession(rows=[])
+        await self._repo().list_revisions_history(
+            session,
+            organisation_id=_ORG_ID,
+            system_map_id=_MAP_ID,
+        )
+
+        assert "system_map_revisions.status IN" not in str(session.statements[0])
+
+
+def test_viewer_reads_a_published_map_detail(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """The published detail is readable by a viewer with the read entitlement."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row(published_revision_id=_REV_ID)))
+    harness.stub(
+        "get_revision_by_id",
+        AsyncMock(return_value=_revision_row(status="published")),
+    )
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["id"] == str(_MAP_ID)
+
+
+def test_viewer_reads_a_published_revision_by_time(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """A viewer's historical read is published-only and succeeds for a published revision."""
+    http, harness = viewer_client
+    at = datetime(2026, 1, 15, tzinfo=UTC)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub(
+        "get_revision_by_time",
+        AsyncMock(return_value=_revision_row_with_effective(status="published")),
+    )
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/revisions/by-time", params={"at": at.isoformat()})
+
+    assert resp.status_code == 200, resp.text
+    assert harness.repository.get_revision_by_time.await_args.kwargs["published_only"] is True
+
+
+def test_viewer_rejects_a_malformed_revision_id(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """A non-UUID revision id is a validation error, never a lookup."""
+    http, harness = viewer_client
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/revisions/not-a-uuid")
+
+    assert resp.status_code == 422
+    assert not harness.repository.get_revision_by_id.called

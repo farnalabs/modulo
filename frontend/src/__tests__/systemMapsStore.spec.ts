@@ -838,3 +838,158 @@ describe('useSystemMapsStore overview', () => {
     expect(store.overviewLoading).toBe(false)
   })
 })
+
+describe('useSystemMapsStore entitlement (402)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-1'))
+  })
+
+  // The backend answers 402 feature_required for an entitlement refusal. It is
+  // an answer, not a failure: each read settles into the unavailable state and
+  // never becomes a retryable error.
+
+  it('settles the default overview into unavailable when the list is refused', async () => {
+    mockGet.mockResolvedValue({
+      error: { type: 'urn:problem:modulo:feature_required', detail: 'not enabled' },
+      response: { status: 402 },
+    })
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    expect(store.overviewUnavailable).toBe(true)
+    expect(store.overview).toBeNull()
+    expect(store.overviewEmpty).toBe(false)
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('settles an explicit overview into unavailable on a 402 status alone', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'not enabled' }, response: { status: 402 } })
+    const store = useSystemMapsStore()
+
+    await store.fetchOverview('map-x')
+
+    expect(store.overviewUnavailable).toBe(true)
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('keeps a genuine server failure retryable on the default overview', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'down' }, response: { status: 500 } })
+    const store = useSystemMapsStore()
+
+    await store.fetchDefaultOverview()
+
+    expect(store.overviewUnavailable).toBe(false)
+    expect(store.overviewError).toBe('down')
+  })
+
+  it('settles the map list into unavailable and clears loaded maps', async () => {
+    mockGet.mockResolvedValueOnce({ data: listPayload([mapItem('published', { published_revision_id: 'rev' })]) })
+    const store = useSystemMapsStore()
+    await store.fetchMaps()
+    expect(store.maps).toHaveLength(1)
+
+    mockGet.mockResolvedValueOnce({
+      error: { type: 'urn:problem:modulo:feature_required', detail: 'not enabled' },
+      response: { status: 402 },
+    })
+    await store.fetchMaps()
+
+    expect(store.unavailable).toBe(true)
+    expect(store.error).toBeNull()
+    expect(store.maps).toEqual([])
+    expect(store.total).toBe(0)
+    expect(store.loaded).toBe(true)
+    expect(store.loading).toBe(false)
+  })
+
+  it('keeps a genuine server failure retryable on the map list', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'down' }, response: { status: 500 } })
+    const store = useSystemMapsStore()
+
+    await store.fetchMaps()
+
+    expect(store.unavailable).toBe(false)
+    expect(store.error).toBe('Could not load system maps')
+  })
+
+  it('settles a refused map detail into unavailable without an error', async () => {
+    mockGet.mockResolvedValue({ error: { status: 402, detail: 'not enabled' }, response: { status: 402 } })
+    const store = useSystemMapsStore()
+
+    await store.loadMap('map-x')
+
+    expect(store.unavailable).toBe(true)
+    expect(store.error).toBeNull()
+    expect(store.activeMap).toBeNull()
+    expect(store.loading).toBe(false)
+  })
+
+  it('settles a refused revision into unavailable', async () => {
+    mockGet.mockResolvedValue({
+      error: { type: 'urn:problem:modulo:feature_required', detail: 'not enabled' },
+      response: { status: 402 },
+    })
+    const store = useSystemMapsStore()
+
+    await store.loadRevision('map-x', 'rev-1')
+
+    expect(store.unavailable).toBe(true)
+    expect(store.error).toBeNull()
+    expect(store.activeRevision).toBeNull()
+  })
+
+  it('keeps a genuine server failure retryable on a revision', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'down' }, response: { status: 500 } })
+    const store = useSystemMapsStore()
+
+    await expect(store.loadRevision('map-x', 'rev-1')).rejects.toThrow('Could not load map revision')
+    expect(store.unavailable).toBe(false)
+  })
+
+  it('settles a refused current revision into unavailable', async () => {
+    mockGet.mockResolvedValue({
+      error: { type: 'urn:problem:modulo:feature_required', detail: 'not enabled' },
+      response: { status: 402 },
+    })
+    const store = useSystemMapsStore()
+
+    await store.loadCurrentRevision('map-x')
+
+    expect(store.unavailable).toBe(true)
+    expect(store.error).toBeNull()
+  })
+
+  it('keeps a genuine server failure retryable on the current revision', async () => {
+    mockGet.mockResolvedValue({ error: {}, response: { status: 500 } })
+    const store = useSystemMapsStore()
+
+    await expect(store.loadCurrentRevision('map-x')).rejects.toThrow('Could not load the current revision')
+    expect(store.unavailable).toBe(false)
+  })
+
+  it('settles a refused by-time revision into unavailable', async () => {
+    mockGet.mockResolvedValue({
+      error: { type: 'urn:problem:modulo:feature_required', detail: 'not enabled' },
+      response: { status: 402 },
+    })
+    const store = useSystemMapsStore()
+
+    await store.loadRevisionByTime('map-x', '2026-01-01T00:00:00Z')
+
+    expect(store.unavailable).toBe(true)
+    expect(store.error).toBeNull()
+  })
+
+  it('keeps a genuine server failure retryable on the by-time revision', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'down' }, response: { status: 500 } })
+    const store = useSystemMapsStore()
+
+    await expect(store.loadRevisionByTime('map-x', '2026-01-01T00:00:00Z')).rejects.toThrow('down')
+    expect(store.unavailable).toBe(false)
+  })
+})
