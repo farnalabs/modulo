@@ -527,6 +527,8 @@ export default {
       "recent_run_option": "{pipeline} — {status} ({createdAt})",
       "select_run_a": "Select run A",
       "select_run_b": "Select run B",
+      "no_eligible_runs": "No runs are available to select — this list shows the 10 most recent runs of any status. You can still paste run IDs above; a comparison needs two runs that both recorded output for the same node.",
+      "recent_runs_load_failed": "Couldn't load recent runs.",
       "loading": "Loading...",
       "compare": "Compare",
       "outputs_identical": "Outputs are identical",

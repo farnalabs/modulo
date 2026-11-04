@@ -228,11 +228,9 @@ describe('AgentOutputDiffView', () => {
     expect(wrapper.text()).not.toContain('diff backend down')
   })
 
-  it('renders an empty recent-runs list when the summary fetch fails (nullish fallback)', async () => {
-    // FAR-1836: exercise the `?? []` fallback on
-    // `summaryResp.value?.recent_runs ?? []`. The summary fetch fails, so
-    // `summaryResp.value` is undefined: the optional chain short-circuits and
-    // the view must still render with an empty recent-runs list (no crash).
+  it('shows a distinct retryable error (not the empty state) when the summary fetch fails', async () => {
+    // FAR-2366: a failed summary fetch used to be swallowed and rendered as
+    // "no recent runs". It must surface as an error with a retry instead.
     vi.mocked(fetch as unknown as () => Promise<unknown>).mockResolvedValueOnce({
       ok: false,
       status: 500,
@@ -248,11 +246,133 @@ describe('AgentOutputDiffView', () => {
     await flushPromises()
     await nextTick()
 
-    expect(wrapper.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="diff-recent-runs-empty"]').exists()).toBe(false)
+    const alerts = wrapper.findAll('[role="alert"]')
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].text()).toContain("Couldn't load recent runs.")
+    expect(alerts[0].text()).toContain('summary unavailable')
+    expect(alerts[0].find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+
     const selects = wrapper.findAllComponents({ name: 'Select' })
     expect(selects.length).toBeGreaterThanOrEqual(2)
     expect(selects[0].props('options')).toEqual([])
-    expect(wrapper.text()).toContain('Select recent run')
+    expect(selects[1].props('options')).toEqual([])
+    expect(selects[0].props('disabled')).toBe(true)
+    expect(selects[1].props('disabled')).toBe(true)
+  })
+
+  it('retries the summary fetch from the error state and recovers the run list', async () => {
+    vi.mocked(fetch as unknown as () => Promise<unknown>)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.resolve({ detail: 'summary unavailable' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          recent_runs: [
+            { id: 'run-a', pipeline_name: 'Build', status: 'complete', created_at: '2026-11-04T10:00:00Z' },
+          ],
+        }),
+      })
+
+    router.push('/runs/diff')
+    await router.isReady()
+    const wrapper = mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const retry = wrapper.find('[role="alert"] [data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+    await retry.trigger('click')
+    await flushPromises()
+    await nextTick()
+    await new Promise(r => setTimeout(r, 0))
+    await nextTick()
+
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="diff-recent-runs-empty"]').exists()).toBe(false)
+    const selects = wrapper.findAllComponents({ name: 'Select' })
+    expect(selects[0].props('options')).toEqual([
+      { value: 'run-a', label: 'Build — complete (2026-11-04T10:00:00Z)' },
+    ])
+    expect(selects[0].props('disabled')).toBe(false)
+  })
+
+  it('shows the empty state when the summary fetch succeeds with zero runs', async () => {
+    vi.mocked(fetch as unknown as () => Promise<unknown>).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ recent_runs: [] }),
+    })
+
+    router.push('/runs/diff')
+    await router.isReady()
+    const wrapper = mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    const empty = wrapper.find('[data-testid="diff-recent-runs-empty"]')
+    expect(empty.exists()).toBe(true)
+    expect(empty.attributes('aria-live')).toBe('polite')
+    expect(empty.text()).toContain('10 most recent runs of any status')
+    expect(empty.text()).toContain('recorded output for the same node')
+  })
+
+  it('populates both selectors from the dashboard recent-runs payload', async () => {
+    vi.mocked(fetch as unknown as () => Promise<unknown>).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        recent_runs: [
+          { id: 'run-a', pipeline_name: 'Build', status: 'complete', created_at: '2026-11-04T10:00:00Z' },
+          { id: 'run-b', pipeline_name: 'Build', status: 'failed', created_at: '2026-11-04T09:00:00Z' },
+        ],
+      }),
+    })
+
+    router.push('/runs/diff')
+    await router.isReady()
+    const wrapper = mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const selects = wrapper.findAllComponents({ name: 'Select' })
+    expect(selects).toHaveLength(2)
+    const expectedOptions = [
+      { value: 'run-a', label: 'Build — complete (2026-11-04T10:00:00Z)' },
+      { value: 'run-b', label: 'Build — failed (2026-11-04T09:00:00Z)' },
+    ]
+    expect(selects[0].props('options')).toEqual(expectedOptions)
+    expect(selects[1].props('options')).toEqual(expectedOptions)
+    expect(selects[0].props('disabled')).toBe(false)
+    expect(selects[1].props('disabled')).toBe(false)
+    expect(wrapper.find('[data-testid="diff-recent-runs-empty"]').exists()).toBe(false)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it('uses the viewer dashboard endpoint for recent runs', async () => {
+    router.push('/runs/diff')
+    await router.isReady()
+    mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      '/api/v1/dashboard/summary',
+      expect.objectContaining({ method: 'GET' }),
+    )
   })
 
   it('renders pure-return node outputs with no telemetry keys', async () => {

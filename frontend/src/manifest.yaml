@@ -5499,6 +5499,9 @@ elements:
       - testid: diff-compare-btn
         type: button
         dynamic_testid: false
+      - testid: diff-recent-runs-empty
+        type: element
+        dynamic_testid: false
       - testid: diff-identical-banner
         type: element
         dynamic_testid: false
