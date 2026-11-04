@@ -12,7 +12,7 @@
       </template>
     </PageHeader>
 
-    <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled>
+    <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled class="space-y-6">
 
       <div v-if="loading" data-testid="cost-components-loading">
         <output class="sr-only" aria-live="polite">{{ $t('views.CostComponentsView.loading_components') }}</output>

@@ -95,14 +95,19 @@
         <!-- Token spend card -->
         <router-link to="/admin/costs" class="card card-hover p-4 block" data-testid="dashboard-token-spend">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ spendLabel }}</p>
-          <div class="flex items-baseline gap-2">
-            <p class="text-2xl font-semibold tabular-nums">{{ formatMoney(totalSpend, currencyCode, 2) }}</p>
-            <span v-if="spendDeltaPct != null" :class="spendDeltaClass" class="text-xs font-medium">
-              <span aria-hidden="true">{{ spendDeltaArrow }}</span>{{ spendDeltaPctText }}
-            </span>
+          <template v-if="hasSpendData">
+            <div class="flex items-baseline gap-2">
+              <p class="text-2xl font-semibold tabular-nums">{{ formatMoney(totalSpend, currencyCode, 2) }}</p>
+              <span v-if="spendDeltaPct != null" :class="spendDeltaClass" class="text-xs font-medium">
+                <span aria-hidden="true">{{ spendDeltaArrow }}</span>{{ spendDeltaPctText }}
+              </span>
+            </div>
+            <p v-if="selectedWindow != null" class="text-xs text-muted-foreground mt-1">{{ spendTrackedDays }} {{ $t('views.DashboardView.days_tracked') }}</p>
+            <Sparkline class="mt-2 h-12 w-full" :data="spendSparklineData" :labels="summaryTrendLabels" missing-data="zero" unit="$" color="hsl(var(--warning-text))" :show-y-axis="true" />
+          </template>
+          <div v-else class="flex flex-col items-center justify-center gap-1 py-6 text-sm text-muted-foreground" aria-live="polite" data-testid="dashboard-token-spend-empty">
+            <span>{{ $t('views.DashboardView.no_token_spend_data_yet') }}</span>
           </div>
-          <p v-if="selectedWindow != null" class="text-xs text-muted-foreground mt-1">{{ spendTrackedDays }} {{ $t('views.DashboardView.days_tracked') }}</p>
-          <Sparkline class="mt-2 h-12 w-full" :data="spendSparklineData" :labels="summaryTrendLabels" missing-data="zero" unit="$" color="hsl(var(--warning-text))" :show-y-axis="true" />
         </router-link>
       </div>
       <!-- Team breakdown (Team only) -->
@@ -261,6 +266,10 @@ const loading = computed(() => dashboardStore.loading)
 const error = computed(() => dashboardStore.error)
 const summary = computed(() => dashboardStore.summary)
 const totalSpend = computed(() => dashboardStore.totalSpend)
+// Spend is only meaningful once the ledger has recorded something. A zero
+// total (no runs, or a window with no billable activity) renders the same
+// compact empty state as the eval chart rather than a misleading "$0.00".
+const hasSpendData = computed(() => totalSpend.value > 0)
 const periodRefreshing = computed(() => dashboardStore.periodRefreshing)
 
 const isTeam = computed(() => planStore.isTeam)

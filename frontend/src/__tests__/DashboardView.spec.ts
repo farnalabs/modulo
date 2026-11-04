@@ -263,6 +263,27 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('100.25')
   })
 
+  it('renders the compact Token Spend empty state without n/a when there is no spend data (FAR-2364)', async () => {
+    setupEmptyMocks()
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+
+    const card = wrapper.get('[data-testid="dashboard-token-spend"]')
+    const empty = card.get('[data-testid="dashboard-token-spend-empty"]')
+
+    expect(empty.text()).toBe('No token spend data yet')
+    expect(card.text()).not.toContain('n/a')
+    expect(card.text()).not.toContain('$0.00')
+    // Same compact, normal-sized container contract as the eval chart's
+    // no-data state — not a shrunken value/"n/a" pair.
+    expect(empty.classes()).toEqual(expect.arrayContaining([
+      'flex', 'flex-col', 'items-center', 'justify-center', 'gap-1',
+      'py-6', 'text-sm', 'text-muted-foreground',
+    ]))
+    expect(empty.find('span.font-semibold').exists()).toBe(false)
+    expect(card.find('[data-testid="sparkline"]').exists()).toBe(false)
+  })
+
   it('does not show team breakdown for non-enterprise plans', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
@@ -822,15 +843,15 @@ describe('DashboardView', () => {
     expect(spendSparkline!.props('data')).toEqual([])
   })
 
-  it('renders the no-data placeholder inside sparklines when the trend is empty', async () => {
+  it('renders the compact Token Spend empty state instead of an empty sparkline when the trend is empty', async () => {
     setupEmptyMocks()
     const wrapper = mount(DashboardView)
     await flushPromises()
-    // Token spend card sparkline gets an empty series → placeholder, not a line.
-    const sparkline = wrapper.find('[data-testid="sparkline"]')
-    expect(sparkline.exists()).toBe(true)
-    expect(sparkline.find('polyline').exists()).toBe(false)
-    expect(sparkline.find('.sparkline-no-data').exists()).toBe(true)
+    // FAR-2364: no spend data is an empty state, not a $0.00 value next to a
+    // sparkline that has nothing to plot.
+    const card = wrapper.get('[data-testid="dashboard-token-spend"]')
+    expect(card.find('[data-testid="dashboard-token-spend-empty"]').exists()).toBe(true)
+    expect(card.find('[data-testid="sparkline"]').exists()).toBe(false)
   })
 
   it('Pipelines card renders neutral trend colour (muted) even when delta is positive', async () => {

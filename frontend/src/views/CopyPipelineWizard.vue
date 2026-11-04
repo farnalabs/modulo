@@ -1,13 +1,11 @@
 <template>
-  <div class="min-h-screen bg-background">
-    <header class="bg-card border-b border-border px-6 py-4">
-      <div class="max-w-3xl mx-auto">
-        <BackLink to="/pipelines" :label="$t('views.CopyPipelineWizard.back_to_pipelines')" class="mb-2" />
-        <PageHeader :title="$t('views.CopyPipelineWizard.copy_pipeline')" :subtitle="$t('views.CopyPipelineWizard.duplicate_an_existing_pipeline_and_adapt_it_for_a_new_purpos')" />
-      </div>
-    </header>
+  <div class="page-wide">
+    <div class="mx-auto max-w-3xl">
+      <BackLink to="/pipelines" :label="$t('views.CopyPipelineWizard.back_to_pipelines')" class="mb-2" />
+      <PageHeader :title="$t('views.CopyPipelineWizard.copy_pipeline')" :subtitle="$t('views.CopyPipelineWizard.duplicate_an_existing_pipeline_and_adapt_it_for_a_new_purpos')" />
+    </div>
 
-    <section class="max-w-3xl mx-auto px-6 py-8">
+    <section class="mx-auto max-w-3xl py-8">
       <div class="flex items-center gap-2 mb-8">
         <div
           v-for="(s, i) in steps"

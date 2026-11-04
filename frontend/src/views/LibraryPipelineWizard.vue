@@ -1,21 +1,19 @@
 <template>
-  <div class="min-h-screen bg-background">
-    <BackLink to="/library" :label="$t('views.LibraryPipelineWizard.back_to_library')" data-testid="library-wizard-back-link" />
-    <header class="bg-card border-b border-border px-6 py-4">
-      <div class="max-w-3xl mx-auto">
-        <button type="button"
-          class="text-sm text-muted-foreground hover:text-foreground mb-2 inline-flex items-center gap-1"
-          @click="router.push({ name: 'library' })"
-          data-testid="library-wizard-back"
-        >
-          <ArrowLeft class="h-4 w-4" aria-hidden="true" />
-          {{ $t('views.LibraryPipelineWizard.back_to_library') }}
-        </button>
-        <PageHeader :title="$t('views.LibraryPipelineWizard.create_pipeline_from_template')" :subtitle="$t('views.LibraryPipelineWizard.subtitle')" />
-      </div>
-    </header>
+  <div class="page-wide">
+    <div class="mx-auto max-w-3xl">
+      <BackLink to="/library" :label="$t('views.LibraryPipelineWizard.back_to_library')" data-testid="library-wizard-back-link" />
+      <button type="button"
+        class="text-sm text-muted-foreground hover:text-foreground mb-2 mt-2 inline-flex items-center gap-1"
+        @click="router.push({ name: 'library' })"
+        data-testid="library-wizard-back"
+      >
+        <ArrowLeft class="h-4 w-4" aria-hidden="true" />
+        {{ $t('views.LibraryPipelineWizard.back_to_library') }}
+      </button>
+      <PageHeader :title="$t('views.LibraryPipelineWizard.create_pipeline_from_template')" :subtitle="$t('views.LibraryPipelineWizard.subtitle')" />
+    </div>
 
-    <section class="max-w-3xl mx-auto px-6 py-8">
+    <section class="mx-auto max-w-3xl py-8">
       <div v-if="loading" class="space-y-6" data-testid="library-wizard-loading-skeleton">
         <div class="card p-6">
           <SkeletonBlock height-class="h-6 w-64" />

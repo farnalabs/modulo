@@ -1060,6 +1060,9 @@ elements:
       - testid: dashboard-token-spend
         type: link
         dynamic_testid: false
+      - testid: dashboard-token-spend-empty
+        type: element
+        dynamic_testid: false
       - testid: dashboard-stats-card
         type: element
         dynamic_testid: false
