@@ -17,6 +17,8 @@ System Maps represents the end-to-end software delivery topography: executable M
 ### 1.2 Category Positioning
 Modulo is an Agentic Delivery Governance platform: the control plane for a software factory. For developer experience and platform engineering teams, graph engineering is the mechanism Modulo applies: a pipeline is an explicit graph of agent, connector, gate, and human nodes joined by typed edges, and Modulo compiles, executes, and governs that graph.
 
+System Maps is the control plane's view of the software factory floor: pipelines are implementation stations, controls are quality gates, improvement loops are continuous-improvement stations, connectors are supplier interfaces, and the left-to-right flow is the factory conveyor. Every node shows provenance-graded operational metrics — the evidence a factory operator needs to justify autonomy.
+
 Modulo governs the execution of autonomous pipelines, enforces quality and safety gates, records immutable audit evidence, and coordinates human-in-the-loop decisions. System Maps provides the system-level visibility required to inspect, operate, and tune that governed delivery network.
 
 ### 1.3 Core Value Proposition
