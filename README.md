@@ -5,8 +5,7 @@
 </p>
 
 <p align="center">
-  <em>Modulo is a self-hosted Agentic Delivery Governance platform for building
-  governed, repeatable AI-assisted software delivery pipelines.</em>
+  <em>Modulo is a self-hosted autonomous software factory: an Agentic Delivery Governance platform that runs governed, repeatable AI-assisted delivery pipelines entirely on your infrastructure. Air-gap capable, no third-party telemetry, any model (cloud or local), automated merge and release.</em>
 </p>
 
 <p align="center">
@@ -50,10 +49,7 @@
 
 ## What it is
 
-Modulo turns AI agent runs into governed, repeatable delivery pipelines. It
-connects atomic agents to external tools like GitHub, GitLab, and Slack while
-keeping execution, approvals, audit data, and credentials under the operator's
-control.
+Modulo is a software factory you own and run. It turns AI agent runs into governed, repeatable delivery pipelines and connects atomic agents to external tools like GitHub, GitLab, and Slack, while keeping execution, approvals, audit data, and credentials under the operator's control.
 
 Agent governance, in practice, means you wire AI agents into your tools inside
 a visual pipeline where every run is audited and budgeted, and can be gated on
