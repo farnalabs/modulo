@@ -2837,8 +2837,8 @@ def test_release_rc_tag_callers_read_the_release_job_output() -> None:
 def test_release_workflow_has_include_windows_input() -> None:
     """The unified release workflow must declare the include_windows input.
 
-    Windows is Alpha scope (FAR-2338), so the default is true: an Alpha cut
-    ships the signed Windows installer unless an operator explicitly opts out.
+    Windows is Beta scope, so the default is false: the Alpha cut does not ship
+    the signed Windows installer unless an operator explicitly opts in.
     """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     # 'on' is a YAML boolean keyword; quoted key ensures correct parsing
@@ -2847,8 +2847,8 @@ def test_release_workflow_has_include_windows_input() -> None:
     assert "include_windows" in inputs
     inp = inputs["include_windows"]
     assert inp["type"] == "boolean"
-    assert inp["default"] is True
-    assert "Alpha" in inp["description"]
+    assert inp["default"] is False
+    assert "Beta" in inp["description"]
 
 
 def test_windows_installer_job_gated_on_include_windows() -> None:
@@ -2864,15 +2864,26 @@ def test_windows_installer_job_gated_on_include_windows() -> None:
 def test_final_release_manifest_needs_windows_installer_when_in_scope() -> None:
     """final-release-manifest must depend on windows-installer (FAR-2338).
 
-    The manifest downloads the ``windows-installer-<version>`` artefact, so the
-    producing job has to be a dependency. The job-level ``if`` keeps the
-    ``include_windows=false`` path working when that job is skipped.
+    The manifest downloads the ``windows-installer-<version>`` artefact when the
+    Beta-only ``include_windows`` opt-in is true, so the producing job has to be
+    a dependency. The job-level ``if`` is fail-closed: the Linux/macOS jobs must
+    succeed, Windows must succeed when opted in, and Windows must be exactly
+    ``skipped`` when it is out of scope.
     """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     final_job = workflow["jobs"]["final-release-manifest"]
     assert "windows-installer" in final_job["needs"]
     assert "macos-installer" in final_job["needs"]
-    assert "inputs.include_windows == false || needs.windows-installer.result == 'success'" in final_job["if"]
+    # Folded scalars join most lines with spaces but keep a newline before the
+    # more-indented continuation, so normalise whitespace before asserting.
+    condition = " ".join(final_job["if"].split())
+    assert "always()" in condition
+    assert "inputs.mode == 'cut' || inputs.mode == 'recut'" in condition
+    assert "needs.release.result == 'success'" in condition
+    assert "needs.bundle.result == 'success'" in condition
+    assert "needs.macos-installer.result == 'success'" in condition
+    assert "inputs.include_windows && needs.windows-installer.result == 'success'" in condition
+    assert "!inputs.include_windows && needs.windows-installer.result == 'skipped'" in condition
 
 
 def test_publish_release_needs_excludes_windows_installer() -> None:
@@ -3422,6 +3433,156 @@ def _extract_publish_release_step_script(name: str) -> str:
     script = steps[_step_names(steps).index(name)]["run"]
     assert isinstance(script, str)
     return script
+
+
+def _bundle_tag_script() -> str:
+    return _extract_publish_release_step_script("Push the bundle tag")
+
+
+def _bundle_tag_harness(
+    tmp_path: Path,
+    *,
+    scenario: str,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls.log"
+    state = tmp_path / "pushed"
+    target = "a" * 40
+    other = "b" * 40
+    _write_executable(
+        bin_dir / "git",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> {shlex.quote(str(calls))}
+case "$*" in
+  'rev-parse HEAD') printf '%s\\n' {target} ;;
+  'ls-remote --exit-code origin refs/tags/bundle-v0.1.0')
+    case "$SCENARIO" in
+      annotated|lightweight|different|lightweight-fallback)
+        if [[ "$SCENARIO" == lightweight-fallback && ! -f {shlex.quote(str(state))} ]]; then
+          exit 2
+        fi
+        tag_sha={target}
+        [[ "$SCENARIO" == different ]] && tag_sha={other}
+        printf '%s\\trefs/tags/bundle-v0.1.0\\n' "$tag_sha"
+        exit 0
+        ;;
+      absent|push-mismatch|push-unknown|push-lightweight)
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-lightweight ]]; then
+          printf '%s\\trefs/tags/bundle-v0.1.0\\n' {target}; exit 0
+        fi
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-mismatch ]]; then
+          printf '%s\\trefs/tags/bundle-v0.1.0\\n' {other}; exit 0
+        fi
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-lightweight ]]; then
+          printf '%s\\trefs/tags/bundle-v0.1.0\\n' {target}; exit 0
+        fi
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-unknown ]]; then exit 128; fi
+        exit 2
+        ;;
+      unknown) exit 128 ;;
+    esac
+    ;;
+      'ls-remote --exit-code origin refs/tags/bundle-v0.1.0^{{}}')
+    case "$SCENARIO" in
+      annotated) printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0 ;;
+      different) printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {other}; exit 0 ;;
+      push-lightweight) exit 2 ;;
+      absent)
+        if [[ -f {shlex.quote(str(state))} ]]; then printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0; fi
+        exit 2
+        ;;
+      push-mismatch) exit 2 ;;
+      push-unknown) exit 128 ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  'tag -a bundle-v0.1.0 -m Bundle release bundle-v0.1.0') exit 0 ;;
+  'push origin bundle-v0.1.0') touch {shlex.quote(str(state))}; exit 0 ;;
+  *)
+    if [[ "$*" == 'ls-remote --exit-code origin refs/tags/bundle-v0.1.0^{{}}' ]]; then
+      if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == absent ]]; then
+        printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0
+      fi
+      exit 2
+    fi
+    exit 0
+    ;;
+esac
+""",
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "VERSION": "0.1.0",
+        "SCENARIO": scenario,
+    }
+    result = _run_bash(_bundle_tag_script(), cwd=tmp_path, env=env)
+    return result, calls
+
+
+def test_bundle_tag_existing_exact_annotated_target_is_idempotent(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="annotated")
+    assert result.returncode == 0, result.stderr
+    assert "already published" in result.stdout
+    assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
+
+
+def test_bundle_tag_existing_exact_lightweight_target_is_idempotent(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="lightweight")
+    assert result.returncode == 0, result.stderr
+    assert "already published" in result.stdout
+    assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
+
+
+def test_bundle_tag_existing_different_target_fails_without_push(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="different")
+    assert result.returncode != 0
+    assert "refusing to overwrite" in result.stdout
+    assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
+
+
+def test_bundle_tag_remote_query_unknown_fails_without_push(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="unknown")
+    assert result.returncode != 0
+    assert "state UNKNOWN" in result.stdout
+    assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
+
+
+def test_bundle_tag_absent_push_and_exact_verification_succeed(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="absent")
+    assert result.returncode == 0, result.stderr
+    assert "push origin bundle-v0.1.0" in calls.read_text(encoding="utf-8")
+
+
+def test_bundle_tag_post_push_verification_mismatch_fails(tmp_path: Path) -> None:
+    result, _ = _bundle_tag_harness(tmp_path, scenario="push-mismatch")
+    assert result.returncode != 0
+    assert "resolved to" in result.stdout
+    assert "after push, not release target" in result.stdout
+    assert "could not be verified after push" not in result.stdout
+
+
+def test_bundle_tag_post_push_lightweight_fallback_succeeds_without_second_push(tmp_path: Path) -> None:
+    """A lightweight tag uses the full-ref fallback and is verified once."""
+    result, calls = _bundle_tag_harness(tmp_path, scenario="push-lightweight")
+    assert result.returncode == 0, result.stderr
+    assert "Pushed and verified bundle-v0.1.0" in result.stdout
+    assert calls.read_text(encoding="utf-8").splitlines().count("push origin bundle-v0.1.0") == 1
+
+
+def test_bundle_tag_post_push_verification_unknown_fails(tmp_path: Path) -> None:
+    result, _ = _bundle_tag_harness(tmp_path, scenario="push-unknown")
+    assert result.returncode != 0
+    assert "could not be verified after push" in result.stdout
+
+
+def test_bundle_tag_publication_has_no_overwrite_escape_hatches() -> None:
+    script = _bundle_tag_script()
+    assert "--force" not in script
+    assert "--clobber" not in script
+    assert 'git push origin "$BUNDLE_TAG"' in script
 
 
 def test_publish_release_guard_covers_exactly_its_needs() -> None:

@@ -87,6 +87,20 @@ from modulo.api.middleware.sensitive_mask import (
 )
 from modulo.api.routes.api_keys import enforce_grants_mint_cap_for
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
+
+# FAR-2328: the MCP approve path resumes the pipeline inline, exactly as the
+# REST approve route does. Reuse that route's executor builder (notifier-wired)
+# and its capacity-deferred response body rather than duplicating either — the
+# established sibling-route-module import pattern (`api_keys`, `evals`,
+# `triggers` above). ``modulo.api.routes.hitl`` imports nothing from
+# ``mcp_server``, so there is no circular-import risk.
+from modulo.api.routes.hitl import (
+    _build_resume_executor,
+    _capacity_deferred_response,
+    _is_sandbox_capacity_exceeded,
+    _restore_failed_mcp_resume_for_reconcile,
+    _run_is_f6a_reconcile_candidate,
+)
 from modulo.api.routes.oauth_metadata import protected_resource_metadata_url
 from modulo.api.routes.triggers import (
     _encrypt_trigger_config_secrets,
@@ -211,6 +225,7 @@ from modulo.core.mcp.scope_validator import (
     set_request_allowed_tools,
 )
 from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_error
+from modulo.core.pipeline_engine.errors import ResumeClaimSupersededError
 from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.runtime_config.key_bridge import public_url_is_configured
@@ -7322,8 +7337,19 @@ async def _dispatch_hitl_approve(
     actor_account_id: uuid.UUID | None,
     answer: dict[str, Any] | None,
     client_type: str,
+    resume_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The ``approve`` branch of ``_dispatch_hitl_action`` (FAR-860 answer validation)."""
+    """The ``approve`` branch of ``_dispatch_hitl_action`` (FAR-860 answer validation).
+
+    FAR-2328: when the caller supplies ``resume_payload``, this function fills
+    it with the validated answer and commits it as the decision payload — the
+    SAME dict the caller then hands to ``executor.resume``. The committed
+    decision and the decision the resumed graph reads are therefore one
+    object, mirroring REST ``approve_review``. The resume itself is NOT
+    performed here: this runs inside the decision transaction, and resuming
+    before that transaction commits would read the stale ``awaiting_human``
+    row from the executor's own connection.
+    """
     # FAR-860: validate choice answer before the manager call. The error is
     # returned out-of-band so a legit answer carrying an "error" key is
     # never misread as an MCP error dict.
@@ -7331,7 +7357,9 @@ async def _dispatch_hitl_approve(
     if answer_error is not None:
         return answer_error
     # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
-    approve_payload: dict[str, Any] = {"action": "approved", "review_id": review_id}
+    approve_payload: dict[str, Any] = (
+        resume_payload if resume_payload is not None else {"action": "approved", "review_id": review_id}
+    )
     if validated_answer is not None:
         approve_payload["answer"] = validated_answer
     await mgr.approve(
@@ -7430,6 +7458,7 @@ async def _dispatch_hitl_action(
     output: dict[str, Any] | None,
     reason: str | None,
     answer: dict[str, Any] | None = None,
+    resume_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Dispatch a validated HITL action to the manager and return the success dict.
 
@@ -7438,10 +7467,14 @@ async def _dispatch_hitl_action(
 
     FAR-541: every decision payload is STAMPED with the ``review_id`` it resolves.
     The decision commits on the gate's claim row (created by the executor when
-    the gate fired); the MCP flow never dispatches a resume itself — the
-    dispatcher reconcile is the resume path, and it scopes its reconstruction
-    by this stamp. HITLManager._decide would stamp the persisted payload
+    the gate fired). HITLManager._decide would stamp the persisted payload
     anyway; these explicit stamps document the writer contract per call.
+
+    FAR-2328: the approve branch also fills the caller's ``resume_payload`` —
+    the dict ``_review_hitl_impl`` injects into ``executor.resume`` AFTER this
+    transaction commits. ``dispatcher_reconcile`` remains the compensating
+    backstop (it scopes its reconstruction by the same stamp), no longer the
+    primary resume path.
 
     FAR-611: every action records ``client_type="mcp"`` on its audit event (the
     sweep was previously attributable only by inference), and every action
@@ -7493,6 +7526,7 @@ async def _dispatch_hitl_action(
             actor_account_id=actor_account_id,
             answer=answer,
             client_type=client_type,
+            resume_payload=resume_payload,
         )
     if action == "deliver_manual":
         return await _dispatch_hitl_deliver_manual(
@@ -7517,6 +7551,181 @@ async def _dispatch_hitl_action(
         actor_account_id=actor_account_id,
         reason=reason,
         client_type=client_type,
+    )
+
+
+async def _resume_run_after_mcp_approval(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    review_id: str,
+    resume_data: dict[str, Any],
+    claim_token: str,
+    expected_claim_status: str = "awaiting_human",
+) -> dict[str, Any]:
+    """Resume an MCP-approved run inline (FAR-2328), mirroring REST ``approve_review``.
+
+    MUST be called only AFTER the approval decision has been committed:
+    ``_review_hitl_impl`` calls it after its ``async with _session(org_id)``
+    block exits (``_session`` wraps ``s.begin()``, which commits on exit).
+    ``PipelineExecutor.resume`` uses its OWN connection, so resuming inside the
+    decision transaction would read the pre-commit ``awaiting_human`` row.
+
+    ``dispatcher_reconcile``'s F6a leg is NOT replaced — it stays the
+    compensating backstop for a resume that is lost (worker crash, capacity
+    deferral, this call failing). Its claim UPDATE only matches
+    ``awaiting_human``/``claimed``/``hitl_parked`` (or a running row with a
+    stale heartbeat), so a run this function has moved to ``running`` is not
+    re-dispatched from underneath it.
+
+    The decision is already durable when this runs, so a resume failure is
+    reported in the RESULT (``resume_status="failed"``, with ``status`` still
+    ``approved``) rather than raised: the approval did happen, and a caller
+    that retried the decision would be refused as ``already_decided``.
+    """
+    try:
+        executor = _build_resume_executor(get_or_create_engine(get_settings()))
+        await executor.resume(
+            run_id=run_id,
+            org_id=org_id,
+            resume_data=resume_data,
+            claim_token=claim_token,
+            expected_claim_status=expected_claim_status,
+        )
+    except ResumeClaimSupersededError:
+        _log.warning("mcp.review_hitl.approve_resume_superseded", extra={"run_id": str(run_id)})
+        return {
+            "status": "approved",
+            "review_id": review_id,
+            "run_id": str(run_id),
+            "resume_status": "superseded",
+            "reconcile_status": "not_needed",
+            "detail": "Approval recorded, but another resume claim won before inline execution started.",
+        }
+    except Exception as exc:
+        # FAR-1831 parity: the decision committed and the resume was denied by
+        # the org sandbox cap — the F6a reconcile re-dispatches once a slot
+        # frees, so this is a queued success. The shared route helper preserves
+        # the REST capacity classification without a pipeline-engine import.
+        if _is_sandbox_capacity_exceeded(exc):
+            deferred = _capacity_deferred_response(run_id, "approve")
+            deferred["review_id"] = review_id
+            return deferred
+        try:
+            recoverable = await _restore_failed_mcp_resume_for_reconcile(
+                engine=get_or_create_engine(get_settings()),
+                org_id=org_id,
+                run_id=run_id,
+                claim_token=claim_token,
+            )
+        except Exception:
+            recoverable = False
+            _log.exception("mcp.review_hitl.approve_resume_reconcile_restore_failed", extra={"run_id": str(run_id)})
+        _log.exception(
+            "mcp.review_hitl.approve_resume_failed",
+            extra={"run_id": str(run_id), "reconcile_recoverable": recoverable},
+        )
+        recovery_detail = (
+            "The reconciliation sweep will retry the resume."
+            if recoverable
+            else "Automatic recovery could not restore the run for reconciliation; operator intervention is required."
+        )
+        return {
+            "status": "approved",
+            "review_id": review_id,
+            "run_id": str(run_id),
+            "resume_status": "failed",
+            "reconcile_status": "queued" if recoverable else "failed",
+            "detail": (
+                f"Approval recorded, but resuming the pipeline failed. The decision is committed; {recovery_detail}"
+            ),
+        }
+    return {"status": "approved", "review_id": review_id, "run_id": str(run_id)}
+
+
+def _mcp_resume_expected_claim_status(run: Any) -> str:
+    """Map a run's post-decision status to the executor's expected claim status.
+
+    ``hitl_parked`` is the pre-resume status the REST approve path expects;
+    every other status passes through unchanged. Extracted from
+    ``_review_hitl_impl`` to keep its cognitive complexity within S3776.
+    """
+    status = getattr(run, "status", "awaiting_human")
+    return "awaiting_human" if status == "hitl_parked" else status
+
+
+async def _resume_missing_claim_token_response(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    decision: dict[str, Any],
+) -> dict[str, Any]:
+    """Report an approval whose resume claim fence could not be established.
+
+    Extracted from ``_review_hitl_impl`` (FAR-2328) to keep that function's
+    cognitive complexity within the S3776 bound.
+    """
+    try:
+        recoverable = await _run_is_f6a_reconcile_candidate(
+            engine=get_or_create_engine(get_settings()),
+            org_id=org_id,
+            run_id=run_id,
+        )
+    except SQLAlchemyError:
+        recoverable = False
+        _log.exception(
+            "mcp.review_hitl.approve_resume_missing_claim_token_reconcile_check_failed",
+            extra={"run_id": str(run_id)},
+        )
+    _log.log(
+        logging.INFO if recoverable else logging.ERROR,
+        "mcp.review_hitl.approve_resume_missing_claim_token",
+        extra={"run_id": str(run_id), "reconcile_recoverable": recoverable},
+    )
+    recovery_detail = (
+        "The reconciliation sweep will retry the resume."
+        if recoverable
+        else ("Automatic recovery could not restore the run for reconciliation; operator intervention is required.")
+    )
+    return {
+        **decision,
+        "run_id": str(run_id),
+        "resume_status": "failed",
+        "reconcile_status": "queued" if recoverable else "failed",
+        "detail": ("Approval recorded, but the resume claim fence could not be established; " + recovery_detail),
+    }
+
+
+async def _resume_after_mcp_approval_decision(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    review_id: str,
+    resume_data: dict[str, Any],
+    run: Any,
+    decision: dict[str, Any],
+) -> dict[str, Any]:
+    """Resume a just-approved run inline (FAR-2328) after its decision commits.
+
+    Extracted from ``_review_hitl_impl`` to keep that function's cognitive
+    complexity within the S3776 bound. Callers MUST invoke this only after the
+    decision transaction has committed — ``executor.resume`` uses its own
+    connection and would otherwise read the pre-commit ``awaiting_human`` row.
+    """
+    resume_claim_token = getattr(run, "claim_token", None)
+    if not isinstance(resume_claim_token, str) or not resume_claim_token:
+        return await _resume_missing_claim_token_response(
+            org_id=org_id,
+            run_id=run_id,
+            decision=decision,
+        )
+    return await _resume_run_after_mcp_approval(
+        org_id=org_id,
+        run_id=run_id,
+        review_id=review_id,
+        resume_data=resume_data,
+        claim_token=resume_claim_token,
+        expected_claim_status=_mcp_resume_expected_claim_status(run),
     )
 
 
@@ -7585,6 +7794,12 @@ async def _review_hitl_impl(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
 
+    # FAR-2328: the approve resume payload is built HERE and handed to the
+    # decision writer, so the dict committed as the decision is the SAME dict
+    # injected into ``executor.resume`` below (REST ``approve_review`` does
+    # exactly this). Only the approve branch consumes/persists it.
+    resume_payload: dict[str, Any] = {"action": "approved", "review_id": review_id}
+
     async with _session(org_id) as s:
         run = await _load_hitl_run(s, rid, org_id)
         if run is _TEAM_SCOPE_ERROR:
@@ -7607,8 +7822,19 @@ async def _review_hitl_impl(
             return human_only_err
 
         try:
-            return await _dispatch_hitl_action(
-                mgr, s, action, rid, review_id, org_id, actor_account_id, claim_token, output, reason, answer
+            decision = await _dispatch_hitl_action(
+                mgr,
+                s,
+                action,
+                rid,
+                review_id,
+                org_id,
+                actor_account_id,
+                claim_token,
+                output,
+                reason,
+                answer,
+                resume_payload=resume_payload,
             )
         except (
             GateNotFoundError,
@@ -7624,6 +7850,24 @@ async def _review_hitl_impl(
             return _hitl_error_response(exc, run_id, review_id)
         except Exception as exc:
             return _hitl_error_response(exc, run_id, review_id)
+
+    # FAR-2328: ``_session`` wraps ``s.begin()``, so the approval decision is
+    # COMMITTED at this point (the ``async with`` block above has exited).
+    # Resuming inside the block would race the executor's own connection
+    # against an uncommitted decision and read the stale ``awaiting_human``
+    # row. Only now is an inline resume safe — the same ordering REST
+    # ``approve_review`` gets by awaiting ``_run_hitl_manager`` (which owns its
+    # own ``session.begin()``) before calling ``executor.resume``.
+    if action == "approve" and decision.get("status") == "approved":
+        return await _resume_after_mcp_approval_decision(
+            org_id=org_id,
+            run_id=rid,
+            review_id=review_id,
+            resume_data=resume_payload,
+            run=run,
+            decision=decision,
+        )
+    return decision
 
 
 @mcp.tool(

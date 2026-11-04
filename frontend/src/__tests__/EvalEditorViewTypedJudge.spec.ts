@@ -420,7 +420,7 @@ describe('EvalEditorView — typed builder interaction coverage', () => {
     await flush()
 
     // Empty backend list renders its own guidance (not an error).
-    expect(wrapper.text()).toContain('No model backends are configured for this organisation yet.')
+    expect(wrapper.text()).toContain('No model backends are configured for this organization yet.')
 
     await chooseOption(wrapper, 'eval-editor-eval-type', 'deterministic')
     expect(wrapper.find('textarea[data-testid="eval-editor-config"]').exists()).toBe(true)

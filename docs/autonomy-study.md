@@ -16,7 +16,7 @@ explicitly below.
 
 Modulo lets each pipeline choose a default **autonomy level** for its HITL reviews:
 
-| Level | HITL review behaviour |
+| Level | HITL review behavior |
 |---|---|
 | `manual_approval` | Gate halts; a human must review and approve/reject. |
 | `notify_on_complete` | Gate is auto-approved at runtime but emits a notification for observability. Applies only to a gate that opts out with `human_only: false`. |
@@ -37,7 +37,7 @@ The *progressive* claim: autonomy should **rise** for change classes that
 consistently ship clean and **fall** after a defect escapes human review. A
 team that runs `manual_approval` for a pipeline, sees a streak of clean merges,
 and promotes it to `notify_on_complete` – then back to `manual_approval` if a
-bad change slips through – is practising *evidence-based* progressive autonomy.
+bad change slips through – is practicing *evidence-based* progressive autonomy.
 
 ### 1.1 Earned autonomy (ADR 043 slice S1)
 
@@ -130,7 +130,7 @@ per-autonomy-level evidence stream.
 | **Defect-escape rate (autonomous)** | autonomous changes later reverted/fixed ÷ autonomous changes shipped | When we grant autonomy, how often do we regret it? |
 | **Defect-escape rate (human-only)** | same denominator for `manual_approval` changes | Is human review actually catching more than it misses? |
 | **Autonomy delta per pipeline** | `(autonomy grant rate now) − (grant rate N periods ago)` | Is autonomy *progressing* as promised? |
-| **Promotion/demotion events** | `pipeline.autonomy_level_changed` events over time | Are teams actually practising progressive autonomy? |
+| **Promotion/demotion events** | `pipeline.autonomy_level_changed` events over time | Are teams actually practicing progressive autonomy? |
 
 The wedge metric is the **defect-escape comparison**: *autonomous vs
 human-only*, same change class, same period. If autonomous escape rate is

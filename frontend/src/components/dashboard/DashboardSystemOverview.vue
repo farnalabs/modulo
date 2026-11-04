@@ -26,6 +26,13 @@
     <div v-if="store.overviewLoading" class="text-sm text-muted-foreground" data-testid="system-map-overview-loading">
       {{ $t('views.DashboardView.system_maps_loading') }}
     </div>
+    <!-- 402 feature_required: unavailable, not a failed fetch - no retry. -->
+    <ErrorAlert
+      v-else-if="store.overviewUnavailable"
+      :message="$t('views.DashboardView.system_maps_unavailable')"
+      aria-live="polite"
+      data-testid="system-map-overview-error"
+    />
     <ErrorAlert
       v-else-if="store.overviewError"
       :message="$t('views.DashboardView.system_maps_error')"

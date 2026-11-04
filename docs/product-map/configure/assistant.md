@@ -35,7 +35,7 @@ model, system prompt, access list), reusable org/user skills, and context source
 Access control restricts who may use Assistant (explicit user/role allow-list; admins and
 listed org roles always granted).
 
-## Behaviours
+## Behaviors
 
 - [x] Sessions: `GET/POST /api/v1/assistant/sessions`, `GET/PATCH/DELETE
       /api/v1/assistant/sessions/{id}` – create, rename, list and delete sessions; delete
@@ -111,7 +111,7 @@ listed org roles always granted).
   read/written by the `/admin/assistant` safety panel; `additional_guidance` is a
   first-class `GET/PUT /api/v1/admin/assistant/config` field edited from the
   Additional Guidance textarea. The manifest registry entry is now `status: covered`
-  with both behaviours ticked.
+  with both behaviors ticked.
 - 2026-09-12: **product-map review pass**: registered the shared
   `AnalyticsChart` surface (`components/analytics/AnalyticsChart.vue` static testids
   `analytics-chart` / `analytics-chart-canvas` / `analytics-chart-empty`) in the
@@ -144,8 +144,8 @@ listed org roles always granted).
   (`components/assistant/AssistantChat.vue`) ships. `test_mapped_route_elements_cover_owning_view_testids`
   now maps `/assistant` to `AssistantOnlyView.vue` + `AssistantChat.vue` so the chat surface
   cannot drift invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-08-28: **product-map review pass**: added this behaviour-tracker
+- 2026-08-28: **product-map review pass**: added this behavior-tracker
   for the registered manifest feature `feat-assistant`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/assistant.py`,
+  `docs/product-map/` entry. Behaviors verified against `api/routes/assistant.py`,
   `api/routes/admin_assistant.py`, `core/assistant/*` and the `backend/tests/bdd/features/assistant/`
   suite. Status: covered.

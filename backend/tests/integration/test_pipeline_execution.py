@@ -16,12 +16,29 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 import modulo.core.pipeline_execution as pe
+from modulo.api.routes.hitl import _restore_failed_mcp_resume_for_reconcile
+from modulo.core.cron_helpers import (
+    CAPACITY_REDISPATCH_SECONDS,
+    RECONCILE_STALE_HEARTBEAT_FACTOR,
+    _build_re_dispatch_predicate,
+    _resolve_hitl_resume_or_skip,
+)
+from modulo.core.pipeline_engine.errors import ResumeClaimSupersededError
+from modulo.core.pipeline_engine.executor import (
+    PipelineExecutor,
+    SandboxCapacityExceededError,
+    _claim_resume_for_executor,
+)
+from modulo.db.models.run import Run
+from modulo.db.rls import set_rls_org
+from modulo.settings import get_settings
 
 pytestmark = [
     pytest.mark.integration,
@@ -353,6 +370,263 @@ async def test_claim_run_async_rls_scoped_claim_requires_set_config(
 
     assert claimed is False
     assert await _claim_count(db_engine, run_id) == 0
+
+
+async def test_inline_resume_claim_fence_real_pg(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """Inline resume claims only the exact committed lease and source state."""
+    run_id = uuid.uuid4()
+    await _insert_run_with_token(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="awaiting_human",
+        claim_token="expected-token",
+    )
+
+    factory = async_sessionmaker(app_engine, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, test_org)
+        with pytest.raises(ResumeClaimSupersededError):
+            await _claim_resume_for_executor(
+                session,
+                run_id=run_id,
+                org_id=test_org,
+                expected_claim_token="superseded-token",
+                source_status="awaiting_human",
+            )
+
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, claim_token, claim_count FROM runs WHERE id=:rid"), {"rid": str(run_id)}
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "awaiting_human"
+    assert row[1] == "expected-token"
+    assert row[2] == 0
+
+    async with factory() as session, session.begin():
+        await set_rls_org(session, test_org)
+        claimed = await _claim_resume_for_executor(
+            session,
+            run_id=run_id,
+            org_id=test_org,
+            expected_claim_token="expected-token",
+            source_status="awaiting_human",
+        )
+        assert claimed.status == "running"
+
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, claim_token, claimed_by FROM runs WHERE id=:rid"), {"rid": str(run_id)}
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "running"
+    assert row[1] == "expected-token"
+    assert row[2] is not None
+
+
+async def test_inline_resume_failure_recovery_does_not_rewrite_successor_real_pg(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """Recovery cannot demote a row after a successor rotates the lease."""
+    run_id = uuid.uuid4()
+    await _insert_run_with_token(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="running",
+        claim_token="successor-token",
+    )
+    engine = db_engine
+    restored = await _restore_failed_mcp_resume_for_reconcile(
+        engine=engine,
+        org_id=test_org,
+        run_id=run_id,
+        claim_token="stale-inline-token",
+    )
+    assert restored is False
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(text("SELECT status, claim_token FROM runs WHERE id=:rid"), {"rid": str(run_id)})
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "running"
+    assert row[1] == "successor-token"
+
+
+async def _insert_committed_hitl_decision(
+    engine: AsyncEngine,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    review_id: str = "gate-1",
+) -> None:
+    async with engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO hitl_claims (id, organisation_id, run_id, pipeline_id, review_id, "
+                "expires_at, decision, decision_at, decision_payload) "
+                "VALUES (:cid, :oid, :rid, :pid, :gid, now(), 'approved', now(), CAST(:p AS json))"
+            ),
+            {
+                "cid": str(uuid.uuid4()),
+                "oid": str(org_id),
+                "rid": str(run_id),
+                "pid": str(pipeline_id),
+                "gid": review_id,
+                "p": json.dumps({"action": "approved", "review_id": review_id}),
+            },
+        )
+
+
+async def test_inline_resume_restore_positive_is_f6a_recoverable_real_pg(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """The repair leaves a row the PRODUCTION F6a predicate/guard selects.
+
+    A post-claim failure restores ``running`` back to ``awaiting_human`` with a
+    stale heartbeat, SAQ as the dispatcher, and the lease preserved. The row
+    must then be selected by the real ``_build_re_dispatch_predicate`` F6a leg
+    and accepted by the real committed-decision guard — not by a predicate
+    re-typed in the test.
+    """
+    run_id = uuid.uuid4()
+    await _insert_run_with_token(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="running",
+        claim_token="claim-inline",
+    )
+    await _insert_committed_hitl_decision(db_engine, run_id=run_id, org_id=test_org, pipeline_id=test_pipeline)
+
+    restored = await _restore_failed_mcp_resume_for_reconcile(
+        engine=db_engine,
+        org_id=test_org,
+        run_id=run_id,
+        claim_token="claim-inline",
+    )
+    assert restored is True
+
+    settings = get_settings()
+    stale_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, heartbeat_at, dispatcher, claim_token, completed_at FROM runs WHERE id=:rid"),
+                {"rid": str(run_id)},
+            )
+        ).fetchone()
+    assert row is not None
+    status, heartbeat_at, dispatcher, claim_token, completed_at = row
+    assert status == "awaiting_human"
+    assert dispatcher == "saq"
+    assert claim_token == "claim-inline"
+    assert completed_at is None
+    assert heartbeat_at is not None
+    assert (datetime.now(UTC) - heartbeat_at).total_seconds() > stale_window
+
+    predicate = _build_re_dispatch_predicate(
+        reenqueue_window=int(settings.saq_reenqueue_window),
+        stale_window=stale_window,
+        capacity_redispatch_seconds=CAPACITY_REDISPATCH_SECONDS,
+        include_node_started_executor_lost=False,
+    )
+    async with db_engine.connect() as conn:
+        selected = (await conn.execute(select(Run.id).where(Run.id == run_id, predicate))).scalars().all()
+    assert selected == [run_id]
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, test_org)
+        run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+        summary: dict[str, int] = {"skipped": 0}
+        skip, resume_data = await _resolve_hitl_resume_or_skip(session, test_org, run, summary)
+    assert skip is False
+    assert summary["skipped"] == 0
+    assert resume_data == {"action": "approved", "review_id": "gate-1"}
+
+
+async def test_inline_resume_capacity_denial_rolls_back_the_cas_real_pg(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A capacity denial after the CAS must leave the row claimable, not ``running``.
+
+    The approval is already committed, so the F6a reconcile must still be able
+    to claim a row the capacity gate bounced. The whole resume transaction
+    (including the status flip) rolls back.
+    """
+    run_id = uuid.uuid4()
+    await _insert_run_with_token(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="awaiting_human",
+        claim_token="claim-capacity",
+    )
+
+    executor = PipelineExecutor(app_engine)
+
+    async def deny_capacity(_session: object, **_kwargs: object) -> None:
+        raise SandboxCapacityExceededError(test_org)
+
+    monkeypatch.setattr(executor, "_enforce_resume_sandbox_capacity", deny_capacity)
+
+    with pytest.raises(SandboxCapacityExceededError):
+        await executor.resume(
+            run_id=run_id,
+            org_id=test_org,
+            resume_data={"action": "approved", "review_id": "gate-1"},
+            claim_token="claim-capacity",
+            expected_claim_status="awaiting_human",
+        )
+
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, claim_token, claimed_by, claim_count FROM runs WHERE id=:rid"),
+                {"rid": str(run_id)},
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "awaiting_human"
+    assert row[1] == "claim-capacity"
+    assert row[2] is None
+    assert row[3] == 0
 
 
 async def test_claim_resume_run_async_real_pg(

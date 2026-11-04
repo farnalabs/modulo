@@ -51,9 +51,10 @@ true with the key itself redacted). The `ModelBackendHub` (`core/model_backend_h
 runtime registry that resolves, health-checks and fails over registered backends per run,
 selecting a healthy configured fallback or rotating across the org's healthy backends,
 and provider adapters under `backend/src/modulo/model_backends/*` implement the
-`BaseChatModel` contract with per-provider configuration.
+`ModelBackendBase` contract with per-provider configuration (most wrap a
+LangChain `BaseChatModel` internally).
 
-## Behaviours
+## Behaviors
 
 - [x] Model-backend CRUD under `/api/v1/model-backends`: create (201) with provider
       validation, list org-scoped backends, get, PATCH (name/model id/API key), delete
@@ -70,8 +71,8 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
       `modulo backfill-model-backend-base-url` command, which migrates a legacy
       `default_params.base_url` (valid https) into the credential JSON, strips plain
       http / invalid / incapable values instead of auto-blessing them, preserves the
-      stored API key, stores the validator's normalised value (never the raw input),
-      reports host only, is dry-run by default, and is idempotent. Each organisation
+      stored API key, stores the validator's normalized value (never the raw input),
+      reports host only, is dry-run by default, and is idempotent. Each organization
       runs under its own RLS scope marked as internal execution, so `visibility='team'`
       rows are reached rather than silently skipped, and every changed row appends a
       SYSTEM-actor `model_backend.base_url_backfilled` audit event carrying only the
@@ -85,13 +86,14 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
       primary/fallback (`hub.feature`)
 - [x] With no configured fallback, the hub rotates across the org's registered backends
       and emits the failover audit event; encrypted credentials are decrypted exactly once
-      per backend per hub initialisation (`hub.feature`)
+      per backend per hub initialization (`hub.feature`)
 - [x] Rotation semantics at run time: a health check before each run selects the primary
       when healthy, the fallback otherwise, and an all-unhealthy assignment fails the run
       with `no_healthy_backend` (`rotation.feature`)
-- [x] Per-provider adapters (openai, anthropic, and peers) share the `BaseChatModel`
-      contract with configuration validation, health checks, error handling and rate
-      limiting (`test_model_backends/*`, `model_backends/*.feature`)
+- [x] Per-provider adapters (openai, anthropic, and peers) share the
+      `ModelBackendBase` contract with configuration validation, health checks,
+      error handling and rate limiting (`test_model_backends/*`,
+      `model_backends/*.feature`)
 - [x] `POST /api/v1/model-backends/{backend_id}/health-check` re-runs the PRD 8.1 check on
       demand against the decrypted stored credential and persists the result - returning
       `healthy` / `unhealthy` (+ auth-failure detail) / `not_applicable` with `checked_at`,
@@ -128,7 +130,7 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
   FAR-1515 sub-surface (cross-team model-backend pin enforcement at graph save,
   merged in PR #1377): the model-backend mirror of the connector team-scope
   rule shipped while neither the manifest `feat-model-backends` registry nor
-  this tracker named it. Added the checked behaviour line (the 409
+  this tracker named it. Added the checked behavior line (the 409
   `model_backend_team_mismatch` refusal, the shared predicate, and the
   deliberate non-extension to the org-only case because the hub has no
   invocation-time visibility gate) plus the `core/team_visibility.py` /
@@ -163,8 +165,8 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
   reverse testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`),
   so a newly shipped panel on the model-backends page can no longer ship invisible to
   Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-08-27: **product-map review pass** - added this behaviour-tracker
+- 2026-08-27: **product-map review pass** - added this behavior-tracker
   for the registered manifest feature `feat-model-backends`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/model_backends.py`,
+  `docs/product-map/` entry. Behaviors verified against `api/routes/model_backends.py`,
   `core/model_backend_hub`, `backend/src/modulo/model_backends/*` and the model-backends
   BDD/unit suites. Status: covered.

@@ -2,7 +2,7 @@
 
 **Audience:** Modulo operators (SRE / platform / security) who hold the
 break-glass operator secrets. This is the operational procedure for
-recovering an organisation whose only admin cannot authenticate.
+recovering an organization whose only admin cannot authenticate.
 
 **Prerequisite reading:**
 - ADR 047 (centralized-authorization), ADR 018 (centralized-authorization) – the auth architecture and the ONE deliberate login-route hook deviation
@@ -165,7 +165,7 @@ modulo-break-glass force-last-admin <org> --reason "<ticket-ref>"
 - Same org advisory lock and the same out-of-band verification protocol as
   `activate` (§5).
 - Appends a `last_admin_forcibly_removed` audit row in the same transaction.
-- The `force` parameter is honoured ONLY for the `modulo_breakglass` session
+- The `force` parameter is honored ONLY for the `modulo_breakglass` session
   (`session_user` gate in the SECURITY DEFINER) – an org admin cannot invoke it.
 - **Distinct from `deactivate --force`:** `deactivate --force` overrides the
   refuse-while-live-activation-exists guard; `force-last-admin` overrides the
@@ -291,7 +291,7 @@ The SCIM deactivate path returns **409** (RFC 7644 body) when no replacement
 admin exists – the IdP must provision one first. The two IdPs behave
 differently:
 
-| IdP | Behaviour on 409 | Consequence |
+| IdP | Behavior on 409 | Consequence |
 |---|---|---|
 | Okta | Stops retrying | Operator must act to resolve |
 | Entra (Azure AD) | Retries indefinitely | Repeated 409s until a replacement admin is provisioned |

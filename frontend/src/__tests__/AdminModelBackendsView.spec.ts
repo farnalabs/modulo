@@ -107,7 +107,7 @@ describe('AdminModelBackendsView — list', () => {
     expect(wrapper.text()).toContain('claude-sonnet')
     expect(wrapper.text()).toContain('Configured')
     expect(wrapper.text()).toContain('Missing')
-    expect(wrapper.text()).toContain('Organisation')
+    expect(wrapper.text()).toContain('Organization')
     expect(wrapper.text()).toContain('Private')
     expect(wrapper.text()).not.toContain('private')
   })

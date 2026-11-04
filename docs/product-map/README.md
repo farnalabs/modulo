@@ -9,8 +9,8 @@ layers:
    `features:` registry of allowed feature ids. The backend serves it at
    `/api/v1/manifest`, the frontend router/nav consume it at build time, and Assistant's
    `search_documentation` indexes each route's `product_map` refs.
-2. **`docs/product-map/`** – the feature graph (this directory). One behaviour-tracker
-   entry per feature, keyed by the same `feat-*` id, describing expected behaviours,
+2. **`docs/product-map/`** – the feature graph (this directory). One behavior-tracker
+   entry per feature, keyed by the same `feat-*` id, describing expected behaviors,
    happy paths, error semantics, coverage, and known gaps. Entries are the human-readable
    layer on top of the manifest registry.
 
@@ -21,7 +21,7 @@ This file is the graph root. Entries are nodes; the frontmatter fields are typed
 `frontend/src/manifest.yaml` **must never shrink** the `features:` registry without
 reason: every registered feature is referenced by at least one shipped route, and every
 `feat-*` reference anywhere in the codebase must resolve either to a registered manifest
-feature or to a behaviour-tracker entry below (enforced by
+feature or to a behavior-tracker entry below (enforced by
 `backend/tests/architecture/test_product_map.py`). If a feature ships, it appears in one
 of these two places – otherwise it is invisible to Assistant and to this graph.
 
@@ -44,9 +44,9 @@ status: covered | partial | gap    # coverage status of the behaviours below
 
 <One-paragraph summary of what the feature is and who uses it.>
 
-## Behaviours
+## Behaviors
 
-- [x] every shipped behaviour, checked once verified against code + tests
+- [x] every shipped behavior, checked once verified against code + tests
 - [ ] unchecked = genuine gap (moved to Known Gaps when acknowledged)
 
 ## Known Gaps
@@ -64,22 +64,22 @@ Infra-only surfaces that have no UI route are tracked **here**, not in the manif
 
 ## Contribution workflow
 
-For **any** feature change (new feature, changed behaviour, deprecated behaviour):
+For **any** feature change (new feature, changed behavior, deprecated behavior):
 
 1. Update the manifest: add/update the route's `product_map` references and keep the
    `features:` registry description accurate (`frontend/src/manifest.yaml`).
-2. Update the behaviour-tracker entry in this directory (`docs/product-map/`) – tick
-   verified behaviours, add tests to `code:`/`unit-tests:`/`bdd:`, and note new known
+2. Update the behavior-tracker entry in this directory (`docs/product-map/`) – tick
+   verified behaviors, add tests to `code:`/`unit-tests:`/`bdd:`, and note new known
    gaps. If the change adds a genuinely new feature, create a new entry here **and**
    register it in `features:` (unless it is an infra-only surface with no UI route).
 3. Run the architecture suite so the graph stays consistent:
    `uv run --project backend --no-sync pytest backend/tests/architecture/test_product_map*.py -q`
-4. Update the PRD if the change introduces new behaviour (see CONTRIBUTING.md).
+4. Update the PRD if the change introduces new behavior (see CONTRIBUTING.md).
 
 ## Index – manifest feature registry (single source of truth)
 
 Every registered manifest feature, its description, and the routes that reference it.
-Fresh entries for these features are added to the graph below as behaviour trackers.
+Fresh entries for these features are added to the graph below as behavior trackers.
 
 ### Build
 - **feat-dashboard** - Home dashboard and metrics overview - routes: `/`
@@ -137,10 +137,10 @@ Fresh entries for these features are added to the graph below as behaviour track
 
 ## Index – feature graph entries
 
-Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
+Behavior-tracker entries in this directory. Infra-only surfaces (no UI route in
 `manifest.yaml`) are tracked here as well, keyed by their `feat-*` id.
 
-> **Known gaps:** registered manifest features that still lack a behaviour-tracker
+> **Known gaps:** registered manifest features that still lack a behavior-tracker
 > entry here are listed once, at the end of this file – see
 > [Known graph gaps](#known-graph-gaps). Keeping a single list stops the two copies
 > drifting apart (they did: the older inline copy still named features whose trackers
@@ -153,7 +153,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `feat-schemas`, `feat-teams`, `feat-evals`, `feat-guardrails`, `feat-variants`,
 > `feat-product-analytics`, `feat-pipelines`, `feat-runs`, `feat-dashboard`,
 > `feat-costs`, `feat-notifications`, `feat-observability`, `feat-plugins`,
-> `feat-triggers`, `feat-analytics`, `feat-audit`, `feat-risk-assessment` gained their behaviour-tracker
+> `feat-triggers`, `feat-analytics`, `feat-audit`, `feat-risk-assessment` gained their behavior-tracker
 > entries – see the graph index below. The 2026-09-10 walk added `feat-apply`
 > (registered in the manifest by FAR-681 but never tracked). A follow-up
 > 2026-09-10 walk reconciled this registry's `routes:` lists with the manifest
@@ -356,8 +356,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `steps/test_secrets_backend.py`, driving the REAL
 > `modulo.core.secrets_backend` seams network-free and DB-free – the
 > `FernetSecretsBackend` persists/reads real rows in an in-memory aiosqlite
-> engine (round-trip, in-place upsert, delete, whitespace-normalised keys),
-> organisation scoping via the real `WHERE organisation_id = :oid` SQL the
+> engine (round-trip, in-place upsert, delete, whitespace-normalized keys),
+> organization scoping via the real `WHERE organisation_id = :oid` SQL the
 > backend emits (org A reads what org A wrote; org B gets `KeyError`),
 > `validate_key` / `_read_org_id_from_session` fail-closed rejections (blank
 > key / no session / missing RLS context), no-downtime rotation fallback +
@@ -393,7 +393,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > requirement (no org context → 403), the `analytics_page` feature gate
 > (disabled → 402), an explicit unauthenticated 401 (HTTPBearer with no
 > `Authorization` header), the JSON + CSV export surfaces (CSV carries a
-> `Content-Disposition: attachment`), the concurrency slot-utilisation series
+> `Content-Disposition: attachment`), the concurrency slot-utilization series
 > and the advisory-only guardrail scorecard. `_ORPHANED_BDD_FEATURES` stays
 > empty.
 >
@@ -454,7 +454,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > transaction (previously it called `_set_default_rls_org` outside any
 > transaction, matching the SAML bug FAR-1058 fixed – a provider read on a
 > transaction-less autobegin=False app session raised `RuntimeError` → 500).
-> Demoted the deferral and added the behaviour lines to
+> Demoted the deferral and added the behavior lines to
 > `frontend/src/manifest.yaml` `feat-sso`. `_ORPHANED_BDD_FEATURES` stays empty.
 >
 > **Closed this walk (2026-09-20):** closed `feat-connectors`'s "No BDD for
@@ -535,7 +535,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > → 422, and a missing org → 404), all driving the REAL `/api/v1/admin/orgs`
 > routes (`admin_create_org_user` / `admin_list_orgs`) with only DB seams
 > patched (`steps/test_system_admin.py`). The `feat-system-orgs` tracker gained
-> the corresponding behaviour lines (`system/system-orgs.md`) and the manifest
+> the corresponding behavior lines (`system/system-orgs.md`) and the manifest
 > registry entry is now `status: covered`.
 
 > **Closed this walk (2026-09-22):** closed `feat-core-runtime-provider-core`'s
@@ -569,7 +569,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `context.span_id`), connector chain callbacks whose span attributes carry no
 > credential fields, and a telemetry-disabled provider registered with NO span
 > processor so nothing reaches the exporter. The closed gap moved to a ticked
-> behaviour in the tracker + manifest; `_ORPHANED_BDD_FEATURES` stays empty.
+> behavior in the tracker + manifest; `_ORPHANED_BDD_FEATURES` stays empty.
 
 > **Closed this walk (2026-09-22):** closed `feat-library-collections`'s "No BDD
 > feature file" gap (`library/library-collections.md`). Registered the new
@@ -619,7 +619,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 > **Closed this walk (2026-09-23):** closed the four stale pipeline-level BDD
 > drafts tracked as `@awaiting-implementation` gaps under the feature graph –
-> every one was a placeholder whose behaviour was already shipped and covered by
+> every one was a placeholder whose behavior was already shipped and covered by
 > the executing `feat-triggers` suite or unit coverage, so the duplicates were
 > archived, not re-wired: `pipelines/webhook_trigger.feature` (deleted; HMAC
 > valid/invalid, duplicate and flood scenarios live in
@@ -639,7 +639,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 > **Closed this walk (2026-09-23):** closed `feat-license`'s
 > "`stripe_webhook.py` / `admin_tiers.py` cited as adjacents but not
-> behaviour-covered" gap (`licensing/license.md`). Registered the new
+> behavior-covered" gap (`licensing/license.md`). Registered the new
 > `licensing/stripe_billing.feature` into the executing BDD suite from the new
 > `steps/test_stripe_billing.py` (10 scenarios), driving the REAL
 > `POST /api/v1/webhooks/stripe` route with only the `fulfil_team_purchase`
@@ -652,7 +652,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > dispatch, bad/tampered/stale signatures and non-JSON payloads fail closed at
 > 400, and a Stripe-disabled instance 404s. Also wired the already-executing
 > `admin/tier_catalog.feature` into `feat-license`'s citations as the
-> tier-catalogue surface it belongs to. `_ORPHANED_BDD_FEATURES` stays empty.
+> tier-catalog surface it belongs to. `_ORPHANED_BDD_FEATURES` stays empty.
 >
 > **Closed this walk (2026-09-24):** closed `feat-mcp`'s MCP (Model Context Protocol) HITL-review
 > `@awaiting-implementation` gap (`configure/mcp.md`). The five
@@ -667,11 +667,11 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > survives only as an accepted input alias - reported as `insufficient_scope`),
 > the real `_check_human_only_gate` policy hook, the real HITLManager approve/reject
 > decision dispatch (`approved` / `rejected` + `review_id`), and the real
-> pending-gate serialisation with the shared gate description resolver –
+> pending-gate serialization with the shared gate description resolver –
 > network-free and DB-free with only the auth re-validation and DB/HITLManager
 > seams patched. Removed the five scenarios from
 > `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`); added the
-> `review_hitl.feature` citation + behaviour line to `feat-mcp`
+> `review_hitl.feature` citation + behavior line to `feat-mcp`
 > (`configure/mcp.md`, manifest registry). `_ORPHANED_BDD_FEATURES` stays empty.
 
 > **Closed this walk (2026-09-25):** closed the last pinned MCP legacy-
@@ -745,7 +745,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > path – and a connector-instance selection list) and were pinned since 2026-08;
 > they are rewritten to the real two-phase import contract and now drive the
 > REAL `POST /api/v1/libraries/import/analyse` + `/api/v1/libraries/import/confirm`
-> routes with only the DB read/materialisation seams patched
+> routes with only the DB read/materialization seams patched
 > (`steps/test_workflows.py`): valid-bundle analysis (connector instance,
 > abstract-name schema and model-backend resolution) then confirm (200
 > `imported` with the bundle's pipeline name), a tampered non-JSON bundle 400
@@ -767,7 +767,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > built" Known Gap (`docs/product-map/admin/org.md`): the `/admin/org` UI ships
 > and its surface is manifest-documented, so the remaining gap is re-scoped to
 > the `@awaiting-implementation` UI-journey BDD scenarios and the manifest
-> `feat-org` registry gained the shipped UI behaviour + scoped deferral.
+> `feat-org` registry gained the shipped UI behavior + scoped deferral.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
 > **Closed this walk (2026-09-28):** closed `feat-sso`'s
@@ -779,7 +779,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > testid, registered in the `/settings/sso` manifest `elements:` inventory (the
 > reverse testid-coverage guard front-to-back), with vitest assertions on the
 > delete-confirmation flow. The `feat-sso` manifest registry gained the shipped
-> behaviour line; the tracker gap is removed.
+> behavior line; the tracker gap is removed.
 
 > **Closed this walk (2026-09-28):** closed `feat-org`'s lingering
 > "org-settings UI-journey BDD scenarios stay `@awaiting-implementation`" gap
@@ -799,7 +799,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > (`viewmodel_current.feature`), org deletion BDD (`org_deletion.feature`). The
 > manifest `feat-org` deferral claiming the drafts were "covered by component
 > (vitest) and E2E suites" was stale and removed; the registry now carries the
-> accurate behaviour lines. `_ORPHANED_BDD_FEATURES` stays empty.
+> accurate behavior lines. `_ORPHANED_BDD_FEATURES` stays empty.
 >
 > **Closed this walk (2026-09-28):** reconciled `feat-assistant`'s stale "Test
 > breadth" known gap (`configure/assistant.md`). The bullet claimed deeper unit
@@ -849,14 +849,14 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > that a product-map `bdd:` citation always names at least one scenario CI
 > actually executes.
 
-> **Closed this walk (2026-09-29):** reconciled the four behaviour-tracker
+> **Closed this walk (2026-09-29):** reconciled the four behavior-tracker
 > frontmatter `status:` fields with the manifest `features:` registry – the two
 > layers disagreed on the same features' coverage. `feat-guardrails`,
 > `feat-license`, `feat-plugins` and `feat-product-analytics` were sharpened to
 > `status: partial` in the manifest during the 2026-09-26 walk (each carries an
 > unshipped sub-surface – cross-org guardrail inheritance, universal license
 > gating, registry-API plugin lifecycle management, in-product analytics
-> export – tracked as an unchecked behaviour deferral), but each
+> export – tracked as an unchecked behavior deferral), but each
 > `docs/product-map/` tracker kept `status: covered` even though its own QA
 > note said "Status stays `partial`". A reader of the graph got the opposite
 > coverage answer from the machine layer Assistant indexes from. The trackers
@@ -868,7 +868,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > drift again. `_ORPHANED_BDD_FEATURES` stays empty.
 >
 > **Closed this walk (2026-09-30):** closed four stale sub-surface gaps –
-> shipped behaviour that neither product-map layer described. `feat-apply`
+> shipped behavior that neither product-map layer described. `feat-apply`
 > (FAR-1294): `modulo apply` manages the pipeline runtime limits
 > `node_timeout_seconds` / `max_duration_seconds` (declare-only, null rejected
 > at load, booleans rejected, hashed into the managed view for `--diff`);
@@ -879,21 +879,21 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > registry + `configure/mcp.md`. `feat-notifications` (FAR-1295): the
 > approaching-deadline HITL sweep's webhook / in-app leg under the single
 > fire-once claim – the manifest tracked it but `notifications/notifications.md`
-> lagged; behaviour line + citations added. `feat-runs` (FAR-1305): the
+> lagged; behavior line + citations added. `feat-runs` (FAR-1305): the
 > truthful `missing_self_report_reason` (`agent_not_reported` vs
 > `zero_report_unproven`; a third state, `sub_floor_rejected`, was added
 > 2026-10-04 by FAR-1308) – manifest tracked it but `build/runs.md` lagged;
-> behaviour line + citations added. `_ORPHANED_BDD_FEATURES` stays empty.
+> behavior line + citations added. `_ORPHANED_BDD_FEATURES` stays empty.
 
 > **Closed this walk (2026-09-30):** closed the feature-graph gap left by
 > chunk 9a (FAR-961 evidence retention/cleanup + FAR-957 advisory author
 > warnings, commit `e64ddac0e`) – a whole evidence subsystem that shipped with
 > no product-map home, invisible to the feature graph and to Assistant's
-> `search_documentation` indexer. New behaviour tracker
+> `search_documentation` indexer. New behavior tracker
 > `feat-core-evidence-store` (`core/evidence-store.md`) covers the append-only
 > evidence fact store (FAR-966 chunk 7 §3.1: subject-scoped key/value facts,
 > five-value producer vocabulary, RLS migration 0263, E1 append-only carve-out),
-> the evidence layer's subject-scoped fetch + producer write-authorisation +
+> the evidence layer's subject-scoped fetch + producer write-authorization +
 > RunEvidence fold-in, the per-org retention policy and the sanctioned batched
 > purge sweep (advisory `PostgresLock`, SAVEPOINT batches preserving the
 > transaction-local RLS scope, `modulo_evidence_retention_deletions_total`
@@ -907,7 +907,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-10-01):** closed the sub-surface gap left by
 > FAR-1336 (delivery-signal provenance/confidence, `#1154`) and FAR-1373
 > (agent-reported streak-outcome qualifier, `#1158`; vocabulary renamed from
-> `self_reported` by FAR-1388) – shipped behaviour neither
+> `self_reported` by FAR-1388) – shipped behavior neither
 > product-map layer described. The run-outcome delivery signal had no home at
 > all: the terminal `run_classification` record (value/reason/`delivered_pr_urls`
 > + FAR-1336 `pr_url_provenance` + `delivery_confidence`), the fail-closed
@@ -966,14 +966,14 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > JWT (JSON Web Token) branch that `pipeline.list` / `run.list` mount rejects before any
 > handler runs (cannot list pipelines or view runs), and the real
 > `_advance_refresh_sequence` refresh seam 401s
-> ("Account no longer has access to this organisation") BEFORE the token-family
+> ("Account no longer has access to this organization") BEFORE the token-family
 > sequence advances so the family stays untouched. Removed the scenario from
 > `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`);
 > `_ORPHANED_BDD_FEATURES` stays empty.
 >
 > **Closed this walk (2026-10-03):** reconciled four human-readable trackers
-> with behaviour the manifest registry carries but the feature-graph entries
-> lagged behind – shipped behaviour that a reader of the graph (or Assistant's
+> with behavior the manifest registry carries but the feature-graph entries
+> lagged behind – shipped behavior that a reader of the graph (or Assistant's
 > docs indexer) could not find. `feat-analytics` (`analytics/analytics.md`):
 > the FAR-1421 claim→dispatch latency metric (`avg_dispatch_latency_ms` with
 > the `started_at` fallback and NULL-never-0 semantics, provenance copied onto
@@ -994,7 +994,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `LifecycleMapView.spec.ts`. `_ORPHANED_BDD_FEATURES` stays empty.
 >
 > **Closed this walk (2026-10-05):** closed four untracked sub-surface gaps –
-> shipped behaviour that neither product-map layer described, all merged after
+> shipped behavior that neither product-map layer described, all merged after
 > the 2026-10-03 walk. `feat-infra-health` (`infra/health-checks.md`): the
 > FAR-1446 readiness-degradation email alert – the `health_readiness_alert`
 > system cron (every 5 min, `unique=True`) emails `ALERT_EMAIL_TO` on a
@@ -1017,7 +1017,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > empty.
 >
 > **Closed this walk (2026-10-05):** reconciled the graph with shipped
-> behaviour and removed stale/ill-formed manifest deferrals. `feat-library`
+> behavior and removed stale/ill-formed manifest deferrals. `feat-library`
 > (`library/library.md`) gained the FAR-1380 composite library-primitive
 > credential-masking surface – the shared
 > `LibraryPrimitiveResponse._mask_composite_graph_credentials` validator on every
@@ -1041,7 +1041,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `enabled_at`/`disabled_at` stamping, `policy_gate.toggled` audit, break-glass
 > deny), the run-start `policy_gate_pins_fingerprint` re-verification, and the
 > pin-governed evaluation universe (`_resolve_governed_gate`) – in the manifest
-> feature registry and `improve/evals.md`. Also normalised the
+> feature registry and `improve/evals.md`. Also normalized the
 > `EvalEditorView` policy-gate surface and three `PageHeader` titles from the
 > `data-test-id` typo to `data-testid`, registered the now-visible testids in
 > the manifest `elements:` inventory, and added a regression guard
@@ -1095,7 +1095,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > seed and fails until each is classified audited / exempt / gap; (2) FAR-1538
 > added the system-admin read surface for the durable `system_audit_events`
 > ledger (`GET /api/v1/admin/system-audit` plus the `/admin/audit` system tab),
-> which narrows the "no read API/UI" half of the per-organisation-chain Known
+> which narrows the "no read API/UI" half of the per-organization-chain Known
 > Gap. `feat-runs` (`build/runs.md`): FAR-1528 refuses a run for an archived /
 > soft-deleted pipeline at `create_run` with a typed `PipelineNotRunnableError`
 > mapped to 409 Conflict across every REST entry point through the shared
@@ -1139,7 +1139,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > stays empty.
 >
 > **Closed this walk (2026-10-08):** tracked the untracked **SCIM 2.0
-> provisioning** surface as a new `feat-scim` behaviour tracker
+> provisioning** surface as a new `feat-scim` behavior tracker
 > (`auth/scim-provisioning.md`). The API-only `/scim/v2/*` surface (Users and
 > Groups CRUD, the `ServiceProviderConfig` document, the shared-secret
 > `MODULO_SCIM_TOKEN` auth, the `scim` plan gate, record-preserving
@@ -1175,7 +1175,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > value) in both the manifest registry and `configure/connectors.md`, and
 > `feat-triggers` now carries the **FAR-1595 polling-connector team-scope gate**
 > (save-time 409 `connector_team_mismatch` over REST + MCP trigger writes and the
-> read-time `enforce_polling_team_scope` defence-in-depth on the polling fire
+> read-time `enforce_polling_team_scope` defense-in-depth on the polling fire
 > path) in both the manifest registry and `triggers/trigger-engine.md`, with the
 > matching code and test citations. `_ORPHANED_BDD_FEATURES` stays empty.
 >
@@ -1186,8 +1186,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > seam (`db/crud/run.py::_persist_guardrail_eval_results`) appends one
 > `eval_guardrail_<eval_id>` fact per guardrail decision through the single
 > `append_evidence()` write path (`core/eval_engine/evidence_layer.py`) with
-> fail-closed key-namespace authorisation, so the store is no longer
-> write-dormant. Tracked as a ticked behaviour with the `db/crud/run.py` +
+> fail-closed key-namespace authorization, so the store is no longer
+> write-dormant. Tracked as a ticked behavior with the `db/crud/run.py` +
 > `test_evidence_first_producer.py` citations; the gap now scopes the
 > deferral to production READS (`fetch()` / `map_run_evidence_to_evidence`)
 > and the parked predicate/`decide` (§4). `_ORPHANED_BDD_FEATURES` stays
@@ -1201,7 +1201,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > author-version endpoint, the `GET .../installs/{install_id}/update` delta
 > surface, the `POST .../upgrade` reconcile endpoint (reconciled / preserved
 > / reported + warnings, operator-modified entities never clobbered, added
-> pins reported not materialised, removed pins reported not deleted,
+> pins reported not materialized, removed pins reported not deleted,
 > structural pipeline-graph changes reported `manual`) and the detail-view
 > update-badge + Upgrade-button panel are now tracked in the manifest
 > `feat-library-collections` registry and in
@@ -1344,5 +1344,5 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 ## Known graph gaps
 
-All registered manifest features now have a `docs/product-map/` behaviour-tracker
+All registered manifest features now have a `docs/product-map/` behavior-tracker
 entry. No untracked features remain.

@@ -16,11 +16,12 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from langchain_core.messages import BaseMessage
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 import modulo.core.pipeline_execution as pe
 from modulo.core.model_backend_hub import ModelBackendHub
@@ -260,7 +261,7 @@ async def _interrupt_run(
     run_id: uuid.UUID,
     backend_id: uuid.UUID,
     fixtures: dict[str, str],
-) -> None:
+) -> str:
     """Claim + execute until the gate interrupts; run must reach awaiting_human."""
     from modulo.core.pipeline_engine.executor import PipelineExecutor
 
@@ -287,6 +288,7 @@ async def _interrupt_run(
         await hub.__aexit__(None, None, None)
 
     assert final.status == "awaiting_human", f"expected awaiting_human interrupt, got {final.status}"
+    return claim_token
 
 
 async def _gate_result(gate_config: dict, payload: dict[str, Any]) -> dict:
@@ -347,6 +349,99 @@ async def _resume_and_complete(
                 )
             ).fetchone()
         raise AssertionError(f"resume_run outcome: {outcome}; run row: {tuple(row) if row else None}")
+
+
+async def test_mcp_approve_commits_then_resumes_inline_without_reconcile(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real MCP approve path commits its decision before inline resume.
+
+    This composes the production MCP tool, real Postgres HITL manager/session,
+    and the real LangGraph executor. Only the model backend is a deterministic
+    stub; no HITL manager, MCP dispatcher, or session is mocked. The executor
+    must observe the committed approval on its own connection and complete the
+    run without a reconcile tick.
+    """
+    from modulo.api import mcp_server as ms
+
+    org_id = await _seed_org(db_engine, "McpInlineApprove")
+    account_id = await _seed_account(db_engine, org_id, "mcp-inline-approve@test.local")
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeMcpInlineApprove", account_id)
+    backend_id = uuid.uuid4()
+    gate_config: dict[str, Any] = {
+        "review_id": "hitl_review_a_b",
+        "human_only": False,
+        "overdue_threshold_minutes": 60,
+        "required_team_id": None,
+    }
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _hitl_graph("a", "b", str(backend_id), gate_config))
+    run_id = await _seed_run(db_engine, org_id, pipe, snap)
+    fixtures = {"Hello World": json.dumps({"greeting": "hi"}), "Bye World": json.dumps({"farewell": "bye"})}
+    run_claim_token = await _interrupt_run(db_engine, migrated_db_url, org_id, run_id, backend_id, fixtures)
+
+    review_id = await _read_review_id(db_engine, org_id, run_id)
+    assert isinstance(run_claim_token, str)
+    assert run_claim_token
+
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    tokens = (
+        ms._ctx_org_id.set(org_id),
+        ms._ctx_user_id.set(account_id),
+        ms._ctx_role.set("admin"),
+        ms._ctx_auth_type.set("api_key"),
+    )
+    hub = None
+    try:
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_check_agent_tool_scope"),
+            patch.object(
+                ms,
+                "_get_session_factory",
+                return_value=async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False),
+            ),
+        ):
+            setup_hub = _run_executor_hub(backend_id, fixtures)
+            hub = await setup_hub()
+            claim_result = await ms.review_hitl(
+                run_id=str(run_id),
+                review_id=review_id,
+                action="claim",
+            )
+            assert claim_result["status"] == "claimed"
+            hitl_claim_token = claim_result["claim_token"]
+            result = await ms.review_hitl(
+                run_id=str(run_id),
+                review_id=review_id,
+                action="approve",
+                claim_token=hitl_claim_token,
+            )
+    finally:
+        ms._ctx_org_id.reset(tokens[0])
+        ms._ctx_user_id.reset(tokens[1])
+        ms._ctx_role.reset(tokens[2])
+        ms._ctx_auth_type.reset(tokens[3])
+        if hub is not None:
+            set_model_backend_hub(None)
+            await hub.__aexit__(None, None, None)
+
+    assert result == {"status": "approved", "review_id": review_id, "run_id": str(run_id)}
+    status, completed_at = await _run_status(db_engine, run_id)
+    assert status == "complete"
+    assert completed_at is not None
+
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT decision, decision_payload FROM hitl_claims WHERE run_id=:rid AND review_id=:review"),
+                {"rid": str(run_id), "review": review_id},
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "approved"
+    assert row[1] == {"action": "approved", "review_id": review_id}
 
 
 async def test_hitl_resume_roundtrip_approve_with_modification(

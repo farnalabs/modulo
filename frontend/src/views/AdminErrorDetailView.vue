@@ -92,53 +92,95 @@
         </div>
       </div>
 
+      <!-- FAR-2374: every error-record write is gated on `errors.manage`
+           (admin) by FAR-2373. A viewer keeps the whole READ surface but no
+           write control is actionable, and each disabled control is described
+           with the reason — via aria-describedby for assistive tech plus the
+           shared v-tooltip affordance. The tooltip sits on the wrapping span
+           because a disabled control swallows hover events, so a tooltip bound
+           directly to it would never open. -->
       <div v-if="!isInstanceScope" class="card p-4">
         <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminErrorDetailView.actions') }}</h2>
+        <p
+          v-if="!canManageErrors"
+          id="admin-error-status-admin-help"
+          class="mb-3 text-xs text-muted-foreground"
+          data-testid="admin-error-detail-status-admin-help"
+        >
+          {{ statusAdminHelp }}
+        </p>
         <div class="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-            :disabled="group.status === 'acknowledged'"
-            data-testid="admin-error-detail-acknowledge"
-            @click="updateStatus('acknowledged')"
-          >
-            {{ $t('views.AdminErrorDetailView.acknowledge') }}
-          </button>
-          <button
-            type="button"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-            :disabled="group.status === 'resolved'"
-            data-testid="admin-error-detail-resolve"
-            @click="updateStatus('resolved')"
-          >
-            {{ $t('views.AdminErrorDetailView.resolve') }}
-          </button>
-          <button
-            type="button"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-            :disabled="group.status === 'archived'"
-            data-testid="admin-error-detail-archive"
-            @click="updateStatus('archived')"
-          >
-            {{ $t('views.AdminErrorDetailView.archive') }}
-          </button>
-            <div class="ml-auto flex items-center gap-2">
-            <label for="assignee-select" class="text-xs text-muted-foreground">{{ $t('views.AdminErrorDetailView.assign_to') }}</label>
-            <Select
-  v-model="assigneeId"
-  :aria-label="$t('views.AdminErrorDetailView.assign_to')"
-  @update:model-value="updateAssignee"
-  :placeholder="$t('views.AdminErrorDetailView.unassigned')"
-  id="assignee-select"
-  data-testid="admin-error-detail-assignee"
-  :options="users.map(user => ({ value: user.id, label: user.display_name || user.email }))"
-  option-label="label"
-  option-value="value"
->
-  <template #option="{ option }">
-    <span :data-value="option.value">{{ option.label }}</span>
-  </template>
-</Select>
+          <span v-tooltip.top="{ value: statusAdminHelp, disabled: canManageErrors }" class="inline-flex">
+            <button
+              type="button"
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+              :disabled="!canManageErrors || group.status === 'acknowledged'"
+              :aria-describedby="statusAdminDescribedBy"
+              data-testid="admin-error-detail-acknowledge"
+              @click="updateStatus('acknowledged')"
+            >
+              {{ $t('views.AdminErrorDetailView.acknowledge') }}
+            </button>
+          </span>
+          <span v-tooltip.top="{ value: statusAdminHelp, disabled: canManageErrors }" class="inline-flex">
+            <button
+              type="button"
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+              :disabled="!canManageErrors || group.status === 'resolved'"
+              :aria-describedby="statusAdminDescribedBy"
+              data-testid="admin-error-detail-resolve"
+              @click="updateStatus('resolved')"
+            >
+              {{ $t('views.AdminErrorDetailView.resolve') }}
+            </button>
+          </span>
+          <span v-tooltip.top="{ value: statusAdminHelp, disabled: canManageErrors }" class="inline-flex">
+            <button
+              type="button"
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+              :disabled="!canManageErrors || group.status === 'archived'"
+              :aria-describedby="statusAdminDescribedBy"
+              data-testid="admin-error-detail-archive"
+              @click="updateStatus('archived')"
+            >
+              {{ $t('views.AdminErrorDetailView.archive') }}
+            </button>
+          </span>
+          <div class="ml-auto flex flex-col items-end gap-1">
+            <div class="flex items-center gap-2">
+              <label for="assignee-select" class="text-xs text-muted-foreground">{{ $t('views.AdminErrorDetailView.assign_to') }}</label>
+              <span
+                v-tooltip.top="{ value: assignAdminHelp, disabled: canManageErrors }"
+                class="inline-flex"
+                :class="{ 'opacity-60': !canManageErrors }"
+              >
+                <Select
+                  v-model="assigneeId"
+                  :aria-label="$t('views.AdminErrorDetailView.assign_to')"
+                  :disabled="!canManageErrors"
+                  :pt="assignSelectPt"
+                  @update:model-value="updateAssignee"
+                  :placeholder="$t('views.AdminErrorDetailView.unassigned')"
+                  id="assignee-select"
+                  data-testid="admin-error-detail-assignee"
+                  :options="users.map(user => ({ value: user.id, label: user.display_name || user.email }))"
+                  option-label="label"
+                  option-value="value"
+                >
+                  <template #option="{ option }">
+                    <span :data-value="option.value">{{ option.label }}</span>
+                  </template>
+                </Select>
+              </span>
+            </div>
+            <p
+              v-if="!canManageErrors"
+              id="admin-error-assign-admin-help"
+              class="text-xs text-muted-foreground"
+              data-testid="admin-error-detail-assign-admin-help"
+            >
+              {{ assignAdminHelp }}
+            </p>
           </div>
         </div>
       </div>
@@ -293,6 +335,7 @@ import { shortId } from '../utils/format'
 import { formatErrorDate, levelBadgeClass, statusBadgeClass } from '../utils/errorGroupPresentation'
 import Select from '../components/shared/AppSelect.vue'
 import { buildErrorGroupSupportReference } from '../lib/supportReference'
+import { useErrorAdminActions } from '../composables/useErrorAdminActions'
 
 const route = useRoute()
 const router = useRouter()
@@ -307,6 +350,32 @@ const errorId = route.params.id as string
 // 403, so a forged param can never surface sentinel rows.
 const { isSystemAdmin } = useCurrentUser()
 const isInstanceScope = isSystemAdmin.value && route.query?.scope === 'instance'
+
+// FAR-2374: the same admin-only permission that gates the PATCH endpoint. The
+// detail view already refuses to render the actions card in instance scope, so
+// this only distinguishes an admin from a viewer WITHIN the tenant scope.
+const { canManageErrors } = useErrorAdminActions()
+
+const STATUS_ADMIN_HELP_ID = 'admin-error-status-admin-help'
+const ASSIGN_ADMIN_HELP_ID = 'admin-error-assign-admin-help'
+
+const statusAdminHelp = computed(() => t('views.AdminErrorDetailView.admin_only_status_help'))
+const assignAdminHelp = computed(() => t('views.AdminErrorDetailView.admin_only_assign_help'))
+
+// Only referenced while the matching help text is rendered, so an admin never
+// carries a dangling aria-describedby reference.
+const statusAdminDescribedBy = computed(() =>
+  canManageErrors.value ? undefined : STATUS_ADMIN_HELP_ID,
+)
+
+// PrimeVue forwards fallthrough attrs to the Select's wrapper, not to the
+// focusable combobox, so the assignee hint is routed through `pt.label` — the
+// same pattern the environment-profile form uses.
+const assignSelectPt = computed(() =>
+  canManageErrors.value
+    ? {}
+    : { label: { 'aria-describedby': ASSIGN_ADMIN_HELP_ID } },
+)
 
 const showStacktrace = ref(false)
 const showContext = ref(false)
@@ -419,5 +488,17 @@ async function loadUsers() {
 loadEvents(0)
 // The assignee picker lives in the tenant-only actions card; the instance
 // view is read-only, so skip the admin user lookup there entirely.
-if (!isInstanceScope) loadUsers()
+//
+// FAR-2374: `GET /api/v1/admin/users` is admin-only. Firing it for a viewer
+// only buys a 403 and an empty dropdown, so the lookup waits for the
+// caller-scoped permission read to grant `errors.manage` — and never happens
+// at all when it does not (a viewer's request is skipped, not attempted and
+// swallowed).
+watch(
+  canManageErrors,
+  (allowed) => {
+    if (allowed && !isInstanceScope) void loadUsers()
+  },
+  { immediate: true },
+)
 </script>

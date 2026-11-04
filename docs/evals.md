@@ -42,7 +42,7 @@ checks are necessary but never sufficient.
 2. **It is injection-prone.** An injection payload embedded in the agent output
    can instruct the judge to return a passing score. The engine mitigates
    instruction leakage with structural delimiters and a guard instruction
-   (`_GUARD_INSTRUCTION` in `eval_engine/__init__.py`), but that only neutralises
+   (`_GUARD_INSTRUCTION` in `eval_engine/__init__.py`), but that only neutralizes
    *instruction* leakage – it cannot guarantee the judge's *correctness*
    assessment is right.
 
@@ -84,7 +84,7 @@ with:
 
 At run time the engine looks up the set and runs **every** assertion. The eval
 passes only if all assertions pass; the `detail` lists any failing assertion
-names. A `block` behaviour raises `EvalBlockedError` on failure.
+names. A `block` behavior raises `EvalBlockedError` on failure.
 
 ### Shipped set: `demo_classification` (`v1`)
 A representative agent task: a support-message classification agent emits JSON
@@ -298,7 +298,7 @@ instead of a pipeline `Run`.
 
 ### Run-kind trigger model
 
-* `triggers.run_kind` – `'run'` (DEFAULT, existing behaviour) or `'suite_run'`.
+* `triggers.run_kind` – `'run'` (DEFAULT, existing behavior) or `'suite_run'`.
   When `'suite_run'`, the cron/event dispatch path enqueues a **SuiteRun**
   execution rather than a `Run`.
 * `triggers.eval_suite_id` – nullable FK to `eval_suites`. `pipeline_id` stays
@@ -358,7 +358,7 @@ prevents a read-check-write spend race from overshooting the per-run ceiling.
 An orchestration failure transitions the run to `failed`, populates
 `error_detail` (a missed run is never rendered as current), and escalates a
 monitored error event to the Error Dashboard (source = `suite_run`). The SAQ
-`execute_suite_run` job re-raises after the run is terminalised so the SAQ
+`execute_suite_run` job re-raises after the run is terminalized so the SAQ
 `after_process` hook sinks it too.
 
 ### Plan and permission gates
@@ -374,7 +374,7 @@ wrapped in the community-tier `eval_system` feature gate.
 
 The READ side of the eval flywheel is a pure read-model over the now-structured
 `SuiteRun` / `eval_results` data. It is **live aggregation** over the existing
-tables – there is no parallel materialised table, no new "scores over time"
+tables – there is no parallel materialized table, no new "scores over time"
 store – so it can never diverge from what the writer actually persisted.
 
 Two endpoints:

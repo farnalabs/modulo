@@ -134,6 +134,22 @@ class TestResolveRequired:
             with pytest.raises(PermissionDenied):
                 assert_org_role(low_role, "operator", "system_maps_access")
 
+    def test_system_maps_read_is_distinct_viewer_key(self) -> None:
+        """FAR-2363: the published-read key is viewer-level and separate from authoring.
+
+        ``system_maps.read`` and ``system_maps_access`` must never collide: the
+        latter is the operator authoring gate, the former a viewer read floor.
+        """
+        from modulo.auth.permissions import SYSTEM_MAPS_READ_PERMISSION
+
+        assert SYSTEM_MAPS_READ_PERMISSION == "system_maps.read"
+        assert PERMISSIONS[SYSTEM_MAPS_READ_PERMISSION] == "viewer"
+        assert resolve_required(SYSTEM_MAPS_READ_PERMISSION) == "viewer"
+        assert is_delegable(SYSTEM_MAPS_READ_PERMISSION) is True
+        assert assert_org_role("viewer", "viewer", SYSTEM_MAPS_READ_PERMISSION) is None
+        assert PERMISSIONS["system_maps_access"] == "operator"
+        assert SYSTEM_MAPS_READ_PERMISSION != "system_maps_access"
+
     def test_unknown_key_raises_configuration_error(self) -> None:
         with pytest.raises(PermissionConfigurationError):
             resolve_required("nonexistent.permission")

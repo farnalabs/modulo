@@ -25,10 +25,10 @@ status: covered
 
 The per-run mutable context object seeded at run start from pipeline defaults and
 extended at runtime, plus autonomy-level resolution that drives HITL-gate /
-notification behaviour. Only `context_setter` nodes write to it; autonomy
+notification behavior. Only `context_setter` nodes write to it; autonomy
 telemetry emits gate-outcome events for observability.
 
-## Behaviours
+## Behaviors
 
 - [x] Run context is seeded from pipeline defaults plus the trigger input payload;
       an absent payload seeds an empty `input`; the payload is nested under the
@@ -55,7 +55,7 @@ telemetry emits gate-outcome events for observability.
 ## Known Gaps
 
 - **Context writes are role-gated at the decorator layer** - enforcement is
-  behavioural (node role), not a storage-level permission, so a mislabeled runtime
+  behavioral (node role), not a storage-level permission, so a mislabeled runtime
   is the boundary.
 
 ## QA History
@@ -73,5 +73,5 @@ telemetry emits gate-outcome events for observability.
 
 - 2026-08-25: **product-map review pass** - entry added to close the
   dangling `depends-on: feat-core-run-context` edge in `teams/org-entity.md`.
-  Behaviours re-verified against `core/run_context/*` and its unit/BDD suites.
+  Behaviors re-verified against `core/run_context/*` and its unit/BDD suites.
   Status: covered.

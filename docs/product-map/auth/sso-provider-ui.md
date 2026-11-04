@@ -41,7 +41,7 @@ identity providers. Team-gated (§9.4): the route is `required_tier: team` +
 incident-response playbook as the prevention control for IdP-initiated SSO validation
 (`docs/security/incident-response-playbook.md`).
 
-## Behaviours
+## Behaviors
 
 - [x] Admin can view the list of all configured SSO providers with type badges (O / S)
 - [x] Admin can add an OIDC provider (client ID, client secret, discovery URL, scopes)
@@ -85,7 +85,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   provisioning (`/scim/v2/*`, `MODULO_SCIM_TOKEN`, the `scim` plan feature) is
   implemented end to end - including record-preserving user deprovisioning
   (`DELETE /scim/v2/Users/{id}` and `PATCH active=false`) behind the
-  last-admin guard - and now has its own behaviour tracker
+  last-admin guard - and now has its own behavior tracker
   (`feat-scim`, `auth/scim-provisioning.md`); the `feat-sso` deferral names only
   the genuinely-unshipped SAML single logout.
 - 2026-09-28: **Improve Architecture product-map walk**: closed the
@@ -107,7 +107,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   `_resolve_saml_for_route`), an unbound app session sees zero OIDC providers,
   and `GET /oidc/{provider}/login` 307s cross-org with the resolved provider's
   client_id while an unknown slug is a 400 not a 500. Demoted the OIDC deferral
-  and added the behaviour lines to `frontend/src/manifest.yaml`.
+  and added the behavior lines to `frontend/src/manifest.yaml`.
 - 2026-09-21: **product-map review pass**: closed the
   "No BDD scenarios for admin provider CRUD" gap. Registered
   `auth/sso_admin_crud.feature` into the executing BDD suite from the new
@@ -165,4 +165,4 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   renders OIDC/SAML buttons that link to the existing login endpoints). Coverage added in
   ``frontend/src/__tests__/LoginView.spec.ts`` (5 cases, incl. fails-closed on 402 / empty
   provider list / network error) and ``frontend/tests/e2e/login.spec.ts``. Unticked
-  behaviour now verified; status: covered.
+  behavior now verified; status: covered.

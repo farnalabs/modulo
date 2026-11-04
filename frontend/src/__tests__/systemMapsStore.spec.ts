@@ -838,3 +838,71 @@ describe('useSystemMapsStore overview', () => {
     expect(store.overviewLoading).toBe(false)
   })
 })
+
+describe('useSystemMapsStore feature entitlement (402)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-1'))
+  })
+
+  it('settles the default overview to unavailable when the list is refused', async () => {
+    mockGet.mockResolvedValue({ error: { status: 402 }, data: undefined })
+
+    const store = useSystemMapsStore()
+    await store.fetchDefaultOverview()
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewEmpty).toBe(false)
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewUnavailable).toBe(true)
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('settles the overview to unavailable when the aggregate is refused', async () => {
+    mockGet.mockResolvedValue({ error: { type: 'urn:problem:modulo:feature_required' }, data: undefined })
+
+    const store = useSystemMapsStore()
+    await store.fetchOverview('map-x')
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewEmpty).toBe(false)
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewUnavailable).toBe(true)
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('marks the store unavailable when loading a revision is refused', async () => {
+    mockGet.mockResolvedValue({ error: { status: 402 }, data: undefined, response: { status: 402 } })
+
+    const store = useSystemMapsStore()
+    await store.loadRevision('map-x', 'rev-1')
+
+    expect(store.unavailable).toBe(true)
+    expect(store.error).toBeNull()
+    expect(store.activeRevision).toBeNull()
+    expect(store.graph).toBeNull()
+  })
+
+  it('marks the store unavailable when loading the current revision is refused', async () => {
+    mockGet.mockResolvedValue({ error: { status: 402 }, data: undefined })
+
+    const store = useSystemMapsStore()
+    await store.loadCurrentRevision('map-x')
+
+    expect(store.unavailable).toBe(true)
+    expect(store.error).toBeNull()
+    expect(store.activeRevision).toBeNull()
+  })
+
+  it('marks the store unavailable when loading a revision by time is refused', async () => {
+    mockGet.mockResolvedValue({ error: { status: 402 }, data: undefined, response: { status: 402 } })
+
+    const store = useSystemMapsStore()
+    await store.loadRevisionByTime('map-x', '2026-01-01T00:00:00Z')
+
+    expect(store.unavailable).toBe(true)
+    expect(store.error).toBeNull()
+    expect(store.activeRevision).toBeNull()
+  })
+})

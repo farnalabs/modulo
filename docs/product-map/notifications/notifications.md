@@ -51,7 +51,7 @@ dead-letter tracking of final failures; `api/routes/admin_notifications.py` expo
 notification-delivery log with retry/DLQ admin actions; `event_mapper.py` maps run/HITL
 events into typed notification payloads; and in-app notifications stream over SSE.
 
-## Behaviours
+## Behaviors
 
 - [x] A failure webhook fires on an unhandled node exception with the `run_id` and
       `error_detail`, includes the failed node name and error message, retries up to 3
@@ -113,7 +113,7 @@ events into typed notification payloads; and in-app notifications stream over SS
       neither the TTL nor the dismissal clause, so a dismissed row stays
       fetchable by its id). List and count share `_apply_status_filter`, so
       `items` and `total` cannot disagree (`test_in_app_notifications_lifecycle.py`).
-- [x] **Dismissal scope is honoured in the active filter.**
+- [x] **Dismissal scope is honored in the active filter.**
       `POST /{id}/dismiss` with `dismiss_scope="self"` writes a per-user
       dismissal that hides the row ONLY for the dismissing user;
       `dismiss_scope="scope"` writes a dismissal that hides the row for EVERY
@@ -142,7 +142,7 @@ events into typed notification payloads; and in-app notifications stream over SS
       `Notifier.dispatch_event` → `_dispatch_inline` – the single choke point
       every emission and every resume/re-dispatch re-entry passes. When the
       linked run's CURRENT status is in `TERMINAL_STATUSES` (operator-cancelled,
-      gate-expiry terminalised, failed, …), the dispatch is suppressed entirely
+      gate-expiry terminalized, failed, …), the dispatch is suppressed entirely
       (no webhook POST, no in-app row) and logged as
       `notifier.hitl_awaiting_suppressed_terminal_run`; a missing run row
       **or a run-status read that raises** (transient DB error – e.g. the
@@ -203,8 +203,8 @@ coverage gate is satisfied by that test rather than by deleting the branch.
   tracker with the shipped `hitl_deadline_warning` surface (FAR-1295,
   merged 2026-09-29): the manifest `feat-notifications` registry tracked the
   approaching-deadline warning's webhook / in-app leg but the human-readable
-  graph entry lagged behind (no behaviour line, no code/unit-test citation).
-  Added the checked behaviour (the single fire-once `hitl:deadline_warning`
+  graph entry lagged behind (no behavior line, no code/unit-test citation).
+  Added the checked behavior (the single fire-once `hitl:deadline_warning`
   claim guarding BOTH the email and the Notifier/webhook/in-app legs), the
   `core/hitl_manager/deadline_warning.py` code citation, and the
   `test_deadline_warning.py` / `test_hitl_deadline_warning.py` /
@@ -227,15 +227,15 @@ coverage gate is satisfied by that test rather than by deleting the branch.
 - 2026-09-27: **notification-lifecycle fix pass** – documented the three
   lifecycle semantics now enforced in code: `expires_at` TTL on every live read
   (dashboard / unread count / inbox default / `status=active`, list and count
-  kept in agreement), `dismiss_scope` honoured in the active filter (`scope`
+  kept in agreement), `dismiss_scope` honored in the active filter (`scope`
   hides for the whole org, `self` stays per-user), and post-terminal
   `hitl_awaiting` suppression at the single `Notifier.dispatch_event` choke
-  point (fail-open on an unreadable run). Behaviours verified against
+  point (fail-open on an unreadable run). Behaviors verified against
   `db/crud/notifications.py`, `core/notifier/__init__.py` and the new
   `test_in_app_notifications_lifecycle.py` / `test_hitl_awaiting_terminal_suppression.py`
   suites (each proven to fail without its fix). The authoritative
   `frontend/src/manifest.yaml` entry was not modified by this pass (out of the
-  delivery's file scope); no existing manifest behaviour text contradicted the
+  delivery's file scope); no existing manifest behavior text contradicted the
   new semantics.
 
 - 2026-09-12: **product-map review pass** – registered the shared
@@ -254,8 +254,8 @@ coverage gate is satisfied by that test rather than by deleting the branch.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-27: **product-map review pass** – added this behaviour-tracker
+- 2026-08-27: **product-map review pass** – added this behavior-tracker
   for the registered manifest feature `feat-notifications`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `core/notifier`,
+  `docs/product-map/` entry. Behaviors verified against `core/notifier`,
   `api/routes/admin_notifications.py` and the notifications BDD/unit suites.
   Status: covered.

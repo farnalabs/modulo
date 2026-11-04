@@ -196,7 +196,7 @@ import { ref, reactive, watch, onBeforeUnmount } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, isFeatureRequiredProblem } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
@@ -205,12 +205,6 @@ import FeatureGate from '../components/FeatureGate.vue'
 import { AlertTriangle } from '@lucide/vue'
 
 const { t } = useI18n()
-
-function isFeatureRequiredError(err: unknown): boolean {
-  if (typeof err !== 'object' || err === null) return false
-  const obj = err as Record<string, unknown>
-  return obj.status === 402 || obj.type === 'urn:problem:modulo:feature_required'
-}
 
 interface ConfigEntry {
   key: string
@@ -241,7 +235,7 @@ const { loading, error, data: configData, load: loadConfig } = useDataFetch<Conf
   async () => {
     const res = await api.GET('/api/v1/admin/runtime-config')
     if (res.error) {
-      if (isFeatureRequiredError(res.error)) {
+      if (isFeatureRequiredProblem(res.error, res.response)) {
         featureRequired.value = true
         return { data: { items: [], has_drift: false } as ConfigResponse, error: undefined }
       }

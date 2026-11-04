@@ -361,15 +361,15 @@ Emergency situation
 
 ---
 
-## 8. Licence Verification Key
+## 8. License Verification Key
 
-A licence key is only as trustworthy as the public key used to verify it.
+A license key is only as trustworthy as the public key used to verify it.
 Modulo ships a built-in development key so local development and the test suite
 work out of the box. **Outside debug mode that development key is not a trust
-anchor**: a licence that would only verify against it is refused, and the
+anchor**: a license that would only verify against it is refused, and the
 instance stays on the Community tier.
 
-To activate a Team licence, configure the production public key that signed it:
+To activate a Team license, configure the production public key that signed it:
 
 ```bash
 # Ed25519 public key, 64 hex characters (the PUBLIC half, not the private key)
@@ -380,32 +380,32 @@ Set it wherever your other secrets live (for example `/etc/modulo/modulo.env`,
 your container environment, or `fly secrets set`), then restart the API and
 worker processes.
 
-Behaviour:
+Behavior:
 
 | Condition | What happens |
 |---|---|
-| No licence key configured (ordinary Community self-hosting) | Boots normally on the Community tier. |
-| `MODULO_LICENSE_KEY` configured, no `MODULO_LICENSE_PUBLIC_KEY`, debug off | **Startup fails** with an error naming `MODULO_LICENSE_PUBLIC_KEY`. No licence can be verified, so the instance refuses to boot rather than run silently unlicensed. |
-| Licence uploaded through the admin API while only the development key is available | The upload is rejected and the message names `MODULO_LICENSE_PUBLIC_KEY`; the instance keeps running on its current tier. |
-| `MODULO_LICENSE_PUBLIC_KEY` set to the real production key | Licences signed by the matching private key verify normally. |
+| No license key configured (ordinary Community self-hosting) | Boots normally on the Community tier. |
+| `MODULO_LICENSE_KEY` configured, no `MODULO_LICENSE_PUBLIC_KEY`, debug off | **Startup fails** with an error naming `MODULO_LICENSE_PUBLIC_KEY`. No license can be verified, so the instance refuses to boot rather than run silently unlicensed. |
+| License uploaded through the admin API while only the development key is available | The upload is rejected and the message names `MODULO_LICENSE_PUBLIC_KEY`; the instance keeps running on its current tier. |
+| `MODULO_LICENSE_PUBLIC_KEY` set to the real production key | Licenses signed by the matching private key verify normally. |
 | `MODULO_LICENSE_PUBLIC_KEY` set to the built-in development key, debug off | Treated exactly like leaving it unset: the development key is not trusted. |
 | `debug` is on | The development key remains usable, for local development only. Never enable debug on a production deployment. |
 
 Every process (API and workers) reads the same environment. Restart all of them
 after changing the key.
 
-### Retain the anchor with the licence
+### Retain the anchor with the license
 
 `MODULO_LICENSE_PUBLIC_KEY` is the public half of the keypair that signed your
-licence. It is not secret, so keep a copy wherever you keep the licence key. If
-you hold a Farnalabs-issued licence and lose the anchor, that licence can no
+license. It is not secret, so keep a copy wherever you keep the license key. If
+you hold a Farnalabs-issued license and lose the anchor, that license can no
 longer be verified, and only Farnalabs holds the matching private key to issue
 a replacement against the anchor you still have.
 
-A successor can also issue Team licences without Farnalabs: generate your own
+A successor can also issue Team licenses without Farnalabs: generate your own
 Ed25519 keypair, set its public half as `MODULO_LICENSE_PUBLIC_KEY`, and sign
-licences with the private half. The full procedure is in
-[Continuity and Escrow](../continuity-and-escrow.md#issue-your-own-team-licence).
+licenses with the private half. The full procedure is in
+[Continuity and Escrow](../continuity-and-escrow.md#issue-your-own-team-license).
 
 ---
 

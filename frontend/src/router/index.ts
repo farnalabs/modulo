@@ -621,14 +621,14 @@ const router = createRouter({
        path: '/system-maps',
        name: 'system-maps',
        component: SystemMapsView,
-       meta: { visibility: 'private_preview' },
+        meta: { visibility: 'public' },
      },
      {
        path: '/system-maps/:id',
        name: 'system-map-detail',
        component: SystemMapDetailView,
        props: true,
-       meta: { visibility: 'private_preview' },
+        meta: { visibility: 'public' },
      },
      {
        path: '/lifecycle-maps',

@@ -215,6 +215,18 @@ describe('DashboardSystemOverview', () => {
     expect(wrapper.find('[data-testid="system-map-overview-empty"]').exists()).toBe(false)
   })
 
+  it('renders the unavailable state without a retry on a 402 feature_required', async () => {
+    const { wrapper, store } = mountOverview()
+    store.overviewLoading = false
+    store.overviewUnavailable = true
+    await wrapper.vm.$nextTick()
+
+    const unavailable = wrapper.get('[data-testid="system-map-overview-error"]')
+    expect(unavailable.text()).toContain('System Maps is not available on your plan')
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-overview-empty"]').exists()).toBe(false)
+  })
+
   it('retries the overview fetch from the shared error alert', async () => {
     const { wrapper, store, fetchDefaultOverview } = mountOverview()
     await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(1))

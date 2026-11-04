@@ -45,6 +45,7 @@ from modulo.auth.dependencies import (
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, decode_principal
 from modulo.auth.permissions import (
     SYSTEM_MAPS_ACCESS_PERMISSION,
+    SYSTEM_MAPS_READ_PERMISSION,
     PermissionConfigurationError,
     PermissionDenied,
     assert_grant,
@@ -54,7 +55,7 @@ from modulo.auth.permissions import (
     set_authz_enforce,
 )
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
-from modulo.core.feature_flags import PlanContext
+from modulo.core.feature_flags import TIER_RANK, PlanContext
 from modulo.db.models.organisation import SYSTEM_ORG_ID, Organisation
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
@@ -256,6 +257,54 @@ def _require_internal_system_maps_access(
         settings=settings,
     )
     return principal
+
+
+def _require_published_system_maps_read(
+    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+) -> TenantPrincipal:
+    """Authorize the published System Maps read model for every viewer.
+
+    This is intentionally separate from the internal authoring gate: published
+    maps are a viewer-readable product surface, while discovery and every
+    mutation remain developer-mode/operator-only. The feature entitlement is
+    checked by the router dependency; this dependency only establishes the
+    tenant permission and API-key grant boundary.
+    """
+    required = resolve_required(SYSTEM_MAPS_READ_PERMISSION)
+    try:
+        assert_org_role(principal.org_role, required, SYSTEM_MAPS_READ_PERMISSION)
+    except PermissionDenied as exc:
+        logger.warning(
+            _CODE_PERMISSION_DENIED,
+            extra={
+                "permission": SYSTEM_MAPS_READ_PERMISSION,
+                "required": required,
+                "actual": principal.org_role,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{SYSTEM_MAPS_READ_PERMISSION}' requires '{required}' role",
+        ) from exc
+    _enforce_key_grant(principal, SYSTEM_MAPS_READ_PERMISSION)
+    return principal
+
+
+def _system_maps_internal_access(
+    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+) -> bool:
+    """Return whether a read caller may also inspect unpublished revisions.
+
+    Resolves the settings from the module-level ``get_settings`` name at call
+    time rather than binding a ``Depends`` default, so the internal gate is
+    always evaluated against the same settings surface as
+    ``_require_internal_system_maps_access``.
+    """
+    try:
+        _require_internal_system_maps_access(principal, get_settings())
+    except HTTPException:
+        return False
+    return True
 
 
 def require_permission_any_credential(permission: str) -> Any:
@@ -761,15 +810,38 @@ async def resolve_anonymous_plan_context(settings: Settings, session: AsyncSessi
     return ctx
 
 
-def _feature_required_detail(feature_name: str) -> str:
-    """Operator-facing 402 detail naming the licence scope a feature needs.
+def _feature_required_detail(feature_name: str, current_tier: str) -> str:
+    """Operator-facing 402 detail that is only as specific as the flag allows.
 
-    FAR-2060: a bare "not available on your plan" reads as an IdP bug. Name the
-    scope so the operator knows an org-scoped key is accepted too.
+    FAR-2060: a bare "not available on your plan" reads as an IdP bug, so a
+    genuine plan-tier restriction names the licence scope an operator must
+    install. But naming a licence for a feature that is merely switched off is
+    a falsehood the operator cannot act on (a community-tier flag like
+    ``system_maps`` is default-off in ``DEFAULT_OFF_FLAGS`` / ``INTERNAL_FLAGS``;
+    no licence would enable it). The declared tier is therefore read from the
+    flag catalog first:
+
+    * declared tier ABOVE the caller's tier -> the feature genuinely needs a
+      licence, so name the Team scope;
+    * declared tier at or below the caller's tier -> the feature is enabled on
+      this plan but switched off for the organisation, so say that and never
+      claim a licence is missing;
+    * unknown name -> fail closed with a neutral message; never invent a
+      licence requirement for a flag this build does not know.
     """
+    from modulo.core.feature_flags import declared_feature_tier
+
+    declared_tier = declared_feature_tier(feature_name)
+    if declared_tier is None:
+        return f"{feature_name} is not available"
+    if TIER_RANK.get(declared_tier, 0) > TIER_RANK.get(current_tier, 0):
+        return (
+            f"{feature_name} is not available on your plan — it requires a Team licence "
+            "installed at system or organisation scope"
+        )
     return (
-        f"{feature_name} is not available on your plan — it requires a Team licence "
-        "installed at system or organisation scope"
+        f"{feature_name} is not enabled for this organisation — the feature is switched "
+        "off, not restricted by your licence"
     )
 
 
@@ -832,7 +904,7 @@ def require_feature_anonymous(
             return
         raise ProblemException(
             ProblemType.FEATURE_REQUIRED,
-            detail=_feature_required_detail(feature_name),
+            detail=_feature_required_detail(feature_name, ctx.tier()),
             instance=feature_name,
         )
 
@@ -855,7 +927,7 @@ def require_feature(feature_name: str) -> DependsParameter:
         if not ctx.feature_enabled(feature_name):
             raise ProblemException(
                 ProblemType.FEATURE_REQUIRED,
-                detail=_feature_required_detail(feature_name),
+                detail=_feature_required_detail(feature_name, ctx.tier()),
                 instance=feature_name,
             )
 

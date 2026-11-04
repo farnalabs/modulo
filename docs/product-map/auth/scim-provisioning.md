@@ -33,7 +33,7 @@ shared-secret bearer token (`MODULO_SCIM_TOKEN`) rather than a user JWT; the
 target org is `MODULO_SCIM_DEFAULT_ORG_ID` when set, else the first-created
 org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
 
-## Behaviours
+## Behaviors
 
 - [x] Auth + gating: a missing bearer token is 401 `Missing SCIM token`, an
       invalid token is 401 `Invalid SCIM token`, an unconfigured instance
@@ -109,7 +109,7 @@ org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
 ## QA History
 
 - 2026-10-08: **Improve Architecture product-map walk** – tracked the untracked
-  SCIM 2.0 provisioning surface as its own `feat-scim` behaviour tracker. The
+  SCIM 2.0 provisioning surface as its own `feat-scim` behavior tracker. The
   full API-only surface (`/scim/v2/ServiceProviderConfig`, Users and Groups
   CRUD, the shared-secret `MODULO_SCIM_TOKEN` auth, the `scim` plan gate, the
   last-admin-safe deprovisioning and the fail-closed mutation audits) shipped

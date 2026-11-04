@@ -300,6 +300,7 @@ def _install_overrides(
     dev_mode: bool = True,
     org_id: uuid.UUID = _ORG_ID,
     account_id: uuid.UUID = _USER_ID,
+    internal_access: bool = True,
 ) -> None:
     """Install FastAPI dependency overrides for testing."""
     from modulo.api.dependencies import get_current_tenant_user, get_db_session, get_settings
@@ -361,7 +362,10 @@ def _install_overrides(
 
     app.dependency_overrides[get_repo] = lambda: harness.repository
     # Override the internal system maps access gate
-    from modulo.api.routes.system_maps import _require_internal_system_maps_access
+    from modulo.api.routes.system_maps import (
+        _require_internal_system_maps_access,
+        _system_maps_internal_access,
+    )
 
     async def _mock_require_internal_system_maps_access(
         principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
@@ -370,12 +374,14 @@ def _install_overrides(
         return principal
 
     app.dependency_overrides[_require_internal_system_maps_access] = _mock_require_internal_system_maps_access
-    from modulo.api.routes.system_maps import _require_system_maps_feature
+    app.dependency_overrides[_system_maps_internal_access] = lambda: internal_access
+    from modulo.api.routes.system_maps import _require_system_maps_feature, _require_system_maps_read_feature
 
     async def _mock_system_maps_feature() -> None:
         return None
 
     app.dependency_overrides[_require_system_maps_feature.dependency] = _mock_system_maps_feature
+    app.dependency_overrides[_require_system_maps_read_feature.dependency] = _mock_system_maps_feature
 
     # Override the tagged permission dependencies generated at import time.
     for route in app.routes:
@@ -728,6 +734,35 @@ def test_delete_system_map_missing_returns_404(client: tuple[TestClient, _Harnes
 
 
 # ─── Revision CRUD tests ───
+
+
+@pytest.mark.parametrize("dev_mode", [True, False])
+def test_operator_without_internal_access_cannot_read_draft_revision(dev_mode: bool) -> None:
+    harness = _Harness()
+    _install_overrides(harness, dev_mode=dev_mode, internal_access=False)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="draft")))
+    try:
+        response = TestClient(app).get(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Revision not found"
+
+
+def test_operator_with_internal_access_can_read_draft_revision() -> None:
+    harness = _Harness()
+    _install_overrides(harness, internal_access=True)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="draft")))
+    try:
+        response = TestClient(app).get(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "draft"
 
 
 def test_get_revision_returns_200(client: tuple[TestClient, _Harness]) -> None:
@@ -1487,6 +1522,35 @@ def test_overview_unknown_loop_facts_stay_null(client: tuple[TestClient, _Harnes
     assert loop["budget_used_usd"] is None
     assert loop["budget_period_start"] is None
     assert loop["last_admission_at"] is None
+
+
+def test_overview_viewer_cannot_read_draft_by_revision_id() -> None:
+    harness = _Harness()
+    _install_overrides(harness, org_role="viewer", internal_access=False)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="draft")))
+    try:
+        response = TestClient(app).get(f"{_BASE}/{_MAP_ID}/overview", params={"revision_id": str(_REV_ID)})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Revision not found"
+
+
+def test_overview_viewer_by_time_hides_a_draft() -> None:
+    """A viewer's point-in-time read never aggregates a draft revision."""
+    harness = _Harness()
+    _install_overrides(harness, org_role="viewer", internal_access=False)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_time", AsyncMock(return_value=_revision_row(status="draft")))
+    try:
+        response = TestClient(app).get(f"{_BASE}/{_MAP_ID}/overview", params={"at": "2026-01-01T00:00:00Z"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert "No revision active at" in response.json()["detail"]
 
 
 def test_overview_non_published_revision_returns_404(client: tuple[TestClient, _Harness]) -> None:
@@ -2623,6 +2687,31 @@ def test_get_revision_history_missing_map_returns_404(client: tuple[TestClient, 
     assert resp.status_code == 404
 
 
+def test_overview_internal_author_can_read_draft_by_revision_id(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    draft = _revision_row(status="draft", revision_number=2)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=draft))
+    harness.stub(
+        "get_full_revision_graph",
+        AsyncMock(
+            return_value={
+                "revision": draft,
+                "nodes": [],
+                "relationships": [],
+                "loop_configs": [],
+            }
+        ),
+    )
+
+    response = http.get(f"{_BASE}/{_MAP_ID}/overview", params={"revision_id": str(draft.id)})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["revision_id"] == str(draft.id)
+
+
 def test_overview_with_revision_id_returns_200(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     rev = _revision_row_with_effective(status="published", revision_number=2)
@@ -2647,6 +2736,33 @@ def test_overview_with_revision_id_returns_200(client: tuple[TestClient, _Harnes
     assert body["revision_id"] == str(rev.id)
     assert body["revision_number"] == 2
     harness.repository.get_revision_by_id.assert_awaited_once()
+
+
+def test_overview_internal_author_passes_unfiltered_at_lookup(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    at = datetime(2026, 1, 15, tzinfo=UTC)
+    draft = _revision_row(status="draft", revision_number=2)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_time", AsyncMock(return_value=draft))
+    harness.stub(
+        "get_full_revision_graph",
+        AsyncMock(
+            return_value={
+                "revision": draft,
+                "nodes": [],
+                "relationships": [],
+                "loop_configs": [],
+            }
+        ),
+    )
+
+    response = http.get(f"{_BASE}/{_MAP_ID}/overview", params={"at": at.isoformat()})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["revision_id"] == str(draft.id)
+    assert harness.repository.get_revision_by_time.await_args.kwargs["published_only"] is False
 
 
 def test_overview_with_at_timestamp_returns_200(client: tuple[TestClient, _Harness]) -> None:
@@ -2975,3 +3091,461 @@ def test_restore_revision_repository_returns_none_returns_404(client: tuple[Test
     resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/restore-as-new", json={"notes": "Restored"})
 
     assert resp.status_code == 404
+
+
+# ─── Viewer published-read contract (FAR-2363) ───
+
+
+class _ReadPlan:
+    """Plan stub that enables exactly the public published-read entitlement."""
+
+    def __init__(self, *, read_enabled: bool = True) -> None:
+        self.read_enabled = read_enabled
+
+    def feature_enabled(self, name: str) -> bool:
+        return name == "system_maps_read" and self.read_enabled
+
+    def list_enabled_features(self) -> list[str]:
+        return ["system_maps_read"] if self.read_enabled else []
+
+    def tier(self) -> str:
+        return "community"
+
+    def has_license_key(self) -> bool:
+        return True
+
+
+def _install_viewer_overrides(
+    harness: _Harness,
+    *,
+    org_role: str = "viewer",
+    org_id: uuid.UUID = _ORG_ID,
+    account_id: uuid.UUID = _USER_ID,
+    dev_mode: bool = True,
+    read_enabled: bool = True,
+) -> None:
+    """Install overrides WITHOUT stubbing the permission/feature gates.
+
+    The ordinary ``_install_overrides`` helper replaces every ``_check``
+    closure, which makes it impossible to assert that the viewer permission
+    contract is enforced. These overrides leave resolution intact so the real
+    ``system_maps.read`` / ``system_maps_access`` gates run.
+    """
+    from modulo.api.dependencies import get_current_tenant_user, get_db_session, get_plan_context, get_settings
+    from modulo.auth.dependencies import get_current_tenant_user_or_api_key
+    from modulo.settings import Settings
+
+    principal = TenantPrincipal(
+        username=f"{org_role}@example.com",
+        organisation_id=org_id,
+        account_id=account_id,
+        org_role=org_role,
+        is_system_admin=False,
+        via_api_key=False,
+        client_kind="test",
+    )
+
+    settings = Settings(
+        modulo_dev_mode=dev_mode,
+        modulo_public_url="http://test",
+        fernet_key="test" * 8,
+        secret_key="test" * 8,
+        redis_url="redis://localhost:6379/0",
+        database_url="postgresql+asyncpg://test:test@localhost/test",
+    )
+
+    session = MagicMock()
+    authz_result = MagicMock()
+    authz_result.scalar_one_or_none = MagicMock(return_value=None)
+    session.execute = AsyncMock(return_value=authz_result)
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.info = {}
+
+    async def _get_session():
+        yield session
+
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_db_session] = _get_session
+    app.dependency_overrides[get_plan_context] = lambda: _ReadPlan(read_enabled=read_enabled)
+    app.dependency_overrides[get_current_tenant_user] = lambda: principal
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: principal
+    from modulo.api.dependencies import _system_maps_internal_access
+    from modulo.api.routes.system_maps import get_repo
+
+    app.dependency_overrides[get_repo] = lambda: harness.repository
+    # The viewer surface must never take the internal (draft-aware) branch.
+    app.dependency_overrides[_system_maps_internal_access] = lambda: False
+
+
+@pytest.fixture
+def viewer_client() -> tuple[TestClient, _Harness]:
+    harness = _Harness()
+    _install_viewer_overrides(harness)
+    with harness:
+        yield TestClient(app), harness
+    app.dependency_overrides.clear()
+
+
+def test_viewer_lists_only_published_maps(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """A viewer reads the published list, and the repository is asked for published maps only."""
+    http, harness = viewer_client
+    harness.stub("list_maps_by_org", AsyncMock(return_value=[_map_row()]))
+
+    resp = http.get(_BASE, params={"page": 1, "page_size": 20})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"][0]["name"] == "Test System Map"
+    assert harness.repository.list_maps_by_org.await_args.kwargs["published_only"] is True
+
+
+def test_viewer_cannot_read_an_unpublished_map(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """A map with no published revision is hidden from the viewer read surface."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row(published_revision_id=None)))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}")
+
+    assert resp.status_code == 404
+
+
+def test_viewer_cannot_read_a_draft_revision(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """Draft revisions never surface through the viewer read path."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="draft")))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}", params={"include_graph": True})
+
+    assert resp.status_code == 404
+
+
+def test_viewer_history_excludes_drafts(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """Revision history is fetched with the published-only filter for viewers."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("list_revisions_history", AsyncMock(return_value=[_revision_row(status="published")]))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/revisions/history")
+
+    assert resp.status_code == 200, resp.text
+    assert harness.repository.list_revisions_history.await_args.kwargs["published_only"] is True
+
+
+def test_viewer_cannot_create_a_map(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """The authoring surface remains closed to a viewer."""
+    http, _harness = viewer_client
+
+    resp = http.post(_BASE, json={"name": "Viewer map", "visibility": "org", "default_map": False})
+
+    assert resp.status_code == 403
+
+
+def test_viewer_cannot_run_discovery(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """Discovery writes a draft, so it stays on the internal operator gate."""
+    http, _harness = viewer_client
+
+    resp = http.post(f"{_BASE}/discover", json={"name": "Viewer discovery"})
+
+    assert resp.status_code == 403
+
+
+def test_viewer_read_requires_the_read_entitlement() -> None:
+    """A viewer whose plan does not grant system_maps_read is refused (fail closed)."""
+    harness = _Harness()
+    _install_viewer_overrides(harness, read_enabled=False)
+    try:
+        with harness:
+            resp = TestClient(app).get(_BASE)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 402
+    body = resp.json()
+    # FAR-2363: the read entitlement is community-tier and default-on; when it
+    # is switched off for an organisation the 402 must say so honestly rather
+    # than claim a Team licence is missing (no licence would enable it).
+    assert body["type"] == "urn:problem:modulo:feature_required"
+    assert "system_maps_read is not enabled for this organisation" in body["detail"]
+    assert "Team licence" not in body["detail"]
+
+
+def test_operator_with_internal_access_still_authors() -> None:
+    """An operator with dev mode + the grant keeps the authoring surface."""
+    harness = _Harness()
+    _install_overrides(harness, org_role="operator", dev_mode=True)
+    with harness:
+        harness.stub("create_map", AsyncMock(return_value=_map_row(name="Authored map")))
+        resp = TestClient(app).post(_BASE, json={"name": "Authored map", "visibility": "org", "default_map": False})
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "Authored map"
+
+
+def test_viewer_reads_are_tenant_scoped(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """A viewer can never read another organisation's map."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=None))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}")
+
+    assert resp.status_code == 404
+
+
+def test_demo_viewer_can_read_a_published_map() -> None:
+    """The read-only demo principal (viewer) reaches the published read path."""
+    from modulo.core.demo import DEMO_ORG_ROLE
+
+    harness = _Harness()
+    harness.stub("list_maps_by_org", AsyncMock(return_value=[_map_row(name="Demo Delivery System")]))
+    _install_viewer_overrides(harness, org_role=DEMO_ORG_ROLE)
+    try:
+        with harness:
+            resp = TestClient(app).get(_BASE)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert DEMO_ORG_ROLE == "viewer"
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"][0]["name"] == "Demo Delivery System"
+
+
+def test_demo_viewer_still_cannot_mutate() -> None:
+    """The demo viewer never gains write authority through the read entitlement."""
+    from modulo.core.demo import DEMO_ORG_ROLE
+
+    harness = _Harness()
+    _install_viewer_overrides(harness, org_role=DEMO_ORG_ROLE)
+    try:
+        with harness:
+            resp = TestClient(app).post(
+                _BASE, json={"name": "Demo mutation", "visibility": "org", "default_map": False}
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 403
+
+
+def test_viewer_diffs_only_published_revisions(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """A viewer diff defaults to the published revision, never the draft."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("diff_revisions", AsyncMock(return_value=_diff_response()))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff", json={})
+
+    assert resp.status_code == 200, resp.text
+    assert not harness.repository.list_revisions.called
+    assert harness.repository.diff_revisions.await_args.kwargs["target_revision_id"] == _REV_ID
+
+
+def test_viewer_diff_with_no_published_revision_returns_404(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """With nothing published there is no viewer-safe diff target."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("get_published_revision", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff", json={})
+
+    assert resp.status_code == 404
+    assert "No published revision found" in resp.json()["detail"]
+    harness.repository.diff_revisions.assert_not_awaited()
+
+
+def test_viewer_cannot_diff_against_a_draft(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """A viewer cannot use the diff surface to read a draft revision."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub(
+        "get_revision_by_id",
+        AsyncMock(side_effect=[_revision_row(status="published"), _revision_row(status="draft")]),
+    )
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+
+    resp = http.post(
+        f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff",
+        json={"against_revision_id": str(uuid.uuid4())},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_viewer_cannot_use_a_draft_as_the_diff_base(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """A draft base revision is invisible even to the diff read."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="draft")))
+
+    resp = http.post(
+        f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff",
+        json={"against_revision_id": str(uuid.uuid4())},
+    )
+
+    assert resp.status_code == 404
+
+
+# ─── Published-only read contract (FAR-2363) ───
+
+
+def test_viewer_diff_without_a_published_revision_returns_404(
+    viewer_client: tuple[TestClient, _Harness],
+) -> None:
+    """A viewer's default diff target is the published revision; none is a 404."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("get_published_revision", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/diff", json={})
+
+    assert resp.status_code == 404
+    assert "No published revision found" in resp.json()["detail"]
+
+
+def test_overview_viewer_hides_a_draft_returned_by_time(
+    viewer_client: tuple[TestClient, _Harness],
+) -> None:
+    """Defence in depth: a draft row returned for a viewer's at-lookup is a 404."""
+    http, harness = viewer_client
+    at = datetime(2026, 1, 15, tzinfo=UTC)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_time", AsyncMock(return_value=_revision_row(status="draft")))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/overview", params={"at": at.isoformat()})
+
+    assert resp.status_code == 404
+    assert harness.repository.get_revision_by_time.await_args.kwargs["published_only"] is True
+
+
+class _CaptureSession:
+    """Minimal session double that records the statement the repository builds."""
+
+    def __init__(self, *, one: object = None, rows: list[object] | None = None) -> None:
+        self.statements: list[object] = []
+        self._one = one
+        self._rows: list[object] = [] if rows is None else rows
+
+    async def execute(self, statement: object) -> MagicMock:
+        self.statements.append(statement)
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = self._one
+        scalars = MagicMock()
+        scalars.all.return_value = self._rows
+        result.scalars.return_value = scalars
+        return result
+
+
+class TestPublishedOnlyRepositoryPredicates:
+    """The published-only filter must be a real SQL predicate, not a route hint.
+
+    A mocked session cannot prove the repository applies the filter, and the
+    integration suite does not feed the changed-lines coverage gate - so these
+    unit tests compile the emitted statement and assert the predicate.
+    """
+
+    def _repo(self) -> SystemMapRepository:
+        return SystemMapRepository(session_factory=MagicMock())
+
+    async def test_list_maps_by_org_excludes_unpublished_maps(self) -> None:
+        session = _CaptureSession(rows=[])
+        await self._repo().list_maps_by_org(session, organisation_id=_ORG_ID, published_only=True)
+
+        assert "published_revision_id IS NOT NULL" in str(session.statements[0])
+
+    async def test_list_maps_by_org_keeps_unpublished_maps_without_the_filter(self) -> None:
+        session = _CaptureSession(rows=[])
+        await self._repo().list_maps_by_org(session, organisation_id=_ORG_ID)
+
+        assert "published_revision_id IS NOT NULL" not in str(session.statements[0])
+
+    async def test_get_revision_by_time_published_only_excludes_drafts(self) -> None:
+        session = _CaptureSession(one=None)
+        await self._repo().get_revision_by_time(
+            session,
+            organisation_id=_ORG_ID,
+            system_map_id=_MAP_ID,
+            at=datetime(2026, 1, 15, tzinfo=UTC),
+            published_only=True,
+        )
+
+        compiled = str(session.statements[0])
+        assert "system_map_revisions.status IN" in compiled
+
+    async def test_get_revision_by_time_without_the_filter_allows_drafts(self) -> None:
+        session = _CaptureSession(one=None)
+        await self._repo().get_revision_by_time(
+            session,
+            organisation_id=_ORG_ID,
+            system_map_id=_MAP_ID,
+            at=datetime(2026, 1, 15, tzinfo=UTC),
+        )
+
+        assert "system_map_revisions.status IN" not in str(session.statements[0])
+
+    async def test_list_revisions_history_published_only_excludes_drafts(self) -> None:
+        session = _CaptureSession(rows=[])
+        await self._repo().list_revisions_history(
+            session,
+            organisation_id=_ORG_ID,
+            system_map_id=_MAP_ID,
+            published_only=True,
+        )
+
+        assert "system_map_revisions.status IN" in str(session.statements[0])
+
+    async def test_list_revisions_history_without_the_filter_keeps_drafts(self) -> None:
+        session = _CaptureSession(rows=[])
+        await self._repo().list_revisions_history(
+            session,
+            organisation_id=_ORG_ID,
+            system_map_id=_MAP_ID,
+        )
+
+        assert "system_map_revisions.status IN" not in str(session.statements[0])
+
+
+def test_viewer_reads_a_published_map_detail(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """The published detail is readable by a viewer with the read entitlement."""
+    http, harness = viewer_client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row(published_revision_id=_REV_ID)))
+    harness.stub(
+        "get_revision_by_id",
+        AsyncMock(return_value=_revision_row(status="published")),
+    )
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["id"] == str(_MAP_ID)
+
+
+def test_viewer_reads_a_published_revision_by_time(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """A viewer's historical read is published-only and succeeds for a published revision."""
+    http, harness = viewer_client
+    at = datetime(2026, 1, 15, tzinfo=UTC)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub(
+        "get_revision_by_time",
+        AsyncMock(return_value=_revision_row_with_effective(status="published")),
+    )
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/revisions/by-time", params={"at": at.isoformat()})
+
+    assert resp.status_code == 200, resp.text
+    assert harness.repository.get_revision_by_time.await_args.kwargs["published_only"] is True
+
+
+def test_viewer_rejects_a_malformed_revision_id(viewer_client: tuple[TestClient, _Harness]) -> None:
+    """A non-UUID revision id is a validation error, never a lookup."""
+    http, harness = viewer_client
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/revisions/not-a-uuid")
+
+    assert resp.status_code == 422
+    assert not harness.repository.get_revision_by_id.called

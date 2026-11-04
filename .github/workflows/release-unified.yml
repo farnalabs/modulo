@@ -39,10 +39,10 @@ name: "Release: Unified Pipeline"
         required: false
         default: false
       include_windows:
-        description: "Include the signed Windows native installer in the release (Alpha scope)"
+        description: "Beta-only opt-in: include the signed Windows native installer in the release (not part of Alpha)"
         type: boolean
         required: false
-        default: true
+        default: false
 
 concurrency:
   group: release-unified-${{ github.ref }}
@@ -85,6 +85,7 @@ jobs:
           RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_FREEZE: ${{ inputs.freeze }}
+          INCLUDE_WINDOWS: ${{ inputs.include_windows }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -95,10 +96,15 @@ jobs:
           if [ "${RELEASE_FREEZE}" = "true" ]; then
             freeze_arg="--freeze"
           fi
+          windows_arg=""
+          if [ "${INCLUDE_WINDOWS}" = "true" ]; then
+            windows_arg="--include-windows"
+          fi
           uv run --no-project --no-build python scripts/run_release_preflight.py \
             --mode "${RELEASE_MODE}" \
             --version "${RELEASE_VERSION}" \
-            $freeze_arg
+            $freeze_arg \
+            $windows_arg
 
   # ---------------------------------------------------------------------------
   # Dry-run rehearsal
@@ -1645,15 +1651,27 @@ jobs:
   # ---------------------------------------------------------------------------
   # Final cross-platform manifest (cut and recut)
   #
-  # Windows is Alpha scope (FAR-2338): the signed Windows installer is a
-  # dependency of the manifest so its artefact exists before the download step
-  # runs. When include_windows=false the installer job is skipped and the
-  # manifest proceeds without it, exactly as it did for the Linux+macOS scope.
+  # Windows is Beta-only: the signed Windows installer is a dependency of the
+  # manifest when explicitly opted in, so its artefact exists before the download
+  # step runs. When include_windows=false (the default), the installer job is
+  # skipped and the manifest proceeds with the Alpha Linux+macOS scope.
   # ---------------------------------------------------------------------------
   final-release-manifest:
     name: Generate final release manifest
     needs: [release, bundle, macos-installer, windows-installer]
-    if: (inputs.mode == 'cut' || inputs.mode == 'recut') && (inputs.include_windows == false || needs.windows-installer.result == 'success')
+    # `windows-installer` is intentionally skipped on the default Alpha path.
+    # `always()` makes that skipped need visible to this condition, while every
+    # required job remains explicitly fail-closed: release, bundle and macOS
+    # must succeed, and Windows must succeed when opted in (or be skipped when
+    # it is intentionally out of scope).
+    if: >-
+      always() &&
+      (inputs.mode == 'cut' || inputs.mode == 'recut') &&
+      needs.release.result == 'success' &&
+      needs.bundle.result == 'success' &&
+      needs.macos-installer.result == 'success' &&
+      ((inputs.include_windows && needs.windows-installer.result == 'success') ||
+       (!inputs.include_windows && needs.windows-installer.result == 'skipped'))
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
     permissions:
@@ -1710,10 +1728,10 @@ jobs:
             --output-dir release-artefacts
           test -s "release-artefacts/modulo-${VERSION}-compose.tar.gz"
           tar -tzf "release-artefacts/modulo-${VERSION}-compose.tar.gz"
-      # Windows is Alpha scope (FAR-2338): the signed installer is included in
-      # SHA256SUMS and the manifest `names`/`components` when include_windows is
-      # true (the default). The Linux and macOS artefacts are always required;
-      # the Windows entry is only added when it is in scope.
+      # Windows is Beta-only: the signed installer is included in SHA256SUMS and
+      # the manifest `names`/`components` only when include_windows is explicitly
+      # true. The Linux and macOS artefacts are always required; the Windows entry
+      # is added only for the Beta opt-in path.
       - name: Build final signed manifest after every platform artifact
         env:
           MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
@@ -1788,12 +1806,12 @@ jobs:
     name: Create GitHub Release
     needs: [release, final-release-manifest, attest-artefacts, macos-installer]
     # Do not publish until the final signed manifest covers the macOS DMG and the
-    # signed Windows installer. Windows is Alpha scope (FAR-2338):
+    # optional signed Windows installer. Windows is Beta-only:
     # windows-installer is a need of final-release-manifest when
-    # include_windows=true (the default), and that job only runs once the
-    # installer reports success - so a failed Windows build fails the release
-    # rather than publishing without it. When include_windows=false the installer
-    # job is skipped and the manifest covers Linux + macOS only.
+    # include_windows=true, and that job only runs once the installer reports
+    # success - so an explicitly opted-in Windows build fails the release rather
+    # than publishing without it. When include_windows=false (the default), the
+    # installer job is skipped and the manifest covers the Alpha Linux+macOS scope.
     # GitHub skipped Create GitHub Release while every direct need reported
     # success (run 41786063745), so this job must run and report for itself when
     # a need did not succeed. It deliberately does NOT use always(): that would
@@ -2001,13 +2019,68 @@ jobs:
         run: |
           set -euo pipefail
           BUNDLE_TAG="bundle-v${VERSION}"
-          if git rev-parse -q --verify "refs/tags/${BUNDLE_TAG}" >/dev/null 2>&1; then
-            echo "::error::${BUNDLE_TAG} already exists - refusing to overwrite a published bundle tag."
+          RELEASE_SHA="$(git rev-parse HEAD)"
+
+          # gh release create publishes the tag itself. Treat an existing remote
+          # tag as success only when it resolves to this exact release checkout;
+          # never overwrite a published tag or collapse an unknown query failure
+          # into "absent".
+          # The peel/rc-2 discrimination below is mirrored by the post-push
+          # verification at the end of this step; keep the two in sync.
+          remote_tag_line=""
+          tag_rc=0
+          remote_tag_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}")" || tag_rc=$?
+          case "$tag_rc" in
+            0)
+              remote_tag_sha=""
+              peeled_line=""
+              peeled_rc=0
+              peeled_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}^{}")" || peeled_rc=$?
+              case "$peeled_rc" in
+                0) remote_tag_sha="${peeled_line%%$'\t'*}" ;;
+                2) remote_tag_sha="${remote_tag_line%%$'\t'*}" ;;
+                *)
+                  echo "::error::${BUNDLE_TAG} exists, but its peeled SHA could not be confirmed (git ls-remote exit ${peeled_rc}) - refusing to publish."
+                  exit 1
+                  ;;
+              esac
+              if [ "$remote_tag_sha" = "$RELEASE_SHA" ]; then
+                echo "${BUNDLE_TAG} already published by the release step at ${RELEASE_SHA}; nothing to push."
+                exit 0
+              fi
+              echo "::error::${BUNDLE_TAG} already exists and points at ${remote_tag_sha}, not release target ${RELEASE_SHA} - refusing to overwrite."
+              exit 1
+              ;;
+            2)
+              git tag -a "$BUNDLE_TAG" -m "Bundle release $BUNDLE_TAG"
+              git push origin "$BUNDLE_TAG"
+              ;;
+            *)
+              echo "::error::Could not query remote tag ${BUNDLE_TAG} (git ls-remote exit ${tag_rc}) - state UNKNOWN, refusing to publish."
+              exit 1
+              ;;
+          esac
+
+          verified_line=""
+          verify_rc=0
+          verified_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}^{}")" || verify_rc=$?
+          if [ "$verify_rc" -eq 2 ]; then
+            # A lightweight tag has no peeled ref, so re-query the full ref and
+            # use that query's rc as the verification result.
+            fallback_rc=0
+            verified_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}")" || fallback_rc=$?
+            verify_rc="$fallback_rc"
+          fi
+          if [ "$verify_rc" -ne 0 ]; then
+            echo "::error::${BUNDLE_TAG} could not be verified after push (git ls-remote exit ${verify_rc})."
             exit 1
           fi
-          git tag -a "$BUNDLE_TAG" -m "Bundle release $BUNDLE_TAG"
-          git push origin "$BUNDLE_TAG"
-          echo "Pushed $BUNDLE_TAG at $(git rev-parse --short HEAD)"
+          verified_sha="${verified_line%%$'\t'*}"
+          if [ "$verified_sha" != "$RELEASE_SHA" ]; then
+            echo "::error::${BUNDLE_TAG} resolved to ${verified_sha} after push, not release target ${RELEASE_SHA}."
+            exit 1
+          fi
+          echo "Pushed and verified $BUNDLE_TAG at $RELEASE_SHA"
 
       - name: Assert the release and bundle tag exist
         # Terminal post-condition for the "concluded success having done

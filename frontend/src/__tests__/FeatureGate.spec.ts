@@ -104,7 +104,7 @@ describe('FeatureGate', () => {
     expect(text).toContain('Feature not available')
     expect(text).not.toContain('Team Feature')
     expect(text).not.toContain('Available on higher plan tier')
-    expect(text).toContain('turned off for your organisation')
+    expect(text).toContain('turned off for your organization')
   })
 
   it('omits the pricing link for a disabled community-tier feature', () => {
