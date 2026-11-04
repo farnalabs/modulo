@@ -69,6 +69,24 @@ describe('SettingsNotificationLogView', () => {
     expect(emptyReset.attributes('aria-label')).toBe('Reset all filters')
   })
 
+  it('empty-state reset requests the default range', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 10, 4, 12, 0, 0))
+      const wrapper = mount(SettingsNotificationLogView)
+      await flushPromises()
+      const emptyReset = wrapper.find('[data-testid="settings-notification-log-empty-reset"]')
+      await emptyReset.trigger('click')
+      await flushPromises()
+      expect(getMock).toHaveBeenLastCalledWith('/api/v1/admin/notifications/deliveries', {
+        params: { query: { limit: 50, from: '2026-10-06', to: '2026-11-04' } },
+      })
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('shows loading skeleton while fetching', async () => {
     getMock.mockReturnValue(new Promise(() => {}))
     const wrapper = mount(SettingsNotificationLogView)
