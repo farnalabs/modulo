@@ -49,6 +49,19 @@ def _make_run_lookup_result(run: MagicMock | None = None) -> MagicMock:
     return result
 
 
+def _stub_resume_executor(mock_build_resume_executor: MagicMock) -> MagicMock:
+    """Wire ``mcp_server._build_resume_executor`` to a no-op executor (FAR-2328).
+
+    Since FAR-2328 the MCP approve resumes the pipeline inline after the
+    decision commits, so any test that reaches a successful approve must stub
+    the executor rather than let it open a real DB connection.
+    """
+    executor = MagicMock()
+    executor.resume = AsyncMock()
+    mock_build_resume_executor.return_value = executor
+    return executor
+
+
 def _make_page_result(items: list, *, total: int | None = None, next_cursor=None, has_more: bool = False) -> MagicMock:
     result = MagicMock()
     result.items = items
@@ -822,8 +835,10 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
     async def test_approve_success(
         self,
+        mock_build_resume_executor: MagicMock,
         mock_session: AsyncMock,
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
@@ -840,17 +855,54 @@ class TestReviewHitl(_AuthContext):
         mock_sesh.execute = AsyncMock(side_effect=[run_result, gate_row_result])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
+        executor = _stub_resume_executor(mock_build_resume_executor)
 
         run_id = str(uuid.uuid4())
         result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
 
-        assert result == {"status": "approved", "review_id": "gate-1"}
+        assert result == {"status": "approved", "review_id": "gate-1", "run_id": run_id}
         manager.approve.assert_awaited_once()
         # FAR-541: the persisted decision payload is stamped with the gate id.
         assert manager.approve.await_args.kwargs["decision_payload"] == {
             "action": "approved",
             "review_id": "gate-1",
         }
+        # FAR-2328: the approval resumes the pipeline inline, after the decision
+        # commits, and the resumed payload is the committed decision itself.
+        executor.resume.assert_awaited_once()
+        assert executor.resume.await_args.kwargs["run_id"] == uuid.UUID(run_id)
+        assert executor.resume.await_args.kwargs["resume_data"] == {"action": "approved", "review_id": "gate-1"}
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
+    async def test_approve_capacity_deferral_is_queued_success(
+        self,
+        mock_build_resume_executor: MagicMock,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A committed approval survives a sandbox-capacity deferral."""
+        from modulo.core.pipeline_engine.executor import SandboxCapacityExceededError
+
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+        executor = _stub_resume_executor(mock_build_resume_executor)
+        run_id = str(uuid.uuid4())
+        executor.resume.side_effect = SandboxCapacityExceededError(_PLACEHOLDER_ORG_ID)
+
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
+
+        assert result == {"status": "queued", "run_id": run_id, "review_id": "gate-1"}
+        manager.approve.assert_awaited_once()
+        executor.resume.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
@@ -924,8 +976,10 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
     async def test_approve_attributes_decision_to_account_id(
         self,
+        mock_build_resume_executor: MagicMock,
         mock_session: AsyncMock,
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
@@ -941,12 +995,12 @@ class TestReviewHitl(_AuthContext):
         mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
+        _stub_resume_executor(mock_build_resume_executor)
 
-        result = await review_hitl(
-            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
-        )
+        run_id = str(uuid.uuid4())
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
 
-        assert result == {"status": "approved", "review_id": "gate-1"}
+        assert result == {"status": "approved", "review_id": "gate-1", "run_id": run_id}
         assert manager.approve.await_args.kwargs["actor_id"] == _PLACEHOLDER_USER_ID
         assert manager.approve.await_args.kwargs["client_type"] == "mcp"
 
@@ -1021,8 +1075,10 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
     async def test_oauth_sentinel_key_id_does_not_leak_into_audit(
         self,
+        mock_build_resume_executor: MagicMock,
         mock_session: AsyncMock,
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
@@ -1042,20 +1098,22 @@ class TestReviewHitl(_AuthContext):
         mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
+        _stub_resume_executor(mock_build_resume_executor)
 
-        result = await review_hitl(
-            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
-        )
+        run_id = str(uuid.uuid4())
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
 
-        assert result == {"status": "approved", "review_id": "gate-1"}
+        assert result == {"status": "approved", "review_id": "gate-1", "run_id": run_id}
         assert manager.approve.await_args.kwargs["actor_id"] == account_id
         assert manager.approve.await_args.kwargs["actor_id"] != uuid.UUID(int=0)
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
     async def test_approve_without_user_context_omits_actor(
         self,
+        mock_build_resume_executor: MagicMock,
         mock_session: AsyncMock,
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
@@ -1073,12 +1131,12 @@ class TestReviewHitl(_AuthContext):
         mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
+        _stub_resume_executor(mock_build_resume_executor)
 
-        result = await review_hitl(
-            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
-        )
+        run_id = str(uuid.uuid4())
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
 
-        assert result == {"status": "approved", "review_id": "gate-1"}
+        assert result == {"status": "approved", "review_id": "gate-1", "run_id": run_id}
         assert manager.approve.await_args.kwargs["actor_id"] is None
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -1458,8 +1516,10 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
     async def test_approve_unresolvable_gate_without_claim_allowed(
         self,
+        mock_build_resume_executor: MagicMock,
         mock_session: AsyncMock,
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
@@ -1496,10 +1556,11 @@ class TestReviewHitl(_AuthContext):
         )
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
+        _stub_resume_executor(mock_build_resume_executor)
 
         result = await review_hitl(run_id=str(run.id), review_id=review_id, action="approve", claim_token="tok-123")
 
-        assert result == {"status": "approved", "review_id": review_id}
+        assert result == {"status": "approved", "review_id": review_id, "run_id": str(run.id)}
         manager.approve.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
