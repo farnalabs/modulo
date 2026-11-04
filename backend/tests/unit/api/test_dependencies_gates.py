@@ -264,6 +264,47 @@ class TestRequireFeature:
         ctx.feature_enabled.assert_called_once_with("audit_viewer")
 
 
+class TestFeatureRequiredDetail:
+    """The 402 detail must only claim a licence when one would actually help.
+
+    A community-tier flag that is default-off (``DEFAULT_OFF_FLAGS`` /
+    ``INTERNAL_FLAGS``, e.g. ``system_maps``) is not enabled by any licence, so
+    naming a Team licence is false and unactionable. The detail therefore reads
+    the flag's declared tier from the catalog.
+    """
+
+    def test_team_tier_below_plan_names_the_licence(self) -> None:
+        from modulo.api.dependencies import _feature_required_detail
+
+        detail = _feature_required_detail("sso", "community")
+        assert "requires a Team licence" in detail
+        assert "system or organisation scope" in detail
+
+    def test_community_tier_disabled_does_not_claim_a_licence(self) -> None:
+        from modulo.api.dependencies import _feature_required_detail
+
+        detail = _feature_required_detail("system_maps", "community")
+        assert "system_maps is not enabled for this organisation" in detail
+        assert "switched off" in detail
+        assert "Team licence" not in detail
+        assert "requires a licence" not in detail
+
+    def test_unknown_feature_fails_closed_neutrally(self) -> None:
+        from modulo.api.dependencies import _feature_required_detail
+
+        detail = _feature_required_detail("not_a_real_flag", "community")
+        assert detail == "not_a_real_flag is not available"
+        assert "licence" not in detail
+
+    def test_team_feature_on_a_team_plan_does_not_claim_a_missing_licence(self) -> None:
+        """Below-or-equal tier disables via an override, not an entitlement gap."""
+        from modulo.api.dependencies import _feature_required_detail
+
+        detail = _feature_required_detail("sso", "team")
+        assert "Team licence" not in detail
+        assert "switched off" in detail
+
+
 class TestRequireFeatureAnonymous:
     """Pre-auth gate: fail-closed by default, degrade-only for authentication.
 

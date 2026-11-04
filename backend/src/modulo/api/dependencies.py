@@ -55,7 +55,7 @@ from modulo.auth.permissions import (
     set_authz_enforce,
 )
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
-from modulo.core.feature_flags import PlanContext
+from modulo.core.feature_flags import TIER_RANK, PlanContext
 from modulo.db.models.organisation import SYSTEM_ORG_ID, Organisation
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
@@ -810,15 +810,38 @@ async def resolve_anonymous_plan_context(settings: Settings, session: AsyncSessi
     return ctx
 
 
-def _feature_required_detail(feature_name: str) -> str:
-    """Operator-facing 402 detail naming the licence scope a feature needs.
+def _feature_required_detail(feature_name: str, current_tier: str) -> str:
+    """Operator-facing 402 detail that is only as specific as the flag allows.
 
-    FAR-2060: a bare "not available on your plan" reads as an IdP bug. Name the
-    scope so the operator knows an org-scoped key is accepted too.
+    FAR-2060: a bare "not available on your plan" reads as an IdP bug, so a
+    genuine plan-tier restriction names the licence scope an operator must
+    install. But naming a licence for a feature that is merely switched off is
+    a falsehood the operator cannot act on (a community-tier flag like
+    ``system_maps`` is default-off in ``DEFAULT_OFF_FLAGS`` / ``INTERNAL_FLAGS``;
+    no licence would enable it). The declared tier is therefore read from the
+    flag catalog first:
+
+    * declared tier ABOVE the caller's tier -> the feature genuinely needs a
+      licence, so name the Team scope;
+    * declared tier at or below the caller's tier -> the feature is enabled on
+      this plan but switched off for the organisation, so say that and never
+      claim a licence is missing;
+    * unknown name -> fail closed with a neutral message; never invent a
+      licence requirement for a flag this build does not know.
     """
+    from modulo.core.feature_flags import declared_feature_tier
+
+    declared_tier = declared_feature_tier(feature_name)
+    if declared_tier is None:
+        return f"{feature_name} is not available"
+    if TIER_RANK.get(declared_tier, 0) > TIER_RANK.get(current_tier, 0):
+        return (
+            f"{feature_name} is not available on your plan — it requires a Team licence "
+            "installed at system or organisation scope"
+        )
     return (
-        f"{feature_name} is not available on your plan — it requires a Team licence "
-        "installed at system or organisation scope"
+        f"{feature_name} is not enabled for this organisation — the feature is switched "
+        "off, not restricted by your licence"
     )
 
 
@@ -881,7 +904,7 @@ def require_feature_anonymous(
             return
         raise ProblemException(
             ProblemType.FEATURE_REQUIRED,
-            detail=_feature_required_detail(feature_name),
+            detail=_feature_required_detail(feature_name, ctx.tier()),
             instance=feature_name,
         )
 
@@ -904,7 +927,7 @@ def require_feature(feature_name: str) -> DependsParameter:
         if not ctx.feature_enabled(feature_name):
             raise ProblemException(
                 ProblemType.FEATURE_REQUIRED,
-                detail=_feature_required_detail(feature_name),
+                detail=_feature_required_detail(feature_name, ctx.tier()),
                 instance=feature_name,
             )
 

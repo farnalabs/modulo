@@ -271,6 +271,23 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
 # community=Free, team=one paid tier
 TIER_RANK: dict[str, int] = {"community": 0, "team": 1}
 
+
+def declared_feature_tier(feature_name: str) -> str | None:
+    """The catalog tier declared for ``feature_name``, or ``None`` if unknown.
+
+    Reads the static ``_KNOWN_FLAGS`` catalog — the same declaration a
+    ``FeatureFlagRegistry`` seeds itself from — so a consumer that only has a
+    resolved plan (e.g. the 402 detail builder) can tell a plan-tier
+    restriction from a default-off feature without a session or a registry
+    instance. An unknown name returns ``None`` so callers fail closed instead
+    of inventing an entitlement.
+    """
+    for flag in _KNOWN_FLAGS:
+        if flag.name == feature_name:
+            return flag.tier
+    return None
+
+
 # Flags shipped default-OFF on every tier regardless of tier rank. Each is
 # listed in the catalog for per-org toggling AND hardcoded here so the
 # community-tier tier-rank fallback in ``FeatureFlagRegistry._refresh`` can

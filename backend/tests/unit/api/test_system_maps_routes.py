@@ -3148,6 +3148,13 @@ def test_viewer_read_requires_the_read_entitlement() -> None:
         app.dependency_overrides.clear()
 
     assert resp.status_code == 402
+    body = resp.json()
+    # FAR-2363: the read entitlement is community-tier and default-on; when it
+    # is switched off for an organisation the 402 must say so honestly rather
+    # than claim a Team licence is missing (no licence would enable it).
+    assert body["type"] == "urn:problem:modulo:feature_required"
+    assert "system_maps_read is not enabled for this organisation" in body["detail"]
+    assert "Team licence" not in body["detail"]
 
 
 def test_operator_with_internal_access_still_authors() -> None:

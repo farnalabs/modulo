@@ -22,7 +22,18 @@
           class="mb-3"
         />
 
-        <ErrorAlert v-if="error" :message="error" :on-retry="loadMaps" />
+        <!-- A 402 feature_required is an entitlement answer, not a transient
+             failure: show the honest unavailable state and never offer a retry
+             that cannot succeed. -->
+        <div
+          v-if="unavailable"
+          class="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground"
+          aria-live="polite"
+        >
+          {{ $t('views.SystemMapsView.unavailable') }}
+        </div>
+
+        <ErrorAlert v-else-if="error" :message="error" :on-retry="loadMaps" />
 
         <TableSkeleton
           v-else-if="loading"
@@ -171,6 +182,7 @@ const page = computed(() => store.page)
 const pageSize = computed(() => store.pageSize)
 const loading = computed(() => store.loading)
 const error = computed(() => store.error)
+const unavailable = computed(() => store.unavailable)
 
 const actionMenuItems = computed(() => {
   const map = actionMenuMap.value

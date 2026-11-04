@@ -26,8 +26,17 @@
 
       <!-- Main Editor Area -->
       <main class="flex-1 flex flex-col min-w-0 overflow-hidden relative">
+        <!-- 402 feature_required is an entitlement answer, not a failed load:
+             no retry affordance, and an honest unavailable message. -->
+        <div
+          v-if="unavailable"
+          class="m-3 rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground"
+          aria-live="polite"
+        >
+          {{ $t('views.SystemMapDetailView.unavailable') }}
+        </div>
         <ErrorAlert
-          v-if="loadError"
+          v-else-if="loadError"
           :message="loadError"
           :on-retry="loadData"
           class="m-3"
@@ -86,7 +95,7 @@
               data-testid="system-map-graph-canvas"
             />
 
-            <div v-else-if="!loadError" class="flex items-center justify-center h-full text-muted-foreground" data-testid="system-map-empty-state">
+            <div v-else-if="!loadError && !unavailable" class="flex items-center justify-center h-full text-muted-foreground" data-testid="system-map-empty-state">
               <div class="text-center">
                 <p class="text-lg">{{ $t('views.SystemMapDetailView.no_graph') }}</p>
                 <p class="text-sm mt-2">{{ $t('views.SystemMapDetailView.no_graph_hint') }}</p>
@@ -134,6 +143,7 @@ const graph = computed(() => store.graph)
 const revisions = computed(() => store.revisions)
 const discovery = computed(() => store.discovery)
 const loadError = computed(() => store.error)
+const unavailable = computed(() => store.unavailable)
 const loading = computed(() => store.loading)
 
 const showSidebar = ref(true)

@@ -90,6 +90,44 @@ describe('SystemMapDetailView load failures', () => {
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(true)
   })
+
+  it('renders the unavailable state without a retry on a 402 feature_required', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      return Promise.resolve({
+        error: {
+          type: 'urn:problem:modulo:feature_required',
+          status: 402,
+          detail: 'system_maps_read is not enabled for this organisation',
+        },
+        response: { status: 402 },
+      })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('This system map is not available on your plan')
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(false)
+  })
+
+  it('keeps the retryable error state for a genuine server failure', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      return Promise.resolve({ error: { detail: 'down' }, response: { status: 500 } })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('This system map is not available on your plan')
+  })
 })
 
 describe('SystemMapDetailView authoring actions', () => {

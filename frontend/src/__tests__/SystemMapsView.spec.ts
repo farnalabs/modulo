@@ -458,6 +458,40 @@ describe('SystemMapsView fallback branches', () => {
     expect(wrapper.find('[data-testid="system-map-action-map-1"]').exists()).toBe(false)
   })
 
+  it('renders the unavailable state without a retry on a 402 feature_required', async () => {
+    mockIsOperator.value = false
+    mockPlanStore.devMode = false
+    mockPlanStore.userPermissions = ['system_maps.read']
+    mockGet.mockResolvedValue({
+      error: {
+        type: 'urn:problem:modulo:feature_required',
+        status: 402,
+        detail: 'system_maps_read is not enabled for this organisation',
+      },
+      response: { status: 402 },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('System Maps is not available on your plan')
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-maps-loading"]').exists()).toBe(false)
+  })
+
+  it('keeps the retryable error state for a genuine server failure', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve({ error: { detail: 'down' }, response: { status: 500 } })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('System Maps is not available on your plan')
+  })
+
   it('keeps the operator action menu for an authoring operator', async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())

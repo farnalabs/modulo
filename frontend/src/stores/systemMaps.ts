@@ -43,6 +43,8 @@ const OVERVIEW_REQUEST_TIMEOUT_MS = 15000
 const SYSTEM_MAP_PAGE_SIZE = 20
 const MAX_SYSTEM_MAP_PAGES = 1000
 
+const FEATURE_REQUIRED_TYPE = 'urn:problem:modulo:feature_required'
+
 /** Prefer the detail the API returned over a generic message. */
 function apiErrorMessage(error: unknown, fallback: string): string {
   if (error && typeof error === 'object') {
@@ -50,6 +52,26 @@ function apiErrorMessage(error: unknown, fallback: string): string {
     if (typeof detail === 'string' && detail.length > 0) return detail
   }
   return fallback
+}
+
+/**
+ * A 402 ``feature_required`` means the request was refused for entitlement
+ * reasons, not that it failed. It must settle into a distinct unavailable
+ * state instead of a retryable error: retrying the same request cannot help.
+ * Both the HTTP status and the RFC 9457 problem type are checked because
+ * mocks and older error shapes carry one but not always the other.
+ */
+function isFeatureRequiredResult(
+  error: unknown,
+  response: { status?: number } | undefined,
+): boolean {
+  if (response?.status === 402) return true
+  if (error && typeof error === 'object') {
+    const candidate = error as { status?: unknown; type?: unknown }
+    if (candidate.status === 402) return true
+    if (candidate.type === FEATURE_REQUIRED_TYPE) return true
+  }
+  return false
 }
 
 function thrownMessage(error: unknown, fallback: string): string {
@@ -64,6 +86,9 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const loaded = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  // A 402 feature_required is an entitlement answer, not a transient failure:
+  // it gets its own state so the views never offer a retry that cannot work.
+  const unavailable = ref(false)
   const maps = ref<SystemMap[]>([])
   const total = ref(0)
   const page = ref(1)
@@ -76,6 +101,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const overview = ref<SystemMapOverview | null>(null)
   const overviewLoading = ref(false)
   const overviewError = ref<string | null>(null)
+  const overviewUnavailable = ref(false)
   // Distinct from an error: discovery has published nothing yet, which is an
   // empty state rather than a failed request.
   const overviewEmpty = ref(false)
@@ -103,6 +129,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     loaded.value = false
     loading.value = false
     error.value = null
+    unavailable.value = false
     maps.value = []
     activeMap.value = null
     activeRevision.value = null
@@ -112,6 +139,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     overview.value = null
     overviewLoading.value = false
     overviewError.value = null
+    overviewUnavailable.value = false
     overviewEmpty.value = false
     accessLoaded.value = false
     systemMapsEnabled.value = false
@@ -128,6 +156,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     overviewGeneration += 1
     overviewLoading.value = true
     overviewError.value = null
+    overviewUnavailable.value = false
     overviewEmpty.value = false
     return { generation: overviewGeneration, token: getAccessToken() }
   }
@@ -194,6 +223,13 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
         )
         if (!isCurrentOverviewRequest(request.generation, request.token)) return
         if (response.error || !response.data) {
+          if (isFeatureRequiredResult(response.error, response.response)) {
+            overview.value = null
+            overviewEmpty.value = false
+            overviewError.value = null
+            overviewUnavailable.value = true
+            return
+          }
           throw new Error(apiErrorMessage(response.error, 'System map list request failed'))
         }
 
@@ -238,6 +274,13 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
       )
       if (!isCurrentOverviewRequest(request.generation, request.token)) return
       if (response.error || !response.data) {
+        if (isFeatureRequiredResult(response.error, response.response)) {
+          overview.value = null
+          overviewEmpty.value = false
+          overviewError.value = null
+          overviewUnavailable.value = true
+          return
+        }
         throw new Error(apiErrorMessage(response.error, 'System overview request failed'))
       }
       overview.value = response.data
@@ -253,12 +296,31 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     }
   }
 
+  /** Settle into the entitlement state: clear any loaded data and never retry. */
+  function markUnavailable(): void {
+    unavailable.value = true
+    error.value = null
+    maps.value = []
+    total.value = 0
+    activeMap.value = null
+    activeRevision.value = null
+    graph.value = null
+  }
+
   async function fetchMaps(nextPage = page.value): Promise<void> {
     loading.value = true
     error.value = null
+    unavailable.value = false
     try {
       const response = await api.GET('/api/v1/system-maps', { params: { query: { page: nextPage, page_size: pageSize.value } } })
-      if (response.error) throw new Error(tr('systemMaps.errors.load_maps'))
+      if (response.error) {
+        if (isFeatureRequiredResult(response.error, response.response)) {
+          markUnavailable()
+          loaded.value = true
+          return
+        }
+        throw new Error(tr('systemMaps.errors.load_maps'))
+      }
       const payload = response.data
       maps.value = payload?.items ?? []
       total.value = payload?.total ?? 0
@@ -285,18 +347,34 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   async function loadMap(mapId: string): Promise<void> {
     loading.value = true
     error.value = null
+    unavailable.value = false
     try {
       const response = await api.GET('/api/v1/system-maps/{map_id}', { params: { path: { map_id: mapId } } })
-      if (response.error || !response.data) throw new Error(tr('systemMaps.errors.load_map'))
+      if (response.error || !response.data) {
+        if (isFeatureRequiredResult(response.error, response.response)) {
+          markUnavailable()
+          return
+        }
+        throw new Error(tr('systemMaps.errors.load_map'))
+      }
       activeMap.value = response.data
       if (response.data.published_revision_id) await loadRevision(mapId, response.data.published_revision_id)
-    } catch (err: unknown) { error.value = err instanceof Error ? err.message : tr('systemMaps.errors.load_map') }
+    } catch (err: unknown) {
+      if (unavailable.value) return
+      error.value = err instanceof Error ? err.message : tr('systemMaps.errors.load_map')
+    }
     finally { loading.value = false }
   }
 
   async function loadRevision(mapId: string, revisionId: string): Promise<void> {
     const response = await api.GET('/api/v1/system-maps/{map_id}/revisions/{rev_id}', { params: { path: { map_id: mapId, rev_id: revisionId }, query: { include_graph: true } } })
-    if (response.error || !response.data) throw new Error(tr('systemMaps.errors.load_map_revision'))
+    if (response.error || !response.data) {
+      if (isFeatureRequiredResult(response.error, response.response)) {
+        markUnavailable()
+        return
+      }
+      throw new Error(tr('systemMaps.errors.load_map_revision'))
+    }
     const value = response.data as SystemMapGraph
     activeRevision.value = 'revision' in value ? value.revision : value as SystemMapRevision
     graph.value = 'revision' in value ? value : null
@@ -314,6 +392,10 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     const response = await api.GET('/api/v1/system-maps/{map_id}/revisions/current', { params: { path: { map_id: mapId } } })
     const revisionId = (response.data as SystemMapCurrentRevision | undefined)?.revision?.id
     if (response.error || !revisionId) {
+      if (isFeatureRequiredResult(response.error, response.response)) {
+        markUnavailable()
+        return
+      }
       throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.load_current_revision')))
     }
     await loadRevision(mapId, revisionId)
@@ -330,6 +412,10 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
       throw new Error(tr('systemMaps.errors.no_revision_at_time'))
     }
     if (response.error) {
+      if (isFeatureRequiredResult(response.error, response.response)) {
+        markUnavailable()
+        return
+      }
       throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.load_revision_at_time')))
     }
     const payload = response.data as SystemMapRevisionByTime | undefined
@@ -385,5 +471,5 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   // Kept for the dashboard's preview card; discovery is now a real operation.
   async function fetchDiscovery(): Promise<void> { loaded.value = true }
 
-  return { loaded, loading, error, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, hasReadAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadCurrentRevision, loadRevisionByTime, saveDraft, publish, archive, discover, clearActive, fetchDiscovery }
+  return { loaded, loading, error, unavailable, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewUnavailable, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, hasReadAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadCurrentRevision, loadRevisionByTime, saveDraft, publish, archive, discover, clearActive, fetchDiscovery }
 })
