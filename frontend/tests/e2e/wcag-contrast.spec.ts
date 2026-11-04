@@ -371,7 +371,7 @@ test.describe('light page with a stale .dark class — PrimeVue badges (FAR-2351
       await loginAsAdmin(page, env)
 
       await page.goto(path)
-      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+      await page.waitForFunction(() => (document.querySelector('#app')?.children.length ?? 0) > 0)
 
       await page.addStyleTag({ content: SUPPRESS_TRANSITIONS_CSS })
       await page.evaluate(() => {
