@@ -2025,6 +2025,8 @@ jobs:
           # tag as success only when it resolves to this exact release checkout;
           # never overwrite a published tag or collapse an unknown query failure
           # into "absent".
+          # The peel/rc-2 discrimination below is mirrored by the post-push
+          # verification at the end of this step; keep the two in sync.
           remote_tag_line=""
           tag_rc=0
           remote_tag_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}")" || tag_rc=$?
@@ -2063,7 +2065,8 @@ jobs:
           verify_rc=0
           verified_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}^{}")" || verify_rc=$?
           if [ "$verify_rc" -eq 2 ]; then
-            # A peeled lookup returns rc=2 for a lightweight tag; verify its full ref instead.
+            # A lightweight tag has no peeled ref, so re-query the full ref and
+            # use that query's rc as the verification result.
             fallback_rc=0
             verified_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}")" || fallback_rc=$?
             verify_rc="$fallback_rc"

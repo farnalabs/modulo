@@ -3468,12 +3468,15 @@ case "$*" in
         printf '%s\\trefs/tags/bundle-v0.1.0\\n' "$tag_sha"
         exit 0
         ;;
-      absent|push-mismatch|push-unknown|lightweight-fallback)
-        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == lightweight-fallback ]]; then
+      absent|push-mismatch|push-unknown|push-lightweight)
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-lightweight ]]; then
           printf '%s\\trefs/tags/bundle-v0.1.0\\n' {target}; exit 0
         fi
         if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-mismatch ]]; then
           printf '%s\\trefs/tags/bundle-v0.1.0\\n' {other}; exit 0
+        fi
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-lightweight ]]; then
+          printf '%s\\trefs/tags/bundle-v0.1.0\\n' {target}; exit 0
         fi
         if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-unknown ]]; then exit 128; fi
         exit 2
@@ -3485,7 +3488,7 @@ case "$*" in
     case "$SCENARIO" in
       annotated) printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0 ;;
       different) printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {other}; exit 0 ;;
-      lightweight-fallback) exit 2 ;;
+      push-lightweight) exit 2 ;;
       absent)
         if [[ -f {shlex.quote(str(state))} ]]; then printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0; fi
         exit 2
@@ -3558,10 +3561,12 @@ def test_bundle_tag_post_push_verification_mismatch_fails(tmp_path: Path) -> Non
     assert result.returncode != 0
     assert "resolved to" in result.stdout
     assert "after push, not release target" in result.stdout
+    assert "could not be verified after push" not in result.stdout
 
 
 def test_bundle_tag_post_push_lightweight_fallback_succeeds_without_second_push(tmp_path: Path) -> None:
-    result, calls = _bundle_tag_harness(tmp_path, scenario="lightweight-fallback")
+    """A lightweight tag uses the full-ref fallback and is verified once."""
+    result, calls = _bundle_tag_harness(tmp_path, scenario="push-lightweight")
     assert result.returncode == 0, result.stderr
     assert "Pushed and verified bundle-v0.1.0" in result.stdout
     assert calls.read_text(encoding="utf-8").splitlines().count("push origin bundle-v0.1.0") == 1
