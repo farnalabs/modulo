@@ -3435,6 +3435,136 @@ def _extract_publish_release_step_script(name: str) -> str:
     return script
 
 
+def _bundle_tag_script() -> str:
+    return _extract_publish_release_step_script("Push the bundle tag")
+
+
+def _bundle_tag_harness(
+    tmp_path: Path,
+    *,
+    scenario: str,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls.log"
+    state = tmp_path / "pushed"
+    target = "a" * 40
+    other = "b" * 40
+    _write_executable(
+        bin_dir / "git",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> {shlex.quote(str(calls))}
+case "$*" in
+  'rev-parse HEAD') printf '%s\\n' {target} ;;
+  'ls-remote --exit-code origin refs/tags/bundle-v0.1.0')
+    case "$SCENARIO" in
+      annotated|lightweight|different)
+        tag_sha={target}
+        [[ "$SCENARIO" == different ]] && tag_sha={other}
+        printf '%s\\trefs/tags/bundle-v0.1.0\\n' "$tag_sha"
+        exit 0
+        ;;
+      absent|push-mismatch|push-unknown)
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-mismatch ]]; then
+          printf '%s\\trefs/tags/bundle-v0.1.0\\n' {other}; exit 0
+        fi
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-unknown ]]; then exit 128; fi
+        exit 2
+        ;;
+      unknown) exit 128 ;;
+    esac
+    ;;
+  'ls-remote --exit-code origin refs/tags/bundle-v0.1.0^{{}}')
+    case "$SCENARIO" in
+      annotated) printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0 ;;
+      different) printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {other}; exit 0 ;;
+      absent)
+        if [[ -f {shlex.quote(str(state))} ]]; then printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0; fi
+        exit 2
+        ;;
+      push-mismatch) exit 2 ;;
+      push-unknown) exit 128 ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  'tag -a bundle-v0.1.0 -m Bundle release bundle-v0.1.0') exit 0 ;;
+  'push origin bundle-v0.1.0') touch {shlex.quote(str(state))}; exit 0 ;;
+  *)
+    if [[ "$*" == 'ls-remote --exit-code origin refs/tags/bundle-v0.1.0^{{}}' ]]; then
+      if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == absent ]]; then
+        printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0
+      fi
+      exit 2
+    fi
+    exit 0
+    ;;
+esac
+""",
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "VERSION": "0.1.0",
+        "SCENARIO": scenario,
+    }
+    result = _run_bash(_bundle_tag_script(), cwd=tmp_path, env=env)
+    return result, calls
+
+
+def test_bundle_tag_existing_exact_annotated_target_is_idempotent(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="annotated")
+    assert result.returncode == 0, result.stderr
+    assert "already published" in result.stdout
+    assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
+
+
+def test_bundle_tag_existing_exact_lightweight_target_is_idempotent(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="lightweight")
+    assert result.returncode == 0, result.stderr
+    assert "already published" in result.stdout
+    assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
+
+
+def test_bundle_tag_existing_different_target_fails_without_push(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="different")
+    assert result.returncode != 0
+    assert "refusing to overwrite" in result.stdout
+    assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
+
+
+def test_bundle_tag_remote_query_unknown_fails_without_push(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="unknown")
+    assert result.returncode != 0
+    assert "state UNKNOWN" in result.stdout
+    assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
+
+
+def test_bundle_tag_absent_push_and_exact_verification_succeed(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="absent")
+    assert result.returncode == 0, result.stderr
+    assert "push origin bundle-v0.1.0" in calls.read_text(encoding="utf-8")
+
+
+def test_bundle_tag_post_push_verification_mismatch_fails(tmp_path: Path) -> None:
+    result, _ = _bundle_tag_harness(tmp_path, scenario="push-mismatch")
+    assert result.returncode != 0
+    assert "could not be verified after push" in result.stdout
+
+
+def test_bundle_tag_post_push_verification_unknown_fails(tmp_path: Path) -> None:
+    result, _ = _bundle_tag_harness(tmp_path, scenario="push-unknown")
+    assert result.returncode != 0
+    assert "could not be verified after push" in result.stdout
+
+
+def test_bundle_tag_publication_has_no_overwrite_escape_hatches() -> None:
+    script = _bundle_tag_script()
+    assert "--force" not in script
+    assert "--clobber" not in script
+    assert 'git push origin "$BUNDLE_TAG"' in script
+
+
 def test_publish_release_guard_covers_exactly_its_needs() -> None:
     """The set of jobs the guard checks must equal the set of ``needs``.
 
