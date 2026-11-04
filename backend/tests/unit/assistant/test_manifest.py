@@ -174,6 +174,16 @@ class TestManifestLoad:
 
         Either way the wider role set is unreachable outside developer mode, and
         the backend re-checks the matching grant plus developer mode.
+
+        One further case is an explicit allowlist rather than a blanket
+        widening: a PUBLIC community route may be viewer-readable when it is
+        gated by its own dedicated read permission. The published System Maps
+        read surfaces (FAR-2363) are the only entries:
+
+        - ``/system-maps`` and ``/system-maps/:id`` - ``public`` visibility,
+          roles ``['viewer', 'operator', 'admin']``, gated by
+          ``system_maps.read``. Mutations on those pages remain operator-only
+          behind the separate ``system_maps_access`` grant.
         """
         _reset_manifest()
         from modulo.core.manifest import load_manifest
@@ -182,12 +192,32 @@ class TestManifestLoad:
             "in_dev": "library.search.in_dev",
             "private_preview": "system_maps_access",
         }
+        # Deliberately viewer-readable PUBLIC community routes (FAR-2363):
+        # published System Maps reads for every principal, gated by the
+        # dedicated system_maps.read permission.
+        viewer_visible_public_routes = {
+            "/system-maps": "system_maps.read",
+            "/system-maps/:id": "system_maps.read",
+        }
+
         manifest = load_manifest()
         for path, route in manifest["routes"].items():
             if route["required_tier"] != "community" or route["required_roles"] is None:
                 continue
             if route["required_roles"] == ["admin"]:
                 continue
+
+            if path in viewer_visible_public_routes:
+                read_permission = viewer_visible_public_routes[path]
+                assert route.get("visibility") == "public", f"Viewer-readable community route {path} must be public"
+                assert route["required_roles"] == ["viewer", "operator", "admin"], (
+                    f"Viewer-readable community route {path} must require exactly ['viewer', 'operator', 'admin']"
+                )
+                assert read_permission in (route.get("required_permissions") or []), (
+                    f"Viewer-readable community route {path} must be gated by the {read_permission} permission"
+                )
+                continue
+
             visibility = route.get("visibility")
             assert visibility in dev_gate_permissions, (
                 f"Community route {path} may only widen roles to ['operator', 'admin'] "
