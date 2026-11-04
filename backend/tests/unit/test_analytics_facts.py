@@ -741,7 +741,17 @@ class TestRecordFactForTerminalFailedRun:
 
 @pytest.fixture(autouse=True)
 def _reset_metrics_handles() -> None:
+    # Reset before AND after each test.  The handles live as module globals and
+    # another test module can lazily initialise them with the real OTel proxy
+    # provider before this module's first test runs (xdist interleaves tests
+    # from different modules across workers), which would otherwise make the
+    # lazy-init assertions below see a ``_ProxyGauge`` instead of ``None``.
+    _clear_metrics_handles()
     yield
+    _clear_metrics_handles()
+
+
+def _clear_metrics_handles() -> None:
     for name in (
         "_facts_write_failed_total",
         "_backfill_last_run_ts",
