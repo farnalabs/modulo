@@ -72,7 +72,7 @@ Windows binaries.
 The native installer (`scripts/install.sh`) distributes a self-contained
 bundle: the backend, a bundled CPython runtime, PostgreSQL 16, Redis 8, and
 the built SPA, laid out under `~/.local/opt/modulo/`. The table below is
-the honest v1 envelope (ADR 031; recentre on what `bundle-v*` artifacts
+the honest v1 envelope (ADR 031; recenter on what `bundle-v*` artifacts
 actually ship - do not widen these rows until the packaging tickets land):
 
 | OS | glibc | Status |
@@ -178,7 +178,7 @@ Treat the two MySQL-family rows as configuration surface only.
 - **Extensions**: none required; `gen_random_uuid()` is built into PostgreSQL 16+ (core since PG 13)
 - **Connection**: Async via `asyncpg` driver
 - **TLS**: `sslmode=require` (or stronger) recommended for production; the
-  `sslmode` in the database URL is honoured. Accepted values: `disable`,
+  `sslmode` in the database URL is honored. Accepted values: `disable`,
   `require`, `verify-ca`, `verify-full`; `prefer`/`allow` are rejected at
   startup (they silently downgrade to plaintext). No `sslmode` = plaintext.
 - **Schema**: Alembic-managed migrations run on startup

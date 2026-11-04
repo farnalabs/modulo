@@ -127,7 +127,7 @@ After the services become healthy, open <http://localhost:5173> and sign in
 with the local demo credentials `admin` / `admin`. These credentials and the
 Compose secrets are for local evaluation only.
 
-To prove the stack can actually store a credential and initialise the
+To prove the stack can actually store a credential and initialize the
 checkpointer — the two things a healthy-looking stack can still be broken at —
 run the smoke check:
 

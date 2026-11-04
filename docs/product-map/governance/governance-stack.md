@@ -18,7 +18,7 @@ status: covered
 # Governance Stack (`/governance`)
 
 A read-only, navigable **Governance Stack** page that expresses the
-organisation's agentic stack as one hierarchy of levels. Each level shows what
+organization's agentic stack as one hierarchy of levels. Each level shows what
 exists today in Modulo's own primitives, with a live count and a
 configured/empty/restricted state, and deep-links to the management surface
 for that level.
@@ -41,7 +41,7 @@ change**, so `pnpm run generate:api` is not required.
 | 6 | Autonomy | Earned-autonomy ladder per pipeline | `GET /api/v1/pipelines` | `/pipelines` |
 | 7 | Telemetry | Observability: OTel export + error dashboard + notification endpoints | `GET /api/v1/settings/observability`, `GET /api/v1/errors`, `GET /api/v1/notifications` | `/settings/observability`, `/admin/errors`, `/admin/notification-delivery` |
 
-## Behaviours
+## Behaviors
 
 - [x] `/governance` renders the seven-level hierarchy as one read-only
       inventory, each level composing an existing list API client-side.
@@ -53,7 +53,7 @@ change**, so `pnpm run generate:api` is not required.
 - [x] Level 3 (MCP) today is what Modulo *serves* to agents (OAuth clients,
       API keys); Level 4 (Agents) is agents Modulo dispatches; Level 5
       (Commands) is a rename over composite templates + library primitives.
-- [x] Level 6 (Autonomy) summarises the pipeline list as total pipelines plus
+- [x] Level 6 (Autonomy) summarizes the pipeline list as total pipelines plus
       the distribution across the three rungs from `earned_autonomy_level`,
       falling back to `default_autonomy_level` when earned is null.
 - [x] The rung distribution is read across EVERY page of
@@ -68,10 +68,10 @@ change**, so `pnpm run generate:api` is not required.
       as truncation, and either one renders the `autonomy_detail_partial`
       string ("… (first {sampled} of {total} pipelines)") rather than a
       prefix dressed up as the whole ladder.
-- [x] Count labels pluralise through vue-i18n's named-`count` form, and the
+- [x] Count labels pluralize through vue-i18n's named-`count` form, and the
       spec asserts the rendered text EXACTLY (singular forms included): a
-      `toContain` assertion also matches an unpluralised pipe-joined message,
-      so containment alone proved nothing about pluralisation.
+      `toContain` assertion also matches an unpluralized pipe-joined message,
+      so containment alone proved nothing about pluralization.
 - [x] Plan-gated levels reuse the same `FeatureGate` as their management page
       (`model_backend_management`, `plugin_management`, `mcp_server`,
       `observability`); every user-facing string is i18n-backed and per-level
@@ -123,14 +123,14 @@ change**, so `pnpm run generate:api` is not required.
   generated `schema.ts`; both have been in `schema.ts` (PipelineResponse)
   since it was regenerated, so the cast is gone and the field names are now
   checked by `vue-tsc`. Fixed MINOR (vacuous coverage): the count assertions
-  were `toContain`, which a pipe-joined unpluralised message satisfies; they
+  were `toContain`, which a pipe-joined unpluralized message satisfies; they
   now assert exact rendered text, with a singular-form case. Verified against
   the code: the four plan-gate names claimed here match the management pages'
   own `FeatureGate`s; all ten backing endpoints exist with the response shapes
   the view assumes (envelope `total` for models/tools/agents/commands/
   autonomy, arrays for OAuth clients / API keys / notification endpoints);
   `page_size` is capped at 100 server-side (the truncation's root cause); and
-  named-`count` pluralisation does resolve through vue-i18n's
+  named-`count` pluralization does resolve through vue-i18n's
   `getPluralIndex`. 24 Vitest specs pass.
 
 ## Data sources

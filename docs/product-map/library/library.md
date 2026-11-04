@@ -55,7 +55,7 @@ each primitive carries an integration tier (native / preview / in_dev) per ADR 0
 Library collections (FAR-760) are authored at `/library/collections/new` and viewed at
 `/library/collections/:id`, gated behind the `library_collection` feature flag.
 
-## Behaviours
+## Behaviors
 
 - [x] Primitives list with `primitive_type`, `source` (local/community), and `search`
       filters, plus single-primitive detail (`browse.feature`)
@@ -66,7 +66,7 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
 - [x] Ratings on library primitives are exercised (`ratings.feature`)
 - [x] Tier classification: an explicit tier (preview) persists on create, omitting the
       tier defaults to native, `in_dev` primitives are excluded from the default listing,
-      `include_in_dev=true` reveals them only to authorised roles (403 for viewers)
+      `include_in_dev=true` reveals them only to authorized roles (403 for viewers)
       (`tiering.feature`)
 - [x] Community sync/install and the community registry are covered
       (`community_registry.feature`, `core/library_sync`, `test_community_install.py`)
@@ -111,7 +111,7 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
       (`backend/tests/unit/api/test_library_collection.py`,
       `frontend/src/views/CollectionCreateView.vue`,
       `frontend/src/views/CollectionDetailView.vue`)
-- [x] Workflow export (`export.feature`) serialises a pipeline into a `.modulo.zip` /
+- [x] Workflow export (`export.feature`) serializes a pipeline into a `.modulo.zip` /
       signed YAML bundle with org-private fields stripped (owner_team_id, visibility,
       credentials/ciphertexts, env secrets) and preserves the configuration surface
       (`core/workflow_import_export/__init__.py`: `export_pipeline_bundle` /
@@ -121,9 +121,9 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
       bundle reference (connector types to the org's local instances, schemas by
       abstract_name, model backends by name) and detects pipeline-name conflicts with a
       disambiguation suffix suggestion, then `POST /api/v1/libraries/import/confirm`
-      materialises the pipeline (200 `imported`); a tampered (non-JSON) bundle is
+      materializes the pipeline (200 `imported`); a tampered (non-JSON) bundle is
       rejected 400 "Invalid bundle JSON" without creating entities. Only the DB
-      read/materialisation seams are patched (`test_workflows.py`)
+      read/materialization seams are patched (`test_workflows.py`)
 
 ## Known Gaps
 
@@ -134,7 +134,7 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   community-registry install path, not the workflow-import path (the drafted
   `import.feature` signature scenario was re-anchored to the shipped 400
   "Invalid bundle JSON" tamper rejection instead).
-- **Schema-structure disambiguation is materialise-time only** – an imported schema
+- **Schema-structure disambiguation is materialize-time only** – an imported schema
   whose name collides with a different-structure local schema is saved with a
   `(imported)` suffix by `materialize_import`'s `_reconcile_existing_schema`
   (unit-covered), while the /import/analyse BDD surface locks abstract-name
@@ -150,7 +150,7 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   `LibraryPrimitiveResponse._mask_composite_graph_credentials` validator that
   masks composite `content_json` nodes on every read surface, the MCP
   `modulo://library/{type}/{slug}` mask, or the FAR-1374 sentinel-refusal rule
-  on the library write surfaces. Added the checked behaviour and the
+  on the library write surfaces. Added the checked behavior and the
   `test_library_primitive_masking.py` unit citation, and removed the now-stale
   `feat-pipelines` deferral that still claimed the library-primitive surface was
   "excluded ... pending FAR-1380" (the top-level `docs/deployment-security.md`
@@ -160,7 +160,7 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   `workflows/import.feature` `@awaiting-implementation` gap: the five pinned
   scenarios were rewritten to the real two-phase import contract and are now
   executing BDD coverage driving `POST /api/v1/libraries/import/analyse` +
-  `POST /api/v1/libraries/import/confirm` with only the DB read/materialisation
+  `POST /api/v1/libraries/import/confirm` with only the DB read/materialization
   seams patched (valid-bundle analysis + confirm, tampered-bundle 400 rejection
   with no entities, connector disambiguation, schema abstract-name resolution,
   duplicate pipeline-name suffix). The drafts that asserted a wire shape the
@@ -171,10 +171,10 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   `PINNED_AWAITING_IMPLEMENTATION`; `workflows/export.feature` is cited here too.
 - 2026-09-25: **Improve Architecture product-map walk** – reconciled the
   manifest `feat-library` registry entry with this tracker (both now
-  `status: covered`): the FAR-760 collections authoring behaviour this entry ticks
+  `status: covered`): the FAR-760 collections authoring behavior this entry ticks
   is now also ticked in the manifest registry (draft → update pins → publish,
   endpoint 404s with `library_collection` off), with the default-off flag gate
-  recorded as a deferral rather than a missing behaviour.
+  recorded as a deferral rather than a missing behavior.
 - 2026-09-21: **product-map walk** – closed the composite
   content_json boundary gap: `composite_library.feature`'s "Composite content_json
   validation – missing required fields returns error" scenario (previously
@@ -237,12 +237,12 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   guard (`test_mapped_route_elements_cover_owning_view_testids`), so the FAR-760 collection
   surface can no longer ship controls invisible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-10: **product-map review pass** – added the FAR-760 library
-  collections behaviour (flag-gated draft → publish lifecycle) and cited the collection
+  collections behavior (flag-gated draft → publish lifecycle) and cited the collection
   unit test and frontend views; the graph-root registry index now lists the collection
   routes. Verified against `backend/tests/unit/api/test_library_collection.py`,
   `frontend/src/views/CollectionCreateView.vue` and `CollectionDetailView.vue`.
-- 2026-08-27: **product-map review pass** – added this behaviour-tracker
+- 2026-08-27: **product-map review pass** – added this behavior-tracker
   for the registered manifest feature `feat-library`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/library.py`,
+  `docs/product-map/` entry. Behaviors verified against `api/routes/library.py`,
   `core/library_sync`, `core/library_service/*` and the library BDD/unit suites.
   Status: covered.

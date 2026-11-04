@@ -42,7 +42,7 @@ recording / refusal windows (spec §9.3 / §4.6) on the `core/cost_controller/*`
 side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 `/admin/costs/components`.
 
-## Behaviours
+## Behaviors
 
 - [x] `GET /api/v1/admin/costs?group_by=team|org&period=day|week|month|year` returns
       per-entity cost-report rows (`total_spend_usd`, `total_runs`, component
@@ -132,7 +132,7 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
       `daily_spend_limit` | `spend_ceiling`, the spend + limit cents, run id) is
       written plus an `org_triggers_auto_paused` admin notification, the pause is
       idempotent (never auto-un-pauses; resuming stays the manual, audited admin
-      toggle), and the whole step is fail-open. Toggle-off behaviour is unchanged
+      toggle), and the whole step is fail-open. Toggle-off behavior is unchanged
       (test_org_auto_pause.py, test_cost_finalize_auto_pause.py).
 - [x] `GET /export?period=this_month|last_month|7d|30d|90d&group_by=team|pipeline|model`
       streams a CSV attachment with a `costs-export-{period}.csv` disposition;
@@ -228,9 +228,9 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-28: **product-map review pass** - added this behaviour-tracker
+- 2026-08-28: **product-map review pass** - added this behavior-tracker
   for the registered manifest feature `feat-costs`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/costs.py`,
+  `docs/product-map/` entry. Behaviors verified against `api/routes/costs.py`,
   `api/routes/cost_components.py`, `core/cost_controller/*` and the costs unit/BDD
   suites. Status: covered.
 - 2026-09-08: **product-map review pass** - closed the anomaly

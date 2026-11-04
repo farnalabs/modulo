@@ -22,9 +22,9 @@ See [Deployment](deployment.md) for production deployment.
 
 ## PrimeVue licensing
 
-PrimeVue is pinned to the MIT-licensed v4 line (`primevue@4.5.5`), so no licence
+PrimeVue is pinned to the MIT-licensed v4 line (`primevue@4.5.5`), so no license
 key, banner or build-arg is involved in local development, e2e or production.
-An old PrimeVue licence entry in a workspace `.env` is inert and can be
+An old PrimeVue license entry in a workspace `.env` is inert and can be
 removed.
 
 ## E2E visual/token slice on PRs (FAR-2017)
@@ -41,7 +41,7 @@ specs against the local mock target on every frontend PR:
 
 | Spec | Why it is in the slice |
 |---|---|
-| `json-viewer.spec.ts` | Design-token colours (incl. the light-mode probe) and long-value geometry |
+| `json-viewer.spec.ts` | Design-token colors (incl. the light-mode probe) and long-value geometry |
 | `staging-wcag.spec.ts` | WCAG AA axe audit (contrast/token class). Misleadingly named, but it runs against the local target |
 | `filter-bar-overlay.spec.ts` | Dropdown overlay anchoring |
 | `select-clipping-container.spec.ts` | Overlay escapes clipping ancestors; portalled to body |
@@ -72,10 +72,10 @@ job).
 `scripts/check_doc_validity.py` checks the product docs (`README.md` and
 `docs/**/*.md`) for three classes of defect:
 
-- retired tokens: organisation names, paths and environment flags the repo no
-  longer recognises, such as a retired top-level AGENTS.md path, or a `ghcr.io`
+- retired tokens: organization names, paths and environment flags the repo no
+  longer recognizes, such as a retired top-level AGENTS.md path, or a `ghcr.io`
   image path whose first path segment is not `farnalabs` (a placeholder such as
-  `<org>`, `{org}` or `$ORG`, or a third-party organisation). A bare
+  `<org>`, `{org}` or `$ORG`, or a third-party organization). A bare
   `ghcr.io/farnalabs` is not flagged;
 - backticked paths that begin with a known top-level prefix (`docs/`,
   `backend/`, `scripts/` and the other entries in `PATH_PREFIXES`) and contain

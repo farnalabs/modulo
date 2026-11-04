@@ -35,7 +35,7 @@ and a sortable evidence table with timestamp, key, action badge, subject, and
 formatted value columns. All strings are i18n-backed and status regions use
 `role=status`/`aria-live`.
 
-## Behaviours
+## Behaviors
 
 - [x] The `/risk-assessment` route renders under the MONITOR sidebar group;
       `RiskAssessmentView.vue` fetches risk assessment data via the evidence
@@ -85,7 +85,7 @@ formatted value columns. All strings are i18n-backed and status regions use
 ## QA History
 
 - 2026-10-31: **Improve Architecture product-map walk** - fixed MAJOR
-  (behaviour-adversarial / Lens 9 - *unreachable-in-tested-states retry*): a
+  (behavior-adversarial / Lens 9 - *unreachable-in-tested-states retry*): a
   deep link carrying an out-of-contract value (`?days=400`, `?days=-5`,
   `?action=nonsense`, `?pipeline_id=not-a-uuid`) was hydrated verbatim and sent
   to the API, which answers 422 (`days` is bounded 1..365, `action` is
@@ -101,7 +101,7 @@ formatted value columns. All strings are i18n-backed and status regions use
   every offered window round-tripping.
 
 - 2026-10-26: **Improve Architecture product-map walk** - fixed MAJOR
-  (behaviour-adversarial / Lens 9 List B - *listed but vacuously covered*): the
+  (behavior-adversarial / Lens 9 List B - *listed but vacuously covered*): the
   pipeline facet requested `GET /api/v1/pipelines` with `{ limit: 100, page: 1 }`,
   but that endpoint has no `limit` parameter and defaults `page_size` to 20, so
   the filter dropdown silently offered only the first 20 pipelines on any

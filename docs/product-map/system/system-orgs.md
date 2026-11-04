@@ -21,10 +21,10 @@ status: covered
 # System Orgs
 
 System-level organization administration for cross-tenant org management. System
-admins can create, list, and delete organisations; create users within orgs; and
+admins can create, list, and delete organizations; create users within orgs; and
 manage org-level licenses.
 
-## Behaviours
+## Behaviors
 
 - [x] POST `/api/v1/admin/orgs` creates a new org with slug uniqueness check and
       cost-component seeding; duplicate slug returns 409
@@ -37,10 +37,10 @@ manage org-level licenses.
       local account holding a password in another org → 409) and boundary
       role/password validation (invalid role or weak password → 422), a missing
       org → 404, and regular admin → 403 (`system_admin_users.feature`)
-- [x] DELETE `/api/v1/admin/orgs/{org_id}` deletes an organisation; returns 404
+- [x] DELETE `/api/v1/admin/orgs/{org_id}` deletes an organization; returns 404
       if not found and 403 for a regular admin
       (`backend/tests/bdd/features/system_admin/system_admin_orgs.feature`)
-- [x] Hard-deleting an organisation records a durable `org_deletion_completed`
+- [x] Hard-deleting an organization records a durable `org_deletion_completed`
       entry in the org-independent `system_audit_events` ledger before the org
       row is removed (FAR-1517) - the org-scoped `audit_events` chain cascades
       away with the org, so the ledger is the surviving evidence of who deleted
@@ -76,7 +76,7 @@ manage org-level licenses.
   durable org-deletion audit record: `DELETE /api/v1/admin/orgs/{org_id}` now
   writes `org_deletion_completed` to the org-independent `system_audit_events`
   ledger in the deleting transaction, so the evidence survives the cascade that
-  destroys the org-scoped chain. Added the checked behaviour line and the
+  destroys the org-scoped chain. Added the checked behavior line and the
   `core/system_audit_logger.py` / integration-test citations.
 - 2026-09-21: **product-map walk** - closed the remaining
   org-CRUD BDD gaps. `system_admin_orgs.feature` gained 3 org-listing scenarios
@@ -111,7 +111,7 @@ manage org-level licenses.
   stay invisible to Assistant's docs indexer / `/api/v1/manifest`.
 
 - 2026-09-07: **product-map review pass** - added this
-  behaviour-tracker for `feat-system-orgs`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against
+  behavior-tracker for `feat-system-orgs`, which previously had no
+  `docs/product-map/` entry. Behaviors verified against
   `routes/admin_orgs.py`, the admin orgs unit tests, and the system-admin BDD
   features. Status: covered.

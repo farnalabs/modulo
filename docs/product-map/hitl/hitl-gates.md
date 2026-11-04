@@ -69,7 +69,7 @@ tokens so reviews are exclusive and safe, and every decision is audited.
 `human_only` and team-scoped gates constrain who – or what (MCP/automation) –
 may decide.
 
-## Behaviours
+## Behaviors
 
 - [x] A run reaching a HITL review edge creates a `HitlClaim` and pauses in
       `awaiting_human`
@@ -135,7 +135,7 @@ may decide.
       gate-identity check) ends the run with the terminal `rejected` status and
       `error_code=hitl.rejected` (not `failed`, not `cancelled`), and `proceed`
       only when the gate explicitly sets `on_reject: proceed` (the pre-FAR-1487
-      continue-along-the-normal-edge behaviour). A reject route always wins; an
+      continue-along-the-normal-edge behavior). A reject route always wins; an
       automated `correction_target` wins over terminate
 - [x] The executor finalize downgrades a would-be `complete` to `rejected` only
       when BOTH the gate artifact (`result: rejected`, `reject_disposition:
@@ -237,7 +237,7 @@ may decide.
       (`HITL_REVIEW_CANCEL_GRACE_SECONDS`). It is resolved ONCE at gate fire
       and stamped as the absolute `hitl_claims.terminalize_at`, so a later
       config change never moves a live gate's deadline; the
-      dispatcher-reconcile terminaliser cancels the run at that deadline with
+      dispatcher-reconcile terminalizer cancels the run at that deadline with
       cancel reason `hitl_timeout` (`core/pipeline_engine/classify.py`) instead
       of a generic cancel. The org control is deliberately NOT plan-gated: the
       `org-hitl-review-window` card on `/admin/org` renders outside the
@@ -250,7 +250,7 @@ may decide.
       (`hitl_email_alerts` subscribers holding `hitl.claim` whose per-user
       preference resolves TRUE for the pipeline) at a lead of
       `min(max(window / 2, 60s), window, 3600s)` before the deadline, so a
-      human can act before the terminaliser cancels the run
+      human can act before the terminalizer cancels the run
       (`core/hitl_manager/deadline_warning.py`, `test_deadline_warning`,
       `test_hitl_deadline_warning`)
 - [x] Conditional HITL: an eval condition decides whether a gate activates at
@@ -327,10 +327,10 @@ may decide.
 ## QA History
 
 - 2026-09-29: **product-map review pass** – reconciled this tracker with the
-  manifest `feat-hitl` behaviours: the configurable review window (FAR-1257 /
+  manifest `feat-hitl` behaviors: the configurable review window (FAR-1257 /
   FAR-1269: three-level resolution stamped once as `hitl_claims.terminalize_at`,
   `hitl_timeout` cancel reason, org control on every tier) and the
-  approaching-deadline warning cron (FAR-1270) both shipped without behaviour
+  approaching-deadline warning cron (FAR-1270) both shipped without behavior
   lines here. Added them, cited `deadline_warning.py`, the org window route in
   `admin.py`, and the review-window/deadline unit and integration suites, and
   dropped a duplicate `hitl_review_config.py` frontmatter entry. Status:
@@ -345,7 +345,7 @@ may decide.
   expired token), the real REST `human_only` denial verdict (an API-key
   principal deciding a human_only gate → 403), and the real
   `get_overdue_claims` aggregation (warning vs escalated status + age).
-  `_ORPHANED_BDD_FEATURES` stays empty; the three behaviours are now
+  `_ORPHANED_BDD_FEATURES` stays empty; the three behaviors are now
   BDD-covered as well as unit-covered. Status: covered.
 
 - 2026-09-11: **product-map review pass** – registered the shared
@@ -364,10 +364,10 @@ may decide.
   `test_mapped_route_elements_cover_owning_view_testids` maps the route to the view
   plus `HitlReviewCard.vue` / `HitlBriefing.vue`, so a newly shipped gate/briefing
   testid can no longer drift invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-08-29: **product-map review pass** – new behaviour
+- 2026-08-29: **product-map review pass** – new behavior
   tracker for the registered `feat-hitl` manifest feature (route
   `/settings/hitl-review`, previously absent from the feature graph).
-  Behaviours verified against `api/routes/hitl.py`, `core/hitl_manager/*`,
+  Behaviors verified against `api/routes/hitl.py`, `core/hitl_manager/*`,
   `core/run_context/autonomy.py`, and the HITL unit/BDD suites. Status:
   covered.
 - 2026-08-30: **duplicate-entry reconciliation** – a parallel product-map walk
@@ -390,13 +390,13 @@ may decide.
   (`hitl/approval_gate.feature` marked `@deprecated`, `hitl/human_only_gate.feature`,
   `hitl/modify_then_approve.feature`, `hitl/overdue_warning.feature`) and the
   byte-identical duplicate `eval/conditional_hitl.feature` (the registered copy
-  lives at `evals/conditional_hitl.feature`). The covered behaviours are
+  lives at `evals/conditional_hitl.feature`). The covered behaviors are
   unchanged; the architecture suite now guards against new orphaned `.feature`
   files (see `backend/tests/architecture/test_product_map_feature_gaps.py`).
   Status: covered.
 - 2026-09-09: **FAR-688 (briefing follow-ups)** – the gate node now stamps the
   matched condition value into the interrupt payload and the briefing stores
-  it as PRIMARY evidence (`condition_result`: expression, serialised redacted
+  it as PRIMARY evidence (`condition_result`: expression, serialized redacted
   value, evaluated-at node); trigger inference never guesses `condition` for
   an unresolvable snapshot (`unknown` instead); description precedence unified
   context-first across REST + MCP via `hitl_review_config.resolve_gate_description`;

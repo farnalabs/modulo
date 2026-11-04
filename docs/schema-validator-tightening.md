@@ -18,7 +18,7 @@ be satisfied.
 ### 1. Check the flip guard
 
 The flip guard endpoint examines ALL enforcement records for your
-organisation and reports whether flipping is safe:
+organization and reports whether flipping is safe:
 
 ```
 GET /api/v1/runs/schema-enforcement/flip-guard
@@ -105,7 +105,7 @@ DO UPDATE SET value = '"strict"'::jsonb, updated_at = now();
 ```
 
 To set the mode per-org, write `schema_validator_mode: "strict"` into the
-target organisation's `settings_json`. The resolver requires a JSON string
+target organization's `settings_json`. The resolver requires a JSON string
 value exactly equal to `lenient` or `strict`; anything else resolves to
 `lenient`.
 
@@ -132,7 +132,7 @@ If a pipeline fails under strict mode, you can revert to lenient:
 2. The next run will use lenient mode. No code changes or restarts
    required; the mode is read from the DB at run time.
 
-## Flip guard behaviour
+## Flip guard behavior
 
 The flip guard is advisory only. Key properties:
 
@@ -142,7 +142,7 @@ The flip guard is advisory only. Key properties:
 - **Counts `LENIENT_VALIDATION_BYPASSED` outcomes.** These are the
   records that would become hard failures in strict mode.
 - **Operates on accumulated evidence.** The guard examines all
-  enforcement records for the organisation, not just recent ones. If old
+  enforcement records for the organization, not just recent ones. If old
   lenient warnings exist from before issues were fixed, they still
   count. After fixing underlying issues, the guard will show
   `safe_to_flip: true` once no `LENIENT_VALIDATION_BYPASSED` records

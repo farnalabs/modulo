@@ -43,7 +43,7 @@ runs keep the schema version they were authored against, carry deletion protecti
 a pipeline references them, and support connector-driven inference plus safe dry-run /
 applied migration between versions (`core/schema_registry/*`).
 
-## Behaviours
+## Behaviors
 
 - [x] A schema is created with a name that must be unique within the org – duplicate
       name is 409, cross-org read is 404 (`create.feature`)
@@ -67,7 +67,7 @@ applied migration between versions (`core/schema_registry/*`).
       audit events, applying a migration transforms data and drops removed fields while
       recording `schema_migration_completed`, and best-effort migration of a partial chain
       applies the reachable prefix and reports chain gaps (`schema_migration.feature`)
-- [x] Runtime input/output validation and sanitisation of schema definitions live in
+- [x] Runtime input/output validation and sanitization of schema definitions live in
       `core/schema_registry/validation.py` / `sanitize.py` and are unit-covered
       (`test_schema_validation.py`, `test_schema_sanitize.py`)
 - [x] Agent input/output schema bindings are (re)assignable and detachable via
@@ -104,7 +104,7 @@ applied migration between versions (`core/schema_registry/*`).
   by unpinned pipeline can be deleted" contradicted its own 409 assertion (an
   unpublished pipeline still protects the schema). Renamed to "Schema referenced by
   an unpublished pipeline cannot be deleted" so the title matches the asserted and
-  shipped behaviour.
+  shipped behavior.
 - 2026-09-13: **product-map review pass**: closed the
   `create.feature` "invalid JSON Schema rejected at create" gap: the create
   endpoint now accepts an optional initial `definition_json`, applies the same
@@ -155,7 +155,7 @@ applied migration between versions (`core/schema_registry/*`).
   `test_mapped_route_elements_cover_owning_view_testids` now maps `/schemas` to
   `SchemaListView.vue` + `FolderTree.vue` so the folder surface cannot drift
   invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-08-27: **product-map review pass**: added this behaviour-tracker
+- 2026-08-27: **product-map review pass**: added this behavior-tracker
   for the registered manifest feature `feat-schemas`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/schemas.py`,
+  `docs/product-map/` entry. Behaviors verified against `api/routes/schemas.py`,
   `core/schema_registry/*` and the schemas BDD/unit suites. Status: covered.

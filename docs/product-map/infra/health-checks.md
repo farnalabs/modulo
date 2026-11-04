@@ -30,7 +30,7 @@ status: covered
 Liveness and readiness endpoints for deployment health monitoring, plus production
 alerting – now entirely the PRODUCT's own in-app alerting, the external
 `.github/workflows/uptime-monitor.yml` GitHub probe (FAR-400 / FAR-1156) having been
-removed in its favour: the `health_readiness_alert` system-cron email (FAR-1446), the
+removed in its favor: the `health_readiness_alert` system-cron email (FAR-1446), the
 in-process worker-liveness watchdog (ADR 021 worker-resilience, email + generic
 webhook / Teams) and the compose deployment's out-of-process Gatus sentinel (PR #1260).
 The advisory / dead-sweep class that removed workflow used to scan now alerts
@@ -48,7 +48,7 @@ completes), worker/cron/scheduler liveness and returns 503 whenever any gate is
 unavailable. The AI agent can also be redirected to this infra-health surface via
 `feat-infra-health`.
 
-## Behaviours
+## Behaviors
 
 - [x] `GET /healthz` returns `{"status": "ok"}` and is advisory only (never flips readiness)
 - [x] `GET /healthz/ready` checks database connectivity (SELECT 1)
@@ -113,7 +113,7 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
 - [ ] External uptime monitoring is GONE – `.github/workflows/uptime-monitor.yml`
       (the 10-minute off-platform probe of `app.modulo.run/healthz/ready` that failed
       and opened a Linear ticket on outage or on a degraded sub-check, FAR-400 /
-      FAR-1156) has been removed in favour of dogfooding the product's own alerting:
+      FAR-1156) has been removed in favor of dogfooding the product's own alerting:
       GitHub's scheduler was dropping its `*/10` cron (FAR-492) and it false-fired
       (FAR-1512). Its alerting role is taken by the in-app legs below; the
       ADVISORY / dead-sweep class only the workflow covered is now covered by the
@@ -242,10 +242,10 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
   failure (hysteresis unchanged; benign `break_glass` / not-measured `db_hygiene`
   advisories stay quiet, while `event_loop_lag` stays quiet below 250 ms, is
   visible-but-non-paging from 250 ms to 1 s, and pages only at 1 s or above per
-  FAR-1771). Added the behaviour bullet,
+  FAR-1771). Added the behavior bullet,
   removed the now-stale Known Gap, and restored `status: covered` (the remaining
   total-outage residual and the no-PRD note are tracked separately and are not
-  behaviours of this surface). No `code:`/`unit-tests:` citations changed –
+  behaviors of this surface). No `code:`/`unit-tests:` citations changed –
   `core/health_alerts.py` and `test_health_alerts.py` already cover the module.
   `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-07: **uptime-monitor removal**: deleted the external
@@ -253,7 +253,7 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
   entry at the product's own in-app alerting as the production channel - the
   `health_readiness_alert` readiness-degradation email (FAR-1446) and the in-process
   worker-liveness watchdog (ADR 021). Dropped the workflow from the `code:` citations,
-  retired its behaviour bullet to an unchecked deferral, and moved the entry to
+  retired its behavior bullet to an unchecked deferral, and moved the entry to
   `status: partial` because the advisory / dead-sweep class only that workflow scanned
   now has no in-app owner until FAR-1571 lands.
 - 2026-10-06: **Improve Architecture product-map walk**: closed two untracked
@@ -295,6 +295,6 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
   rebuilding the `docs/product-map/` feature graph that was lost from the public tree.
   Registered the dangling `feat-infra-health` reference: `backend/tests/unit/api/test_health.py`
   documented the per-check-timeout feature with a `feat-infra-health` tag that resolved
-  nowhere. Re-verified all 19 behaviours against `backend/src/modulo/api/routes/health.py`
+  nowhere. Re-verified all 19 behaviors against `backend/src/modulo/api/routes/health.py`
   and `fly.toml`; status: covered at the time (the `.github/workflows/uptime-monitor.yml`
   also cited then was removed on 2026-10-07, see above).

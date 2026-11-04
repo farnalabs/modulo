@@ -53,7 +53,7 @@ layers. The `/settings/mcp` surface configures keys, their roles, and the MCP
 URL, plus completion handoff setup and the org's registered OAuth client
 applications. Built on the auth + model-backend core.
 
-## Behaviours
+## Behaviors
 
 - [x] The remote MCP server mounts at `/mcp` (FastMCP over Starlette, SSE
       streaming) and exposes the registered tool stack – run, pipeline, schema,
@@ -104,7 +104,7 @@ applications. Built on the auth + model-backend core.
       – name, client id, scopes, redirect URIs, created – and drives
       registration and revocation through `POST/GET/DELETE
       /api/v1/mcp/oauth/clients`. Registering takes a required name, one or
-      more redirect URIs (tokenised on ANY whitespace so the backend's
+      more redirect URIs (tokenized on ANY whitespace so the backend's
       space-joined storage round-trips losslessly, every entry an absolute
       `http://`/`https://` URI – localhost and 127.0.0.1 stay valid for local
       development, duplicates de-duplicated, invalid entries named in an
@@ -113,7 +113,7 @@ applications. Built on the auth + model-backend core.
       accepted scope IS the permission key, ~158 today - with the three
       pre-FAR-1476 spellings `trigger:run` / `hitl:review` / `library:browse`
       still accepted as INPUT aliases through `auth.oauth.SCOPE_ALIASES` and
-      canonicalised to `run.trigger` / `hitl.review` / `resource.read_only`
+      canonicalized to `run.trigger` / `hitl.review` / `resource.read_only`
       before anything is stored; the registered list is the client's CEILING,
       so an unknown or non-delegable scope is a 400 `InvalidScopeError`).
       The picker itself is backend-driven: it fetches
@@ -319,10 +319,10 @@ applications. Built on the auth + model-backend core.
       "limited to team X" line; Approve sends
       `{state, granted_scopes: <still-granted keys>}` and the approve POST
       (now accepting optional `granted_scopes`) fails CLOSED: the keys are
-      canonicalised, must be a non-empty subset of the stored set (anything
+      canonicalized, must be a non-empty subset of the stored set (anything
       outside → 400, never widens), and the live-role check re-runs against
       the granted subset (403 on denial, no code minted) - omitted
-      `granted_scopes` keeps the pre-slice all-stored-scopes behaviour. The
+      `granted_scopes` keeps the pre-slice all-stored-scopes behavior. The
       client-name bug (showing the logged-in user's username) is gone: the
       name comes from the context endpoint, display-only - the code is still
       minted from the stored state row only. Decline renders a clear "you
@@ -379,8 +379,8 @@ applications. Built on the auth + model-backend core.
   approve, the rebuilt `/oauth/authorize` view). The tracker's OAuth bullet
   previously described only client CRUD + the approve POST (and the approve
   endpoint's own docstring claimed there was deliberately NO consent page);
-  added the consent-screen behaviour line above with its code/test citations
-  and the `frontend/src/manifest.yaml` `feat-mcp` behaviour + the
+  added the consent-screen behavior line above with its code/test citations
+  and the `frontend/src/manifest.yaml` `feat-mcp` behavior + the
   `/oauth/authorize` element-registry refresh. Known Gaps reviewed and
   unchanged.
 - 2026-10-10: **Spec-accuracy pass (FAR-1476 slice)** – the registry widened
@@ -388,12 +388,12 @@ applications. Built on the auth + model-backend core.
   `PERMISSIONS` key, the `hitl.*` decision keys became delegable (2026-10-09
   decision record; the gate's runtime `human_only` policy is the boundary),
   and the registration picker became backend-driven (`GET
-  /api/v1/mcp/oauth/scopes`, grouped + searchable). Updated the two behaviour
+  /api/v1/mcp/oauth/scopes`, grouped + searchable). Updated the two behavior
   bullets that still described three valid scopes (`trigger:run` /
   `hitl:review` / `library:browse`) and the discovery bullet that advertised
   that set as `scopes_supported`, fixed the HITL scope-gate wording to the
   canonical `hitl.approve` / `hitl.claim` action keys, added the widened-
-  vocabulary behaviour line, and cited the new pinning suites
+  vocabulary behavior line, and cited the new pinning suites
   (`test_hitl_delegation_boundary.py`, `test_mcp_oauth.py` scope-endpoint
   cases, `SettingsMcpView.spec.ts` picker cases).
 - 2026-10-07: **Spec-accuracy pass** – FAR-1476 shipped the OAuth discovery
@@ -402,11 +402,11 @@ applications. Built on the auth + model-backend core.
   `/.well-known/` proxy rules in the five deploy configs) but no product-map
   layer described it. Added the `code:` / `unit-tests:` citations
   (`api/routes/oauth_metadata.py`, `tests/unit/api/test_oauth_metadata.py`) and
-  the checked behaviour line above. Known Gaps reviewed and unchanged: the
+  the checked behavior line above. Known Gaps reviewed and unchanged: the
   session-bearing protocol-endpoint gap and the SSE-only transport gap both
   still stand. The `frontend/src/manifest.yaml` `feat-mcp` registry is untouched
   – its `behaviours:` list is a curated subset (the base mount/auth/scope and
-  trigger-dispatch behaviours are tracker-only), and neither the feature
+  trigger-dispatch behaviors are tracker-only), and neither the feature
   description nor any route `product_map` ref changes for a pre-auth endpoint
   with no UI surface.
 - 2026-10-06: **Improve Architecture product-map walk** - closed the untracked
@@ -414,7 +414,7 @@ applications. Built on the auth + model-backend core.
   branches on shipped (specific, branchable codes via the required-keyword
   `_tool_error` + the shared `_tool_exception_error` classifier) and the run
   WebSocket control frames were aligned to the same codes, but neither
-  product-map layer described it. Added the two checked behaviour lines and the
+  product-map layer described it. Added the two checked behavior lines and the
   `code:` / `unit-tests:` citations (`mcp_server.py`, `db_error_handling.py`,
   `run_ws.py`; `test_mcp_tool_exception_error.py`,
   `test_mcp_session_contract_errors.py`, `test_run_ws.py`) plus the
@@ -425,8 +425,8 @@ applications. Built on the auth + model-backend core.
   key card's revoked-vs-expired status distinction (why `is_active: false`
   cannot say WHY a key stopped working) shipped 2026-09-29/30 (DELETE
   revocation, `revoked_at` in the serializer, the `settings-mcp-key-status`
-  badge read in the Settings MCP view) but the behaviour surface was not
-  described in either product-map layer. Added the behaviour line to the
+  badge read in the Settings MCP view) but the behavior surface was not
+  described in either product-map layer. Added the behavior line to the
   manifest `feat-mcp` registry and sharpened this tracker's API-key bullet,
   citing `auth/api_key._serialize_key`, `api_keys.py`, `SettingsMcpView.vue`
   and `SettingsMcpView.spec.ts` / `test_api_keys_endpoint.py`.
@@ -463,7 +463,7 @@ applications. Built on the auth + model-backend core.
   role-hierarchy scope gate (a `runner` is denied `hitl:review` →
   `insufficient_scope`), the real `_check_human_only_gate` policy hook and the
   real HITLManager approve/reject decision dispatch (`approved` / `rejected` +
-  `review_id`), plus the real pending-gate serialisation with the shared gate
+  `review_id`), plus the real pending-gate serialization with the shared gate
   description resolver – network-free and DB-free with only the auth
   re-validation and DB/HITLManager seams patched. Removed the five scenarios
   from `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`);
@@ -524,9 +524,9 @@ applications. Built on the auth + model-backend core.
   server (its middleware rejects unauthenticated introspection fail-closed),
   so it was rewritten to describe the real contract and dropped from the
   tracked orphaned-BDD debt list.
-- 2026-08-30: **product-map review pass** – new behaviour
+- 2026-08-30: **product-map review pass** – new behavior
   tracker for the registered `feat-mcp` manifest feature (route `/settings/mcp`,
-  previously absent from the feature graph). Behaviours verified against
+  previously absent from the feature graph). Behaviors verified against
   `api/mcp_server.py`, `api/mcp_tool_registry.py`, `core/mcp/scope_validator.py`,
   the OAuth + setup-handoff routes, the `tests/unit/mcp/*` scope/tenant/team
   suites, and the `mcp/` BDD features. Status: covered.

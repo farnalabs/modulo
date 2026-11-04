@@ -25,7 +25,7 @@ principal decoding with tenant context, and purpose-scoped compact tokens
 (WebSocket, claim, refresh). Consumed by `feat-teams-org-entity` and every
 authenticated API route through `auth/dependencies.py`.
 
-## Behaviours
+## Behaviors
 
 - [x] `create_access_token` issues a signed JWT carrying user identity (`sub`),
       org context, role, expiry, and the credential class (`client_kind`); unlike
@@ -75,6 +75,6 @@ covered by `jwt_security.feature`.
   run/gate scoping with a wrong-gate refusal, and the legacy no-`client_kind`
   token decoding as `browser`. `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-08-25: **product-map review pass** - entry added to close the
-  dangling `depends-on: feat-auth-jwt-auth` edge in `teams/org-entity.md`. Behaviours
+  dangling `depends-on: feat-auth-jwt-auth` edge in `teams/org-entity.md`. Behaviors
   re-verified against `auth/jwt.py` and `backend/tests/unit/auth/test_jwt.py`. Status:
   covered.

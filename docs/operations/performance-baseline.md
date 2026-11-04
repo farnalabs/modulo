@@ -69,8 +69,8 @@ Measured with 50 concurrent pipeline users, 20 HITL users, 10 WebSocket users.
 | WS subscriber count | 100 per run | 500 per run | Shard event broker |
 | Concurrent runs | 50 | 100 | Increase workers |
 | Error rate | <1% | <5% | Investigate and fix |
-| CPU utilisation | <70% | <90% | Scale horizontally |
-| Memory utilisation | <70% | <85% | Profile memory usage |
+| CPU utilization | <70% | <90% | Scale horizontally |
+| Memory utilization | <70% | <85% | Profile memory usage |
 
 ## Historical Trend Tracking
 
