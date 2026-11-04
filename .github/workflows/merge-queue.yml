@@ -2014,11 +2014,39 @@ jobs:
       # separate 'Capture frontend failures' step — which, being `if:
       # failure()`, used to append "Frontend checks failed" even when the
       # BACKEND step was the one that failed and frontend never ran.
+      #
+      # FAR-2369 — optional LIGHT validation for the merge batch (DEFAULT OFF).
+      # Every PR in the batch already ran the full backend unit suite
+      # (`uv run ... pytest tests/unit/`) and the frontend unit suite
+      # (`pnpm run test:unit`) on its OWN branch before it was approved, so
+      # re-running both here against the combined branch is largely duplicated
+      # work. When the repository variable MERGE_QUEUE_LIGHT_VALIDATION is set to
+      # `true`, this step SKIPS exactly those two suites and still runs every
+      # other gate: frontend lint, frontend type-check, frontend build, the
+      # backend lint tools (ruff check / mypy / bandit / ruff format), the
+      # `uv lock --check` lockfile-freshness step and the migration-heads gate.
+      #
+      # Trade-off (why this is opt-in, not the default): the batch re-run is the
+      # only place that catches a SEMANTIC conflict between two individually
+      # green PRs — each passes its own suite, but the combination breaks a unit
+      # test. With light validation on, such a conflict is no longer caught at
+      # batch time and would only surface on main. The default is OFF, so
+      # behaviour is unchanged until an operator deliberately accepts that risk.
+      #
+      # To enable: set the repository variable MERGE_QUEUE_LIGHT_VALIDATION=true
+      # (Settings -> Secrets and variables -> Actions -> Variables). Unset or any
+      # other value keeps the full validation. The guard is written
+      # `[ "${MERGE_QUEUE_LIGHT_VALIDATION:-false}" != "true" ]` so an unset
+      # variable always executes the guarded command.
       - name: Backend lint + tests and frontend checks (concurrent)
         # remaining_count is set by the heads check: if EVERY PR in the batch was
         # dropped as a migration-head offender the branch is just main, so the
         # ~20-minute combined validation has nothing new to prove and is skipped.
         if: steps.merge.outputs.merged_count != '0' && steps.migration_heads.outputs.remaining_count != '0'
+        env:
+          # FAR-2369: default OFF — full backend + frontend unit suites run
+          # unless this is explicitly set to 'true'.
+          MERGE_QUEUE_LIGHT_VALIDATION: ${{ vars.MERGE_QUEUE_LIGHT_VALIDATION || 'false' }}
         shell: bash
         run: |
           # --- Frontend checks: background subshell (was a separate sequential step) ---
@@ -2031,7 +2059,9 @@ jobs:
             pnpm install --frozen-lockfile --ignore-scripts
             pnpm run lint --quiet
             pnpm run type-check
-            pnpm run test:unit
+            # FAR-2369: skippable only under light validation (default OFF); an
+            # unset variable falls back to 'false', so the suite still runs.
+            if [ "${MERGE_QUEUE_LIGHT_VALIDATION:-false}" != "true" ]; then pnpm run test:unit; fi
             pnpm run build
           ) &
           FRONTEND_PID=$!
@@ -2053,7 +2083,12 @@ jobs:
           # description is written (the old script's `TEST_EXIT=$?` line was
           # unreachable on a pytest failure for that reason).
           set +e
-          uv run --no-build --no-sync pytest tests/unit/ -n 2 -x -q --timeout=120 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+          # FAR-2369: skippable only under light validation (default OFF). The
+          # suite runs unchanged when the variable is unset/anything-but-'true',
+          # and TEST_EXIT still captures its exit code exactly as before.
+          if [ "${MERGE_QUEUE_LIGHT_VALIDATION:-false}" != "true" ]; then
+            uv run --no-build --no-sync pytest tests/unit/ -n 2 -x -q --timeout=120 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+          fi
           TEST_EXIT=$?
           set -e
 

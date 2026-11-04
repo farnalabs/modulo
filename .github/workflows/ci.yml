@@ -122,10 +122,13 @@ jobs:
     # (a job-level skip is surfaced as a non-green "skipped" check, which the
     # PR Reviewer flags - same reason notify-pr-failure gates at step level).
     #
-    # The backend test jobs are deliberately NOT gated: backend/tests/
-    # architecture/ read frontend/ (product map, manifest, login field), and the
-    # combined coverage artifact (`backend-coverage`) feeds SonarCloud and the
-    # coverage gate.
+    # `backend-non-unit` IS gated on backend_heavy (FAR-2369, breadth over
+    # speed). That is a deliberate coverage trade: backend/tests/architecture/
+    # read frontend/ (product map, manifest, login field), so a frontend-only PR
+    # no longer runs that scan - a break there is caught by the SAME job on the
+    # push to main (every non-PR event reports backend_heavy=true), not on the
+    # PR. The unit shards and `backend-coverage` stay ungated: the combined
+    # coverage artifact feeds SonarCloud and the coverage gate.
     name: Detect changed paths
     runs-on: ubicloud-standard-2
     timeout-minutes: 5
@@ -610,10 +613,23 @@ jobs:
     # self-contained BDD module sets. They are small and produce no coverage, so
     # they run in their own job PARALLEL to the unit shards and stop being part
     # of the critical path at all.
+    #
+    # Runner choice (FAR-2369, breadth over speed): ubicloud-standard-2, the
+    # same size as every other test job here. This was the last standard-4 job
+    # in the workflow; the suites are small (architecture scan, connector
+    # contracts, two BDD module sets), so 4 vCPU bought wall-clock we are
+    # deliberately trading for cost at roughly half the per-minute rate. No
+    # comment ever claimed standard-4 was required for this job.
+    #
+    # Also gated on `backend_heavy` at STEP level (see the steps below): a
+    # change confined to frontend/ + docs skips the install and every suite and
+    # the job still reports success. Caveat, accepted and recorded on the
+    # `changes` job above: tests/architecture/ read frontend/, so such a PR no
+    # longer runs that scan - the push to main catches it instead.
     name: Test (Backend) non-unit suites
-    needs: [current-head-gate, backend-lint]
+    needs: [current-head-gate, changes, backend-lint]
     if: needs.current-head-gate.outputs.current == 'true'
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     timeout-minutes: 30
     defaults:
       run:
@@ -623,11 +639,17 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        # `!= 'false'` (not `== 'true'`) is deliberate: it is the fail-open
+        # form. Non-PR events always publish backend_heavy=true, and an absent
+        # or unparseable output must RUN the suites, never skip them.
+        if: needs.changes.outputs.backend_heavy != 'false'
         with:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen
+        if: needs.changes.outputs.backend_heavy != 'false'
       - name: Run architecture tests
+        if: needs.changes.outputs.backend_heavy != 'false'
         # The architecture suite scans all of src/modulo for structural
         # violations (raw SQL f-strings, sensitive data logging, module-level
         # side effects, bare session.rollback, login-field drift, Dockerfile
@@ -642,6 +664,7 @@ jobs:
         # benign summary.
         run: uv run --no-build --no-sync pytest tests/architecture/ -q --tb=short --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings -n auto
       - name: Run connector contract tests
+        if: needs.changes.outputs.backend_heavy != 'false'
         # The connector contract suite drives each connector (filesystem,
         # REST, shell, npm, pypi) against a real in-process HTTP server or
         # a recorded VCR cassette — no Docker and no external network, so
@@ -656,6 +679,7 @@ jobs:
         # benign summary.
         run: uv run --no-build --no-sync pytest tests/connectors/ -q --tb=short --timeout=180 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - name: Run email settings BDD scenarios
+        if: needs.changes.outputs.backend_heavy != 'false'
         # The admin email-settings BDD feature file is self-contained (no
         # browser/live app), so it runs here rather than only in the unit
         # suite. Without this step, CI never exercises the email-settings
@@ -666,6 +690,7 @@ jobs:
           tests/bdd/features/infra/test_health_steps.py
           -q --tb=short --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - name: Run repaired step-rot BDD modules
+        if: needs.changes.outputs.backend_heavy != 'false'
         # The step-definition repairs for auth/eval/hitl (FAR-246) live in
         # test_auth, test_eval, test_eval_block_steps and test_hitl. These are
         # self-contained (no browser/live app), so wire them into CI — a green
@@ -856,12 +881,17 @@ jobs:
       run:
         working-directory: backend
     steps:
+      # Unconditional: the job must always have a valid checkout so it can
+      # complete green with the steps below skipped (FAR-2369). It costs a few
+      # seconds on a gated-out PR and keeps the job shape conventional.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.changes.outputs.backend_heavy == 'true'
         with:
           persist-credentials: false
       - name: Free up disk space
-        if: needs.changes.outputs.backend_heavy == 'true'
+        # `!= 'false'` (not `== 'true'`) is the fail-open form: non-PR events
+        # always publish backend_heavy=true, and an absent/unparseable output
+        # must RUN the suite, never skip it.
+        if: needs.changes.outputs.backend_heavy != 'false'
         # The Tier 1b suites pull many container images and the runner's local
         # disk is the binding constraint: on ubicloud-standard-2 the suite has
         # been observed with 0-2 MB free, which aborts Docker pulls and kills
@@ -880,7 +910,7 @@ jobs:
           sudo -n apt-get clean || true
           echo "disk after:"; df -h / || true
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
-        if: needs.changes.outputs.backend_heavy == 'true'
+        if: needs.changes.outputs.backend_heavy != 'false'
         with:
           python-version: "3.12"
           enable-cache: true
@@ -889,9 +919,9 @@ jobs:
       # a cold uv cache. `--frozen` locks the exact revisions, so the builds are
       # deterministic and trusted (no untrusted setup scripts execute).
       - run: uv sync --frozen  # NOSONAR
-        if: needs.changes.outputs.backend_heavy == 'true'
+        if: needs.changes.outputs.backend_heavy != 'false'
       - name: Run Tier 1b light connector + model-server suites
-        if: needs.changes.outputs.backend_heavy == 'true'
+        if: needs.changes.outputs.backend_heavy != 'false'
         run: |
           uv run --no-build --no-sync pytest \
             tests/integration/test_tier1b_connectors_light.py \
@@ -1909,9 +1939,18 @@ jobs:
   # PRODUCTION bootstrap_role.py, in BOTH directions (clean config passes, a
   # rogue grant FAILS the assertion) plus the transient-vs-fatal discriminator.
   # Also runs the FAR-190/192 streak-engine SQL suite
-  # (test_trigger_streak_engine_sql.py) — the only per-PR run of the
-  # trigger_events vocabulary constraint + deactivation SQL against real
-  # Postgres (FAR-192 FIX 3).
+  # (test_trigger_streak_engine_sql.py) - the trigger_events vocabulary
+  # constraint + deactivation SQL against real Postgres (FAR-192 FIX 3).
+  #
+  # FAR-2369 (breadth over speed): this is a DEPLOY gate, not a PR gate, so it
+  # runs on push-to-main and workflow_dispatch only. On a pull_request every
+  # step is skipped at STEP level and the job still reports success (a
+  # job-level skip surfaces as a non-green "skipped" check the PR Reviewer
+  # flags). Coverage trade, recorded deliberately: the vocabulary-constraint
+  # suite is no longer exercised per-PR - a break reaches main and is caught by
+  # this job on the very next push rather than on the PR. The deploy gate's own
+  # integration job still runs the same class of Postgres-backed suite before
+  # anything is promoted.
   break-glass-deploy-gate:
     if: needs.current-head-gate.outputs.current == 'true'
     needs: [current-head-gate]
@@ -1922,14 +1961,18 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name != 'pull_request'
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        if: github.event_name != 'pull_request'
         with:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen
+        if: github.event_name != 'pull_request'
       - name: Break-glass boot allow-list + connectivity smoke
+        if: github.event_name != 'pull_request'
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
         run: uv run --no-build --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings

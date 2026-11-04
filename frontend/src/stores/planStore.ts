@@ -81,8 +81,15 @@ async function settlePlanSource<T>(
  * (FAR-1237 review finding: the cache was per-origin, so signing into org B
  * first-painted org A's resolved chrome). Returns null when the token is
  * absent/opaque — those sessions share the `unknown` bucket.
+ *
+ * Exported (FAR-2368) as the single shared "which org is the caller
+ * authenticated as" accessor. It is NOT the same value as the store's
+ * `orgId`, which mirrors the LICENCE's `org_id` (`license.org_id` in the
+ * `GET /api/v1/plan` payload) and may name a different org on a
+ * deployment-wide licence. Anything that addresses an org-scoped endpoint has
+ * to use this claim, because that is the org the caller is authorised against.
  */
-function currentOrgId(): string | null {
+export function currentOrgId(): string | null {
   try {
     const payload = decodeJwtPayload(getAccessToken());
     const orgId = payload?.org_id;
