@@ -45,6 +45,29 @@ test.describe('Dashboard', () => {
 
   test('run activity card shows HITL and rejection rate labels', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
+    // The card renders its chart labels only when the trend series has more
+    // than one point; otherwise it shows the "no data yet" empty state. Staging
+    // carries sparse run history, so the live trends endpoint is not a
+    // deterministic source for this presentation assertion. Serve a populated
+    // 3-day window (registered after loginAsAdmin so it wins over any target
+    // catch-all) and assert the labels render when the window is populated.
+    await page.route('**/api/v1/dashboard/trends*', (route) => {
+      const dates = ['2026-07-05', '2026-07-06', '2026-07-07']
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          days: dates.length,
+          run_counts: dates.map((date, i) => ({ date, run_count: 10 + i })),
+          eval_pass_rates: dates.map((date, i) => ({ date, total_evals: 8, passed_evals: 7, pass_rate: 88 + i })),
+          token_spend: dates.map((date, i) => ({ date, total_spend_usd: 3.5 + i })),
+          hitl_volume: dates.map((date, i) => ({ date, total_decisions: 4, approved_count: 3, rejected_count: 1, rejection_rate: 25, avg_time_to_approve_ms: 120000 + i * 5000 })),
+          rejection_trend: dates.map((date, i) => ({ date, rolling_rejection_rate: 5 + i, raw_rejection_rate: 6 + i })),
+          correlation: dates.map((date, i) => ({ date, rejection_rate: 5 + i, eval_pass_rate: 88 + i })),
+          feedback_volume: dates.map((date) => ({ date, feedback_count: 2, resolved_count: 1, correcting_count: 1 })),
+        }),
+      })
+    })
     await page.reload()
 
     const runActivity = page.locator('[data-testid="dashboard-run-activity"]')
