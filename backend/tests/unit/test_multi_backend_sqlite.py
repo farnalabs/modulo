@@ -1,10 +1,11 @@
+import os
+
 """Smoke test: SQLite backend with create_all, CRUD, and tenant filtering.
 
 Verifies that core ORM operations work on the sqlite+aiosqlite driver
 without any Postgres-specific features (RLS, advisory locks, etc.).
 """
 
-import os
 import uuid
 
 import anyio
@@ -23,19 +24,26 @@ from modulo.db.models.base import Base
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 
-_DB_URL = "sqlite+aiosqlite:///./test_multi_backend.db"
-_DB_PATH = "./test_multi_backend.db"
-
 
 @pytest.fixture(scope="module")
-def engine():
-    return create_async_engine(_DB_URL, echo=False)
+def engine(request):
+    import os
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    db_path = f"./test_multi_backend_{worker_id}.db"
+    db_url = f"sqlite+aiosqlite:///{db_path}"
+    return create_async_engine(db_url, echo=False)
 
 
 @pytest.fixture(scope="module")
 async def _tables(engine):
     # SQLite does not support ARRAY type - skip tables that use it
+    import os
+
     from sqlalchemy import ARRAY
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    db_path = f"./test_multi_backend_{os.environ.get('PYTEST_XDIST_WORKER', 'master')}.db"
 
     tables_to_create = [t for t in Base.metadata.sorted_tables if not any(isinstance(c.type, ARRAY) for c in t.columns)]
     async with engine.begin() as conn:
@@ -44,13 +52,17 @@ async def _tables(engine):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
-    if await anyio.to_thread.run_sync(os.path.exists, _DB_PATH):
-        await anyio.to_thread.run_sync(os.remove, _DB_PATH)
+    if await anyio.to_thread.run_sync(os.path.exists, db_path):
+        await anyio.to_thread.run_sync(os.remove, db_path)
 
 
 @pytest.fixture(autouse=True)
 async def _clear_data(engine, _tables):
+    import os
+
     from sqlalchemy import ARRAY
+
+    db_path = f"./test_multi_backend_{os.environ.get('PYTEST_XDIST_WORKER', 'master')}.db"
 
     async with engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
