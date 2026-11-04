@@ -85,10 +85,7 @@ from modulo.core.hitl_manager import (
     RunNotAwaitingError,
 )
 from modulo.core.notifier import Notifier
-from modulo.core.pipeline_engine.executor import (
-    PipelineExecutor,
-    SandboxCapacityExceededError,
-)
+from modulo.core.pipeline_engine.executor import PipelineExecutor, SandboxCapacityExceededError
 from modulo.db.crud.hitl_review_config import (
     EVENT_HUMAN_ONLY_DENIED,
     edge_source_or_target,

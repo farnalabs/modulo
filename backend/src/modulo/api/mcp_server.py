@@ -224,6 +224,7 @@ from modulo.core.mcp.scope_validator import (
     set_request_allowed_tools,
 )
 from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_error
+from modulo.core.pipeline_engine.errors import ResumeClaimSupersededError
 from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.runtime_config.key_bridge import public_url_is_configured
@@ -7559,6 +7560,7 @@ async def _resume_run_after_mcp_approval(
     review_id: str,
     resume_data: dict[str, Any],
     claim_token: str,
+    expected_claim_status: str = "awaiting_human",
 ) -> dict[str, Any]:
     """Resume an MCP-approved run inline (FAR-2328), mirroring REST ``approve_review``.
 
@@ -7587,7 +7589,18 @@ async def _resume_run_after_mcp_approval(
             org_id=org_id,
             resume_data=resume_data,
             claim_token=claim_token,
+            expected_claim_status=expected_claim_status,
         )
+    except ResumeClaimSupersededError:
+        _log.warning("mcp.review_hitl.approve_resume_superseded", extra={"run_id": str(run_id)})
+        return {
+            "status": "approved",
+            "review_id": review_id,
+            "run_id": str(run_id),
+            "resume_status": "superseded",
+            "reconcile_status": "not_needed",
+            "detail": "Approval recorded, but another resume claim won before inline execution started.",
+        }
     except Exception as exc:
         # FAR-1831 parity: the decision committed and the resume was denied by
         # the org sandbox cap — the F6a reconcile re-dispatches once a slot
@@ -7780,6 +7793,11 @@ async def _review_hitl_impl(
             review_id=review_id,
             resume_data=resume_payload,
             claim_token=resume_claim_token,
+            expected_claim_status=(
+                "awaiting_human"
+                if getattr(run, "status", "awaiting_human") == "hitl_parked"
+                else getattr(run, "status", "awaiting_human")
+            ),
         )
     return decision
 

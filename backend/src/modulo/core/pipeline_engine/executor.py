@@ -43,7 +43,7 @@ from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt, NodeCancelledError
 from opentelemetry import context as context_api
 from opentelemetry.trace import set_span_in_context
-from sqlalchemy import Boolean, Uuid, bindparam, select, text
+from sqlalchemy import Boolean, Uuid, bindparam, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
@@ -105,7 +105,7 @@ from modulo.core.pipeline_engine.error_codes import (
     sanitize_error_text,
     should_notify_terminal_failure,
 )
-from modulo.core.pipeline_engine.errors import RouterNoMatchError
+from modulo.core.pipeline_engine.errors import ResumeClaimSupersededError, RouterNoMatchError
 from modulo.core.pipeline_engine.eval_persist_order import (
     EvalDefDTO,
     run_evals_persist_before_decide,
@@ -831,6 +831,47 @@ class RunNotFoundError(KeyError):
     def __init__(self, run_id: uuid.UUID) -> None:
         super().__init__(str(run_id))
         self.run_id = run_id
+
+
+async def _claim_resume_for_executor(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    expected_claim_token: str,
+    source_status: str,
+) -> Run:
+    """Atomically take the expected resume claim before loading/executing it.
+
+    The MCP approval path captures the run lease before committing the decision.
+    Matching both that token and the claimable source state in this UPDATE makes
+    the approval a compare-and-swap: a reconcile claim or another resume that
+    won first has already changed one of those predicates, so this path refuses
+    without changing status or starting execution. The token is deliberately
+    preserved; the caller's recovery path uses the same fence.
+    """
+    result = await session.execute(
+        update(Run)
+        .where(
+            Run.id == run_id,
+            Run.organisation_id == org_id,
+            Run.claim_token == expected_claim_token,
+            Run.status == source_status,
+        )
+        .values(
+            status="running",
+            heartbeat_at=func.now(),
+            claimed_by=_WORKER_ID,
+        )
+        .returning(Run.id)
+    )
+    if result.scalar_one_or_none() is None:
+        raise ResumeClaimSupersededError(run_id)
+    refreshed = await session.execute(select(Run).where(Run.id == run_id).execution_options(populate_existing=True))
+    run = refreshed.scalar_one_or_none()
+    if run is None:
+        raise RunNotFoundError(run_id)
+    return run
 
 
 class SandboxCapacityExceededError(Exception):
@@ -5150,6 +5191,7 @@ class PipelineExecutor:
         org_id: uuid.UUID,
         resume_data: dict[str, Any],
         claim_token: str | None = None,
+        expected_claim_status: str | None = None,
         check_sandbox_capacity: bool = True,
     ) -> Run:
         """Resume a run that was interrupted for HITL review.
@@ -5164,16 +5206,25 @@ class PipelineExecutor:
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
             # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE this
-            # transaction's first lock (the ``update_run_status`` claim below).
-            # Issued in the caller's transaction; the shared
-            # ``update_run_status`` stays unbounded (FAR-1601). A 55P03
-            # propagates to the resume caller's error handling — a request
-            # (HITL approve) path fails visibly, never silently.
+            # transaction's first lock. The inline MCP resume uses a
+            # compare-and-swap on the expected source status and claim token;
+            # other resume/reconcile paths retain the existing guarded claim.
             await set_mutation_row_lock_timeout(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
-            await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
+            if expected_claim_status is not None:
+                if claim_token is None:
+                    raise ValueError("expected_claim_status requires claim_token")
+                run = await _claim_resume_for_executor(
+                    session,
+                    run_id=run_id,
+                    org_id=org_id,
+                    expected_claim_token=claim_token,
+                    source_status=expected_claim_status,
+                )
+            else:
+                await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
 
             # Atomic sandbox-capacity enforcement (FAR-1306 TOCTOU fix).
             # Skipped for reject resumes (check_sandbox_capacity=False) as a

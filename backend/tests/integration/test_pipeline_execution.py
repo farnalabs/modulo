@@ -19,9 +19,13 @@ import uuid
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 import modulo.core.pipeline_execution as pe
+from modulo.api.routes.hitl import _restore_failed_mcp_resume_for_reconcile
+from modulo.core.pipeline_engine.errors import ResumeClaimSupersededError
+from modulo.core.pipeline_engine.executor import _claim_resume_for_executor
+from modulo.db.rls import set_rls_org
 
 pytestmark = [
     pytest.mark.integration,
@@ -353,6 +357,107 @@ async def test_claim_run_async_rls_scoped_claim_requires_set_config(
 
     assert claimed is False
     assert await _claim_count(db_engine, run_id) == 0
+
+
+async def test_inline_resume_claim_fence_real_pg(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """Inline resume claims only the exact committed lease and source state."""
+    run_id = uuid.uuid4()
+    await _insert_run_with_token(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="awaiting_human",
+        claim_token="expected-token",
+    )
+
+    factory = async_sessionmaker(app_engine, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, test_org)
+        with pytest.raises(ResumeClaimSupersededError):
+            await _claim_resume_for_executor(
+                session,
+                run_id=run_id,
+                org_id=test_org,
+                expected_claim_token="superseded-token",
+                source_status="awaiting_human",
+            )
+
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, claim_token, claim_count FROM runs WHERE id=:rid"), {"rid": str(run_id)}
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "awaiting_human"
+    assert row[1] == "expected-token"
+    assert row[2] == 0
+
+    async with factory() as session, session.begin():
+        await set_rls_org(session, test_org)
+        claimed = await _claim_resume_for_executor(
+            session,
+            run_id=run_id,
+            org_id=test_org,
+            expected_claim_token="expected-token",
+            source_status="awaiting_human",
+        )
+        assert claimed.status == "running"
+
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, claim_token, claimed_by FROM runs WHERE id=:rid"), {"rid": str(run_id)}
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "running"
+    assert row[1] == "expected-token"
+    assert row[2] is not None
+
+
+async def test_inline_resume_failure_recovery_does_not_rewrite_successor_real_pg(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """Recovery cannot demote a row after a successor rotates the lease."""
+    run_id = uuid.uuid4()
+    await _insert_run_with_token(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="running",
+        claim_token="successor-token",
+    )
+    engine = db_engine
+    restored = await _restore_failed_mcp_resume_for_reconcile(
+        engine=engine,
+        org_id=test_org,
+        run_id=run_id,
+        claim_token="stale-inline-token",
+    )
+    assert restored is False
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(text("SELECT status, claim_token FROM runs WHERE id=:rid"), {"rid": str(run_id)})
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "running"
+    assert row[1] == "successor-token"
 
 
 async def test_claim_resume_run_async_real_pg(
