@@ -276,5 +276,8 @@ describe('AdminSpendLimitsView', () => {
 
     await input.vm.$emit('update:modelValue', null)
     expect(vm.orgLimit).toBe(null)
+
+    await input.vm.$emit('update:modelValue', 'not-a-number')
+    expect(vm.orgLimit).toBe(null)
   })
 })
