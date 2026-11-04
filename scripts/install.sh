@@ -518,6 +518,9 @@ resolve_latest_tag() {
   RELEASE_TAG="${effective##*/}"
   case "${RELEASE_TAG}" in
     bundle-v*) : ;;
+    releases)
+      die "no published bundle-v* release exists for ${REPO}; use VERSION=bundle-vX.Y.Z when a release is published, or use --from-file <tarball> with its signed manifest assets."
+      ;;
     *) die "resolved release tag '${RELEASE_TAG}' is not a bundle tag (expected bundle-v*)" ;;
   esac
 }

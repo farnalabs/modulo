@@ -171,6 +171,24 @@ def test_bad_version_prints_the_support_block_last(tmp_path: Path) -> None:
 
 
 @pytest.mark.posix_only
+def test_missing_latest_release_prints_actionable_message(tmp_path: Path) -> None:
+    curl_stub = _stub(
+        tmp_path,
+        "curl",
+        "#!/usr/bin/env bash\nprintf '%s' releases\n",
+    )
+    result = _run_installer(_INSTALL_SH, [], _install_env(tmp_path, path_prefix=curl_stub))
+    combined = _output(result)
+
+    assert result.returncode == 1
+    assert "no published bundle-v* release exists for farnalabs/modulo" in combined
+    assert "use VERSION=bundle-vX.Y.Z when a release is published" in combined
+    assert "use --from-file <tarball> with its signed manifest assets" in combined
+    assert "resolved release tag 'releases' is not a bundle tag" not in combined
+    assert _last_non_empty_line(combined) == _BLOCK_END
+
+
+@pytest.mark.posix_only
 def test_support_block_names_target_stage_log_and_reference(tmp_path: Path) -> None:
     result = _run_installer(_INSTALL_SH, [], _install_env(tmp_path), {"VERSION": "nonsense"})
     combined = _output(result)
