@@ -64,19 +64,21 @@ actually ship - do not widen these rows until the packaging tickets land):
 
 | OS | glibc | Status |
 |----|-------|--------|
-| Debian 13+ | 2.41 | Supported |
-| Ubuntu 26.04+ | 2.41+ | Supported |
-| Ubuntu 24.04 and earlier | 2.39 and below | Not supported (below the bundled service-binary floor) |
+| Ubuntu 22.04 LTS+ | 2.35+ | Supported |
+| Debian 12+ | 2.36+ | Supported |
+| Ubuntu 20.04 and earlier | 2.31 and below | Not supported (below the bundled service-binary floor) |
 | macOS arm64 | Apple Silicon | Supported native `.dmg`; x64/Rosetta is not supported |
 | Windows | - | Beta scope, planned after Alpha; native installer in progress (FAR-2337 / FAR-2338), no signed installer published yet |
 
-The hard requirement is **glibc 2.41 or newer**. The bundled PostgreSQL 16 and
-Redis 8 binaries are extracted from Debian 13 (trixie) packages, and the venv's
-own 2.39 runner floor is lower, so the service binaries set the effective floor
-(`scripts/bundle-versions.env`: "the effective bundle floor is glibc 2.41
-(Debian 13+, Ubuntu 26.04+)"; `bundle-release.yml` states the same envelope).
-An Ubuntu 24.04 host (glibc 2.39) is therefore below the floor and is not a
-supported native-install target.
+The hard requirement is **glibc 2.35 or newer**. The bundle is assembled on an
+Ubuntu 22.04 (jammy) build baseline: the bundled PostgreSQL 16 binaries come
+from the jammy PGDG pool, Redis 8 is compiled from the pinned upstream tarball
+on that same runner, and the Python venv is created there too, so every shipped
+binary stays within the glibc 2.35 floor (`scripts/bundle-versions.env`;
+`bundle-release.yml` asserts the floor on every build). This covers all
+currently-supported Ubuntu LTS releases (22.04 and 24.04) and Debian 12 or
+newer. Ubuntu 20.04 (glibc 2.31) and older are below the floor and are not
+supported native-install targets.
 
 ### Supported architectures
 
