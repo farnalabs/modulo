@@ -16,22 +16,6 @@ type SystemMapCurrentRevision = components['schemas']['SystemMapCurrentRevisionR
 type SystemMapRevisionByTime = components['schemas']['SystemMapRevisionByTimeResponse']
 type SystemMapRevisionHistory = components['schemas']['SystemMapRevisionHistoryResponse']
 
-/** One page of the published system-map list (the overview's discovery step). */
-interface PublishedMapPage {
-  items: SystemMapList['items']
-  total: number
-  pageSize: number
-}
-
-/**
- * Outcome of one published-list page request: a page to accumulate, a request
- * superseded by a newer one, or an entitlement refusal.
- */
-type PublishedPageOutcome =
-  | { kind: 'page'; page: PublishedMapPage }
-  | { kind: 'superseded' }
-  | { kind: 'unavailable' }
-
 export type SystemMap = components['schemas']['SystemMapResponse']
 export type SystemMapRevision = components['schemas']['SystemMapRevisionResponse']
 export type SystemMapNode = components['schemas']['SystemMapNodeResponse']
@@ -194,72 +178,51 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     }
   }
 
-  /** Settle the overview into the entitlement state: no data, no retry. */
-  function settleOverviewUnavailable(): void {
-    overview.value = null
-    overviewEmpty.value = false
-    overviewError.value = null
-    overviewUnavailable.value = true
-  }
-
-  /** True when the page carries no further published items to page through. */
-  function isLastPublishedPage(page: PublishedMapPage): boolean {
-    return page.items.length === 0 || page.items.length < page.pageSize
-  }
-
   /**
-   * Request one page of the published map list.
+   * Page through the map list and collect only published maps.
    *
-   * Returns ``superseded`` when a newer overview request owns the state, and
-   * ``unavailable`` when the plan refused the read, so the caller can stop
-   * without treating an entitlement answer as a transient failure.
+   * The caller may be superseded by a newer request (``stale``) or refused for
+   * entitlement reasons (``feature_required``); both must stop pagination
+   * without surfacing an error. Kept separate so ``fetchDefaultOverview`` owns
+   * the settle/fetch flow while this function owns the pagination invariants.
    */
-  async function requestPublishedPage(
+  async function collectPublishedMapItems(
     request: { generation: number; token: string | null },
-    nextPage: number,
-  ): Promise<PublishedPageOutcome> {
-    const response = await withRequestDeadline(
-      (signal) =>
-        api.GET('/api/v1/system-maps', {
-          params: { query: { page: nextPage, page_size: SYSTEM_MAP_PAGE_SIZE } },
-          signal,
-        }),
-      OVERVIEW_REQUEST_TIMEOUT_MS,
-    )
-    if (!isCurrentOverviewRequest(request.generation, request.token)) return { kind: 'superseded' }
-    if (response.error || !response.data) {
-      if (isFeatureRequiredProblem(response.error, response.response)) return { kind: 'unavailable' }
-      throw new Error(apiErrorMessage(response.error, 'System map list request failed'))
-    }
-    const pageData = response.data as SystemMapList
-    return { kind: 'page', page: { items: pageData.items, total: pageData.total, pageSize: pageData.page_size } }
-  }
-
-  /**
-   * Page through the published map list and collect every published item.
-   *
-   * Stops early on a superseded request or an entitlement refusal; the caller
-   * settles or returns without touching the overview state.
-   */
-  async function collectPublishedItems(
-    request: { generation: number; token: string | null },
-  ): Promise<SystemMapList['items'] | 'superseded' | 'unavailable'> {
+  ): Promise<
+    | { kind: 'ok'; items: SystemMapList['items'] }
+    | { kind: 'stale' }
+    | { kind: 'feature_required' }
+  > {
     const publishedItems: SystemMapList['items'] = []
     let nextPage = 1
     let listTotal = Number.POSITIVE_INFINITY
+
     while (publishedItems.length < listTotal && nextPage <= MAX_SYSTEM_MAP_PAGES) {
-      const outcome = await requestPublishedPage(request, nextPage)
-      if (outcome.kind === 'superseded') return 'superseded'
-      if (outcome.kind === 'unavailable') return 'unavailable'
-      publishedItems.push(...outcome.page.items.filter((item) => item.published_revision_id != null))
-      listTotal = outcome.page.total
-      if (isLastPublishedPage(outcome.page)) break
+      const response = await withRequestDeadline(
+        (signal) =>
+          api.GET('/api/v1/system-maps', {
+            params: { query: { page: nextPage, page_size: SYSTEM_MAP_PAGE_SIZE } },
+            signal,
+          }),
+        OVERVIEW_REQUEST_TIMEOUT_MS,
+      )
+      if (!isCurrentOverviewRequest(request.generation, request.token)) return { kind: 'stale' }
+      if (response.error || !response.data) {
+        if (isFeatureRequiredProblem(response.error, response.response)) return { kind: 'feature_required' }
+        throw new Error(apiErrorMessage(response.error, 'System map list request failed'))
+      }
+
+      const pageData = response.data as SystemMapList
+      publishedItems.push(...pageData.items.filter((item) => item.published_revision_id != null))
+      listTotal = pageData.total
+      if (pageData.items.length === 0 || pageData.items.length < pageData.page_size) break
       nextPage += 1
     }
+
     if (nextPage > MAX_SYSTEM_MAP_PAGES) {
       throw new Error('System map list pagination exceeded its safety limit')
     }
-    return publishedItems
+    return { kind: 'ok', items: publishedItems }
   }
 
   /**
@@ -272,13 +235,16 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   async function fetchDefaultOverview(): Promise<void> {
     const request = beginOverviewRequest()
     try {
-      const published = await collectPublishedItems(request)
-      if (published === 'superseded') return
-      if (published === 'unavailable') {
-        settleOverviewUnavailable()
+      const outcome = await collectPublishedMapItems(request)
+      if (outcome.kind === 'stale') return
+      if (outcome.kind === 'feature_required') {
+        overview.value = null
+        overviewEmpty.value = false
+        overviewError.value = null
+        overviewUnavailable.value = true
         return
       }
-      const map = published.find((item) => item.default_map) ?? published[0]
+      const map = outcome.items.find((item) => item.default_map) ?? outcome.items[0]
       if (!map) {
         overview.value = null
         overviewEmpty.value = true
@@ -310,7 +276,10 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
       if (!isCurrentOverviewRequest(request.generation, request.token)) return
       if (response.error || !response.data) {
         if (isFeatureRequiredProblem(response.error, response.response)) {
-          settleOverviewUnavailable()
+          overview.value = null
+          overviewEmpty.value = false
+          overviewError.value = null
+          overviewUnavailable.value = true
           return
         }
         throw new Error(apiErrorMessage(response.error, 'System overview request failed'))

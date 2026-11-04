@@ -207,6 +207,7 @@ class TestSystemMapCrud:
             db,
             organisation_id=_ORG,
             include_deleted=True,
+            published_only=True,
             visibility="org",
             owner_team_id=_TEAM,
             name="ma",
@@ -1792,7 +1793,9 @@ class TestVersionAwareRevisionMethods:
             effective_to=None,
         )
         db = _session(_result(one=rev))
-        result = await repo.get_revision_by_time(db, organisation_id=_ORG, system_map_id=_MAP, at=at)
+        result = await repo.get_revision_by_time(
+            db, organisation_id=_ORG, system_map_id=_MAP, at=at, published_only=True
+        )
         assert result is rev
 
     async def test_get_revision_by_time_not_found(self, repo: SystemMapRepository) -> None:
@@ -1823,7 +1826,7 @@ class TestVersionAwareRevisionMethods:
             effective_to=None,
         )
         db = _session(_result(rows=[rev1, rev2]))
-        result = await repo.list_revisions_history(db, organisation_id=_ORG, system_map_id=_MAP)
+        result = await repo.list_revisions_history(db, organisation_id=_ORG, system_map_id=_MAP, published_only=True)
         assert result == [rev1, rev2]
         # Verify order is ascending by revision_number
         assert result[0].revision_number == 1

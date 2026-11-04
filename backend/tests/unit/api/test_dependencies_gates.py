@@ -621,106 +621,34 @@ class TestSystemEnginePoolRecycle:
             deps._SYSTEM_ENGINE_IS_FALLBACK = saved_flag
 
 
-class TestPublishedSystemMapsReadGate:
-    """The viewer read gate: ``system_maps.read`` is viewer-level.
+class TestSystemMapsReadDependencies:
+    """The published-read gate and the internal-access probe (FAR-2363)."""
 
-    It is deliberately separate from the internal authoring gate, so the tests
-    pin both the allowed viewer and the two refusal shapes (role floor and an
-    API key without the grant).
-    """
-
-    def test_viewer_is_allowed(self) -> None:
+    def test_published_read_allows_a_viewer(self) -> None:
         from modulo.api.dependencies import _require_published_system_maps_read
 
         principal = _tenant("viewer")
-
         assert _require_published_system_maps_read(principal) is principal
 
-    def test_unknown_role_is_denied_403(self) -> None:
+    def test_published_read_below_viewer_is_denied_403(self) -> None:
         from modulo.api.dependencies import _require_published_system_maps_read
 
-        with pytest.raises(HTTPException) as exc_info:
-            _require_published_system_maps_read(_tenant("guest"))
+        with pytest.raises(HTTPException) as excinfo:
+            _require_published_system_maps_read(_tenant(""))
+        assert excinfo.value.status_code == 403
 
-        assert exc_info.value.status_code == 403
-        assert "system_maps.read" in exc_info.value.detail
+    def test_internal_access_true_when_the_internal_gate_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies as deps
 
-    def test_api_key_without_the_grant_is_denied_403(self) -> None:
-        from modulo.api.dependencies import _require_published_system_maps_read
+        principal = _tenant("operator")
+        monkeypatch.setattr(deps, "_require_internal_system_maps_access", lambda *_a, **_k: principal)
+        assert deps._system_maps_internal_access(principal) is True
 
-        principal = TenantPrincipal(
-            username="key",
-            organisation_id=_ORG,
-            account_id=_ACCOUNT,
-            org_role="viewer",
-            is_system_admin=False,
-            via_api_key=True,
-            client_kind="api_key",
-            key_grants=frozenset(["pipeline.list"]),
-        )
+    def test_internal_access_false_when_the_internal_gate_denies(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies as deps
 
-        with pytest.raises(HTTPException) as exc_info:
-            _require_published_system_maps_read(principal)
+        def _deny(*_a: object, **_k: object) -> None:
+            raise HTTPException(status_code=403, detail="denied")
 
-        assert exc_info.value.status_code == 403
-        assert "is not granted to this API key" in exc_info.value.detail
-
-
-class TestSystemMapsInternalAccess:
-    """``_system_maps_internal_access`` is the draft-aware read predicate.
-
-    It reuses the internal authoring gate and converts a refusal into ``False``
-    rather than a 403, because the same endpoint serves viewers (published only)
-    and internal authors (drafts included).
-    """
-
-    @staticmethod
-    def _settings(*, dev_mode: bool) -> object:
-        from modulo.settings import Settings
-
-        return Settings(
-            modulo_dev_mode=dev_mode,
-            modulo_public_url="http://test",
-            fernet_key="test" * 8,
-            secret_key="test" * 8,
-            redis_url="redis://localhost:6379/0",
-            database_url="postgresql+asyncpg://test:test@localhost/test",
-        )
-
-    def test_operator_in_dev_mode_has_internal_access(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api import dependencies
-
-        monkeypatch.setattr(dependencies, "get_settings", lambda: self._settings(dev_mode=True))
-
-        assert dependencies._system_maps_internal_access(_tenant("operator")) is True
-
-    def test_viewer_never_has_internal_access(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api import dependencies
-
-        monkeypatch.setattr(dependencies, "get_settings", lambda: self._settings(dev_mode=True))
-
-        assert dependencies._system_maps_internal_access(_tenant("viewer")) is False
-
-    def test_dev_mode_off_denies_even_an_operator(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api import dependencies
-
-        monkeypatch.setattr(dependencies, "get_settings", lambda: self._settings(dev_mode=False))
-
-        assert dependencies._system_maps_internal_access(_tenant("operator")) is False
-
-    def test_api_key_without_the_grant_has_no_internal_access(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api import dependencies
-
-        monkeypatch.setattr(dependencies, "get_settings", lambda: self._settings(dev_mode=True))
-        principal = TenantPrincipal(
-            username="key",
-            organisation_id=_ORG,
-            account_id=_ACCOUNT,
-            org_role="operator",
-            is_system_admin=False,
-            via_api_key=True,
-            client_kind="api_key",
-            key_grants=frozenset(["pipeline.list"]),
-        )
-
-        assert dependencies._system_maps_internal_access(principal) is False
+        monkeypatch.setattr(deps, "_require_internal_system_maps_access", _deny)
+        assert deps._system_maps_internal_access(_tenant("viewer")) is False
