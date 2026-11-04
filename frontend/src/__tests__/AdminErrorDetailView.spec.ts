@@ -61,6 +61,7 @@ vi.mock('../lib/api/client', () => ({
 
 import AdminErrorDetailView from '../views/AdminErrorDetailView.vue'
 import BackLink from '../components/BackLink.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 
 function groupDetail(over: Record<string, unknown> = {}) {
   return {
@@ -514,6 +515,29 @@ describe('AdminErrorDetailView', () => {
     expect(assignee.element.closest('.opacity-60')).toBeNull()
 
     expect(requestedPaths()).toContain('/api/v1/admin/users')
+    wrapper.unmount()
+  })
+
+  it('admin: an assignee with no display name falls back to their email (FAR-2374)', async () => {
+    grantPermissions(ADMIN_PERMISSIONS)
+    const baseImplementation = getMock.getMockImplementation()!
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/users') {
+        return Promise.resolve({
+          data: { items: [{ id: 'u2', email: 'nameless@example.com', display_name: '' }] },
+          error: undefined,
+        })
+      }
+      return baseImplementation(path)
+    })
+    const wrapper = mountView()
+    await flush()
+
+    const assignee = wrapper.findComponent(AppSelect)
+    expect(assignee.exists()).toBe(true)
+    expect(assignee.props('options')).toEqual([
+      { value: 'u2', label: 'nameless@example.com' },
+    ])
     wrapper.unmount()
   })
 })
