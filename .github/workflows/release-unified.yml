@@ -2052,7 +2052,10 @@ jobs:
     # without waiting on the intentionally skipped bundle job.
     if: always() && inputs.mode != 'dry-run' && needs.produce-sbom.result == 'success' && (inputs.mode == 'promote' || needs.final-release-manifest.result == 'success')
     runs-on: ubicloud-standard-2
-    timeout-minutes: 20
+    # Raised from 20 to 30 minutes: run 41770073539 spent ~14.5 min downloading
+    # final-release-artefacts and ~5 min on the macOS artifact before attesting.
+    # The 20-minute cap left no headroom for artifact download variance.
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
@@ -2185,7 +2188,7 @@ jobs:
                  ;;
              esac
 
-            subject="ghcr.io/$image_name@$digest"
+            subject="oci://ghcr.io/$image_name@$digest"
             echo "Verifying attestation for $subject"
             gh attestation verify "$subject" --repo "${{ github.repository }}"
           done

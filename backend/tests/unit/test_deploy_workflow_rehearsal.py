@@ -3090,3 +3090,193 @@ def test_attest_artefacts_needs_includes_windows_installer() -> None:
     assert "always()" in condition, (
         f"attest-artefacts must use always() to not block on skipped windows-installer, got: {condition}"
     )
+
+
+# ---------------------------------------------------------------------------
+# OCI attestation verification fix (FAR-2832)
+# ---------------------------------------------------------------------------
+
+
+def test_attest_artefacts_verify_step_uses_oci_prefix() -> None:
+    """The Verify image attestations step must use oci:// prefix for OCI subjects."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    attest_job = workflow["jobs"]["attest-artefacts"]
+    steps = attest_job["steps"]
+    names = _step_names(steps)
+    verify_idx = names.index("Verify image attestations")
+    verify_step = steps[verify_idx]
+    script = verify_step["run"]
+    # The subject must be built with oci:// prefix
+    assert 'subject="oci://ghcr.io/$image_name@$digest"' in script, (
+        f"Verify step subject must use oci:// prefix, got: {script}"
+    )
+    # The gh attestation verify call must use the subject variable
+    assert 'gh attestation verify "$subject" --repo "${{ github.repository }}"' in script
+
+
+def test_attest_artefacts_job_timeout_is_30_minutes() -> None:
+    """attest-artefacts timeout must be 30 minutes to accommodate artifact download variance."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    attest_job = workflow["jobs"]["attest-artefacts"]
+    # Run 41770073539 spent ~14.5 min downloading final-release-artefacts
+    # and ~5 min on the macOS artifact before attesting. The 20-minute cap
+    # left no headroom for artifact download variance.
+    assert attest_job.get("timeout-minutes") == 30, (
+        f"attest-artefacts timeout-minutes must be 30, got: {attest_job.get('timeout-minutes')}"
+    )
+
+
+@pytest.mark.posix_only
+def test_attest_verify_step_executes_with_stub_gh_oci_form(tmp_path: Path) -> None:
+    """Execute the verify step loop body with a stub gh and assert oci:// arguments."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    attest_job = workflow["jobs"]["attest-artefacts"]
+    steps = attest_job["steps"]
+    names = _step_names(steps)
+    verify_idx = names.index("Verify image attestations")
+    verify_step = steps[verify_idx]
+    script = verify_step["run"]
+
+    # Extract the for-loop body (from 'for image_name' to the closing 'done')
+    loop_start = script.index("for image_name in")
+    loop_end = script.index("done", loop_start) + len("done")
+    loop_body = script[loop_start:loop_end]
+    # Replace GitHub Actions expression with literal value for test execution
+    loop_body = loop_body.replace('"${{ github.repository }}"', '"farnalabs/modulo"')
+
+    # Build a harness that runs the loop with stubbed gh
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "gh-calls.log"
+    log.write_text("", encoding="utf-8")
+
+    _write_executable(
+        bin_dir / "gh",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+# Log the exact call
+printf '%s\\n' "$*" >> {shlex.quote(str(log))}
+# Simulate successful verification
+exit 0
+""",
+    )
+
+    # Environment with dummy digests for all four images
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "IMAGE_NAMESPACE": "farnalabs/modulo",
+        "ALL_IN_ONE_DIGEST": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "BACKEND_DIGEST": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "FRONTEND_DIGEST": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "RUNNER_OPENCODE_DIGEST": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "GITHUB_REPOSITORY": "farnalabs/modulo",
+    }
+
+    # Wrap the loop body to make it executable
+    wrapper = f"""#!/usr/bin/env bash
+set -euo pipefail
+{loop_body}
+"""
+    _write_executable(tmp_path / "verify_loop.sh", wrapper)
+
+    bash = which("bash")
+    assert bash is not None
+    result = subprocess.run(  # noqa: S603 - fixed bash executable and test-controlled workflow text
+        [bash, "--noprofile", "--norc", "-c", f"source {shlex.quote(str(tmp_path / 'verify_loop.sh'))}"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+    # Parse the logged gh calls
+    calls = log.read_text(encoding="utf-8").strip().splitlines()
+    assert len(calls) == 4, f"expected 4 gh attestation verify calls, got {len(calls)}: {calls}"
+
+    # Each call must use oci:// prefix
+    for call in calls:
+        assert call.startswith("attestation verify oci://"), f"call must use oci:// prefix: {call}"
+        assert "--repo farnalabs/modulo" in call, f"call must include --repo: {call}"
+
+    # Verify all four images were attested
+    subjects = [call.split()[2] for call in calls]  # attestation verify <subject> --repo ...
+    expected_subjects = {
+        "oci://ghcr.io/farnalabs/modulo@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "oci://ghcr.io/farnalabs/modulo/backend@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "oci://ghcr.io/farnalabs/modulo/frontend@sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "oci://ghcr.io/farnalabs/modulo/runner-opencode@sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    }
+    assert set(subjects) == expected_subjects, f"unexpected subjects: {subjects}"
+
+
+@pytest.mark.posix_only
+def test_attest_verify_step_fails_closed_on_gh_nonzero(tmp_path: Path) -> None:
+    """A non-zero gh exit must fail the verify step (fail closed)."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    attest_job = workflow["jobs"]["attest-artefacts"]
+    steps = attest_job["steps"]
+    names = _step_names(steps)
+    verify_idx = names.index("Verify image attestations")
+    verify_step = steps[verify_idx]
+    script = verify_step["run"]
+
+    loop_start = script.index("for image_name in")
+    loop_end = script.index("done", loop_start) + len("done")
+    loop_body = script[loop_start:loop_end]
+    # Replace GitHub Actions expression with literal value for test execution
+    loop_body = loop_body.replace('"${{ github.repository }}"', '"farnalabs/modulo"')
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "gh-calls.log"
+    log.write_text("", encoding="utf-8")
+
+    _write_executable(
+        bin_dir / "gh",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> {shlex.quote(str(log))}
+# Simulate verification failure
+exit 1
+""",
+    )
+
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "IMAGE_NAMESPACE": "farnalabs/modulo",
+        "ALL_IN_ONE_DIGEST": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "BACKEND_DIGEST": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "FRONTEND_DIGEST": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "RUNNER_OPENCODE_DIGEST": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "GITHUB_REPOSITORY": "farnalabs/modulo",
+    }
+
+    wrapper = f"""#!/usr/bin/env bash
+set -euo pipefail
+{loop_body}
+"""
+    _write_executable(tmp_path / "verify_loop.sh", wrapper)
+
+    bash = which("bash")
+    assert bash is not None
+    result = subprocess.run(  # noqa: S603 - fixed bash executable and test-controlled workflow text
+        [bash, "--noprofile", "--norc", "-c", f"source {shlex.quote(str(tmp_path / 'verify_loop.sh'))}"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    # The loop must fail on the first non-zero gh exit (set -e)
+    assert result.returncode != 0, "verify step must fail when gh attestation verify fails"
+    # Must have attempted at least one call
+    calls = log.read_text(encoding="utf-8").strip().splitlines()
+    assert len(calls) >= 1, "at least one gh call must have been attempted"
