@@ -431,7 +431,7 @@ def test_launcher_command_line_size_covers_zero_and_quoted_arguments(launcher_so
 
 def test_workflow_contract(workflow_source: str, build_script_source: str) -> None:
     assert "d3f86a106a0bac45b974a628896c90dbdf5c8093" in workflow_source
-    assert "520d128f165991a6c774bcb264f323e3d70747f4" in workflow_source
+    assert "e8998f949152b193b063cb0ec769d69d929409be" in workflow_source
     assert "Invoke-Expression" not in workflow_source
     assert "runtime/python" in workflow_source
     assert workflow_source.count("Invoke-WindowsBundleStaging") == 1
