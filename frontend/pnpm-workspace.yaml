@@ -333,3 +333,4 @@ minimumReleaseAgeExclude:
   - '@lucide/vue@1.65.0'
   - 'eslint@10.14.0'
   - '@lucide/vue@1.66.0'
+  - '@lucide/vue@1.67.0'
