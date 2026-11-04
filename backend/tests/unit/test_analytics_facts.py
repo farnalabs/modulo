@@ -739,18 +739,29 @@ class TestRecordFactForTerminalFailedRun:
 # ---------------------------------------------------------------------------
 
 
+_METRICS_HANDLE_NAMES = (
+    "_facts_write_failed_total",
+    "_backfill_last_run_ts",
+    "_backfill_rows",
+    "_reconcile_alert_total",
+    "_retention_lag",
+    "_facts_skip_non_pg_total",
+)
+
+
+def _clear_metrics_handles() -> None:
+    for name in _METRICS_HANDLE_NAMES:
+        setattr(metrics_mod, name, None)
+
+
 @pytest.fixture(autouse=True)
 def _reset_metrics_handles() -> None:
+    # Clear BEFORE as well as after: the handles are process-global and pytest-xdist
+    # distributes tests individually, so a test in another module on the same worker
+    # can initialise them with the real OTel proxy instruments between our tests.
+    _clear_metrics_handles()
     yield
-    for name in (
-        "_facts_write_failed_total",
-        "_backfill_last_run_ts",
-        "_backfill_rows",
-        "_reconcile_alert_total",
-        "_retention_lag",
-        "_facts_skip_non_pg_total",
-    ):
-        setattr(metrics_mod, name, None)
+    _clear_metrics_handles()
 
 
 class TestGetMeter:
