@@ -547,7 +547,7 @@ describe('SystemMapDetailView authoring actions', () => {
 describe('SystemMapDetailView guards and non-Error failures', () => {
   const HeaderStub = { name: 'HeaderBar', emits: ['toggle-sidebar', 'save', 'publish', 'archive', 'discover'], template: '<div />' }
   const GraphStub = { name: 'GraphEditor', emits: ['nodes-change', 'relationships-change'], template: '<div />' }
-  const RevisionStub = { name: 'RevisionSidebar', emits: ['select-revision', 'new-draft', 'discover'], template: '<div />' }
+  const RevisionStub = { name: 'RevisionSidebar', emits: ['select-revision', 'new-draft', 'restore-revision', 'discover'], template: '<div />' }
   const DiscoveryStub = { name: 'DiscoveryPanel', emits: ['close', 'save'], template: '<div />' }
 
   function mountWithStubs() {

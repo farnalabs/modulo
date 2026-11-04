@@ -317,6 +317,31 @@ describe('useSystemMapsStore CRUD', () => {
     await expect(store.archive('map-1', 'rev-1')).rejects.toThrow('Could not archive revision')
   })
 
+  it('restores a historical revision as a new active draft', async () => {
+    mockPost.mockResolvedValue({ data: { new_revision: { id: 'rev-3', revision_number: 3, status: 'draft' } } })
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/system-maps/{map_id}/revisions/history') return Promise.resolve({ data: { revisions: [{ revision: { id: 'rev-3', revision_number: 3, status: 'draft' } }] } })
+      return Promise.resolve({ data: { revision: { id: 'rev-3', revision_number: 3, status: 'draft' }, nodes: [], relationships: [], loop_configs: [] } })
+    })
+    const store = useSystemMapsStore()
+
+    const restored = await store.restoreRevisionAsNew('map-1', 'rev-1')
+
+    expect(restored.id).toBe('rev-3')
+    expect(store.activeRevision?.id).toBe('rev-3')
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/{rev_id}/restore-as-new', {
+      params: { path: { map_id: 'map-1', rev_id: 'rev-1' } },
+      body: { notes: 'Restored from revision' },
+    })
+  })
+
+  it('throws when restoring a revision fails', async () => {
+    mockPost.mockResolvedValue({ error: { detail: 'nope' } })
+    const store = useSystemMapsStore()
+
+    await expect(store.restoreRevisionAsNew('map-1', 'rev-1')).rejects.toThrow('Could not restore revision')
+  })
+
   it('discovers a map and loads the created draft revision', async () => {
     mockPost.mockResolvedValue({ data: { draft_map_id: 'map-9', draft_revision_id: 'rev-9', inferred_nodes: [], inferred_edges: [] } })
     mockGet.mockImplementation((path: string) => {

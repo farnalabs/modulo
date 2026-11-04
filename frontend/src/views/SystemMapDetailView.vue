@@ -19,8 +19,10 @@
           @select-current="selectCurrentRevision"
           @select-by-time="selectRevisionByTime"
           :read-only="readOnly"
-          @new-draft="createNewDraft"
-          @discover="runDiscovery"
+           @new-draft="createNewDraft"
+           @restore-revision="restoreRevision"
+           @discover="runDiscovery"
+
         />
       </div>
 
@@ -246,6 +248,19 @@ async function createNewDraft(): Promise<void> {
     )
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.create_draft')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function restoreRevision(revisionId: string): Promise<void> {
+  if (!activeMap.value) return
+  saving.value = true
+  actionError.value = null
+  try {
+    await store.restoreRevisionAsNew(activeMap.value.id, revisionId)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.restore_revision')
   } finally {
     saving.value = false
   }

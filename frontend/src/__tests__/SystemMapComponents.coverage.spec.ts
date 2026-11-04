@@ -166,21 +166,24 @@ describe('SystemMapRevisionSidebar', () => {
     expect(wrapper.get('[data-testid="system-map-revision-2"]').classes()).toContain('border-primary')
   })
 
-  it('emits select, new-draft and discover events', async () => {
+  it('emits select, new-draft, restore and discover events', async () => {
     const wrapper = mountSidebar({
       mapId: 'map-1',
       activeRevisionId: 'rev-1',
       activeMap: map(),
-      revisions: [revision()],
-    })
+       revisions: [revision({ status: 'published' })],
+     })
 
-    await wrapper.get('[data-testid="system-map-revision-1"]').trigger('click')
-    await wrapper.get('[data-testid="system-map-new-draft"]').trigger('click')
-    await wrapper.get('[data-testid="system-map-sidebar-discover"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-revision-1"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-new-draft"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-revision-restore"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-sidebar-discover"]').trigger('click')
 
-    expect(wrapper.emitted('select-revision')![0]).toEqual(['rev-1'])
-    expect(wrapper.emitted('new-draft')).toBeTruthy()
-    expect(wrapper.emitted('discover')).toBeTruthy()
+     expect(wrapper.emitted('select-revision')![0]).toEqual(['rev-1'])
+     expect(wrapper.emitted('new-draft')).toBeTruthy()
+     expect(wrapper.emitted('restore-revision')![0]).toEqual(['rev-1'])
+     expect(wrapper.emitted('discover')).toBeTruthy()
+
   })
 
   it('emits current and by-time switching events', async () => {
@@ -223,7 +226,9 @@ describe('SystemMapRevisionSidebar', () => {
     expect(wrapper.find('[data-testid="system-map-revision-1"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-revision-2"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="system-map-new-draft"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="system-map-sidebar-discover"]').exists()).toBe(false)
+     expect(wrapper.find('[data-testid="system-map-sidebar-discover"]').exists()).toBe(false)
+     expect(wrapper.find('[data-testid="system-map-revision-restore"]').exists()).toBe(false)
+
   })
 
   it('keeps a draft revision and authoring controls for an operator', () => {
@@ -239,7 +244,9 @@ describe('SystemMapRevisionSidebar', () => {
 
     expect(wrapper.find('[data-testid="system-map-revision-1"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="system-map-new-draft"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="system-map-sidebar-discover"]').exists()).toBe(true)
+     expect(wrapper.find('[data-testid="system-map-sidebar-discover"]').exists()).toBe(true)
+     expect(wrapper.find('[data-testid="system-map-revision-restore"]').exists()).toBe(true)
+
   })
 
   it('marks the currently published revision', () => {

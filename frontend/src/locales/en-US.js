@@ -2002,6 +2002,7 @@ export default {
       "revision_at_time": "Revision at time",
       "current_revision": "Current",
       "new_draft": "New draft",
+      "restore_as_new": "Restore as new draft",
       "effective_from": "Effective from",
       "no_revisions": "No revisions have been created yet.",
       "unavailable": "This system map is not available on your plan. System Maps is switched off for this organisation, so retrying will not help.",
@@ -4635,6 +4636,8 @@ export default {
       "feature_flags": "Internal feature flags request failed",
       "load_revision": "Could not load revision",
       "create_draft": "Could not create draft",
+      "restore_revision": "Could not restore revision",
+      "restore_notes": "Restored from revision",
       "save_draft": "Could not save draft",
       "discovery_failed": "Discovery failed"
     }
