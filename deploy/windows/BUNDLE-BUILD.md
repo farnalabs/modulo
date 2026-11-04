@@ -46,9 +46,10 @@ passes `-Version`, `version`.
 whatever main happened to produce.
 
 `.github/workflows/release-unified.yml` calls it as `windows-native-artifacts`
-(cut/recut, gated on `include_windows`, which defaults to true because Windows
-is Alpha scope), then calls `.github/workflows/windows-installer.yml` with that
-job as a dependency.
+for cut/recut only when the Beta-only `include_windows` input is explicitly
+set to true. That input defaults to false, so the ordinary Alpha release path
+excludes Windows; the workflow then calls `.github/workflows/windows-installer.yml`
+with that job as a dependency only for the opt-in path.
 
 Inside `windows-installer.yml`:
 
@@ -74,9 +75,11 @@ Dry-run still skips the payload download, compile-against-real-payload, signing
 and attestation. It runs `scripts/test-windows-installer.ps1 -RequireIscc`, so
 the dry-run proves the installer contract compiles without publishing anything.
 
-`final-release-manifest` depends on `windows-installer` when
-`include_windows` is true, so the `windows-installer-<version>` artefact exists
-before the manifest downloads and hashes it.
+`final-release-manifest` depends on `windows-installer` when the Beta-only
+`include_windows` opt-in is true, so the `windows-installer-<version>` artefact
+exists before the manifest downloads and hashes it. With the default
+`include_windows: false`, the Windows job and artifact are omitted from the
+Alpha manifest.
 
 ## Installer bundle contract
 
