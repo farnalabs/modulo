@@ -23,7 +23,8 @@ Checks included:
 
 Windows native packaging is Beta scope: every Windows-only check is skipped with an
 explicit result unless ``include_windows`` is enabled (``--include-windows`` /
-``RELEASE_INCLUDE_WINDOWS=true``).
+``INCLUDE_WINDOWS=true``; the longer ``RELEASE_INCLUDE_WINDOWS`` is still honoured as
+a fallback so existing callers keep working).
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -864,12 +865,20 @@ class ReleasePreflightChecker:
         missing_windows = (
             [s for s in windows_signing_secrets if not self.env.get(s)] if windows_packaging_required else []
         )
-        missing = missing_windows + missing_release
-        if missing:
+        if missing_windows or missing_release:
+            # The check name is historical (it began as the Azure signing gate),
+            # so the failure text has to say WHICH kind of secret is missing:
+            # release secrets are required on every release path, the Azure
+            # Trusted Signing credentials only when a Windows installer is built.
+            missing_parts: list[str] = []
+            if missing_release:
+                missing_parts.append(f"Missing required release secret(s): {', '.join(missing_release)}")
+            if missing_windows:
+                missing_parts.append(f"Missing required Azure Trusted Signing secret(s): {', '.join(missing_windows)}")
             return PreflightCheckResult(
                 name,
                 False,
-                f"Missing required release secret(s): {', '.join(missing)} (values redacted)",
+                f"{' | '.join(missing_parts)} (values redacted)",
             )
 
         if not windows_packaging_required:
@@ -1127,6 +1136,23 @@ def _safe_summary_path(value: str) -> str | None:
     return matched.group(0) if matched else None
 
 
+def _env_include_windows(env: Mapping[str, str] | None = None) -> bool:
+    """Return the ``include_windows`` default from the environment.
+
+    ``INCLUDE_WINDOWS`` is the name every release-workflow step declares in its
+    ``env:`` block, so the script reads the same name the workflow sets. The
+    longer ``RELEASE_INCLUDE_WINDOWS`` is still honoured as a fallback for
+    existing callers, but only when ``INCLUDE_WINDOWS`` is unset — a declared
+    ``INCLUDE_WINDOWS=false`` is not overridden by a stale sibling variable.
+    """
+    source = os.environ if env is None else env
+    for key in ("INCLUDE_WINDOWS", "RELEASE_INCLUDE_WINDOWS"):
+        raw = source.get(key)
+        if raw is not None:
+            return raw.strip().lower() == "true"
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1148,8 +1174,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--include-windows",
         action="store_true",
-        default=os.environ.get("RELEASE_INCLUDE_WINDOWS", "false").lower() == "true",
-        help="Require the Beta-scope Windows native installer inputs (default: $RELEASE_INCLUDE_WINDOWS == true)",
+        default=_env_include_windows(),
+        help=(
+            "Require the Beta-scope Windows native installer inputs "
+            "(default: $INCLUDE_WINDOWS == true, falling back to $RELEASE_INCLUDE_WINDOWS)"
+        ),
     )
     parser.add_argument(
         "--repo-root",

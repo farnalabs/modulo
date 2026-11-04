@@ -786,7 +786,9 @@ def test_azure_signing_secrets_cut_and_recut_fail_when_missing(tmp_path: Path, m
     checker = ReleasePreflightChecker(mode=mode, version="0.1.0", include_windows=True, repo_root=repo, env={})
     res = checker.check_azure_signing_secrets()
     assert not res.passed
+    # Both kinds are missing here, and the message must name both.
     assert "Missing required release secret(s)" in res.details
+    assert "Missing required Azure Trusted Signing secret(s)" in res.details
     assert "BUNDLE_MANIFEST_SIGNING_KEY" in res.details
     assert "MODULO_RELEASE_PR_TOKEN" in res.details
 
@@ -799,7 +801,10 @@ def test_azure_signing_secrets_cut_fails_when_only_azure_secrets_missing(tmp_pat
     )
     res = checker.check_azure_signing_secrets()
     assert not res.passed
-    assert "Missing required release secret(s)" in res.details
+    # The check name is historical, so the failure text must name the KIND of
+    # secret that is missing: here only the Azure signing credentials.
+    assert "Missing required Azure Trusted Signing secret(s)" in res.details
+    assert "release secret(s)" not in res.details
     assert "AZURE_CLIENT_ID" in res.details
 
 
@@ -811,7 +816,8 @@ def test_azure_signing_secrets_recut_fails_when_only_azure_secrets_missing(tmp_p
     )
     res = checker.check_azure_signing_secrets()
     assert not res.passed
-    assert "Missing required release secret(s)" in res.details
+    assert "Missing required Azure Trusted Signing secret(s)" in res.details
+    assert "release secret(s)" not in res.details
     assert "AZURE_CLIENT_ID" in res.details
 
 
@@ -824,6 +830,26 @@ def test_azure_signing_secrets_promote_passes_without_azure_secrets(tmp_path: Pa
     res = checker.check_azure_signing_secrets()
     assert res.passed
     assert "does not build or sign a Windows installer" in res.details
+
+
+def test_release_pr_token_is_required_in_promote_without_windows(tmp_path: Path):
+    """The release-secret requirement is mode-independent: promote needs the PR token too.
+
+    ``promote`` does not build or sign a Windows installer, so the Azure
+    Trusted Signing secrets are correctly not required — but the cut/promote PR
+    is driven by ``MODULO_RELEASE_PR_TOKEN``, so its absence must fail the gate
+    and name the missing variable.
+    """
+    repo = _make_dummy_repo(tmp_path)
+    env = {key: value for key, value in _RELEASE_SECRETS_ENV.items() if key != "MODULO_RELEASE_PR_TOKEN"}
+    checker = ReleasePreflightChecker(mode="promote", version="0.1.0", include_windows=False, repo_root=repo, env=env)
+    res = checker.check_azure_signing_secrets()
+    assert not res.passed
+    assert "Missing required release secret(s)" in res.details
+    assert "MODULO_RELEASE_PR_TOKEN" in res.details
+    # The configured release secret is not reported, and Azure is not demanded.
+    assert "BUNDLE_MANIFEST_SIGNING_KEY" not in res.details
+    assert "AZURE_CLIENT_ID" not in res.details
 
 
 def test_azure_signing_secrets_cut_passes_when_present(tmp_path: Path):
@@ -1282,6 +1308,7 @@ def test_main_refuses_summary_path_with_disallowed_characters(tmp_path: Path, ca
 # CLI wiring: --include-windows must reach run_all_checks
 # -----------------------------------------------------------------------------
 _PREFLIGHT_SECRET_ENV_KEYS = (
+    "INCLUDE_WINDOWS",
     "RELEASE_INCLUDE_WINDOWS",
     "AZURE_CLIENT_ID",
     "AZURE_TENANT_ID",
@@ -1319,6 +1346,7 @@ def test_main_passes_include_windows_flag_to_run_all_checks(tmp_path: Path, monk
 
 def test_main_defaults_include_windows_to_false(tmp_path: Path, monkeypatch, capsys):
     repo = _make_dummy_repo(tmp_path)
+    monkeypatch.delenv("INCLUDE_WINDOWS", raising=False)
     monkeypatch.delenv("RELEASE_INCLUDE_WINDOWS", raising=False)
     seen: dict[str, bool] = {}
 
@@ -1333,8 +1361,28 @@ def test_main_defaults_include_windows_to_false(tmp_path: Path, monkeypatch, cap
     assert "include_windows=false" in capsys.readouterr().err
 
 
-def test_main_honours_release_include_windows_env(tmp_path: Path, monkeypatch, capsys):
+def test_main_honours_include_windows_env(tmp_path: Path, monkeypatch, capsys):
+    """INCLUDE_WINDOWS is the name the release workflow declares on every step."""
     repo = _make_dummy_repo(tmp_path)
+    monkeypatch.delenv("RELEASE_INCLUDE_WINDOWS", raising=False)
+    monkeypatch.setenv("INCLUDE_WINDOWS", "true")
+    seen: dict[str, bool] = {}
+
+    def fake_run_all_checks(self: ReleasePreflightChecker) -> list[PreflightCheckResult]:
+        seen["include_windows"] = self.include_windows
+        return []
+
+    monkeypatch.setattr(mod.ReleasePreflightChecker, "run_all_checks", fake_run_all_checks)
+    exit_code = mod.main(["--mode", "cut", "--version", "0.1.0", "--repo-root", str(repo)])
+    assert exit_code == 0
+    assert seen["include_windows"] is True
+    assert "include_windows=true" in capsys.readouterr().err
+
+
+def test_main_honours_legacy_release_include_windows_env_fallback(tmp_path: Path, monkeypatch, capsys):
+    """RELEASE_INCLUDE_WINDOWS remains accepted when INCLUDE_WINDOWS is unset."""
+    repo = _make_dummy_repo(tmp_path)
+    monkeypatch.delenv("INCLUDE_WINDOWS", raising=False)
     monkeypatch.setenv("RELEASE_INCLUDE_WINDOWS", "true")
     seen: dict[str, bool] = {}
 
@@ -1347,6 +1395,24 @@ def test_main_honours_release_include_windows_env(tmp_path: Path, monkeypatch, c
     assert exit_code == 0
     assert seen["include_windows"] is True
     assert "include_windows=true" in capsys.readouterr().err
+
+
+def test_main_include_windows_env_wins_over_legacy_fallback(tmp_path: Path, monkeypatch, capsys):
+    """A declared INCLUDE_WINDOWS=false must not be overridden by a stale sibling."""
+    repo = _make_dummy_repo(tmp_path)
+    monkeypatch.setenv("INCLUDE_WINDOWS", "false")
+    monkeypatch.setenv("RELEASE_INCLUDE_WINDOWS", "true")
+    seen: dict[str, bool] = {}
+
+    def fake_run_all_checks(self: ReleasePreflightChecker) -> list[PreflightCheckResult]:
+        seen["include_windows"] = self.include_windows
+        return []
+
+    monkeypatch.setattr(mod.ReleasePreflightChecker, "run_all_checks", fake_run_all_checks)
+    exit_code = mod.main(["--mode", "cut", "--version", "0.1.0", "--repo-root", str(repo)])
+    assert exit_code == 0
+    assert seen["include_windows"] is False
+    assert "include_windows=false" in capsys.readouterr().err
 
 
 def _run_preflight_subprocess(repo: Path, extra_args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -1365,12 +1431,20 @@ def test_subprocess_include_windows_flag_reaches_the_checker(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
     completed = _run_preflight_subprocess(repo, ["--include-windows"])
     assert "include_windows=true" in completed.stderr
+    # The dummy repo legitimately fails several checks, so the gate must exit 1
+    # through its terminal aggregation path. Asserting the exit code (not just
+    # the banner, which is printed before any check runs) proves the process
+    # completed the whole run instead of dying after the banner.
+    assert completed.returncode == 1
+    assert "PREFLIGHT FAILED:" in completed.stderr
 
 
 def test_subprocess_include_windows_defaults_to_false(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
     completed = _run_preflight_subprocess(repo, [])
     assert "include_windows=false" in completed.stderr
+    assert completed.returncode == 1
+    assert "PREFLIGHT FAILED:" in completed.stderr
 
 
 # -----------------------------------------------------------------------------
@@ -1400,9 +1474,13 @@ def test_preflight_passes_include_windows_to_the_real_checker():
     step = next(
         s for s in _release_workflow()["jobs"]["preflight"]["steps"] if "run_release_preflight.py" in s.get("run", "")
     )
-    assert step["env"]["RELEASE_INCLUDE_WINDOWS"] == "${{ inputs.include_windows }}"
+    # INCLUDE_WINDOWS — not RELEASE_INCLUDE_WINDOWS — is the name every step in
+    # this workflow declares; the rehearsal gate enforces that contract.
+    assert step["env"]["INCLUDE_WINDOWS"] == "${{ inputs.include_windows }}"
+    assert "RELEASE_INCLUDE_WINDOWS" not in step["env"]
     assert 'windows_arg="--include-windows"' in step["run"]
-    assert "${RELEASE_INCLUDE_WINDOWS}" in step["run"]
+    assert "${INCLUDE_WINDOWS}" in step["run"]
+    assert "RELEASE_INCLUDE_WINDOWS" not in step["run"]
     assert "$windows_arg" in step["run"]
 
 
