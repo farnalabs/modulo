@@ -209,6 +209,39 @@ describe('SystemMapRevisionSidebar', () => {
     expect(at).toMatch(/Z$/)
   })
 
+  it('filters drafts and authoring controls for a read-only viewer', () => {
+    const wrapper = mountSidebar({
+      mapId: 'map-1',
+      activeMap: map(),
+      readOnly: true,
+      revisions: [
+        revision({ id: 'rev-1', revision_number: 1, status: 'draft' }),
+        revision({ id: 'rev-2', revision_number: 2, status: 'published' }),
+      ],
+    })
+
+    expect(wrapper.find('[data-testid="system-map-revision-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-revision-2"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-map-new-draft"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-sidebar-discover"]').exists()).toBe(false)
+  })
+
+  it('keeps a draft revision and authoring controls for an operator', () => {
+    const wrapper = mountSidebar({
+      mapId: 'map-1',
+      activeMap: map(),
+      readOnly: false,
+      revisions: [
+        revision({ id: 'rev-1', revision_number: 1, status: 'draft' }),
+        revision({ id: 'rev-2', revision_number: 2, status: 'published' }),
+      ],
+    })
+
+    expect(wrapper.find('[data-testid="system-map-revision-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-map-new-draft"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-map-sidebar-discover"]').exists()).toBe(true)
+  })
+
   it('marks the currently published revision', () => {
     const wrapper = mountSidebar({
       mapId: 'map-1',

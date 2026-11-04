@@ -49,6 +49,32 @@ export function getProblemTypeLabel(type: string): string {
   return PROBLEM_TITLES[key] ?? 'Error'
 }
 
+/** RFC 9457 problem type the backend emits for an entitlement refusal. */
+const FEATURE_REQUIRED_TYPE = 'urn:problem:modulo:feature_required'
+
+/**
+ * A 402 ``feature_required`` means the request was refused for entitlement
+ * reasons, not that it failed. Callers settle into a distinct unavailable
+ * state instead of offering a retry that cannot succeed.
+ *
+ * Both the HTTP status and the RFC 9457 problem type are checked because a
+ * mocked or older error shape carries one but not always the other; the
+ * responded status is checked too because an openapi-fetch result keeps the
+ * status on ``response`` while the parsed problem lives on ``error``.
+ */
+export function isFeatureRequiredProblem(
+  error: unknown,
+  response?: { status?: number } | undefined,
+): boolean {
+  if (response?.status === 402) return true
+  if (error && typeof error === 'object') {
+    const candidate = error as { status?: unknown; type?: unknown }
+    if (candidate.status === 402) return true
+    if (candidate.type === FEATURE_REQUIRED_TYPE) return true
+  }
+  return false
+}
+
 export function isProblemDetail(err: unknown): err is ProblemDetail {
   if (typeof err !== 'object' || err === null) return false
   const obj = err as Record<string, unknown>

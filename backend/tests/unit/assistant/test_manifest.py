@@ -163,17 +163,29 @@ class TestManifestLoad:
         Pins the FAR-462 escape hatch (/admin/users is community-tier but
         admin-role-gated for nav) so it cannot widen silently to other roles.
 
-        A widened (operator+admin) community route is permitted only behind a
-        dev-only visibility gate paired with its own grant:
+        A widened community route is permitted only by an explicit policy
+        exception:
 
         - ``in_dev`` + ``library.search.in_dev`` - the retained internal
           lifecycle-map surfaces (FAR-2200); and
         - ``private_preview`` + ``system_maps_access`` - the System Maps
           authoring surfaces (FAR-2288), which deliberately use their own grant
-          separate from the lifecycle-map one.
+          separate from the lifecycle-map one; or
+        - the published System Maps reads (``/system-maps`` and
+          ``/system-maps/:id`` only), which are ``public`` in manifest
+          vocabulary but still require an authenticated viewer and the dedicated
+          ``system_maps.read`` permission (FAR-2363). Drafts are 404 for any
+          caller without the internal gate, and the backend's published-only
+          filter is pinned by ``tests/unit/api/test_system_maps_routes.py``
+          (``list_maps_by_org``/``list_revisions_history`` receive
+          ``published_only=True``) plus
+          ``tests/integration/test_system_maps_published_read.py``.
 
-        Either way the wider role set is unreachable outside developer mode, and
-        the backend re-checks the matching grant plus developer mode.
+        Every widened route must therefore carry a matching permission gate;
+        public visibility is allowed only for the explicit published-read
+        exception, never as an anonymous route. The published System Maps
+        reads are the only such entries; mutations remain operator-only behind
+        the separate ``system_maps_access`` grant.
         """
         _reset_manifest()
         from modulo.core.manifest import load_manifest
@@ -182,11 +194,29 @@ class TestManifestLoad:
             "in_dev": "library.search.in_dev",
             "private_preview": "system_maps_access",
         }
+        # Deliberately viewer-readable PUBLIC community routes (FAR-2363):
+        # published System Maps reads for every authenticated principal, gated
+        # by the dedicated system_maps.read permission. The exception is narrow:
+        # only these two paths, and only with exactly [system_maps.read].
+        viewer_visible_public_routes = {
+            "/system-maps": "system_maps.read",
+            "/system-maps/:id": "system_maps.read",
+        }
         manifest = load_manifest()
         for path, route in manifest["routes"].items():
             if route["required_tier"] != "community" or route["required_roles"] is None:
                 continue
             if route["required_roles"] == ["admin"]:
+                continue
+            if path in viewer_visible_public_routes:
+                read_permission = viewer_visible_public_routes[path]
+                assert route.get("visibility") == "public", f"Viewer-readable community route {path} must be public"
+                assert "viewer" in route["required_roles"], (
+                    f"Viewer-readable community route {path} must include the viewer role"
+                )
+                assert route.get("required_permissions") == [read_permission], (
+                    f"Viewer-readable community route {path} must require only {read_permission}"
+                )
                 continue
             visibility = route.get("visibility")
             assert visibility in dev_gate_permissions, (

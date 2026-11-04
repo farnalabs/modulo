@@ -48,8 +48,11 @@ const FRONTEND_ONLY_EXCEPTIONS = new Set(['pipeline_delete'])
  * than a FeatureGate component or planStore.featureEnabled() call:
  *   - analytics_page: the /analytics route is gated by
  *     required_permissions: [analytics.query] in frontend/src/manifest.yaml.
+ *   - system_maps_read: the published System Maps read model is gated by the
+ *     /system-maps route entries' required_permissions: [system_maps.read] in
+ *     frontend/src/manifest.yaml, not by a FeatureGate component.
  */
-const MANIFEST_GATED_EXCEPTIONS = new Set(['analytics_page'])
+const MANIFEST_GATED_EXCEPTIONS = new Set(['analytics_page', 'system_maps_read'])
 
 function collectTeamFeatureNames(): Set<string> {
   const names = new Set<string>()

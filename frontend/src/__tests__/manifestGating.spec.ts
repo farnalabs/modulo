@@ -74,8 +74,8 @@ describe('manifest merge-key gating (js-yaml regression guard)', () => {
 
   it('/admin/errors and /admin/errors/:id keep the team tier and admit viewers as well as admins (FAR-2356)', () => {
     // FAR-2356 relaxes the error dashboard from `<<: *team` (admin-only) to
-    // `<<: *team_viewer` so a demo-org viewer can reach it. Pin the gate on
-    // the REAL manifest: the tier must stay `team` (the demo org seeds that
+    // `<<: *team_viewer` so a demo-org viewer can reach it. Pin the gate on the
+    // REAL manifest: the tier must stay `team` (the demo org seeds that
     // tier and the views wrap themselves in a FeatureGate) and the role list
     // must admit `viewer` WITHOUT dropping `admin` (the router role gate is
     // ANY-of, so a regression that replaces the list with [viewer] would lock
@@ -89,6 +89,18 @@ describe('manifest merge-key gating (js-yaml regression guard)', () => {
       expect(route.required_roles, `${path} required_roles`).toContain('admin')
     }
   })
+
+  it('/system-maps published reads are authenticated viewer routes, not anonymous public routes (FAR-2363)', () => {
+    for (const path of ['/system-maps', '/system-maps/:id']) {
+      const route = routes[path]
+      expect(route, `${path} must exist`).toBeDefined()
+      expect(route.required_tier, `${path} required_tier`).toBe('community')
+      expect(route.required_roles, `${path} required_roles`).toEqual(['viewer', 'operator', 'admin'])
+      expect(route.required_permissions, `${path} required_permissions`).toEqual(['system_maps.read'])
+      expect(route.visibility, `${path} visibility`).toBe('public')
+    }
+  })
+
 
   it('at least 25 routes have a non-null required_tier (non-vacuity guard)', () => {
     const gatedRoutes = Object.values(routes).filter((route) => {
