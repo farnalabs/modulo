@@ -91,6 +91,35 @@ function eventsPage(items: Record<string, unknown>[], total: number) {
   return { items, total }
 }
 
+const ADMIN_PERMISSIONS = ['errors.resolve', 'errors.manage']
+const VIEWER_PERMISSIONS = ['errors.resolve']
+
+/**
+ * Boot-time `api.GET` surface for the view: the caller-scoped permission read
+ * that gates every write control (FAR-2374) and the admin-only user lookup
+ * behind the assignee picker. Anything else keeps the permissive stub the
+ * suite has always used.
+ */
+function grantPermissions(permissions: string[]) {
+  getMock.mockImplementation((path: string) => {
+    if (path === '/api/v1/auth/permissions') {
+      return Promise.resolve({ data: { permissions }, error: undefined })
+    }
+    if (path === '/api/v1/admin/users') {
+      return Promise.resolve({
+        data: { items: [{ id: 'u1', email: 'a@b.c', display_name: 'Alice' }] },
+        error: undefined,
+      })
+    }
+    return Promise.resolve({ data: { items: [] }, error: undefined })
+  })
+}
+
+/** Every path the view (or a store it boots) asked `api.GET` for. */
+function requestedPaths(): string[] {
+  return getMock.mock.calls.map((call) => String(call[0]))
+}
+
 async function flush() {
   await flushPromises()
   await nextTick()
@@ -119,10 +148,9 @@ describe('AdminErrorDetailView', () => {
     fetchEventsMock.mockResolvedValue(eventsPage([eventRow()], 1))
     fetchInstanceGroupMock.mockResolvedValue(groupDetail())
     fetchInstanceEventsMock.mockResolvedValue(eventsPage([eventRow()], 1))
-    getMock.mockResolvedValue({
-      data: { items: [{ id: 'u1', email: 'a@b.c', display_name: 'Alice' }] },
-      error: undefined,
-    })
+    // The suite's default principal holds `errors.manage`; the viewer state is
+    // exercised by the dedicated FAR-2374 tests below.
+    grantPermissions(ADMIN_PERMISSIONS)
   })
 
   function eventRow(over: Record<string, unknown> = {}) {
@@ -419,6 +447,73 @@ describe('AdminErrorDetailView', () => {
     const vm = wrapper.vm as unknown as { supportReference: string }
     expect(vm.supportReference).toContain('error err-1')
     expect(vm.supportReference).not.toContain('source')
+    wrapper.unmount()
+  })
+
+  it('viewer: every write control is disabled and described, and the admin user lookup is never fired (FAR-2374)', async () => {
+    grantPermissions(VIEWER_PERMISSIONS)
+    const wrapper = mountView()
+    await flush()
+
+    // Status transitions: the PATCH is admin-only, so all three are disabled
+    // even though the group's own status would otherwise enable them.
+    for (const testid of [
+      'admin-error-detail-acknowledge',
+      'admin-error-detail-resolve',
+      'admin-error-detail-archive',
+    ]) {
+      const button = wrapper.find(`[data-testid="${testid}"]`)
+      expect(button.exists()).toBe(true)
+      expect(button.attributes('disabled')).toBeDefined()
+      expect(button.attributes('aria-describedby')).toBe('admin-error-status-admin-help')
+    }
+    const statusHelp = wrapper.find('[data-testid="admin-error-detail-status-admin-help"]')
+    expect(statusHelp.exists()).toBe(true)
+    expect(statusHelp.text()).toContain('administrator')
+
+    // Reassignment: the picker is disabled and greyed, described through the
+    // combobox itself (PrimeVue puts fallthrough attrs on its wrapper).
+    const assignee = wrapper.find('[data-testid="admin-error-detail-assignee"]')
+    expect(assignee.exists()).toBe(true)
+    const combobox = assignee.find('[role="combobox"]')
+    expect(combobox.attributes('aria-disabled')).toBe('true')
+    expect(combobox.attributes('tabindex')).toBe('-1')
+    expect(combobox.attributes('aria-describedby')).toBe('admin-error-assign-admin-help')
+    const assignHelp = wrapper.find('[data-testid="admin-error-detail-assign-admin-help"]')
+    expect(assignHelp.exists()).toBe(true)
+    expect(assignHelp.text()).toContain('administrator')
+    expect(assignee.element.closest('.opacity-60')).not.toBeNull()
+
+    // GET /api/v1/admin/users is admin-only: a viewer must not ask for it at
+    // all, rather than firing it and swallowing the 403.
+    expect(requestedPaths()).not.toContain('/api/v1/admin/users')
+    wrapper.unmount()
+  })
+
+  it('admin: the write controls stay enabled and the assignee picker loads users (FAR-2374)', async () => {
+    grantPermissions(ADMIN_PERMISSIONS)
+    const wrapper = mountView()
+    await flush()
+
+    for (const testid of [
+      'admin-error-detail-acknowledge',
+      'admin-error-detail-resolve',
+      'admin-error-detail-archive',
+    ]) {
+      const button = wrapper.find(`[data-testid="${testid}"]`)
+      expect(button.attributes('disabled')).toBeUndefined()
+      expect(button.attributes('aria-describedby')).toBeUndefined()
+    }
+    expect(wrapper.find('[data-testid="admin-error-detail-status-admin-help"]').exists()).toBe(false)
+
+    const assignee = wrapper.find('[data-testid="admin-error-detail-assignee"]')
+    const combobox = assignee.find('[role="combobox"]')
+    expect(combobox.attributes('aria-disabled')).not.toBe('true')
+    expect(combobox.attributes('aria-describedby')).toBeUndefined()
+    expect(wrapper.find('[data-testid="admin-error-detail-assign-admin-help"]').exists()).toBe(false)
+    expect(assignee.element.closest('.opacity-60')).toBeNull()
+
+    expect(requestedPaths()).toContain('/api/v1/admin/users')
     wrapper.unmount()
   })
 })
