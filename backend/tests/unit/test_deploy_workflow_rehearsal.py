@@ -7,7 +7,9 @@ pre-deploy wiring intact — the same reasoning as the sibling
 ``test_extract_machine_id.py`` for the machine-id parser.
 """
 
+import hashlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -15,6 +17,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import tarfile
 import textwrap
 from pathlib import Path
 from shutil import which
@@ -3512,3 +3515,155 @@ def test_publish_release_assertion_reports_an_unknown_state_not_absence(tmp_path
     assert "state UNKNOWN, not proof of absence" in result.stdout
     assert "is ABSENT" not in result.stdout
     assert "Publication post-condition failed" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Redis source download + sha256 verification (bundle-release.yml)
+#
+# Release runs 41813584406 / 41818199376 failed in "Build and sha256-verify
+# Redis from pinned upstream source": the checksum manifest named
+# ``downloads/redis-src.tar.gz`` while ``sha256sum --check`` ran INSIDE
+# ``downloads/``, so it looked for ``downloads/downloads/redis-src.tar.gz`` and
+# the step died with "No such file or directory". This harness EXECUTES the
+# shipped step, so that class of defect fails here instead of in a release run.
+# ---------------------------------------------------------------------------
+
+_REDIS_SOURCE_STEP_NAME = "Build and sha256-verify Redis from pinned upstream source"
+
+
+def _bundle_workflow() -> dict[str, Any]:
+    return cast(dict[str, Any], yaml.safe_load(BUNDLE_WORKFLOW.read_text(encoding="utf-8")))
+
+
+def _bundle_step_run(name: str) -> str:
+    steps = cast(list[dict[str, Any]], _bundle_workflow()["jobs"]["bundle"]["steps"])
+    run = steps[_step_names(steps).index(name)].get("run")
+    assert isinstance(run, str), f"{name!r} must contain a shell run block"
+    return run
+
+
+def _redis_source_tarball() -> bytes:
+    """A real gzip tarball so the step's ``tar -xzf`` extraction is exercised."""
+    payload = b"# pinned redis fixture\n"
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        member = tarfile.TarInfo("redis-8.0.2/README.md")
+        member.size = len(payload)
+        member.mtime = 0
+        archive.addfile(member, io.BytesIO(payload))
+    return buffer.getvalue()
+
+
+def _redis_step_harness(
+    tmp_path: Path,
+    *,
+    tarball: bytes | None,
+    pin_sha256: str,
+) -> tuple[dict[str, str], Path]:
+    """A repo root whose ``curl`` fetches ``tarball`` (or nothing when None).
+
+    ``make`` and ``nproc`` are stubbed so the step's build tail never needs a
+    compiler; ``sha256sum`` and ``tar`` are the real binaries, because the
+    manifest-path contract is exactly what is under test.
+    """
+    root = tmp_path / "repo"
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts" / "bundle-versions.env").write_text(
+        "REDIS_VERSION=8.0.2\n"
+        "REDIS_SOURCE_URL=https://download.redis.io/releases/redis-8.0.2.tar.gz\n"
+        f"REDIS_SOURCE_SHA256={pin_sha256}\n",
+        encoding="utf-8",
+    )
+    fixture = tmp_path / "fixture-redis-src.tar.gz"
+    if tarball is not None:
+        fixture.write_bytes(tarball)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "curl",
+        f"""#!/usr/bin/env bash
+set -u
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift; out="$1" ;;
+  esac
+  shift
+done
+if [ -n "$out" ] && [ -f {shlex.quote(str(fixture))} ]; then
+  cp {shlex.quote(str(fixture))} "$out"
+fi
+exit 0
+""",
+    )
+    _write_executable(
+        bin_dir / "nproc",
+        """#!/usr/bin/env bash
+printf '2\\n'
+""",
+    )
+    _write_executable(
+        bin_dir / "make",
+        """#!/usr/bin/env bash
+set -u
+mkdir -p build/redis-install/bin
+for binary in redis-server redis-cli; do
+  printf '#!/usr/bin/env bash\\n' > "build/redis-install/bin/${binary}"
+  chmod +x "build/redis-install/bin/${binary}"
+done
+exit 0
+""",
+    )
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    return env, root
+
+
+def test_bundle_redis_step_verifies_a_matching_tarball_from_the_download_dir(tmp_path: Path) -> None:
+    """The checksum passes only when the manifest name is valid where the check runs."""
+    tarball = _redis_source_tarball()
+    env, root = _redis_step_harness(tmp_path, tarball=tarball, pin_sha256=hashlib.sha256(tarball).hexdigest())
+
+    result = _run_bash(_bundle_step_run(_REDIS_SOURCE_STEP_NAME), cwd=root, env=env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "redis-src.tar.gz: OK" in result.stdout
+    assert (root / "build" / "redis-install" / "bin" / "redis-server").is_file()
+
+
+def test_bundle_redis_step_fails_on_a_digest_mismatch_and_never_extracts(tmp_path: Path) -> None:
+    tarball = _redis_source_tarball()
+    env, root = _redis_step_harness(tmp_path, tarball=tarball, pin_sha256="0" * 64)
+
+    result = _run_bash(_bundle_step_run(_REDIS_SOURCE_STEP_NAME), cwd=root, env=env)
+
+    assert result.returncode != 0, "a digest mismatch must fail the step"
+    assert "FAILED" in result.stdout + result.stderr
+    assert not (root / "redis-src").exists(), "a mismatched tarball must never be extracted"
+
+
+def test_bundle_redis_step_fails_loudly_when_the_download_writes_no_file(tmp_path: Path) -> None:
+    env, root = _redis_step_harness(tmp_path, tarball=None, pin_sha256="0" * 64)
+
+    result = _run_bash(_bundle_step_run(_REDIS_SOURCE_STEP_NAME), cwd=root, env=env)
+
+    assert result.returncode != 0, "an empty download must fail the step"
+    assert "missing or empty" in result.stdout + result.stderr
+
+
+def test_bundle_workflow_keeps_sha256sum_manifests_relative_to_the_download_dir() -> None:
+    """Systematic guard: every ``sha256sum --check`` run from inside ``downloads/``
+    must name its file relative to that directory, never ``downloads/``-prefixed."""
+    offenders: list[str] = []
+    workflow = _bundle_workflow()
+    for job_id, job in workflow["jobs"].items():
+        for step in cast(list[dict[str, Any]], job.get("steps", [])):
+            run = step.get("run")
+            if not isinstance(run, str):
+                continue
+            for line in run.splitlines():
+                if "cd downloads" in line and "sha256sum --check" in line and "downloads/" in line:
+                    offenders.append(f"{job_id}: {step.get('name', '')}: {line.strip()}")
+    assert not offenders, (
+        "sha256sum --check runs inside downloads/ but the manifest path is downloads/-prefixed: " + "; ".join(offenders)
+    )

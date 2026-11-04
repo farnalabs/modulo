@@ -151,6 +151,8 @@ jobs:
             *) echo "::error::unsupported arch: $ARCH"; exit 1 ;;
           esac
 
+          mkdir -p downloads
+
           download_and_verify() {
             local url="$1" name="$2" sha="$3"
             curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/${name}" "$url"
@@ -176,8 +178,16 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/bundle-versions.env
+          mkdir -p downloads
           curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/redis-src.tar.gz" "${REDIS_SOURCE_URL}"
-          echo "${REDIS_SOURCE_SHA256}  downloads/redis-src.tar.gz" | (cd downloads && sha256sum --check --strict -)
+          if [ ! -s downloads/redis-src.tar.gz ]; then
+            echo "::error::Redis source tarball is missing or empty after download: downloads/redis-src.tar.gz"
+            exit 1
+          fi
+          # The manifest names the file RELATIVE to the directory sha256sum
+          # runs in. Keep the name bare: `cd downloads` + a `downloads/`-prefixed
+          # path looks for downloads/downloads/redis-src.tar.gz and fails.
+          echo "${REDIS_SOURCE_SHA256}  redis-src.tar.gz" | (cd downloads && sha256sum --check --strict -)
           rm -rf redis-src
           mkdir -p redis-src
           tar -xzf downloads/redis-src.tar.gz -C redis-src --strip-components=1

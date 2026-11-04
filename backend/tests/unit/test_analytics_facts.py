@@ -739,6 +739,16 @@ class TestRecordFactForTerminalFailedRun:
 # ---------------------------------------------------------------------------
 
 
+_METRICS_HANDLE_NAMES = (
+    "_facts_write_failed_total",
+    "_backfill_last_run_ts",
+    "_backfill_rows",
+    "_reconcile_alert_total",
+    "_retention_lag",
+    "_facts_skip_non_pg_total",
+)
+
+
 @pytest.fixture(autouse=True)
 def _reset_metrics_handles() -> None:
     # Reset before AND after each test.  The handles live as module globals and
@@ -752,14 +762,7 @@ def _reset_metrics_handles() -> None:
 
 
 def _clear_metrics_handles() -> None:
-    for name in (
-        "_facts_write_failed_total",
-        "_backfill_last_run_ts",
-        "_backfill_rows",
-        "_reconcile_alert_total",
-        "_retention_lag",
-        "_facts_skip_non_pg_total",
-    ):
+    for name in _METRICS_HANDLE_NAMES:
         setattr(metrics_mod, name, None)
 
 
