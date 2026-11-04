@@ -2,11 +2,13 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.mcp_server import (
+    _resume_run_after_mcp_approval,
     copy_library_primitive,
     create_pipeline,
     delete_pipeline,
@@ -872,6 +874,59 @@ class TestReviewHitl(_AuthContext):
         executor.resume.assert_awaited_once()
         assert executor.resume.await_args.kwargs["run_id"] == uuid.UUID(run_id)
         assert executor.resume.await_args.kwargs["resume_data"] == {"action": "approved", "review_id": "gate-1"}
+
+    @patch("modulo.api.routes.hitl.async_sessionmaker")
+    @patch("modulo.api.mcp_server.get_or_create_engine")
+    @patch("modulo.api.mcp_server._build_resume_executor")
+    async def test_resume_failure_restores_run_for_reconcile(
+        self,
+        mock_build_resume_executor: MagicMock,
+        mock_get_engine: MagicMock,
+        mock_sessionmaker: MagicMock,
+    ) -> None:
+        """A post-claim resume failure restores a stale F6a candidate."""
+        engine = MagicMock()
+        mock_get_engine.return_value = engine
+        state = {"status": "awaiting_human", "heartbeat_at": "fresh"}
+        executor = MagicMock()
+
+        async def resume_after_claim(**_kwargs: Any) -> None:
+            state["status"] = "running"
+            state["heartbeat_at"] = "fresh"
+            raise RuntimeError("graph compile failed")
+
+        executor.resume = AsyncMock(side_effect=resume_after_claim)
+        mock_build_resume_executor.return_value = executor
+
+        session = MagicMock()
+        session.in_transaction.return_value = True
+        session.get_bind.return_value.dialect.name = "sqlite"
+        session.info = {}
+
+        async def restore_row(*args: Any, **kwargs: Any) -> MagicMock:
+            state["status"] = "awaiting_human"
+            state["heartbeat_at"] = "stale"
+            return MagicMock(rowcount=1)
+
+        session.execute = AsyncMock(side_effect=restore_row)
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.begin.return_value = _make_session_context(session)
+        mock_sessionmaker.return_value = MagicMock(return_value=session)
+
+        run_id = uuid.uuid4()
+        result = await _resume_run_after_mcp_approval(
+            org_id=_PLACEHOLDER_ORG_ID,
+            run_id=run_id,
+            review_id="gate-1",
+            resume_data={"action": "approved", "review_id": "gate-1"},
+        )
+
+        assert result["resume_status"] == "failed"
+        assert result["reconcile_status"] == "queued"
+        executor.resume.assert_awaited_once()
+        assert state == {"status": "awaiting_human", "heartbeat_at": "stale"}
+        assert session.execute.await_count == 1
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")

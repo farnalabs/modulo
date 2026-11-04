@@ -98,6 +98,7 @@ from modulo.api.routes.hitl import (
     _build_resume_executor,
     _capacity_deferred_response,
     _is_sandbox_capacity_exceeded,
+    _restore_failed_mcp_resume_for_reconcile,
 )
 from modulo.api.routes.oauth_metadata import protected_resource_metadata_url
 from modulo.api.routes.triggers import (
@@ -7590,15 +7591,34 @@ async def _resume_run_after_mcp_approval(
             deferred = _capacity_deferred_response(run_id, "approve")
             deferred["review_id"] = review_id
             return deferred
-        _log.exception("mcp.review_hitl.approve_resume_failed", extra={"run_id": str(run_id)})
+        try:
+            restored = await _restore_failed_mcp_resume_for_reconcile(
+                engine=get_or_create_engine(get_settings()),
+                org_id=org_id,
+                run_id=run_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            restored = False
+            _log.exception("mcp.review_hitl.approve_resume_reconcile_restore_failed", extra={"run_id": str(run_id)})
+        _log.exception(
+            "mcp.review_hitl.approve_resume_failed",
+            extra={"run_id": str(run_id), "reconcile_restored": restored},
+        )
+        recovery_detail = (
+            "The reconciliation sweep will retry the resume."
+            if restored
+            else "Automatic recovery could not restore the run for reconciliation; operator intervention is required."
+        )
         return {
             "status": "approved",
             "review_id": review_id,
             "run_id": str(run_id),
             "resume_status": "failed",
+            "reconcile_status": "queued" if restored else "failed",
             "detail": (
-                "Approval recorded, but resuming the pipeline failed. The decision is committed; "
-                "the reconciliation sweep retries the resume while the run remains awaiting."
+                f"Approval recorded, but resuming the pipeline failed. The decision is committed; {recovery_detail}"
             ),
         }
     return {"status": "approved", "review_id": review_id, "run_id": str(run_id)}

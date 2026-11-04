@@ -42,13 +42,14 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
-from typing import Any, Literal, NoReturn
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal, NoReturn, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, nullslast, select
+from sqlalchemy import func, nullslast, select, update
 from sqlalchemy.exc import PendingRollbackError, ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
@@ -106,7 +107,7 @@ from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
-from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, Run
+from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_ACTIONABLE_RUN_STATUSES, Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.settings import get_settings
@@ -320,6 +321,44 @@ def _is_sandbox_capacity_exceeded(exc: BaseException) -> bool:
     preserve the same mapping without importing the pipeline engine directly.
     """
     return isinstance(exc, SandboxCapacityExceededError)
+
+
+async def _restore_failed_mcp_resume_for_reconcile(
+    *,
+    engine: AsyncEngine,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> bool:
+    """Return a failed inline HITL resume to the F6a reconcile state.
+
+    ``PipelineExecutor.resume`` claims the run as ``running`` before loading
+    setup and compiling the graph. A failure after that claim cannot be left
+    with a fresh heartbeat: dispatcher_reconcile deliberately ignores a fresh
+    running row, so the durable approval would be stranded. This fenced repair
+    preserves the committed decision while making the row an explicit
+    ``awaiting_human`` resume candidate with a stale heartbeat and the SAQ
+    dispatcher identity expected by F6a.
+    """
+    stale_seconds = max(1, int(get_settings().saq_job_heartbeat) * 2)
+    stale_heartbeat = datetime.now(UTC) - timedelta(seconds=stale_seconds)
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        result = await session.execute(
+            update(Run)
+            .where(
+                Run.id == run_id,
+                Run.organisation_id == org_id,
+                Run.status == "running",
+            )
+            .values(
+                status=AWAITING_HUMAN_STATUS,
+                heartbeat_at=stale_heartbeat,
+                dispatcher="saq",
+                completed_at=None,
+            )
+        )
+    return bool(cast(Any, result).rowcount == 1)
 
 
 def _capacity_deferred_response(run_id: uuid.UUID, action: str) -> dict[str, str]:
