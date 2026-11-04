@@ -1822,6 +1822,47 @@ class TestListNotificationDeliveriesEdgeCases(AuthContext):
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
+    async def test_bare_date_to_is_exclusive_next_day_bound(
+        self, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        rows_result = MagicMock()
+        rows_result.all.return_value = []
+        count_result = MagicMock()
+        count_result.scalar.return_value = 0
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[rows_result, count_result])
+        mock_session.return_value = make_session_context(session)
+
+        result = await list_notification_deliveries(date_to="2026-11-04")
+
+        assert result["total"] == 0
+        query = session.execute.call_args_list[0].args[0]
+        compiled = query.compile()
+        assert "<" in str(query)
+        assert compiled.params["created_at_1"] == datetime(2026, 11, 5, tzinfo=UTC)
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_offsetless_date_to_is_normalized_to_utc(
+        self, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        rows_result = MagicMock()
+        rows_result.all.return_value = []
+        count_result = MagicMock()
+        count_result.scalar.return_value = 0
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[rows_result, count_result])
+        mock_session.return_value = make_session_context(session)
+
+        result = await list_notification_deliveries(date_to="2026-11-04T12:30:00")
+
+        assert result["total"] == 0
+        query = session.execute.call_args_list[0].args[0]
+        compiled = query.compile()
+        assert compiled.params["created_at_1"].tzinfo is UTC
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
     async def test_invalid_date_from_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         result = await list_notification_deliveries(date_from="nope")

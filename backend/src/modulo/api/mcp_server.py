@@ -28,7 +28,7 @@ import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from datetime import date as _date
 from decimal import Decimal
 from typing import Any, NamedTuple, ParamSpec, cast
@@ -2391,7 +2391,10 @@ def _parse_iso8601_param(value: str | None, field: str) -> tuple[datetime | None
     if value is None:
         return None, None
     try:
-        return datetime.fromisoformat(value), None
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed, None
     except ValueError:
         return None, {
             "error": "validation_failed",
@@ -11284,6 +11287,7 @@ def _notification_delivery_filters(
     endpoint_uid: uuid.UUID | None,
     from_dt: datetime | None,
     to_dt: datetime | None,
+    date_to_is_bare: bool = False,
     cursor_dt: datetime | None = None,
 ) -> list[Any]:
     """Build the shared WHERE clauses for the delivery-list and count queries."""
@@ -11299,7 +11303,10 @@ def _notification_delivery_filters(
     if from_dt:
         clauses.append(NotificationDeliveryLog.created_at >= from_dt)
     if to_dt:
-        clauses.append(NotificationDeliveryLog.created_at <= to_dt)
+        if date_to_is_bare:
+            clauses.append(NotificationDeliveryLog.created_at < to_dt + timedelta(days=1))
+        else:
+            clauses.append(NotificationDeliveryLog.created_at <= to_dt)
     if cursor_dt:
         clauses.append(NotificationDeliveryLog.created_at < cursor_dt)
     return clauses
@@ -11365,6 +11372,7 @@ async def list_notification_deliveries(
         to_dt, to_err = _parse_iso8601_param(date_to, "date_to")
         if to_err:
             return to_err
+        date_to_is_bare = date_to is not None and len(date_to) == 10 and date_to[4] == "-" and date_to[7] == "-"
         cursor_dt, cursor_err = _parse_iso8601_param(cursor, "cursor")
         if cursor_err:
             return cursor_err
@@ -11401,6 +11409,7 @@ async def list_notification_deliveries(
                         endpoint_uid=endpoint_uid,
                         from_dt=from_dt,
                         to_dt=to_dt,
+                        date_to_is_bare=date_to_is_bare,
                         cursor_dt=cursor_dt,
                     ),
                 )
@@ -11418,6 +11427,7 @@ async def list_notification_deliveries(
                     endpoint_uid=endpoint_uid,
                     from_dt=from_dt,
                     to_dt=to_dt,
+                    date_to_is_bare=date_to_is_bare,
                 ),
             )
             total = (await s.execute(count_query)).scalar() or 0
