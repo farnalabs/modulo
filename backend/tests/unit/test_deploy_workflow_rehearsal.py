@@ -89,6 +89,61 @@ def _release_validator() -> Any:
     return module
 
 
+def test_promote_rebuilds_compose_bundle_from_ga_tag_and_replaces_release_assets() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["promote-compose"]
+    assert job["needs"] == "release"
+    assert job["if"] == "inputs.mode == 'promote'"
+    names = _step_names(job["steps"])
+    pull_idx = names.index("Verify the GA image is anonymously pullable")
+    package_idx = names.index("Package final GA compose release bundle")
+    sign_idx = names.index("Generate SHA256SUMS and sign the final GA manifest")
+    upload_idx = names.index("Replace GA compose assets without clobbering")
+    assert pull_idx < package_idx < sign_idx < upload_idx
+
+    pull_script = job["steps"][pull_idx]["run"]
+    assert 'docker pull "$IMAGE"' in pull_script
+    assert 'IMAGE="ghcr.io/${{ github.repository }}:v${VERSION}"' in pull_script
+    # The pull must be anonymous: a credential would let a private image look
+    # publishable and the bundle would fail on the evaluator's clean host.
+    assert 'export DOCKER_CONFIG="$EMPTY_DOCKER_CONFIG"' in pull_script
+    assert "docker login" not in pull_script
+
+    package_script = job["steps"][package_idx]["run"]
+    assert '--tag "$GA_TAG"' in package_script
+    assert '--tag "$RC_TAG"' not in package_script
+
+    sign_script = job["steps"][sign_idx]["run"]
+    assert 'sha256sum "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS' in sign_script
+    assert "RELEASE_MANIFEST.json.sig" in sign_script
+    assert "sha256sum --check SHA256SUMS" in sign_script
+
+    upload_script = job["steps"][upload_idx]["run"]
+    assert 'gh release view "$TAG"' in upload_script
+    assert 'gh release upload "$TAG"' in upload_script
+    assert "modulo-${VERSION}-compose.tar.gz" in upload_script
+
+
+def test_promote_retag_publishes_the_v_prefixed_ga_tag_the_compose_bundle_pins() -> None:
+    """The GA compose bundle pins ``vX.Y.Z``, so promotion must create that tag.
+
+    Without the v-prefixed stable tag the promoted bundle would reference an
+    image that does not exist, and the promote-mode anonymous-pull gate would
+    (correctly) fail the release. The bare semver tag stays because the Helm
+    chart's ``appVersion`` resolves to it.
+    """
+    retag = _release_job_run("Retag container images for GA")
+
+    assert '--tag "ghcr.io/$image_name:v$VERSION_NUM"' in retag
+    assert '--tag "ghcr.io/$image_name:$VERSION_NUM"' in retag
+    assert '--tag "ghcr.io/$image_name:latest"' in retag
+    # The fallback path must publish the same tag set, or a retag that degrades
+    # to pull/tag/push would silently drop the tag the GA bundle pins.
+    assert 'docker push "ghcr.io/$image_name:v$VERSION_NUM"' in retag
+    assert 'docker push "ghcr.io/$image_name:$VERSION_NUM"' in retag
+    assert 'docker push "ghcr.io/$image_name:latest"' in retag
+
+
 def test_release_signature_heredocs_compile_as_python() -> None:
     workflows = ((BUNDLE_WORKFLOW, "PYEOF"), (RELEASE_WORKFLOW, "PY"))
     for workflow_path, marker in workflows:
@@ -99,8 +154,9 @@ def test_release_signature_heredocs_compile_as_python() -> None:
             for step in job.get("steps", [])
             if "verify_signature" in step.get("run", "") and "MANIFEST_SIGNING_KEY" in step.get("run", "")
         ]
-        assert len(scripts) == 1, f"expected one signing script in {workflow_path}"
-        compile(_python_heredoc(scripts[0], marker), str(workflow_path), "exec")
+        assert scripts, f"expected at least one signing script in {workflow_path}"
+        for script in scripts:
+            compile(_python_heredoc(script, marker), str(workflow_path), "exec")
 
 
 def test_rehearsal_step_exists_before_real_migrations_per_leg() -> None:
@@ -221,6 +277,7 @@ def test_release_identity_step_passes_gh_token_to_its_gh_api_calls() -> None:
 
 #: Caller job id -> called reusable workflow, relative to the repo root.
 _INSTALLER_CALLS = (
+    ("windows-native-artifacts", "./.github/workflows/windows-artifacts.yml"),
     ("windows-installer", "./.github/workflows/windows-installer.yml"),
     ("macos-installer", "./.github/workflows/macos-installer.yml"),
 )
@@ -524,24 +581,24 @@ def test_final_release_manifest_verification_step_precedes_github_release() -> N
     assert "sha256sum --check SHA256SUMS" not in verify_script
 
 
-def test_alpha_bundle_scopes_windows_out_of_the_release_path() -> None:
-    """Alpha native targets are Linux and macOS; Windows is Beta scope.
+def test_windows_bundle_is_scoped_into_the_alpha_release_path() -> None:
+    """Windows is Alpha scope (FAR-2338): the installer feeds the manifest.
 
-    ``windows-installer.yml`` is a deliberate fail-closed placeholder, so any
-    alpha publication job whose ``needs`` includes ``windows-installer`` is
-    SKIPPED on every cut/recut and no release is ever published. The Windows
-    artefact must therefore stay out of the final manifest (SHA256SUMS,
-    ``names`` and ``components``) until Windows returns to scope — this gate
-    fails if it is re-added without re-scoping the job graph.
-
-    The manifest script now conditionally includes Windows when
-    ``inputs.include_windows=true`` (Beta path), but the Alpha path
-    (include_windows=false) must not include Windows artifacts.
+    The final manifest downloads ``windows-installer-<version>`` the moment
+    ``include_windows`` is true, so it must DEPEND on the job that produces that
+    artefact — otherwise the download races the producer and the Alpha release
+    fails with a missing-artefact error. Publication still only requires the
+    manifest, so a Windows failure surfaces as a failed manifest rather than an
+    artefact-less publication.
     """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
 
-    for job_id in ("final-release-manifest", "publish-release"):
-        assert "windows-installer" not in workflow["jobs"][job_id]["needs"]
+    # The manifest depends on the installer, gated so include_windows=false still works.
+    manifest_job = workflow["jobs"]["final-release-manifest"]
+    assert "windows-installer" in manifest_job["needs"]
+    assert "needs.windows-installer.result == 'success'" in manifest_job["if"]
+    # publish-release consumes the manifest, never the installer directly.
+    assert "windows-installer" not in workflow["jobs"]["publish-release"]["needs"]
 
     final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
     final_names = _step_names(final_steps)
@@ -2775,7 +2832,11 @@ def test_release_rc_tag_callers_read_the_release_job_output() -> None:
 
 
 def test_release_workflow_has_include_windows_input() -> None:
-    """The unified release workflow must declare the include_windows input."""
+    """The unified release workflow must declare the include_windows input.
+
+    Windows is Alpha scope (FAR-2338), so the default is true: an Alpha cut
+    ships the signed Windows installer unless an operator explicitly opts out.
+    """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     # 'on' is a YAML boolean keyword; quoted key ensures correct parsing
     assert "on" in workflow
@@ -2783,8 +2844,7 @@ def test_release_workflow_has_include_windows_input() -> None:
     assert "include_windows" in inputs
     inp = inputs["include_windows"]
     assert inp["type"] == "boolean"
-    assert inp["default"] is False
-    assert "Beta" in inp["description"]
+    assert inp["default"] is True
     assert "Alpha" in inp["description"]
 
 
@@ -2798,13 +2858,18 @@ def test_windows_installer_job_gated_on_include_windows() -> None:
     assert "inputs.include_windows" in win_job["if"]
 
 
-def test_final_release_manifest_needs_excludes_windows_installer() -> None:
-    """final-release-manifest must not depend on windows-installer."""
+def test_final_release_manifest_needs_windows_installer_when_in_scope() -> None:
+    """final-release-manifest must depend on windows-installer (FAR-2338).
+
+    The manifest downloads the ``windows-installer-<version>`` artefact, so the
+    producing job has to be a dependency. The job-level ``if`` keeps the
+    ``include_windows=false`` path working when that job is skipped.
+    """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     final_job = workflow["jobs"]["final-release-manifest"]
-    assert "windows-installer" not in final_job["needs"]
-    # macos-installer must still be a dependency
+    assert "windows-installer" in final_job["needs"]
     assert "macos-installer" in final_job["needs"]
+    assert "inputs.include_windows == false || needs.windows-installer.result == 'success'" in final_job["if"]
 
 
 def test_publish_release_needs_excludes_windows_installer() -> None:
@@ -3515,6 +3580,147 @@ def test_publish_release_assertion_reports_an_unknown_state_not_absence(tmp_path
     assert "state UNKNOWN, not proof of absence" in result.stdout
     assert "is ABSENT" not in result.stdout
     assert "Publication post-condition failed" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# FAR-2338: Windows release packaging path
+# ---------------------------------------------------------------------------
+
+
+def _windows_installer_job(job_id: str) -> dict[str, Any]:
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
+    )
+    return cast(dict[str, Any], workflow["jobs"][job_id])
+
+
+def _step_by_name(job: dict[str, Any], name: str) -> dict[str, Any]:
+    steps = cast(list[dict[str, Any]], job["steps"])
+    return steps[_step_names(steps).index(name)]
+
+
+def test_windows_artifacts_is_a_reusable_workflow_building_the_release_ref() -> None:
+    """The payload producer must be callable and build the ref it is given.
+
+    Without ``workflow_call`` the release cannot ask for a payload built from
+    the RC tag, and a payload built from an unrelated main commit would ship
+    binaries that do not match the release.
+    """
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "windows-artifacts.yml").read_text(encoding="utf-8")
+    )
+    # PyYAML resolves the unquoted `on` key to boolean True (YAML 1.1).
+    triggers = workflow.get("on", workflow.get(True))
+    assert isinstance(triggers, dict)
+    inputs = triggers["workflow_call"]["inputs"]
+    assert inputs["ref"]["required"] is True
+
+    steps = cast(list[dict[str, Any]], workflow["jobs"]["download-and-verify"]["steps"])
+    checkout = next(step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@"))
+    assert checkout["with"]["ref"] == "${{ inputs.ref || github.ref }}"
+
+
+def test_windows_installer_build_consumes_the_native_payload_and_stages_with_version() -> None:
+    """The build job must consume the payload and restage it with the version.
+
+    ``modulo-runtime.json`` only carries a ``version`` when
+    ``Invoke-WindowsBundleStaging -Version`` is passed, so a payload staged
+    without it would ship a marker that cannot identify the release.
+    """
+    build = _windows_installer_job("build")
+
+    download = _step_by_name(build, "Download native Windows payload")
+    assert download["uses"].startswith("actions/download-artifact@")
+    assert download["with"]["name"] == "windows-native-artifacts"
+    assert download["if"] == "${{ inputs.mode != 'dry-run' }}"
+
+    stage = _step_by_name(build, "Stage native Windows payload")
+    stage_script = cast(str, stage["run"])
+    assert "Invoke-WindowsBundleStaging" in stage_script
+    assert "-Version $env:VERSION_NUM" in stage_script
+    assert "build-launcher.ps1" in stage_script
+
+    compile_step = _step_by_name(build, "Compile Windows installer")
+    compile_script = cast(str, compile_step["run"])
+    assert "deploy/windows/modulo.iss" in compile_script
+    assert '"/DVERSION_NUM=$env:VERSION_NUM"' in compile_script
+    assert "'/DBUNDLE_ARCH=amd64'" in compile_script
+    assert '"/DBUNDLE_DIR=$env:BUNDLE_DIR"' in compile_script
+
+
+def test_windows_installer_sign_job_reuses_the_azure_trusted_signing_contract() -> None:
+    """The sign job must reuse the existing signing flow and secret names.
+
+    Signing a different file than the one built (for example an unsigned
+    artefact that was never downloaded) would either fail closed on a missing
+    file or ship an unsigned installer with a green job.
+    """
+    sign = _windows_installer_job("sign")
+    names = _step_names(cast(list[dict[str, Any]], sign["steps"]))
+
+    download = _step_by_name(sign, "Download unsigned Windows installer")
+    assert download["with"]["name"] == "windows-installer-unsigned-${{ inputs.version }}"
+    assert names.index("Download unsigned Windows installer") < names.index("Sign with Azure Trusted Signing")
+
+    login = _step_by_name(sign, "Log in to Azure (OIDC)")
+    assert login["uses"].startswith("azure/login@")
+    assert login["with"] == {
+        "client-id": "${{ secrets.AZURE_CLIENT_ID }}",
+        "tenant-id": "${{ secrets.AZURE_TENANT_ID }}",
+        "subscription-id": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+    }
+
+    signing = _step_by_name(sign, "Sign with Azure Trusted Signing")
+    assert signing["uses"].startswith("Azure/trusted-signing-action@")
+    assert signing["with"]["signing-account-name"] == "farnasigning"
+    assert signing["with"]["certificate-profile-name"] == "farna-public-trust"
+    assert signing["with"]["files-folder"] == r"${{ runner.temp }}\\native-installer"
+
+    upload = _step_by_name(sign, "Upload signed Windows installer")
+    assert upload["with"]["name"] == "windows-installer-signed-${{ inputs.version }}"
+
+
+def test_windows_installer_attests_and_publishes_the_versioned_installer() -> None:
+    """The attested artefact name is what the release manifest downloads."""
+    attest = _windows_installer_job("attest")
+    steps = cast(list[dict[str, Any]], attest["steps"])
+
+    assert _step_by_name(attest, "Download signed Windows installer")["with"]["name"] == (
+        "windows-installer-signed-${{ inputs.version }}"
+    )
+    attest_step = next(
+        step for step in steps if str(step.get("uses", "")).startswith("actions/attest-build-provenance@")
+    )
+    assert attest_step["with"]["subject-path"] == "release-artefacts/modulo-*-windows-amd64.exe"
+
+    upload = _step_by_name(attest, "Upload attested Windows installer")
+    assert upload["with"]["name"] == "windows-installer-${{ inputs.version }}"
+
+
+def test_windows_installer_dry_run_skips_payload_build_and_publication() -> None:
+    """Dry-run keeps its contract-only rehearsal and publishes nothing."""
+
+    build = _windows_installer_job("build")
+    for name in ("Download native Windows payload", "Stage native Windows payload", "Compile Windows installer"):
+        assert _step_by_name(build, name)["if"] == "${{ inputs.mode != 'dry-run' }}"
+
+    dry_run = _step_by_name(build, "Dry-run contract summary")
+    assert dry_run["if"] == "${{ inputs.mode == 'dry-run' }}"
+    assert "test-windows-installer.ps1 -RequireIscc" in cast(str, dry_run["run"])
+
+    for job_id in ("sign", "attest"):
+        assert "inputs.mode != 'dry-run'" in cast(dict[str, Any], _windows_installer_job(job_id))["if"]
+
+
+def test_release_builds_the_windows_payload_before_the_installer() -> None:
+    """release-unified must produce the payload from the RC tag first."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    payload_job = workflow["jobs"]["windows-native-artifacts"]
+    assert payload_job["uses"] == "./.github/workflows/windows-artifacts.yml"
+    assert payload_job["with"]["ref"] == "${{ needs.release.outputs.rc_tag }}"
+    assert "inputs.include_windows" in payload_job["if"]
+
+    assert "windows-native-artifacts" in workflow["jobs"]["windows-installer"]["needs"]
 
 
 # ---------------------------------------------------------------------------

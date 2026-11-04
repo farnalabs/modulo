@@ -14,7 +14,7 @@ Checks included:
   6. uv.lock freshness for release version bump.
   7. Release-freeze marker state valid and movable (FAR-2317 tag ruleset).
   8. Windows native artifacts payload present.
-  9. Azure Trusted Signing resource / secrets presence check (values never printed!).
+  9. Azure Trusted Signing + release secret presence check, required for cut/recut (values never printed!).
  10. Branch merge-conflict check against main.
 """
 
@@ -85,16 +85,12 @@ class ReleasePreflightChecker:
         repo_root: Path | str | None = None,
         env: dict[str, str] | None = None,
         run_cmd: Callable[..., tuple[int, str, str]] | None = None,
-        windows_native_in_scope: bool = False,
     ) -> None:
         self.mode = mode.strip()
         self.version = version.strip()
         self.freeze = freeze
         self.env = env if env is not None else dict(os.environ)
         self.run_cmd = run_cmd if run_cmd is not None else default_run_cmd
-        self.windows_native_in_scope = (
-            windows_native_in_scope or self.env.get("WINDOWS_NATIVE_IN_SCOPE", "false").lower() == "true"
-        )
 
         if repo_root is not None:
             self.repo_root = Path(repo_root).resolve()
@@ -745,17 +741,16 @@ class ReleasePreflightChecker:
                 f"Windows native artifacts available from successful windows-artifacts.yml run ({run_id})",
             )
 
-        if not self.windows_native_in_scope:
-            return PreflightCheckResult(
-                name,
-                True,
-                "Windows native packaging is Beta scope, planned after Alpha (FAR-2213); does not gate an Alpha release",
-            )
-
+        # Windows native packaging is Alpha scope: the packaging job (FAR-2338)
+        # consumes this zip and real-host validation (FAR-2250) runs the installer
+        # it produces, so a cut/recut without the payload would fail later in the
+        # release instead of here.
         return PreflightCheckResult(
             name,
             False,
-            f"Windows native artifacts payload 'windows-native-artifacts' is missing; release packaging requires it for mode '{self.mode}'",
+            f"Windows native artifacts payload '{_WINDOWS_ARTIFACTS_ZIP}' is missing: no local zip and no "
+            f"successful windows-artifacts.yml run found. The Alpha Windows package (FAR-2338) requires it for "
+            f"mode '{self.mode}'; real-host validation (FAR-2250) runs the installer it produces",
         )
 
     def _find_local_windows_payload(self) -> Path | None:
@@ -813,20 +808,19 @@ class ReleasePreflightChecker:
             "AZURE_TENANT_ID",
             "AZURE_SUBSCRIPTION_ID",
         ]
-        alpha_required_secrets = [
+        release_secrets = [
             "BUNDLE_MANIFEST_SIGNING_KEY",
             "MODULO_RELEASE_PR_TOKEN",
         ]
-        missing_alpha = [s for s in alpha_required_secrets if not self.env.get(s)]
-        missing_azure = [s for s in signing_secrets if not self.env.get(s)]
 
         if self.mode == "dry-run":
-            all_missing = missing_alpha + missing_azure
+            all_missing = [s for s in signing_secrets + release_secrets if not self.env.get(s)]
             if all_missing:
                 return PreflightCheckResult(
                     name,
                     True,
-                    f"Dry-run mode: signing secrets not required (unconfigured: {', '.join(all_missing)}; values redacted)",
+                    "Dry-run mode: signing secrets not required "
+                    f"(unconfigured: {', '.join(all_missing)}; values redacted)",
                 )
             return PreflightCheckResult(
                 name,
@@ -834,36 +828,24 @@ class ReleasePreflightChecker:
                 "All signing and release secrets configured (values redacted)",
             )
 
-        if self.windows_native_in_scope:
-            all_missing = missing_alpha + missing_azure
-            if all_missing:
-                return PreflightCheckResult(
-                    name,
-                    False,
-                    f"Missing required release secret(s): {', '.join(all_missing)} (values redacted)",
-                )
-            return PreflightCheckResult(
-                name,
-                True,
-                "All required Azure Trusted Signing and release secrets are configured (values redacted)",
-            )
+        # Windows native packaging is Alpha scope (FAR-2338) and the Windows
+        # signing job (windows-installer.yml) fails closed without the Azure
+        # Trusted Signing credentials. A cut/recut that passed this gate
+        # without them would only fail later, at the signing job - the
+        # serial-unveiling failure this preflight exists to prevent. Promote
+        # does not build or sign a Windows installer, so it only requires the
+        # release secrets.
+        required = list(release_secrets)
+        if self.mode in ("cut", "recut"):
+            required = signing_secrets + release_secrets
 
-        # Alpha release: Windows native packaging is Beta scope (FAR-2213).
-        # Only bundle manifest signing key and release PR token are strictly required.
-        if missing_alpha:
+        all_missing = [s for s in required if not self.env.get(s)]
+        if all_missing:
             return PreflightCheckResult(
                 name,
                 False,
-                f"Missing required release secret(s): {', '.join(missing_alpha)} (values redacted)",
+                f"Missing required release secret(s): {', '.join(all_missing)} (values redacted)",
             )
-
-        if missing_azure:
-            return PreflightCheckResult(
-                name,
-                True,
-                f"Required release secrets configured (values redacted); Azure Trusted Signing secrets unconfigured ({', '.join(missing_azure)}; values redacted, optional for Alpha release as Windows native packaging is Beta scope)",
-            )
-
         return PreflightCheckResult(
             name,
             True,
@@ -1042,9 +1024,10 @@ class ReleasePreflightChecker:
 #:
 #: The destination is externally controlled (a CLI argument defaulting to
 #: ``$GITHUB_STEP_SUMMARY``), so it is a path-injection sink (CWE-22). Only
-#: letters, digits, dot, underscore, hyphen and the path separator are allowed:
-#: no whitespace, glob, control or shell metacharacters can survive the match.
-_SUMMARY_PATH_RE = re.compile(r"/?(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+")
+#: letters, digits, dot, underscore, hyphen, an optional drive prefix and the
+#: path separator are allowed: no whitespace, glob, control or shell
+#: metacharacters can survive the match.
+_SUMMARY_PATH_RE = re.compile(r"(?:[A-Za-z]:/)?/?(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+")
 
 
 def _safe_summary_path(value: str) -> str | None:
@@ -1055,10 +1038,18 @@ def _safe_summary_path(value: str) -> str | None:
     regex-bounded match, so the taint analyser no longer tracks the raw
     caller-supplied string into the filesystem write. Returns ``None`` when the
     path is empty or unsafe.
+
+    Windows separators are normalised to ``/`` before validation, because a
+    Windows runner's ``$GITHUB_STEP_SUMMARY`` is a backslash path (``open()``
+    accepts either separator there). Traversal is checked on the normalised
+    form so a ``..\\`` component cannot slip past a POSIX-only parts split.
     """
-    if not value or ".." in Path(value).parts:
+    if not value:
         return None
-    matched = _SUMMARY_PATH_RE.fullmatch(value)
+    normalised = value.replace("\\", "/")
+    if ".." in Path(normalised).parts:
+        return None
+    matched = _SUMMARY_PATH_RE.fullmatch(normalised)
     return matched.group(0) if matched else None
 
 
@@ -1081,12 +1072,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Release freeze flag (default: $RELEASE_FREEZE == true)",
     )
     parser.add_argument(
-        "--windows-native-in-scope",
-        action="store_true",
-        default=os.environ.get("WINDOWS_NATIVE_IN_SCOPE", "false").lower() == "true",
-        help="Windows native packaging is in scope (Beta scope; default: false)",
-    )
-    parser.add_argument(
         "--repo-root",
         default=None,
         help="Path to repository root",
@@ -1104,7 +1089,6 @@ def main(argv: list[str] | None = None) -> int:
         version=args.version,
         freeze=args.freeze,
         repo_root=args.repo_root,
-        windows_native_in_scope=args.windows_native_in_scope,
     )
 
     print(
