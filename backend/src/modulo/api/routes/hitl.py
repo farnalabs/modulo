@@ -328,16 +328,17 @@ async def _restore_failed_mcp_resume_for_reconcile(
     engine: AsyncEngine,
     org_id: uuid.UUID,
     run_id: uuid.UUID,
+    claim_token: str,
 ) -> bool:
-    """Return a failed inline HITL resume to the F6a reconcile state.
+    """Return this failed inline HITL resume to the F6a reconcile state.
 
     ``PipelineExecutor.resume`` claims the run as ``running`` before loading
     setup and compiling the graph. A failure after that claim cannot be left
     with a fresh heartbeat: dispatcher_reconcile deliberately ignores a fresh
-    running row, so the durable approval would be stranded. This fenced repair
-    preserves the committed decision while making the row an explicit
-    ``awaiting_human`` resume candidate with a stale heartbeat and the SAQ
-    dispatcher identity expected by F6a.
+    running row, so the durable approval would be stranded. The repair is
+    fenced to the exact executor claim token. A later executor/reconcile claim
+    therefore wins the row and this stale failure cannot rewrite it back to
+    ``awaiting_human``.
     """
     stale_seconds = max(1, int(get_settings().saq_job_heartbeat) * 2)
     stale_heartbeat = datetime.now(UTC) - timedelta(seconds=stale_seconds)
@@ -350,6 +351,7 @@ async def _restore_failed_mcp_resume_for_reconcile(
                 Run.id == run_id,
                 Run.organisation_id == org_id,
                 Run.status == "running",
+                Run.claim_token == claim_token,
             )
             .values(
                 status=AWAITING_HUMAN_STATUS,

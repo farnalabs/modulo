@@ -47,7 +47,10 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
 def _make_run_lookup_result(run: MagicMock | None = None) -> MagicMock:
     """A session.execute() result that resolves a run for the get_run boundary check."""
     result = MagicMock()
-    result.scalar_one_or_none.return_value = run if run is not None else MagicMock()
+    resolved_run = run if run is not None else MagicMock()
+    if not isinstance(getattr(resolved_run, "claim_token", None), str):
+        resolved_run.claim_token = "claim-current"
+    result.scalar_one_or_none.return_value = resolved_run
     return result
 
 
@@ -846,18 +849,42 @@ class TestReviewHitl(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         self._set_role_operator()
+        events: list[str] = []
         manager = MagicMock()
-        manager.approve = AsyncMock()
+
+        async def approve(*_args: Any, **_kwargs: Any) -> None:
+            events.append("decision")
+
+        manager.approve = AsyncMock(side_effect=approve)
+        run = MagicMock()
+        run.claim_token = "claim-current"
         run_result = MagicMock()
-        run_result.scalar_one_or_none.return_value = MagicMock()  # the run
+        run_result.scalar_one_or_none.return_value = run
         gate_row_result = MagicMock()
         gate_row_result.scalar_one_or_none.return_value = None
 
         mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+
+        async def close_session() -> None:
+            events.append("commit")
+
+        mock_sesh.commit = AsyncMock(side_effect=close_session)
         mock_sesh.execute = AsyncMock(side_effect=[run_result, gate_row_result])
-        mock_session.return_value = _make_session_context(mock_sesh)
+        session_context = _make_session_context(mock_sesh)
+
+        async def exit_session(*_args: Any) -> bool:
+            events.append("commit")
+            return False
+
+        session_context.__aexit__ = AsyncMock(side_effect=exit_session)
+        mock_session.return_value = session_context
         mock_manager_cls.return_value = manager
         executor = _stub_resume_executor(mock_build_resume_executor)
+
+        async def resume_after_commit(**_kwargs: Any) -> None:
+            events.append("resume")
+
+        executor.resume.side_effect = resume_after_commit
 
         run_id = str(uuid.uuid4())
         result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
@@ -874,6 +901,7 @@ class TestReviewHitl(_AuthContext):
         executor.resume.assert_awaited_once()
         assert executor.resume.await_args.kwargs["run_id"] == uuid.UUID(run_id)
         assert executor.resume.await_args.kwargs["resume_data"] == {"action": "approved", "review_id": "gate-1"}
+        assert events == ["decision", "commit", "resume"]
 
     @patch("modulo.api.routes.hitl.async_sessionmaker")
     @patch("modulo.api.mcp_server.get_or_create_engine")
@@ -920,13 +948,18 @@ class TestReviewHitl(_AuthContext):
             run_id=run_id,
             review_id="gate-1",
             resume_data={"action": "approved", "review_id": "gate-1"},
+            claim_token="claim-old",
         )
 
         assert result["resume_status"] == "failed"
         assert result["reconcile_status"] == "queued"
         executor.resume.assert_awaited_once()
+        assert executor.resume.await_args.kwargs["claim_token"] == "claim-old"
         assert state == {"status": "awaiting_human", "heartbeat_at": "stale"}
         assert session.execute.await_count == 1
+        update_statement = session.execute.await_args.args[0]
+        assert "claim_token" in str(update_statement)
+        assert "claim-old" in str(update_statement) or "claim_token" in str(update_statement)
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
@@ -946,7 +979,9 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.approve = AsyncMock()
         mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
+        run = MagicMock()
+        run.claim_token = "claim-current"
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(None)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
         executor = _stub_resume_executor(mock_build_resume_executor)

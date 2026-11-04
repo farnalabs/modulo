@@ -7558,6 +7558,7 @@ async def _resume_run_after_mcp_approval(
     run_id: uuid.UUID,
     review_id: str,
     resume_data: dict[str, Any],
+    claim_token: str,
 ) -> dict[str, Any]:
     """Resume an MCP-approved run inline (FAR-2328), mirroring REST ``approve_review``.
 
@@ -7581,7 +7582,12 @@ async def _resume_run_after_mcp_approval(
     """
     try:
         executor = _build_resume_executor(get_or_create_engine(get_settings()))
-        await executor.resume(run_id=run_id, org_id=org_id, resume_data=resume_data)
+        await executor.resume(
+            run_id=run_id,
+            org_id=org_id,
+            resume_data=resume_data,
+            claim_token=claim_token,
+        )
     except Exception as exc:
         # FAR-1831 parity: the decision committed and the resume was denied by
         # the org sandbox cap — the F6a reconcile re-dispatches once a slot
@@ -7596,6 +7602,7 @@ async def _resume_run_after_mcp_approval(
                 engine=get_or_create_engine(get_settings()),
                 org_id=org_id,
                 run_id=run_id,
+                claim_token=claim_token,
             )
         except asyncio.CancelledError:
             raise
@@ -7754,11 +7761,25 @@ async def _review_hitl_impl(
     # ``approve_review`` gets by awaiting ``_run_hitl_manager`` (which owns its
     # own ``session.begin()``) before calling ``executor.resume``.
     if action == "approve" and decision.get("status") == "approved":
+        resume_claim_token = getattr(run, "claim_token", None)
+        if not isinstance(resume_claim_token, str) or not resume_claim_token:
+            _log.error("mcp.review_hitl.approve_resume_missing_claim_token", extra={"run_id": str(rid)})
+            return {
+                **decision,
+                "run_id": str(rid),
+                "resume_status": "failed",
+                "reconcile_status": "failed",
+                "detail": (
+                    "Approval recorded, but the resume claim fence could not be established; "
+                    "operator intervention is required."
+                ),
+            }
         return await _resume_run_after_mcp_approval(
             org_id=org_id,
             run_id=rid,
             review_id=review_id,
             resume_data=resume_payload,
+            claim_token=resume_claim_token,
         )
     return decision
 
