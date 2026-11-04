@@ -17,8 +17,8 @@
             <Select
               :aria-label="$t('views.AgentOutputDiffView.select_run_a')"
               v-model="runIdA"
-              :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
-              :disabled="loadingRuns || recentRuns.length === 0"
+              :placeholder="$t('views.AgentOutputDiffView.select_recent_run')"
+              :disabled="recentRuns.length === 0"
               data-testid="diff-recent-runs-a"
               class="w-72"
   :options="recentRunOptions"
@@ -55,8 +55,8 @@
             <Select
               :aria-label="$t('views.AgentOutputDiffView.select_run_b')"
               v-model="runIdB"
-              :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
-              :disabled="loadingRuns || recentRuns.length === 0"
+              :placeholder="$t('views.AgentOutputDiffView.select_recent_run')"
+              :disabled="recentRuns.length === 0"
               data-testid="diff-recent-runs-b"
               class="w-72"
   :options="recentRunOptions"
@@ -219,7 +219,7 @@ const recentRuns = computed<RecentRun[]>(() => summaryResp.value?.recent_runs ??
 
 const { t } = useI18n()
 const runsErrorMessage = computed(() =>
-  runsError.value ? `${t('views.AgentOutputDiffView.recent_runs_load_failed')} ${runsError.value}` : '',
+  `${t('views.AgentOutputDiffView.recent_runs_load_failed')} ${runsError.value}`,
 )
 const recentRunOptions = computed(() =>
   recentRuns.value.map(run => ({
