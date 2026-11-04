@@ -1,22 +1,23 @@
 <template>
     <div data-theme="agent" class="page-wide">
-      <header class="flex items-center justify-between">
-        <PageHeader :title="$t('views.SettingsGuardrailsView.title')" :subtitle="$t('views.SettingsGuardrailsView.subtitle')" />
-        <div class="flex items-center gap-2">
-          <Button
-            v-if="isAdmin"
-            data-testid="settings-guardrails-import"
-            severity="secondary"
-            class="border-primary/30 hover:border-primary/60"
-            @click="openImportDialog"
-          >
-            {{ $t('views.SettingsGuardrailsView.import_guardrail') }}
-          </Button>
-          <Button data-testid="settings-guardrails-create" class="border-primary/30 hover:border-primary/60" @click="openCreateDialog">
-            {{ $t('views.SettingsGuardrailsView.create_guardrail') }}
-          </Button>
-        </div>
-      </header>
+      <PageHeader :title="$t('views.SettingsGuardrailsView.title')" :subtitle="$t('views.SettingsGuardrailsView.subtitle')">
+        <template #right>
+          <div class="flex items-center gap-2">
+            <Button
+              v-if="isAdmin"
+              data-testid="settings-guardrails-import"
+              severity="secondary"
+              class="border-primary/30 hover:border-primary/60"
+              @click="openImportDialog"
+            >
+              {{ $t('views.SettingsGuardrailsView.import_guardrail') }}
+            </Button>
+            <Button data-testid="settings-guardrails-create" class="border-primary/30 hover:border-primary/60" @click="openCreateDialog">
+              {{ $t('views.SettingsGuardrailsView.create_guardrail') }}
+            </Button>
+          </div>
+        </template>
+      </PageHeader>
 
       <div
         v-if="killSwitchEnabled"

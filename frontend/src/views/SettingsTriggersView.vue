@@ -2,12 +2,13 @@
   <FeatureGate feature-name="webhook_trigger" required-tier="community" show-disabled>
 
     <div data-theme="agent" class="page-wide">
-    <header class="flex items-center justify-between">
-      <PageHeader :title="$t('views.SettingsTriggersView.title')" :subtitle="$t('views.SettingsTriggersView.subtitle')" />
-      <Button data-testid="settings-triggers-create" class="border-primary/30 hover:border-primary/60" @click="openCreateDialog">
-        {{ $t('views.SettingsTriggersView.create_trigger') }}
-      </Button>
-    </header>
+    <PageHeader :title="$t('views.SettingsTriggersView.title')" :subtitle="$t('views.SettingsTriggersView.subtitle')">
+      <template #right>
+        <Button data-testid="settings-triggers-create" class="border-primary/30 hover:border-primary/60" @click="openCreateDialog">
+          {{ $t('views.SettingsTriggersView.create_trigger') }}
+        </Button>
+      </template>
+    </PageHeader>
 
     <div
       v-if="orgTriggersPaused"

@@ -1,12 +1,13 @@
 <template>
   <FeatureGate feature-name="model_backend_management" required-tier="community" show-disabled>
     <div class="page-wide">
-      <header class="flex items-center justify-between">
-        <PageHeader :title="$t('views.AdminModelBackendsView.model_backends')" :subtitle="$t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials')" />
-        <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-model-backends-add" @click="openAddForm">
-          {{ $t('views.AdminModelBackendsView.add_model_backend') }}
-        </Button>
-      </header>
+      <PageHeader :title="$t('views.AdminModelBackendsView.model_backends')" :subtitle="$t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials')">
+        <template #right>
+          <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-model-backends-add" @click="openAddForm">
+            {{ $t('views.AdminModelBackendsView.add_model_backend') }}
+          </Button>
+        </template>
+      </PageHeader>
 
       <TableSkeleton
         v-if="loading"

@@ -40,7 +40,7 @@ const tableActionsStub = {
 }
 
 const pageHeaderStub = {
-  template: '<div><h1>{{ title }}</h1></div>',
+  template: '<div><h1>{{ title }}</h1><slot name="right" /></div>',
   props: ['title', 'subtitle'],
 }
 

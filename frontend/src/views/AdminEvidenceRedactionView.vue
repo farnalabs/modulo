@@ -1,19 +1,20 @@
 <template>
   <div class="page-wide">
-    <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <PageHeader
-        :title="$t('views.AdminEvidenceRedaction.title')"
-        :subtitle="$t('views.AdminEvidenceRedaction.subtitle')"
-      />
-      <Button
-        class="border-primary/30 hover:border-primary/60"
-        data-testid="admin-evidence-redaction-add"
-        :disabled="loading || loadError !== null || saving"
-        @click="openCreate"
-      >
-        {{ $t('views.AdminEvidenceRedaction.add_rule') }}
-      </Button>
-    </header>
+    <PageHeader
+      :title="$t('views.AdminEvidenceRedaction.title')"
+      :subtitle="$t('views.AdminEvidenceRedaction.subtitle')"
+    >
+      <template #right>
+        <Button
+          class="border-primary/30 hover:border-primary/60"
+          data-testid="admin-evidence-redaction-add"
+          :disabled="loading || loadError !== null || saving"
+          @click="openCreate"
+        >
+          {{ $t('views.AdminEvidenceRedaction.add_rule') }}
+        </Button>
+      </template>
+    </PageHeader>
 
     <div
       class="mb-4 rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground"

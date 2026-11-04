@@ -2,8 +2,8 @@
   <FeatureGate feature-name="audit_viewer" required-tier="team" show-disabled>
 
     <div class="page-wide">
-    <header class="flex items-center justify-between">
-      <PageHeader :title="$t('views.AdminAuditView.audit_log')" :subtitle="$t('views.AdminAuditView.tamper_evident_event_trail')" />
+    <PageHeader :title="$t('views.AdminAuditView.audit_log')" :subtitle="$t('views.AdminAuditView.tamper_evident_event_trail')">
+      <template #right>
       <div v-if="auditSource === 'org'" class="flex items-center gap-2">
         <button
           type="button"
@@ -33,7 +33,8 @@
           {{ exportingJsonl ? $t('views.AdminAuditView.exporting') : $t('views.AdminAuditView.export_jsonl') }}
         </button>
       </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <div
       v-if="isSystemAdmin"
