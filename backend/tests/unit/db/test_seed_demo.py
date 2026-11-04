@@ -2419,12 +2419,108 @@ async def test_seed_creates_demo_system_map(session: AsyncSession, monkeypatch: 
     revision = (await session.execute(select(SystemMapRevision))).scalar_one()
     assert revision.id == system_map.published_revision_id
     assert revision.status == "published"
+    assert revision.content_json["nodes"]
+    assert {node["node_key"] for node in revision.content_json["nodes"]} == {
+        "intake",
+        "implementation",
+        "review",
+        "release",
+        "docs",
+        "improve_security",
+        "improve_architecture",
+    }
 
+    nodes = list((await session.execute(select(SystemMapNode))).scalars())
+    assert {node.node_key for node in nodes} == {revision.content_json["nodes"][i]["node_key"] for i in range(7)}
+    assert {node.node_type for node in nodes} == {"external_system", "pipeline", "improvement_loop"}
+    assert {node.pipeline_id for node in nodes if node.pipeline_id is not None}
+
+    relationships = list((await session.execute(select(SystemMapRelationship))).scalars())
+    assert {(rel.source_node_key, rel.target_node_key, rel.relationship_type) for rel in relationships} == {
+        ("intake", "implementation", "flow"),
+        ("implementation", "review", "flow"),
+        ("review", "release", "flow"),
+        ("release", "docs", "flow"),
+        ("improve_security", "implementation", "trigger"),
+        ("improve_architecture", "implementation", "trigger"),
+    }
+
+    loops = list((await session.execute(select(SystemMapLoopConfig))).scalars())
+    assert {loop.node_key for loop in loops} == {"improve_security", "improve_architecture"}
+    assert all(loop.action_pipeline_id is not None for loop in loops)
+    assert all(loop.budget_limit_usd == Decimal("50.000000") for loop in loops)
+
+
+async def test_seed_system_map_is_idempotent(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second demo seed does not duplicate the map, revision, or elements."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    first_ids = {
+        "map": (await session.execute(select(SystemMap.id))).scalar_one(),
+        "revision": (await session.execute(select(SystemMapRevision.id))).scalar_one(),
+        "nodes": {node.id for node in (await session.execute(select(SystemMapNode))).scalars()},
+        "relationships": {rel.id for rel in (await session.execute(select(SystemMapRelationship))).scalars()},
+        "loops": {loop.id for loop in (await session.execute(select(SystemMapLoopConfig))).scalars()},
+    }
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert await _count(session, SystemMap) == 1
+    assert await _count(session, SystemMapRevision) == 1
     assert await _count(session, SystemMapNode) == 7
     assert await _count(session, SystemMapRelationship) == 6
     assert await _count(session, SystemMapLoopConfig) == 2
+    assert (await session.execute(select(SystemMap.id))).scalar_one() == first_ids["map"]
+    assert (await session.execute(select(SystemMapRevision.id))).scalar_one() == first_ids["revision"]
+    assert {node.id for node in (await session.execute(select(SystemMapNode))).scalars()} == first_ids["nodes"]
+    assert {rel.id for rel in (await session.execute(select(SystemMapRelationship))).scalars()} == first_ids[
+        "relationships"
+    ]
+    assert {loop.id for loop in (await session.execute(select(SystemMapLoopConfig))).scalars()} == first_ids["loops"]
 
-    # Verify idempotency on second run
+
+async def test_seed_system_map_converges_existing_archived_revision(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing map with an archived revision gets a fresh published revision."""
     await _run_seed(session, monkeypatch, _demo_settings())
-    assert await _count(session, SystemMap) == 1
-    assert await _count(session, SystemMapRevision) == 1
+    system_map = (await session.execute(select(SystemMap))).scalar_one()
+    original_revision = (await session.execute(select(SystemMapRevision))).scalar_one()
+    system_map.default_map = False
+    system_map.published_revision_id = None
+    original_revision.status = "archived"
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    refreshed_map = (await session.execute(select(SystemMap))).scalar_one()
+    revisions = list(
+        (await session.execute(select(SystemMapRevision).order_by(SystemMapRevision.revision_number))).scalars()
+    )
+    assert refreshed_map.default_map is True
+    assert refreshed_map.published_revision_id == revisions[-1].id
+    assert len(revisions) == 2
+    assert revisions[0].status == "archived"
+    assert revisions[1].status == "published"
+    assert revisions[1].revision_number == 2
+    assert await _count(session, SystemMapNode) == 14
+    assert await _count(session, SystemMapRelationship) == 12
+    assert await _count(session, SystemMapLoopConfig) == 4
+
+
+async def test_seed_system_map_failure_is_best_effort(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A nested System Map failure is logged without aborting other demo data."""
+
+    async def _fail_elements(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated system map element failure")
+
+    monkeypatch.setattr(seed_demo_module, "_seed_demo_system_map_elements", _fail_elements)
+    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        summary = await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, SystemMap) == 0
+    assert await _count(session, SystemMapRevision) == 0
+    assert await _count(session, Run) == 20
+    assert any(record.getMessage().startswith("demo_seed.system_map_write_failed") for record in caplog.records)
