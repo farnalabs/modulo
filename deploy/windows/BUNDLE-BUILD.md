@@ -3,7 +3,9 @@
 `deploy/windows/modulo.iss` compiles a Windows installer around a **native
 Windows bundle directory**. The installer is fail-closed: it refuses to compile
 unless the bundle's required inputs are present, so a partial artifact or a
-relabelled Linux build can never be published as a Windows installer.
+relabelled Linux build can never be published as a Windows installer. Windows
+native packaging is Beta scope: the Alpha release path does not build, sign or
+publish it.
 
 ## How the bundle directory is built
 
@@ -97,10 +99,14 @@ iscc /DVERSION_NUM=0.4.0 /DBUNDLE_ARCH=amd64 /DBUNDLE_DIR=C:\bundle deploy\windo
 
 ## CI gate: `.iss` changes are compiled, not read
 
-`.github/workflows/windows-installer.yml` runs on every release invocation and on
-pull requests that touch `deploy/windows/**`, `scripts/create-windows-launcher.ps1`,
-`scripts/windows/build-launcher.ps1`, `scripts/test-windows-installer.ps1` or the
-workflow itself. All proofs live in `scripts/test-windows-installer.ps1`:
+`.github/workflows/windows-installer.yml` runs its compile and redaction gates on
+release invocations through `workflow_call` and on pull requests that touch
+`deploy/windows/**`, `scripts/create-windows-launcher.ps1`,
+`scripts/windows/build-launcher.ps1`, `scripts/test-windows-installer.ps1` or
+`.github/workflows/windows-installer.yml`. The unified release pipeline invokes
+it only when its Beta Windows input (`include_windows`) is enabled, so Windows
+native packaging is not part of the Alpha release path. All proofs live in
+`scripts/test-windows-installer.ps1`:
 
 - Job `compile-check` (Windows runner, Inno Setup 6.2.2 via Chocolatey) runs
   `./scripts/test-windows-installer.ps1 -RequireIscc`. It compiles `modulo.iss`
