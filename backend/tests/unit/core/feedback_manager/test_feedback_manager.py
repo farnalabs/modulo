@@ -25,6 +25,10 @@ _REVIEW_ID = "gate-1"
 _PRODUCING_NODE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
 
 
+def _executed_sql(mock_session: AsyncMock) -> list[str]:
+    return [str(call.args[0]) for call in mock_session.execute.await_args_list]
+
+
 @pytest.fixture
 def mock_session() -> AsyncMock:
     session = AsyncMock()
@@ -351,7 +355,9 @@ class TestGetFeedbackRecords:
         await self._setup_mock(mock_session, [sample_record], 1)
 
         result = await mgr.get_feedback_records(status="pending")
+
         assert result["total"] == 1
+        assert any("feedback_records.feedback_status" in sql for sql in _executed_sql(mock_session))
 
     async def test_returns_empty_when_no_records(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         await self._setup_mock(mock_session, [], 0)
@@ -366,8 +372,10 @@ class TestGetFeedbackRecords:
         await self._setup_mock(mock_session, [sample_record], 1)
 
         result = await mgr.get_feedback_records(pipeline_id=uuid.uuid4())
+
         assert result["total"] == 1
         assert len(result["items"]) == 1
+        assert any("feedback_records.run_id IN" in sql for sql in _executed_sql(mock_session))
 
     async def test_applies_tenant_scope_filter(
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
@@ -1101,6 +1109,7 @@ class TestGetFeedbackRecordsInbox:
         result = await mgr.get_feedback_records_inbox(handler_type="human")
 
         assert result["total"] == 1
+        assert any("feedback_records.feedback_handler_type" in sql for sql in _executed_sql(mock_session))
 
     async def test_returns_empty_when_no_records(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         await self._setup_mock(mock_session, [], 0)
@@ -1129,8 +1138,12 @@ class TestGetFeedbackRecordsInbox:
             date_from=datetime(2026, 1, 1, tzinfo=UTC),
             date_to=datetime(2026, 12, 31, tzinfo=UTC),
         )
+
         assert result["total"] == 1
         assert len(result["items"]) == 1
+        sql = " ".join(_executed_sql(mock_session))
+        assert "feedback_records.created_at >=" in sql
+        assert "feedback_records.created_at <=" in sql
 
     async def test_includes_pipeline_map(
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
