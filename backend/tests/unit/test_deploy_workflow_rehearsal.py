@@ -1969,6 +1969,7 @@ freeze_marker() {
 }
 freeze_marker
 if [[ "${1:-}" == login ]]; then
+  if [[ " $* " == *" --password-stdin "* ]]; then cat >/dev/null; fi
   printf 'docker login marker\\n' >> "$HARNESS_DIR/publication-markers"
   exit 0
 fi
@@ -2006,7 +2007,9 @@ git -C "$ROOT" rev-parse -q --verify refs/heads/release-freeze >/dev/null 2>&1 |
 }
 printf 'freeze-present:helm\\n' >> "$HARNESS_DIR/publication-markers"
 case "${1:-}" in
-  registry) printf 'helm login marker\\n' >> "$HARNESS_DIR/publication-markers" ;;
+  registry)
+    if [[ " $* " == *" --password-stdin "* ]]; then cat >/dev/null; fi
+    printf 'helm login marker\\n' >> "$HARNESS_DIR/publication-markers" ;;
   package)
     destination=""
     version=""
