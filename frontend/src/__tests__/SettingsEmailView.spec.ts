@@ -1,55 +1,88 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
+import { usePlanStore } from '../stores/planStore'
 
-const { mockPlanStore, mockApi } = vi.hoisted(() => {
-  const ORG_ID = '00000000-0000-0000-0000-000000000001'
+const { mockApi, ORG_IDS } = vi.hoisted(() => {
+  // FAR-2368: two DISTINCT orgs. The caller is authenticated against
+  // `authenticated` (the JWT `org_id` claim); the deployment licence names
+  // `licence` (`license.org_id` in GET /api/v1/plan). Only the former may ever
+  // address an org-scoped endpoint.
+  const authenticated = '00000000-0000-0000-0000-0000000000aa'
+  const licence = '00000000-0000-0000-0000-0000000000bb'
   return {
-    mockPlanStore: {
-      orgId: ORG_ID as string | null,
-      fetchPlan: vi.fn().mockResolvedValue(undefined),
-      featureEnabled: vi.fn().mockReturnValue(true),
-      isAtMinimumTier: vi.fn().mockReturnValue(true),
-    },
+    ORG_IDS: { authenticated, licence },
     mockApi: {
       GET: vi.fn(),
       PUT: vi.fn(),
       POST: vi.fn(),
-      getAccessToken: vi.fn().mockReturnValue('mock-token'),
+      getAccessToken: vi.fn(),
     },
   }
 })
 
-vi.mock('../stores/planStore', () => ({
-  usePlanStore: () => mockPlanStore,
-}))
-
 vi.mock('../lib/api/client', () => ({
   api: mockApi,
+  getAccessToken: mockApi.getAccessToken,
 }))
 
 import SettingsEmailView from '../views/SettingsEmailView.vue'
 
-const ORG_ID = '00000000-0000-0000-0000-000000000001'
+/** The JWT the backend issues: its `org_id` claim is the AUTHENTICATED org. */
+function authToken(orgId: string | null): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+  const claims: Record<string, unknown> = { sub: 'admin@modulo.run', org_role: 'admin' }
+  if (orgId) claims.org_id = orgId
+  const body = btoa(JSON.stringify(claims))
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replace(/=+$/, '')
+  return `${header}.${body}.signature`
+}
 
-function okLoad() {
-  mockApi.GET.mockResolvedValue({
-    data: {
-      smtp_host: 'smtp.example.com',
-      smtp_port: 587,
-      smtp_username: 'user',
-      email_from: 'a@b.com',
-      smtp_timeout: 30,
-    },
-    error: undefined,
+function okLoad(emailError = false) {
+  mockApi.GET.mockImplementation((path: string) => {
+    if (path === '/api/v1/plan') {
+      return Promise.resolve({
+        data: {
+          license: { tier: 'team', org_id: ORG_IDS.licence },
+          flags: [{ name: 'email_config', currently_active: true }],
+        },
+        error: undefined,
+      })
+    }
+    if (path === '/api/v1/admin/tiers') {
+      return Promise.resolve({
+        data: { tiers: [{ tier_id: 'team', label: 'Team', rank: 1 }] },
+        error: undefined,
+      })
+    }
+    if (emailError) return Promise.reject(new Error('settings unavailable'))
+    return Promise.resolve({
+      data: {
+        smtp_host: 'smtp.example.com',
+        smtp_port: 587,
+        smtp_username: 'user',
+        email_from: 'a@b.com',
+        smtp_timeout: 30,
+      },
+      error: undefined,
+    })
   })
 }
 
-async function mountView(orgId: string | null = ORG_ID) {
-  mockPlanStore.orgId = orgId
-  mockPlanStore.fetchPlan.mockResolvedValue(undefined)
-  mockPlanStore.featureEnabled.mockReturnValue(true)
-  okLoad()
+async function preparePlanStore() {
+  setActivePinia(createPinia())
+  const planStore = usePlanStore()
+  await planStore.fetchPlan()
+  mockApi.GET.mockClear()
+  return planStore
+}
+
+async function mountView(authenticatedOrg: string | null = ORG_IDS.authenticated) {
+  mockApi.getAccessToken.mockReturnValue(authToken(authenticatedOrg))
+  await preparePlanStore()
   const wrapper = mount(SettingsEmailView)
   await flushPromises()
   await nextTick()
@@ -60,8 +93,7 @@ async function mountView(orgId: string | null = ORG_ID) {
 describe('SettingsEmailView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockPlanStore.orgId = ORG_ID
-    mockPlanStore.featureEnabled.mockReturnValue(true)
+    mockApi.getAccessToken.mockReturnValue(authToken(ORG_IDS.authenticated))
     okLoad()
   })
 
@@ -77,6 +109,62 @@ describe('SettingsEmailView', () => {
     await flushPromises()
     await nextTick()
     expect(wrapper.text()).toContain('Organisation ID not available')
+  })
+
+  // FAR-2368 regression: the load/save/test endpoints all authorise the caller
+  // against the org in the PATH. The target org must be the authenticated org
+  // from the JWT, never the licence's org — on staging the licence named a
+  // different org, so the view addressed another org's settings and the backend
+  // correctly answered 403 "requires 'operator' role in target organisation".
+  it('targets the authenticated org on load, save and test even when the licence names another org', async () => {
+    mockApi.PUT.mockResolvedValue({ data: { ok: true }, error: undefined })
+    mockApi.POST.mockResolvedValue({ data: { ok: true, message: 'sent' }, error: undefined })
+
+    const wrapper = await mountView()
+    await wrapper.find('[data-testid="settings-email-save"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="settings-email-test"]').trigger('click')
+    await flushPromises()
+
+    // The plan payload's licence org is a real, different org in this test.
+    expect(usePlanStore().orgId).toBe(ORG_IDS.licence)
+
+    // READ: email-settings is fetched for the authenticated org.
+    expect(mockApi.GET).toHaveBeenCalledWith('/api/v1/admin/org/{org_id}/email-settings', {
+      params: { path: { org_id: ORG_IDS.authenticated } },
+    })
+
+    // UPDATE: same target org, and the real EmailSettingsUpdate payload shape
+    // (backend `admin_email.EmailSettingsUpdate`).
+    expect(mockApi.PUT).toHaveBeenCalledWith('/api/v1/admin/org/{org_id}/email-settings', {
+      params: { path: { org_id: ORG_IDS.authenticated } },
+      body: {
+        smtp_host: 'smtp.example.com',
+        smtp_port: 587,
+        smtp_username: 'user',
+        smtp_password: '',
+        email_from: 'a@b.com',
+        smtp_timeout: 30,
+        clear_password: false,
+      },
+    })
+
+    // TEST-SEND: same target org again.
+    expect(mockApi.POST).toHaveBeenCalledWith('/api/v1/admin/org/{org_id}/email-settings/test', {
+      params: { path: { org_id: ORG_IDS.authenticated } },
+      body: { to: 'test@example.com' },
+    })
+
+    // The licence's org is never addressed on any of the three paths.
+    expect(mockApi.GET).not.toHaveBeenCalledWith(expect.anything(), {
+      params: { path: { org_id: ORG_IDS.licence } },
+    })
+    expect(mockApi.PUT).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      params: { path: { org_id: ORG_IDS.licence } },
+    }))
+    expect(mockApi.POST).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      params: { path: { org_id: ORG_IDS.licence } },
+    }))
   })
 
   it('saves settings successfully and sends clear_password: false', async () => {
@@ -111,7 +199,9 @@ describe('SettingsEmailView', () => {
 
   it('shows a failure when organisation cannot be determined on save', async () => {
     const wrapper = await mountView()
-    mockPlanStore.orgId = null
+    // The form renders from a valid session, then the token loses its org
+    // claim (e.g. an opaque/expired token) before the save is attempted.
+    mockApi.getAccessToken.mockReturnValue(authToken(null))
     await wrapper.find('[data-testid="settings-email-save"]').trigger('click')
     await flushPromises()
     await nextTick()
@@ -156,7 +246,7 @@ describe('SettingsEmailView', () => {
 
   it('returns early when organisation id is missing on test', async () => {
     const wrapper = await mountView()
-    mockPlanStore.orgId = null
+    mockApi.getAccessToken.mockReturnValue(authToken(null))
     mockApi.POST.mockResolvedValue({ data: { ok: true }, error: undefined })
     await wrapper.find('[data-testid="settings-email-test"]').trigger('click')
     await flushPromises()
@@ -179,7 +269,9 @@ describe('SettingsEmailView', () => {
   })
 
   it('shows a load failure and allows retry', async () => {
-    mockApi.GET.mockRejectedValueOnce(new Error('settings unavailable'))
+    mockApi.getAccessToken.mockReturnValue(authToken(ORG_IDS.authenticated))
+    await preparePlanStore()
+    okLoad(true)
     const wrapper = mount(SettingsEmailView)
     await flushPromises()
     expect(wrapper.text()).toContain('settings unavailable')
