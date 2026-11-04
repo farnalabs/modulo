@@ -279,7 +279,14 @@ PERMISSIONS: dict[str, str] = {
     "admin.assistant.manage": "admin",
     "admin.rotation.manage": "admin",
     "admin.sensitive.manage": "admin",
+    # Error-dashboard reads stay at the viewer floor (a read-only/demo viewer
+    # must be able to inspect diagnostics), but mutating the incident record —
+    # acknowledge/resolve/archive and reassignment — is admin-only (FAR-2373).
+    # ``errors.manage`` is deliberately distinct from both ``errors.resolve``
+    # and ``errors.resolve_instance``: a near-miss key resolves to nothing
+    # (fail closed at import) rather than silently inheriting a sibling's role.
     "errors.resolve": "viewer",
+    "errors.manage": "admin",
     # Instance-scope error reads (FAR-1547): reading the SYSTEM_ORG_ID
     # sentinel partition (instance-level / unattributed error rows) is a
     # strict ``is_system_admin`` gate via ``require_system_permission`` —

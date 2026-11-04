@@ -332,3 +332,23 @@ def test_principal_with_no_org_claim_is_served_the_empty_list(app: FastAPI) -> N
 
     assert resp.status_code == 200, resp.text
     assert not resp.json()["permissions"]
+
+
+def test_error_reads_and_error_mutations_are_split_in_the_registry() -> None:
+    """FAR-2373: error reads stay viewer, incident-record mutations are admin.
+
+    The dashboard read keys remain at the viewer floor (a demo/read-only viewer
+    must be able to inspect diagnostics), while ``errors.manage`` gates the
+    PATCH mutation surface and is admin-only. Asserted against the raw registry
+    AND the effective-name projection the SPA nav resolves, so a role flipped on
+    either side of the split fails here.
+    """
+    assert PERMISSIONS["errors.resolve"] == "viewer"
+    assert PERMISSIONS["errors.manage"] == "admin"
+
+    viewer_names = _effective_permission_names("viewer", is_system_admin=False)
+    assert "errors.resolve" in viewer_names
+    assert "errors.manage" not in viewer_names
+
+    admin_names = _effective_permission_names("admin", is_system_admin=False)
+    assert "errors.manage" in admin_names
