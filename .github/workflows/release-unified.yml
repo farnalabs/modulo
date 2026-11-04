@@ -1653,7 +1653,19 @@ jobs:
   final-release-manifest:
     name: Generate final release manifest
     needs: [release, bundle, macos-installer, windows-installer]
-    if: (inputs.mode == 'cut' || inputs.mode == 'recut') && (inputs.include_windows == false || needs.windows-installer.result == 'success')
+    # `windows-installer` is intentionally skipped on the default Alpha path.
+    # `always()` makes that skipped need visible to this condition, while every
+    # required job remains explicitly fail-closed: release, bundle and macOS
+    # must succeed, and Windows must succeed when opted in (or be skipped when
+    # it is intentionally out of scope).
+    if: >-
+      always() &&
+      (inputs.mode == 'cut' || inputs.mode == 'recut') &&
+      needs.release.result == 'success' &&
+      needs.bundle.result == 'success' &&
+      needs.macos-installer.result == 'success' &&
+      ((inputs.include_windows && needs.windows-installer.result == 'success') ||
+       (!inputs.include_windows && needs.windows-installer.result == 'skipped'))
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
     permissions:
