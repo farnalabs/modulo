@@ -18,6 +18,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _CHART = _REPO_ROOT / "deploy" / "helm" / "modulo"
 _TEMPLATE = _CHART / "templates" / "redis-deployment.yaml"
 _HELPERS = _CHART / "templates" / "_helpers.tpl"
+_README = _REPO_ROOT / "deploy" / "helm" / "modulo" / "README.md"
 
 
 def _template_text() -> str:
@@ -86,6 +87,14 @@ def test_helm_embedded_redis_auth_runtime_wiring() -> None:
         assert base64.b64encode(b"runtime-test-password").decode() in rendered
     else:
         assert shutil.which("helm") is None
+
+
+def test_helm_readme_local_kind_command_supplies_redis_auth() -> None:
+    readme = _README.read_text(encoding="utf-8")
+    local_kind = readme.split("## Local Development (kind)", maxsplit=1)[1].split("## Upgrade", maxsplit=1)[0]
+
+    assert "--set redis.embedded=true" in local_kind
+    assert "--set redis.password=replace-with-a-development-password" in local_kind
 
 
 def test_helm_redis_policy_only_evicts_ttl_bearing_keys() -> None:

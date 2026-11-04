@@ -286,6 +286,7 @@ kind create cluster --name modulo-dev
 # Deploy with embedded Redis (requires two Postgres roles: admin + app)
 helm install modulo ./deploy/helm/modulo \
   --set redis.embedded=true \
+  --set redis.password=replace-with-a-development-password \
   --set postgres.host=host.docker.internal \
   --set postgres.password=changeme \
   --set postgres.username=modulo_app \
