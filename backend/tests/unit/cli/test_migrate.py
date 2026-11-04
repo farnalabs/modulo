@@ -28,6 +28,7 @@ from modulo.cli.migrate import (
     _write_jsonl,
     cli,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 from tests.unit.cli.conftest import MockModel
 
 # ── Pure function tests (no mocking needed) ──────────────────────────────────
@@ -689,6 +690,7 @@ class TestImportOrgData:
         # begin_nested() must return an async context manager (not the coroutine
         # an AsyncMock attribute would return) for `async with` to work.
         session = AsyncMock()
+        configure_permissive_session(session)
 
         class _Nested:
             async def __aenter__(self) -> AsyncMock:

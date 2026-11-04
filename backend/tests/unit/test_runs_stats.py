@@ -21,11 +21,13 @@ from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import _get_dialect_name, _percentile, get_run_heatmap, get_run_stats
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _make_session(dialect: str) -> AsyncMock:
     """AsyncSession mock whose ``get_bind()`` reports the given dialect."""
     session = AsyncMock(spec=AsyncSession)
+    configure_permissive_session(session)
     bind = MagicMock()
     bind.dialect.name = dialect
 

@@ -26,6 +26,7 @@ from modulo.core.cleanup_jobs import webhook_dedup_cleanup as webhook_dedup_modu
 from modulo.core.cleanup_jobs.trigger_events_cleanup import cleanup_old_trigger_events
 from modulo.core.cleanup_jobs.webhook_dedup_cleanup import cleanup_old_webhook_events
 from modulo.db.models.trigger_event import TriggerEvent
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,7 @@ def make_session(ids: list[uuid.UUID] | None = None) -> AsyncMock:
     is non-empty a second ``execute`` returns a DELETE result with a rowcount.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     select_result = MagicMock()
     select_result.scalars.return_value.all.return_value = ids or []
     if ids:

@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.unit.api.mock_session import configure_permissive_session
 from tests.unit.rate_limiter.helpers import make_settings
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -49,6 +50,7 @@ def _authz_result() -> MagicMock:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

@@ -49,6 +49,7 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.collection_install import CollectionInstall
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.schema import Schema
+from tests.unit.api.mock_session import configure_permissive_session
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -85,6 +86,7 @@ def _session(
     execute_side_effect: object | None = None,
 ) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
 
     async def _get(model, obj_id, **_kwargs):
         return (get_map or {}).get((model, obj_id))

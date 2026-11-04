@@ -12,6 +12,7 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from tests.bdd.conftest import ORG_ID, USER_ID, harden_session_double, make_settings
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _valid_stream_payload() -> dict[str, Any]:
@@ -115,6 +116,7 @@ def _engine_db_double(chat_session: Any) -> AsyncMock:
     no-op AsyncMocks.
     """
     engine_db = AsyncMock()
+    configure_permissive_session(engine_db)
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

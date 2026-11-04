@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from tests.unit.api.mock_session import configure_permissive_session
 from tests.unit.notifier.conftest import begin_context
 
 from modulo.api.dependencies import _get_engine, get_db_session
@@ -33,6 +34,7 @@ def _make_settings() -> Settings:
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session.in_transaction = MagicMock(return_value=True)

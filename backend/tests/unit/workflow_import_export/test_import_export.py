@@ -41,6 +41,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 import yaml
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
+from tests.unit.api.mock_session import configure_permissive_session
 
 import modulo.core.workflow_import_export as mod
 from modulo.core.pipeline_engine.git_content import GitContentRefError
@@ -818,6 +819,7 @@ def _pipeline_fakes() -> dict[str, Any]:
 
 def _export_session(fakes: dict[str, Any]) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     pipeline_result = MagicMock()
     pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
     agents_result = MagicMock()
@@ -1207,6 +1209,7 @@ async def test_apply_agent_bindings_invalid_pair_warns(monkeypatch: pytest.Monke
 
 def _v2_session(fakes: dict[str, Any], *, trigger_error: bool = False, no_creator: bool = False) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     pipeline_result = MagicMock()
     pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
     agents_result = MagicMock()
@@ -1299,6 +1302,7 @@ async def test_export_pipeline_bundle_v2_author_falls_back_to_account_id(monkeyp
 
 def _v2_aux_session(fakes: dict[str, Any], *, team_error: bool = False, account_error: bool = False) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     pipeline_result = MagicMock()
     pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
     agents_result = MagicMock()

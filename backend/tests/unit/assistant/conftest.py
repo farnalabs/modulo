@@ -10,6 +10,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from tests.unit.api.mock_session import configure_permissive_session
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")
 os.environ.setdefault("SECRET_KEY", "a" * 32)
@@ -32,6 +33,7 @@ def user_id() -> uuid.UUID:
 @pytest.fixture
 def mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

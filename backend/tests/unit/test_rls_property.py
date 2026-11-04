@@ -36,6 +36,7 @@ from modulo.auth.team_rbac import (
     team_role_level,
 )
 from modulo.db.rls import _inject_tenant_filter, set_rls_org
+from tests.unit.api.mock_session import configure_permissive_session
 
 _Base = declarative_base()
 
@@ -72,6 +73,7 @@ def _org_id() -> st.SearchStrategy[uuid.UUID]:
 
 def _make_session(*, in_tx: bool = True, dialect: str = "postgresql") -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
+    configure_permissive_session(session)
     session.in_transaction.return_value = in_tx
     session.info = {}
     session.execute = AsyncMock()

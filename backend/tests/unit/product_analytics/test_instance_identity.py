@@ -22,6 +22,7 @@ from modulo.core.product_analytics.instance_identity import (
     get_secret_exists,
     rotate_secret,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,7 @@ def _make_mock_session(existing: dict[str, str] | None = None) -> AsyncMock:
     the right value for the right key.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     _stored: dict[str, str] = dict(existing) if existing else {}
     last_queried_key: list[str | None] = [None]
 

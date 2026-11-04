@@ -29,7 +29,7 @@ from sqlalchemy.exc import OperationalError
 
 from modulo.api.models.error import ErrorEventInput
 from modulo.core import dispatch
-from tests.unit.api.mock_session import configure_redis_client, make_redis_client
+from tests.unit.api.mock_session import configure_permissive_session, configure_redis_client, make_redis_client
 
 RUN_ID = "fb4b1368-68ca-4125-8091-ca8d7c25839e"
 ORG_ID = "18348064-eca3-4aa7-be96-8f6c9123efd0"
@@ -721,6 +721,7 @@ def _session_with_pipeline(pipeline: object) -> AsyncMock:
     ``session.get``, so the result's ``scalar_one_or_none`` must carry it.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.scalar_one_or_none.return_value = pipeline
     session.execute = AsyncMock(return_value=result)
