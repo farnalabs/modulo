@@ -1350,9 +1350,14 @@ jobs:
                  ;;
              esac
 
-             echo "Retagging $img ($RC_TAG -> $VERSION_NUM, latest)..."
+            # Both stable spellings are published: the v-prefixed tag is the one
+            # the GA compose bundle pins (matching the RC bundle's own v-prefix
+            # convention and the git tag identity), and the bare semver tag is
+            # what the Helm chart's appVersion resolves to.
+            echo "Retagging $img ($RC_TAG -> v$VERSION_NUM, $VERSION_NUM, latest)..."
 
             if docker buildx imagetools create \
+                --tag "ghcr.io/$image_name:v$VERSION_NUM" \
                 --tag "ghcr.io/$image_name:$VERSION_NUM" \
                 --tag "ghcr.io/$image_name:latest" \
                 "ghcr.io/$image_name:$RC_TAG"; then
@@ -1360,8 +1365,10 @@ jobs:
             else
               echo "imagetools retag failed; falling back to docker pull/tag/push..."
               docker pull "ghcr.io/$image_name:$RC_TAG"
+              docker tag "ghcr.io/$image_name:$RC_TAG" "ghcr.io/$image_name:v$VERSION_NUM"
               docker tag "ghcr.io/$image_name:$RC_TAG" "ghcr.io/$image_name:$VERSION_NUM"
               docker tag "ghcr.io/$image_name:$RC_TAG" "ghcr.io/$image_name:latest"
+              docker push "ghcr.io/$image_name:v$VERSION_NUM"
               docker push "ghcr.io/$image_name:$VERSION_NUM"
               docker push "ghcr.io/$image_name:latest"
               echo "Retagged $img via docker pull/tag/push."
@@ -2044,6 +2051,142 @@ jobs:
             exit 1
           fi
           echo "Publication verified: GitHub Release 'bundle-v${VERSION}' and bundle tag '${BUNDLE_TAG}' both exist."
+
+  # ---------------------------------------------------------------------------
+  # Final GA compose asset (promote only)
+  #
+  # The cut/recut bundle is intentionally pinned to its RC image because the
+  # stable tag does not exist yet. Promotion creates that stable tag, so the GA
+  # release must replace the compose asset with a newly packaged bundle pinned
+  # to vX.Y.Z rather than carrying the RC reference forward.
+  # ---------------------------------------------------------------------------
+  promote-compose:
+    name: Publish final GA compose bundle
+    needs: release
+    if: inputs.mode == 'promote'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.ga_tag }}
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Verify the GA image is anonymously pullable
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${{ github.repository }}:v${VERSION}"
+          # An EMPTY docker config directory proves the pull is anonymous: any
+          # ambient registry credential would otherwise let a private image
+          # appear publishable, and the bundle would fail on the evaluator's
+          # clean host - the exact silent failure this asset exists to prevent.
+          EMPTY_DOCKER_CONFIG="$(mktemp -d)"
+          export DOCKER_CONFIG="$EMPTY_DOCKER_CONFIG"
+          trap 'rm -rf "$EMPTY_DOCKER_CONFIG"' EXIT
+          docker pull "$IMAGE"
+          docker image inspect "$IMAGE" >/dev/null
+          echo "Verified anonymous pull of ${IMAGE}."
+
+      - name: Package final GA compose release bundle
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          GA_TAG="v${VERSION}"
+          case "$GA_TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::GA tag '${GA_TAG}' is not an immutable vX.Y.Z tag; refusing to package a GA compose bundle"; exit 1 ;;
+          esac
+          uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 \
+            python scripts/package_compose_release.py \
+            --version "$VERSION" \
+            --tag "$GA_TAG" \
+            --output-dir release-artefacts
+          test -s "release-artefacts/modulo-${VERSION}-compose.tar.gz"
+          tar -tzf "release-artefacts/modulo-${VERSION}-compose.tar.gz"
+
+      - name: Generate SHA256SUMS and sign the final GA manifest
+        env:
+          MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ -n "$MANIFEST_SIGNING_KEY" ]] || { echo '::error::manifest signing key is required'; exit 1; }
+          cd release-artefacts
+          sha256sum "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
+          cd ..
+          uv run --no-project --no-sync --no-build python - <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, "backend/src")
+          from modulo.launcher import manifest as m
+
+          root = Path("release-artefacts")
+          version = os.environ["VERSION"]
+          name = f"modulo-{version}-compose.tar.gz"
+          body = m.build_release_manifest(
+              release=f"bundle-v{version}",
+              platform="compose",
+              generated_at=os.environ.get("GITHUB_SHA", ""),
+              components={"compose": "production"},
+              artifacts=[{"name": name, "sha256": hashlib.sha256((root / name).read_bytes()).hexdigest(), "version": version}],
+          )
+          payload = json.dumps(body, indent=2, sort_keys=True).encode("utf-8")
+          signing_key = os.environ["MANIFEST_SIGNING_KEY"]
+          if len(signing_key) != 64:
+              raise SystemExit("BUNDLE_MANIFEST_SIGNING_KEY must be exactly 32-byte Ed25519 private-key hex")
+          try:
+              int(signing_key, 16)
+          except ValueError as exc:
+              raise SystemExit("BUNDLE_MANIFEST_SIGNING_KEY must contain only hexadecimal characters") from exc
+          sig = m.sign_release_bytes(payload, key_id=m._KEY_ID_CURRENT, private_key_hex=signing_key)
+          if sig["key_id"] != m._KEY_ID_CURRENT:
+              raise SystemExit("generated manifest signature used an unexpected key_id")
+          if m.verify_signature(payload, sig) != m._KEY_ID_CURRENT:
+              raise SystemExit("generated manifest signature did not verify under the expected current key_id")
+          (root / "RELEASE_MANIFEST.json").write_bytes(payload)
+          (root / "RELEASE_MANIFEST.json.sig").write_text(json.dumps(sig), encoding="utf-8")
+          print(f"final GA manifest covers {name} and verifies under key_id {sig['key_id']}")
+          PY
+          (cd release-artefacts && sha256sum --check SHA256SUMS)
+
+      - name: Replace GA compose assets without clobbering
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          ASSETS=(
+            "release-artefacts/modulo-${VERSION}-compose.tar.gz"
+            "release-artefacts/SHA256SUMS"
+            "release-artefacts/RELEASE_MANIFEST.json"
+            "release-artefacts/RELEASE_MANIFEST.json.sig"
+          )
+          for asset in "${ASSETS[@]}"; do
+            test -s "$asset"
+          done
+          # The GA release is created by the promotion step (without assets).
+          # Read it back first: a missing release is a real failure, and an
+          # existing compose asset means a previous promote partially published,
+          # which must be repaired by hand rather than silently clobbered -
+          # replacing an asset invalidates every download already checked
+          # against its manifest.
+          if ! gh release view "$TAG" --json tagName >/dev/null; then
+            echo "::error::GA release ${TAG} does not exist - refusing to upload the compose bundle to an unpublished release."
+            exit 1
+          fi
+          gh release upload "$TAG" "${ASSETS[@]}"
 
   # ---------------------------------------------------------------------------
   # PyPI package publish (promote only). This is the repository's sole live

@@ -178,6 +178,32 @@ def test_build_compose_release_end_to_end(tmp_path: Path):
     ).read_text(encoding="utf-8")
 
 
+def _pinned_modulo_image(tarball_path: Path) -> str:
+    with tarfile.open(tarball_path, "r:gz") as tar:
+        handle = tar.extractfile("docker-compose.prod.yml")
+        assert handle is not None
+        compose = yaml.safe_load(handle.read().decode("utf-8"))
+    image: str = compose["services"]["modulo"]["image"]
+    return image
+
+
+def test_build_compose_release_distinguishes_rc_and_ga_image_pins(tmp_path: Path) -> None:
+    """Cut/recut pin the RC tag; promote must pin the GA tag.
+
+    The two modes produce a DIFFERENT image reference from the same version, so
+    a promote that reused the cut bundle would ship an RC-pinned compose file
+    under the GA release name.
+    """
+    rc_image = _pinned_modulo_image(
+        build_compose_release(version="0.5.1", tag="v0.5.1-rc2", output_dir=tmp_path / "rc")
+    )
+    ga_image = _pinned_modulo_image(build_compose_release(version="0.5.1", tag="v0.5.1", output_dir=tmp_path / "ga"))
+
+    assert rc_image == "ghcr.io/farnalabs/modulo:v0.5.1-rc2"
+    assert ga_image == "ghcr.io/farnalabs/modulo:v0.5.1"
+    assert rc_image != ga_image
+
+
 def test_build_compose_release_derives_tag_from_version(tmp_path: Path):
     tarball_path = build_compose_release(
         version="0.5.1",

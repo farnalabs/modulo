@@ -57,6 +57,13 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.schema import Schema, SchemaVersion
+from modulo.db.models.system_map import (
+    SystemMap,
+    SystemMapLoopConfig,
+    SystemMapNode,
+    SystemMapRelationship,
+    SystemMapRevision,
+)
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
@@ -93,6 +100,12 @@ _SEED_TABLES = {
     "run_daily_facts",
     "evals",
     "eval_results",
+    # System Maps demo seeding
+    "system_maps",
+    "system_map_revisions",
+    "system_map_nodes",
+    "system_map_relationships",
+    "system_map_loop_configs",
     # FAR-1248: first-class graph edges, per-node run traces, lifecycle map.
     "pipeline_edges",
     "run_node_outputs",
@@ -2390,3 +2403,87 @@ async def test_seed_edge_convergence_records_an_edit_snapshot(
     # boot-time system write's privilege from the DEMO account's role (and it
     # crashes the SQLite unit suite outright).
     assert kwargs.get("account_id") is None, kwargs
+
+
+async def test_seed_creates_demo_system_map(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The public demo seeds a default published System Map with graph elements."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert await _count(session, SystemMap) == 1
+    system_map = (await session.execute(select(SystemMap))).scalar_one()
+    assert system_map.name == "Demo Delivery System"
+    assert system_map.default_map is True
+    assert system_map.published_revision_id is not None
+
+    assert await _count(session, SystemMapRevision) == 1
+    revision = (await session.execute(select(SystemMapRevision))).scalar_one()
+    assert revision.id == system_map.published_revision_id
+    assert revision.status == "published"
+
+    assert await _count(session, SystemMapNode) == 7
+    assert await _count(session, SystemMapRelationship) == 6
+    assert await _count(session, SystemMapLoopConfig) == 2
+
+    # Verify idempotency on second run
+    await _run_seed(session, monkeypatch, _demo_settings())
+    assert await _count(session, SystemMap) == 1
+    assert await _count(session, SystemMapRevision) == 1
+
+
+async def test_seed_converges_existing_system_map(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An existing map converges its flags and republishes when it has no revision."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    system_map = (await session.execute(select(SystemMap))).scalar_one()
+    system_map.default_map = False
+    system_map.published_revision_id = None
+    # Archive the seeded revision so the map is in the "no published revision"
+    # state the convergence branch exists to repair.
+    seeded_revision = (await session.execute(select(SystemMapRevision))).scalar_one()
+    seeded_revision.status = "archived"
+    await session.commit()
+
+    # The next boot restores default_map and publishes a successor revision.
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    await session.refresh(system_map)
+    assert system_map.default_map is True
+    revisions = list(
+        (await session.execute(select(SystemMapRevision).order_by(SystemMapRevision.revision_number))).scalars()
+    )
+    assert [rev.revision_number for rev in revisions] == [1, 2]
+    assert system_map.published_revision_id == revisions[-1].id
+    assert await _count(session, SystemMap) == 1
+
+    # Drop every revision: the no-latest-revision branch restarts at number 1.
+    system_map.published_revision_id = None
+    await session.execute(delete(SystemMapNode))
+    await session.execute(delete(SystemMapRelationship))
+    await session.execute(delete(SystemMapLoopConfig))
+    await session.execute(delete(SystemMapRevision))
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    await session.refresh(system_map)
+    revisions = list((await session.execute(select(SystemMapRevision))).scalars())
+    assert [rev.revision_number for rev in revisions] == [1]
+    assert system_map.published_revision_id == revisions[0].id
+
+
+async def test_seed_system_map_failure_is_best_effort(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A System Map element write failure is swallowed so the rest of the seed survives."""
+
+    async def _explode(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated system map element failure")
+
+    monkeypatch.setattr(seed_demo_module, "_seed_demo_system_map_elements", _explode)
+
+    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        summary = await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, SystemMap) == 0
+    assert any(record.getMessage().startswith("demo_seed.system_map_write_failed") for record in caplog.records)

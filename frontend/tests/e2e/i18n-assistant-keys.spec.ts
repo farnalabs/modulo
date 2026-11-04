@@ -4,7 +4,7 @@ test.describe('Assistant i18n Keys Regression', () => {
   test('no missing assistant i18n key warnings', { tag: "@regression" }, async ({ page, env }) => {
     const intlifyWarnings: string[] = []
     page.on('console', (msg) => {
-      if (msg.type() === 'warn' && msg.text().includes("[intlify] Not found 'assistant.")) {
+      if (msg.type() === 'warning' && msg.text().includes("[intlify] Not found 'assistant.")) {
         intlifyWarnings.push(msg.text())
       }
     })
