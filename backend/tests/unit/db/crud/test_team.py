@@ -6,11 +6,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.db.crud.base import PageResult
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 @pytest.fixture
 def mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.add = MagicMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)

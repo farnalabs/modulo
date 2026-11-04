@@ -13,6 +13,7 @@ from modulo.db.rls import (
     set_rls_org,
     set_rls_user_context,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _TENANT_KEY = "org_id"
 _TENANT_COLUMN = "organisation_id"
@@ -37,6 +38,7 @@ class EntityWithoutOrg:
 
 def _make_session(*, in_tx: bool = True, dialect: str = "postgresql", org_id: uuid.UUID | None = None) -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
+    configure_permissive_session(session)
     session.in_transaction.return_value = in_tx
     session.execute = AsyncMock()
 

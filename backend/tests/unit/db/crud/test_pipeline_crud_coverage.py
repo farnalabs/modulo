@@ -31,6 +31,7 @@ from modulo.db.crud.pipeline import (
     update_pipeline,
     validate_max_concurrent_runs,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 # ---------------------------------------------------------------------------
 # validate_max_concurrent_runs
@@ -71,6 +72,7 @@ class TestPipelineHasActiveRunsError:
 
 def _mock_session(result: MagicMock | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     res = result or MagicMock()
     session.execute = AsyncMock(return_value=res)
     session.flush = AsyncMock()

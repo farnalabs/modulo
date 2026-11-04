@@ -21,6 +21,7 @@ import pytest
 
 from modulo.db.seed import rehash_existing_user, seed_modulo_user, seed_modulo_users
 from modulo.settings import Settings
+from tests.unit.api.mock_session import configure_permissive_session
 
 _VALID_32 = "a" * 32
 _FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -79,6 +80,7 @@ def _result(
 
 def _mock_session(result: MagicMock | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.in_transaction = MagicMock(return_value=True)
     session.get_bind = MagicMock(return_value=MagicMock(dialect=MagicMock(name="postgresql")))
     session.info = {}

@@ -23,6 +23,7 @@ from modulo.db.crud.runner_probe import (
     upsert_runner_probe_cache,
 )
 from modulo.db.models.runner_probe_cache import RunnerProbeCache
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _OTHER_ORG = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -30,6 +31,7 @@ _OTHER_ORG = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()

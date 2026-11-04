@@ -30,6 +30,7 @@ from modulo.core.eval_engine.suite_run import (
 )
 from modulo.db.models import Base, Eval, EvalResult, EvalSuite
 from modulo.db.models.eval_suite_run import SuiteRun
+from tests.unit.api.mock_session import configure_permissive_session
 
 _MIGRATION_PATH = (
     Path(__file__).parents[4]
@@ -126,6 +127,7 @@ class _FakeScalarResult:
 
 def _async_session(row=None) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(return_value=_FakeScalarResult(row))
     return session
 

@@ -15,10 +15,12 @@ from sqlalchemy import select
 
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.pipeline import Pipeline
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     execute_result = MagicMock()
     execute_result.scalars.return_value.all.return_value = []
     session.execute.return_value = execute_result

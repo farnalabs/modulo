@@ -164,6 +164,7 @@ class TestSeedEvidenceRedactionCatchAll:
     @pytest.mark.asyncio
     async def test_is_idempotent_when_catch_all_row_already_present(self) -> None:
         session = AsyncMock()
+        session.add = MagicMock()
         result = MagicMock()
         result.first.return_value = (uuid.uuid4(),)
         session.execute = AsyncMock(return_value=result)

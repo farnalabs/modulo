@@ -161,6 +161,7 @@ class TestWiringThroughReplacePipelineGraph:
         edge_result.scalars.return_value = []
 
         session = AsyncMock()
+        session.add_all = MagicMock()
         session.execute = AsyncMock(side_effect=[read_result, edge_result])
 
         schemaless_node = _manual_node()

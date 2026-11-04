@@ -38,6 +38,7 @@ from modulo.db.models.run import (
     CANCEL_REASON_VALUES,
     CANCELLED_BY_SYSTEM,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _MIGRATION_NAME = "0260_run_cancel_reason"
 _MIGRATION_PATH = (
@@ -81,6 +82,7 @@ def _session_returning(run: Any) -> AsyncMock:
     result = MagicMock()
     result.scalar_one_or_none.return_value = run
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(return_value=result)
     session.flush = AsyncMock()
     return session

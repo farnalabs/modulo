@@ -32,6 +32,7 @@ from modulo.db.settings_resolver import (
     org_row_is_paused,
     resolve_schema_validator_mode,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.uuid4()
 _TRIGGER_ID = uuid.uuid4()
@@ -175,6 +176,7 @@ class TestOrgRowIsPaused:
 
 def _session_with_org_row(row: object) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.one_or_none.return_value = row
     session.execute = AsyncMock(return_value=result)
@@ -183,6 +185,7 @@ def _session_with_org_row(row: object) -> AsyncMock:
 
 def _session_raising(exc: Exception) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(side_effect=exc)
     return session
 

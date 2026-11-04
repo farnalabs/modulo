@@ -22,6 +22,7 @@ from modulo.db.repositories.locks import (
     _generic_locks,
 )
 from modulo.db.repositories.postgres import PostgresRepository
+from tests.unit.api.mock_session import configure_permissive_session
 
 _TENANT_KEY = "org_id"
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -41,6 +42,7 @@ class EntityWithoutOrg:
 
 def _make_session(*, in_tx: bool = True, dialect: str = "sqlite") -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
+    configure_permissive_session(session)
     session.in_transaction.return_value = in_tx
     session.execute = AsyncMock()
     bind = MagicMock()

@@ -26,6 +26,7 @@ from modulo.core.release_channels import (
 )
 from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
 from modulo.db.crud.pipeline_snapshot_versioning import diff_snapshots, resolve_snapshot_for_channel
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _mock_snapshot(
@@ -570,6 +571,7 @@ class TestDiffSnapshotsSemantic:
 def _channel_session(resolved: MagicMock | None) -> AsyncMock:
     """Return an AsyncMock session resolving the channel lookup to *resolved*."""
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: resolved))
     return session
 

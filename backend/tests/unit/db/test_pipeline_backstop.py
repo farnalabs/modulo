@@ -25,6 +25,7 @@ import pytest
 from modulo.api.routes.pipelines import _is_privileged
 from modulo.db.crud.pipeline import GraphWriteActor, replace_pipeline_graph
 from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
+from tests.unit.api.mock_session import configure_permissive_session
 
 _SRC_ROOT = Path(__file__).resolve().parents[3] / "src" / "modulo"
 
@@ -109,6 +110,7 @@ async def test_rollback_to_snapshot_requires_is_privileged() -> None:
 
 def _session_with_no_pipeline() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
     session.execute = AsyncMock(return_value=result)

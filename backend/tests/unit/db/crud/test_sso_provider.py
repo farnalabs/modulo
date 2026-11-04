@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit.api.mock_session import configure_permissive_session
+
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PROVIDER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _ACTOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -21,6 +23,7 @@ def mock_session() -> AsyncMock:
 @pytest.fixture
 def system_session() -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
+    configure_permissive_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

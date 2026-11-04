@@ -23,12 +23,14 @@ from modulo.db.bundled_runner_template import (
     TEMPLATE_OWNED_FIELDS,
 )
 from modulo.db.crud.environment_profile import apply_bundled_runner_template
+from tests.unit.api.mock_session import configure_permissive_session
 
 _PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.flush = AsyncMock()
     return session
 

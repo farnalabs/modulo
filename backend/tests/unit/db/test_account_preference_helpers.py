@@ -19,6 +19,7 @@ from modulo.db.crud.account import (
     set_hitl_email_preference,
     update_account_preferences,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _OTHER_UUID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -35,6 +36,7 @@ def _mock_session(account: Any | None) -> AsyncMock:
     """Mimic the REST DI session (autobegin=False): ``begin`` EXISTS but is
     NEVER invoked by the helpers themselves — the caller opens the txn."""
     session = AsyncMock()
+    configure_permissive_session(session)
     session.get = AsyncMock(return_value=account)
     session.begin = MagicMock(side_effect=AssertionError("helper must never call begin()"))
     session.flush = AsyncMock()

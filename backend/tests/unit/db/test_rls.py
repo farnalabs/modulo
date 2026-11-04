@@ -20,6 +20,7 @@ from modulo.db.rls import (
     set_rls_org,
     set_rls_user_context,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -28,6 +29,7 @@ _ORG_ROLE = "admin"
 
 def _make_session(*, in_tx: bool = True, dialect: str = "postgresql") -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
+    configure_permissive_session(session)
     session.in_transaction.return_value = in_tx
     session.execute = AsyncMock()
 

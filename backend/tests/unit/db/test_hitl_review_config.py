@@ -28,6 +28,7 @@ from modulo.db.crud.hitl_review_config import (
     resolve_review_human_only_map,
     snapshot_review_config_map,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -76,6 +77,7 @@ def _make_session(
         return result
 
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(side_effect=_execute)
     return session
 
@@ -697,6 +699,7 @@ class TestResolveGateDescriptions:
             return result
 
         session = AsyncMock()
+        configure_permissive_session(session)
         session.execute = AsyncMock(side_effect=_execute)
         return session
 
@@ -833,6 +836,7 @@ class TestResolveGateHumanOnlyMap:
             return result
 
         session = AsyncMock()
+        configure_permissive_session(session)
         session.execute = AsyncMock(side_effect=_execute)
         return session
 

@@ -22,6 +22,7 @@ from modulo.db.crud.variant_group import (
     upsert_batch_state,
 )
 from modulo.db.models.variant_batch_state import VariantBatchState
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _make_result(
@@ -46,6 +47,7 @@ def _make_result(
 
 def _make_session(result: MagicMock | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(return_value=result if result is not None else _make_result())
     session.add = MagicMock()
     session.flush = AsyncMock()

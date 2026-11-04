@@ -24,6 +24,7 @@ from modulo.db.crud.hitl_review_guard import (
 )
 from modulo.db.crud.pipeline import GraphWriteActor, _edge_to_plain_dict, replace_pipeline_graph
 from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
+from tests.unit.api.mock_session import configure_permissive_session
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -85,6 +86,7 @@ def _hitl_audits(audit: AsyncMock) -> list[Any]:
 
 def _build_session(*results: MagicMock) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     calls = list(results)
 
     async def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
