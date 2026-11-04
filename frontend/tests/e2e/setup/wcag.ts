@@ -36,6 +36,6 @@ const ACCEPTABLE_VIOLATIONS = [
 ]
 
 /** Drop the library-internal violations Modulo does not own. */
-export function filterViolations(violations: { id: string }[]) {
+export function filterViolations<T extends { id: string }>(violations: T[]): T[] {
   return violations.filter((v) => !ACCEPTABLE_VIOLATIONS.includes(v.id))
 }
