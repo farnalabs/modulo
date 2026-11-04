@@ -30,7 +30,7 @@ test.describe('Copy Pipeline - regression', () => {
     // a `.or()` across the two is a strict-mode violation (both match). Assert
     // the heading, then the hint — pinning the no-pipelines-at-all empty state
     // rather than a filter/search-empty variant.
-    await expect(page.getByText('No pipelines available', { ignoreCase: true })).toBeVisible()
-    await expect(page.getByText('Create one from the Library', { ignoreCase: true })).toBeVisible()
+    await expect(page.getByText(/no pipelines available/i)).toBeVisible()
+    await expect(page.getByText(/create one from the library/i)).toBeVisible()
   })
 })

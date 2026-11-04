@@ -20,7 +20,7 @@ test.describe('i18n Keys & SvgIcon Regression', () => {
   test('no SvgIcon warnings for Mail or File icons', { tag: "@regression" }, async ({ page, env }) => {
     const warnings: string[] = []
     page.on('console', (msg) => {
-      if (msg.type() === 'warn' && msg.text().includes('SvgIcon: unknown icon')) {
+      if (msg.type() === 'warning' && msg.text().includes('SvgIcon: unknown icon')) {
         warnings.push(msg.text())
       }
     })

@@ -1,4 +1,5 @@
-import { test, expect, loginAsAdmin, isDevModeTarget, type Page } from './setup/fixtures'
+import { test, expect, loginAsAdmin, isDevModeTarget } from './setup/fixtures'
+import type { Page } from '@playwright/test'
 
 const SAMPLE_RECORD = {
   id: 'rec-1',
