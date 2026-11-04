@@ -44,9 +44,8 @@ passes `-Version`, `version`.
 whatever main happened to produce.
 
 `.github/workflows/release-unified.yml` calls it as `windows-native-artifacts`
-(cut/recut, gated on `include_windows`, which defaults to true because Windows
-is Alpha scope), then calls `.github/workflows/windows-installer.yml` with that
-job as a dependency.
+(cut/recut, gated on `include_windows`), then calls
+`.github/workflows/windows-installer.yml` with that job as a dependency.
 
 Inside `windows-installer.yml`:
 
@@ -102,7 +101,8 @@ pull requests that touch `deploy/windows/**`, `scripts/create-windows-launcher.p
 `scripts/windows/build-launcher.ps1`, `scripts/test-windows-installer.ps1` or the
 workflow itself. All proofs live in `scripts/test-windows-installer.ps1`:
 
-- Job `compile-check` (Windows runner, Inno Setup 6.2.2 via Chocolatey) runs
+- Job `compile-check` (Windows runner, using the preinstalled Inno Setup compiler
+  when available and an unpinned Chocolatey fallback otherwise) runs
   `./scripts/test-windows-installer.ps1 -RequireIscc`. It compiles `modulo.iss`
   against fixture bundles: a bundle missing `bin\modulo.exe` (or with the
   launcher at the bundle root) **must fail**, a bundle missing
