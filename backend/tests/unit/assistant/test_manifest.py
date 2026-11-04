@@ -163,17 +163,22 @@ class TestManifestLoad:
         Pins the FAR-462 escape hatch (/admin/users is community-tier but
         admin-role-gated for nav) so it cannot widen silently to other roles.
 
-        A widened (operator+admin) community route is permitted only behind a
-        dev-only visibility gate paired with its own grant:
+        A widened community route is permitted only by an explicit policy
+        exception:
 
         - ``in_dev`` + ``library.search.in_dev`` - the retained internal
           lifecycle-map surfaces (FAR-2200); and
         - ``private_preview`` + ``system_maps_access`` - the System Maps
           authoring surfaces (FAR-2288), which deliberately use their own grant
-          separate from the lifecycle-map one.
+          separate from the lifecycle-map one; or
+        - the published System Maps reads, which are ``public`` in manifest
+          vocabulary but still require an authenticated viewer and the dedicated
+          ``system_maps.read`` permission (FAR-2363). Their backend router is
+          published-only, so this is not anonymous access.
 
-        Either way the wider role set is unreachable outside developer mode, and
-        the backend re-checks the matching grant plus developer mode.
+        Every widened route must therefore carry a matching permission gate;
+        public visibility is allowed only for the explicit published-read
+        exception, never as an anonymous route.
         """
         _reset_manifest()
         from modulo.core.manifest import load_manifest
@@ -182,11 +187,17 @@ class TestManifestLoad:
             "in_dev": "library.search.in_dev",
             "private_preview": "system_maps_access",
         }
+        published_system_map_routes = {"/system-maps", "/system-maps/:id"}
         manifest = load_manifest()
         for path, route in manifest["routes"].items():
             if route["required_tier"] != "community" or route["required_roles"] is None:
                 continue
             if route["required_roles"] == ["admin"]:
+                continue
+            if path in published_system_map_routes:
+                assert route.get("visibility") == "public"
+                assert route["required_roles"] == ["viewer", "operator", "admin"]
+                assert route.get("required_permissions") == ["system_maps.read"]
                 continue
             visibility = route.get("visibility")
             assert visibility in dev_gate_permissions, (
@@ -201,6 +212,12 @@ class TestManifestLoad:
                 f"Community route {path} with explicit roles must require exactly ['admin'] "
                 "or the dev-gated ['operator', 'admin'] set"
             )
+
+        for path in published_system_map_routes:
+            route = manifest["routes"][path]
+            assert route.get("visibility") == "public"
+            assert route["required_roles"] == ["viewer", "operator", "admin"]
+            assert route.get("required_permissions") == ["system_maps.read"]
 
     def test_admin_routes_require_admin_role(self):
         """Team-tier /admin routes require the admin org-role, except system_admin_only routes.
