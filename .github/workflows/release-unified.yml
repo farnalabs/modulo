@@ -2019,13 +2019,68 @@ jobs:
         run: |
           set -euo pipefail
           BUNDLE_TAG="bundle-v${VERSION}"
-          if git rev-parse -q --verify "refs/tags/${BUNDLE_TAG}" >/dev/null 2>&1; then
-            echo "::error::${BUNDLE_TAG} already exists - refusing to overwrite a published bundle tag."
+          RELEASE_SHA="$(git rev-parse HEAD)"
+
+          # gh release create publishes the tag itself. Treat an existing remote
+          # tag as success only when it resolves to this exact release checkout;
+          # never overwrite a published tag or collapse an unknown query failure
+          # into "absent".
+          # The peel/rc-2 discrimination below is mirrored by the post-push
+          # verification at the end of this step; keep the two in sync.
+          remote_tag_line=""
+          tag_rc=0
+          remote_tag_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}")" || tag_rc=$?
+          case "$tag_rc" in
+            0)
+              remote_tag_sha=""
+              peeled_line=""
+              peeled_rc=0
+              peeled_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}^{}")" || peeled_rc=$?
+              case "$peeled_rc" in
+                0) remote_tag_sha="${peeled_line%%$'\t'*}" ;;
+                2) remote_tag_sha="${remote_tag_line%%$'\t'*}" ;;
+                *)
+                  echo "::error::${BUNDLE_TAG} exists, but its peeled SHA could not be confirmed (git ls-remote exit ${peeled_rc}) - refusing to publish."
+                  exit 1
+                  ;;
+              esac
+              if [ "$remote_tag_sha" = "$RELEASE_SHA" ]; then
+                echo "${BUNDLE_TAG} already published by the release step at ${RELEASE_SHA}; nothing to push."
+                exit 0
+              fi
+              echo "::error::${BUNDLE_TAG} already exists and points at ${remote_tag_sha}, not release target ${RELEASE_SHA} - refusing to overwrite."
+              exit 1
+              ;;
+            2)
+              git tag -a "$BUNDLE_TAG" -m "Bundle release $BUNDLE_TAG"
+              git push origin "$BUNDLE_TAG"
+              ;;
+            *)
+              echo "::error::Could not query remote tag ${BUNDLE_TAG} (git ls-remote exit ${tag_rc}) - state UNKNOWN, refusing to publish."
+              exit 1
+              ;;
+          esac
+
+          verified_line=""
+          verify_rc=0
+          verified_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}^{}")" || verify_rc=$?
+          if [ "$verify_rc" -eq 2 ]; then
+            # A lightweight tag has no peeled ref, so re-query the full ref and
+            # use that query's rc as the verification result.
+            fallback_rc=0
+            verified_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}")" || fallback_rc=$?
+            verify_rc="$fallback_rc"
+          fi
+          if [ "$verify_rc" -ne 0 ]; then
+            echo "::error::${BUNDLE_TAG} could not be verified after push (git ls-remote exit ${verify_rc})."
             exit 1
           fi
-          git tag -a "$BUNDLE_TAG" -m "Bundle release $BUNDLE_TAG"
-          git push origin "$BUNDLE_TAG"
-          echo "Pushed $BUNDLE_TAG at $(git rev-parse --short HEAD)"
+          verified_sha="${verified_line%%$'\t'*}"
+          if [ "$verified_sha" != "$RELEASE_SHA" ]; then
+            echo "::error::${BUNDLE_TAG} resolved to ${verified_sha} after push, not release target ${RELEASE_SHA}."
+            exit 1
+          fi
+          echo "Pushed and verified $BUNDLE_TAG at $RELEASE_SHA"
 
       - name: Assert the release and bundle tag exist
         # Terminal post-condition for the "concluded success having done
