@@ -1,4 +1,4 @@
-name: "RC Validation (pen test vs app.modulo.run)"
+name: "RC Validation (pen test vs app.modulo.run + clean-host compose)"
 
 # Runs during the alpha release freeze against the LIVE production soak
 # deployment - NOT an in-process app (that is schemathesis-nightly.yml).
@@ -8,6 +8,14 @@ name: "RC Validation (pen test vs app.modulo.run)"
 # v1 scope: read-only (GET) fuzzing only. Destructive-method fuzzing against
 # the live soak would mutate real dogfood data and trigger real pipeline
 # runs/costs; it belongs against a disposable clone when that suite arrives.
+#
+# FAR-2345: `clean-host-compose` is the second gate. It validates the artefact
+# an evaluator actually downloads - the compose bundle - on a host with no
+# GitHub credentials and no docker login, i.e. an anonymous pull of the
+# immutable RC image from public GHCR followed by `docker compose up -d` and a
+# `/healthz/ready` poll. It runs BEFORE the pen test and the validation marker
+# depends on it, so a release whose published artefacts cannot be brought up by
+# a self-hoster can never be marked validated (and therefore never promoted).
 
 on:
   workflow_dispatch:
@@ -22,8 +30,173 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Clean-host anonymous deployment of the published compose bundle (FAR-2345)
+  # ---------------------------------------------------------------------------
+  clean-host-compose:
+    name: Clean-host anonymous compose deployment
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      RC_TAG: ${{ inputs.rc_tag }}
+      # Loopback port for the trial stack; the compose publishes ${PORT}:80.
+      PORT: "8080"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.rc_tag }}
+
+      - name: Confirm RC tag exists and resolve its version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git rev-parse -q --verify "refs/tags/${RC_TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag ${RC_TAG} not found."
+            exit 1
+          fi
+          case "$RC_TAG" in
+            v*-rc[0-9]*) ;;
+            *)
+              echo "::error::rc_tag '${RC_TAG}' is not an immutable vX.Y.Z-rcN tag - refusing to run a clean-host deployment against a mutable or SHA tag."
+              exit 1
+              ;;
+          esac
+          VERSION="${RC_TAG#v}"
+          VERSION="${VERSION%-rc*}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Clean-host validating ${RC_TAG} (version ${VERSION}) at $(git rev-parse --short "${RC_TAG}^{commit}")"
+
+      - name: Set up Python for the bundle packager
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+
+      - name: Package the compose bundle exactly as the release does
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same script, same arguments as release-unified.yml's
+          # "Package self-hosted compose release bundle" step: this validates
+          # the shipped artefact, not a hand-made equivalent.
+          uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 \
+            python scripts/package_compose_release.py \
+            --version "$VERSION" \
+            --tag "$RC_TAG" \
+            --output-dir "$RUNNER_TEMP/compose-bundle"
+          tar -xzf "$RUNNER_TEMP/compose-bundle/modulo-${VERSION}-compose.tar.gz" \
+            -C "$RUNNER_TEMP/compose-bundle"
+          (cd "$RUNNER_TEMP/compose-bundle" && sha256sum --check SHA256SUMS)
+
+      - name: Assert the bundle pins the immutable tag and never :latest
+        shell: bash
+        env:
+          TAG_UNDER_TEST: ${{ inputs.rc_tag }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/compose-bundle"
+          # Parse the YAML rather than grepping the raw text: the file is heavily
+          # commented and a comment can never pin an image, so a text match could
+          # both false-pass and false-fail.
+          uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 python - <<'PY'
+          import os
+          import sys
+          import yaml
+
+          tag = os.environ["TAG_UNDER_TEST"]
+          with open("docker-compose.prod.yml", encoding="utf-8") as handle:
+              compose = yaml.safe_load(handle)
+
+          pinned = compose["services"]["modulo"]["image"]
+          expected = f"ghcr.io/farnalabs/modulo:{tag}"
+          print(f"Bundled image reference: {pinned}")
+          if pinned != expected:
+              sys.exit(f"bundled compose pins {pinned!r}, expected the immutable {expected!r}")
+
+          floating = [
+              f"{name}: {service['image']}"
+              for name, service in compose["services"].items()
+              if isinstance(service.get("image"), str)
+              and service["image"].rsplit(":", 1)[-1] in {"latest", "stable"}
+          ]
+          if floating:
+              sys.exit(f"bundled compose floats on a moving tag: {floating}")
+          PY
+
+      - name: Start the stack anonymously (no docker login)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/compose-bundle"
+          # The exact operator path: the bundle ships no secret, so init-env.sh
+          # generates .env on this host (the same script an evaluator runs).
+          ./init-env.sh
+          # An empty DOCKER_CONFIG guarantees no registry credential exists, so
+          # the pull below can only succeed if the image is PUBLIC. A login the
+          # runner happens to carry would turn this into a false pass.
+          for credential_var in CR_PAT GHCR_TOKEN DOCKER_USERNAME DOCKER_PASSWORD; do
+            if [ -n "$(printenv "$credential_var" || true)" ]; then
+              echo "::error::registry credential ${credential_var} is present in this job's environment; the anonymous-pull guarantee cannot be proven here."
+              exit 1
+            fi
+          done
+          DOCKER_CONFIG="$(mktemp -d)"
+          export DOCKER_CONFIG
+          echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "$GITHUB_ENV"
+          echo "Anonymous docker config: ${DOCKER_CONFIG} (no auth.json, no credential helper)"
+          docker compose version
+          docker compose -f docker-compose.prod.yml up -d
+          docker compose -f docker-compose.prod.yml ps
+
+      - name: Poll /healthz/ready until 200 OK
+        shell: bash
+        run: |
+          set -euo pipefail
+          READY_URL="http://127.0.0.1:${PORT}/healthz/ready"
+          echo "Polling ${READY_URL}"
+          CODE=""
+          for attempt in $(seq 1 60); do
+            CODE="$(curl -s -m 10 -o "$RUNNER_TEMP/ready.json" -w '%{http_code}' "$READY_URL" || true)"
+            if [ "$CODE" = "200" ]; then
+              echo "Ready after ${attempt} attempt(s) (HTTP 200):"
+              cat "$RUNNER_TEMP/ready.json"
+              exit 0
+            fi
+            echo "Attempt ${attempt}: ${READY_URL} returned HTTP ${CODE:-<none>}; waiting..."
+            sleep 10
+          done
+          echo "::error::${READY_URL} never returned 200 OK within 10 minutes (last HTTP ${CODE:-<none>}). Dumping diagnostics:"
+          (cd "$RUNNER_TEMP/compose-bundle" && docker compose -f docker-compose.prod.yml ps) || echo "::warning::could not dump container state"
+          (cd "$RUNNER_TEMP/compose-bundle" && docker compose -f docker-compose.prod.yml logs --no-color --tail=200) || echo "::warning::could not dump container logs"
+          exit 1
+
+      - name: Tear down the trial stack
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "$RUNNER_TEMP/compose-bundle/docker-compose.prod.yml" ]; then
+            echo "No bundle to tear down."
+            exit 0
+          fi
+          cd "$RUNNER_TEMP/compose-bundle"
+          # Best-effort cleanup: a teardown failure must be visible but must not
+          # mask the outcome the gate already reported.
+          if ! docker compose -f docker-compose.prod.yml down --volumes --remove-orphans; then
+            echo "::warning::could not fully tear down the trial stack; the runner is ephemeral."
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Read-only pen test against the live RC (the pre-existing gate)
+  # ---------------------------------------------------------------------------
   pen-test:
     name: Schemathesis fuzz vs live RC
+    # FAR-2345: the validation marker is pushed by this job, so gating it on the
+    # clean-host deployment means a release is marked validated only when the
+    # downloadable artefacts actually come up for a self-hoster.
+    needs: [clean-host-compose]
     runs-on: ubicloud-standard-2
     timeout-minutes: 60
     permissions:
