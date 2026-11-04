@@ -1,5 +1,11 @@
 <template>
-  <div class="flex items-start min-h-screen overflow-x-clip">
+  <div class="flex h-screen overflow-hidden">
+    <!-- FAR-2365: the shell owns a single viewport-height scroll region. With
+         `min-h-screen` + `items-start` the <main> grew to its content height,
+         so its `overflow-auto` never produced a scrollbar and the document
+         scrolled instead — while the shell's `overflow-x-clip` trapped any
+         wider-than-viewport content. `h-screen` + `overflow-hidden` keeps the
+         chrome fixed and makes <main> the only scroller. -->
     <AppSidebar
       :is-system-admin="isSystemAdmin"
       :user-role="userRole"
@@ -21,7 +27,7 @@
          header and no top padding to reserve - `mainPaddingClass` (and the
          sidebar-mode composable that produced it) is gone. -->
     <main
-      class="flex-1 min-w-0 overflow-auto overscroll-contain bg-background relative"
+      class="flex-1 min-w-0 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain bg-background relative"
       data-main-landmark
       tabindex="-1"
     >

@@ -5883,6 +5883,9 @@ elements:
       - testid: hitl-review-toggle-expand
         type: button
         dynamic_testid: false
+      - testid: hitl-review-header-expand-spacer
+        type: element
+        dynamic_testid: false
       - testid: hitl-review-column-headers
         type: element
         dynamic_testid: false

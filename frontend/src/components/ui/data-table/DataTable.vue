@@ -9,6 +9,8 @@ export interface Column {
   sortable?: boolean
   numeric?: boolean
   width?: string
+  /** Hide the column below this Tailwind breakpoint (FAR-2365). */
+  hideBelow?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
   testid?: string
 }
 
@@ -24,6 +26,9 @@ const props = withDefaults(defineProps<{
   loading?: boolean
   loadingRows?: number
   rowClickable?: boolean
+  /** Let the table shrink to the available width from `lg` up instead of
+   *  forcing `min-w-max` horizontal scroll (FAR-2365). */
+  fit?: boolean
   initialSortColumn?: string | null
   initialSortDirection?: 'asc' | 'desc'
   newSortDirection?: 'asc' | 'desc'
@@ -32,6 +37,7 @@ const props = withDefaults(defineProps<{
   loading: false,
   loadingRows: 5,
   rowClickable: true,
+  fit: false,
   initialSortColumn: null,
   initialSortDirection: 'asc',
   newSortDirection: 'asc',
@@ -43,6 +49,20 @@ const emit = defineEmits<{
 }>()
 
 const scrollInstructionsId = `data-table-scroll-instructions-${useId()}`
+
+// Full literal class strings so Tailwind's scanner emits every breakpoint
+// variant, even though the column only names the breakpoint it hides below.
+const HIDE_BELOW_CLASS: Record<NonNullable<Column['hideBelow']>, string> = {
+  sm: 'hidden sm:table-cell',
+  md: 'hidden md:table-cell',
+  lg: 'hidden lg:table-cell',
+  xl: 'hidden xl:table-cell',
+  '2xl': 'hidden 2xl:table-cell',
+}
+
+function hideBelowClass(col: Column): string {
+  return col.hideBelow ? HIDE_BELOW_CLASS[col.hideBelow] : ''
+}
 const sortColumn = ref<string | null>(props.initialSortColumn)
 const sortDirection = ref<'asc' | 'desc'>(props.initialSortDirection)
 
@@ -116,7 +136,7 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
       tabindex="0"
       :aria-describedby="scrollInstructionsId"
     >
-      <table class="w-full min-w-max">
+      <table :class="cn('w-full min-w-max', props.fit && 'table-auto lg:min-w-0 lg:table-fixed')">
       <thead>
         <tr>
           <th
@@ -127,7 +147,9 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
               col.numeric && 'text-right tabular-nums',
               col.sortable && 'cursor-pointer select-none hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               sortColumn === col.key ? 'text-foreground' : 'text-muted-foreground',
+              hideBelowClass(col),
             )"
+            :style="col.width ? { width: col.width } : undefined"
             :tabindex="col.sortable ? 0 : undefined"
             :aria-sort="sortColumn === col.key ? (sortDirection === 'asc' ? 'ascending' : 'descending') : undefined"
             @click="col.sortable && toggleSort(col.key)"
@@ -152,7 +174,12 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
       </thead>
       <tbody v-if="loading" class="divide-y divide-border">
         <tr v-for="i in loadingRows" :key="i">
-          <td v-for="col in columns" :key="col.key" :class="cn('px-4 py-3', col.numeric && 'text-right')">
+          <td
+            v-for="col in columns"
+            :key="col.key"
+            :class="cn('px-4 py-3', col.numeric && 'text-right', hideBelowClass(col))"
+            :style="col.width ? { width: col.width } : undefined"
+          >
             <div class="h-4 animate-pulse rounded bg-muted" :style="{ width: `${30 + (i * 7) % 50}%` }" />
           </td>
         </tr>
@@ -182,7 +209,9 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
             :class="cn(
               'px-4 py-3 text-sm',
               col.numeric && 'text-right tabular-nums',
+              hideBelowClass(col),
             )"
+            :style="col.width ? { width: col.width } : undefined"
           >
             <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
               {{ row[col.key] }}
