@@ -89,6 +89,15 @@ re-enabling. See FAR-547 (error forwarders) and FAR-543 (browser monitoring)._
 - [x] Error dashboard: list groups, filter by status, view group detail, resolve a
       group, and 404 on a missing group (`error_dashboard.feature`,
       `routes/errors.py` + `db/crud/error_tracking.py`)
+- [x] Error reads and error mutations are separate permissions (FAR-2373 /
+      FAR-2374): every tenant read route requires `errors.resolve`, which viewers
+      hold, while acknowledging, resolving, archiving and reassigning a group
+      require `errors.manage` (admin-only). A viewer keeps the whole read
+      surface but no write control is actionable: the detail view disables the
+      status and assignee controls and explains why through an
+      `aria-describedby` help line plus the shared tooltip affordance
+      (`api/routes/errors.py`, `AdminErrorDetailView.vue`,
+      `__tests__/AdminErrorDetailView.spec.ts`)
 - [x] Scheduler-starvation detection (FAR-604):
       `GET /api/v1/errors/scheduler-starvation` surfaces pipelines whose
       unstarted pending runs (`status='pending'`, `started_at IS NULL`) carry a

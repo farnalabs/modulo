@@ -51,7 +51,8 @@ true with the key itself redacted). The `ModelBackendHub` (`core/model_backend_h
 runtime registry that resolves, health-checks and fails over registered backends per run,
 selecting a healthy configured fallback or rotating across the org's healthy backends,
 and provider adapters under `backend/src/modulo/model_backends/*` implement the
-`BaseChatModel` contract with per-provider configuration.
+`ModelBackendBase` contract with per-provider configuration (most wrap a
+LangChain `BaseChatModel` internally).
 
 ## Behaviours
 
@@ -89,9 +90,10 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
 - [x] Rotation semantics at run time: a health check before each run selects the primary
       when healthy, the fallback otherwise, and an all-unhealthy assignment fails the run
       with `no_healthy_backend` (`rotation.feature`)
-- [x] Per-provider adapters (openai, anthropic, and peers) share the `BaseChatModel`
-      contract with configuration validation, health checks, error handling and rate
-      limiting (`test_model_backends/*`, `model_backends/*.feature`)
+- [x] Per-provider adapters (openai, anthropic, and peers) share the
+      `ModelBackendBase` contract with configuration validation, health checks,
+      error handling and rate limiting (`test_model_backends/*`,
+      `model_backends/*.feature`)
 - [x] `POST /api/v1/model-backends/{backend_id}/health-check` re-runs the PRD 8.1 check on
       demand against the decrypted stored credential and persists the result - returning
       `healthy` / `unhealthy` (+ auth-failure detail) / `not_applicable` with `checked_at`,

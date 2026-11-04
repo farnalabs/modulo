@@ -47,9 +47,13 @@ status: covered
 `modulo apply -f <config.yaml>` applies an organisation's schemas (+ versions),
 model backends, pipelines and triggers to a live deployment from one YAML file
 (`api_version: modulo.dev/v1`), driven by `MODULO_URL` + `MODULO_API_KEY` (a
-bearer `mk_` org key). The reference routes are the product surfaces the CLI
-writes to (`/schemas`, `/admin/model-backends`, `/pipelines`,
-`/settings/triggers`); there is no dedicated CLI page in the nav. Built on the
+bearer `mk_` org key). The API routes the CLI writes to are `/api/v1/schemas`,
+`/api/v1/model-backends`, `/api/v1/pipelines`,
+`/api/v1/pipelines/{pipeline_id}/triggers` (create) and
+`/api/v1/triggers/{trigger_id}` (update); plan-time `credential_ref` validation
+also reads the org vault through the MCP `list_secrets` tool. The matching UI
+surfaces are `/admin/model-backends` and `/settings/triggers`; there is no
+dedicated CLI page in the nav. Built on the
 schemas, model-backends, pipelines and triggers features. For a copy-paste
 Terraform-style CI loop (plan on every pull request, apply on merge to `main`),
 see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-actions.md).
