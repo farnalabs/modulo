@@ -2548,7 +2548,10 @@ jobs:
     # `contains(needs.*.result, 'failure') || cancelled()` — and both of those
     # conditions already make
     # this job's guard false. `self-report-ci` cannot list itself.
-    if: github.event_name == 'pull_request' && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    # A superseded run (current-head-gate emits current=false) must not report
+    # the PR's CI stage as done for a stale SHA; `!= 'false'` keeps the report
+    # fail-open when the gate's output is unreadable.
+    if: github.event_name == 'pull_request' && !cancelled() && needs.current-head-gate.outputs.current != 'false' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     needs: [current-head-gate, changes, backend-lint, uv-lock-check, backend-test, backend-coverage, backend-non-unit, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
