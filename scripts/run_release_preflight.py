@@ -13,7 +13,7 @@ Checks included:
   5. rc_tag output defined and propagated.
   6. uv.lock freshness for release version bump.
   7. Release-freeze marker state valid and movable (FAR-2317 tag ruleset).
-  8. Windows native artifacts payload present.
+  8. Windows native artifacts payload present when Windows packaging is included.
   9. Azure Trusted Signing + release secret presence check, required for cut/recut (values never printed!).
  10. Branch merge-conflict check against main.
 """
@@ -82,6 +82,7 @@ class ReleasePreflightChecker:
         mode: str = "dry-run",
         version: str = "",
         freeze: bool = False,
+        include_windows: bool = False,
         repo_root: Path | str | None = None,
         env: dict[str, str] | None = None,
         run_cmd: Callable[..., tuple[int, str, str]] | None = None,
@@ -89,6 +90,7 @@ class ReleasePreflightChecker:
         self.mode = mode.strip()
         self.version = version.strip()
         self.freeze = freeze
+        self.include_windows = include_windows
         self.env = env if env is not None else dict(os.environ)
         self.run_cmd = run_cmd if run_cmd is not None else default_run_cmd
 
@@ -714,10 +716,16 @@ class ReleasePreflightChecker:
         )
 
     # -------------------------------------------------------------------------
-    # 8. Windows native artifacts payload present
+    # 8. Windows native artifacts payload present when included
     # -------------------------------------------------------------------------
     def check_windows_native_artifacts(self) -> PreflightCheckResult:
         name = "Windows native artifacts payload present"
+        if not self.include_windows:
+            return PreflightCheckResult(
+                name,
+                True,
+                "Windows native artifacts skipped: include_windows=false; Windows packaging is Beta scope",
+            )
         if self.mode == "dry-run":
             return PreflightCheckResult(
                 name,
@@ -741,15 +749,16 @@ class ReleasePreflightChecker:
                 f"Windows native artifacts available from successful windows-artifacts.yml run ({run_id})",
             )
 
-        # Windows native packaging is Alpha scope: the packaging job (FAR-2338)
-        # consumes this zip and real-host validation (FAR-2250) runs the installer
-        # it produces, so a cut/recut without the payload would fail later in the
-        # release instead of here.
+        # Windows native packaging is required when include_windows=true: the
+        # packaging job (FAR-2338) consumes this zip and real-host validation
+        # (FAR-2250) runs the installer
+        # it produces, so an included cut/recut without the payload would fail
+        # later in the release instead of here.
         return PreflightCheckResult(
             name,
             False,
             f"Windows native artifacts payload '{_WINDOWS_ARTIFACTS_ZIP}' is missing: no local zip and no "
-            f"successful windows-artifacts.yml run found. The Alpha Windows package (FAR-2338) requires it for "
+            f"successful windows-artifacts.yml run found. The Windows package (FAR-2338) requires it when "
             f"mode '{self.mode}'; real-host validation (FAR-2250) runs the installer it produces",
         )
 
@@ -1072,6 +1081,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Release freeze flag (default: $RELEASE_FREEZE == true)",
     )
     parser.add_argument(
+        "--include-windows",
+        action="store_true",
+        default=os.environ.get("RELEASE_INCLUDE_WINDOWS", "false").lower() == "true",
+        help="Require Windows native artifacts (default: $RELEASE_INCLUDE_WINDOWS == true)",
+    )
+    parser.add_argument(
         "--repo-root",
         default=None,
         help="Path to repository root",
@@ -1088,11 +1103,13 @@ def main(argv: list[str] | None = None) -> int:
         mode=args.mode,
         version=args.version,
         freeze=args.freeze,
+        include_windows=args.include_windows,
         repo_root=args.repo_root,
     )
 
     print(
-        f"--- Starting Release Preflight Gate (mode={checker.mode}, version={checker.version or 'unset'}) ---",
+        f"--- Starting Release Preflight Gate (mode={checker.mode}, version={checker.version or 'unset'}, "
+        f"include_windows={str(checker.include_windows).lower()}) ---",
         file=sys.stderr,
     )
 

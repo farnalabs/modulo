@@ -664,18 +664,15 @@ def test_windows_native_artifacts_dry_run_passes(tmp_path: Path):
     checker = ReleasePreflightChecker(mode="dry-run", version="0.1.0", repo_root=repo)
     res = checker.check_windows_native_artifacts()
     assert res.passed
-    assert "Dry-run mode" in res.details
+    assert "Windows native artifacts skipped" in res.details
+    assert "Beta scope" in res.details
 
 
 @pytest.mark.parametrize("mode", ["cut", "recut"])
-def test_windows_native_artifacts_payload_missing_fails_cut_and_recut(tmp_path: Path, mode: str):
-    """Windows native packaging is Alpha scope (FAR-2338 / FAR-2250).
-
-    A cut/recut with no payload must FAIL here rather than passing on a stale
-    deferral and failing later in the packaging job.
-    """
+def test_windows_native_artifacts_payload_missing_fails_when_included(tmp_path: Path, mode: str):
+    """An included Windows package must fail closed when its payload is absent."""
     repo = _make_dummy_repo(tmp_path)
-    checker = ReleasePreflightChecker(mode=mode, version="0.1.0", repo_root=repo, env={})
+    checker = ReleasePreflightChecker(mode=mode, version="0.1.0", include_windows=True, repo_root=repo, env={})
     res = checker.check_windows_native_artifacts()
     assert not res.passed
     assert "windows-native-artifacts.zip" in res.details
@@ -685,20 +682,19 @@ def test_windows_native_artifacts_payload_missing_fails_cut_and_recut(tmp_path: 
     assert "FAR-2250" in res.details
 
 
-def test_windows_native_artifacts_failure_names_the_alpha_scope_tickets(tmp_path: Path):
-    """There is no opt-out: every cut requires the Alpha payload (FAR-2338 / FAR-2250)."""
+def test_windows_native_artifacts_payload_missing_is_skipped_for_alpha(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
-    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo)
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env={})
     res = checker.check_windows_native_artifacts()
-    assert not res.passed
-    assert "FAR-2338" in res.details
-    assert "FAR-2250" in res.details
+    assert res.passed
+    assert "include_windows=false" in res.details
+    assert "Beta scope" in res.details
 
 
 def test_windows_native_artifacts_non_dry_run_passes_when_zip_exists(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
     (repo / "windows-native-artifacts.zip").write_bytes(b"dummy zip content")
-    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo)
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", include_windows=True, repo_root=repo)
     res = checker.check_windows_native_artifacts()
     assert res.passed
     assert "present locally" in res.details
@@ -1106,6 +1102,21 @@ def test_preflight_job_runs_the_aggregate_checker():
     steps = _release_workflow()["jobs"]["preflight"]["steps"]
     runs = " ".join(step.get("run", "") for step in steps)
     assert "scripts/run_release_preflight.py" in runs
+
+
+def test_preflight_passes_include_windows_to_the_real_checker():
+    step = next(
+        s for s in _release_workflow()["jobs"]["preflight"]["steps"] if "run_release_preflight.py" in s.get("run", "")
+    )
+    assert step["env"]["RELEASE_INCLUDE_WINDOWS"] == "${{ inputs.include_windows }}"
+    assert 'windows_arg="--include-windows"' in step["run"]
+    assert "$windows_arg" in step["run"]
+
+
+def test_include_windows_default_is_alpha_safe():
+    workflow = _release_workflow()
+    assert workflow["on"]["workflow_dispatch"]["inputs"]["include_windows"]["default"] is False
+    assert workflow["on"]["workflow_dispatch"]["inputs"]["include_windows"]["description"].endswith("(Beta scope)")
 
 
 def test_preflight_passes_secrets_but_never_prints_them():
