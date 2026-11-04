@@ -745,17 +745,16 @@ class ReleasePreflightChecker:
                 f"Windows native artifacts available from successful windows-artifacts.yml run ({run_id})",
             )
 
-        if not self.windows_native_in_scope:
-            return PreflightCheckResult(
-                name,
-                True,
-                "Windows native packaging is Beta scope, planned after Alpha (FAR-2213); does not gate an Alpha release",
-            )
-
+        # Windows native packaging is Alpha scope: the packaging job (FAR-2338)
+        # consumes this zip and real-host validation (FAR-2250) runs the installer
+        # it produces, so a cut/recut without the payload would fail later in the
+        # release instead of here.
         return PreflightCheckResult(
             name,
             False,
-            f"Windows native artifacts payload 'windows-native-artifacts' is missing; release packaging requires it for mode '{self.mode}'",
+            f"Windows native artifacts payload '{_WINDOWS_ARTIFACTS_ZIP}' is missing: no local zip and no "
+            f"successful windows-artifacts.yml run found. The Alpha Windows package (FAR-2338) requires it for "
+            f"mode '{self.mode}'",
         )
 
     def _find_local_windows_payload(self) -> Path | None:
@@ -848,8 +847,9 @@ class ReleasePreflightChecker:
                 "All required Azure Trusted Signing and release secrets are configured (values redacted)",
             )
 
-        # Alpha release: Windows native packaging is Beta scope (FAR-2213).
-        # Only bundle manifest signing key and release PR token are strictly required.
+        # Windows native packaging is Alpha scope: the payload check (8) already
+        # gates a cut/recut on the artifacts zip. Azure Trusted Signing is only
+        # enforced here when Windows packaging is explicitly declared in scope.
         if missing_alpha:
             return PreflightCheckResult(
                 name,
@@ -861,7 +861,7 @@ class ReleasePreflightChecker:
             return PreflightCheckResult(
                 name,
                 True,
-                f"Required release secrets configured (values redacted); Azure Trusted Signing secrets unconfigured ({', '.join(missing_azure)}; values redacted, optional for Alpha release as Windows native packaging is Beta scope)",
+                f"Required release secrets configured (values redacted); Azure Trusted Signing secrets unconfigured ({', '.join(missing_azure)}; values redacted, not required by this gate unless Windows native packaging is declared in scope)",
             )
 
         return PreflightCheckResult(
@@ -1042,9 +1042,10 @@ class ReleasePreflightChecker:
 #:
 #: The destination is externally controlled (a CLI argument defaulting to
 #: ``$GITHUB_STEP_SUMMARY``), so it is a path-injection sink (CWE-22). Only
-#: letters, digits, dot, underscore, hyphen and the path separator are allowed:
-#: no whitespace, glob, control or shell metacharacters can survive the match.
-_SUMMARY_PATH_RE = re.compile(r"/?(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+")
+#: letters, digits, dot, underscore, hyphen, an optional drive prefix and the
+#: path separator are allowed: no whitespace, glob, control or shell
+#: metacharacters can survive the match.
+_SUMMARY_PATH_RE = re.compile(r"(?:[A-Za-z]:/)?/?(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+")
 
 
 def _safe_summary_path(value: str) -> str | None:
@@ -1055,10 +1056,18 @@ def _safe_summary_path(value: str) -> str | None:
     regex-bounded match, so the taint analyser no longer tracks the raw
     caller-supplied string into the filesystem write. Returns ``None`` when the
     path is empty or unsafe.
+
+    Windows separators are normalised to ``/`` before validation, because a
+    Windows runner's ``$GITHUB_STEP_SUMMARY`` is a backslash path (``open()``
+    accepts either separator there). Traversal is checked on the normalised
+    form so a ``..\\`` component cannot slip past a POSIX-only parts split.
     """
-    if not value or ".." in Path(value).parts:
+    if not value:
         return None
-    matched = _SUMMARY_PATH_RE.fullmatch(value)
+    normalised = value.replace("\\", "/")
+    if ".." in Path(normalised).parts:
+        return None
+    matched = _SUMMARY_PATH_RE.fullmatch(normalised)
     return matched.group(0) if matched else None
 
 
@@ -1084,7 +1093,7 @@ def main(argv: list[str] | None = None) -> int:
         "--windows-native-in-scope",
         action="store_true",
         default=os.environ.get("WINDOWS_NATIVE_IN_SCOPE", "false").lower() == "true",
-        help="Windows native packaging is in scope (Beta scope; default: false)",
+        help="Require the Azure Trusted Signing secrets (Windows native packaging in scope; default: false)",
     )
     parser.add_argument(
         "--repo-root",

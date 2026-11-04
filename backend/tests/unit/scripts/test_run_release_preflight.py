@@ -8,6 +8,7 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
+import pytest
 import yaml
 
 for parent in Path(__file__).resolve().parents:
@@ -659,28 +660,36 @@ def test_release_freeze_state_fails_closed_when_freeze_query_errors(tmp_path: Pa
 # -----------------------------------------------------------------------------
 def test_windows_native_artifacts_dry_run_passes(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
+    assert not (repo / "windows-native-artifacts.zip").exists()
     checker = ReleasePreflightChecker(mode="dry-run", version="0.1.0", repo_root=repo)
     res = checker.check_windows_native_artifacts()
     assert res.passed
     assert "Dry-run mode" in res.details
 
 
-def test_windows_native_artifacts_passes_for_alpha_with_beta_scope_message(tmp_path: Path):
+@pytest.mark.parametrize("mode", ["cut", "recut"])
+def test_windows_native_artifacts_payload_missing_fails_cut_and_recut(tmp_path: Path, mode: str):
+    """Windows native packaging is Alpha scope (FAR-2338 / FAR-2250).
+
+    A cut/recut with no payload must FAIL here rather than passing on the
+    retired Beta-scope deferral (FAR-2213) and failing in the packaging job.
+    """
     repo = _make_dummy_repo(tmp_path)
-    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo)
+    checker = ReleasePreflightChecker(mode=mode, version="0.1.0", repo_root=repo, env={})
     res = checker.check_windows_native_artifacts()
-    assert res.passed
-    assert "Beta scope" in res.details
-    assert "FAR-2213" in res.details
-    assert "Alpha" in res.details
+    assert not res.passed
+    assert "windows-native-artifacts.zip" in res.details
+    assert "missing" in res.details
+    assert mode in res.details
 
 
-def test_windows_native_artifacts_fails_when_missing_and_in_scope(tmp_path: Path):
+def test_windows_native_artifacts_fails_when_missing_even_in_scope(tmp_path: Path):
+    """The explicit in-scope flag no longer decides whether the payload gates."""
     repo = _make_dummy_repo(tmp_path)
     checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, windows_native_in_scope=True)
     res = checker.check_windows_native_artifacts()
     assert not res.passed
-    assert "missing" in res.details
+    assert "windows-native-artifacts.zip" in res.details
 
 
 def test_windows_native_artifacts_non_dry_run_passes_when_zip_exists(tmp_path: Path):
@@ -723,7 +732,7 @@ def test_azure_signing_secrets_missing_azure_does_not_fail_alpha_release(tmp_pat
     res = checker.check_azure_signing_secrets()
     assert res.passed
     assert "AZURE_CLIENT_ID" in res.details
-    assert "Beta scope" in res.details
+    assert "not required by this gate" in res.details
 
 
 def test_azure_signing_secrets_cut_fails_when_missing_azure_and_windows_in_scope(tmp_path: Path):
@@ -997,6 +1006,24 @@ def test_safe_summary_path_rejects_empty_traversal_and_unsafe_characters():
     assert mod._safe_summary_path("/tmp/../escape.md") is None
     assert mod._safe_summary_path("/tmp/bad name.md") is None
     assert mod._safe_summary_path("/tmp/bad\nname.md") is None
+
+
+def test_safe_summary_path_accepts_windows_absolute_paths():
+    """A Windows runner's ``$GITHUB_STEP_SUMMARY`` is a backslash path.
+
+    ``open()`` accepts ``/`` on Windows, so the path is normalised rather than
+    rejected (the pre-existing behaviour refused to write the step summary on
+    every Windows host).
+    """
+    assert mod._safe_summary_path("C:\\Users\\runneradmin\\step_summary.md") == "C:/Users/runneradmin/step_summary.md"
+    assert mod._safe_summary_path("C:/Users/runneradmin/step_summary.md") == "C:/Users/runneradmin/step_summary.md"
+
+
+def test_safe_summary_path_rejects_windows_traversal_and_unsafe_characters():
+    assert mod._safe_summary_path("C:\\Users\\..\\..\\etc\\passwd") is None
+    assert mod._safe_summary_path("\\tmp\\..\\escape.md") is None
+    assert mod._safe_summary_path("C:\\tmp\\bad name.md") is None
+    assert mod._safe_summary_path("C:relative.md") is None
 
 
 def test_main_refuses_traversal_summary_path(tmp_path: Path, capsys):
