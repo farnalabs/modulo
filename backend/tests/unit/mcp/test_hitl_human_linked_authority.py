@@ -23,6 +23,7 @@ from modulo.auth.human_linkage import (
     LINKAGE_OAUTH_CONSENT,
     HumanLinkage,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000011")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000013")
@@ -84,6 +85,7 @@ def _linked() -> HumanLinkage:
 
 def _session_with_run(run: MagicMock, snapshot: MagicMock) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(
         side_effect=[
             _make_run_lookup_result(run),

@@ -19,6 +19,7 @@ import pytest
 
 import modulo.api.mcp_server as ms
 from modulo.api.mcp_server import get_hitl_email_alerts, set_hitl_email_alerts
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -35,6 +36,7 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
 
 def _mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=None)

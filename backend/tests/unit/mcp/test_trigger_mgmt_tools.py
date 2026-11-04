@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.mcp_server import create_trigger, list_triggers
-from tests.unit.api.mock_session import make_session_scope
+from tests.unit.api.mock_session import configure_permissive_session, make_session_scope
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -102,6 +102,7 @@ def _make_add_session(trigger_id: uuid.UUID | None = None) -> AsyncMock:
     ``add`` lets the tool build a real ``Trigger`` and return a valid id.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     generated_id = trigger_id or uuid.uuid4()
     session.add = MagicMock(side_effect=lambda obj: setattr(obj, "id", generated_id))
     # FAR-1639: the create tool computes streak_status for covered trigger

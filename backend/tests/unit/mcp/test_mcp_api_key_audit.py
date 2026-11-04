@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import modulo.api.mcp_server as ms
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -29,6 +30,7 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
 
 def _mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.get = AsyncMock(return_value=MagicMock(is_break_glass=False))
     return session
 

@@ -61,6 +61,7 @@ from modulo.api.mcp_server import (
     _validate_trigger_numbers,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
+from tests.unit.api.mock_session import configure_permissive_session
 from tests.unit.mcp.helpers import API_KEY, ORG_ID, USER_ID, AuthContext, make_session_context
 
 _TEAM = uuid.UUID("00000000-0000-0000-0000-000000000009")
@@ -69,6 +70,7 @@ _KEY_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 def _mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=None)
@@ -1198,6 +1200,7 @@ class TestApplyNodeConnectorBinding:
 
 def _session_returning_instances(rows: list[Any]) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
 
     async def _execute(_statement: Any, *_args: Any, **_kwargs: Any) -> MagicMock:
         scaler = MagicMock()

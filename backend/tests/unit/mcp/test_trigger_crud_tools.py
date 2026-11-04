@@ -11,7 +11,7 @@ from cryptography.fernet import Fernet
 
 from modulo.api.mcp_server import create_trigger, delete_trigger, get_trigger, update_trigger
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from tests.unit.api.mock_session import make_session_scope
+from tests.unit.api.mock_session import configure_permissive_session, make_session_scope
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
@@ -133,6 +133,7 @@ def _make_add_session(trigger_id: uuid.UUID | None = None) -> AsyncMock:
     (``Trigger.id`` has a Python-side ``default=uuid.uuid4`` SQLAlchemy only
     applies at flush time)."""
     session = AsyncMock()
+    configure_permissive_session(session)
     generated_id = trigger_id or uuid.uuid4()
     session.add = MagicMock(side_effect=lambda obj: setattr(obj, "id", generated_id))
     return session
