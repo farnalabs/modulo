@@ -2063,7 +2063,10 @@ jobs:
           verify_rc=0
           verified_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}^{}")" || verify_rc=$?
           if [ "$verify_rc" -eq 2 ]; then
-            verified_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}")" || verify_rc=$?
+            # A peeled lookup returns rc=2 for a lightweight tag; verify its full ref instead.
+            fallback_rc=0
+            verified_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}")" || fallback_rc=$?
+            verify_rc="$fallback_rc"
           fi
           if [ "$verify_rc" -ne 0 ]; then
             echo "::error::${BUNDLE_TAG} could not be verified after push (git ls-remote exit ${verify_rc})."

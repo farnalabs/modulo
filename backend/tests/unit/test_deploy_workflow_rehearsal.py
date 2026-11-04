@@ -3459,13 +3459,19 @@ case "$*" in
   'rev-parse HEAD') printf '%s\\n' {target} ;;
   'ls-remote --exit-code origin refs/tags/bundle-v0.1.0')
     case "$SCENARIO" in
-      annotated|lightweight|different)
+      annotated|lightweight|different|lightweight-fallback)
+        if [[ "$SCENARIO" == lightweight-fallback && ! -f {shlex.quote(str(state))} ]]; then
+          exit 2
+        fi
         tag_sha={target}
         [[ "$SCENARIO" == different ]] && tag_sha={other}
         printf '%s\\trefs/tags/bundle-v0.1.0\\n' "$tag_sha"
         exit 0
         ;;
-      absent|push-mismatch|push-unknown)
+      absent|push-mismatch|push-unknown|lightweight-fallback)
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == lightweight-fallback ]]; then
+          printf '%s\\trefs/tags/bundle-v0.1.0\\n' {target}; exit 0
+        fi
         if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-mismatch ]]; then
           printf '%s\\trefs/tags/bundle-v0.1.0\\n' {other}; exit 0
         fi
@@ -3475,10 +3481,11 @@ case "$*" in
       unknown) exit 128 ;;
     esac
     ;;
-  'ls-remote --exit-code origin refs/tags/bundle-v0.1.0^{{}}')
+      'ls-remote --exit-code origin refs/tags/bundle-v0.1.0^{{}}')
     case "$SCENARIO" in
       annotated) printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0 ;;
       different) printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {other}; exit 0 ;;
+      lightweight-fallback) exit 2 ;;
       absent)
         if [[ -f {shlex.quote(str(state))} ]]; then printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0; fi
         exit 2
@@ -3549,7 +3556,15 @@ def test_bundle_tag_absent_push_and_exact_verification_succeed(tmp_path: Path) -
 def test_bundle_tag_post_push_verification_mismatch_fails(tmp_path: Path) -> None:
     result, _ = _bundle_tag_harness(tmp_path, scenario="push-mismatch")
     assert result.returncode != 0
-    assert "could not be verified after push" in result.stdout
+    assert "resolved to" in result.stdout
+    assert "after push, not release target" in result.stdout
+
+
+def test_bundle_tag_post_push_lightweight_fallback_succeeds_without_second_push(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="lightweight-fallback")
+    assert result.returncode == 0, result.stderr
+    assert "Pushed and verified bundle-v0.1.0" in result.stdout
+    assert calls.read_text(encoding="utf-8").splitlines().count("push origin bundle-v0.1.0") == 1
 
 
 def test_bundle_tag_post_push_verification_unknown_fails(tmp_path: Path) -> None:
