@@ -371,12 +371,15 @@ test.describe('Notification bell dropdown viewport anchoring (FAR-1926)', { tag:
     await expectNotClipped(page, dropdown)
   })
 
-  test('mobile drawer header: the dropdown stays inside a 360px viewport', { tag: '@regression' }, async ({ page, env }) => {
+  test('retired-flag mobile chrome: the dropdown stays inside a 360px viewport', { tag: '@regression' }, async ({ page, env }) => {
     // Cold Vite dev compile on first navigation can blow the 30s local budget.
     test.setTimeout(90_000)
     await bootWithChrome(page, env, { rail: false })
-    // Flag-OFF mobile chrome: the hamburger header + slide-in drawer.
-    await expect(page.locator('[aria-controls="mobile-sidebar"]')).toBeVisible()
+    // FAR-2234 retired the hamburger header + slide-in drawer. The icon rail is
+    // now unconditional, even when the retired mobile_sidebar_rail flag reads
+    // false — and the bell's viewport anchoring must still hold in that case.
+    await expect(page.locator('[aria-controls="mobile-sidebar"]')).toHaveCount(0)
+    await expect(page.locator('[aria-label="Expand sidebar"]')).toBeVisible()
 
     const { dropdown, box } = await openBell(page)
     expectWithinViewport(box, NARROW.width)
