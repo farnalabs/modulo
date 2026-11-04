@@ -261,6 +261,24 @@ describe('PipelineListView', () => {
     expect(classes).not.toContain('h-screen')
   })
 
+  it('leaves intentional whitespace below the centralized page header before the content (FAR-2364)', async () => {
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: {
+        plugins: [router],
+        stubs: { ErrorAlert: true, FolderTree: true },
+      },
+    })
+
+    // The header is the flex sibling above the folder/content row and does not
+    // sit inside a `.page-wide` container, so it owns its own bottom padding.
+    // Without it the folder tree and table butted straight against the subtitle.
+    const header = wrapper.get('header.page-header')
+    expect(header.classes()).toContain('pb-6')
+    expect(header.classes()).toContain('pt-6')
+  })
+
   it('renders the search bar with correct testid', async () => {
     await router.push('/pipelines')
     await router.isReady()

@@ -55,6 +55,9 @@ from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _CODE_ERRORS_RESOLVE = "errors.resolve"
+# FAR-2373: reads stay viewer-accessible (``errors.resolve``), while mutating
+# an error group (acknowledge/resolve/archive, reassignment) is admin-only.
+_CODE_ERRORS_MANAGE = "errors.manage"
 _CODE_ERRORS_RESOLVE_INSTANCE = "errors.resolve_instance"
 _CODE_ERRORS_INGEST_ERRORS = "errors.ingest_errors"
 _CODE_ERRORS_INGEST_ERRORS_PUBLIC = "errors.ingest_errors_public"
@@ -1021,7 +1024,7 @@ async def patch_error_group(
     error_id: uuid.UUID,
     req: ErrorGroupUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_ERRORS_RESOLVE),
+    principal: TenantPrincipal = require_permission(_CODE_ERRORS_MANAGE),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:

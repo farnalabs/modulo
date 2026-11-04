@@ -21,16 +21,16 @@ _EVENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000020")
 _NOW = datetime.now(UTC)
 
 
-def _make_app(execute_result: MagicMock | None = None):
+def _make_app(execute_result: MagicMock | None = None, org_role: str = "admin"):
     app = FastAPI()
     app.include_router(errors_router)
 
     async def _override_user():
         return AuthenticatedPrincipal(
-            username="admin",
+            username=org_role,
             organisation_id=_ORG_ID,
             account_id=uuid.uuid4(),
-            org_role="admin",
+            org_role=org_role,
         )
 
     async def _override_db():
@@ -310,3 +310,89 @@ class TestSchedulerStarvation:
         assert "trigger_events" in sql, "the age anchor must correlate the run's trigger events"
         assert "received_at" in sql, "the age anchor must key on the earliest event receipt"
         assert "coalesce" in sql.lower(), "runs without a trigger event must fall back to created_at"
+
+
+class TestViewerReadAccess:
+    """FAR-2373: the error dashboard READS stay viewer-accessible.
+
+    The demo/read-only viewer must be able to inspect diagnostics; only
+    mutating the incident record is admin-only. These pin that the split did
+    not accidentally raise the read floor.
+    """
+
+    def test_viewer_can_list_error_groups(self):
+        with (
+            patch("modulo.api.routes.errors.get_error_groups", AsyncMock(return_value=[])),
+            patch("modulo.api.routes.errors.count_error_groups", AsyncMock(return_value=0)),
+            patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            TestClient(_make_app(org_role="viewer")) as client,
+        ):
+            resp = client.get("/api/v1/errors")
+        assert resp.status_code == 200, resp.text
+
+    def test_viewer_can_read_group_detail(self):
+        with (
+            patch("modulo.api.routes.errors.get_error_group", AsyncMock(return_value=_make_group())),
+            patch("modulo.api.routes.errors._fetch_sample_event", AsyncMock(return_value=None)),
+            patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            TestClient(_make_app(org_role="viewer")) as client,
+        ):
+            resp = client.get(f"/api/v1/errors/{_GROUP_ID}")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["fingerprint"] == "fp123"
+
+    def test_viewer_can_list_error_events(self):
+        evts = [_make_event(id=uuid.uuid4())]
+        with (
+            patch("modulo.api.routes.errors.get_error_group", AsyncMock(return_value=_make_group())),
+            patch("modulo.api.routes.errors.get_error_events_by_group", AsyncMock(return_value=evts)),
+            patch("modulo.api.routes.errors.count_error_events_by_group", AsyncMock(return_value=1)),
+            patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            TestClient(_make_app(org_role="viewer")) as client,
+        ):
+            resp = client.get(f"/api/v1/errors/{_GROUP_ID}/events")
+        assert resp.status_code == 200, resp.text
+
+
+class TestViewerCannotMutateErrorGroup:
+    """FAR-2373: acknowledging/resolving/reassigning an error group is admin-only."""
+
+    def test_viewer_patch_is_forbidden_and_never_reaches_the_write(self):
+        update = AsyncMock(return_value=_make_group())
+        with (
+            patch("modulo.api.routes.errors.update_error_group", update),
+            patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            TestClient(_make_app(org_role="viewer")) as client,
+        ):
+            resp = client.patch(
+                f"/api/v1/errors/{_GROUP_ID}",
+                json={"status": "resolved", "assigned_to": str(uuid.uuid4())},
+            )
+        assert resp.status_code == 403, resp.text
+        # Denied at the dependency boundary, so the CRUD write is never
+        # reached and the stored group row cannot change.
+        update.assert_not_awaited()
+
+
+class TestAdminMutatesErrorGroup:
+    """FAR-2373: admin keeps the mutation surface the viewer just lost."""
+
+    def test_admin_patch_applies_status_and_assignment(self):
+        assigned_to = uuid.uuid4()
+        grp = _make_group()
+        grp.status = "resolved"
+        update = AsyncMock(return_value=grp)
+        with (
+            patch("modulo.api.routes.errors.update_error_group", update),
+            patch("modulo.api.routes.errors._fetch_sample_event", AsyncMock(return_value=None)),
+            patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            TestClient(_make_app(org_role="admin")) as client,
+        ):
+            resp = client.patch(
+                f"/api/v1/errors/{_GROUP_ID}",
+                json={"status": "resolved", "assigned_to": str(assigned_to)},
+            )
+        assert resp.status_code == 200, resp.text
+        _, kwargs = update.call_args
+        assert kwargs["status"] == "resolved"
+        assert kwargs["assigned_to"] == assigned_to

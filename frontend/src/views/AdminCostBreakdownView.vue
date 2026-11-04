@@ -6,8 +6,7 @@
        :tabs="costPageTabs"
     />
 
-    <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled>
-      <div class="space-y-6">
+    <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled class="space-y-6">
       <LoadingSpinner v-if="loading" />
 
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
@@ -86,7 +85,7 @@
             </div>
             <p
               v-if="hasUnattributedSpend"
-              class="mt-3 text-xs text-muted-foreground"
+              class="mt-3 px-6 pb-6 text-xs text-muted-foreground"
               data-testid="cost-team-unattributed"
             >
               {{ $t('views.AdminCostBreakdownView.unattributed_spend_line', {
@@ -95,7 +94,7 @@
             </p>
             <p
               v-else-if="unassignedUnavailable"
-              class="mt-3 text-xs text-warning-text"
+              class="mt-3 px-6 pb-6 text-xs text-warning-text"
               data-testid="cost-team-unattributed-unavailable"
             >
               {{ $t('views.AdminCostBreakdownView.unattributed_spend_unavailable') }}
@@ -145,7 +144,6 @@
           </template>
         </DataCard>
       </template>
-      </div>
     </FeatureGate>
   </div>
 </template>

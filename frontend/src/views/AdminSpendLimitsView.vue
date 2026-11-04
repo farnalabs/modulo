@@ -6,8 +6,7 @@
        :tabs="costPageTabs"
     />
 
-    <FeatureGate feature-name="admin_spend_limits" required-tier="team" show-disabled>
-      <div class="space-y-6">
+    <FeatureGate feature-name="admin_spend_limits" required-tier="team" show-disabled class="space-y-6">
       <LoadingSpinner v-if="loading" />
 
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
@@ -174,7 +173,6 @@
           </template>
         </DataCard>
       </template>
-      </div>
     </FeatureGate>
   </div>
 </template>

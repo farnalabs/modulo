@@ -1874,6 +1874,7 @@ export default {
       "eval_pass_rate": "Eval Pass Rate",
       "eval_pass_rate_label": "Eval pass rate",
       "no_eval_data_yet": "No eval data yet",
+      "no_token_spend_data_yet": "No token spend data yet",
       "overview_of_your_organisations_pipelines_and_runs": "Overview of your organisation's pipelines and runs",
       "token_spend_24h": "Token Spend (24h)",
       "token_spend_3d": "Token Spend (3d)",
