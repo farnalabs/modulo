@@ -57,6 +57,13 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.schema import Schema, SchemaVersion
+from modulo.db.models.system_map import (
+    SystemMap,
+    SystemMapLoopConfig,
+    SystemMapNode,
+    SystemMapRelationship,
+    SystemMapRevision,
+)
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
@@ -93,6 +100,12 @@ _SEED_TABLES = {
     "run_daily_facts",
     "evals",
     "eval_results",
+    # System Maps demo seeding
+    "system_maps",
+    "system_map_revisions",
+    "system_map_nodes",
+    "system_map_relationships",
+    "system_map_loop_configs",
     # FAR-1248: first-class graph edges, per-node run traces, lifecycle map.
     "pipeline_edges",
     "run_node_outputs",
@@ -2390,3 +2403,28 @@ async def test_seed_edge_convergence_records_an_edit_snapshot(
     # boot-time system write's privilege from the DEMO account's role (and it
     # crashes the SQLite unit suite outright).
     assert kwargs.get("account_id") is None, kwargs
+
+
+async def test_seed_creates_demo_system_map(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The public demo seeds a default published System Map with graph elements."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert await _count(session, SystemMap) == 1
+    system_map = (await session.execute(select(SystemMap))).scalar_one()
+    assert system_map.name == "Demo Delivery System"
+    assert system_map.default_map is True
+    assert system_map.published_revision_id is not None
+
+    assert await _count(session, SystemMapRevision) == 1
+    revision = (await session.execute(select(SystemMapRevision))).scalar_one()
+    assert revision.id == system_map.published_revision_id
+    assert revision.status == "published"
+
+    assert await _count(session, SystemMapNode) == 7
+    assert await _count(session, SystemMapRelationship) == 6
+    assert await _count(session, SystemMapLoopConfig) == 2
+
+    # Verify idempotency on second run
+    await _run_seed(session, monkeypatch, _demo_settings())
+    assert await _count(session, SystemMap) == 1
+    assert await _count(session, SystemMapRevision) == 1
