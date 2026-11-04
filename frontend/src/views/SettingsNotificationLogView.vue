@@ -76,8 +76,16 @@
       v-else-if="items.length === 0"
       data-testid="settings-notification-log-empty"
       :title="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found')"
-      :description="$t('views.AdminNotificationDeliveryLogView.try_adjusting_filters')"
-    />
+      :description="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_in_range')"
+    >
+       <button
+         type="button"
+         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+         @click="resetFilters"
+       >
+         {{ $t('views.AdminNotificationDeliveryLogView.reset') }}
+       </button>
+     </EmptyState>
 
     <template v-else>
       <DataCard variant="bordered" padding="none" elevation="sm" card-class="overflow-hidden">
@@ -177,9 +185,24 @@ const {
 // refs. Declaring them after caused a TDZ ReferenceError on the initial fetch
 // (FAR-2173 — surfaced in production as "Cannot access 'Z' before
 // initialization" after minification, the same defect class as FAR-608).
+function formatDateInput(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function defaultDateRange(): { from: string; to: string } {
+  const to = new Date()
+  const from = new Date(to)
+  from.setDate(from.getDate() - 30)
+  return { from: formatDateInput(from), to: formatDateInput(to) }
+}
+
+const initialDateRange = defaultDateRange()
 const filterStatus = ref('__all__')
-const filterDateFrom = ref('')
-const filterDateTo = ref('')
+const filterDateFrom = ref(initialDateRange.from)
+const filterDateTo = ref(initialDateRange.to)
 
 const { loading, error, data: responseData, load: loadDeliveries } = useDataFetch(
   async () => {
@@ -236,9 +259,10 @@ function applyFilters() {
 }
 
 function resetFilters() {
+  const dateRange = defaultDateRange()
   filterStatus.value = '__all__'
-  filterDateFrom.value = ''
-  filterDateTo.value = ''
+  filterDateFrom.value = dateRange.from
+  filterDateTo.value = dateRange.to
   resetCursor()
   loadDeliveries()
 }

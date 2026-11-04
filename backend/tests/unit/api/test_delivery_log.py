@@ -115,10 +115,12 @@ def test_list_deliveries_empty(client: TestClient) -> None:
         list_result.scalars.return_value = []
         count_result = MagicMock()
         count_result.scalar.return_value = 0
+        executed_queries: list[str] = []
 
         def execute_side_effect(*args: object, **kwargs: object) -> MagicMock:
-            sql = args[0] if args else kwargs.get("query", "")
-            if "count(" in str(sql).lower():
+            sql = str(args[0] if args else kwargs.get("query", ""))
+            executed_queries.append(sql)
+            if "count(" in sql.lower():
                 return count_result
             return list_result
 
@@ -269,9 +271,11 @@ def test_list_all_deliveries_date_filter(client: TestClient) -> None:
         list_result.all.return_value = []
         count_result = MagicMock()
         count_result.scalar.return_value = 0
+        executed_queries: list[str] = []
 
         def execute_side_effect(*args: object, **kwargs: object) -> MagicMock:
             sql = str(args[0] if args else kwargs.get("query", ""))
+            executed_queries.append(sql)
             if "count(" in sql.lower():
                 return count_result
             return list_result
@@ -288,6 +292,9 @@ def test_list_all_deliveries_date_filter(client: TestClient) -> None:
         client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
     assert resp.status_code == 200
+    assert len(executed_queries) == 3
+    assert "created_at" in executed_queries[1]
+    assert "created_at" in executed_queries[2]
 
 
 def test_list_all_deliveries_bad_date_returns_422(client: TestClient) -> None:

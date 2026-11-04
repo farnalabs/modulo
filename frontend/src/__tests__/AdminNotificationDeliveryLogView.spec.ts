@@ -56,6 +56,8 @@ describe('AdminNotificationDeliveryLogView', () => {
     await flushPromises()
     await nextTick()
     expect(wrapper.text()).toContain('No delivery logs found')
+    expect(wrapper.text()).toContain('No webhook deliveries were recorded in the selected date range')
+    expect(wrapper.text()).toContain('Reset')
   })
 
   it('renders filter controls', async () => {
@@ -67,6 +69,8 @@ describe('AdminNotificationDeliveryLogView', () => {
     expect(wrapper.find('[data-testid="admin-notification-log-date-to"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="admin-notification-log-apply"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="admin-notification-log-reset"]').exists()).toBe(true)
+    expect((wrapper.find('[data-testid="admin-notification-log-date-from"]').element as HTMLInputElement).value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect((wrapper.find('[data-testid="admin-notification-log-date-to"]').element as HTMLInputElement).value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 
   it('renders pagination controls when items exist', async () => {

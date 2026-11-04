@@ -139,8 +139,16 @@
       v-else-if="items.length === 0"
       data-testid="admin-notification-log-empty"
       :title="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found')"
-      :description="$t('views.AdminNotificationDeliveryLogView.try_adjusting_filters')"
-    />
+      :description="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_in_range')"
+    >
+       <button
+         type="button"
+         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+         @click="resetFilters"
+       >
+         {{ $t('views.AdminNotificationDeliveryLogView.reset') }}
+       </button>
+     </EmptyState>
 
     <template v-else>
       <div class="table-wrapper">
@@ -307,6 +315,20 @@ import { useI18n } from 'vue-i18n'
 
 const { t, te } = useI18n()
 
+function formatDateInput(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function defaultDateRange(): { from: string; to: string } {
+  const to = new Date()
+  const from = new Date(to)
+  from.setDate(from.getDate() - 30)
+  return { from: formatDateInput(from), to: formatDateInput(to) }
+}
+
 type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
 interface DeliveryLogPage {
   items: DeliveryLogEntry[]
@@ -317,10 +339,11 @@ interface DeliveryLogPage {
 type DeliveryLogQuery = NonNullable<paths['/api/v1/admin/notifications/deliveries']['get']>['parameters']['query']
 
 const cursor = ref<string | null>(null)
+const initialDateRange = defaultDateRange()
 const filterStatus = ref('__all__')
 const filterEventType = ref('__all__')
-const filterDateFrom = ref('')
-const filterDateTo = ref('')
+const filterDateFrom = ref(initialDateRange.from)
+const filterDateTo = ref(initialDateRange.to)
 
 const { data: deliveriesData, loading, error, load: loadDeliveries } = useDataFetch<DeliveryLogPage>(
   async () => {
@@ -428,10 +451,11 @@ function applyFilters() {
 }
 
 function resetFilters() {
+  const dateRange = defaultDateRange()
   filterStatus.value = '__all__'
   filterEventType.value = '__all__'
-  filterDateFrom.value = ''
-  filterDateTo.value = ''
+  filterDateFrom.value = dateRange.from
+  filterDateTo.value = dateRange.to
   cursor.value = null
   retrySuccessMessage.value = null
   loadDeliveries()

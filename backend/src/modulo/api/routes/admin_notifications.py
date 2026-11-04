@@ -323,6 +323,8 @@ async def _list_deliveries(
             status_filter=status_filter,
             event_type_filter=event_type_filter,
             endpoint_id_filter=endpoint_id_filter,
+            date_from=date_from,
+            date_to=date_to,
         )
 
     has_more = len(rows) > limit
@@ -370,6 +372,8 @@ async def _count_deliveries(
     status_filter: str | None,
     event_type_filter: str | None,
     endpoint_id_filter: uuid.UUID | None,
+    date_from: str | None,
+    date_to: str | None,
 ) -> int:
     count_query = select(sa_func.count(NotificationDeliveryLog.id)).where(
         NotificationDeliveryLog.organisation_id == principal.organisation_id,
@@ -380,6 +384,12 @@ async def _count_deliveries(
         count_query = count_query.where(NotificationDeliveryLog.event_type == event_type_filter)
     if endpoint_id_filter:
         count_query = count_query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
+    if date_from:
+        count_query = count_query.where(
+            NotificationDeliveryLog.created_at >= _parse_delivery_date(date_from, "from date")
+        )
+    if date_to:
+        count_query = count_query.where(NotificationDeliveryLog.created_at <= _parse_delivery_date(date_to, "to date"))
     count_result = await session.execute(count_query)
     return count_result.scalar() or 0
 

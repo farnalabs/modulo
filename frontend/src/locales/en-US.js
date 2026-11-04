@@ -3020,6 +3020,7 @@ export default {
       "next": "Next",
       "of_deliveries": "{count} of {total} deliveries",
       "try_adjusting_filters": "Try adjusting your filters or wait for notifications to be sent.",
+      "no_delivery_logs_in_range": "No webhook deliveries were recorded in the selected date range. Try a wider range or reset the filters.",
       "no_additional_details": "No additional details available.",
       "view_dead_lettered": "View Dead Lettered",
       "dead_letter_queue_description": "{count} undeliverable notification across all endpoints | {count} undeliverable notifications across all endpoints",

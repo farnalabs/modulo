@@ -61,7 +61,8 @@ describe('SettingsNotificationLogView', () => {
     const wrapper = mount(SettingsNotificationLogView)
     await flushPromises()
     expect(wrapper.text()).toContain('No delivery logs found')
-    expect(wrapper.text()).toContain('Try adjusting your filters')
+    expect(wrapper.text()).toContain('No webhook deliveries were recorded in the selected date range')
+    expect(wrapper.text()).toContain('Reset')
   })
 
   it('shows loading skeleton while fetching', async () => {
@@ -84,7 +85,15 @@ describe('SettingsNotificationLogView', () => {
     expect(getMock).toHaveBeenCalledTimes(1)
     expect(getMock).toHaveBeenCalledWith(
       '/api/v1/admin/notifications/deliveries',
-      expect.objectContaining({ params: { query: { limit: 50 } } }),
+      expect.objectContaining({
+        params: {
+          query: {
+            limit: 50,
+            from: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+            to: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+          },
+        },
+      }),
     )
   })
 
@@ -519,7 +528,8 @@ describe('SettingsNotificationLogView', () => {
     const dateTo = wrapper.find('[data-testid="settings-notification-log-date-to"]')
     expect(dateFrom.exists()).toBe(true)
     expect(dateTo.exists()).toBe(true)
-    expect((dateFrom.element as HTMLInputElement).value).toBe('')
-    expect((dateTo.element as HTMLInputElement).value).toBe('')
+    expect((dateFrom.element as HTMLInputElement).value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect((dateTo.element as HTMLInputElement).value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect((dateFrom.element as HTMLInputElement).value).not.toBe((dateTo.element as HTMLInputElement).value)
   })
 })
