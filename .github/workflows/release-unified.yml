@@ -1780,10 +1780,13 @@ jobs:
   publish-release:
     name: Create GitHub Release
     needs: [release, final-release-manifest, attest-artefacts, macos-installer]
-    # Do not publish until the final signed manifest covers the macOS DMG.
-    # Windows is Beta scope (windows-installer.yml fails closed) and is
-    # intentionally not a dependency of Alpha publication. When include_windows=true
-    # (Beta path), the Windows artifact is included via final-release-manifest.
+    # Do not publish until the final signed manifest covers the macOS DMG and the
+    # signed Windows installer. Windows is Alpha scope (FAR-2338):
+    # windows-installer is a need of final-release-manifest when
+    # include_windows=true (the default), and that job only runs once the
+    # installer reports success - so a failed Windows build fails the release
+    # rather than publishing without it. When include_windows=false the installer
+    # job is skipped and the manifest covers Linux + macOS only.
     # GitHub skipped Create GitHub Release while every direct need reported
     # success (run 41786063745), so this job must run and report for itself when
     # a need did not succeed. It deliberately does NOT use always(): that would
