@@ -65,11 +65,19 @@ redis:
 
 ### Embedded Redis (Development)
 
+Embedded Redis requires authentication. Set either `redis.password` or
+`redis.existingSecret`; the chart fails at render time when neither is set.
+The password is kept in the Kubernetes Secret and passed to Redis through
+`REDIS_PASSWORD`, so it is not rendered into the Deployment command. The
+same credential is embedded in `REDIS_URL`, and the probes authenticate with
+that environment variable.
+
 ```yaml
 redis:
-  embedded: true      # Deploy Redis in-cluster
-  # password: secret  # Optional. Sets --requirepass on the container and embeds
-                     # the credential in REDIS_URL; the probes authenticate too.
+  embedded: true
+  password: replace-with-a-development-password
+  # Or use a pre-created Secret containing a `password` key:
+  # existingSecret: modulo-secrets
 ```
 
 `redis.embedded` is the only switch that controls the embedded Redis Deployment.
