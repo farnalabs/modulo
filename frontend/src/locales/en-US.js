@@ -4618,6 +4618,7 @@ export default {
       "delete_map": "Could not delete system map",
       "load_map_revision": "Could not load map revision",
       "load_current_revision": "Could not load the current revision",
+      "load_revision_history": "Could not load revision history",
       "load_revision_at_time": "Could not load the revision for that time",
       "no_revision_at_time": "No revision was active at that time",
       "save_draft_revision": "Could not save draft revision",

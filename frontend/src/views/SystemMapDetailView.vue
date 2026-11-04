@@ -183,6 +183,12 @@ async function loadData(): Promise<void> {
   actionError.value = null
   await store.fetchAccess()
   await store.loadMap(mapId.value)
+  if (!activeMap.value) return
+  try {
+    await store.loadRevisionHistory(mapId.value)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.load_revision_history')
+  }
 }
 
 async function selectRevision(revisionId: string): Promise<void> {

@@ -68,6 +68,9 @@ describe('SystemMapDetailView load failures', () => {
       if (path === '/api/v1/admin/feature-flags') {
         return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
       }
+      if (path === '/api/v1/system-maps/{map_id}/revisions/history') {
+        return Promise.resolve({ data: { system_map_id: 'map-1', revisions: [] } })
+      }
       mapCalls += 1
       if (mapCalls === 1) return Promise.resolve({ error: { detail: 'map unavailable' } })
       return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
@@ -564,6 +567,17 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     wrapper.findComponent(HeaderStub).vm.$emit('archive')
     await flushPromises()
     expect(wrapper.text()).toContain('Could not archive revision')
+  })
+
+  it('uses the localized fallback when revision history loading rejects with a non-Error', async () => {
+    const store = useSystemMapsStore()
+    vi.spyOn(store, 'loadRevisionHistory').mockRejectedValue('offline')
+
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    expect(store.activeMap?.id).toBe('map-1')
+    expect(wrapper.text()).toContain('Could not load revision history')
   })
 
   it('keeps the discovery panel open when applying selections fails to save', async () => {
