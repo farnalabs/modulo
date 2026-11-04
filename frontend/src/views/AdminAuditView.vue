@@ -3,8 +3,8 @@
 
     <div class="page-wide">
     <PageHeader :title="$t('views.AdminAuditView.audit_log')" :subtitle="$t('views.AdminAuditView.tamper_evident_event_trail')">
-      <template #right>
-      <div v-if="auditSource === 'org'" class="flex items-center gap-2">
+      <template v-if="auditSource === 'org'" #right>
+      <div class="flex items-center gap-2">
         <button
           type="button"
           :disabled="verifying"

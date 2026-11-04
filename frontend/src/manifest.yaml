@@ -1359,6 +1359,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/audit:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-audit-verify-chain
         type: button
         dynamic_testid: false
@@ -1465,6 +1468,9 @@ elements:
         type: button
         dynamic_testid: false
     /admin/connectors:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-connectors-add
         type: button
         dynamic_testid: false
@@ -1653,6 +1659,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/costs/components:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: cost-components-add
         type: button
         dynamic_testid: false
@@ -1880,6 +1889,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/errors/:id:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-error-detail-acknowledge
         type: button
         dynamic_testid: false
@@ -2038,6 +2050,9 @@ elements:
         type: link
         dynamic_testid: false
     /admin/model-backends:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-model-backends-add
         type: button
         dynamic_testid: false
@@ -2217,6 +2232,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/node-categories:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-node-categories-add
         type: button
         dynamic_testid: false
@@ -2467,6 +2485,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/parameter-schemas:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: paramschema-new
         type: button
         dynamic_testid: false
@@ -2540,6 +2561,9 @@ elements:
         type: button
         dynamic_testid: false
     /admin/plugins:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-plugins-refresh
         type: button
         dynamic_testid: false
@@ -2851,6 +2875,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/users:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-users-add-user
         type: button
         dynamic_testid: false
@@ -3091,6 +3118,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/evidence-redaction:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-evidence-redaction-add
         type: button
         dynamic_testid: false
@@ -5537,6 +5567,9 @@ elements:
         type: element
         dynamic_testid: false
     /schemas/editor/:id:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -5665,6 +5698,9 @@ elements:
         type: button
         dynamic_testid: false
     /settings/guardrails:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: settings-guardrails-create
         type: button
         dynamic_testid: false
@@ -5720,6 +5756,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/system/config:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-system-config-refresh
         type: button
         dynamic_testid: false
@@ -6356,6 +6395,9 @@ elements:
         type: element
         dynamic_testid: false
     /settings/assistant:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: assistant-user-skills-add
         type: button
         dynamic_testid: false
@@ -6418,6 +6460,9 @@ elements:
         type: element
         dynamic_testid: false
     /settings/sso:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -6512,6 +6557,9 @@ elements:
         type: button
         dynamic_testid: false
     /settings/teams:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -6636,6 +6684,9 @@ elements:
         type: button
         dynamic_testid: false
     /settings/triggers:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
