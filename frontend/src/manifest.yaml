@@ -1886,6 +1886,9 @@ elements:
       - testid: admin-error-detail-archive
         type: button
         dynamic_testid: false
+      - testid: admin-error-detail-assign-admin-help
+        type: element
+        dynamic_testid: false
       - testid: admin-error-detail-assignee
         type: select
         dynamic_testid: false
@@ -1912,6 +1915,9 @@ elements:
         dynamic_testid: false
       - testid: admin-error-detail-resolve
         type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-status-admin-help
+        type: element
         dynamic_testid: false
       - testid: admin-error-detail-toggle-context
         type: button

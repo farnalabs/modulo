@@ -578,7 +578,9 @@ export default {
       "next": "Next",
       "instance_scope_readonly": "Instance scope — this error group is not attributed to any organisation. Read-only.",
       "copy_support_reference": "Copy support reference",
-      "support_reference_copied": "Copied"
+      "support_reference_copied": "Copied",
+      "admin_only_status_help": "Changing an error's status requires an administrator.",
+      "admin_only_assign_help": "Assigning an error requires an administrator."
     },
     "AdminProductAnalyticsView": {
       "title": "Product Analytics",
