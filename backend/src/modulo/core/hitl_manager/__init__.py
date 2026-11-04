@@ -1205,10 +1205,11 @@ class HITLManager:
         # to the gate's reject route (``reject_target`` config or a reject
         # edge) when one is configured — with no reject route the run ENDS
         # ``rejected`` (FAR-1487; ``on_reject: proceed`` opts back into
-        # continuing along the normal path) — and a decision committed
-        # without an inline resume
-        # (the MCP flow) leaves the run ``awaiting_human`` with a committed
-        # decision, which dispatcher_reconcile's gated recovery then resumes.
+        # continuing along the normal path). The MCP approve path now resumes
+        # inline AFTER this transaction commits; a resume that fails before its
+        # claim, or any caller that only records the decision, leaves the run
+        # ``awaiting_human`` with a committed decision, which
+        # dispatcher_reconcile's gated recovery then resumes.
         # The guarded predicate makes this a no-op for every non-parked run.
         # Shared transition (qa F15) — the gate coalescing's supersede
         # close-out issues the identical write through the same helper.
