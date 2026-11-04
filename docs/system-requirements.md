@@ -7,9 +7,10 @@ Supported platforms, minimum resources, and database backends for running Modulo
 ## Supported Platforms
 
 Modulo v1 targets Linux hosts and Apple Silicon macOS for the native single-install
-artifact. Windows native support is Alpha scope: the native installer (delivered by
-FAR-2337 / FAR-2338) is built, signed and attested by the unified release pipeline on
-a `cut`/`recut` release, alongside the Linux bundle and the macOS `.dmg`. Its
+artifact. Windows native support is Beta scope, opt-in only: the native installer (delivered
+by FAR-2337 / FAR-2338) is built, signed and attested by the unified release pipeline
+on a `cut`/`recut` release only when the Beta-only `include_windows` input is enabled,
+alongside the Linux bundle and the macOS `.dmg`. Its
 publication depends on a release running (no signed Windows installer is published
 yet), and end-to-end validation on the real Windows installer host is still
 outstanding under FAR-2250.
@@ -24,7 +25,7 @@ below).
 |----------------------|-----------|
 | **Linux** | Supported (native single-install and container paths) |
 | **macOS arm64** | Supported native single-install host (signed/notarized `.dmg`, macos-15 validation) |
-| **Windows** | Alpha scope: native installer built, signed (Azure Trusted Signing) and attested by the release pipeline (FAR-2337 / FAR-2338). Publication depends on a release run (no signed installer published yet); real-host validation (FAR-2250) is outstanding |
+| **Windows** | Beta scope, opt-in only: native installer built, signed (Azure Trusted Signing) and attested by the release pipeline when the Beta-only `include_windows` input is enabled (FAR-2337 / FAR-2338). Publication depends on a release run (no signed installer published yet); real-host validation (FAR-2250) is outstanding |
 
 Docker Desktop (see Development / Evaluation below) is a developer
 convenience on macOS and Windows: it runs the Linux containers inside a Linux
@@ -38,15 +39,16 @@ macOS installer's trust boundary is Apple Developer ID signing/notarization and
 stapling, verified with `codesign`, `spctl` and `hdiutil verify`; it does not
 consume the Linux signed release manifest.
 
-Windows native support is in Alpha scope. The native Windows installer is delivered
-by FAR-2337 / FAR-2338 (see
+Windows native support is in Beta scope and is opt-in only. The native Windows
+installer is delivered by FAR-2337 / FAR-2338 (see
 [`deploy/windows/BUNDLE-BUILD.md`](../deploy/windows/BUNDLE-BUILD.md)): the release
 pipeline builds the native payload (`windows-artifacts.yml`), compiles the Inno
 Setup installer (`windows-installer.yml`), signs it with Azure Trusted Signing,
 and attaches a build provenance attestation. Signing and attestation happen on
 `cut` and `recut` only; `dry-run` compiles the installer contract and skips them.
 `release-unified.yml` includes the installer in `SHA256SUMS` and the signed release
-manifest when `include_windows` is enabled (the default). Because publication depends
+manifest only when the Beta-only `include_windows` input is explicitly enabled (it
+defaults to false). Because publication depends
 on a release running, no signed Windows installer is published yet, and end-to-end
 validation on the real installer host (FAR-2250) is still outstanding. Until the
 installer is published and that validation is recorded, a Windows-hosted deployment
@@ -79,7 +81,7 @@ actually ship - do not widen these rows until the packaging tickets land):
 | Debian 12+ | 2.36+ | Supported |
 | Ubuntu 20.04 and earlier | 2.31 and below | Not supported (below the bundled service-binary floor) |
 | macOS arm64 | Apple Silicon | Supported native `.dmg`; x64/Rosetta is not supported |
-| Windows | - | Alpha scope; native installer built, signed and attested by the release pipeline (FAR-2337 / FAR-2338), published only by a release run (no installer published yet); real-host validation outstanding (FAR-2250) |
+| Windows | - | Beta scope, opt-in only; native installer built, signed and attested by the release pipeline when the Beta-only `include_windows` input is enabled (FAR-2337 / FAR-2338), published only by a release run (no installer published yet); real-host validation outstanding (FAR-2250) |
 
 The hard requirement is **glibc 2.35 or newer**. The bundle is assembled on an
 Ubuntu 22.04 (jammy) build baseline: the bundled PostgreSQL 16 binaries come
