@@ -2012,7 +2012,7 @@ jobs:
     # without waiting on the intentionally skipped bundle job.
     if: always() && inputs.mode != 'dry-run' && needs.produce-sbom.result == 'success' && (inputs.mode == 'promote' || needs.final-release-manifest.result == 'success')
     runs-on: ubicloud-standard-2
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
