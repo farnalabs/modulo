@@ -15,6 +15,7 @@ type SystemMapList = components['schemas']['SystemMapListResponse']
 type SystemMapCurrentRevision = components['schemas']['SystemMapCurrentRevisionResponse']
 type SystemMapRevisionByTime = components['schemas']['SystemMapRevisionByTimeResponse']
 type SystemMapRevisionHistory = components['schemas']['SystemMapRevisionHistoryResponse']
+type SystemMapRevisionRestoreAsNewResponse = components['schemas']['SystemMapRevisionRestoreAsNewResponse']
 
 export type SystemMap = components['schemas']['SystemMapResponse']
 export type SystemMapRevision = components['schemas']['SystemMapRevisionResponse']
@@ -463,6 +464,18 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     await loadMap(mapId)
   }
 
+  async function restoreRevisionAsNew(mapId: string, revisionId: string): Promise<SystemMapRevision> {
+    const response = await api.POST('/api/v1/system-maps/{map_id}/revisions/{rev_id}/restore-as-new', {
+      params: { path: { map_id: mapId, rev_id: revisionId } },
+      body: { notes: tr('systemMaps.restore_notes') },
+    })
+    if (response.error || !response.data) throw new Error(tr('systemMaps.errors.restore_revision'))
+    const payload = response.data as SystemMapRevisionRestoreAsNewResponse
+    await loadRevisionHistory(mapId)
+    await loadRevision(mapId, payload.new_revision.id)
+    return payload.new_revision
+  }
+
   async function discover(name = 'Discovered System Map', description?: string): Promise<DiscoveryReport> {
     const response = await api.POST('/api/v1/system-maps/discover', { body: { name, description } })
     if (response.error || !response.data) throw new Error(tr('systemMaps.errors.discover_map'))
@@ -487,5 +500,5 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   // Kept for the dashboard's preview card; discovery is now a real operation.
   async function fetchDiscovery(): Promise<void> { loaded.value = true }
 
-  return { loaded, loading, error, unavailable, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewUnavailable, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, hasReadAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadRevisionHistory, loadCurrentRevision, loadRevisionByTime, saveDraft, publish, archive, discover, clearActive, fetchDiscovery }
+  return { loaded, loading, error, unavailable, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewUnavailable, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, hasReadAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadRevisionHistory, loadCurrentRevision, loadRevisionByTime, saveDraft, publish, archive, restoreRevisionAsNew, discover, clearActive, fetchDiscovery }
 })

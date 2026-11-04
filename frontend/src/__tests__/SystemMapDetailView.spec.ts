@@ -438,6 +438,39 @@ describe('SystemMapDetailView authoring actions', () => {
     expect(wrapper.text()).toContain('Could not save draft revision')
   })
 
+  it('restores a historical revision as a new draft from the sidebar', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+    const restore = vi.spyOn(store, 'restoreRevisionAsNew').mockResolvedValue({ id: 'rev-3', revision_number: 3, status: 'draft' } as never)
+
+    wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-2')
+    await flushPromises()
+
+    expect(restore).toHaveBeenCalledWith('map-1', 'rev-2')
+    expect(wrapper.text()).not.toContain('Could not restore revision')
+  })
+
+  it('reports restore failures and falls back for non-Error rejections', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+    const restore = vi.spyOn(store, 'restoreRevisionAsNew')
+
+    restore.mockRejectedValueOnce(new Error('Could not restore revision'))
+    wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not restore revision')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    restore.mockRejectedValueOnce('offline')
+    wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not restore revision')
+  })
+
   it('runs discovery, opens the review panel and saves selections', async () => {
     seed(mockPost)
     const report = { draft_map_id: 'map-1', draft_revision_id: 'rev-1', inferred_nodes: [{ node_key: 'agent-1', node_type: 'agent', display_name: 'Agent' }], inferred_edges: [] }
@@ -547,7 +580,7 @@ describe('SystemMapDetailView authoring actions', () => {
 describe('SystemMapDetailView guards and non-Error failures', () => {
   const HeaderStub = { name: 'HeaderBar', emits: ['toggle-sidebar', 'save', 'publish', 'archive', 'discover'], template: '<div />' }
   const GraphStub = { name: 'GraphEditor', emits: ['nodes-change', 'relationships-change'], template: '<div />' }
-  const RevisionStub = { name: 'RevisionSidebar', emits: ['select-revision', 'new-draft', 'discover'], template: '<div />' }
+  const RevisionStub = { name: 'RevisionSidebar', emits: ['select-revision', 'new-draft', 'restore-revision', 'discover'], template: '<div />' }
   const DiscoveryStub = { name: 'DiscoveryPanel', emits: ['close', 'save'], template: '<div />' }
 
   function mountWithStubs() {
@@ -595,6 +628,7 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
 
     wrapper.findComponent(RevisionStub).vm.$emit('select-revision', 'rev-1')
     wrapper.findComponent(RevisionStub).vm.$emit('new-draft')
+    wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-1')
     wrapper.findComponent(RevisionStub).vm.$emit('discover')
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
     wrapper.findComponent(HeaderStub).vm.$emit('save')
