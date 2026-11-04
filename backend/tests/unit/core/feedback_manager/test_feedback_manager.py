@@ -357,7 +357,7 @@ class TestGetFeedbackRecords:
         result = await mgr.get_feedback_records(status="pending")
 
         assert result["total"] == 1
-        assert any("feedback_records.feedback_status" in sql for sql in _executed_sql(mock_session))
+        assert any("feedback_records.feedback_status = " in sql for sql in _executed_sql(mock_session))
 
     async def test_returns_empty_when_no_records(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         await self._setup_mock(mock_session, [], 0)
@@ -1109,7 +1109,7 @@ class TestGetFeedbackRecordsInbox:
         result = await mgr.get_feedback_records_inbox(handler_type="human")
 
         assert result["total"] == 1
-        assert any("feedback_records.feedback_handler_type" in sql for sql in _executed_sql(mock_session))
+        assert any("feedback_records.feedback_handler_type = " in sql for sql in _executed_sql(mock_session))
 
     async def test_returns_empty_when_no_records(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         await self._setup_mock(mock_session, [], 0)
