@@ -298,7 +298,15 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     const value = response.data as SystemMapGraph
     activeRevision.value = 'revision' in value ? value.revision : value as SystemMapRevision
     graph.value = 'revision' in value ? value : null
-    if (activeRevision.value && !revisions.value.some((revision) => revision.id === activeRevision.value?.id)) revisions.value = [...revisions.value, activeRevision.value]
+    if (activeRevision.value) {
+      // A re-read must refresh the cached entry, not just append a missing one:
+      // publish/archive reload the revision through here, and keeping the stale
+      // object would leave the history sidebar showing the old status chip.
+      const cached = revisions.value.findIndex((revision) => revision.id === activeRevision.value?.id)
+      revisions.value = cached === -1
+        ? [...revisions.value, activeRevision.value]
+        : revisions.value.map((revision, index) => (index === cached ? activeRevision.value as SystemMapRevision : revision))
+    }
   }
 
   async function loadRevisionHistory(mapId: string): Promise<void> {

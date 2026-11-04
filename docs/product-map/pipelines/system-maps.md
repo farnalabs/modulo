@@ -360,7 +360,9 @@ The map is stored in dedicated System Maps tables (migration
 - [x] The revision sidebar reads `GET /revisions/history` when a map opens and
       replaces its session list with every tenant-scoped published, draft and
       archived revision, ordered newest first; selecting an entry loads its
-      graph through `GET /revisions/{rev_id}`
+      graph through `GET /revisions/{rev_id}`. A re-read of an already cached
+      revision replaces that entry instead of keeping the stale object, so the
+      status chip reflects a publish or archive without a full page reload
       (`frontend/src/stores/systemMaps.ts`,
       `frontend/src/views/SystemMapDetailView.vue`,
       `frontend/src/components/system-maps/SystemMapRevisionSidebar.vue`;
@@ -408,11 +410,10 @@ The map is stored in dedicated System Maps tables (migration
   author a map, publish / archive / diff / restore a revision, read a revision
   or its history, or read the overview; those remain REST-only.
 - **Version-aware reads are only partly wired into the UI.**
-  `revisions/current` and `revisions/by-time` now drive the revision sidebar,
-  but `revisions/history` is still unread and `revisions/{rev_id}/diff` /
-  `restore-as-new` have no UI affordance. The sidebar lists only the revisions
-  the session has loaded, so an archived revision that was never selected in
-  this session does not appear until it is read by id.
+  `revisions/current`, `revisions/by-time` and `revisions/history` now drive
+  the revision sidebar (history supplies every published, draft and archived
+  revision), but `revisions/{rev_id}/diff` / `restore-as-new` have no UI
+  affordance.
 - **Discovery is create-only.** Each discovery persists a new map plus a draft
   revision; a repeat with a colliding name is a 409. There is no re-scan into an
   existing draft, so the "added / removed / ambiguous" reconciliation described
@@ -423,6 +424,16 @@ The map is stored in dedicated System Maps tables (migration
   concurrency are not enforced (deferred to Beta 3).
 
 ## QA History
+
+- 2026-11-04: **Improve Architecture product-map walk** - fixed stale revision
+  metadata in the history sidebar. `loadRevision` only appended an unseen
+  revision, so publishing or archiving (which re-read the revision via
+  `loadMap`) left the previously cached object in place and the sidebar kept
+  showing the old status chip until a full reload. A re-read now replaces the
+  cached entry by id; added regression tests for the direct re-read and for the
+  publish path in `systemMapsStoreCrud.spec.ts`. Also reconciled the entry's
+  stale Known Gap, which still claimed `revisions/history` was unread after PR
+  #2848 wired it into the sidebar.
 
 - 2026-11-03: **Improve Architecture product-map walk (gap freshness)** -
   re-verified the remaining UI gap against `origin/main` after PR #2803 wired
