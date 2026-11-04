@@ -76,7 +76,7 @@ test.describe('PrimeVue Select overlay WCAG + keyboard nav', { tag: "@regression
     await loginAsAdmin(page, env)
 
     await page.goto('/runs')
-    await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+    await page.waitForFunction(() => (document.querySelector('#app')?.children.length ?? 0) > 0)
 
     // Open the migrated PrimeVue Select panel (teleported to body).
     const trigger = page.getByTestId('filter-bar-status')
@@ -109,7 +109,7 @@ test.describe('PrimeVue Select overlay WCAG + keyboard nav', { tag: "@regression
     await loginAsAdmin(page, env)
 
     await page.goto('/runs')
-    await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+    await page.waitForFunction(() => (document.querySelector('#app')?.children.length ?? 0) > 0)
 
     const trigger = page.getByTestId('filter-bar-status')
     await trigger.click()
@@ -146,7 +146,7 @@ test.describe('WCAG AA audit (CI — Vite dev server)', { tag: "@regression" }, 
       }
 
       // Wait for the Vue app to mount before running axe
-      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+      await page.waitForFunction(() => (document.querySelector('#app')?.children.length ?? 0) > 0)
 
       // Flipping the theme triggers PrimeVue's 0.2s colour transition on every
       // control. A cross-fade between the two themes passes through a
@@ -189,7 +189,7 @@ test.describe('WCAG AA audit (CI — Vite dev server)', { tag: "@regression" }, 
       }
 
       // Wait for the Vue app to mount before running axe
-      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+      await page.waitForFunction(() => (document.querySelector('#app')?.children.length ?? 0) > 0)
 
       // Same transition-suppression guard as the light-mode test: a stored
       // theme that differs from the default means this class-flip cross-fades,
@@ -250,7 +250,7 @@ test.describe('authenticated shell — sidebar profile links (FAR-1907)', { tag:
     await page.goto('/runs')
     await page.evaluate((token) => localStorage.setItem('modulo_access_token', token), systemAdminJwt('3f9a1b2c-4d5e-6f70-8192-a3b4c5d6e7f8'))
     await page.reload()
-    await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+    await page.waitForFunction(() => (document.querySelector('#app')?.children.length ?? 0) > 0)
 
     const links = page.locator('a[href$="/admin/my-profile"]')
     // Layout-agnostic: the number of profile links rendered on /runs depends on
@@ -289,7 +289,7 @@ test.describe('authenticated shell — sidebar profile links (FAR-1907)', { tag:
       await loginAsAdmin(page, env)
 
       await page.goto(path)
-      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+      await page.waitForFunction(() => (document.querySelector('#app')?.children.length ?? 0) > 0)
 
       const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()
       const violations = filterViolations(results.violations)
@@ -326,7 +326,7 @@ test.describe('authenticated light-theme contrast (FAR-1938)', { tag: "@regressi
       await loginAsAdmin(page, env)
 
       await page.goto(path)
-      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+      await page.waitForFunction(() => (document.querySelector('#app')?.children.length ?? 0) > 0)
       await forceLightMode(page)
 
       // Guard the harness itself: if the theme did not actually flip, the scan

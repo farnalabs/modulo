@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from '../setup/fixtures'
+import { test, expect } from '../setup/fixtures'
 import { loginThroughUi } from '../setup/login'
 import {
   apiBaseFor,
