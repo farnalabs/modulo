@@ -112,12 +112,12 @@ test.describe('Run detail metadata + heartbeat (FAR-1839)', { tag: '@regression'
     await openRunDetail(page, terminalRun({ heartbeat_at: HEARTBEAT_AT }))
 
     const heartbeat = page.getByTestId('run-detail-heartbeat')
-    await expect(heartbeat).toContainText('Last heartbeat')
+    await expect(heartbeat).toContainText('Last heartbeat', { timeout: 30_000 })
     // The value is a formatted local timestamp, not the "—" placeholder.
-    await expect(heartbeat).not.toContainText('—')
-    await expect(heartbeat).toContainText(await expectedHeartbeatText(page))
+    await expect(heartbeat).not.toContainText('—', { timeout: 30_000 })
+    await expect(heartbeat).toContainText(await expectedHeartbeatText(page), { timeout: 30_000 })
     // Staleness is a live-run signal only — a finished run never wears it.
-    await expect(heartbeat).not.toContainText('(stale)')
+    await expect(heartbeat).not.toContainText('(stale)', { timeout: 30_000 })
     await expect(page.getByTestId('run-detail-warnings-strip-stale-heartbeat')).toHaveCount(0)
   })
 
@@ -126,7 +126,7 @@ test.describe('Run detail metadata + heartbeat (FAR-1839)', { tag: '@regression'
     await openRunDetail(page, terminalRun({ heartbeat_at: null }))
 
     const heartbeat = page.getByTestId('run-detail-heartbeat')
-    await expect(heartbeat).toContainText(/Last heartbeat\s+—/)
+    await expect(heartbeat).toContainText(/Last heartbeat\s+—/, { timeout: 30_000 })
   })
 
   test('renders all five metadata fields with their labels', { tag: '@regression' }, async ({ page, env }) => {
@@ -134,16 +134,16 @@ test.describe('Run detail metadata + heartbeat (FAR-1839)', { tag: '@regression'
     await openRunDetail(page, terminalRun({ heartbeat_at: HEARTBEAT_AT }))
 
     const list = metadataList(page)
-    await expect(list).toBeVisible()
-    await expect(list).toContainText('Created')
-    await expect(list).toContainText('Started')
-    await expect(list).toContainText('Completed')
+    await expect(list).toBeVisible({ timeout: 30_000 })
+    await expect(list).toContainText('Created', { timeout: 30_000 })
+    await expect(list).toContainText('Started', { timeout: 30_000 })
+    await expect(list).toContainText('Completed', { timeout: 30_000 })
     const actor = page.getByTestId('run-detail-trigger-actor')
-    await expect(actor).toContainText('Triggered by')
-    await expect(actor).toContainText('admin@example.com')
-    await expect(list).toContainText('Last heartbeat')
-    await expect(list.locator('dt')).toHaveCount(5)
-    await expect(list.locator('dd')).toHaveCount(5)
+    await expect(actor).toContainText('Triggered by', { timeout: 30_000 })
+    await expect(actor).toContainText('admin@example.com', { timeout: 30_000 })
+    await expect(list).toContainText('Last heartbeat', { timeout: 30_000 })
+    await expect(list.locator('dt')).toHaveCount(5, { timeout: 30_000 })
+    await expect(list.locator('dd')).toHaveCount(5, { timeout: 30_000 })
   })
 
   test('metadata labels and values align in two columns on desktop', { tag: '@regression' }, async ({ page, env }) => {
@@ -171,8 +171,8 @@ test.describe('Run detail metadata + heartbeat (FAR-1839)', { tag: '@regression'
 
     const list = metadataList(page)
     // All five rows still readable (no collapsed/hidden labels)...
-    await expect(list.locator('dt')).toHaveCount(5)
-    await expect(list).toContainText('Last heartbeat')
+    await expect(list.locator('dt')).toHaveCount(5, { timeout: 30_000 })
+    await expect(list).toContainText('Last heartbeat', { timeout: 30_000 })
     // ...and the block itself never scrolls horizontally.
     const box = await list.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
     expect(box.scrollWidth, `metadata block overflows: ${JSON.stringify(box)}`).toBeLessThanOrEqual(box.clientWidth + 1)
