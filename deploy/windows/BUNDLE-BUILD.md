@@ -37,9 +37,44 @@ the installer places it at `{app}\bin\modulo.exe` and not at the install root.
 The marker holds `contract` (`native-windows-v1`), `arch` and, when the caller
 passes `-Version`, `version`.
 
-The release workflow (`.github/workflows/windows-installer.yml`, job `build`)
-still refuses to package: it does not yet consume the `windows-native-artifacts`
-payload. That wiring, plus signing, is separate from the bundle contract.
+## Release packaging path
+
+`windows-artifacts.yml` is also a reusable workflow (`workflow_call` with a
+`ref` input), so a release builds the payload from the RC tag rather than from
+whatever main happened to produce.
+
+`.github/workflows/release-unified.yml` calls it as `windows-native-artifacts`
+(cut/recut, gated on `include_windows`, which defaults to true because Windows
+is Alpha scope), then calls `.github/workflows/windows-installer.yml` with that
+job as a dependency.
+
+Inside `windows-installer.yml`:
+
+1. Job `build` downloads the `windows-native-artifacts` payload from the same
+   run, extracts it, and re-stages it with
+   `Invoke-WindowsBundleStaging -Version <release version>` so
+   `modulo-runtime.json` records the release version. `pg/` and `redis/` are
+   copied over from the payload. It then compiles `modulo.iss` with
+   `ISCC /DVERSION_NUM=<version> /DBUNDLE_ARCH=amd64 /DBUNDLE_DIR=<staged>`
+   and uploads `windows-installer-unsigned-<version>`.
+2. Job `sign` downloads that artefact and signs it with the existing Azure
+   Trusted Signing flow (`azure/login` OIDC with `AZURE_CLIENT_ID`,
+   `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, then
+   `Azure/trusted-signing-action` against the `farnasigning` account and the
+   `farna-public-trust` certificate profile), then uploads
+   `windows-installer-signed-<version>`. No secret value is ever printed.
+3. Job `attest` downloads the signed installer, verifies the file is present and
+   non-empty, attests provenance with `actions/attest-build-provenance`, and
+   uploads the public `windows-installer-<version>` artefact the release
+   manifest consumes.
+
+Dry-run still skips the payload download, compile-against-real-payload, signing
+and attestation. It runs `scripts/test-windows-installer.ps1 -RequireIscc`, so
+the dry-run proves the installer contract compiles without publishing anything.
+
+`final-release-manifest` depends on `windows-installer` when
+`include_windows` is true, so the `windows-installer-<version>` artefact exists
+before the manifest downloads and hashes it.
 
 ## Installer bundle contract
 
@@ -64,8 +99,8 @@ iscc /DVERSION_NUM=0.4.0 /DBUNDLE_ARCH=amd64 /DBUNDLE_DIR=C:\bundle deploy\windo
 
 `.github/workflows/windows-installer.yml` runs on every release invocation and on
 pull requests that touch `deploy/windows/**`, `scripts/create-windows-launcher.ps1`,
-`scripts/test-windows-installer.ps1` or the workflow itself. All proofs live in
-`scripts/test-windows-installer.ps1`:
+`scripts/windows/build-launcher.ps1`, `scripts/test-windows-installer.ps1` or the
+workflow itself. All proofs live in `scripts/test-windows-installer.ps1`:
 
 - Job `compile-check` (Windows runner, Inno Setup 6.2.2 via Chocolatey) runs
   `./scripts/test-windows-installer.ps1 -RequireIscc`. It compiles `modulo.iss`

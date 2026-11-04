@@ -39,10 +39,10 @@ name: "Release: Unified Pipeline"
         required: false
         default: false
       include_windows:
-        description: "Beta: include the Windows native installer in the release (not part of Alpha)"
+        description: "Include the signed Windows native installer in the release (Alpha scope)"
         type: boolean
         required: false
-        default: false
+        default: true
 
 concurrency:
   group: release-unified-${{ github.ref }}
@@ -1576,18 +1576,33 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
   # ---------------------------------------------------------------------------
+  # Build the native Windows payload used by the installer (cut and recut).
+  # ---------------------------------------------------------------------------
+  windows-native-artifacts:
+    name: Build native Windows payload
+    needs: release
+    if: (inputs.mode == 'cut' || inputs.mode == 'recut') && inputs.include_windows
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/windows-artifacts.yml
+    with:
+      ref: ${{ needs.release.outputs.rc_tag }}
+
+  # ---------------------------------------------------------------------------
   # Build Windows installer (cut and recut)
   # ---------------------------------------------------------------------------
   windows-installer:
-    name: Validate Windows installer prerequisite
-    needs: [release, bundle]
+    name: Build and sign Windows installer
+    needs: [release, bundle, windows-native-artifacts]
     if: (inputs.mode == 'cut' || inputs.mode == 'recut') && inputs.include_windows
     # The reusable workflow declares OIDC and attestation permissions for its
     # non-dry-run signing/attestation jobs. Permissions cannot be elevated
     # across a reusable-workflow boundary, so grant the caller the maximum
     # permissions the called workflow can request.
     permissions:
-      contents: write
+      contents: read
       id-token: write
       attestations: write
     uses: ./.github/workflows/windows-installer.yml
@@ -1623,16 +1638,15 @@ jobs:
   # ---------------------------------------------------------------------------
   # Final cross-platform manifest (cut and recut)
   #
-  # Alpha scope is Linux and macOS. Windows native packaging is BETA scope
-  # (windows-installer.yml is still a deliberate fail-closed placeholder), so
-  # this job must NOT depend on it or bundle its artefact - doing so made every
-  # Alpha cut/recut impossible. See the manifest step's note before re-adding.
-  # When include_windows=true (Beta path), the Windows artifact is required.
+  # Windows is Alpha scope (FAR-2338): the signed Windows installer is a
+  # dependency of the manifest so its artefact exists before the download step
+  # runs. When include_windows=false the installer job is skipped and the
+  # manifest proceeds without it, exactly as it did for the Linux+macOS scope.
   # ---------------------------------------------------------------------------
   final-release-manifest:
-    name: Generate final Linux + macOS release manifest
-    needs: [release, bundle, macos-installer]
-    if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    name: Generate final release manifest
+    needs: [release, bundle, macos-installer, windows-installer]
+    if: (inputs.mode == 'cut' || inputs.mode == 'recut') && (inputs.include_windows == false || needs.windows-installer.result == 'success')
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
     permissions:
@@ -1689,12 +1703,10 @@ jobs:
             --output-dir release-artefacts
           test -s "release-artefacts/modulo-${VERSION}-compose.tar.gz"
           tar -tzf "release-artefacts/modulo-${VERSION}-compose.tar.gz"
-      # Alpha bundle = Linux + macOS only. Windows native packaging is BETA
-      # scope: windows-installer.yml still fails closed, so the Windows .exe is
-      # deliberately absent here and must not be re-added to SHA256SUMS, the
-      # manifest `names` list or `components` until Windows is back in scope.
-      # When include_windows=true (Beta path), the Windows artifact is required
-      # and included in SHA256SUMS and the manifest components.
+      # Windows is Alpha scope (FAR-2338): the signed installer is included in
+      # SHA256SUMS and the manifest `names`/`components` when include_windows is
+      # true (the default). The Linux and macOS artefacts are always required;
+      # the Windows entry is only added when it is in scope.
       - name: Build final signed manifest after every platform artifact
         env:
           MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}

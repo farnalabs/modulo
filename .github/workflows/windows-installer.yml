@@ -1,9 +1,9 @@
 name: "Windows: Build Installer (Inno Setup)"
 
-# FAR-679: native Windows packaging is deliberately fail-closed until a real
-# Windows runtime exists. A Linux bundle is never relabeled as Windows. Dry-run
-# records that packaging is unavailable; it does not compile a fake or incomplete
-# installer and does not claim to validate the runtime contract.
+# FAR-2338: the release build consumes the separately produced native Windows
+# payload, restages it with the release version marker, compiles the Inno Setup
+# installer, and signs the installer with Azure Trusted Signing. Dry-run still
+# validates the installer contract without downloading or publishing a payload.
 #
 # FAR-2315: the compile-check and redaction-unit jobs are the real gates for
 # deploy/windows/modulo.iss. They run on every release invocation AND on pull
@@ -155,14 +155,13 @@ jobs:
           Write-Host 'bundle-versions.env loaded; no native Windows pins are currently available.'
 
   build:
-    name: Validate Windows installer prerequisite
+    name: Build Windows installer
     if: ${{ github.event_name == 'workflow_call' }}
     needs: [version-parity, compile-check]
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       VERSION_NUM: ${{ inputs.version }}
-      MODE: ${{ inputs.mode }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -171,75 +170,78 @@ jobs:
       - name: Install Inno Setup
         run: |
           $ErrorActionPreference = 'Stop'
-
-          # FAR-2331: the windows-latest image already ships Inno Setup (6.7.1 at
-          # the time of writing). Chocolatey refuses to replace a newer install with
-          # an older pin, so use the preinstalled ISCC.exe when it exists and only
-          # fall back to a Chocolatey install when it is missing.
           function Find-Iscc {
             $found = Get-Command -Name 'ISCC.exe' -ErrorAction SilentlyContinue
-            if ($found) {
-              return $found.Source
-            }
+            if ($found) { return $found.Source }
             foreach ($programFiles in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
               if ($programFiles) {
                 $candidate = Join-Path $programFiles 'Inno Setup 6\ISCC.exe'
-                if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-                  return $candidate
-                }
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
               }
             }
             return $null
           }
-
           $isccPath = Find-Iscc
-          if ($isccPath) {
-            Write-Host "Using preinstalled Inno Setup: $isccPath"
-          } else {
-            Write-Host 'Inno Setup is not preinstalled; installing it with Chocolatey.'
+          if (-not $isccPath) {
             choco install innosetup --yes --no-progress
-            if ($LASTEXITCODE -ne 0) {
-              throw "choco install innosetup exited $LASTEXITCODE"
-            }
+            if ($LASTEXITCODE -ne 0) { throw "choco install innosetup exited $LASTEXITCODE" }
             $isccPath = Find-Iscc
           }
-          if (-not $isccPath) {
-            throw 'ISCC.exe is not available: it is not on PATH or under Program Files\Inno Setup 6, and the Chocolatey install did not provide it.'
-          }
-
-          $versionInfo = (Get-Item -LiteralPath $isccPath).VersionInfo
-          Write-Host "ISCC: $isccPath (product version: $($versionInfo.ProductVersion), file version: $($versionInfo.FileVersion))"
+          if (-not $isccPath) { throw 'ISCC.exe is unavailable' }
           Add-Content -Path $env:GITHUB_PATH -Value (Split-Path -Parent $isccPath)
-      - name: Validate launcher helper contract
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & "$env:GITHUB_WORKSPACE/scripts/create-windows-launcher.ps1" -Version $env:VERSION_NUM -OutputPath (Join-Path $env:RUNNER_TEMP 'modulo.exe')
-          if (Test-Path -LiteralPath (Join-Path $env:RUNNER_TEMP 'modulo.exe')) {
-            throw 'launcher helper created a fake executable'
-          }
-      - name: Refuse packaging without native bundle
-        if: ${{ inputs.mode != 'dry-run' }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          throw 'Native Windows packaging is unavailable until the real native bundle is supplied; compile-only packaging is intentionally skipped.'
-      - name: Validate native Windows runtime prerequisite
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Write-Host 'Native Windows runtime/binaries are not yet available.'
-          Write-Host 'The current bundle artifact is Linux-only and must not be relabeled as Windows.'
-          if ($env:MODE -eq 'dry-run') {
-            Write-Host 'Dry-run contract: packaging is intentionally skipped until a real native bundle exists.'
-          } else {
-            throw 'Cannot publish Windows installer: no real Windows-native runtime/binaries exist.'
-          }
-      - name: Dry-run summary
+      - name: Dry-run contract summary
         if: ${{ inputs.mode == 'dry-run' }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/test-windows-installer.ps1 -RequireIscc
           @'
           ## Windows installer dry-run
 
-          Native Windows artifacts are not yet available. No placeholder Linux launcher or incomplete installer was created or published.
+          Installer contract compiled successfully. Native release payload download, signing, attestation, and publication were skipped.
           '@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+      - name: Download native Windows payload
+        if: ${{ inputs.mode != 'dry-run' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-native-artifacts
+          path: ${{ runner.temp }}\windows-native-artifacts
+      - name: Stage native Windows payload
+        if: ${{ inputs.mode != 'dry-run' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'windows-native-artifacts\windows-native-artifacts.zip'
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) { throw 'windows-native-artifacts.zip is missing' }
+          $payload = Join-Path $env:RUNNER_TEMP 'windows-native-payload'
+          if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Recurse -Force }
+          Expand-Archive -LiteralPath $archive -DestinationPath $payload -Force
+          $stageScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/windows/build-launcher.ps1'
+          . $stageScript
+          $staged = Join-Path $env:RUNNER_TEMP 'windows-bundle-staged'
+          Invoke-WindowsBundleStaging -StagePath $staged -PythonRoot (Join-Path $payload 'runtime/python') -BackendSource (Join-Path $payload 'backend/src') -SitePackagesSource (Join-Path $payload 'runtime/python/Lib/site-packages') -FrontendDistSource (Join-Path $payload 'frontend-dist') -LauncherPath (Join-Path $payload 'bin/modulo.exe') -Version $env:VERSION_NUM
+          Copy-Item -LiteralPath (Join-Path $payload 'pg') -Destination $staged -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $payload 'redis') -Destination $staged -Recurse -Force
+          if (-not (Test-Path -LiteralPath (Join-Path $staged 'modulo-runtime.json') -PathType Leaf)) { throw 'staged runtime marker is missing' }
+          if (-not (Test-Path -LiteralPath (Join-Path $staged 'bin/modulo.exe') -PathType Leaf)) { throw 'staged native launcher is missing' }
+          "BUNDLE_DIR=$staged" | Add-Content -Path $env:GITHUB_ENV
+      - name: Compile Windows installer
+        if: ${{ inputs.mode != 'dry-run' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'native-installer'
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+          & ISCC "/DVERSION_NUM=$env:VERSION_NUM" '/DBUNDLE_ARCH=amd64' "/DBUNDLE_DIR=$env:BUNDLE_DIR" "/O$output" 'deploy/windows/modulo.iss'
+          if ($LASTEXITCODE -ne 0) { throw "installer compilation exited $LASTEXITCODE" }
+          if (-not (Test-Path -LiteralPath (Join-Path $output "modulo-$env:VERSION_NUM-windows-amd64.exe") -PathType Leaf)) {
+            throw 'compiled Windows installer is missing'
+          }
+      - name: Upload unsigned Windows installer
+        if: ${{ inputs.mode != 'dry-run' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607be02 # v4.6.2
+        with:
+          name: windows-installer-unsigned-${{ inputs.version }}
+          path: ${{ runner.temp }}\native-installer
+          if-no-files-found: error
+          retention-days: 30
 
   sign:
     name: Sign Windows installer (Azure Trusted Signing)
@@ -251,6 +253,11 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Download unsigned Windows installer
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-installer-unsigned-${{ inputs.version }}
+          path: ${{ runner.temp }}\native-installer
       - name: Log in to Azure (OIDC)
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
@@ -267,6 +274,13 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+      - name: Upload signed Windows installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607be02 # v4.6.2
+        with:
+          name: windows-installer-signed-${{ inputs.version }}
+          path: ${{ runner.temp }}\native-installer
+          if-no-files-found: error
+          retention-days: 30
 
   attest:
     name: Attest Windows installer
@@ -279,23 +293,26 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Refuse incomplete native artifact
+      - name: Download signed Windows installer
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-installer-signed-${{ inputs.version }}
+          path: release-artefacts
+      - name: Verify the signed installer is present
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          echo "::error::Native Windows artifact publication is disabled until a real Windows build exists."
-          exit 1
-
-  publish:
-    name: Publish Windows installer
-    needs: [build, attest]
-    if: ${{ github.event_name == 'workflow_call' && inputs.mode == 'promote' && needs.build.result == 'success' && needs.attest.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - name: Refuse incomplete native artifact
-        run: |
-          set -euo pipefail
-          echo "::error::Cannot publish Windows installer: native artifact is unavailable."
-          exit 1
+          installer="release-artefacts/modulo-${VERSION}-windows-amd64.exe"
+          test -s "$installer"
+          sha256sum "$installer"
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: release-artefacts/modulo-*-windows-amd64.exe
+      - name: Upload attested Windows installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607be02 # v4.6.2
+        with:
+          name: windows-installer-${{ inputs.version }}
+          path: release-artefacts/modulo-*-windows-amd64.exe
+          if-no-files-found: error
+          retention-days: 30
