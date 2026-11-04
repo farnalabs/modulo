@@ -2428,3 +2428,62 @@ async def test_seed_creates_demo_system_map(session: AsyncSession, monkeypatch: 
     await _run_seed(session, monkeypatch, _demo_settings())
     assert await _count(session, SystemMap) == 1
     assert await _count(session, SystemMapRevision) == 1
+
+
+async def test_seed_converges_existing_system_map(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An existing map converges its flags and republishes when it has no revision."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    system_map = (await session.execute(select(SystemMap))).scalar_one()
+    system_map.default_map = False
+    system_map.published_revision_id = None
+    # Archive the seeded revision so the map is in the "no published revision"
+    # state the convergence branch exists to repair.
+    seeded_revision = (await session.execute(select(SystemMapRevision))).scalar_one()
+    seeded_revision.status = "archived"
+    await session.commit()
+
+    # The next boot restores default_map and publishes a successor revision.
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    await session.refresh(system_map)
+    assert system_map.default_map is True
+    revisions = list(
+        (await session.execute(select(SystemMapRevision).order_by(SystemMapRevision.revision_number))).scalars()
+    )
+    assert [rev.revision_number for rev in revisions] == [1, 2]
+    assert system_map.published_revision_id == revisions[-1].id
+    assert await _count(session, SystemMap) == 1
+
+    # Drop every revision: the no-latest-revision branch restarts at number 1.
+    system_map.published_revision_id = None
+    await session.execute(delete(SystemMapNode))
+    await session.execute(delete(SystemMapRelationship))
+    await session.execute(delete(SystemMapLoopConfig))
+    await session.execute(delete(SystemMapRevision))
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    await session.refresh(system_map)
+    revisions = list((await session.execute(select(SystemMapRevision))).scalars())
+    assert [rev.revision_number for rev in revisions] == [1]
+    assert system_map.published_revision_id == revisions[0].id
+
+
+async def test_seed_system_map_failure_is_best_effort(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A System Map element write failure is swallowed so the rest of the seed survives."""
+
+    async def _explode(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated system map element failure")
+
+    monkeypatch.setattr(seed_demo_module, "_seed_demo_system_map_elements", _explode)
+
+    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        summary = await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, SystemMap) == 0
+    assert any(record.getMessage().startswith("demo_seed.system_map_write_failed") for record in caplog.records)
