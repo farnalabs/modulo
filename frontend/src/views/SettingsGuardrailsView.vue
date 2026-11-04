@@ -1,8 +1,8 @@
 <template>
     <div data-theme="agent" class="page-wide">
-      <header class="flex items-center justify-between">
+      <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <PageHeader :title="$t('views.SettingsGuardrailsView.title')" :subtitle="$t('views.SettingsGuardrailsView.subtitle')" />
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2 sm:shrink-0">
           <Button
             v-if="isAdmin"
             data-testid="settings-guardrails-import"
