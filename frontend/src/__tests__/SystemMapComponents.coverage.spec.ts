@@ -153,7 +153,7 @@ describe('SystemMapRevisionSidebar', () => {
       ],
     })
 
-    const buttons = wrapper.findAll('ol li > button')
+    const buttons = wrapper.findAll('ol li > button:not([data-testid="system-map-revision-restore"])')
     expect(buttons.map((button) => button.attributes('data-testid'))).toEqual([
       'system-map-revision-3',
       'system-map-revision-2',

@@ -4618,6 +4618,7 @@ export default {
     }
   },
   "systemMaps": {
+    "restore_notes": "Restored from revision",
     "errors": {
       "load_maps": "Could not load system maps",
       "load_map": "Could not load system map",
@@ -4637,7 +4638,6 @@ export default {
       "load_revision": "Could not load revision",
       "create_draft": "Could not create draft",
       "restore_revision": "Could not restore revision",
-      "restore_notes": "Restored from revision",
       "save_draft": "Could not save draft",
       "discovery_failed": "Discovery failed"
     }
