@@ -288,8 +288,9 @@ Backups are encrypted with AES-256-CBC (PBKDF2, 600K iterations). See
 
 ### 4.1 Rate Limiting Configuration
 
-Rate limiting uses a Redis token-bucket algorithm. Auth-specific rate limiting
-is configured via environment variables:
+Route-level rate limiting uses a Redis sliding-window algorithm (ZADD +
+ZREMRANGEBYSCORE). Auth-specific rate limiting is configured via environment
+variables:
 
 ```env
 # Auth rate limiting
@@ -320,8 +321,12 @@ done
 # Expected: once the 60-second window has seen 100 requests, responses return 429
 ```
 
-Without Redis, rate limiting falls back to in-memory token bucket – this does
-not coordinate across replicas. See `docs/deployment.md` §Scaling for details.
+Without Redis, route-level rate limiting becomes a no-op that allows every
+request (except the demo auto-login rule, which keeps a process-local
+token-bucket floor). Auth rate limiting is disabled without Redis.
+Application-level limits that use a per-process `TokenBucketRegistry` (MCP
+`trigger_pipeline` and HITL decisions, guardrail override) still apply but do not
+coordinate across replicas. See `docs/deployment.md` §Scaling for details.
 
 ### 4.2 CSRF Protection
 

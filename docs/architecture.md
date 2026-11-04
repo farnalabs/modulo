@@ -885,14 +885,17 @@ Hardcoded sliding-window rules enforced by `RateLimitMiddleware` (see `backend/s
 
 | Path prefix | Limit | Window |
 |-------------|-------|--------|
+| `/api/v1/auth/demo` (demo auto-login) | 10 per IP | 1 hour |
 | `/api/v1/runs` | 60 | 60s |
 | `/api/v1/triggers` | 100 | 60s |
 | `/api/v1/errors/ingest` | 10 | 60s |
 | HITL review actions (`/api/v1/runs/{run_id}/hitl/{review_id}/{action}` and `/api/v1/runs/{run_id}/manual/{review_id}/submit`, POST) | 20 per user (aggregate) | 60s |
 | `/mcp` | 200 | 60s |
-| Auth endpoints (`/api/v1/auth/`) | 10 attempts | 60s (configurable via `MODULO_AUTH_MAX_ATTEMPTS`) |
+| Auth endpoints (`/api/v1/auth/`) | 10 attempts | 60s (configurable via `MODULO_AUTH_MAX_ATTEMPTS` and `MODULO_AUTH_WINDOW_SECONDS`) |
 
-Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory no-op when Redis is unavailable. Auth rate limiter requires Redis and is disabled without it.
+Pre-auth anonymous GETs have their own enumeration-defence rules (FAR-856 / FAR-1978 / FAR-2059), all 60/min per IP: `/api/v1/auth/login-context`, `/api/v1/auth/org-login/`, `/api/v1/auth/sso/providers`, `/api/v1/auth/oidc/` and `/api/v1/auth/saml/`. The demo auto-login rule is declared first so no later prefix can shadow it.
+
+Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). When Redis is unavailable the registry is a no-op limiter that allows every request, except the demo rule, which falls back to a process-local token-bucket floor (10/hour) that survives both a missing Redis and a runtime registry failure. Auth rate limiting requires Redis and is disabled without it (`MODULO_AUTH_RATE_LIMIT_ENABLED`). Separate application-level limits use a per-process `TokenBucketRegistry` (the MCP `trigger_pipeline` 60/min and HITL-decision limits, and the guardrail-override limit).
 
 The HITL budget is AGGREGATE per identity (JWT user, API-key prefix, or IP) across runs, gates, review actions, AND both surfaces; the bucket key normalizes the whole variable tail (FAR-611), so rotating gates, runs, or actions cannot dodge the 20/min cap (the 2026-09-05 bulk-approve sweep spread 22 decisions across per-gate buckets and was never throttled). The manual-output submit route (`/runs/{run_id}/manual/{review_id}/submit`, an approve-capability HITL surface whose path has no `/hitl/` segment, shares the SAME aggregate bucket, so a sweep alternating `/hitl/` review actions and `/manual/` submits exhausts one budget. MCP review actions sit behind the general `/mcp` 200/min rule rather than the HITL rule; they are machine-surface, human_only gates are already denied there, and tightening the MCP budget is follow-up work if MCP-side sweeps ever warrant it.
 
