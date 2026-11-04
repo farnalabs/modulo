@@ -313,6 +313,15 @@ _REVIEW_PAGE_SIZE_MAX = 100
 _PENDING_WORK_REVIEW_STATUSES = frozenset({"undecided", "pending", "claimed"})
 
 
+def _is_sandbox_capacity_exceeded(exc: BaseException) -> bool:
+    """Return whether a resume failure is the capacity-deferred outcome.
+
+    Kept beside the REST handler's exception import so other API adapters can
+    preserve the same mapping without importing the pipeline engine directly.
+    """
+    return isinstance(exc, SandboxCapacityExceededError)
+
+
 def _capacity_deferred_response(run_id: uuid.UUID, action: str) -> dict[str, str]:
     """Queued-success body for a resume denied by the org sandbox capacity cap.
 

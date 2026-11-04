@@ -95,9 +95,9 @@ from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 # `triggers` above). ``modulo.api.routes.hitl`` imports nothing from
 # ``mcp_server``, so there is no circular-import risk.
 from modulo.api.routes.hitl import (
-    SandboxCapacityExceededError,
     _build_resume_executor,
     _capacity_deferred_response,
+    _is_sandbox_capacity_exceeded,
 )
 from modulo.api.routes.oauth_metadata import protected_resource_metadata_url
 from modulo.api.routes.triggers import (
@@ -7584,10 +7584,9 @@ async def _resume_run_after_mcp_approval(
     except Exception as exc:
         # FAR-1831 parity: the decision committed and the resume was denied by
         # the org sandbox cap — the F6a reconcile re-dispatches once a slot
-        # frees, so this is a queued success, not an error. The exception is
-        # re-exported by the sibling HITL route module, keeping this adapter's
-        # import graph within the API-layer contract.
-        if isinstance(exc, SandboxCapacityExceededError):
+        # frees, so this is a queued success. The shared route helper preserves
+        # the REST capacity classification without a pipeline-engine import.
+        if _is_sandbox_capacity_exceeded(exc):
             deferred = _capacity_deferred_response(run_id, "approve")
             deferred["review_id"] = review_id
             return deferred
