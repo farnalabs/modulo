@@ -569,6 +569,17 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     expect(wrapper.text()).toContain('Could not archive revision')
   })
 
+  it('uses the localized fallback when revision history loading rejects with a non-Error', async () => {
+    const store = useSystemMapsStore()
+    vi.spyOn(store, 'loadRevisionHistory').mockRejectedValue('offline')
+
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    expect(store.activeMap?.id).toBe('map-1')
+    expect(wrapper.text()).toContain('Could not load revision history')
+  })
+
   it('keeps the discovery panel open when applying selections fails to save', async () => {
     const { wrapper, store } = await mountedWithMap()
     vi.spyOn(store, 'discover').mockResolvedValue({ draft_map_id: 'map-1', inferred_nodes: [], inferred_edges: [] } as never)
