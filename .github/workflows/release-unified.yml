@@ -1854,6 +1854,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           TAG: ${{ needs.release.outputs.rc_tag }}
+          INCLUDE_WINDOWS: ${{ inputs.include_windows }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2046,7 +2047,7 @@ jobs:
   # ---------------------------------------------------------------------------
   attest-artefacts:
     name: Attest released artefacts
-    needs: [produce-sbom, final-release-manifest, release]
+    needs: [produce-sbom, final-release-manifest, release, windows-installer]
     # The bundle is available for cut/recut; promote still attests the SBOM
     # without waiting on the intentionally skipped bundle job.
     if: always() && inputs.mode != 'dry-run' && needs.produce-sbom.result == 'success' && (inputs.mode == 'promote' || needs.final-release-manifest.result == 'success')
@@ -2078,7 +2079,7 @@ jobs:
           path: release-artefacts
 
       - name: Download the Windows installer artefact
-        if: inputs.mode == 'cut' || inputs.mode == 'recut' && inputs.include_windows
+        if: (inputs.mode == 'cut' || inputs.mode == 'recut') && inputs.include_windows
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: windows-installer-${{ inputs.version }}
@@ -2096,7 +2097,7 @@ jobs:
           printf 'Attestation subject: %s\n' "$DMG"
 
       - name: Assert the exact Windows exe is present
-        if: inputs.mode == 'cut' || inputs.mode == 'recut' && inputs.include_windows
+        if: (inputs.mode == 'cut' || inputs.mode == 'recut') && inputs.include_windows
         shell: bash
         env:
           VERSION: ${{ inputs.version }}

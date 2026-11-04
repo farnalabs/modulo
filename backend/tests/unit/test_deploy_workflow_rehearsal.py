@@ -276,7 +276,7 @@ def test_release_installer_callers_grant_permissions_their_jobs_require() -> Non
 def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["attest-artefacts"]
-    assert job["needs"] == ["produce-sbom", "final-release-manifest", "release"]
+    assert job["needs"] == ["produce-sbom", "final-release-manifest", "release", "windows-installer"]
     names = _step_names(job["steps"])
     assert "Download the SBOM artefact" in names
     assert "Download the final cross-platform release artefact" in names
@@ -2774,6 +2774,8 @@ def test_release_rc_tag_callers_read_the_release_job_output() -> None:
 def test_release_workflow_has_include_windows_input() -> None:
     """The unified release workflow must declare the include_windows input."""
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    # 'on' is a YAML boolean keyword; quoted key ensures correct parsing
+    assert "on" in workflow
     inputs = workflow["on"]["workflow_dispatch"]["inputs"]
     assert "include_windows" in inputs
     inp = inputs["include_windows"]
@@ -3023,3 +3025,68 @@ cd ..
     result = _run_bash(sha256_script, cwd=tmp_path, env=env)
     assert result.returncode != 0
     assert "include_windows=true but windows-installer" in result.stdout + result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for Alpha scope gating fixes (FAR-2831)
+# ---------------------------------------------------------------------------
+
+
+def test_release_workflow_on_key_is_quoted_for_yaml_boolean() -> None:
+    """The workflow trigger key must be quoted '"on":' because 'on' is a YAML boolean keyword."""
+    workflow_text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    # 'on' is a YAML 1.1 boolean keyword; quoting prevents it being parsed as True
+    assert '"on":' in workflow_text, "workflow trigger key must be quoted '\"on\":'"
+    workflow = yaml.safe_load(workflow_text)
+    assert "on" in workflow, "workflow must have 'on' key after YAML parsing"
+    assert workflow["on"] is not True, "'on' key must not be parsed as boolean True"
+
+
+def test_include_windows_referencing_steps_declare_env() -> None:
+    """Every step that references INCLUDE_WINDOWS must declare it in env:."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+
+    for job_id, job in workflow["jobs"].items():
+        for step in job.get("steps", []):
+            run = step.get("run", "")
+            if not isinstance(run, str):
+                continue
+            if "INCLUDE_WINDOWS" in run:
+                env = step.get("env") or {}
+                assert "INCLUDE_WINDOWS" in env, (
+                    f"{job_id}: step '{step.get('name', 'unnamed')}' references INCLUDE_WINDOWS "
+                    f"but does not declare it in env:"
+                )
+                # Verify it maps to the input
+                assert env["INCLUDE_WINDOWS"] == "${{ inputs.include_windows }}", (
+                    f"{job_id}: step '{step.get('name', 'unnamed')}' INCLUDE_WINDOWS env "
+                    f"must be '${{ inputs.include_windows }}'"
+                )
+
+
+def test_windows_installer_gated_steps_use_parenthesised_condition() -> None:
+    """The two attest-artefacts steps gated on Windows must use parenthesised condition."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    attest_job = workflow["jobs"]["attest-artefacts"]
+
+    for step in attest_job.get("steps", []):
+        name = step.get("name", "")
+        if name in ("Download the Windows installer artefact", "Assert the exact Windows exe is present"):
+            condition = step.get("if", "")
+            # Must be parenthesised: (cut || recut) && include_windows
+            assert condition == "(inputs.mode == 'cut' || inputs.mode == 'recut') && inputs.include_windows", (
+                f"Step '{name}' condition must be parenthesised, got: {condition}"
+            )
+
+
+def test_attest_artefacts_needs_includes_windows_installer() -> None:
+    """attest-artefacts job must depend on windows-installer for the Windows artifact."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    attest_job = workflow["jobs"]["attest-artefacts"]
+    needs = attest_job.get("needs", [])
+    assert "windows-installer" in needs, f"attest-artefacts.needs must include 'windows-installer', got: {needs}"
+    # The job uses always() so a skipped windows-installer must not block it
+    condition = attest_job.get("if", "")
+    assert "always()" in condition, (
+        f"attest-artefacts must use always() to not block on skipped windows-installer, got: {condition}"
+    )
