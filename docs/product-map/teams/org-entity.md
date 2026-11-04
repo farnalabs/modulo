@@ -39,16 +39,16 @@ status: covered
 
 # Teams Org Entity
 
-The Organisation entity is the root tenant entity in Modulo's multi-tenant architecture.
-Every resource belongs to an organisation (feature `feat-org` / route `/admin/org`). Postgres
+The Organization entity is the root tenant entity in Modulo's multi-tenant architecture.
+Every resource belongs to an organization (feature `feat-org` / route `/admin/org`). Postgres
 Row-Level Security (RLS) enforces tenant isolation at the database layer, and
-`OrgMembership` scopes users (`admin | operator | runner | viewer`) to organisations.
+`OrgMembership` scopes users (`admin | operator | runner | viewer`) to organizations.
 Referenced by ADR 047/018 as the product-map entry updated during centralized
 authorization cleanup.
 
-## Behaviours
+## Behaviors
 
-- [x] Organisation model: `id`, `name`, immutable `slug`, `status`
+- [x] Organization model: `id`, `name`, immutable `slug`, `status`
       (`active | suspended | deleted`), `created_by` (nullable, deliberately not an FK),
       `settings_json`, `plan_id`, `otel_config_json`, `daily_spend_limit`,
       `deletion_token` (24h, single-use), `export_bundle_json`
@@ -57,16 +57,16 @@ authorization cleanup.
 - [x] System-admin org CRUD (`/api/v1/admin/orgs`): create/list, create user in org,
       delete org - 403 for non-system-admins, 409 on slug collision / duplicate
       membership, 422 on invalid slug/role/weak password, 404 when missing. Deletion
-      is cross-organisation only: the caller's own organisation is refused with 409
+      is cross-organization only: the caller's own organization is refused with 409
       and the reserved infrastructure orgs (nil-UUID error ingest, modulo-library
       registry) with 404, both before any delete (`api/routes/admin_orgs.py`)
 - [x] Self-service org profile (`/api/v1/admin/org`): get/update name/logo, regenerate
       API key - admin role gate → 403
-- [x] Self-service organisation deletion is refused (FAR-2225): the only
-      organisation these routes can address is the caller's active one, so
+- [x] Self-service organization deletion is refused (FAR-2225): the only
+      organization these routes can address is the caller's active one, so
       `POST /api/v1/admin/org/deletion-request`, `POST
       /api/v1/admin/org/deletion-confirm` and `DELETE /api/v1/admin/org` all return
-      403 - naming the system-admin cross-organisation route in the detail - before
+      403 - naming the system-admin cross-organization route in the detail - before
       any token validation or database work. `PATCH
       /api/v1/admin/org/deletion-cancel` (a harmless safety valve) and `GET
       /api/v1/admin/org/export` remain functional
@@ -98,9 +98,9 @@ authorization cleanup.
 ## QA History
 
 - 2026-10-29: **FAR-2225 self-deletion fix** - recorded the rule that the
-  organisation the caller is signed in to can never be deleted: the three
+  organization the caller is signed in to can never be deleted: the three
   self-service delete routes refuse with 403 before any token or DB work, the
-  cross-organisation system-admin route refuses the caller's own org (409) and
+  cross-organization system-admin route refuses the caller's own org (409) and
   reserved orgs (404), and only `deletion-cancel` and the cross-org delete still
   write the FAR-1517 durable ledger. Corrected the previous "token + 202" and
   "immediate DELETE succeeds" wording, which no longer matched the handlers.
@@ -108,7 +108,7 @@ authorization cleanup.
   org-lifecycle durable audit ledger: the deletion workflow now mirrors its
   events into the org-independent `system_audit_events` table before the org
   row is removed, so the evidence is not destroyed by the `audit_events`
-  cascade. Added the checked behaviour line, the
+  cascade. Added the checked behavior line, the
   `core/system_audit_logger.py` code citation and the
   `test_system_audit_org_deletion.py` integration citation.
 - 2026-09-21: **product-map walk** - closed the "No org-CRUD BDD feature
@@ -122,8 +122,8 @@ authorization cleanup.
   real `/api/v1/admin/orgs` routes with DB seams patched
   (`steps/test_system_admin.py`).
 - 2026-08-29: **product-map review pass** - removed the stale
-  "no ``organisation exists`` shared BDD step" Known Gap: the step
-  ``Given the organisation exists`` is now defined once in the top-level
+  "no ``organization exists`` shared BDD step" Known Gap: the step
+  ``Given the organization exists`` is now defined once in the top-level
   ``tests/bdd/conftest.py`` (shared by every BDD module) and reused by the
   library and assistant feature files.
 - 2026-08-25: **product-map review pass** - restored this entry as part of

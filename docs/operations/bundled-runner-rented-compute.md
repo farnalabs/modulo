@@ -294,8 +294,8 @@ So a reader can choose between T2a and T2b knowingly:
 | Ops cost | Ongoing: OS/Docker updates, TLS cert renewal, proxy image bumps, engine-version monitoring (see §3, bridge-isolation caveat) | None – the vendor operates the fleet |
 | When it wins | Steady, heavy, predictable usage where a flat VM is cheaper than metered seconds; data-residency requirements that pin compute to a chosen provider | Bursty/light usage; spiky concurrency; when you need an **egress allowlist today** (T2a supports it, T2b does not – §5); when you don't want to operate a VM |
 
-Rule of thumb: at low or bursty utilisation the metered T2a sandbox is
-cheaper *and* lower-effort; at sustained high utilisation a modest flat VM
+Rule of thumb: at low or bursty utilization the metered T2a sandbox is
+cheaper *and* lower-effort; at sustained high utilization a modest flat VM
 is usually cheaper – but T2b then carries the whole ops surface and the
 accepted egress gap below. The egress-allowlist requirement is a
 hard discriminator: if you need bounded egress now, T2b cannot provide it

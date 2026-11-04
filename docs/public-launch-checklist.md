@@ -9,7 +9,7 @@ Production deployment readiness checklist for the Modulo Alpha public launch. Ea
 - [ ] **PostgreSQL 16+** is provisioned and reachable
   - Connection string uses a least-privilege role (not superuser)
   - TLS enabled - `sslmode=require` (or `verify-full` + CA) in `DATABASE_URL`;
-    the setting is honoured end-to-end and `prefer`/`allow` are rejected at startup
+    the setting is honored end-to-end and `prefer`/`allow` are rejected at startup
 - [ ] **Redis 8+** is provisioned (required for every production deployment because SAQ handles dispatch and scheduling)
   - `protected-mode yes` with `requirepass`
   - TLS enabled if Redis is configured with `tls-port`

@@ -33,7 +33,7 @@ Organization-level settings including display currency, guardrails kill-switch
 status, and admin-level org management (CRUD, license, trigger pause, guardrails
 kill-switch, authorization enforcement).
 
-## Behaviours
+## Behaviors
 
 - [x] `GET /api/v1/org/settings` returns the org's display currency for any
       authenticated org member (`backend/src/modulo/api/routes/org_settings.py`)
@@ -54,19 +54,19 @@ kill-switch, authorization enforcement).
       the already-committed override
       (`backend/src/modulo/api/routes/admin_feature_flags.py`,
       `backend/tests/unit/api/test_admin_feature_flags.py`)
-- [x] Internal-only flags stay off the customer-facing catalogue (FAR-2230):
+- [x] Internal-only flags stay off the customer-facing catalog (FAR-2230):
       `system_maps` (Beta System Maps) is a default-OFF, internal-only flag, so
       `effective_feature_flags` filters it and the retired internal flags out of
       plan/customer-facing flag responses. `GET /api/v1/admin/feature-flags` omits
       it unless the caller is an internal operator with developer mode and the
       dedicated `system_maps_access` grant, and the toggle route refuses the flag
       without that grant; the response cache key carries the caller's visibility
-      class so an internal catalogue can never be served to an ordinary caller
+      class so an internal catalog can never be served to an ordinary caller
       (`backend/src/modulo/core/feature_flags.py`,
       `backend/src/modulo/api/routes/admin_feature_flags.py`,
       `backend/tests/unit/api/test_admin_feature_flags.py`,
       `backend/tests/unit/core/test_feature_flag_registry.py`)
-- [x] Org admins govern their own organisation's low-sensitivity community
+- [x] Org admins govern their own organization's low-sensitivity community
       feature flags through `GET`/`PUT`/`DELETE
       /api/v1/admin/org/feature-flags[/{flag_name}]` without the instance-wide
       `system.config.manage` gate (`org.feature_flags.manage`, admin,
@@ -83,9 +83,9 @@ kill-switch, authorization enforcement).
       `frontend/src/views/AdminOrgSettingsView.vue`,
       `frontend/src/__tests__/AdminOrgSettingsView.spec.ts`)
 - [x] Frontend renders org settings at `/admin/org` with export, product-analytics,
-      community-objects and organisation-feature-flag controls
+      community-objects and organization-feature-flag controls
       (`frontend/src/manifest.yaml` testids). The page intentionally has no
-      self-service organisation-delete action: active-org deletion is refused by
+      self-service organization-delete action: active-org deletion is refused by
       every self-service API route (403, FAR-2225)
 - [x] Self-service org profile (`GET`/`PUT /api/v1/admin/org` in
       `api/routes/admin.py`): admins read and rename the org (slug immutable -
@@ -94,7 +94,7 @@ kill-switch, authorization enforcement).
       `backend/tests/unit/api/test_admin.py`). `DELETE /api/v1/admin/org`,
       `POST /org/deletion-request`, and `POST /org/deletion-confirm` are explicit
       403 refusals, before any deletion DB work; system admins must use the
-      cross-organisation route in `admin_orgs.py`
+      cross-organization route in `admin_orgs.py`
 - [x] Member invites into the org are BDD-executed against
       `POST /api/v1/admin/orgs/{org_id}/users` (`system_admin_users.feature`:
       duplicate-membership 409, cross-tenant local-account 409, invalid role /
@@ -115,15 +115,15 @@ Architecture walk - none of the eleven `data-testid`s they referenced
 `api-key-row`, `revoke-api-key`, `api-key-status`, etc.) exists anywhere in the
 frontend, so the scenarios described a page that never shipped and could never
 execute (they stayed pinned `@awaiting-implementation`). Each flow's real
-behaviour is covered by the citations above.
+behavior is covered by the citations above.
 
 ## QA History
 - 2026-11-02: **FAR-2302 delivery follow-up** - registered the org-admin
   feature-flag governance surface on this tracker: added the route module and
   the org-settings view to `code:`, their tests to `unit-tests:`, and the
-  behaviour line above. The `feature_overrides` write path, the fail-closed
+  behavior line above. The `feature_overrides` write path, the fail-closed
   `org_admin_settable` classification and the `/admin/org` card are covered by
-  `test_admin_org_feature_flags.py` (route behaviour + refuse paths) and
+  `test_admin_org_feature_flags.py` (route behavior + refuse paths) and
   `AdminOrgSettingsView.spec.ts` (load/save/throw/fallback states). Changed-lines
   coverage for the new lines is 100% line and branch on both the Python and
   JavaScript legs.
@@ -149,7 +149,7 @@ behaviour is covered by the citations above.
   control because self-service deletion is refused (FAR-2225)) and its surface
   is guarded in the manifest; the remaining gap was re-scoped to the
   `@awaiting-implementation` UI-journey BDD scenarios, which describe frontend
-  flows covered by component + E2E suites rather than backend BDD. Manifest `feat-org` gained the shipped UI behaviour line and the scoped
+  flows covered by component + E2E suites rather than backend BDD. Manifest `feat-org` gained the shipped UI behavior line and the scoped
   deferral.
 - 2026-09-25: **Improve Architecture product-map walk** -
   closed the feat-org "governance and audit partially wired" gap: the admin
@@ -186,6 +186,6 @@ behaviour is covered by the citations above.
   docs indexer and `/api/v1/manifest`.
 
 - 2026-09-07: **product-map review pass** - added this
-  behaviour-tracker for `feat-org`, which previously had no `docs/product-map/`
-  entry. Behaviours verified against `routes/org_settings.py`,
+  behavior-tracker for `feat-org`, which previously had no `docs/product-map/`
+  entry. Behaviors verified against `routes/org_settings.py`,
   `routes/admin_orgs.py`, and the admin org unit tests. Status: covered.

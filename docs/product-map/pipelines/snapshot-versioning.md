@@ -47,7 +47,7 @@ trigger and on every explicit graph save, each carries an incrementing
 annotate, delete, rollback, diff) is the data layer under
 `feat-pipelines-pipeline-diff-rollback`.
 
-## Behaviours
+## Behaviors
 
 - [x] Snapshots are created from the live graph and ordered by version descending
       with total count
@@ -112,7 +112,7 @@ annotate, delete, rollback, diff) is the data layer under
       created under that channel (`resolve_snapshot_for_channel`, newest
       `snapshot_version` first, org/pipeline-scoped); unbound, bogus-channel, or
       channel-without-snapshot triggers resolve to `None` and the caller pins
-      the live graph, preserving current behaviour
+      the live graph, preserving current behavior
       (`backend/src/modulo/db/crud/pipeline_snapshot_versioning.py`,
       `backend/src/modulo/core/trigger_engine/__init__.py::resolve_snapshot_id_for_trigger`,
       `backend/tests/unit/db/crud/test_snapshot_versioning_far402.py::TestResolveSnapshotForChannel`,
@@ -144,7 +144,7 @@ error-path semantics stay unit-tested (
   channel-resolution hook shipped under FAR-402 P6 with no product-map line
   anywhere (no entry mentioned `channel`/`canary`/`stable`) and
   `resolve_snapshot_for_channel` + `resolve_snapshot_id_for_trigger` entirely
-  untested. Added both checked behaviours plus the `release_channels.py` code
+  untested. Added both checked behaviors plus the `release_channels.py` code
   and `test_snapshot_versioning_far402.py` / `test_pipeline_snapshot_gating.py`
   unit-test citations; the 10 new resolver/hook tests live in the former.
   Status stays `covered`.
@@ -163,6 +163,6 @@ error-path semantics stay unit-tested (
   references and retired the outdated "no BDD" gap.
 - 2026-08-25: **product-map review pass** - entry added to close the
   dangling `depends-on: feat-pipelines-pipeline-versioning` edge in
-  `pipelines/pipeline-diff-rollback.md`. Behaviours re-verified against
+  `pipelines/pipeline-diff-rollback.md`. Behaviors re-verified against
   `db/crud/pipeline_snapshot_versioning.py` and the snapshot unit suites. Status:
   covered.

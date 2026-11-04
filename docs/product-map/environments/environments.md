@@ -57,7 +57,7 @@ concurrency tab is `/admin/runners/concurrency`. (FAR-551 collapsed the duplicat
 surface; FAR-591 D5 folded `/environment-profiles*` and `/admin/environments`
 into the Runners page as redirects.)
 
-## Behaviours
+## Behaviors
 
 - [x] A profile is createable with a name, description, provider_type, image_ref,
       capabilities, network_policy, initialisation_strategy, secret_refs,
@@ -68,7 +68,7 @@ into the Runners page as redirects.)
       id; a missing profile resolves 404 with message "Environment profile not found"
       (`list_profiles` / `get_profile`)
 - [x] Update (`PUT /api/v1/environment-profiles/{id}`) is a partial merge: omitted
-      fields are left untouched, `capabilities` / `secret_refs` are re-serialised into
+      fields are left untouched, `capabilities` / `secret_refs` are re-serialized into
       their JSON columns, and a name collision resolves 409
 - [x] Delete is a soft delete returning 204 (hard delete only via the immutable
       admin surface's reusable CRUD); restore is exposed on
@@ -90,7 +90,7 @@ into the Runners page as redirects.)
       `sandbox_agent` node whose `timeout_seconds` exceeds
       `min(profile.max_node_seconds, saq_run_timeout)`
       (`SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP`), so a save can never bind a node
-      budget the environment cannot honour. At dispatch the same effective cap
+      budget the environment cannot honor. At dispatch the same effective cap
       is re-validated by `validate_e2b_dispatch_timeout`, replacing the E2B
       3300-second provisioning default; an unbound pipeline keeps that E2B
       default. A non-integer `timeout_seconds` still raises the existing
@@ -142,13 +142,13 @@ into the Runners page as redirects.)
       `environment_profile_id` (omit to leave unchanged, explicit `null` clears
       and restores the default route), validated in the route against the
       EFFECTIVE post-update owner team - the profile must exist in the caller's
-      organisation and be either org-visible or a team profile owned by that
+      organization and be either org-visible or a team profile owned by that
       team; a foreign or cross-team id is 422 (never 404, which would confirm it
       exists) and a team/visibility change re-validates a STORED binding so a
       move can never strand an ineligible profile. The binding is frozen onto
       every snapshot created afterwards
       (`db/crud/pipeline_snapshot.create_snapshot_from_live_graph`), which is the
-      value dispatch reads; `NULL` keeps the historical default behaviour. The
+      value dispatch reads; `NULL` keeps the historical default behavior. The
       team rule is enforced at ALL THREE writers of the invariant (bind time, a
       pipeline scope change, and a profile scope change - the profile side
       refuses a `PUT` that would strand an existing binding with 422
@@ -171,7 +171,7 @@ into the Runners page as redirects.)
       test_environment_profiles_routes.py,
       test_environment_profile_scope_rls_guard.py`)
 - [x] The FAR-1558 team rule has a dispatch-time backstop as its last line of
-      defence (FAR-1598): when the snapshot-bound environment profile is loaded
+      defense (FAR-1598): when the snapshot-bound environment profile is loaded
       for dispatch, `runner_dispatch` re-validates it with the SAME shared
       predicate (`core.team_visibility.environment_profile_team_mismatch`)
       against the pipeline's EFFECTIVE owner team, read team-blind through
@@ -198,7 +198,7 @@ into the Runners page as redirects.)
       test_dispatch_route.py`)
 - [x] The binding is exposed on the read and non-REST surfaces (FAR-1599):
       `SnapshotResponse` carries `environment_profile_id` (additive and nullable
-      - legacy and partial stand-in snapshots serialise as null) so a snapshot's
+      - legacy and partial stand-in snapshots serialize as null) so a snapshot's
       frozen binding is readable through the API; the MCP `update_pipeline` tool
       accepts the field so MCP / org-API-key callers can set it; and
       `cli/apply` takes an `environment_profile_id` key on pipelines, managed
@@ -215,7 +215,7 @@ into the Runners page as redirects.)
 
 ## Known Gaps
 
-- Provider catalogue is fixed at `local_docker` + `e2b` + `kubernetes` (the
+- Provider catalog is fixed at `local_docker` + `e2b` + `kubernetes` (the
   `kubernetes` provider is env-gated on the `kubernetes-asyncio` SDK, FAR-1051);
   hub registration is env-driven and no plugin surface exists for third-party
   runtime providers.
@@ -231,7 +231,7 @@ into the Runners page as redirects.)
   `SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP` /
   `ENV_PROFILE_WALL_CLOCK_EXCEEDS_RUN_CEILING` refusals and the dispatch-time
   effective-cap re-validation were invisible to the feature graph and to
-  Assistant's `search_documentation` indexer. Added the checked behaviour line,
+  Assistant's `search_documentation` indexer. Added the checked behavior line,
   the model / migration `0338` / graph-validator / dispatch code citations and
   the form-spec citation. `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-09: **Improve Architecture product-map walk** – reconciled the two
@@ -239,10 +239,10 @@ into the Runners page as redirects.)
   FAR-1614 post-merge polish sweep (PR #1455) added the FAR-1598 (dispatch-time
   team-scope backstop) and FAR-1599 (read / non-REST surface exposure:
   `SnapshotResponse.environment_profile_id`, the MCP `update_pipeline` tool, and
-  the `modulo apply` `environment_profile_id` key) behaviours to the manifest
+  the `modulo apply` `environment_profile_id` key) behaviors to the manifest
   `feat-environments` registry, but this human-readable tracker still stopped at
   FAR-1558, so a reader of the feature graph got the opposite coverage answer
-  from the machine layer Assistant indexes. Added the two checked behaviour
+  from the machine layer Assistant indexes. Added the two checked behavior
   lines mirroring the manifest, plus the `runner_dispatch.py` / `node_runner.py`
   / `mcp_server.py` / `cli/apply` code citations and the
   `test_dispatch_team_scope_backstop.py` / `test_dispatch_route.py` /
@@ -255,7 +255,7 @@ into the Runners page as redirects.)
   `feat-environments` registry but this human-readable tracker never mirrored
   it, so a reader of the feature graph could not see the PATCH
   `environment_profile_id` contract, the three-writer team-scope invariant, the
-  snapshot freeze, or the editor select. Added the checked behaviour line plus
+  snapshot freeze, or the editor select. Added the checked behavior line plus
   the `pipelines.py` / `environment_profiles.py` / `core/team_visibility.py` /
   migration `0289` / `PipelineEditorView.vue` and unit- and integration-test
   citations.
@@ -263,10 +263,10 @@ into the Runners page as redirects.)
   FAR-1559 sub-surface (kubernetes provider type in the environment-profile
   form, merged in PR #1404): the form shipped the `kubernetes` provider while
   the manifest `feat-environments` registry and this tracker still listed the
-  provider catalogue as "local_docker + e2b" only. Added the checked behaviour
+  provider catalog as "local_docker + e2b" only. Added the checked behavior
   line (the three manually-creatable provider types, `local`/`runner_docker`
   excluded) and corrected the stale Known Gap to name the env-gated `kubernetes`
-  provider instead of asserting a closed two-provider catalogue.
+  provider instead of asserting a closed two-provider catalog.
 - 2026-09-12: **product-map review pass**: registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/runners/concurrency`, `/admin/runners/profiles`
@@ -311,15 +311,15 @@ into the Runners page as redirects.)
   and the graph-root registry index with the FAR-591 D5 Runners page: the
   canonical routes are `/admin/runners/profiles{,/new,/:id/edit}` and
   `/admin/runners/concurrency`, and the old `/environment-profiles*` /
-  `/admin/environments` URLs are redirects. No shipped behaviour changed.
+  `/admin/environments` URLs are redirects. No shipped behavior changed.
 - 2026-09-02: **FAR-551**: collapsed the duplicate `/admin/environments` UI +
   `environments.py` router (`/api/v1/environments`) into `/environment-profiles`;
   ported the `POST /{id}/test` connectivity check onto the survivor with a dedicated
   `environment_profile.test` permission; added the API-layer `require_feature`
   gate the new router was missing; `/admin/environments` now redirects.
-- 2026-09-01: **product-map review pass**: added this behaviour-tracker
+- 2026-09-01: **product-map review pass**: added this behavior-tracker
   for the registered manifest feature `feat-environments`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against
+  `docs/product-map/` entry. Behaviors verified against
   `api/routes/environment_profiles.py`, `api/routes/admin.py`,
   `core/runtime_provider`, `core/graph_validator` and the
   env unit/integration/BDD suites. Status: covered.

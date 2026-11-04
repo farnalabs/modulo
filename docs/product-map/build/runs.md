@@ -69,7 +69,7 @@ summaries, cancellation, node-level output and IO inspection, workspace events a
 leases, live event polling, node recovery / observation / guardrail-override /
 prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`).
 
-## Behaviours
+## Behaviors
 
 - [x] `POST /api/v1/runs` triggers a run (202) carrying `thread_id`; 404 for a missing
       pipeline, 409 for a deleted org, 422 for unknown fields, and 429 on
@@ -92,7 +92,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 - [x] A connector node that reports failure is a failed RUN, not a completed run with
       a failed node (FAR-2090): a `connector` or `dispatch` node envelope whose
       artifact has `status: failed` (or the legacy `connector_failure: true` marker)
-      is latched, and finalisation downgrades an otherwise-`complete` run to
+      is latched, and finalization downgrades an otherwise-`complete` run to
       `failed` with error code `connector.failed` – or
       `connector.side_effect_unknown` when any observed failure is a cancelled or
       raised write whose upstream effect is unknowable – joining the distinct
@@ -343,7 +343,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `organisation_id` FKs `ON DELETE CASCADE` so retention inherits the parent
       run with no separate sweep) carries a 0-based, per-run contiguous
       `attempt_index` (unique with `run_id`; the `COALESCE(MAX, -1) + 1`
-      allocator is serialised on Postgres by a transaction-scoped per-run
+      allocator is serialized on Postgres by a transaction-scoped per-run
       advisory lock), `started_at`, nullable `ended_at`, `model_used`,
       `error_code` and a CLOSED `terminal_reason` vocabulary (`deadline` /
       `stall` / `guard_cap` / `worker_lost` / `provider_error` / `completed` /
@@ -363,7 +363,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `run.status` permission as run detail (`require_permission_any_credential`,
       so JWT and org API-key callers both work, deliberately not a new
       permission key). The run is loaded org-scoped behind `set_rls_org`, so a
-      missing run AND another organisation's run both answer 404 – never an
+      missing run AND another organization's run both answer 404 – never an
       empty list, which would leak existence semantics. `items` is capped at
       100 while `total` carries the run's true attempt count, so a truncated
       page is visible rather than silently reported as complete
@@ -373,7 +373,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `aria-live` region: 1-based attempt numbers over the 0-based wire index,
       started time, duration (an OPEN attempt reads as running, an unparseable
       interval as a dash, never a fabricated duration), the translated closed
-      terminal-reason vocabulary (an unrecognised value reads as a translated
+      terminal-reason vocabulary (an unrecognized value reads as a translated
       Unknown, never the raw enum), model and error code. Loading, empty (older
       runs with no recorded attempts) and an inline unavailable + Retry state
       are handled without breaking the rest of the page (a 404 or generic fetch
@@ -381,7 +381,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       response when the run id changes mid-flight, and a truncation note appears
       when `total` exceeds the returned items (`RunAttemptHistory.spec.ts`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
-  MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
+  MVP nav (hidden via `visibility: private_preview`). Behavior detail removed for the
   MVP cut – restore from git history when re-enabling. See FAR-542._
 
 ## Known Gaps
@@ -401,11 +401,11 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   so the new `run_node_outputs.completed_at` contract, the completion writer /
   reader, the no-forward-progress terminal-fail rule and the fail-closed probe
   were invisible to the feature graph and to Assistant's
-  `search_documentation` indexer. Added the checked behaviour line, the
+  `search_documentation` indexer. Added the checked behavior line, the
   `db/crud/run_node_outputs.py` / `db/models/run_node_outputs.py` / migration
   `0337` code citations and the `test_per_node_completion.py` /
   `test_migration_0337_per_node_completion.py` test citations. It sits beside
-  the FAR-1463 firing-record behaviour, which it complements: FAR-1463 records
+  the FAR-1463 firing-record behavior, which it complements: FAR-1463 records
   that the watchdog fired, FAR-2050 decides whether the fire may re-dispatch.
   `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-25: **Improve Architecture product-map walk** – closed the untracked
@@ -417,14 +417,14 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   (open on admission, close-on-terminal, `reset` on re-dispatch, open while
   awaiting a human) and the `GET /runs/{id}/attempts` read + run-detail table –
   was invisible to the feature graph and to Assistant's
-  `search_documentation` indexer. Added three checked behaviour lines, the
+  `search_documentation` indexer. Added three checked behavior lines, the
   `db/models/run_attempt.py` / `db/crud/run_attempts.py` / migration `0329` /
   executor / `RunAttemptHistory.vue` code citations and the four backend suites
   plus the frontend spec. `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
   FAR-1141 run-provenance half: `runs.execution_origin` (ADR-042) and the
   `dispatched` stamp shipped in PR #1370 with only a testid in the product map,
-  nowhere in the feature registry or this tracker. Added the checked behaviour
+  nowhere in the feature registry or this tracker. Added the checked behavior
   line (closed vocabulary, frozen-graph derivation, legacy-never-backfilled,
   the run-rendering surfaces and the analytics dimension) plus the
   `db/models/run.py` / migration `0288_runs_execution_origin` /
@@ -434,7 +434,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   `feat-runs` tracker gap for FAR-1530: the manifest `feat-runs` registry entry
   was extended to name the `paused` state (`run_enabled=false`), but this
   tracker still described only archived / soft-deleted pipelines. Extended the
-  checked behaviour line to include the paused refusal, the
+  checked behavior line to include the paused refusal, the
   deleted-outranks-archived-outranks-paused state classifier
   (`db/crud/run.py`), the RLS-fenced org-scoped state gate, and the
   `test_pipeline_state_gate.py` citation, matching the manifest layer.
@@ -445,7 +445,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   across every REST entry point (manual trigger, rerun, test trigger, webhook,
   replay, slack, variant runs, feedback correction) through the shared
   `pipeline_not_runnable_http` helper, and the cron/polling/ongoing fire jobs
-  handle the same refusal without crashing. Added the checked behaviour line,
+  handle the same refusal without crashing. Added the checked behavior line,
   the `core/exceptions.py` code citation and the `test_runs_rerun_endpoint.py`
   / `test_pipeline_state_gate_rls.py` citations. `_ORPHANED_BDD_FEATURES`
   stays empty.
@@ -454,7 +454,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   firing on `runs.node_deadline_watchdog_fired_count` (and copies it onto
   `run_daily_facts`), so a firing is observable in analytics even when the kill
   re-dispatches and nulls `error_code`, and the count is distinct from a genuine
-  terminal failure. Added the checked behaviour line plus the
+  terminal failure. Added the checked behavior line plus the
   `core/pipeline_execution.py` / `db/models/run.py` / migration-0280 code
   citations and the `test_watchdog_firing_record_writer.py` /
   `test_pipeline_execution_watchdog_retry.py` unit citations. The analytics
@@ -478,7 +478,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   marker + reconciliation sweep, run-detail serialization + derived
   `gate_fired`) had NO product-map home in either layer – invisible to the
   feature graph and to Assistant's `search_documentation` indexer. Added the
-  three checked behaviour lines above plus the `pipeline_engine/classify.py`
+  three checked behavior lines above plus the `pipeline_engine/classify.py`
   code and `test_run_classification.py` unit-test citations. The FAR-1373
   streak-readout half is tracked under `feat-triggers`.
   `_ORPHANED_BDD_FEATURES` stays empty.
@@ -488,7 +488,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   `missing_self_report_reason` (at the time two states:
   `agent_not_reported` vs `zero_report_unproven`; a third,
   `sub_floor_rejected`, was added 2026-10-04 by FAR-1308 – see above)
-  but the human-readable graph entry was stale. Added the checked behaviour
+  but the human-readable graph entry was stale. Added the checked behavior
   line and the `core/cost_controller/` code + `test_run_warnings.py` /
   `test_cost_aggregate.py` / `test_runs_endpoint.py` unit citations.
   `_ORPHANED_BDD_FEATURES` stays empty.
@@ -575,13 +575,13 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   are no longer orphaned – they were wired into `steps/test_pipelines.py` (12 scenarios)
   when the same gap was closed on the `feat-pipelines` tracker, but this entry was not
   updated. Both files are now cited in `bdd:` and the run-lifecycle / sequential-ordering
-  behaviour is ticked. Status: covered.
+  behavior is ticked. Status: covered.
 - 2026-09-08: **product-map review pass** – recorded `run_lifecycle.feature`
   / `run_sequential.feature` as a dead-BDD-file known gap (run-time surfaces owned here that
   no step module registers). Superseded by the 2026-09-09 closure above once
   `steps/test_pipelines.py` registered both files.
-- 2026-08-28: **product-map review pass** – added this behaviour-tracker
+- 2026-08-28: **product-map review pass** – added this behavior-tracker
   for the registered manifest feature `feat-runs`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/runs.py`,
+  `docs/product-map/` entry. Behaviors verified against `api/routes/runs.py`,
   `api/routes/run_ws.py`, `db/crud/run.py`, `core/line_diff.py` and the runs unit/BDD
   suites. Status: covered.

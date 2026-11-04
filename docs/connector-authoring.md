@@ -50,7 +50,7 @@ class ConnectorBase(ABC):
 
 ### Overridable (non-abstract) methods
 
-These methods have default implementations and can be overridden for custom behaviour:
+These methods have default implementations and can be overridden for custom behavior:
 
 ```python
 class ConnectorBase(ABC):
@@ -239,7 +239,7 @@ interchangeable when they share a `connector_type` and the target's
 Unit tests use `unittest.mock` to stub external calls. Integration tests use
 the real connector against test fixtures (e.g., `tmp_path` directories for
 `FilesystemConnector`, which is a plain path connector with `file` and
-`directory` resources and no Git behaviour).
+`directory` resources and no Git behavior).
 
 ```python
 async def test_your_connector():

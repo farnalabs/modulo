@@ -45,7 +45,7 @@ when a run is triggered and on every explicit graph save, so any pipeline versio
 recovered or compared. Referenced by ADR 047/018 as a product-map entry touched during
 centralized authorization cleanup.
 
-## Behaviours
+## Behaviors
 
 - [x] Snapshot created automatically when a run is triggered and on every
       explicit graph save (the save→edit contract is detailed under
@@ -124,7 +124,7 @@ centralized authorization cleanup.
       port-signature deltas, downstream `impacted_nodes`, and `breaking_changes`
       (`block` vs `warning`)
       (`backend/tests/unit/db/crud/test_snapshot_versioning_far402.py::TestDiffSnapshotsSemantic`)
-- [x] A node that differs ONLY in behaviour-bearing config is reported as
+- [x] A node that differs ONLY in behavior-bearing config is reported as
       modified, never as unchanged: the per-field comparison covers the
       node-level `hitl_config` gate (a gate added, removed or retargeted changes
       who must approve the run), `timeout_seconds`, `template_id`,
@@ -137,7 +137,7 @@ centralized authorization cleanup.
       `backend/tests/unit/pipelines/test_snapshot_versioning.py::TestComputeNodeChangesExecutionSemantics`)
 - [x] A conditional edge that differs only in its routing expression is reported
       as modified: `condition_expression` (or the legacy `condition` spelling,
-      normalised before comparison so a re-spelled-but-identical expression is
+      normalized before comparison so a re-spelled-but-identical expression is
       NOT a change) plus `hitl_review_config` and `edge_type`; the frozen side
       reported to the client carries `condition_expression` too, so the
       reported change has a field to land on
@@ -148,7 +148,7 @@ centralized authorization cleanup.
       the pair can never disagree about what is in scope), `delete_snapshot`,
       and `diff_snapshots` (which now resolves BOTH sides through the scoped
       `get_snapshot_detail`, the same pattern `tag_snapshot` uses) – every REST
-      route and the MCP `get_pipeline_diff` tool pass the caller's organisation,
+      route and the MCP `get_pipeline_diff` tool pass the caller's organization,
       so an out-of-scope id resolves to `None` → 404 even on a layer where RLS
       context is missing
       (`backend/tests/unit/pipelines/test_snapshot_versioning.py::TestDiffSnapshotsOrgScoping`,
@@ -184,9 +184,9 @@ centralized authorization cleanup.
 ## QA History
 
 - 2026-10-25: **Improve Architecture product-map walk (cross-cutting lenses:
-  behaviour completeness, error handling, tenancy, resilience, edge cases)** –
+  behavior completeness, error handling, tenancy, resilience, edge cases)** –
   three findings fixed under an explicit allowlist.
-  (1) MAJOR, behaviour completeness: the per-field node comparison covered ONLY
+  (1) MAJOR, behavior completeness: the per-field node comparison covered ONLY
   the identity fields plus bindings/schema/ports, so a version pair differing
   only in a node-level `hitl_config`, `timeout_seconds`, `template_id`,
   `model_class` or `single_pr_per_run` was reported as MODIFIED-NOWHERE – the
@@ -194,18 +194,18 @@ centralized authorization cleanup.
   summary said there were no differences, for a graph that removes an approval
   gate or changes what a node executes. `_compute_node_changes` now compares
   those fields, and the edge comparison now covers `condition_expression`
-  (legacy `condition` normalised before comparison) – a routing-expression-only
+  (legacy `condition` normalized before comparison) – a routing-expression-only
   edit was invisible for the same reason. `_rebuild_graph` carries
   `condition_expression` so the frozen side shows the field the change names.
   Labelled in the compare view (`field_hitl_config` / `field_hitl_review_config`
   / `field_timeout_seconds` / `field_template_id` / `field_model_class` /
   `field_single_pr_per_run` / `field_condition_expression`). 12 new tests fail
   without the fix and pass with it (verified by reverting the source file).
-  (2) MINOR, tenancy/defence-in-depth: `list_snapshots` and `delete_snapshot`
+  (2) MINOR, tenancy/defense-in-depth: `list_snapshots` and `delete_snapshot`
   took no `organisation_id`, and `diff_snapshots` resolved each side by primary
   key before comparing `pipeline_id`; all three now take the same
   org/pipeline scope `get_snapshot_detail` already carried, and the REST routes
-  plus MCP `get_pipeline_diff` pass the caller's organisation. The page query
+  plus MCP `get_pipeline_diff` pass the caller's organization. The page query
   and its count share one filter list, so they cannot disagree.
   (3) MINOR, edge case: a corrupt id-less node now has TWO explicit tests
   (rebuild raises; the known-gap decision below is thus pinned by a test rather
@@ -223,14 +223,14 @@ centralized authorization cleanup.
 - 2026-10-12: **Improve Architecture product-map walk (index 400)** – closed
   five untracked sub-surfaces shipped since the 2026-08-29 pass: (1) FAR-1666
   policy-gate reconciliation on rollback (same-txn `reconcile_graph_policy_gates`,
-  tested but undescribed - added checked behaviour + `test_far1666_*` citation);
+  tested but undescribed - added checked behavior + `test_far1666_*` citation);
   (2) FAR-1515 MAJOR 3 connector-team `post_lock_gate` on rollback (added checked
-  behaviour cross-referencing `feat-connectors`); (3) FAR-1471
-  `pipeline.graph_updated` audit on rollback (added checked behaviour +
+  behavior cross-referencing `feat-connectors`); (3) FAR-1471
+  `pipeline.graph_updated` audit on rollback (added checked behavior +
   `test_pipeline_graph_updated_audit.py` citation); (4) FAR-1360 path scoping +
-  FAR-1312 in-txn team-gate re-check on tag/diff/delete (added checked behaviour
+  FAR-1312 in-txn team-gate re-check on tag/diff/delete (added checked behavior
   + `test_snapshot_path_scoping_and_residual_gates.py` citation); (5) FAR-402 P6
-  semantic diff layer (added checked behaviour + `TestDiffSnapshotsSemantic`
+  semantic diff layer (added checked behavior + `TestDiffSnapshotsSemantic`
   citation). MAJOR coverage fix: `resolve_snapshot_for_channel` (CRUD) and
   `TriggerEngine.resolve_snapshot_id_for_trigger` (hook) had ZERO tests - added
   `TestResolveSnapshotForChannel` (5 tests: passthrough, None, compiled-statement

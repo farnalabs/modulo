@@ -208,7 +208,7 @@ describe('LibraryPipelineWizard', () => {
     await nextTick()
 
     // The sub-pipeline visualization section should be visible
-    expect(wrapper.text()).toContain('Pipeline Visualisation')
+    expect(wrapper.text()).toContain('Pipeline Visualization')
     expect(wrapper.text()).toContain('sub-pipeline internal')
   })
 
@@ -263,7 +263,7 @@ describe('LibraryPipelineWizard', () => {
     const wrapper = mount(LibraryPipelineWizard, { global: { plugins: [router], stubs: { OwnershipPicker: true, VueFlow: true, Background: true } } })
     await flushPromises()
     await nextTick()
-    expect(wrapper.text()).toContain('Pipeline Visualisation')
+    expect(wrapper.text()).toContain('Pipeline Visualization')
   })
 
   it('renders template agents with descriptions and connector refs', async () => {

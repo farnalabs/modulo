@@ -25,7 +25,7 @@ status: covered
 
 The pluggable at-rest secret store for external credential material. The
 current production writers through it are model-backend API keys
-(`api/routes/model_backends.py`) and the organisation secret vault
+(`api/routes/model_backends.py`) and the organization secret vault
 (`api/mcp_server.py`); the connector hub *prefers* this backend on read and
 falls back to the connector row's own ciphertext column. Notification-endpoint
 and OTel export keys are written direct-Fernet into their own columns and are
@@ -36,31 +36,31 @@ pluggable store. The ``SecretsBackend`` ABC exposes async ``get_secret`` /
 rows in the ``secrets`` table), ``vault`` (HashiCorp Vault) or ``aws`` (Secrets
 Manager). External backends are available on every tier - there is no
 entitlement gate on them (FAR-2100 retired the `external_secrets` flag that
-could never fire), and no licence state changes which backend the factory
+could never fire), and no license state changes which backend the factory
 builds (FAR-2059 / FAR-2060).
 ``fernet_rotation.py``
 re-encrypts every encrypted store to a new key with an ``old_key`` fallback for
 no-downtime rotation. Infra-only surface - no UI route, so it is tracked here
 rather than in the manifest registry.
 
-## Behaviours
+## Behaviors
 
 - [x] ``SecretsBackend`` ABC with async ``get_secret`` / ``set_secret`` /
       ``delete_secret`` and a ``KeyError`` contract for a missing key
-- [x] Secret keys are validated / normalised (non-empty string, stripped) -
+- [x] Secret keys are validated / normalized (non-empty string, stripped) -
       invalid keys raise ``ValueError``, never touch the store
 - [x] Factory ``create_secrets_backend`` selects the backend from
       ``backend_name`` / ``MODULO_SECRETS_BACKEND`` (``fernet`` default,
       ``vault``, ``aws``); unknown name → ``ValueError`` listing the choices
 - [x] External backends (``vault`` / ``aws``) are available on ALL tiers with
-      no entitlement or licence gate (FAR-2100): a configured backend is
+      no entitlement or license gate (FAR-2100): a configured backend is
       always constructed and is never silently downgraded to ``fernet`` on a
-      licence lapse (FAR-2059 / FAR-2060) - an unconfigured external backend
+      license lapse (FAR-2059 / FAR-2060) - an unconfigured external backend
       fails hard in its own constructor instead
 - [x] ``fernet`` backend encrypts values with ``cryptography.fernet.Fernet``
       and persists them in the ``secrets`` table with an
       ``(organisation_id, key)`` scope
-- [x] ``fernet`` backend is RLS-aware - reads the organisation id from the
+- [x] ``fernet`` backend is RLS-aware - reads the organization id from the
       session (``app.organisation_id`` via ``current_setting``, falling back
       to ``session.info`` on non-Postgres backends) and scopes every row to
       that org; missing org context fails closed with an actionable error
@@ -107,8 +107,8 @@ rather than in the manifest registry.
   ``steps/test_secrets_backend.py``, driving the REAL
   ``modulo.core.secrets_backend`` seams network-free and DB-free - the
   ``FernetSecretsBackend`` persists/reads real rows in an in-memory aiosqlite
-  engine (round-trip, in-place upsert, delete, whitespace-normalised keys),
-  organisation scoping via the real ``WHERE organisation_id = :oid`` SQL the
+  engine (round-trip, in-place upsert, delete, whitespace-normalized keys),
+  organization scoping via the real ``WHERE organisation_id = :oid`` SQL the
   backend emits (org A can read what org A wrote; org B gets ``KeyError``),
   ``validate_key`` / ``_read_org_id_from_session`` fail-closed rejections
   (blank key, no session, missing RLS context), real-key rotation fallback +
@@ -118,6 +118,6 @@ rather than in the manifest registry.
 - 2026-08-27: **product-map review pass** - entry added to
   close the feature-graph gap for a shipped infra-only surface consumed by the
   connector / model-backend / notification / OTel-export credential paths but
-  invisible to the product map. Behaviours verified against
+  invisible to the product map. Behaviors verified against
   ``core/secrets_backend/*``, ``core/fernet_rotation.py`` and the
   ``secrets_backend`` + ``fernet_rotation`` unit suites. Status: covered.

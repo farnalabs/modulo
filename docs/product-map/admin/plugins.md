@@ -30,7 +30,7 @@ is deferred from the MVP nav (`visibility: private_preview`, FAR-544), but the
 API surface ships and is gated by the `plugin_management` feature and the
 `plugin.list` permission.
 
-## Behaviours
+## Behaviors
 
 - [x] Plugins are discovered at startup and available through the registry's
       `list_plugins` / `get_plugin` queries
@@ -149,7 +149,7 @@ API surface ships and is gated by the `plugin_management` feature and the
   path (`api/main.py::_discover_plugins`) and made the whole instance unbootable
   because of one broken plugin. The catch is now `Exception` (re-raising
   `asyncio.CancelledError`), so the plugin is surfaced unhealthy under the
-  documented "Failed to load entry point …" detail; regression tests parametrise
+  documented "Failed to load entry point …" detail; regression tests parametrize
   RuntimeError/ValueError/KeyError/OSError/LookupError and prove sibling plugins
   still discover (partial-failure isolation). MAJOR (frontend↔backend contract):
   `AdminPluginsView.vue` rendered an enable/disable toggle that called
@@ -157,7 +157,7 @@ API surface ships and is gated by the `plugin_management` feature and the
   API is read-only by design, and the plugin unit test mocked only `api.GET`, so
   nothing exercised it). The dead control and its `activeStates` / `togglePlugin`
   machinery are removed; the status pill is now health-driven. MAJOR (coverage):
-  the "[x] routes gated by `require_feature(\"plugin_management\")`" behaviour
+  the "[x] routes gated by `require_feature(\"plugin_management\")`" behavior
   was declaration-only - added 402 tests for all three endpoints. MINOR
   (coverage): added the missing 500 fallback tests for the list and health
   endpoints. 90 plugin backend tests pass (79 → 90); frontend eslint / vue-tsc

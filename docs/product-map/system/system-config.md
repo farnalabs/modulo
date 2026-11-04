@@ -20,7 +20,7 @@ System-level configuration administration for deployment-wide `SystemConfig`
 entries. System admins can list, create/update, and delete config key-value pairs
 with sensitive value masking.
 
-## Behaviours
+## Behaviors
 
 - [x] GET `/api/v1/system-admin/config` lists all config entries with sensitive
       value masking; gated on `system.config.manage` (system admin only)
@@ -59,7 +59,7 @@ with sensitive value masking.
   can no longer drift unguarded.
 
 - 2026-09-07: **product-map review pass** - added this
-  behaviour-tracker for `feat-system-config`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against
+  behavior-tracker for `feat-system-config`, which previously had no
+  `docs/product-map/` entry. Behaviors verified against
   `routes/admin_system_config.py`, the system-config unit tests, and the
   `system_admin_config.feature` BDD. Status: covered.

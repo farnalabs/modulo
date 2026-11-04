@@ -67,7 +67,7 @@ evals raise `EvalBlockedError` and are the mechanism engine-side guardrails
 build on (`feat-guardrails` depends on this engine).
 Surfaces: `/evals/editor` and `/evals/proposals`.
 
-## Behaviours
+## Behaviors
 
 - [x] Five eval types: `model_judge` (LLM-as-judge via ModelBackendHub),
       `regex` (pattern match against an output field), `json_schema` (validate
@@ -186,7 +186,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   `min_runs`/`threshold`), corrected the "admin CRUD" permission claim (reads are
   runner-readable), cited the `PolicyGateDecision` model file + the purge-first
   test that actually covers org-deletion ordering, and corrected the proposal-queue
-  behaviour so the `/evals/proposals` view's publish is not conflated with the API
+  behavior so the `/evals/proposals` view's publish is not conflated with the API
   publish that creates an eval definition.
 - 2026-10-05: **Improve Architecture product-map walk** – tracked the
   FAR-967 chunk 10 policy-gate operator-control + pin-integrity surface that
@@ -196,12 +196,12 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   run-start `policy_gate_pins_fingerprint` re-verification, and the pin-governed
   evaluation universe (`_resolve_governed_gate`). Registered the newly visible
   `/evals/editor` policy-gate testids in the manifest `elements:` inventory and
-  added the checked behaviour line + code/unit-test citations (migration 0274,
+  added the checked behavior line + code/unit-test citations (migration 0274,
   `test_policy_gate_pin.py`, `test_policy_gate_eval_wiring.py`,
   `test_policy_gate_routes_coverage.py`, `test_policy_gate_pin_migration.py`,
   `EvalEditorViewPolicyGate.spec.ts`). The policy-gate UI controls were written
   with a `data-test-id` typo that hid them from the product-map element guard and
-  from Playwright's `getByTestId`; this walk normalised them to `data-testid`
+  from Playwright's `getByTestId`; this walk normalized them to `data-testid`
   (with a regression guard in `test_product_map_consistency.py`).
 - 2026-09-30: **Improve Architecture product-map walk** – ticked the FAR-957
   advisory author-warning surface: policy-gate binding
@@ -211,7 +211,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   `temporal_ordering` / `recent_undefined`, warn on the safe direction). Added
   `core/eval_engine/author_warnings.py` to `code:`,
   `tests/unit/core/evidence/test_author_warnings.py` to `unit-tests:`, and the
-  manifest `feat-evals` registry behaviour line. The append-only evidence store
+  manifest `feat-evals` registry behavior line. The append-only evidence store
   and the FAR-961 retention policy + purge sweep it sits on are tracked under
   the new `feat-core-evidence-store` tracker (`core/evidence-store.md`).
 - 2026-09-28: **Improve Architecture product-map walk** – archived the stale
@@ -233,7 +233,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   frontend types) and is now engine-internal only (verified against
   `api/routes/evals.py` "public fields only, failure_behaviour excluded" and
   the absence of the field in `frontend/src/types/`); the `/evals/editor`
-  behaviour dropped the "failure-warn / failure-block thresholds" the retired
+  behavior dropped the "failure-warn / failure-block thresholds" the retired
   UI had removed along with the `eval-editor-failure-*` elements. Tracked the
   FAR-1102/1060 `PolicyGateDecision` surface (write + purge + delete-block)
   that shipped without a product-map home.
@@ -281,9 +281,9 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   judge `model_backend_id`, and the guarded rubric prompt with the
   data-not-instructions delimiter wrapping.
 
-- 2026-08-30: **product-map review pass** – new behaviour
+- 2026-08-30: **product-map review pass** – new behavior
   tracker for the registered `feat-evals` manifest feature (routes `/evals/editor`,
-  `/evals/proposals`, previously absent from the feature graph). Behaviours
+  `/evals/proposals`, previously absent from the feature graph). Behaviors
   verified against `api/routes/evals.py` + `feedback.py`, `core/eval_engine/*`
   (engine, suite-run, coverage gap, regression), the admin/eval/suite
   unit + integration suites, and the `eval/` + `evals/` BDD features. Status:

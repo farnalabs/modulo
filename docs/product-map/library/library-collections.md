@@ -32,9 +32,9 @@ then install it into runnable org entities. Collection authoring lives at
 `/library/collections/new` and the detail view at `/library/collections/:id`, both
 gated behind the `library_collection` feature flag.
 
-## Behaviours
+## Behaviors
 
-- [x] Install resolves manifest pins to visible org primitives, materialises
+- [x] Install resolves manifest pins to visible org primitives, materializes
       entities via `materialize_import` (with `format_version` set so the bundle
       passes validation), stamps `collection_install_id` on every created entity
       (schemas, agents, pipelines), and writes a `CollectionInstall` provenance
@@ -102,7 +102,7 @@ gated behind the `library_collection` feature flag.
       OR content drifted from the install-time `entity_fingerprints`
       snapshot) are NEVER clobbered - preserved and reported; unmodified
       entities whose pin changed are rewritten in place with stable ids;
-      added pins are reported, not materialised; removed pins are reported,
+      added pins are reported, not materialized; removed pins are reported,
       not deleted; structural pipeline-graph changes are reported `manual`
       (reinstalling is the operator's job). The install record then points at
       the new version row and its snapshot is refreshed. 404 unknown install,
@@ -164,6 +164,6 @@ gated behind the `library_collection` feature flag.
   `_ORPHANED_BDD_FEATURES` stays empty.
 
 - 2026-09-10: **Branch Fixer** - registered `feat-library-collections` in the
-  manifest, the graph-root registry index, and this behaviour tracker so the
+  manifest, the graph-root registry index, and this behavior tracker so the
   product-map architecture guards (route reference, registry index enumeration,
-  behaviour tracking) stay green.
+  behavior tracking) stay green.

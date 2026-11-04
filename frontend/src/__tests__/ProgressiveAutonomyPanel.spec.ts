@@ -161,7 +161,7 @@ describe('ProgressiveAutonomyPanel', () => {
 
     const error = wrapper.find('[data-testid="progressive-autonomy-error"]')
     expect(error.exists()).toBe(true)
-    expect(error.text()).toContain('Only an organisation admin or the pipeline')
+    expect(error.text()).toContain('Only an organization admin or the pipeline')
     expect(error.text()).toContain('not an admin or owner')
     expect(wrapper.emitted('changed')).toBeUndefined()
     // The displayed earned level was never touched by the refusal.
@@ -241,8 +241,8 @@ describe('ProgressiveAutonomyPanel', () => {
     expect(demote.attributes('disabled')).toBeDefined()
 
     // The permission rule is not hover-only: each button carries it for AT.
-    expect(demote.attributes('aria-description')).toContain('organisation admin')
-    expect(promote.attributes('aria-description')).toContain('organisation admin')
+    expect(demote.attributes('aria-description')).toContain('organization admin')
+    expect(promote.attributes('aria-description')).toContain('organization admin')
   })
 
   it('clears a stale local override only once fresher prop data arrives', async () => {

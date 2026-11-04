@@ -22,7 +22,7 @@ The workflow defaults to workflow-level `permissions: contents: read`, with writ
 | Mode | What it does | Publishes? |
 |------|--------------|------------|
 | `cut` | Establishes a temporary publication hold, bumps the version on `main`, tags `vX.Y.Z-rcN`, establishes the authoritative `release-freeze`, publishes four RC-qualified container images (including `runner-opencode`), builds/signs the release bundle, pushes the bundle tag, creates the GitHub Release, and dispatches forced deploy plus `rc-validate.yml` | Yes - RC tag, freeze, four RC images, signed bundle/artifacts, GitHub Release, bundle tag, forced deploy + validation |
-| `recut` | After a fix has been manually merged to `main`: tags the *next* RC, re-freezes, republishes the four RC-qualified images and signed release artefacts, and dispatches the forced soak and validation again | Yes - next RC tag, freeze, four RC images, signed bundle/artifacts, GitHub Release, bundle tag, forced deploy + validation |
+| `recut` | After a fix has been manually merged to `main`: tags the *next* RC, re-freezes, republishes the four RC-qualified images and signed release artifacts, and dispatches the forced soak and validation again | Yes - next RC tag, freeze, four RC images, signed bundle/artifacts, GitHub Release, bundle tag, forced deploy + validation |
 | `promote` | Promotes the validated RC to GA: creates and pushes the `vX.Y.Z` tag, retags all four images as `VERSION_NUM` and `latest`, pushes the stable Helm chart, updates `CHANGELOG.md`, creates or updates the GitHub Release, lifts the freeze, and publishes `farnalabs-modulo` to PyPI | Yes - stable `VERSION_NUM`/`latest` images and Helm chart only here, plus GA tag, Release and PyPI package |
 | `dry-run` | Builds everything and resolves what a `cut` would have done, then stops | **No - no publication, tags, commits, registry pushes, Release, attestation, or deploy** |
 
@@ -89,9 +89,9 @@ The GA tag is the release identity, so it is created and pushed before anything 
 `dry-run` is the safe way to answer "what would this release actually do?" before committing to it. It:
 
 - validates the version input (must be semver `X.Y.Z`);
-- resolves the version, the next RC tag, and the artefacts a `cut` would produce, and writes them to the job summary;
+- resolves the version, the next RC tag, and the artifacts a `cut` would produce, and writes them to the job summary;
 - builds every container image (see below);
-- generates the CycloneDX SBOM and uploads it as the `sbom-cyclonedx` workflow artefact (building a file inside the run is not publishing - it reaches no registry and no release).
+- generates the CycloneDX SBOM and uploads it as the `sbom-cyclonedx` workflow artifact (building a file inside the run is not publishing - it reaches no registry and no release).
 
 It does **not** publish anything. It does not create a tag or marker branch of any kind - not the RC, not `release-freeze`, not `release-publication-hold`, not `validated/*`, not GA - does not push to any registry, and does not create a Release, commit a CHANGELOG, publish a package, create an attestation, or deploy. It is therefore safe to run during an active freeze.
 
@@ -120,7 +120,7 @@ Server images are `linux/amd64` **only**. The native macOS installer is a separa
 
 ### How images are actually published
 
-The unified workflow owns release publication directly. `cut` and `recut` publish four RC-qualified images (`all-in-one`, `backend`, `frontend`, and `runner-opencode`) alongside the signed bundle and release artefacts. `promote` is the only path that publishes stable `VERSION_NUM` and `latest` image tags and the stable Helm chart.
+The unified workflow owns release publication directly. `cut` and `recut` publish four RC-qualified images (`all-in-one`, `backend`, `frontend`, and `runner-opencode`) alongside the signed bundle and release artifacts. `promote` is the only path that publishes stable `VERSION_NUM` and `latest` image tags and the stable Helm chart.
 
 `publish-images.yml` remains the ordinary `main` publication path. It always publishes the immutable short-SHA image; it publishes `latest` only when neither the authoritative `release-freeze` nor the cut-only `release-publication-hold` marker exists. A failed or unknown marker lookup fails closed. The temporary hold closes the race between the cut's version-bump push and creation of `release-freeze`; the freeze remains the authoritative release boundary after that point.
 
@@ -139,13 +139,13 @@ The dry-run's no-publication guarantee stays structural: it performs no marker a
 
 ## Not implemented yet
 
-`release-unified.yml` owns the RC/GA lifecycle, RC publication, GA publication, the rehearsal, the deterministic RC soak dispatch (FAR-1870), and PyPI publication. The legacy `release.yml` is not a second release implementation: its release jobs were removed outright in favour of a single fail-closed refusal, and it must stay that way. Only the explicitly listed future publication surfaces remain out of scope; they are not executable release steps and must not be described as active stubs.
+`release-unified.yml` owns the RC/GA lifecycle, RC publication, GA publication, the rehearsal, the deterministic RC soak dispatch (FAR-1870), and PyPI publication. The legacy `release.yml` is not a second release implementation: its release jobs were removed outright in favor of a single fail-closed refusal, and it must stay that way. Only the explicitly listed future publication surfaces remain out of scope; they are not executable release steps and must not be described as active stubs.
 
 | Future surface | Ticket | Scope |
 |----------------|--------|-------|
 | `pin-release-docs` | FAR-1872 | Pinning the released version in the docs |
 
-SBOM production and file-artefact attestation are **no longer stubs** (FAR-1868). `produce-sbom` runs for every action, dry-run included, and uploads a validated CycloneDX SBOM as the `sbom-cyclonedx` artefact. `attest-artefacts` runs for every action except `dry-run` and creates SLSA build provenance with `actions/attest-build-provenance`; it is the producer for the fail-closed `gh attestation verify` gate in `native-release-smoke.yml`. Today the SBOM is the only attested subject: container-image and release-bundle attestation remain FAR-1869 work, because attesting an image needs a registry digest - nothing fabricates a subject for an artefact that was not produced.
+SBOM production and file-artifact attestation are **no longer stubs** (FAR-1868). `produce-sbom` runs for every action, dry-run included, and uploads a validated CycloneDX SBOM as the `sbom-cyclonedx` artifact. `attest-artefacts` runs for every action except `dry-run` and creates SLSA build provenance with `actions/attest-build-provenance`; it is the producer for the fail-closed `gh attestation verify` gate in `native-release-smoke.yml`. Today the SBOM is the only attested subject: container-image and release-bundle attestation remain FAR-1869 work, because attesting an image needs a registry digest - nothing fabricates a subject for an artifact that was not produced.
 
 Until `pin-release-docs` lands, a GA release still gets its tag, its GitHub Release, its CHANGELOG section, stable container/chart publication and the release bundle. It also produces an SBOM for the run, plus an attestation for it on non-`dry-run` actions.
 

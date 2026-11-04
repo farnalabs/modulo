@@ -56,7 +56,7 @@ onto the same runtime-provider surface; its product-map entry carries the ADR 04
 deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 029)
 – workspace state lives in `runs.sandbox_dispatch_state`.
 
-## Behaviours
+## Behaviors
 
 - [x] Runtime provider base contract (`base.py`): lifecycle, health, execution, teardown
 - [x] Provider registry/hub resolves the configured provider deterministically
@@ -122,7 +122,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       threads the flag on the typed `IsolationPolicy` (the single carrier) to
       `apply_sandbox_policy`, which installs a `gh` shim that permits exactly
       ONE `gh pr create` per sandbox run for the `gh` binaries it managed to
-      guard (a bounded, best-effort defence-in-depth layer behind the
+      guard (a bounded, best-effort defense-in-depth layer behind the
       prompt-level one-PR-per-run rule, FAR-1254 – explicitly not a guarantee
       on its own); every other `gh`
       invocation passes through untouched, and
@@ -227,8 +227,8 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       hub `aclose`, marker clear), and the cancellation is re-raised only
       afterwards – a cancel during the harvest can no longer leak a sandbox,
       strand a dispatch marker or leave the ledger hold settling-less.
-      **Run-id canonicalisation:** the marker/receipt PATH and the ledger key
-      both canonicalise a UUID-shaped run scope first (braced / uppercase /
+      **Run-id canonicalization:** the marker/receipt PATH and the ledger key
+      both canonicalize a UUID-shaped run scope first (braced / uppercase /
       `urn:uuid:` / hex-less forms all map to ONE path), so the install side
       (which threads `str(spec.run_id)`) and the harvest/settle side (which
       threads the raw run id) can never disagree about which path to probe.
@@ -249,7 +249,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
         (mode 755, PATH-resolvable) prints its exact path, so a DELIBERATELY
         malicious agent can pre-create the marker/receipt (false SPEND: later
         flagged nodes are refused and the run delivers nothing) or DELETE it
-        (false RELEASE). **Marker/receipt deletion now also neutralises the
+        (false RELEASE). **Marker/receipt deletion now also neutralizes the
         sentinel arm**: the harvest answers ABSENT against the deleted path
         and, when the install was live, that definitive ABSENT suppresses the
         stdout sentinel and `pr_url` as well – so a hostile deletion both
@@ -282,7 +282,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       spending, and an absent/failed install leaving the receipt meaningless –
       the bounded+cancellation-safe `harvest_gh_pr_claim_bounded` wrapper
       (timeout drains the probe; cancellation re-raises only after the probe
-      is drained), the run-id canonicalisation across every UUID form, the
+      is drained), the run-id canonicalization across every UUID form, the
       real-probe harvest parse, a real-shell install reporting `absent` on a
       gh-less PATH – the shipped runner image's shape – and the
       exec installer's installed/pre_planted/absent/failed outcomes),
@@ -314,12 +314,12 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       `_enforce_one_pr_per_run`, which is **armed ONLY for runs whose frozen
       pipeline snapshot declares the FAR-1273 `single_pr_per_run` node flag** –
       multi-PR-by-design pipelines (and runs whose snapshot cannot be read)
-      stay silent, so the detector honours each run's own declared contract.
+      stay silent, so the detector honors each run's own declared contract.
       For an armed run it re-scans the run's **platform-captured**
       delivery evidence – the stored blobs' strings, i.e. the persisted
       transcript (`agent_stdout` / `agent_stderr` / `sandbox_log_tail`, marker
       `raw_output`) plus the agent-declared `pr_url` fields – for distinct
-      GitHub pull-request URLs: URLs are **normalised before dedup**
+      GitHub pull-request URLs: URLs are **normalized before dedup**
       (scheme-insensitive, lowercase host/path, trailing punctuation stripped –
       variants of one PR never count twice), `gh pr list --json` listing lines
       (other open PRs a pre-check echoes) are skipped, and both collection
@@ -348,7 +348,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       `gh pr list --jq`-style listing flattened to bare URL lines still counts;
       and terminalizers that write `status` via raw SQL (the cron/SAQ failure
       sweeps) bypass this hook exactly as they bypass the FAR-189 inline
-      classify hook. The in-sandbox FAR-1264 `gh` shim stays as **defence in
+      classify hook. The in-sandbox FAR-1264 `gh` shim stays as **defense in
       depth, bounded**. Unit-covered in
       `tests/unit/db/test_run_one_pr_per_run.py` (the FAR-1254 shape caught
       from the transcript alone; single-PR happy path silent; multi-PR-by-design
@@ -378,7 +378,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
 
 - 2026-10-10: **qa-iterate product-map pass** - corrected drifted claims. Added
   the `kubernetes`/`k8s` provider to the summary, the built-in-providers
-  behaviour and the tier-coverage boundary (it runs the same
+  behavior and the tier-coverage boundary (it runs the same
   `install_gh_pr_guard_via_exec` machinery under `apply_isolation`). Removed the
   false "node type marked deprecated in the UI" claim - there is no `shell` node
   type (the editor vocabulary is `agent`/`manual`/`router`/`hitl`/`dispatch`).
@@ -393,8 +393,8 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
   (slice 1), `exec_command_stream` + `destroy_workspace_by_ref` (slice 2),
   `read_log_tail` (R1), `apply_isolation` + `IsolationPolicy` (R3), and the
   file-I/O primitives `read_file` / `write_file` / `list_files` / `get_info` +
-  `WorkspaceFileInfo` (R2a) were shipped without behaviour-tracker lines or
-  citation updates; added the behaviour lines, the missing unit-test citations,
+  `WorkspaceFileInfo` (R2a) were shipped without behavior-tracker lines or
+  citation updates; added the behavior lines, the missing unit-test citations,
   the ADR 040 reference, and new executing BDD coverage
   (`runtime_providers/file_io.feature`, steps in
   `features/runtime_providers/test_file_io_steps.py`) driving the REAL

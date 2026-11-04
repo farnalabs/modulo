@@ -31,7 +31,7 @@ The multi-backend data layer (ADR 002): PostgreSQL 16 as the primary backend wit
 conformance support for SQLite and MariaDB/MySQL, repository + session plumbing,
 and org-scoped tenant context injection that is backend-aware.
 
-## Behaviours
+## Behaviors
 
 - [x] Repository base (`BaseRepository`) provides the shared `paginate` /
       `execute` helpers, the abstract `apply_tenant_filter` hook and the shared
@@ -74,5 +74,5 @@ and org-scoped tenant context injection that is backend-aware.
 
 - 2026-08-25: **product-map review pass** - entry added to close the
   dangling `depends-on: feat-core-db-abstraction-core` edge in `teams/org-entity.md`.
-  Behaviours re-verified against `db/repositories/*`, `db/session.py`, and the
+  Behaviors re-verified against `db/repositories/*`, `db/session.py`, and the
   multi-backend unit/BDD suites. Status: covered.

@@ -185,7 +185,7 @@ SELECT * FROM users;
 ```
 
 The application sets `app.organisation_id` at connection pool checkout via
-`set_config`. If RLS is bypassed, the query returns rows across organisations.
+`set_config`. If RLS is bypassed, the query returns rows across organizations.
 
 **Checklist:**
 - [ ] Every table has `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY;`
@@ -199,7 +199,7 @@ multi-tenant isolation.
 ### 3.2 Connection Encryption
 
 - **In-transit:** Postgres connections must use TLS. The `sslmode` in
-  `DATABASE_URL` is honoured end-to-end (asyncpg's `ssl` connect arg is built
+  `DATABASE_URL` is honored end-to-end (asyncpg's `ssl` connect arg is built
   from it): `postgresql+asyncpg://user:pass@host:5432/db?sslmode=require`
 - **Certificate validation:** Use `sslmode=verify-full` with a CA certificate
   in production to prevent MITM within the VPC.
@@ -520,9 +520,9 @@ of the previous entry, forming a tamper-evident chain:
 A row does not store its own hash. `verify_chain` recomputes each event's
 SHA-256 over its canonical JSON (including `previous_hash`) and compares it
 with the next event's `previous_hash`, then checks the final hash against the
-organisation's `audit_chain_heads.last_event_hash`.
+organization's `audit_chain_heads.last_event_hash`.
 
-Recording is not licence-gated: the append-only triggers and hash chaining are
+Recording is not license-gated: the append-only triggers and hash chaining are
 always active, so a Community install records the chain too. Reading it through
 the product is Team-tier.
 

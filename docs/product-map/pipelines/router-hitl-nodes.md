@@ -37,7 +37,7 @@ node that compiles to the exact same synthetic-gate path. Ships under the
 `/pipelines` surface (`feat-pipelines`) and is registered in the manifest
 registry (`feat-router`).
 
-## Behaviours
+## Behaviors
 
 - [x] `router` is an API-authorable `PipelineGraphNode.node_type` (with a
       `router_config`; `PipelineGraphNode` validates presence of rules) and
@@ -83,7 +83,7 @@ registry (`feat-router`).
       `VALID_EDGE_TYPES`, while `connector` remains an internal engine
       resolution, never an API-authored node type
 - [x] Pipeline editor renders Router nodes with a dedicated `node-router`
-      template slot and localised labels (`PipelineEditorView.vue`)
+      template slot and localized labels (`PipelineEditorView.vue`)
 
 ## Known Gaps
 
@@ -92,7 +92,7 @@ registry (`feat-router`).
   it (ADR 050, backward-compatible). (The prior "No BDD feature scenarios"
   gap was closed 2026-09-17 by `router_nodes.feature` - Router authoring,
   first-match-wins/default/classifier routing semantics, and the
-  RouterNoMatchError → `router_no_match` terminalisation are now executing BDD
+  RouterNoMatchError → `router_no_match` terminalization are now executing BDD
   coverage.)
 
 ## QA History
@@ -123,7 +123,7 @@ registry (`feat-router`).
 - 2026-08-29: **product-map review pass** - entry added to close
   the feature-graph gap behind the manifest `feat-router` registry entry (with
   `/pipelines` route referencing it) that shipped in FAR-415 but had no
-  behaviour-tracker node. Behaviours re-verified against ADR 050,
+  behavior-tracker node. Behaviors re-verified against ADR 050,
   `pipeline_engine/{node_runner,graph_cache,jmespath_eval,errors,executor}*.py`,
   `run.py` + migration `0150_add_router_no_match_status`, the
   `PipelineGraphNode` validators in `api/routes/pipelines.py`, and the

@@ -34,13 +34,13 @@ The platform's append-only evidence fact store (FAR-966 chunk 7 §3.1) plus the
 chunk-9a surfaces built on it: the per-org evidence retention policy and purge
 sweep (FAR-961) and the advisory author warnings for racy/indeterminate evidence
 keys (FAR-957). Evidence rows are key/value facts scoped to a subject
-(`{subject_type, subject_id}`) inside an organisation; run nodes, guardrail
+(`{subject_type, subject_id}`) inside an organization; run nodes, guardrail
 policy gates and evals reference evidence keys at pipeline runtime, so this
 store is the shared substrate the `feat-evals` / `feat-guardrails` surfaces
 build on. Infra-only surface - no UI route, so it is tracked here rather than in
 the manifest registry.
 
-## Behaviours
+## Behaviors
 
 - [x] The `evidence` table is an append-only key/value fact store scoped to a
       subject (`{subject_type, subject_id}`) within an org; the `value` JSONB
@@ -54,7 +54,7 @@ the manifest registry.
       pinned by `tests/architecture/test_evidence_deletion_carveout.py`
 - [x] The evidence layer fetches subject-scoped evidence (`fetch()` returns the
       most recent row per distinct key with `DISTINCT ON` for cross-key snapshot
-      consistency) and enforces producer write-authorisation via the
+      consistency) and enforces producer write-authorization via the
       `KEY_NAMESPACE_OWNERSHIP` map (`assert_write_authorisation`); the CHECK
       constraint remains authoritative for the producer-type vocabulary
       (`core/eval_engine/evidence_layer.py`)
@@ -128,7 +128,7 @@ the manifest registry.
   own query, not a general decision predicate over the store.
 - **Author warnings are advisory and can be noisy on purpose.** They warn on the
   safe direction (indeterminate producer position, store-query failure), so a
-  gate's rigour is ultimately the author's judgment.
+  gate's rigor is ultimately the author's judgment.
 
 ## QA History
 
@@ -137,7 +137,7 @@ the manifest registry.
   FAR-1293 (PR #1612): the store is no longer write-dormant - the
   guardrail/eval persist seam appends one `eval_guardrail_<eval_id>` fact per
   decision through the single `append_evidence()` write path with fail-closed
-  namespace authorisation. Added the ticked behaviour plus the
+  namespace authorization. Added the ticked behavior plus the
   `db/crud/run.py` and `test_evidence_first_producer.py` citations; the gap
   now scopes the deferral to production READS (`fetch()` /
   `map_run_evidence_to_evidence`) and the parked predicate/`decide` (§4).
@@ -150,12 +150,12 @@ the manifest registry.
   that `fetch()` / `map_run_evidence_to_evidence` have no production call site yet
   (the live read is the author-warning query). Status: covered.
 
-- 2026-09-30: **Improve Architecture product-map walk** - new behaviour tracker
+- 2026-09-30: **Improve Architecture product-map walk** - new behavior tracker
   closing the feature-graph gap left by chunk 9a (FAR-961 / FAR-957): the
   append-only evidence store, the retention policy + purge sweep and the
   advisory author warnings shipped in `e64ddac0e` without a product-map home -
   invisible to Assistant's `search_documentation` indexer and the feature graph.
-  Behaviours verified against `db/models/evidence.py`, migration 0263,
+  Behaviors verified against `db/models/evidence.py`, migration 0263,
   `core/eval_engine/evidence_layer.py`, `core/eval_engine/author_warnings.py`,
   `core/evidence_retention.py`, `api/routes/admin_evidence_retention.py` and the
   retention / author-warning / deletion-carveout unit + integration suites.

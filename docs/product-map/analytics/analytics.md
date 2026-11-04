@@ -30,7 +30,7 @@ analytics builder aggregates run-derived facts/deltas into a queryable surface,
 with an event-bus ingestion path (`record_facts`) so downstream cost and guardrail
 reports resolve against a consistent fact model.
 
-## Behaviours
+## Behaviors
 
 - [x] Analytics facts are built from run outputs and cost components into structured
       fact/delta records (`core/analytics/builder.py`, `tests/unit/test_analytics_builder.py`)
@@ -84,7 +84,7 @@ reports resolve against a consistent fact model.
       written whether the kill re-dispatched (which nulls `error_code`) or
       terminal-failed (`core/analytics/builder.py`,
       `api/routes/analytics.py`, `backend/tests/unit/test_analytics_facts.py`)
-- [x] Concurrency (`/concurrency`) reports the pooled slot-utilisation series
+- [x] Concurrency (`/concurrency`) reports the pooled slot-utilization series
       (`pool_reference` + per-bucket `max_active`/`avg_active`/`max_queued`/
       `avg_queued`), and the guardrail scorecard (`/guardrails`) is labelled
       `advisory_only: true`
@@ -101,17 +101,17 @@ reports resolve against a consistent fact model.
   `node_deadline_watchdog_fired_count` (SUM over the bucket's runs, COALESCEd
   to 0) and the export item the raw per-run count, so a node-deadline watchdog
   firing is visible without log access even when the kill re-dispatched and
-  nulled `error_code`. Added the checked behaviour line plus the
+  nulled `error_code`. Added the checked behavior line plus the
   `core/analytics/builder.py` / `api/routes/analytics.py` and
   `test_analytics_facts.py` citations. The run-side recording is cited under
   `feat-runs`.
 - 2026-10-03: **Improve Architecture product-map walk** – closed the
   `feat-analytics` tracker lag left by FAR-1421 (merged 2026-09-25): the
   manifest `feat-analytics` registry carried the claim→dispatch latency
-  behaviour (`avg_dispatch_latency_ms` per bucket, groupable per trigger via
+  behavior (`avg_dispatch_latency_ms` per bucket, groupable per trigger via
   `dimension=trigger_type` / `trigger_id`) but the human-readable graph entry
-  had no behaviour line and never cited the export-contract unit suite. Added
-  the checked behaviour (the `dispatch_phase_entered_at` − `created_at` metric
+  had no behavior line and never cited the export-contract unit suite. Added
+  the checked behavior (the `dispatch_phase_entered_at` − `created_at` metric
   with the `started_at` fallback, `run_daily_facts` provenance copied at
   finalize so the read never joins `runs`, and the NULL-never-0 semantics) plus
   the `core/analytics/builder.py` code citation and the
@@ -146,7 +146,7 @@ reports resolve against a consistent fact model.
   statement timeout → 503), the permission gate (a principal without an org
   context → 403) and the feature gate (`analytics_page` disabled → 402), an
   explicit unauthenticated 401 (HTTPBearer with no `Authorization` header),
-  the JSON + CSV export surfaces, the concurrency slot-utilisation series and
+  the JSON + CSV export surfaces, the concurrency slot-utilization series and
   the advisory-only guardrail scorecard. Status remains covered;
   `_ORPHANED_BDD_FEATURES` stays empty.
 
@@ -158,7 +158,7 @@ reports resolve against a consistent fact model.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-27: **product-map review pass** - added this behaviour-tracker
+- 2026-08-27: **product-map review pass** - added this behavior-tracker
   for the registered manifest feature `feat-analytics`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/analytics.py`,
+  `docs/product-map/` entry. Behaviors verified against `api/routes/analytics.py`,
   `core/analytics/*` and the analytics unit/integration suites. Status: covered.

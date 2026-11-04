@@ -108,7 +108,7 @@ describe('SettingsEmailView', () => {
     const wrapper = await mountView(null)
     await flushPromises()
     await nextTick()
-    expect(wrapper.text()).toContain('Organisation ID not available')
+    expect(wrapper.text()).toContain('Organization ID not available')
   })
 
   // FAR-2368 regression: the load/save/test endpoints all authorise the caller
@@ -205,7 +205,7 @@ describe('SettingsEmailView', () => {
     await wrapper.find('[data-testid="settings-email-save"]').trigger('click')
     await flushPromises()
     await nextTick()
-    expect(wrapper.text()).toContain('Could not determine organisation')
+    expect(wrapper.text()).toContain('Could not determine organization')
   })
 
   it('reports a successful test email', async () => {
