@@ -3465,9 +3465,12 @@ case "$*" in
         printf '%s\\trefs/tags/bundle-v0.1.0\\n' "$tag_sha"
         exit 0
         ;;
-      absent|push-mismatch|push-unknown)
+      absent|push-mismatch|push-unknown|push-lightweight)
         if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-mismatch ]]; then
           printf '%s\\trefs/tags/bundle-v0.1.0\\n' {other}; exit 0
+        fi
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-lightweight ]]; then
+          printf '%s\\trefs/tags/bundle-v0.1.0\\n' {target}; exit 0
         fi
         if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-unknown ]]; then exit 128; fi
         exit 2
@@ -3549,7 +3552,20 @@ def test_bundle_tag_absent_push_and_exact_verification_succeed(tmp_path: Path) -
 def test_bundle_tag_post_push_verification_mismatch_fails(tmp_path: Path) -> None:
     result, _ = _bundle_tag_harness(tmp_path, scenario="push-mismatch")
     assert result.returncode != 0
-    assert "could not be verified after push" in result.stdout
+    assert "resolved to" in result.stdout
+    assert "after push, not release target" in result.stdout
+    assert "could not be verified after push" not in result.stdout
+
+
+def test_bundle_tag_post_push_lightweight_fallback_succeeds(tmp_path: Path) -> None:
+    """A lightweight tag whose peel query exits 2 must verify via the full ref.
+
+    The fallback query's rc is the one that decides success; inheriting the
+    peel's exit 2 would fail a healthy lightweight publication.
+    """
+    result, _ = _bundle_tag_harness(tmp_path, scenario="push-lightweight")
+    assert result.returncode == 0, result.stderr
+    assert "Pushed and verified bundle-v0.1.0" in result.stdout
 
 
 def test_bundle_tag_post_push_verification_unknown_fails(tmp_path: Path) -> None:
