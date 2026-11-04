@@ -1739,12 +1739,40 @@ jobs:
     # Windows is Beta scope (windows-installer.yml fails closed) and is
     # intentionally not a dependency of Alpha publication. When include_windows=true
     # (Beta path), the Windows artifact is included via final-release-manifest.
-    if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    # Use always() to prevent transitive skip from windows-installer (skipped when
+    # include_windows=false) -> attest-artefacts (always()) -> publish-release.
+    # A guard step validates every dependency explicitly and fails closed with a
+    # specific error naming the offending job and its result.
+    if: always() && (inputs.mode == 'cut' || inputs.mode == 'recut')
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
+      - name: Validate publication dependencies
+        # Fail closed if any required dependency did not succeed. This makes a
+        # bad state loud rather than silently skipping the release.
+        env:
+          RELEASE_RESULT: ${{ needs.release.result }}
+          MANIFEST_RESULT: ${{ needs.final-release-manifest.result }}
+          ATTEST_RESULT: ${{ needs.attest-artefacts.result }}
+          MACOS_RESULT: ${{ needs.macos-installer.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # macos-installer is a reusable workflow call; its conclusion is the
+          # called workflow's overall conclusion. On a healthy run the API
+          # reports 'success'. Accept only 'success' for all four.
+          for job in "release=$RELEASE_RESULT" "final-release-manifest=$MANIFEST_RESULT" "attest-artefacts=$ATTEST_RESULT" "macos-installer=$MACOS_RESULT"; do
+            name="${job%%=*}"
+            result="${job#*=}"
+            if [ "$result" != "success" ]; then
+              echo "::error::Publication dependency '$name' did not succeed (result: $result) - refusing to publish."
+              exit 1
+            fi
+          done
+          echo "All publication dependencies succeeded."
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -2047,7 +2075,13 @@ jobs:
   # ---------------------------------------------------------------------------
   attest-artefacts:
     name: Attest released artefacts
-    needs: [produce-sbom, final-release-manifest, release, windows-installer]
+    # windows-installer removed from needs to avoid transitive skip:
+    # when include_windows=false, windows-installer is skipped, and even
+    # though attest-artefacts uses always(), GitHub propagates the skip to
+    # downstream jobs (publish-release) that don't use always(). The Windows
+    # artifact is downloaded conditionally below only when include_windows=true,
+    # which only runs when windows-installer actually executes and produces it.
+    needs: [produce-sbom, final-release-manifest, release]
     # The bundle is available for cut/recut; promote still attests the SBOM
     # without waiting on the intentionally skipped bundle job.
     if: always() && inputs.mode != 'dry-run' && needs.produce-sbom.result == 'success' && (inputs.mode == 'promote' || needs.final-release-manifest.result == 'success')
@@ -2082,6 +2116,9 @@ jobs:
           path: release-artefacts
 
       - name: Download the Windows installer artefact
+        # Only download when include_windows=true (Beta path). This step runs
+        # only when windows-installer actually executed and produced the artifact
+        # (its if: includes inputs.include_windows), so no skipped-need edge.
         if: (inputs.mode == 'cut' || inputs.mode == 'recut') && inputs.include_windows
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -2207,7 +2244,7 @@ jobs:
   # ---------------------------------------------------------------------------
   freeze-cleanup:
     name: Clear release freeze after a failed cut or recut
-    needs: [preflight, release, bundle, windows-installer, macos-installer, final-release-manifest, attest-artefacts, publish-release]
+    needs: [preflight, release, bundle, macos-installer, final-release-manifest, attest-artefacts, publish-release]
     # `always()` lets this run after a failed publication chain; `failure()`
     # keeps it out of a successful release (where the freeze is deliberate).
     # `needs.preflight.result == 'success'` keeps it out of a run whose

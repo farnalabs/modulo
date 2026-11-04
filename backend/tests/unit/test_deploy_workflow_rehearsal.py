@@ -276,7 +276,8 @@ def test_release_installer_callers_grant_permissions_their_jobs_require() -> Non
 def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["attest-artefacts"]
-    assert job["needs"] == ["produce-sbom", "final-release-manifest", "release", "windows-installer"]
+    # windows-installer removed from needs to avoid transitive skip (FAR-2363)
+    assert job["needs"] == ["produce-sbom", "final-release-manifest", "release"]
     names = _step_names(job["steps"])
     assert "Download the SBOM artefact" in names
     assert "Download the final cross-platform release artefact" in names
@@ -3079,17 +3080,17 @@ def test_windows_installer_gated_steps_use_parenthesised_condition() -> None:
             )
 
 
-def test_attest_artefacts_needs_includes_windows_installer() -> None:
-    """attest-artefacts job must depend on windows-installer for the Windows artifact."""
+def test_attest_artefacts_needs_excludes_windows_installer() -> None:
+    """attest-artefacts job must not depend on windows-installer to avoid transitive skip."""
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     attest_job = workflow["jobs"]["attest-artefacts"]
     needs = attest_job.get("needs", [])
-    assert "windows-installer" in needs, f"attest-artefacts.needs must include 'windows-installer', got: {needs}"
-    # The job uses always() so a skipped windows-installer must not block it
-    condition = attest_job.get("if", "")
-    assert "always()" in condition, (
-        f"attest-artefacts must use always() to not block on skipped windows-installer, got: {condition}"
+    assert "windows-installer" not in needs, (
+        f"attest-artefacts.needs must not include 'windows-installer', got: {needs}"
     )
+    # The job uses always() so promote still attests the SBOM without waiting on the bundle job
+    condition = attest_job.get("if", "")
+    assert "always()" in condition, f"attest-artefacts must use always() for promote mode, got: {condition}"
 
 
 # ---------------------------------------------------------------------------
@@ -3280,3 +3281,122 @@ set -euo pipefail
     # Must have attempted at least one call
     calls = log.read_text(encoding="utf-8").strip().splitlines()
     assert len(calls) >= 1, "at least one gh call must have been attempted"
+
+
+# ---------------------------------------------------------------------------
+# Publish-release gate: always() + explicit dependency validation
+# ---------------------------------------------------------------------------
+
+
+def test_publish_release_if_uses_always_and_restricts_to_cut_recut() -> None:
+    """publish-release must run via always() to avoid transitive skip, but still
+    only for cut/recut modes."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["publish-release"]
+    if_expr = job["if"]
+    assert if_expr.startswith("always()"), f"publish-release if must start with always(): {if_expr}"
+    assert "inputs.mode == 'cut'" in if_expr
+    assert "inputs.mode == 'recut'" in if_expr
+
+
+def test_publish_release_guard_step_exists_and_validates_dependencies() -> None:
+    """The first step must validate all four publication dependencies and fail
+    closed with a specific error naming the offending job."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["publish-release"]["steps"]
+    names = _step_names(steps)
+    assert "Validate publication dependencies" in names, "guard step missing"
+    guard_idx = names.index("Validate publication dependencies")
+    assert guard_idx == 0, "guard step must be the FIRST step (before checkout)"
+    guard_step = steps[guard_idx]
+
+    # Must declare the four env vars
+    env = guard_step.get("env") or {}
+    assert env.get("RELEASE_RESULT") == "${{ needs.release.result }}"
+    assert env.get("MANIFEST_RESULT") == "${{ needs.final-release-manifest.result }}"
+    assert env.get("ATTEST_RESULT") == "${{ needs.attest-artefacts.result }}"
+    assert env.get("MACOS_RESULT") == "${{ needs.macos-installer.result }}"
+
+    # Script must check all four and fail with ::error:: naming the job
+    script = guard_step["run"]
+    for job_name in ("release", "final-release-manifest", "attest-artefacts", "macos-installer"):
+        assert job_name in script, f"guard must check {job_name}"
+    assert "::error::" in script, "guard must emit ::error:: on failure"
+    assert "Publication dependency" in script, "error must name the dependency"
+    assert "refusing to publish" in script, "error must state refusal"
+
+
+def _extract_publish_release_guard_script() -> str:
+    """Extract the guard step's run script from the workflow."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["publish-release"]["steps"]
+    names = _step_names(steps)
+    guard_idx = names.index("Validate publication dependencies")
+    return steps[guard_idx]["run"]
+
+
+@pytest.mark.posix_only
+def test_publish_release_guard_all_success_exits_zero(tmp_path: Path) -> None:
+    """Guard script with all four dependencies as 'success' must exit 0."""
+    script = _extract_publish_release_guard_script()
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(bin_dir / "echo", '#!/usr/bin/env bash\necho "$@"')
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "RELEASE_RESULT": "success",
+        "MANIFEST_RESULT": "success",
+        "ATTEST_RESULT": "success",
+        "MACOS_RESULT": "success",
+    }
+    result = _run_bash(script, cwd=tmp_path, env=env)
+    assert result.returncode == 0, f"all success must exit 0: {result.stdout} {result.stderr}"
+    assert "All publication dependencies succeeded" in result.stdout
+
+
+@pytest.mark.posix_only
+def test_publish_release_guard_final_manifest_failure_fails_and_names_it(tmp_path: Path) -> None:
+    """Guard script with final-release-manifest=failure must exit non-zero and name it."""
+    script = _extract_publish_release_guard_script()
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(bin_dir / "echo", '#!/usr/bin/env bash\necho "$@"')
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "RELEASE_RESULT": "success",
+        "MANIFEST_RESULT": "failure",
+        "ATTEST_RESULT": "success",
+        "MACOS_RESULT": "success",
+    }
+    result = _run_bash(script, cwd=tmp_path, env=env)
+    assert result.returncode != 0, "failure must exit non-zero"
+    assert "final-release-manifest" in result.stdout + result.stderr
+    assert "failure" in result.stdout + result.stderr
+    assert "refusing to publish" in result.stdout + result.stderr
+
+
+@pytest.mark.posix_only
+def test_publish_release_guard_attest_skipped_fails_and_names_it(tmp_path: Path) -> None:
+    """Guard script with attest-artefacts=skipped must exit non-zero and name it."""
+    script = _extract_publish_release_guard_script()
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(bin_dir / "echo", '#!/usr/bin/env bash\necho "$@"')
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "RELEASE_RESULT": "success",
+        "MANIFEST_RESULT": "success",
+        "ATTEST_RESULT": "skipped",
+        "MACOS_RESULT": "success",
+    }
+    result = _run_bash(script, cwd=tmp_path, env=env)
+    assert result.returncode != 0, "skipped must exit non-zero"
+    assert "attest-artefacts" in result.stdout + result.stderr
+    assert "skipped" in result.stdout + result.stderr
+    assert "refusing to publish" in result.stdout + result.stderr
