@@ -33,6 +33,7 @@ from modulo.core.pipeline_engine.executor import (
     _stall_event_matches,
     _timeout_event_matches,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _make_run(
@@ -111,6 +112,7 @@ def _make_session(snapshot: MagicMock, statements: list[str] | None = None, retr
             return count_result
 
     session = AsyncMock(spec=object)
+    configure_permissive_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

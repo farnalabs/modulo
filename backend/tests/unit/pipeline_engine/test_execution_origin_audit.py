@@ -40,6 +40,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.pipeline_engine.executor import PipelineExecutor
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -48,6 +49,7 @@ _PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 def _mock_session() -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
+    configure_permissive_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

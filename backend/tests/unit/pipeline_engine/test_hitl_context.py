@@ -35,6 +35,7 @@ from modulo.core.pipeline_engine.hitl_context import (
     slice_with_marker,
 )
 from modulo.db.crud.hitl_review_config import make_review_id
+from tests.unit.api.mock_session import configure_permissive_session
 
 _UUID_SRC = "550e8400-e29b-41d4-a716-446655440000"
 _UUID_TGT = "660e8400-e29b-41d4-a716-446655440001"
@@ -49,6 +50,7 @@ _RUN_ID = uuid.uuid4()
 def _make_session(graph_json: dict[str, Any] | None) -> AsyncMock:
     """Mock AsyncSession: get_run patched separately; execute() returns the snapshot."""
     session = AsyncMock()
+    configure_permissive_session(session)
     execute_result = MagicMock()
     execute_result.scalar_one_or_none.return_value = graph_json
     session.execute = AsyncMock(return_value=execute_result)

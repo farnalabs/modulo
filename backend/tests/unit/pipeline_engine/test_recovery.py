@@ -26,6 +26,7 @@ from modulo.core.pipeline_engine.recovery import (
     guardrail_override,
     recover_node,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -93,6 +94,7 @@ def _blocked_false_outcome() -> Any:
 def _mock_session() -> AsyncMock:
     """Return a contract-shaped AsyncSession mock for recovery tests."""
     session = AsyncMock(spec=AsyncSession)
+    configure_permissive_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=None)

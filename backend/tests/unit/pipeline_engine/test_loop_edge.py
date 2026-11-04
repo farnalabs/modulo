@@ -13,6 +13,7 @@ from modulo.core.pipeline_engine.graph_cache import (
     build_graph_from_json,
     make_loop_counter_fn,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 pytestmark = pytest.mark.usefixtures("_auto_clear_cache")
 
@@ -290,6 +291,7 @@ class TestBuildGraphWithLoop:
 
 def _session_mock() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     scalars_result = MagicMock()
     scalars_result.all.return_value = []
     execute_result = MagicMock()

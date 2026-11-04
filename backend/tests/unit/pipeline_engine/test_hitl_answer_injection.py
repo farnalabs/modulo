@@ -16,6 +16,7 @@ from modulo.core.pipeline_engine.node_runner import (
     HITL_REVIEW_ANSWER_STATE_KEY_PREFIX,
     _inject_answer_state,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _UUID_SRC = "550e8400-e29b-41d4-a716-446655440000"
 _UUID_TGT = "660e8400-e29b-41d4-a716-446655440001"
@@ -73,6 +74,7 @@ class TestInjectAnswerState:
 
 def _make_session(graph_json: dict[str, Any] | None) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     execute_result = MagicMock()
     execute_result.scalar_one_or_none.return_value = graph_json
     session.execute = AsyncMock(return_value=execute_result)
