@@ -8,14 +8,16 @@ rendered in one run.
 Checks included:
   1. Schema freshness: verify schema freshness gate status or check schema drift.
   2. macOS installer inputs: check workflow inputs contract (semver, mode).
-  3. Inno Setup availability on Windows.
+  3. Inno Setup availability on Windows when Windows packaging is included.
   4. GHCR auth / buildx context / tag availability.
   5. rc_tag output defined and propagated.
   6. uv.lock freshness for release version bump.
   7. Release-freeze marker state valid and movable (FAR-2317 tag ruleset).
   8. Windows native artifacts payload present when Windows packaging is included.
-  9. Azure Trusted Signing + release secret presence check, required for cut/recut (values never printed!).
- 10. Branch merge-conflict check against main.
+  9. Azure Trusted Signing + release secret presence check, required for included Windows cut/recut (values never printed!).
+  10. Helm chart artefact validation when the local Helm tool is available.
+  11. Branch merge-conflict check against main.
+
 """
 
 from __future__ import annotations
@@ -349,6 +351,12 @@ class ReleasePreflightChecker:
     # -------------------------------------------------------------------------
     def check_inno_setup_availability(self) -> PreflightCheckResult:
         name = "Inno Setup availability on Windows"
+        if not self.include_windows:
+            return PreflightCheckResult(
+                name,
+                True,
+                "Windows native packaging checks skipped: include_windows=false; Windows packaging is Beta scope",
+            )
         iss_path = self.repo_root / "deploy" / "windows" / "modulo.iss"
         if not iss_path.exists():
             return PreflightCheckResult(name, False, "deploy/windows/modulo.iss is missing")
@@ -822,6 +830,13 @@ class ReleasePreflightChecker:
             "MODULO_RELEASE_PR_TOKEN",
         ]
 
+        if not self.include_windows:
+            return PreflightCheckResult(
+                name,
+                True,
+                "Windows native signing checks skipped: include_windows=false; Windows packaging is Beta scope",
+            )
+
         if self.mode == "dry-run":
             all_missing = [s for s in signing_secrets + release_secrets if not self.env.get(s)]
             if all_missing:
@@ -837,11 +852,10 @@ class ReleasePreflightChecker:
                 "All signing and release secrets configured (values redacted)",
             )
 
-        # Windows native packaging is Alpha scope (FAR-2338) and the Windows
-        # signing job (windows-installer.yml) fails closed without the Azure
-        # Trusted Signing credentials. A cut/recut that passed this gate
-        # without them would only fail later, at the signing job - the
-        # serial-unveiling failure this preflight exists to prevent. Promote
+        # When Windows packaging is included, the signing job (windows-installer.yml)
+        # fails closed without the Azure Trusted Signing credentials. A cut/recut
+        # that passed this gate without them would only fail later, at the signing
+        # job - the serial-unveiling failure this preflight exists to prevent. Promote
         # does not build or sign a Windows installer, so it only requires the
         # release secrets.
         required = list(release_secrets)
@@ -862,7 +876,39 @@ class ReleasePreflightChecker:
         )
 
     # -------------------------------------------------------------------------
-    # 10. Branch merge-conflict check against main
+    # 10. Helm chart artefact validation
+    # -------------------------------------------------------------------------
+    def check_helm_chart(self) -> PreflightCheckResult:
+        name = "Helm chart artefact validation"
+        chart_dir = self.repo_root / "deploy" / "helm" / "modulo"
+        if not chart_dir.is_dir():
+            return PreflightCheckResult(name, False, "deploy/helm/modulo chart directory is missing")
+
+        required_files = ("Chart.yaml", "values.yaml")
+        missing = [filename for filename in required_files if not (chart_dir / filename).is_file()]
+        if missing:
+            return PreflightCheckResult(
+                name,
+                False,
+                f"Helm chart is malformed: missing required file(s): {', '.join(missing)}",
+            )
+
+        helm_bin = shutil.which("helm")
+        if not helm_bin:
+            return PreflightCheckResult(
+                name,
+                True,
+                "Helm chart files are present; helm is not installed locally, so helm lint is deferred to CI",
+            )
+
+        rc, stdout, stderr = self.run_cmd([helm_bin, "lint", str(chart_dir)], cwd=self.repo_root, timeout=180)
+        if rc != 0:
+            reason = (stderr or stdout).strip() or f"exit code {rc}"
+            return PreflightCheckResult(name, False, f"helm lint failed for deploy/helm/modulo: {reason}")
+        return PreflightCheckResult(name, True, "Helm chart is present and helm lint passed")
+
+    # -------------------------------------------------------------------------
+    # 11. Branch merge-conflict check against main
     # -------------------------------------------------------------------------
     def check_merge_conflicts(self) -> PreflightCheckResult:
         name = "Branch merge-conflict check against main"
@@ -976,7 +1022,7 @@ class ReleasePreflightChecker:
     # Orchestration & Summary
     # -------------------------------------------------------------------------
     def run_all_checks(self) -> list[PreflightCheckResult]:
-        """Execute all 10 preflight checks unconditionally."""
+        """Execute all release preflight checks and report every result."""
         checks: list[Callable[[], PreflightCheckResult]] = [
             self.check_schema_freshness,
             self.check_macos_installer_inputs,
@@ -987,6 +1033,7 @@ class ReleasePreflightChecker:
             self.check_release_freeze_state,
             self.check_windows_native_artifacts,
             self.check_azure_signing_secrets,
+            self.check_helm_chart,
             self.check_merge_conflicts,
         ]
 

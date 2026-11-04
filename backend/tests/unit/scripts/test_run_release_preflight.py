@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -59,6 +60,11 @@ def _make_dummy_repo(tmp_path: Path) -> Path:
     (tmp_path / "backend" / "uv.lock").write_text("version = 1\n", encoding="utf-8")
     (tmp_path / "frontend" / "Dockerfile.prod").write_text("FROM alpine\n", encoding="utf-8")
     (tmp_path / "deploy" / "docker" / "runner-opencode.Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
+
+    chart_dir = tmp_path / "deploy" / "helm" / "modulo"
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "Chart.yaml").write_text("apiVersion: v2\nname: modulo\nversion: 0.1.0\n", encoding="utf-8")
+    (chart_dir / "values.yaml").write_text("{}\n", encoding="utf-8")
 
     return tmp_path
 
@@ -375,7 +381,7 @@ def test_macos_installer_inputs_invalid_version(tmp_path: Path):
 # -----------------------------------------------------------------------------
 def test_inno_setup_availability_passes_with_valid_iss_and_workflow(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
-    checker = ReleasePreflightChecker(mode="dry-run", version="0.1.0", repo_root=repo)
+    checker = ReleasePreflightChecker(mode="dry-run", version="0.1.0", include_windows=True, repo_root=repo)
     res = checker.check_inno_setup_availability()
     assert res.passed
 
@@ -383,7 +389,7 @@ def test_inno_setup_availability_passes_with_valid_iss_and_workflow(tmp_path: Pa
 def test_inno_setup_availability_fails_when_iss_missing(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
     (repo / "deploy" / "windows" / "modulo.iss").unlink()
-    checker = ReleasePreflightChecker(mode="dry-run", version="0.1.0", repo_root=repo)
+    checker = ReleasePreflightChecker(mode="dry-run", version="0.1.0", include_windows=True, repo_root=repo)
     res = checker.check_inno_setup_availability()
     assert not res.passed
     assert "modulo.iss is missing" in res.details
@@ -392,7 +398,7 @@ def test_inno_setup_availability_fails_when_iss_missing(tmp_path: Path):
 def test_inno_setup_availability_fails_on_character_code_literal(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
     (repo / "deploy" / "windows" / "modulo.iss").write_text("[Setup]\n#123 invalid preprocessor\n", encoding="utf-8")
-    checker = ReleasePreflightChecker(mode="dry-run", version="0.1.0", repo_root=repo)
+    checker = ReleasePreflightChecker(mode="dry-run", version="0.1.0", include_windows=True, repo_root=repo)
     res = checker.check_inno_setup_availability()
     assert not res.passed
     assert "character-code literal" in res.details
@@ -703,9 +709,18 @@ def test_windows_native_artifacts_non_dry_run_passes_when_zip_exists(tmp_path: P
 # -----------------------------------------------------------------------------
 # 9. Azure Trusted Signing secrets presence
 # -----------------------------------------------------------------------------
+def test_azure_signing_secrets_are_skipped_for_alpha(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env={})
+    res = checker.check_azure_signing_secrets()
+    assert res.passed
+    assert "include_windows=false" in res.details
+    assert "Beta scope" in res.details
+
+
 def test_azure_signing_secrets_dry_run_passes_even_if_missing(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
-    checker = ReleasePreflightChecker(mode="dry-run", version="0.1.0", repo_root=repo, env={})
+    checker = ReleasePreflightChecker(mode="dry-run", version="0.1.0", include_windows=True, repo_root=repo, env={})
     res = checker.check_azure_signing_secrets()
     assert res.passed
     assert "Dry-run mode" in res.details
@@ -714,7 +729,7 @@ def test_azure_signing_secrets_dry_run_passes_even_if_missing(tmp_path: Path):
 @pytest.mark.parametrize("mode", ["cut", "recut"])
 def test_azure_signing_secrets_cut_and_recut_fail_when_missing(tmp_path: Path, mode: str):
     repo = _make_dummy_repo(tmp_path)
-    checker = ReleasePreflightChecker(mode=mode, version="0.1.0", repo_root=repo, env={})
+    checker = ReleasePreflightChecker(mode=mode, version="0.1.0", include_windows=True, repo_root=repo, env={})
     res = checker.check_azure_signing_secrets()
     assert not res.passed
     assert "Missing required release secret(s)" in res.details
@@ -729,7 +744,7 @@ def test_azure_signing_secrets_cut_fails_when_only_azure_secrets_missing(tmp_pat
         "BUNDLE_MANIFEST_SIGNING_KEY": "key-123",
         "MODULO_RELEASE_PR_TOKEN": "token-123",
     }
-    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env=env)
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", include_windows=True, repo_root=repo, env=env)
     res = checker.check_azure_signing_secrets()
     assert not res.passed
     assert "Missing required release secret(s)" in res.details
@@ -743,7 +758,7 @@ def test_azure_signing_secrets_recut_fails_when_only_azure_secrets_missing(tmp_p
         "BUNDLE_MANIFEST_SIGNING_KEY": "key-123",
         "MODULO_RELEASE_PR_TOKEN": "token-123",
     }
-    checker = ReleasePreflightChecker(mode="recut", version="0.1.0", repo_root=repo, env=env)
+    checker = ReleasePreflightChecker(mode="recut", version="0.1.0", include_windows=True, repo_root=repo, env=env)
     res = checker.check_azure_signing_secrets()
     assert not res.passed
     assert "Missing required release secret(s)" in res.details
@@ -757,7 +772,7 @@ def test_azure_signing_secrets_promote_passes_without_azure_secrets(tmp_path: Pa
         "BUNDLE_MANIFEST_SIGNING_KEY": "key-123",
         "MODULO_RELEASE_PR_TOKEN": "token-123",
     }
-    checker = ReleasePreflightChecker(mode="promote", version="0.1.0", repo_root=repo, env=env)
+    checker = ReleasePreflightChecker(mode="promote", version="0.1.0", include_windows=True, repo_root=repo, env=env)
     res = checker.check_azure_signing_secrets()
     assert res.passed
 
@@ -771,7 +786,7 @@ def test_azure_signing_secrets_cut_passes_when_present(tmp_path: Path):
         "BUNDLE_MANIFEST_SIGNING_KEY": "key-123",
         "MODULO_RELEASE_PR_TOKEN": "token-123",
     }
-    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env=env)
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", include_windows=True, repo_root=repo, env=env)
     res = checker.check_azure_signing_secrets()
     assert res.passed
     # Secrets must be redacted
@@ -952,11 +967,11 @@ def test_run_all_checks_aggregates_multiple_failures_in_single_run(tmp_path: Pat
     # 2. Break Inno setup by deleting modulo.iss
     (repo / "deploy" / "windows" / "modulo.iss").unlink()
 
-    checker = ReleasePreflightChecker(mode="dry-run", version="0.1.0", repo_root=repo)
+    checker = ReleasePreflightChecker(mode="dry-run", version="0.1.0", include_windows=True, repo_root=repo)
     results = checker.run_all_checks()
 
-    # Total checks must be 10
-    assert len(results) == 10
+    # Total checks include the local Helm artefact validation.
+    assert len(results) == 11
 
     failed = [r for r in results if not r.passed]
     failed_names = [r.name for r in failed]
@@ -968,6 +983,38 @@ def test_run_all_checks_aggregates_multiple_failures_in_single_run(tmp_path: Pat
     passed_names = [r.name for r in results if r.passed]
     assert "macOS installer inputs" in passed_names
     assert "rc_tag output defined and propagated" in passed_names
+    assert "Helm chart artefact validation" in passed_names
+
+
+def test_run_all_checks_skips_windows_prerequisites_for_alpha(tmp_path: Path, monkeypatch):
+    repo = _make_dummy_repo(tmp_path)
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None if name in {"helm", "uv"} else "/usr/bin/" + name)
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env={})
+
+    results = checker.run_all_checks()
+    by_name = {result.name: result for result in results}
+
+    assert by_name["Inno Setup availability on Windows"].passed
+    assert "skipped" in by_name["Inno Setup availability on Windows"].details
+    assert by_name["Azure Trusted Signing secrets presence"].passed
+    assert "skipped" in by_name["Azure Trusted Signing secrets presence"].details
+    assert by_name["Helm chart artefact validation"].passed
+    assert "deferred to CI" in by_name["Helm chart artefact validation"].details
+    assert by_name["macOS installer inputs"].passed
+    assert by_name["GHCR auth / buildx context / tag availability"].passed
+    assert by_name["Windows native artifacts payload present"].passed
+
+
+def test_helm_chart_fails_when_required_file_missing(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+    (repo / "deploy" / "helm" / "modulo" / "Chart.yaml").unlink()
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo)
+
+    result = checker.check_helm_chart()
+
+    assert not result.passed
+    assert "malformed" in result.details
+    assert "Chart.yaml" in result.details
 
 
 def test_format_markdown_summary_contains_all_checks_and_details():
@@ -981,6 +1028,47 @@ def test_format_markdown_summary_contains_all_checks_and_details():
     assert "| Check 2 | ❌ FAIL | Details 2 with \\| pipe |" in summary
     assert "Preflight Gate FAILED" in summary
     assert "Check 2" in summary
+
+
+def test_cli_include_windows_env_wiring(tmp_path: Path, monkeypatch, capsys):
+    repo = _make_dummy_repo(tmp_path)
+    monkeypatch.setenv("RELEASE_INCLUDE_WINDOWS", "true")
+    monkeypatch.setattr(mod.ReleasePreflightChecker, "run_all_checks", lambda self: [])
+
+    assert mod.main(["--mode", "cut", "--version", "0.1.0", "--repo-root", str(repo)]) == 0
+    assert "include_windows=true" in capsys.readouterr().err
+
+
+def test_cli_include_windows_false_wiring(tmp_path: Path, monkeypatch, capsys):
+    repo = _make_dummy_repo(tmp_path)
+    monkeypatch.delenv("RELEASE_INCLUDE_WINDOWS", raising=False)
+    monkeypatch.setattr(mod.ReleasePreflightChecker, "run_all_checks", lambda self: [])
+
+    assert mod.main(["--mode", "cut", "--version", "0.1.0", "--repo-root", str(repo)]) == 0
+    assert "include_windows=false" in capsys.readouterr().err
+
+
+def test_cli_entrypoint_accepts_include_windows_flag(tmp_path: Path):
+    repo = _make_dummy_repo(tmp_path)
+    script = Path(mod.__file__).resolve()
+    completed = subprocess.run(  # noqa: S603 - executable and arguments are test-controlled
+        [
+            sys.executable,
+            str(script),
+            "--mode",
+            "cut",
+            "--version",
+            "0.1.0",
+            "--include-windows",
+            "--repo-root",
+            str(repo),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert "include_windows=true" in completed.stderr
 
 
 def test_main_exits_one_on_failure(tmp_path: Path, capsys):
