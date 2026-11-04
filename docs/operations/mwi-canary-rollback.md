@@ -20,7 +20,7 @@ is merged on the P1 branches.
 ## Canary plan (staged rollout)
 
 1. **Stage 0 – flag-off soak.** Deploy with no pipelines using
-   `workspace_inputs`. Zero behaviour change expected: absent config is a
+   `workspace_inputs`. Zero behavior change expected: absent config is a
    no-op in the validator (`_validate_sandbox_managed_inputs_config`)
    and in `_sandbox_agent_impl`.
 2. **Stage 1 – internal single pipeline.** Enable MWI on ONE internal

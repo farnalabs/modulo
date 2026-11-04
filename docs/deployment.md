@@ -167,7 +167,7 @@ Gatus adds its own confirmation on the next line
 can stop the container: with them absent the service starts, runs, and reports
 health normally.
 
-Two caveats on the values themselves (both are Gatus behaviour, verified against
+Two caveats on the values themselves (both are Gatus behavior, verified against
 the pinned image):
 
 - A literal `$` in a value must be written `$$` - Gatus expands `${VAR}` in the
@@ -231,7 +231,7 @@ WebSocket connections use the correct origin.
 
 ## Migration
 
-The `modulo-migrate` CLI tool exports, imports, and verifies organisation data
+The `modulo-migrate` CLI tool exports, imports, and verifies organization data
 between Modulo instances. It is installed as a console script entry point.
 
 ### Authentication
@@ -274,7 +274,7 @@ modulo-migrate export-org <org-id> --output ./users.jsonl --users-only
 
 Import from a previously exported JSONL bundle. Conflict resolution strategies:
 
-| Strategy     | Behaviour |
+| Strategy     | Behavior |
 |--------------|-----------|
 | `skip`       | Leave existing records untouched (default) |
 | `overwrite`  | Replace existing records with imported values |
@@ -308,7 +308,7 @@ The export is a JSONL file where:
   - `__table__` – table name (e.g. `"users"`, `"pipelines"`)
   - `id` – record primary key (string-formatted UUID)
   - `data` – full column data for the record
-  - `__hash__` – SHA-256 of the sorted serialised `data`
+  - `__hash__` – SHA-256 of the sorted serialized `data`
 
 ### Progress Bars
 
@@ -466,7 +466,7 @@ Runs and triggers require Redis plus the SAQ workers – see [`docs/quickstart.m
 
 **What you lose vs. full deployment:**
 - **No horizontal scaling** – one process, one user at a time
-- **No high availability** – a worker crash mid-run is recovered or terminalised by `dispatcher_reconcile` only while the system worker and Redis stay up; a lost Redis strands in-flight jobs until it returns
+- **No high availability** – a worker crash mid-run is recovered or terminalized by `dispatcher_reconcile` only while the system worker and Redis stay up; a lost Redis strands in-flight jobs until it returns
 - **No distributed rate limiting** – without Redis the limiter is a per-process no-op, so limits don't coordinate across processes
 
 **What you keep:**
@@ -613,7 +613,7 @@ They run the same commands the root `docker-compose.yml` uses for its
 separate `saq-runner` / `saq-system` services. On an existing deployment
 whose `.env` predates this, add the now-required variables before upgrading
 (`MODULO_DB_PASSWORD`, `SAQ_AUTH_USERNAME`, `SAQ_AUTH_PASSWORD`) - a database
-already initialised on the old `changeme` default keeps that value until you
+already initialized on the old `changeme` default keeps that value until you
 rotate it.
 
 The compose also constructs one URL the system worker needs:

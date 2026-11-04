@@ -35,7 +35,7 @@ fact store, with a SERVER-SIDE field-level redaction boundary: a caller's role
 resolves a rule from `evidence_redaction_rules` (most-specific-wins by
 `key_pattern`, else the `*` catch-all for that role, else the built-in
 fail-closed default) and the covered evidence-value keys are replaced with the
-`[REDACTED]` sentinel before the payload is serialised. Redaction is name-based
+`[REDACTED]` sentinel before the payload is serialized. Redaction is name-based
 (a class covers a fixed set of JSON key NAMES), not a default-deny allowlist.
 The `/evidence` route renders under the MONITOR sidebar group, and the
 `/admin/evidence-redaction` editor under the ADMIN sidebar group lets an admin
@@ -43,16 +43,16 @@ maintain the rules the boundary consults.
 
 The same feature owns the per-instance **compliance evidence index** (FAR-2036):
 `/admin/compliance/evidence-index` renders pack metadata, framework coverage and
-one entry per artefact type the instance produces, keyed to the mapping rows the
-artefact satisfies, with the deprecated `/admin/evidence` URL kept as a
+one entry per artifact type the instance produces, keyed to the mapping rows the
+artifact satisfies, with the deprecated `/admin/evidence` URL kept as a
 compatibility alias to the same view.
 
-## Behaviours
+## Behaviors
 
 - [x] `GET /api/v1/evidence` lists a run's evidence rows (required `run_id` UUID;
-      optional `node_id` and `key` filters) scoped to the caller's organisation
+      optional `node_id` and `key` filters) scoped to the caller's organization
       through RLS, with the field-level redaction boundary applied server-side
-      before serialisation; permitted fields (`key`,
+      before serialization; permitted fields (`key`,
       `subject_type`/`subject_id`, `observed_at`, timestamps, pass/fail
       outcomes) survive unredacted
 - [x] `GET /api/v1/evidence/{evidence_id}` returns a single org-scoped evidence
@@ -70,7 +70,7 @@ compatibility alias to the same view.
       role CHECK in admin/operator/viewer), applies the four-step RLS pattern,
       and seeds the mandatory catch-all row `key_pattern='*'` / `role='viewer'` /
       `redacted_fields='{sensitive_output, internal_metadata}'` for every
-      existing organisation
+      existing organization
 - [x] The `/evidence` route renders under the MONITOR sidebar group;
       `EvidenceView.vue` fetches the already-redacted payload and renders it
       as-is with NO client-side redaction or conditional field hiding, with
@@ -87,15 +87,15 @@ compatibility alias to the same view.
       vocabulary, the seeded `*` / `viewer` catch-all is marked mandatory (with
       a warning when it is absent), and the page configures the SERVER boundary
       only - it never redacts or hides evidence values in the client
-- [x] `GET /api/v1/compliance/evidence-index` returns the organisation's
+- [x] `GET /api/v1/compliance/evidence-index` returns the organization's
       per-instance evidence index, gated by `compliance.evidence_index.read`,
-      scoped to the caller's organisation from the authenticated principal
+      scoped to the caller's organization from the authenticated principal
       (never a query parameter) through RLS, and optionally scoped to an audit
       period with the half-open `from`/`to` parameters (a start after the end is
-      rejected 422; no period means the organisation's full history, recorded as
+      rejected 422; no period means the organization's full history, recorded as
       null `period_from`/`period_to`). On Postgres the transaction carries a
       30s transaction-local `statement_timeout` and a timeout is answered 503
-      with an audit-period remedy, not a pinned connection. Each artefact type
+      with an audit-period remedy, not a pinned connection. Each artifact type
       the instance produces is returned with its status/provenance/record
       count/location; an absent type is returned as `absent` and named in
       `missing_artifact_types`, customer-owned record types are deliberately
@@ -104,8 +104,8 @@ compatibility alias to the same view.
 - [x] The canonical `/admin/compliance/evidence-index` route renders
       `ComplianceEvidenceIndexView.vue`, with the deprecated `/admin/evidence`
       route kept as a compatibility alias to that same view. The page shows pack
-      metadata, framework coverage, present/absent/customer-supplied artefact
-      status, identifiers/locations/provenance/mapping row IDs, missing artefact
+      metadata, framework coverage, present/absent/customer-supplied artifact
+      status, identifiers/locations/provenance/mapping row IDs, missing artifact
       warnings and the human-only lower-bound warning; a pipeline-snapshot
       identifier renders as a concise label plus a link to that exact version
       and the raw identifier behind a details disclosure with a copy action,
@@ -131,8 +131,8 @@ the page is careful about identity:
   built-in default (both classes redacted), while `admin` and `operator` are
   trusted and see unredacted evidence when no rule targets them.
 - The class vocabulary is the backend's `REDACTION_CLASS_FIELDS`
-  (`sensitive_output`, `internal_metadata`). An unrecognised stored class stays
-  visible so it can be removed, and an unrecognised stored role is shown
+  (`sensitive_output`, `internal_metadata`). An unrecognized stored class stays
+  visible so it can be removed, and an unrecognized stored role is shown
   read-only with Save disabled.
 - The page never redacts or hides evidence values itself; it only configures
   the server-side boundary.
@@ -178,7 +178,7 @@ the page is careful about identity:
   reads are org-scoped and redacted server-side, the rule upsert is
   admin-gated and audited, migration 0320 + org creation both seed the
   `*`/viewer catch-all, and the editor's create/edit guards match the
-  documented contract. No behaviour change.
+  documented contract. No behavior change.
 
 - 2026-10-28: **Improve Architecture product-map walk** (second pass on this
   entry, compliance evidence index). Fixed MINOR (product-map completeness +
@@ -203,5 +203,5 @@ the page is careful about identity:
   `compliance.evidence_index.read`, org comes from the principal through RLS,
   `from`/`to` are half-open with a 422 on an inverted period, the Postgres
   statement timeout is transaction-local, customer-owned record types are
-  omitted by design, and the alias resolves to the same view. No behaviour
+  omitted by design, and the alias resolves to the same view. No behavior
   change.

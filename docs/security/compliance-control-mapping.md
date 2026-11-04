@@ -41,17 +41,17 @@ backend/src/modulo/compliance/mappings/
 The loader (`backend/src/modulo/compliance/pack.py`) validates the pack at
 load time and refuses an invalid or dishonest one:
 
-- every row names a known artefact type, coverage attribution and provenance
+- every row names a known artifact type, coverage attribution and provenance
   tag;
 - every row states, in a sentence, what remains the customer's responsibility;
 - a `satisfied` row can never rest on customer-supplied material;
 - a `customer-responsibility` row must be tagged `customer-supplied`;
-- artefact types the instance does not produce cannot evidence a
+- artifact types the instance does not produce cannot evidence a
   `satisfied`/`supported` claim;
 - every framework must name at least one thing Modulo does not satisfy
   (a pack that claims everything is worse than no pack);
 - the required SOC 2 clause set is present;
-- every indexed artefact type is mapped to at least one clause.
+- every indexed artifact type is mapped to at least one clause.
 
 ## Vocabulary
 
@@ -105,29 +105,29 @@ GET /api/v1/compliance/evidence-index
 ```
 
 - Authenticated, admin-only (`compliance.evidence_index.read`). The index
-  aggregates the organisation's whole audit surface, so it sits at the same
+  aggregates the organization's whole audit surface, so it sits at the same
   level as `audit.manage`, not at the viewer-level `audit.list`.
-- The organisation comes from the authenticated principal. There is no
-  organisation parameter and no cross-tenant read.
+- The organization comes from the authenticated principal. There is no
+  organization parameter and no cross-tenant read.
 - No UI ships with this ticket; the endpoint is the deliverable an auditor is
   handed. A UI can follow in a later ticket.
 
 ### What it contains
 
-One entry per artefact type **the instance produces**, always present in the
+One entry per artifact type **the instance produces**, always present in the
 response:
 
-| Artefact type | Source in the instance | Provenance |
+| Artifact type | Source in the instance | Provenance |
 |---|---|---|
 | `audit_chain` | `audit_events` + `audit_chain_heads`; events are recorded on every tier, while the browse, verify, export, scan and evidence-pack routes need the Team-tier `audit_viewer` feature plus `audit.manage` | observed |
 | `run_snapshot` | `pipeline_snapshots` joined to `runs` | observed |
 | `hitl_decision` | decided `hitl_claims`, counting `human_only` gates separately | observed |
 | `eval_result` | `eval_results`, with pass/fail counts and definition count | observed |
 | `autonomy_change` | `pipeline.autonomy_promotion_decided` / `pipeline.autonomy_demoted` audit events | observed |
-| `release_sbom` | release pipeline artefact (or `backend/scripts/generate-sbom.py`), retained by the operator | customer-supplied |
+| `release_sbom` | release pipeline artifact (or `backend/scripts/generate-sbom.py`), retained by the operator | customer-supplied |
 | `build_identity` | `GET /api/v1/deployment` (product version, source revision, build timestamp) | observed |
 
-The index does **not** list every artefact the pack maps, because it cannot: a
+The index does **not** list every artifact the pack maps, because it cannot: a
 row whose `artifact_type` is `customer_records` is evidenced by material Modulo
 never sees. Ten mapping rows across the three frameworks rest on
 `customer_records` - policies, risk assessments, internal-audit reports,
@@ -157,7 +157,7 @@ Each entry carries:
   `human_only_counts_are_lower_bounds: true` (plus
   `human_only_scan_truncated: true`). An auditor reading those figures must
   read the flag with them;
-- `mapping_row_ids` - the pack rows this artefact evidences;
+- `mapping_row_ids` - the pack rows this artifact evidences;
 - `absence_reason` when the status is `absent`.
 
 `hitl_decision`'s `human_only_gate_approvals` counts the decision vocabulary's
@@ -169,15 +169,15 @@ single rule (`human_only_effective`): an omitted, `null` or non-dict
 human oversight rather than skipped.
 
 A `present` `audit_chain` entry means the trail exists **in this instance** -
-recording is not licence-gated, so a Community install produces one too. It does
+recording is not license-gated, so a Community install produces one too. It does
 not assert that the trail can be browsed, verified or exported here: those admin
 routes need the Team-tier `audit_viewer` feature plus `audit.manage`, and the
 signed evidence pack additionally needs a configured
 `MODULO_EVIDENCE_SIGNING_KEY`. The index does not probe either condition.
 
-### Missing artefacts are loud, never dropped
+### Missing artifacts are loud, never dropped
 
-A mapped artefact type with no records for the organisation is reported with
+A mapped artifact type with no records for the organization is reported with
 `status: absent`, an `absence_reason`, and its name in
 `missing_artifact_types`. The response also carries
 `complete: false`. An auditor therefore sees the hole in the evidence, not an
@@ -188,7 +188,7 @@ The generator additionally supports `strict=True`, which raises
 partial index. No automated export ships with this release: `strict` is a
 library-level option a caller may use, not a gate any shipped endpoint applies.
 
-Note what counts as absent: an organisation that has run no pipeline has no run
+Note what counts as absent: an organization that has run no pipeline has no run
 snapshots, no HITL decisions and no eval results. That is not an error in the
 index - it is the truth about that instance's evidence, and the index says so.
 
@@ -214,7 +214,7 @@ deployed at the time.
    feature plus `audit.manage` (HTTP 402 on an unlicensed Community install).
    The endpoint accepts no query parameters and is not period-scoped: it checks
    the first **10,000** events in created-at order and returns `truncated: true`
-   with `valid: false` when the organisation's trail is larger. That is an
+   with `valid: false` when the organization's trail is larger. That is an
    incomplete check, not evidence of tampering. Where the trail exceeds that
    cap, verify through the chain export instead (step 3), which carries the
    events under a signature the auditor checks offline - do not read
@@ -246,10 +246,10 @@ deployed at the time.
   10,000 in created-at order, and reports `valid: false` when it truncates. It
   takes no date range, so there is no date-bounded verification to fall back on.
   A `false` therefore means "not proven complete", not "tampered".
-- Reading the audit trail is Team-tier. Recording is not licence-gated, so a
+- Reading the audit trail is Team-tier. Recording is not license-gated, so a
   Community install still writes a hash-chained trail; the browse, verify,
   export and scan routes carry the `audit_viewer` feature plus `audit.manage`
-  and answer 402 without a Team licence. The offline-verifiable export is also
+  and answer 402 without a Team license. The offline-verifiable export is also
   not on by default: `GET /api/v1/admin/audit/evidence-pack` and
   `/verification-key` additionally need a configured `MODULO_EVIDENCE_SIGNING_KEY`
   (503 without it). On a Community install the events exist in the customer's

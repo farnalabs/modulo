@@ -34,13 +34,13 @@ status: covered
 Lifecycle maps and stage workflows are retained for internal Farnalabs dogfood
 and future product work. They are not an Alpha-facing feature: the routes are
 registered with `visibility: in_dev` and an empty sidebar group, so ordinary
-navigation, the library catalogue, the pipeline editor, global/audit search and
+navigation, the library catalog, the pipeline editor, global/audit search and
 the ordinary feature-flag surfaces do not expose them, and the API router
 additionally requires `MODULO_DEV_MODE` plus the `library.search.in_dev`
 operator grant. Maps define the lifecycle stages a pipeline's work items flow
 through, with edges representing transitions between stages.
 
-## Behaviours
+## Behaviors
 
 - [x] Internal-only concealment (FAR-2200): the `/lifecycle-maps`,
       `/lifecycle-maps/:id` and `/lifecycle-maps/:id/editor` routes carry
@@ -81,7 +81,7 @@ through, with edges representing transitions between stages.
       endpoint
       (`backend/tests/bdd/features/lifecycle_maps/journeys.feature`,
       `backend/tests/unit/api/test_lifecycle_maps_routes.py`)
-- [x] Canonical work-item ref canonicalisation (GitHub, Linear, JIRA) with
+- [x] Canonical work-item ref canonicalization (GitHub, Linear, JIRA) with
       deterministic uuid5 derivation ensures same ref forms collapse to same
       journey row (`backend/tests/unit/db/test_lifecycle_refs.py`)
 - [x] Frontend visual editor with auto-layout (Sugiyama-style layered graph),
@@ -103,7 +103,7 @@ through, with edges representing transitions between stages.
 
 None acknowledged. Being retained for internal dogfood only (not exposed to
 Alpha users) is a deliberate product scope decision recorded above, not a
-coverage gap: every behaviour this entry tracks is implemented and tested.
+coverage gap: every behavior this entry tracks is implemented and tested.
 The journey surface (map journey list with keyset pagination,
 journey-detail run history, and the advisory self-report counters) is now locked
 by the executing `journeys.feature` BDD surface, driving the real
@@ -120,9 +120,9 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
   with an empty sidebar group, library / pipeline-editor / global-search /
   audit-search / feature-flag exposure closed, and the API router guarded by
   `require_in_dev_operator` = developer mode + `library.search.in_dev`), yet the
-  manifest still carried that concealment as the entry's only `[ ]` behaviour,
+  manifest still carried that concealment as the entry's only `[ ]` behavior,
   so the registry reported the feature as `partial` and the tracker disagreed
-  with its own "None acknowledged" gaps. Ticked the shipped behaviour with its
+  with its own "None acknowledged" gaps. Ticked the shipped behavior with its
   real two-part gate, moved both layers to `covered`, and recorded the
   internal-only scope as a deliberate product decision rather than a gap.
   Lens 9 found the dev-mode refusal branch was implemented but unreachable in
@@ -135,11 +135,11 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
 - 2026-10-03: **Improve Architecture product-map walk** – closed the
   `feat-lifecycle-maps` tracker lag left by FAR-654/FAR-742 (journey display
   gating on the map detail view): the manifest `feat-lifecycle-maps` registry
-  carried the shipped double-gating behaviour (`lifecycle_map_journeys`
+  carried the shipped double-gating behavior (`lifecycle_map_journeys`
   feature flag AND the per-visit "Show work items" checkbox, default OFF, with
   the no-API-call / empty-journeys-list render path) but the human-readable
-  graph entry had no behaviour line and no frontend-test citation. Added the
-  checked behaviour plus the `LifecycleMapView.vue` code and
+  graph entry had no behavior line and no frontend-test citation. Added the
+  checked behavior plus the `LifecycleMapView.vue` code and
   `LifecycleMapView.spec.ts` unit citations.
   `_ORPHANED_BDD_FEATURES` stays empty.
 
@@ -176,7 +176,7 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
   stays visible to Assistant's docs indexer / `/api/v1/manifest`. Also registered the map
   detail page's header action buttons `lifecycle-map-export` / `lifecycle-map-import`
   (bound-literal static testids that the manifest previously left out), and extended
-  the static-testid scanner to recognise bound string literals
+  the static-testid scanner to recognize bound string literals
   (`:data-testid="'lit'"` / ``:data-testid="`lit`"``) while excluding dynamic
   ``:data-testid="expr"`` bindings (bare-identifier props like `dataTestId` are no
   longer misread as elements).
@@ -207,7 +207,7 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
   in the manifest `elements:` inventory and added `LifecycleMapView.vue` to the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`).
 - 2026-09-07: **product-map review pass** - added this
-  behaviour-tracker for `feat-lifecycle-maps`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against
+  behavior-tracker for `feat-lifecycle-maps`, which previously had no
+  `docs/product-map/` entry. Behaviors verified against
   `routes/lifecycle_maps.py`, `core/lifecycle_map/`, and the lifecycle-map
   unit+BDD suites. Status: covered.

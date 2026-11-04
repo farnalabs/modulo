@@ -18,7 +18,7 @@ Plugin package          Modulo Core
     │                       │  ModelBackendBase instance
 ```
 
-Plugins are **discovered at startup**: all builder functions are loaded from installed packages and cached in-memory. At runtime, the `ConnectorHub` and `ModelBackendHub` first check their built-in types, then fall back to the plugin registry for any type they do not recognise.
+Plugins are **discovered at startup**: all builder functions are loaded from installed packages and cached in-memory. At runtime, the `ConnectorHub` and `ModelBackendHub` first check their built-in types, then fall back to the plugin registry for any type they do not recognize.
 
 ### Entry point groups
 
@@ -123,7 +123,7 @@ Verifies that the plugin's distribution package is still importable via `importl
 from modulo.core.plugin_registry import get_plugin_registry
 ```
 
-The module-level `get_plugin_registry()` returns a lazily-initialised singleton. All consumers (the API layer, `ConnectorHub`, `ModelBackendHub`) share the same instance.
+The module-level `get_plugin_registry()` returns a lazily-initialized singleton. All consumers (the API layer, `ConnectorHub`, `ModelBackendHub`) share the same instance.
 
 ### REST API
 

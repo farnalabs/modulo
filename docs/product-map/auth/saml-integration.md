@@ -24,7 +24,7 @@ SAML 2.0 upstream integration via python3-saml: IdP metadata parsing,
 `AuthnRequest` generation, and `SAMLResponse` parsing with full XML digital
 signature verification, wired into the SSO ACS flow (`feat-sso`).
 
-## Behaviours
+## Behaviors
 
 - [x] `AuthnRequest` generation from the IdP metadata (optional SP signing)
 - [x] `SAMLResponse` parsing with XML digital signature verification against the
@@ -53,7 +53,7 @@ signature verification, wired into the SSO ACS flow (`feat-sso`).
       an integrity signal only, never the routing key)
       (`auth/saml_handler.py`, `test_saml_audience_containment`,
       `test_saml_per_org_regression`, `test_sso`)
-- [x] Per-organisation provider isolation: metadata XML and the ACS surface
+- [x] Per-organization provider isolation: metadata XML and the ACS surface
       are per-provider; an org's assertion is accepted only at the matching
       org's ACS (`test_saml_per_org_regression`)
 
@@ -61,7 +61,7 @@ signature verification, wired into the SSO ACS flow (`feat-sso`).
 
 - **python3-saml is a PyPI dependency, not vendored** - declared as
   `python3-saml>=1.16.0` in `backend/pyproject.toml` and locked to 1.16.0 in
-  `backend/uv.lock`; behaviour is verified against that locked version in the
+  `backend/uv.lock`; behavior is verified against that locked version in the
   BDD suite.
 
 ## QA History
@@ -70,10 +70,10 @@ signature verification, wired into the SSO ACS flow (`feat-sso`).
   `feat-core-saml-integration` tracker lag left by FAR-1010 (cross-org
   assertion audience containment) and FAR-1011 (per-provider
   Destination/Recipient pinning): the manifest `feat-sso` registry carried
-  the shipped "replayed to org B's ACS is rejected" behaviour, but the
+  the shipped "replayed to org B's ACS is rejected" behavior, but the
   human-readable graph entry for the implementing surface
-  (`auth/saml_handler.py`) had no behaviour line and cited only the
-  datetime-parser unit suite. Added the checked behaviours - the fail-closed
+  (`auth/saml_handler.py`) had no behavior line and cited only the
+  datetime-parser unit suite. Added the checked behaviors - the fail-closed
   `_enforce_audience_restriction` containment on top of python3-saml's
   conditional checks, the real-ACS-URL Destination/Recipient pinning, and the
   per-provider ACS isolation - plus the `test_saml_audience_containment.py`,
@@ -82,5 +82,5 @@ signature verification, wired into the SSO ACS flow (`feat-sso`).
 
 - 2026-08-25: **product-map review pass** - entry added to close the
   dangling `depends-on: feat-core-saml-integration` edge in `auth/sso-provider-ui.md`.
-  Behaviours re-verified against `auth/saml_handler.py`, `sso_saml.feature`, and unit
+  Behaviors re-verified against `auth/saml_handler.py`, `sso_saml.feature`, and unit
   tests. Status: covered.

@@ -81,7 +81,7 @@ describe('OrgLoginView', () => {
     await vi.waitFor(() => {
       expect(wrapper.find('[data-testid="org-login-not-found"]').exists()).toBe(true)
     })
-    expect(wrapper.text()).toContain('Organisation not found')
+    expect(wrapper.text()).toContain('Organization not found')
 
     // FAR-1669 prove-the-fix: the not-found box must be the SHARED
     // ErrorAlert — the pre-conversion bespoke div carried the same testid,

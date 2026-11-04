@@ -183,9 +183,9 @@ without a format-version change, so the list below is the contract.
 | `settings.txt` | Full settings **key inventory**. Values only for a reviewed safe-list (`MODULO_DB`, the public and frontend URLs, ports, worker pool and concurrency counts), plus the plan tier and feature flags. Every other key is shown as `set` or `unset`. | All |
 | `deployment.txt` | Install shape, service names, image tags and digests, restart counts, proxy variable names, CA bundle path. | All |
 | `db.txt` | Database migration head, expected head, Postgres version, and row counts for a fixed table list. No rows. | All |
-| `errors.json` | Top error groups: id, fingerprint, level, source, count, first and last seen, environment, version, sanitised message. | All |
+| `errors.json` | Top error groups: id, fingerprint, level, source, count, first and last seen, environment, version, sanitized message. | All |
 | `runs.json` | Last failed runs: run id, pipeline, status, error code, timings, cost. No inputs, outputs or node standard output. | All |
-| `licence.txt` | Plan tier, licence state, expiry, opaque licence id, feature list. Never the licence key. | All |
+| `licence.txt` | Plan tier, license state, expiry, opaque license id, feature list. Never the license key. | All |
 | `degraded.json` | Terminal-degrade reason and the last crash backtraces, redacted. | Native launcher only |
 | `logs/<component>.log.tail` | Bounded log tail per component. Consecutive repeated lines are collapsed, so a crash loop cannot fill the bundle. | Native (recorded as missing in a container; Docker Compose carries `docker/logs/...` instead) |
 | `docker/...` | `compose ps -a`, container state, health, restart count and exit code per service, image tags and digests, compose file names and hashes, volume names only, bounded per-service logs. | Docker Compose |
@@ -209,7 +209,7 @@ The collector does not collect or copy any of the following:
   bodies.
 - Connector configuration.
 - User identities: the user list, email addresses, SSO provider configuration.
-- Any other organisation's data.
+- Any other organization's data.
 
 The bundle is built to exclude credentials and customer content. It is plain
 text - open it and read it before you send it.

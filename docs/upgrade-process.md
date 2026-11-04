@@ -168,7 +168,7 @@ curl http://localhost:8000/healthz
 
 ---
 
-## Migration Behaviour
+## Migration Behavior
 
 Migrations run automatically on backend startup:
 

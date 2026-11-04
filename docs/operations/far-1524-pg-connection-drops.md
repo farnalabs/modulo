@@ -124,7 +124,7 @@ are **refuted for the error window by observation** (below).
 - `db/session.py`: `_build_engine` reads the setting instead of the
   hardcoded 3600; `pool_pre_ping=True` unchanged.
 - **Engine-build sweep (follow-up commits):** every remaining long-lived
-  pooled engine now honours the same setting –
+  pooled engine now honors the same setting –
   `api/dependencies.py` (`_SYSTEM_ASYNC_ENGINE`, system role),
   `core/reports/scheduler.py`, `core/error_tracking/saq_hooks.py`,
   `core/saq_worker.py` (`_get_system_async_engine`),

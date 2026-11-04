@@ -110,7 +110,7 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(wrapper.find('[data-testid="compliance-evidence-summary"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="compliance-evidence-summary-count"]').text()).toBe('1/1')
     expect(wrapper.find('[data-testid="compliance-evidence-summary-percentage"]').text()).toContain('100%')
-    expect(wrapper.find('[data-testid="compliance-evidence-summary-status"]').text()).toContain('All indexed evidence artefacts are present')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-status"]').text()).toContain('All indexed evidence artifacts are present')
   })
 
   it('makes every horizontally scrollable table a keyboard-reachable named region', async () => {
@@ -143,7 +143,7 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(wrapper.find('[data-testid="compliance-evidence-summary"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="compliance-evidence-summary-count"]').text()).toBe('0/0')
     expect(wrapper.find('[data-testid="compliance-evidence-summary-percentage"]').text()).toContain('0%')
-    expect(wrapper.find('[data-testid="compliance-evidence-summary-status"]').text()).toContain('Some indexed evidence artefacts are missing')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-status"]').text()).toContain('Some indexed evidence artifacts are missing')
 
     const warning = wrapper.find('[data-testid="compliance-evidence-index-incomplete"]')
     expect(warning.exists()).toBe(true)
@@ -245,7 +245,7 @@ describe('ComplianceEvidenceIndexView', () => {
 
     expect(wrapper.find('[data-testid="compliance-evidence-summary-count"]').text()).toBe('1/1')
     expect(wrapper.find('[data-testid="compliance-evidence-summary-percentage"]').text()).toContain('100%')
-    expect(wrapper.find('[data-testid="compliance-evidence-summary-status"]').text()).toContain('All indexed evidence artefacts are present')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-status"]').text()).toContain('All indexed evidence artifacts are present')
     expect(wrapper.text()).toContain('Customer supplied')
   })
 

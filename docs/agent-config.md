@@ -90,7 +90,7 @@ Pipeline graphs are validated at three enforcement layers. Each layer catches di
 
 ### Layer 1: Pydantic Model (`PipelineGraphNode`)
 
-Caught at HTTP request deserialisation – blocks the API call with a 422 response.
+Caught at HTTP request deserialization – blocks the API call with a 422 response.
 
 | Code | Severity | Rule |
 |---|---|---|
@@ -174,7 +174,7 @@ Runs on-save (via the REST API's `PUT /{pipeline_id}/graph` endpoint) and pre-ru
 | `SANDBOX_RESOURCE_LIMITS_INVALID` | Error | `resource_limits` is not an object |
 | `SANDBOX_RESOURCE_LIMITS_UNKNOWN_KEY` | Error | `resource_limits` contains unknown keys (fail-closed, never silently dropped) |
 | `SANDBOX_READ_ONLY_INVALID` | Error | `read_only` is not a genuine boolean (FAR-212) |
-| `SANDBOX_GIT_CREDENTIALS_INVALID` | Error | `git_credentials` scope is not recognised (FAR-212) |
+| `SANDBOX_GIT_CREDENTIALS_INVALID` | Error | `git_credentials` scope is not recognized (FAR-212) |
 | `SANDBOX_POLICY_FIELD_ON_NON_SANDBOX` | Error | `read_only` / `git_credentials` / `single_pr_per_run` / `egress_policy` / `egress_allowlist` set on a non-`sandbox_agent` node |
 | `SANDBOX_WALLCLOCK_BUDGET_INVALID` | Error | `wallclock_budget_seconds` is not a valid positive budget (FAR-296) |
 | `SANDBOX_LOOP_INTERCEPT_MALFORMED` | Error | `loop_intercept` config is not a valid object (FAR-211) |

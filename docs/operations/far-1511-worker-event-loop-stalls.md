@@ -34,7 +34,7 @@ and the port-8082 liveness server.
 
 ## What was observed
 
-### 1. The 95 s budget is spent inside one organisation's reconcile pass
+### 1. The 95 s budget is spent inside one organization's reconcile pass
 
 Sampled `GET https://app.modulo.run/healthz/ready` seven times while the
 `dispatcher_reconcile` check reported a timeout tick. Every sample carried the
@@ -52,7 +52,7 @@ reach `record_facts`, `compensating_sweeps`, or the stats write before the
 deadline – and the counters (`scanned=3, repaired=0, skipped=2`) are identical
 across all seven samples, so the tick makes the same amount of progress each
 time and then stops at the same place. The budget is not spread across work; it
-is consumed by one await inside one organisation's pass.
+is consumed by one await inside one organization's pass.
 
 A tick that succeeds looks completely different (`scanned=5, repaired=2,
 skipped=3, status=ok`), so the pass itself is normally fast.
@@ -199,13 +199,13 @@ updated (`flyctl machine update <standby-machine-id> -a app-modulo --vm-size
 shared-cpu-2x`, safe while stopped) or recreated by a deploy. The app machine
 needed no such step – it was observed at 4 shared vCPU on 2026-10-05.
 
-The cadence gap described above (no per-organisation **time** bound, only a row
+The cadence gap described above (no per-organization **time** bound, only a row
 budget) was closed by FAR-1525 (PR #1342): each org's reconcile pass now runs
 under its own timeout at `DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS` (default 30,
 min 1, max 119), clamped to the tick's remaining budget minus a 15 s tail
 reserve for facts/sweeps – one hung org can no longer consume the whole inner
 deadline. FAR-1643 then split what "expiry" means, because the production
-deferrals were localised to time spent PROCESSING rows, and a rollback there
+deferrals were localized to time spent PROCESSING rows, and a rollback there
 discarded work that was already done. Today there are two distinct paths:
 
 1. **Row-loop deferral (the expected path):** once less than an adaptive margin –
@@ -222,9 +222,9 @@ discarded work that was already done. Today there are two distinct paths:
 
 ## Follow-ups
 
-- **Done (FAR-1525, PR #1342; refined by FAR-1643):** a per-organisation
+- **Done (FAR-1525, PR #1342; refined by FAR-1643):** a per-organization
   **time** bound inside `dispatcher_reconcile`. The row budget from FAR-1425
-  caps *how much* work one organisation can do, but a single hung await could
+  caps *how much* work one organization can do, but a single hung await could
   still eat the whole 95-second deadline (the seven timeout ticks above) – now
   each pass is cut at `DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS` (default 30 s),
   clamped to the tick's remaining budget minus a tail reserve for facts/sweeps.

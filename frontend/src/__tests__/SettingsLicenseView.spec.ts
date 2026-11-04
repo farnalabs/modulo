@@ -229,7 +229,7 @@ describe('SettingsLicenseView', () => {
     expect(wrapper.find('[data-testid="license-remove-btn-system"]').exists()).toBe(false)
     expect(wrapper.find('textarea').exists()).toBe(true)
     expect(wrapper.text()).toContain('Apply Key')
-    expect(wrapper.text()).toContain('Organisation License')
+    expect(wrapper.text()).toContain('Organization License')
     expect(wrapper.text()).not.toContain('Verify Key')
   })
 
@@ -250,7 +250,7 @@ describe('SettingsLicenseView', () => {
     // write is install, behind a confirmation step.
     expect(wrapper.find('[data-testid="license-verify-btn"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Verify Key')
-    expect(wrapper.text()).toContain('Install licence')
+    expect(wrapper.text()).toContain('Install license')
   })
 
   // ── FAR-2142: no restart instruction; durability stated per scope ────
@@ -291,7 +291,7 @@ describe('SettingsLicenseView', () => {
     await nextTick()
 
     const description = wrapper.find('.formdialog-description').text()
-    expect(description).toContain("organisation's current license key")
+    expect(description).toContain("organization's current license key")
     expect(description).toContain('survives a restart or redeploy')
     expect(description).not.toContain('requires a server restart')
     expect(description).not.toContain('held in memory only')

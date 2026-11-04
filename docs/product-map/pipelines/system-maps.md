@@ -74,9 +74,9 @@ status: partial
 
 # System Maps (Beta, internal dogfood)
 
-An internal, default-off preview that inspects an organisation's existing
+An internal, default-off preview that inspects an organization's existing
 inventory (pipelines, triggers, connector instances and pipeline folders),
-materialises a deterministic, unpublished draft graph from it, and lets an
+materializes a deterministic, unpublished draft graph from it, and lets an
 operator author, revise and publish that graph as a delivery System Map. It has
 its own routed surface (`/system-maps` and `/system-maps/:id`, both
 `private_preview`) and its own schema, registered in the manifest `features:`
@@ -85,7 +85,7 @@ registry as `feat-system-maps`.
 Every route sits behind the internal-only `system_maps` gate: developer mode,
 the operator role floor, the `system_maps_access` grant for grant-bearing API
 keys, and the `system_maps` feature flag, all resolved server-side on each
-request. Legacy JWTs and keys with no grant set keep the role-based behaviour
+request. Legacy JWTs and keys with no grant set keep the role-based behavior
 rather than being refused for the missing grant. The surface is deliberately
 invisible to ordinary customers and never publishes automatically.
 
@@ -98,11 +98,11 @@ The map is stored in dedicated System Maps tables (migration
 `0347_system_maps_version_aware.py` adds the `effective_from` /
 `effective_to` windows that make a revision readable at a point in time.
 
-## Behaviours
+## Behaviors
 
 - [x] The `system_maps` flag is a community-tier `FeatureFlag` registered in
       `INTERNAL_FLAGS` and `DEFAULT_OFF_FLAGS`, so it is off by default and
-      filtered from customer-facing plan/catalogue responses
+      filtered from customer-facing plan/catalog responses
       (`effective_feature_flags`); it is visible in the admin feature-flag list
       only to a caller passing the internal System Maps gate, and the list's
       cache key is scoped by that visibility class so an internal response can
@@ -134,7 +134,7 @@ The map is stored in dedicated System Maps tables (migration
       keys are registered but have no route: nodes, relationships and loop
       configs are authored inside the revision payload
       (`auth/permissions.py`, `api/routes/system_maps.py`)
-- [x] Every handler is organisation-scoped: it binds `set_rls_org` and
+- [x] Every handler is organization-scoped: it binds `set_rls_org` and
       `set_rls_user_context` inside the same `session.begin()` block as its
       reads and writes, and every repository call carries an explicit
       `organisation_id` (`api/routes/system_maps.py`,
@@ -145,7 +145,7 @@ The map is stored in dedicated System Maps tables (migration
       with no owner team. Create is validated by
       `validate_owner_team_for_create` and update by
       `validate_team_transition_for_update`: a newly named owner team must
-      exist in the caller's organisation and a non-admin caller must belong to
+      exist in the caller's organization and a non-admin caller must belong to
       it, a team-private map's current owner team gates the transition, and an
       update cannot set `team` visibility without an owner team (422)
       (`db/models/system_map.py`, `api/routes/system_maps.py`;
@@ -170,7 +170,7 @@ The map is stored in dedicated System Maps tables (migration
       `0345_system_maps_name_integrity.py`;
       `test_system_map_migrations.py`)
 - [x] `POST /api/v1/system-maps/discover` inspects only the caller's
-      organisation: live pipelines (`deleted_at IS NULL`,
+      organization: live pipelines (`deleted_at IS NULL`,
       `archived_at IS NULL`), live triggers, live connector instances and
       pipeline folders, then returns 201 with a discovery report (sources
       inspected, node/edge counts, inferred nodes and edges, skipped sources,
@@ -215,7 +215,7 @@ The map is stored in dedicated System Maps tables (migration
 - [x] Publishing validates before it publishes: relationship endpoints resolve
       against live nodes, `flow` edges are acyclic, every `improvement_loop`
       node has a loop config carrying all six required parameters, and every
-      binding resolves in the organisation and team scope; an invalid revision
+      binding resolves in the organization and team scope; an invalid revision
       returns the wire-contract `PublishResponse` carrying `validation_errors`
       while the audit dependency records `outcome="error"`; a valid publish sets
       `published_revision_id`, closes the previous revision's effective window
@@ -264,7 +264,7 @@ The map is stored in dedicated System Maps tables (migration
       `pipeline` node whose `pipeline_id` matches, an `action_pipeline` binding
       requires an `improvement_loop` node whose loop config names the same
       action pipeline, the pipeline (and optional trigger) must exist in the
-      organisation, and delete is a fail-closed audited soft delete
+      organization, and delete is a fail-closed audited soft delete
       (`api/routes/system_maps.py`, `db/repositories/system_map.py`;
       `test_system_maps_routes.py`)
 - [x] `modulo apply` treats a System Map as a name-keyed declarative entity
@@ -331,7 +331,7 @@ The map is stored in dedicated System Maps tables (migration
       the internal gate server-side (developer mode, operator/admin role floor,
       `system_maps_access` grant and the `system_maps` feature, each before any
       inventory read), refuses team- and user-scoped credentials because the
-      scan covers the whole organisation, and returns the discovery report as
+      scan covers the whole organization, and returns the discovery report as
       JSON or a branchable error code. It calls the route's undecorated handler
       and classifies DB failures itself (session contract, lock timeout,
       conflict, migration required, unavailable) instead of inheriting the REST
@@ -386,7 +386,7 @@ The map is stored in dedicated System Maps tables (migration
       `DashboardSystemOverview.spec.ts`, `SystemMapDetailView.spec.ts`)
 - [x] BDD coverage ships for the access gate and the revision lifecycle:
       `access_and_discovery.feature` drives the real router through
-      `TestClient` for an authorised discovery (201, the report names the
+      `TestClient` for an authorized discovery (201, the report names the
       unpublished draft, infers suggested edges, records honest stage types and
       reads tenant-scoped) plus the four refusals (viewer 403, grantless key
       403, developer mode off 403, feature off 402);
@@ -426,7 +426,7 @@ The map is stored in dedicated System Maps tables (migration
   the revision sidebar's "View current" and by-time switching. The unchecked
   bullet and Known Gap that claimed `revisions/current` and `revisions/by-time`
   were uncalled were false: both are now read from the store and exercised by
-  the sidebar, so the behaviour is checked and the remaining gap is narrowed to
+  the sidebar, so the behavior is checked and the remaining gap is narrowed to
   the unread `revisions/history` endpoint and the missing diff / restore-as-new
   affordances. Also fixed a stale-error bug in `SystemMapDetailView.selectRevision`:
   it did not clear a previous action error before a revision switch, unlike the
@@ -438,7 +438,7 @@ The map is stored in dedicated System Maps tables (migration
   against `origin/main` after FAR-2288's MCP-discovery + BDD PR (#2761) and the
   product-map refresh (#2762). Corrected the now-false remaining gaps: MCP has
   a `discover_system_map` tool (discovery only, not authoring/publish/overview),
-  so that behaviour is checked and the gap narrowed; the two BDD feature files
+  so that behavior is checked and the gap narrowed; the two BDD feature files
   (`access_and_discovery.feature`, `revisions.feature`) now execute, so the
   frontmatter cites them instead of leaving `bdd: []`. Wired the one real
   remaining UI gap: the dashboard "Discover My System" button is enabled, runs
@@ -449,7 +449,7 @@ The map is stored in dedicated System Maps tables (migration
 
 - 2026-10-31: **Improve Architecture product-map walk** - closed the feature-graph
   gap left by FAR-2244 (backend discovery) and FAR-2245 (dashboard draft-review
-  card): the shipped System Maps preview had no behaviour-tracker entry in either
+  card): the shipped System Maps preview had no behavior-tracker entry in either
   product-map layer. Added this entry (code, unit/integration test and frontend
   spec citations, the internal-flag visibility rules, the triple access gate, the
   deterministic discovery contract, the collision-safe lifecycle-map persistence
@@ -477,7 +477,7 @@ The map is stored in dedicated System Maps tables (migration
   against `feat-system-maps` with real list, detail, graph-editor,
   revision-sidebar and discovery components; (5) "no publish flow" and the
   lifecycle-map write invariants (FOR UPDATE lock, pipeline uniqueness,
-  normaliser bounds, rebuilt stage projection) - replaced by the System Maps
+  normalizer bounds, rebuilt stage projection) - replaced by the System Maps
   repository and `validate_publish` / `validate_bindings`; (6) "an existing
   discovery-owned map with the same name is reused" - any live name collision is
   now a 409. Added the shipped-but-undocumented surface: the revision lifecycle
@@ -528,7 +528,7 @@ The map is stored in dedicated System Maps tables (migration
   tool. (2) "No BDD coverage" / `bdd: []` -
   `tests/bdd/features/system_maps/access_and_discovery.feature` and
   `revisions.feature` execute through `steps/test_system_maps.py`, so both are
-  now cited in `bdd:` and the coverage is a ticked behaviour. Re-verified and
+  now cited in `bdd:` and the coverage is a ticked behavior. Re-verified and
   kept the gaps that genuinely remain: version-aware revision reads are still
   backend-only, discovery is still create-only, and loop dispatch still has no
   runtime. The dashboard discover button was still disabled when this pass ran;

@@ -3,11 +3,11 @@
 Modulo is self-hosted and published as source under the Business Source License
 1.1 (BUSL). This page describes what a customer, or a successor taking over a
 deployment, can rely on if Farnalabs stops operating. It covers the from-source
-build that makes the source usable on its own, and the one licence caveat that
+build that makes the source usable on its own, and the one license caveat that
 needs planning before that day: the Team trust anchor.
 
 The short version: you keep the **Community** tier forever because it needs no
-licence key, you can build, modify and patch the source yourself, and each
+license key, you can build, modify and patch the source yourself, and each
 released version converts to Apache-2.0 three years after its first public
 release. You do not automatically keep the **Team** tier or Farnalabs' future
 patches.
@@ -23,7 +23,7 @@ Verified properties:
 | Property | Evidence |
 |---|---|
 | The source builds with no Farnalabs-held secret. | The production all-in-one image builds from a clean checkout with no credential or build secret from Farnalabs. [Build the image from source](#build-the-image-from-source) below gives the command, which was run against this checkout for this page. |
-| The Community tier needs no licence key. | A deployment with no `MODULO_LICENSE_KEY` boots and runs on Community (`backend/src/modulo/core/license_bootstrap.py`: "Booting with no licence at all stays valid"). |
+| The Community tier needs no license key. | A deployment with no `MODULO_LICENSE_KEY` boots and runs on Community (`backend/src/modulo/core/license_bootstrap.py`: "Booting with no license at all stays valid"). |
 | You may modify and patch the source. | The BUSL Additional Use Grant permits production use of Modulo and of any modified version or derivative work you create, including personal, internal and commercial use, provided that you may not use Modulo or any such modified version or derivative work to offer a paid hosted or managed service to third parties where that service provides substantially the same functionality as Modulo. See `LICENSE`. |
 | Each released version converts to Apache-2.0. | `LICENSE`: the Change Date for the distributed version is 2029-07-12, and "For each version of the Licensed Work, the Change Date is three years after that version is first publicly released." |
 
@@ -31,16 +31,16 @@ Verified properties:
 
 | Capability | Without Farnalabs |
 |---|---|
-| Community tier, pipelines, runs, connectors, evals, HITL, audit | Kept. No licence is required. |
+| Community tier, pipelines, runs, connectors, evals, HITL, audit | Kept. No license is required. |
 | Source, local patches, your own fork | Kept. Build from your fork at any time. |
 | A released version after its Change Date | Apache-2.0, per `LICENSE`. |
-| Team tier (SSO, team RBAC, audit viewer) | Not automatic. It needs a licence key signed by an anchor you trust. Recoverable by issuing your own key: see [The Team licence trust anchor](#the-team-licence-trust-anchor). |
+| Team tier (SSO, team RBAC, audit viewer) | Not automatic. It needs a license key signed by an anchor you trust. Recoverable by issuing your own key: see [The Team license trust anchor](#the-team-licence-trust-anchor). |
 | Farnalabs' future patches and releases | Not kept. You maintain your fork from the Change Date onward, or from the last release you mirrored. |
 
 ## Build the image from source
 
 The production compose file pulls `ghcr.io/farnalabs/modulo:${TAG}`. That image
-is convenient, but it is a Farnalabs-built artefact. The escrow path is to build
+is convenient, but it is a Farnalabs-built artifact. The escrow path is to build
 the same all-in-one image from the source you already have:
 
 ```bash
@@ -84,7 +84,7 @@ Notes:
 ## The frontend is MIT-licensed
 
 Starting with this release the frontend depends on **PrimeVue 4.5.5**, which is
-MIT-licensed. There is no licence key, no offline verification, and no
+MIT-licensed. There is no license key, no offline verification, and no
 "Invalid PrimeUI License" banner in a build from this commit onward, and the
 all-in-one build needs no credential of any kind for the frontend. This matters
 for escrow for the reason the rest of this page describes: MIT imposes no
@@ -93,14 +93,14 @@ modifies it does not inherit a licensing obligation from a frontend dependency.
 
 Older releases (before the PrimeVue 4 downgrade) shipped PrimeVue 5
 (`primevue` 5.0.4, part of PrimeTek's commercially licensed PrimeUI family) and
-*do* require a PrimeUI licence key. If you are keeping an older tag, read that
+*do* require a PrimeUI license key. If you are keeping an older tag, read that
 tag's own `docs/continuity-and-escrow.md`: it documents the key, the banner and
 how to supply the key to a from-source build. The instructions do not apply to
 this release, and this release's build takes no such key.
 
-## The Team licence trust anchor
+## The Team license trust anchor
 
-Team licences are Ed25519-signed keys in the format
+Team licenses are Ed25519-signed keys in the format
 `<base64(payload)>.<base64(signature)>`. Verification uses exactly one public
 key, the trust anchor:
 
@@ -109,24 +109,24 @@ key, the trust anchor:
 - the configured `MODULO_LICENSE_PUBLIC_KEY` (64 hex characters).
 
 The built-in key is the public half of Farnalabs' **development** keypair. It is
-not the anchor Farnalabs signs production licences with, and outside debug mode
-it is not trusted. A production licence therefore cannot verify against it, and
+not the anchor Farnalabs signs production licenses with, and outside debug mode
+it is not trusted. A production license therefore cannot verify against it, and
 startup logs a `LICENSE_CRITICAL` message saying the development anchor is in
 use. The production anchor is not in the repository.
 
-### Retain the anchor with the licence
+### Retain the anchor with the license
 
-Keep a copy of `MODULO_LICENSE_PUBLIC_KEY` wherever you keep the licence key. It
-is a public key, not a secret, so storing it next to the licence is safe. If you
-hold a Farnalabs-issued Team licence and lose the anchor, the licence can no
+Keep a copy of `MODULO_LICENSE_PUBLIC_KEY` wherever you keep the license key. It
+is a public key, not a secret, so storing it next to the license is safe. If you
+hold a Farnalabs-issued Team license and lose the anchor, the license can no
 longer verify. Re-issuing a key that verifies against the anchor you still hold
 requires the matching private key, which Farnalabs holds.
 
-### Issue your own Team licence
+### Issue your own Team license
 
 A successor does not need Farnalabs to restore Team. The deployment trusts
 whatever anchor the operator configures, so you can generate your own keypair
-and sign your own Team licences. Run these commands in a checkout of the source.
+and sign your own Team licenses. Run these commands in a checkout of the source.
 
 1. Generate an Ed25519 keypair:
 
@@ -152,7 +152,7 @@ and sign your own Team licences. Run these commands in a checkout of the source.
    Set it wherever the deployment's other configuration lives, then restart the
    API and the workers. Every process resolves the same anchor.
 
-3. Mint a Team licence with the private key:
+3. Mint a Team license with the private key:
 
    ```bash
    cd backend
@@ -166,10 +166,10 @@ and sign your own Team licences. Run these commands in a checkout of the source.
    "
    ```
 
-   The command prints one line in the licence-key format. The signed payload
+   The command prints one line in the license-key format. The signed payload
    carries `tier: team`, a `features` list (`team_rbac`, `sso`, `audit_viewer`),
-   the organisation id, and the expiry (`issued_at + 12 months` by default).
-   A `team` tier licence unlocks every flag catalogued at the Team tier,
+   the organization id, and the expiry (`issued_at + 12 months` by default).
+   A `team` tier license unlocks every flag cataloged at the Team tier,
    including `admin_spend_limits`. Pass a different `term_months` for a
    different term.
 
@@ -194,10 +194,10 @@ and sign your own Team licences. Run these commands in a checkout of the source.
 
 Verified: a keypair generated by step 1, a key minted by step 3, and
 `parse_and_verify` against the matching public key returns a valid `team`
-licence with the three feature flags and a 12-month expiry.
+license with the three feature flags and a 12-month expiry.
 
 Activation is a technical mechanism. Whether you are entitled to use the Team
-tier remains governed by your licence from Farnalabs and the BUSL terms.
+tier remains governed by your license from Farnalabs and the BUSL terms.
 
 ## A continuity checklist
 
@@ -207,10 +207,10 @@ tier remains governed by your licence from Farnalabs and the BUSL terms.
    works from your own infrastructure.
 3. Keep your Team anchor and its private key, or record that you will generate a
    replacement keypair. Without the private key you cannot renew a self-issued
-   licence; without the anchor a Farnalabs-issued one will not verify.
+   license; without the anchor a Farnalabs-issued one will not verify.
 4. If the release you mirror predates the PrimeVue 4 downgrade, keep its PrimeUI
-   licence key and the terms you accepted, and supply it on every rebuild.
-   Releases from the downgrade onward need no frontend licence key.
+   license key and the terms you accepted, and supply it on every rebuild.
+   Releases from the downgrade onward need no frontend license key.
 5. Record the Change Date of the version you run, so you know when that version
    becomes Apache-2.0.
 6. Keep a tested restore of the database and object storage. Continuity of the
