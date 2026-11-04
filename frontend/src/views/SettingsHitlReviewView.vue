@@ -233,6 +233,11 @@
             @change="toggleSelectAll"
           />
         </label>
+        <!-- FAR-2365: mirrors the body's expand chevron (h-4 w-4) so every
+             header label aligns with the value column beneath it. The body
+             chevron lives inside the row button, after the checkbox; this
+             spacer reserves the same track in the header. -->
+        <span class="h-4 w-4 flex-shrink-0" aria-hidden="true" data-testid="hitl-review-header-expand-spacer" />
         <div class="w-24 flex-shrink-0">{{ $t('views.SettingsHitlReviewView.status_label') }}</div>
         <div class="min-w-0 flex-[2]">{{ $t('views.SettingsHitlReviewView.pipeline_label') }}</div>
         <div class="min-w-0 flex-[2]">{{ $t('views.SettingsHitlReviewView.node_label') }}</div>

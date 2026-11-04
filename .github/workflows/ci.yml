@@ -45,7 +45,50 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Fast jobs run on ALL events (PR + push + manual)
+  # Cheap jobs run on ALL events (PR + push + manual). The current-head gate
+  # prevents superseded pull_request runs from starting expensive validation;
+  # non-PR events always pass through so main and manual runs are unchanged.
+
+  current-head-gate:
+    name: Current PR head gate
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      current: ${{ steps.check.outputs.current }}
+    steps:
+      - name: Verify this run still owns the PR head
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Non-PR event (${EVENT_NAME}) - current=true."
+            echo "current=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          API_RC=0
+          CURRENT_HEAD_SHA="$(gh api "/repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')" || API_RC=$?
+          if [ "$API_RC" -ne 0 ] || [ -z "$CURRENT_HEAD_SHA" ]; then
+            echo "::warning::Could not read the current PR head (rc=${API_RC}); failing open with current=true."
+            echo "current=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$CURRENT_HEAD_SHA" = "$RUN_HEAD_SHA" ]; then
+            echo "PR #${PR_NUMBER} still points at ${RUN_HEAD_SHA}; current=true."
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::PR #${PR_NUMBER} moved from ${RUN_HEAD_SHA} to ${CURRENT_HEAD_SHA}; this run is superseded and expensive validation will be skipped."
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
 
   changes:
     # FAR-1427: one cheap, checkout-free path detector feeding the path gates
@@ -464,7 +507,8 @@ jobs:
     # lint fails these jobs are skipped and every dependent (backend-coverage,
     # coverage-gate, Sonar) is skipped with it - the run still concludes FAILURE
     # because lint failed, and notify-pr-failure's needs-aware guard sees it.
-    needs: [backend-lint]
+    needs: [current-head-gate, backend-lint]
+    if: needs.current-head-gate.outputs.current == 'true'
     # Runner choice, measured (FAR-2325, 2026-11-03). standard-4 was never a
     # CPU-speed win: the single un-sharded job on standard-4 took a median
     # 35.8 min (n=15, 27.7-39.7), not the ~2x over standard-2's ~25 min that
@@ -528,7 +572,8 @@ jobs:
     # SonarCloud consume, so the artifact name and shape are unchanged from the
     # single-job era.
     name: Coverage combine (backend unit shards)
-    needs: [backend-test]
+    needs: [current-head-gate, backend-test]
+    if: always() && needs.current-head-gate.outputs.current == 'true' && needs.backend-test.result == 'success'
     runs-on: ubicloud-standard-2
     timeout-minutes: 20
     defaults:
@@ -566,7 +611,8 @@ jobs:
     # they run in their own job PARALLEL to the unit shards and stop being part
     # of the critical path at all.
     name: Test (Backend) non-unit suites
-    needs: [backend-lint]
+    needs: [current-head-gate, backend-lint]
+    if: needs.current-head-gate.outputs.current == 'true'
     runs-on: ubicloud-standard-4
     timeout-minutes: 30
     defaults:
@@ -634,6 +680,8 @@ jobs:
             -q --tb=short --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
 
   integration-changed:
+    if: needs.current-head-gate.outputs.current == 'true'
+    needs: [current-head-gate]
     # Runs the integration test files a PR (or push) actually changed. The
     # full integration suite only runs in the deploy pipeline's pre-deploy
     # gate, so a broken integration test merged to main sails through PR CI
@@ -801,7 +849,8 @@ jobs:
     # schedule trigger fires this ENTIRE fast-validation suite, FAR-773).
     name: Tier 1b testcontainers (light)
     # FAR-1427 (cheap-first): also waits for Lint (Backend), see backend-test.
-    needs: [changes, backend-lint]
+    needs: [current-head-gate, changes, backend-lint]
+    if: needs.current-head-gate.outputs.current == 'true'
     runs-on: ubicloud-standard-2
     defaults:
       run:
@@ -857,6 +906,8 @@ jobs:
           # against REAL server responses only.
 
   runner-ci-harness:
+    if: needs.current-head-gate.outputs.current == 'true'
+    needs: [current-head-gate]
     # Bundled Runner CI harness (FAR-773): boots the deploy/compose/
     # runner-ci.yml rig (socket-proxy + dind + workspace network) and runs
     # the docker-marked harness suite against it. The job body lives in the
@@ -870,7 +921,8 @@ jobs:
 
   frontend:
     name: Frontend and WCAG
-    needs: [changes]
+    needs: [current-head-gate, changes]
+    if: needs.current-head-gate.outputs.current == 'true'
     runs-on: ubicloud-standard-2
     defaults:
       run:
@@ -1060,6 +1112,8 @@ jobs:
           exit 1
 
   frontend-unit-parity:
+    if: needs.current-head-gate.outputs.current == 'true'
+    needs: [current-head-gate, changes]
     # FAR-1947: the "Frontend and WCAG" job runs the unit suite with
     # `--maxWorkers=2` (a deliberate 2-vCPU cap — see the vitest step there),
     # but the merge queue runs `pnpm run test:unit`, which is `vitest run src
@@ -1091,7 +1145,6 @@ jobs:
     # unit shards (~14 min), so no added PR critical-path wall-clock; a
     # backend-only PR skips every step (a few seconds of runner allocation).
     name: Frontend unit suite (merge-queue parity)
-    needs: [changes]
     runs-on: ubicloud-standard-2
     timeout-minutes: 20
     defaults:
@@ -1122,6 +1175,14 @@ jobs:
         run: pnpm run test:unit
 
   sonarcloud-scan:
+    if: >-
+      !cancelled()
+      && needs.current-head-gate.outputs.current == 'true'
+      && needs.changes.result == 'success'
+      && needs.backend-coverage.result == 'success'
+      && (github.event_name == 'pull_request'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || github.event_name == 'workflow_dispatch')
     name: SonarCloud scan (coverage import)
     # SonarCloud automatic analysis (the GitHub App) cannot import coverage
     # reports, so a CI-based scanner run is the only way the coverage measure
@@ -1133,20 +1194,13 @@ jobs:
     # shard combine job (`backend-coverage`) uploads (and the frontend-coverage
     # artifact the frontend job uploads) instead of re-running either suite.
     # workflow_dispatch is allowed so this job can be validated manually.
-    if: >-
-      !cancelled()
-      && needs.changes.result == 'success'
-      && needs.backend-coverage.result == 'success'
-      && (github.event_name == 'pull_request'
-      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-      || github.event_name == 'workflow_dispatch')
     # FAR-1430: `frontend` is a need only so its coverage artifact is ready to
     # download. Sonar must still run when `frontend` FAILS (it ran independently
     # before), so the condition above replaces the implicit success() with
     # !cancelled() + an explicit success check on the backend coverage combine
     # job (the old behaviour: skipped when the backend run fails/is skipped).
     # frontend (~7 min) finishes well inside the backend unit shards.
-    needs: [backend-coverage, frontend, changes]
+    needs: [current-head-gate, backend-coverage, frontend, changes]
     runs-on: ubicloud-standard-2
     # A job-level block REPLACES the workflow default. actions: read is needed
     # by `gh run download` (Actions artifacts REST API) in the frontend-coverage
@@ -1410,8 +1464,8 @@ jobs:
     # on the whole ci.yml run conclusion, so a failing gate blocks merges with
     # no merge-queue change (same mechanism as coverage-gate).
     name: New issues gate (SonarCloud)
-    if: github.event_name == 'pull_request'
-    needs: [sonarcloud-scan, changes]
+    if: github.event_name == 'pull_request' && needs.current-head-gate.outputs.current == 'true'
+    needs: [current-head-gate, sonarcloud-scan, changes]
     runs-on: ubicloud-standard-2
     timeout-minutes: 5
     steps:
@@ -1526,13 +1580,14 @@ jobs:
     # merge queue are needed.
     name: Coverage gate (changed lines)
     if: >-
-      github.event_name == 'pull_request'
-      || github.event_name == 'workflow_dispatch'
+      needs.current-head-gate.outputs.current == 'true'
+      && (github.event_name == 'pull_request'
+      || github.event_name == 'workflow_dispatch')
     # `backend-coverage` is the job that combines the three unit shards and
     # enforces the thresholds; `backend-test` (the shard matrix) is its own
     # dependency, so naming the combine job here is enough. It also uploads the
     # `coverage-report` artifact this job downloads.
-    needs: [backend-coverage, frontend, changes]
+    needs: [current-head-gate, backend-coverage, frontend, changes]
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1791,6 +1846,8 @@ jobs:
           exit 0
 
   e2e-route-methods-check:
+    if: needs.current-head-gate.outputs.current == 'true'
+    needs: [current-head-gate, changes]
     # FAR-1847: deploy-critical structural guard. deploy.yml runs
     # `playwright test --grep "@regression"` against staging before promoting
     # to production, so an E2E caller whose method no longer matches the live
@@ -1801,7 +1858,6 @@ jobs:
     # against the live route objects (`app.routes`), not the OpenAPI document -
     # it omits `include_in_schema=False` routes and flattens path converters.
     name: E2E route methods
-    needs: [changes]
     runs-on: ubicloud-standard-2
     timeout-minutes: 10
     steps:
@@ -1857,6 +1913,8 @@ jobs:
   # trigger_events vocabulary constraint + deactivation SQL against real
   # Postgres (FAR-192 FIX 3).
   break-glass-deploy-gate:
+    if: needs.current-head-gate.outputs.current == 'true'
+    needs: [current-head-gate]
     name: Break-glass deploy gate
     runs-on: ubicloud-standard-2
     defaults:
@@ -1896,7 +1954,7 @@ jobs:
     # failure() nor cancelled(); every job here either always runs (path gates
     # are step-level) or is only skipped because an ancestor already failed,
     # which is itself a failure.
-    needs: [changes, backend-lint, uv-lock-check, backend-test, backend-coverage, backend-non-unit, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
+    needs: [current-head-gate, changes, backend-lint, uv-lock-check, backend-test, backend-coverage, backend-non-unit, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -1930,6 +1988,7 @@ jobs:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           PR_NUM: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_STATUS: ${{ needs.current-head-gate.outputs.current }}
         run: |
           # FAR-1427: this workflow now cancels in-progress pull_request runs
           # when a newer push lands (workflow-level concurrency). A job with
@@ -1942,6 +2001,11 @@ jobs:
           # Fail OPEN (treat as current) on any API/parse failure: a genuine
           # CI failure must not be silently dropped on an API blip; the Branch
           # Fixer webhook already coalesces duplicates by (prNumber, headSha).
+          if [ "$HEAD_STATUS" = "false" ]; then
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Current-head gate already marked this run superseded; skipping Branch Fixer dispatch."
+            exit 0
+          fi
           CURRENT_SHA=$(gh api "/repos/${{ github.repository }}/pulls/${PR_NUM}" --jq '.head.sha' 2>/dev/null || echo "")
           if [ -n "$CURRENT_SHA" ] && [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
             echo "superseded=true" >> "$GITHUB_OUTPUT"
@@ -2316,7 +2380,7 @@ jobs:
     # `self-report-ci` (both `github.event_name == 'pull_request' && ...`) never
     # run on a push or dispatch to main, so they cannot fail there.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && always()
-    needs: [changes, backend-lint, uv-lock-check, backend-test, backend-coverage, backend-non-unit, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
+    needs: [current-head-gate, changes, backend-lint, uv-lock-check, backend-test, backend-coverage, backend-non-unit, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -2484,8 +2548,11 @@ jobs:
     # `contains(needs.*.result, 'failure') || cancelled()` — and both of those
     # conditions already make
     # this job's guard false. `self-report-ci` cannot list itself.
-    if: github.event_name == 'pull_request' && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
-    needs: [changes, backend-lint, uv-lock-check, backend-test, backend-coverage, backend-non-unit, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
+    # A superseded run (current-head-gate emits current=false) must not report
+    # the PR's CI stage as done for a stale SHA; `!= 'false'` keeps the report
+    # fail-open when the gate's output is unreadable.
+    if: github.event_name == 'pull_request' && !cancelled() && needs.current-head-gate.outputs.current != 'false' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    needs: [current-head-gate, changes, backend-lint, uv-lock-check, backend-test, backend-coverage, backend-non-unit, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
       - name: Self-report CI Validate stage to Modulo (fail-open, best-effort)

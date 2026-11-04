@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Unit tests for scripts/fast_lane_classify.py.
 
-Run from the repo root:
-    uv run --project backend pytest tests/unit/scripts/test_fast_lane_classify.py -q
+Run from the backend directory:
+    uv run pytest tests/unit/scripts/test_fast_lane_classify.py -q
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Ensure the scripts directory is importable.
-_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
+_SCRIPTS_DIR = Path(__file__).resolve().parents[4] / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
