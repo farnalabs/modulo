@@ -3146,6 +3146,42 @@ jobs:
           echo "----- end pre-migrate machine log -----"
           exit 1
 
+      - name: Wait for active sandbox runs to finish (production)
+        shell: bash
+        env:
+          WORKER_DRAIN_TIMEOUT_MINUTES: "60"
+          WORKER_DRAIN_POLL_SECONDS: "30"
+        run: |
+          set -euo pipefail
+          # A rolling Fly deploy SIGTERMs the old worker. Do not start that
+          # replacement while a sandbox-backed run is still executing: the
+          # existing FAR-1627 handoff deliberately terminalises runs after
+          # durable sandbox activity rather than re-executing side effects.
+          # This endpoint is unauthenticated specifically for CI/CD probes and
+          # reads through the BYPASSRLS system session, so the count is deployment-wide.
+          timeout_s=$((WORKER_DRAIN_TIMEOUT_MINUTES * 60))
+          deadline=$(( $(date +%s) + timeout_s ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            body=""
+            if body=$(curl -fsS --max-time 15 "https://app.modulo.run/api/v1/deployment" 2>/dev/null); then
+              active=$(printf '%s' "$body" | jq -er '.active_sandbox_runs | numbers') || active=""
+              if [ -n "$active" ]; then
+                echo "active sandbox runs: $active"
+                if [ "$active" -eq 0 ]; then
+                  echo "No active sandbox runs remain; production worker replacement is safe."
+                  exit 0
+                fi
+              else
+                echo "::warning::deployment status returned no numeric active_sandbox_runs; refusing to deploy yet."
+              fi
+            else
+              echo "::warning::could not read production active-run status; refusing to deploy yet."
+            fi
+            sleep "$WORKER_DRAIN_POLL_SECONDS"
+          done
+          echo "::error::production still has active sandbox runs after ${WORKER_DRAIN_TIMEOUT_MINUTES} minutes; deploy was not started to avoid killing in-flight work."
+          exit 1
+
       - name: Deploy to app-modulo
         shell: bash
         env:

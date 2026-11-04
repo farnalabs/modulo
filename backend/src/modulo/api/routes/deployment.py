@@ -4,9 +4,13 @@ import os
 import time
 from datetime import UTC, datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.dependencies import get_system_db_session
+from modulo.db.models.run import Run
 from modulo.version import get_version
 
 router = APIRouter(prefix="/api/v1/deployment", tags=["deployment"])
@@ -15,9 +19,11 @@ _start_time = time.time()
 _started_at = datetime.now(UTC)
 
 
-@router.get("")
+@router.get("", include_in_schema=True)
 @handle_db_errors("deployment.deployment_info")
-async def deployment_info() -> dict[str, object]:
+async def deployment_info(
+    session: AsyncSession = Depends(get_system_db_session),
+) -> dict[str, object]:
     """Return deployment metadata for operational visibility.
 
     Served unauthenticated on purpose: the CI/CD deploy pipelines
@@ -36,6 +42,15 @@ async def deployment_info() -> dict[str, object]:
     # customer may build from a private fork), and no consumer reads them
     # (FAR-1975). Keep the response to build identifiers that are useless
     # without the repo itself.
+    active_runs = await session.execute(
+        select(func.count())
+        .select_from(Run)
+        .where(
+            Run.status == "running",
+            Run.dispatch_phase == "first_node_dispatched",
+            Run.sandbox_dispatch_state.is_not(None),
+        )
+    )
     return {
         "version": get_version(),
         "uptime_seconds": int(time.time() - _start_time),
@@ -45,4 +60,5 @@ async def deployment_info() -> dict[str, object]:
         "git_sha": os.environ.get("GIT_SHA", ""),
         "git_commit_timestamp": os.environ.get("GIT_COMMIT_TIMESTAMP", ""),
         "build_timestamp": os.environ.get("BUILD_TIMESTAMP", ""),
+        "active_sandbox_runs": int(active_runs.scalar_one()),
     }

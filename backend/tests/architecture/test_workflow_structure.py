@@ -1895,6 +1895,25 @@ def test_throttle_anchor_is_the_deploy_job_conclusion_not_the_run_conclusion() -
     assert not violations, "the throttle anchor is not a real-deploy signal:\n" + "\n".join(violations)
 
 
+def test_production_deploy_waits_for_active_sandbox_runs_before_fly_swap() -> None:
+    """The production worker is not replaced while sandbox work is active."""
+    production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
+    names = [step.get("name") for step in production_steps if isinstance(step, dict)]
+    assert "Wait for active sandbox runs to finish (production)" in names
+    wait_step = next(
+        step
+        for step in production_steps
+        if isinstance(step, dict) and step.get("name") == "Wait for active sandbox runs to finish (production)"
+    )
+    script = str(wait_step.get("run") or "")
+    deploy_index = names.index("Deploy to app-modulo")
+    wait_index = names.index("Wait for active sandbox runs to finish (production)")
+    assert wait_index < deploy_index
+    assert "/api/v1/deployment" in script
+    assert "active_sandbox_runs" in script
+    assert "exit 1" in script
+
+
 def test_production_deploy_still_verifies_the_shipped_sha() -> None:
     """A deploying run must still prove production serves what it shipped.
 

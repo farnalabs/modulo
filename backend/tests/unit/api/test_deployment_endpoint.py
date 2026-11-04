@@ -14,11 +14,13 @@ generalise) and no deploy workflow reads them.
 
 from collections.abc import Generator
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from modulo.api.main import app
+from modulo.api.routes import deployment
 from modulo.settings import Settings, get_settings
 
 
@@ -35,7 +37,12 @@ def _make_settings() -> Settings:
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     # Deliberately NO auth principal override: the endpoint is public.
+    session = MagicMock()
+    result = MagicMock()
+    result.scalar_one.return_value = 0
+    session.execute = AsyncMock(return_value=result)
     app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[deployment.get_system_db_session] = lambda: session
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -57,6 +64,7 @@ class TestDeploymentInfo:
         assert "git_sha" in body
         assert "git_commit_timestamp" in body
         assert "build_timestamp" in body
+        assert body["active_sandbox_runs"] == 0
 
     def test_source_repo_free_text_absent(self, client: TestClient) -> None:
         """FAR-1975: no free text from the deployment's source repo is exposed."""
@@ -113,6 +121,26 @@ class TestDeploymentInfo:
             "build_timestamp",
         ):
             assert isinstance(body[field], str), f"{field} should be a string"
+
+    def test_active_sandbox_runs_is_reported(self, client: TestClient) -> None:
+        session = app.dependency_overrides[deployment.get_system_db_session]()
+        result = MagicMock()
+        result.scalar_one.return_value = 3
+        session.execute = AsyncMock(return_value=result)
+        body = client.get("/api/v1/deployment").json()
+        assert body["active_sandbox_runs"] == 3
+
+    def test_active_sandbox_query_excludes_non_running_runs(self, client: TestClient) -> None:
+        session = app.dependency_overrides[deployment.get_system_db_session]()
+        result = MagicMock()
+        result.scalar_one.return_value = 0
+        session.execute = AsyncMock(return_value=result)
+        client.get("/api/v1/deployment")
+        statement = session.execute.call_args.args[0]
+        sql = str(statement)
+        assert "runs.status = :status_1" in sql
+        assert "runs.dispatch_phase = :dispatch_phase_1" in sql
+        assert "runs.sandbox_dispatch_state IS NOT NULL" in sql
 
     def test_build_metadata_falls_back_to_empty(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")

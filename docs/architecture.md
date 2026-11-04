@@ -368,9 +368,13 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   (default 30 min) with the `worker_lost` error code, force-releasing the
   pipeline slots a crashed worker leaked. Journeys and daily facts advance for
   each released run.
-- **Worker-shutdown handoff (FAR-1627):** a deploy SIGTERMs the SAQ runs
-  worker while agent runs are mid-execution. Instead of leaving those runs
-  `running` until the 30-minute heartbeat TTL above detects the loss (and
+- **Worker-shutdown handoff (FAR-1627):** the production deploy path waits for
+  active sandbox-backed runs to reach zero before starting the Fly worker
+  replacement. This prevents the normal deploy from SIGTERMing a run that has
+  already created a sandbox. The worker still has a shutdown handoff for hard
+  restarts, crashes, and races: a worker can be SIGTERMed while agent runs are
+  mid-execution. Instead of leaving those runs `running` until the 30-minute
+  heartbeat TTL above detects the loss (and
   misattributes it to the dispatch path), the worker's SAQ `shutdown` hook
   processes every run it still owns the moment shutdown begins, and each run
   takes one of two paths. If a re-run is safe – a pre-node run (zero nodes
