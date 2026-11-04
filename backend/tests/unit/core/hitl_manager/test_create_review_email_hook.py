@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.core.hitl_manager import DEFAULT_OVERDUE_THRESHOLD_MINUTES, HITLManager
 from modulo.db.models.hitl_claim import HitlClaim
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG = uuid.uuid4()
 _RUN = uuid.uuid4()
@@ -21,6 +22,7 @@ _GATE = "review-step"
 def _session_for_create(existing: HitlClaim | MagicMock | None = None) -> AsyncMock:
     """Session double for create_gate: pre-check SELECT, savepoint flush."""
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.scalar_one_or_none.return_value = existing
     session.execute = AsyncMock(return_value=result)

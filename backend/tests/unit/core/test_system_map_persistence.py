@@ -16,6 +16,7 @@ from modulo.core.system_map_persistence import (
     SystemMapNameConflictError,
 )
 from modulo.db.models.system_map import SystemMap
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -30,6 +31,7 @@ async def _noop_savepoint() -> AsyncIterator[None]:
 def _mock_session() -> AsyncMock:
     """Session double whose ``begin_nested()`` is a working async context manager."""
     session = AsyncMock()
+    configure_permissive_session(session)
     session.begin_nested = MagicMock(side_effect=_noop_savepoint)
     return session
 

@@ -24,6 +24,7 @@ from modulo.core.hitl_email_alerts import (
     send_hitl_deadline_alerts,
     send_hitl_email_alerts,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 # The lazy ``patch("modulo.db.session.get_shared_engine")`` in
 # test_dispatch_session_factory_builds_on_the_shared_engine imports
@@ -59,6 +60,7 @@ def _settings_mock() -> MagicMock:
 def _session_returning(rows: list[tuple[str, object]]) -> AsyncMock:
     """Session double whose ``execute`` returns ``.all()`` = *rows*."""
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.all.return_value = rows
     session.execute = AsyncMock(return_value=result)

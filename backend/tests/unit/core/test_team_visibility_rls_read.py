@@ -34,6 +34,7 @@ from modulo.core.team_visibility import (
     find_connector_team_mismatches,
 )
 from modulo.db.models.connector_instance import ConnectorInstance
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
@@ -63,6 +64,7 @@ def _pg_session(statements: list[Any], rows: list[object], *, guc_prev: tuple[An
     SELECT returns ``rows``, the set_config statements return a blank result.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     bind = MagicMock()
     bind.dialect.name = "postgresql"
     session.get_bind = MagicMock(return_value=bind)
@@ -89,6 +91,7 @@ def _pg_session(statements: list[Any], rows: list[object], *, guc_prev: tuple[An
 
 def _sqlite_session(statements: list[Any], rows: list[object]) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session.get_bind = MagicMock(return_value=bind)

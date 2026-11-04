@@ -17,6 +17,7 @@ from modulo.core.feedback_manager import (
 )
 from modulo.db.crud.run_node_outputs import RunBlobs
 from modulo.db.models.feedback_record import FeedbackRecord
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -28,6 +29,7 @@ _PRODUCING_NODE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
 @pytest.fixture
 def mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session.in_transaction = MagicMock(return_value=True)
@@ -1570,6 +1572,7 @@ class TestRejectCorrectionAccountGate:
         no_rows.first = MagicMock(return_value=None)
         scalars = MagicMock(return_value=no_rows)
         session = AsyncMock()
+        configure_permissive_session(session)
         session.execute = AsyncMock(return_value=MagicMock(scalars=scalars))
         session.add = MagicMock()
         session.flush = AsyncMock()

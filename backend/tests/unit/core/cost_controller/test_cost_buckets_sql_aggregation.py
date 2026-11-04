@@ -41,6 +41,7 @@ from modulo.core.cost_controller import (
     build_cost_report_buckets,
     get_cost_export_rows,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
@@ -252,6 +253,7 @@ def _mock_session(
     org_run_count: Any = None,
 ) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(
         side_effect=[
             MagicMock(all=MagicMock(return_value=component_rows)),  # component buckets

@@ -20,6 +20,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from tests.unit.api.mock_session import configure_permissive_session
 
 from modulo.core.eval_engine.regression import detect_regressions
 
@@ -77,6 +78,7 @@ def _row(**kw: Any) -> SimpleNamespace:
 
 async def _make_session(*, rows: list[Any] | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute.return_value = _FakeScalarResult(rows or [])
     return session
 

@@ -36,6 +36,7 @@ from sqlalchemy.exc import OperationalError
 from modulo.core.hitl_manager import GateNotFoundError, HITLManager
 from modulo.core.pipeline_engine.executor import AdmissionLockTimeoutError, PipelineExecutor, RunNotFoundError
 from modulo.core.pipeline_execution import _handle_executor_failure
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _lock_timeout_error(statement: str = "UPDATE runs") -> OperationalError:
@@ -62,6 +63,7 @@ def _begin_session() -> AsyncMock:
     ``PytestUnraisableExceptionWarning`` (and a red Test (Backend) shard).
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.scalar_one_or_none = MagicMock(return_value=None)
     session.execute = AsyncMock(return_value=result)
@@ -87,6 +89,7 @@ def _begin_session() -> AsyncMock:
 
 def _make_session(org: Any) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
 
     def _execute(stmt: Any, *_args: Any, **_kwargs: Any) -> MagicMock:
         result = MagicMock()

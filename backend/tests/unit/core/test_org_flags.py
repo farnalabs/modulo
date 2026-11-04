@@ -15,6 +15,7 @@ from modulo.core.runtime_config.org_flags import (
     read_org_flag,
     set_org_flag,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 ORG_ID = uuid4()
 
@@ -39,6 +40,7 @@ def _session_for_settings(settings_json):
     result = MagicMock()
     result.scalar_one_or_none.return_value = org
     session = AsyncMock()
+    configure_permissive_session(session)
     session.info = {"org_id": str(ORG_ID)}
     session.execute.return_value = result
     return session

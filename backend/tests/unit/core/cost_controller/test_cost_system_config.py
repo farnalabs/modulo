@@ -20,10 +20,12 @@ from modulo.core.cost_controller.system_config import (
     try_acquire_kv_lock,
     write_system_config,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _make_session(dialect: str = "postgresql") -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
+    configure_permissive_session(session)
     bind = MagicMock()
     bind.dialect.name = dialect
     session.get_bind = MagicMock(return_value=bind)

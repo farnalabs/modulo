@@ -37,6 +37,7 @@ from modulo.db.crud.runner_probe import (
     probe_age_seconds,
     probe_is_stale,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _NOW = datetime(2026, 9, 9, 12, 0, 0, tzinfo=UTC)
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -212,6 +213,7 @@ def _fake_session_factory(session: AsyncMock) -> Any:
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

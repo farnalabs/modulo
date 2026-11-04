@@ -49,6 +49,7 @@ from modulo.core.pipeline_execution import (
     run_executor_with_watchdog,
     zombie_watchdog,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _make_executor_mock(
@@ -474,6 +475,7 @@ async def _acm(obj: Any):
 def _begin_bound_session() -> AsyncMock:
     """Session double whose ``begin()`` is an async context manager."""
     session = AsyncMock()
+    configure_permissive_session(session)
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

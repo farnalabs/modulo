@@ -17,6 +17,7 @@ from modulo.core.hitl_manager import (
     HITLManager,
 )
 from modulo.db.models.hitl_claim import HitlClaim
+from tests.unit.api.mock_session import configure_permissive_session
 
 _KEY = "test_secret_key_32_bytes_long!!!!!!"
 _ORG = uuid.uuid4()
@@ -60,6 +61,7 @@ def _begin_nested(session: AsyncMock) -> None:
 
 def _session_get(return_value: Any = None) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.scalar_one_or_none.return_value = return_value
     scalars_result = MagicMock()
@@ -83,6 +85,7 @@ def _session_claim(
     gate sequencing is unaffected.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     session.add = MagicMock()
     session.flush = AsyncMock()
     _begin_nested(session)
@@ -128,6 +131,7 @@ def _session_decide(
 ) -> AsyncMock:
     """Session mock for _decide(): UPDATE RETURNING, optional diagnosis SELECT, session.get."""
     session = AsyncMock()
+    configure_permissive_session(session)
     session.add = MagicMock()
     session.flush = AsyncMock()
     _begin_nested(session)

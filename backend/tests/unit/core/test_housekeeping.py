@@ -20,6 +20,7 @@ from modulo.core.housekeeping import (
     Scanner,
     scan_all,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _FakeBase = declarative_base()
 
@@ -33,6 +34,7 @@ def _fake_scan_session() -> AsyncMock:
     real ``AsyncSession`` provides.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     nested = AsyncMock()
     nested.__aenter__ = AsyncMock(return_value=None)
     nested.__aexit__ = AsyncMock(return_value=False)

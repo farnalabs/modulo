@@ -6,10 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.feature_flags import DEFAULT_OFF_FLAGS, RETIRED_INTERNAL_FLAGS, FeatureFlagRegistry
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

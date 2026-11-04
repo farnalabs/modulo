@@ -17,6 +17,7 @@ from modulo.core.mcp_setup_handoff import (
     consume_handoff,
     create_handoff,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.uuid4()
 _RESOURCE_ID = uuid.uuid4()
@@ -25,6 +26,7 @@ _CREATED_BY = uuid.uuid4()
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     # session.add is a sync call; an AsyncMock would emit an un-awaited-coroutine
     # RuntimeWarning, which this repo's pytest config escalates to an error.
     session.add = MagicMock()

@@ -36,6 +36,7 @@ from modulo.core.feature_flags import (
     resolve_plan_context,
 )
 from modulo.core.license import LicenseData
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -57,6 +58,7 @@ def _clean_global_state() -> None:
 
 def _make_db_session(*, in_transaction: bool = False, async_in_transaction: bool = False) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     if async_in_transaction:

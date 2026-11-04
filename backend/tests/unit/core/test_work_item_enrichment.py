@@ -24,6 +24,7 @@ from modulo.core.work_item_enrichment import (
     enrich_pr_targets,
 )
 from modulo.settings import Settings
+from tests.unit.api.mock_session import configure_permissive_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -140,6 +141,7 @@ def _begin_cm() -> MagicMock:
 
 def _session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.begin = MagicMock(return_value=_begin_cm())
     return session
 

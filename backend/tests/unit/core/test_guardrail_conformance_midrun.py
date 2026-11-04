@@ -37,6 +37,7 @@ from modulo.core.guardrails.conformance import (
     type_qualified_claims,
     worst_state,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.uuid4()
 
@@ -224,6 +225,7 @@ def _manifest_session(
     embedded in the statement (the module imports each model and selects it).
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     connector_rows = {str(r.id): r for r in (connectors or [])}
 
     async def _execute(stmt: Any) -> Any:

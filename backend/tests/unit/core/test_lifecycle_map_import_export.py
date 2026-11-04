@@ -20,6 +20,7 @@ from modulo.core.lifecycle_map.import_export import (
 )
 from modulo.core.lifecycle_map.validation import LifecycleMapContentError
 from modulo.db.models.lifecycle_map import LifecycleMap
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -29,6 +30,7 @@ _MAP_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
 @pytest.fixture
 def session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.add = MagicMock()
     session.execute = AsyncMock()
     return session

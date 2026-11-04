@@ -25,6 +25,7 @@ from modulo.core.pipeline_engine.executor import (
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED
 from modulo.db.crud.run_node_outputs import DualWriteError
 from modulo.db.models.run import Run
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 @asynccontextmanager
@@ -34,6 +35,7 @@ async def _acm(obj):
 
 def _make_session(state: MagicMock | None) -> MagicMock:
     session = AsyncMock()
+    configure_permissive_session(session)
 
     def _execute(stmt, *_args, **_kwargs):
         result = MagicMock()

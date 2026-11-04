@@ -37,6 +37,7 @@ from modulo.core.fernet_rotation import (
     rotate_all_encrypted_data,
 )
 from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _new_key() -> str:
@@ -51,6 +52,7 @@ def _make_session(rows: list[object] | None = None) -> AsyncMock:
     statements are recorded on ``session.calls`` as ``(sql, params)`` pairs.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     calls: list[tuple[str, dict[str, object]]] = []
 
     async def execute(statement: object, params: dict[str, object] | None = None) -> MagicMock:

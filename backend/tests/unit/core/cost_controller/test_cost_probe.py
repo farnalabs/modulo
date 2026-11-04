@@ -32,6 +32,7 @@ from modulo.core.cost_controller.probe import (
     run_probe,
     set_duplicate_terminal_cooldown,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _NOW = datetime.now(UTC)
@@ -58,6 +59,7 @@ class _FixedClock:
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     # AsyncMock supports the async context-manager protocol natively — assigning
     # __aenter__/__aexit__ instance attrs would create NEVER-AWAITED coroutines
     # (async-with uses the class methods), tripping pytest's RuntimeWarning->error.

@@ -36,6 +36,7 @@ from modulo.core.team_visibility import (
 )
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.model_backend import ModelBackend
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
@@ -55,6 +56,7 @@ def _connector(*, visibility: str, owner_team_id: uuid.UUID | None, name: str = 
 
 def _mock_session(rows: list[object]) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.scalars.return_value.all.return_value = rows
     session.execute = AsyncMock(return_value=result)

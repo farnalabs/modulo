@@ -16,6 +16,7 @@ from modulo.core.trigger_secrets import (
     LEGACY_PLAINTEXT_SHIM_SINCE,
     resolve_trigger_secret_scoped,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _FERNET_KEY = Fernet.generate_key().decode()
 _ORG_ID = uuid.uuid4()
@@ -24,6 +25,7 @@ _TRIGGER_ID = uuid.uuid4()
 
 def _session_mock() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.in_transaction = MagicMock(return_value=True)
     session.info = {}
     return session
