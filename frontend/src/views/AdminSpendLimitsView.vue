@@ -51,7 +51,7 @@
                       <InputText
                         :aria-label="$t('views.AdminSpendLimitsView.per_run_ceiling_aria')"
                         :model-value="ceilingMaxRun == null ? '' : String(ceilingMaxRun)"
-                        @update:model-value="(v: any) => ceilingMaxRun = v === '' ? null : Number(v)"
+                        @update:model-value="v => ceilingMaxRun = parseNumericInput(v)"
                         type="number"
                         min="0"
                         step="0.01"
@@ -68,7 +68,7 @@
                       <InputText
                         :aria-label="$t('views.AdminSpendLimitsView.org_lifetime_ceiling_aria')"
                         :model-value="ceilingSpend == null ? '' : String(ceilingSpend)"
-                        @update:model-value="(v: any) => ceilingSpend = v === '' ? null : Number(v)"
+                        @update:model-value="v => ceilingSpend = parseNumericInput(v)"
                         type="number"
                         min="0"
                         step="0.01"
@@ -121,7 +121,7 @@
                   <td class="table-cell font-medium">{{ team.name }}</td>
                   <td class="table-cell">
                     <InputText :aria-label="$t('views.AdminSpendLimitsView.form_control')"
-                      :model-value="team.editingLimit == null ? '' : String(team.editingLimit)" @update:model-value="(v: any) => team.editingLimit = v === '' ? null : Number(v)"
+                      :model-value="team.editingLimit == null ? '' : String(team.editingLimit)" @update:model-value="v => team.editingLimit = parseNumericInput(v)"
                       type="number"
                       min="0"
                       step="0.01"
@@ -241,6 +241,12 @@ function parseDecimalString(value: string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+function parseNumericInput(value: unknown): number | null {
+  if (value === '' || value == null) return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
 interface TeamRow {
   id: string
   name: string
@@ -257,8 +263,8 @@ const { data: limitsData, loading, error: loadError, load: loadData } = useDataF
 const orgLimit = ref<number | null>(null)
 const teams = ref<TeamRow[]>([])
 
-function onUpdateOrgLimit(v: any) {
-  orgLimit.value = v === '' || v == null ? null : Number(v)
+function onUpdateOrgLimit(v: unknown) {
+  orgLimit.value = parseNumericInput(v)
 }
 
 watch(() => limitsData.value, (data) => {
