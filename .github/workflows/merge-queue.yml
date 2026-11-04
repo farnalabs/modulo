@@ -10,23 +10,24 @@ name: "Merge: Queue"
 
 on:
   schedule:
-    # Off-boundary minutes dodge the scheduler sampling that drops round-boundary crons on high-activity repos (FAR-492).
-    - cron: '7,22,37,52 * * * *'
+    # Run hourly at an off-boundary minute: breadth over speed keeps runner spend bounded while event-driven dispatch still recovers promptly (FAR-2369).
+    - cron: '7 * * * *'
   workflow_dispatch:
   # Trigger design (FAR-1428; supersedes the FAR-492 event-driven design):
   # the queue runs ONLY on schedule, workflow_dispatch and the
   # repository_dispatch self-chain below. GitHub's scheduler drops most
   # high-frequency cron events on this high-activity repo (FAR-492), so the
-  # reliable cadence is the app's PR Housekeeper pipeline dispatching this
-  # workflow (workflow_dispatch) every 15 min; the merge-queue-watchdog
-  # workflow also re-arms it via repository_dispatch when the queue has been
-  # idle >=15 min. FAR-492 had added pull_request_review and check_suite
+  # reliable recovery is the app's PR Housekeeper pipeline dispatching this
+  # workflow (workflow_dispatch) on demand; the merge-queue-watchdog workflow
+  # also re-arms it via repository_dispatch when the queue has been idle long
+  # enough. The hourly cron is deliberately slower to reduce runner spend.
+  # FAR-492 had added pull_request_review and check_suite
   # triggers; they were removed in FAR-1428 because the event-gate filtering
   # ran on billed runners and produced ~7,000 runs/month (82% of all runs),
   # and the shared concurrency group displaced pending runs.
   repository_dispatch:
     # Self-chaining (stateless, FAR-492): a pass that found approved
-    # PRs still waiting on CI dispatches 'merge-queue-chain' ~10 min ahead.
+    # PRs still waiting on CI dispatches 'merge-queue-chain' ahead of the next pass.
     # Deliberately repository_dispatch instead of `gh workflow run` because
     # GitHub has a caching bug where workflow_dispatch on a recently modified
     # workflow returns HTTP 422 "Workflow does not have 'workflow_dispatch'
@@ -162,7 +163,7 @@ jobs:
             fail-closed)
               # Fail CLOSED: a *persistent* API error must never be read as "not
               # frozen", or a gh failure would silently lift the freeze mid-release.
-              # Skipping this 15-min tick costs nothing; a wrongly-open gate costs the RC.
+              # Skipping this tick costs nothing; a wrongly-open gate costs the RC.
               echo "frozen=true" >> "$GITHUB_OUTPUT"
               echo "::error::$MSG - failing CLOSED, skipping this merge-queue tick." ;;
             *)
@@ -175,7 +176,7 @@ jobs:
     name: Event relevance gate (FAR-492)
     # Cheap context-only filter. schedule/workflow_dispatch always pass;
     # repository_dispatch (self-chain) honors the payload's not-before time so
-    # chained passes pace ~10 min apart - the wait happens HERE on a tiny idle
+    # chained passes pace themselves - the wait happens HERE on a tiny idle
     # runner, NOT inside the queue job, which would hold the merge-queue
     # concurrency slot and delay other runs. The merge-queue concurrency group
     # is scoped to the `queue` job precisely so this sleep cannot hold it.
@@ -217,7 +218,7 @@ jobs:
               SHOULD_RUN=true ;;
             repository_dispatch)
               # Self-chaining pass (FAR-492). Depth-capped: after 12 chained
-              # passes the loop re-anchors to the 15-min cron sweep instead of
+              # passes the loop re-anchors to the hourly cron sweep instead of
               # chaining forever.
               if [ "$EVENT_ACTION" = "merge-queue-chain" ]; then
                 if [ "$CHAIN_DEPTH" -ge 12 ]; then
@@ -250,8 +251,8 @@ jobs:
     # The merge-queue concurrency group lives on THIS job, not at workflow
     # level: only this job merges to main, so only it needs serialising. At
     # workflow level the group was held by the whole run - including the
-    # event-gate ~10-min pacing sleep - so every chained pass queued behind an
-    # incumbent's sleep and waited out the full ~10 min before its own turn.
+# event-gate pacing sleep - so every chained pass queued behind an incumbent's
+# sleep and waited out the full pacing window before its own turn.
     concurrency:
       group: merge-queue
       cancel-in-progress: false
@@ -292,7 +293,7 @@ jobs:
         # A run that is in_progress with a job that never got picked up by a
         # runner (startedAt: null) holds the merge-queue concurrency group lock
         # (cancel-in-progress: false), blocking every later queue run. This sweep
-        # cancels such runs once they exceed ~10 minutes so THIS run can proceed.
+        # cancels such runs once they exceed the stuck-run threshold so THIS run can proceed.
         # Best-effort: every subcommand below is guarded (2>/dev/null || echo/true)
         # so the script always exits 0 and can never fail the queue run itself.
         env:
@@ -310,13 +311,13 @@ jobs:
             CREATED_TS=$(date -u -d "$CREATED" +%s 2>/dev/null || echo "$NOW")
             echo "  Checking run #$RUN_ID (created $CREATED)..."
             if [ "$CREATED_TS" -ge "$CUTOFF" ]; then
-              echo "    Run #$RUN_ID is younger than 10 min - leaving it."
+              echo "    Run #$RUN_ID is younger than the stuck-run threshold - leaving it."
               continue
             fi
             # Only cancel if at least one job is queued but never started
             UNSTARTED=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs" --jq '[.jobs[] | select(.started_at == null)] | length' 2>/dev/null || echo "0")
             if [ "$UNSTARTED" -gt 0 ]; then
-              echo "    Run #$RUN_ID has $UNSTARTED queued job(s) never started for >10 min - cancelling."
+              echo "    Run #$RUN_ID has $UNSTARTED queued job(s) never started past the stuck-run threshold - cancelling."
               gh run cancel "$RUN_ID" --repo ${{ github.repository }} 2>/dev/null && echo "    Cancelled run #$RUN_ID." || echo "    Cancel of #$RUN_ID failed (ignoring)."
             else
               echo "    Run #$RUN_ID has no unstarted jobs - leaving it."
@@ -605,7 +606,7 @@ jobs:
           # cost cannot grow without bound as the backlog grows (a growing batch
           # is what tipped the ~29-min sequential baseline past the 30-min job
           # cap). Oldest-first order is preserved (prs.json is createdAt-sorted);
-          # PRs beyond the cap simply wait for the next pass (~15 min cadence via
+          # PRs beyond the cap simply wait for the next pass (hourly cron or
           # the Housekeeper dispatch / cron / self-chain). Per-PR merge semantics
           # are unchanged: every PR in the batch still runs the full combined
           # backend+frontend validation and the freeze/TOCTOU guards before
@@ -634,7 +635,7 @@ jobs:
           # FAR-2098: the head SHA of each conflicted PR, as "<num> <sha>" per
           # line, so 'Notify fixer of conflicts' can tell "the same conflict,
           # already notified" from "a new conflict state" and stop re-dispatching
-          # an unchanged head every ~15-min pass (PR #2144, 2026-10-21: 8 retry
+          # an unchanged head every queue pass (PR #2144, 2026-10-21: 8 retry
           # attempts per pass against a fixer already at its 8-run cap).
           # Deliberately a PARALLEL file rather than a new format for
           # /tmp/conflict_prs.txt: three other consumers read that file as a
@@ -1246,7 +1247,7 @@ jobs:
           CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
 
           # --- FAR-2098: never re-notify the fixer about an UNCHANGED head ---------
-          # The queue re-dispatched the same conflicted PR on every ~15-min pass.
+          # The queue re-dispatched the same conflicted PR on every pass.
           # PR #2144 sat conflicted all day on 2026-10-21 and each pass burned 8
           # retry attempts against a fixer already at its 8-run cap (HTTP 429),
           # accumulated `merge-queue/failed-*` branches, and spent up to 120s of
@@ -1533,7 +1534,7 @@ jobs:
               UNDELIVERED_BODY="The merge queue could NOT deliver its merge-conflict notification to the Branch Fixer for this PR: every webhook attempt failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled, this PR stays conflicted and the queue keeps skipping it. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               # FAR-2098: this durable comment also RECORDS the attempt for this
               # head, so the next pass can tell this conflict is already known
-              # instead of dispatching it again every ~15 min. No marker (no
+              # instead of dispatching it again every queue pass. No marker (no
               # resolvable head, or no clock) means the next pass retries.
               PR_HEAD=$(conflict_head_sha "$NUM")
               if [ -n "$PR_HEAD" ] && [ -n "$DISPATCH_AT" ]; then
@@ -2315,7 +2316,7 @@ jobs:
             fi
           done
 
-          # A failed `gh pr merge` is NOT terminal: the queue runs on a ~15-min
+          # A failed `gh pr merge` is NOT terminal: the queue runs on an hourly
           # cron and is designed to skip-and-retry. Transient failures (CI not
           # yet complete at collection time, a GitHub API blip, a momentary
           # branch-protection state) must not kill an approved, mergeable PR --
@@ -2793,8 +2794,8 @@ jobs:
       # FAR-492 self-chaining fallback - STATELESS design, chosen over the
       # counter-based alternative because it needs no cross-run persisted
       # state: the dispatch payload itself carries {depth, ready_at}; the
-      # event-gate job honors the not-before time (~10-min pacing on a tiny
-      # idle runner) and the depth cap (12, then re-anchor to the 15-min cron).
+      # event-gate job honors the not-before time (paced on a tiny idle runner)
+      # and the depth cap (12, then re-anchor to the hourly cron).
       # Idle passes chain NOTHING - the next Housekeeper dispatch / watchdog
       # re-arm / cron tick re-fires the queue - so the loop self-terminates
       # when nothing waits.
@@ -2935,7 +2936,7 @@ jobs:
           # not have 'workflow_dispatch' trigger" caching bug). GITHUB_TOKEN is
           # exempt from the recursive-run block for repository_dispatch.
           if gh api -X POST "repos/${{ github.repository }}/dispatches" --input - <<< "$PAYLOAD" 2>&1; then
-            echo "Chained next queue pass (~10 min out, depth $NEXT_DEPTH) - keeps pace while CI runs."
+            echo "Chained next queue pass (paced while CI runs, depth $NEXT_DEPTH)."
           else
             # Non-fatal: the Housekeeper dispatch + cron + watchdog re-arm still cover the queue.
             echo "::warning::repository_dispatch chain failed - Housekeeper dispatch + cron + watchdog keep coverage."
