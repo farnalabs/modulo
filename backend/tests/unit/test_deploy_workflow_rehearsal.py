@@ -89,6 +89,61 @@ def _release_validator() -> Any:
     return module
 
 
+def test_promote_rebuilds_compose_bundle_from_ga_tag_and_replaces_release_assets() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["promote-compose"]
+    assert job["needs"] == "release"
+    assert job["if"] == "inputs.mode == 'promote'"
+    names = _step_names(job["steps"])
+    pull_idx = names.index("Verify the GA image is anonymously pullable")
+    package_idx = names.index("Package final GA compose release bundle")
+    sign_idx = names.index("Generate SHA256SUMS and sign the final GA manifest")
+    upload_idx = names.index("Replace GA compose assets without clobbering")
+    assert pull_idx < package_idx < sign_idx < upload_idx
+
+    pull_script = job["steps"][pull_idx]["run"]
+    assert 'docker pull "$IMAGE"' in pull_script
+    assert 'IMAGE="ghcr.io/${{ github.repository }}:v${VERSION}"' in pull_script
+    # The pull must be anonymous: a credential would let a private image look
+    # publishable and the bundle would fail on the evaluator's clean host.
+    assert 'export DOCKER_CONFIG="$EMPTY_DOCKER_CONFIG"' in pull_script
+    assert "docker login" not in pull_script
+
+    package_script = job["steps"][package_idx]["run"]
+    assert '--tag "$GA_TAG"' in package_script
+    assert '--tag "$RC_TAG"' not in package_script
+
+    sign_script = job["steps"][sign_idx]["run"]
+    assert 'sha256sum "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS' in sign_script
+    assert "RELEASE_MANIFEST.json.sig" in sign_script
+    assert "sha256sum --check SHA256SUMS" in sign_script
+
+    upload_script = job["steps"][upload_idx]["run"]
+    assert 'gh release view "$TAG"' in upload_script
+    assert 'gh release upload "$TAG"' in upload_script
+    assert "modulo-${VERSION}-compose.tar.gz" in upload_script
+
+
+def test_promote_retag_publishes_the_v_prefixed_ga_tag_the_compose_bundle_pins() -> None:
+    """The GA compose bundle pins ``vX.Y.Z``, so promotion must create that tag.
+
+    Without the v-prefixed stable tag the promoted bundle would reference an
+    image that does not exist, and the promote-mode anonymous-pull gate would
+    (correctly) fail the release. The bare semver tag stays because the Helm
+    chart's ``appVersion`` resolves to it.
+    """
+    retag = _release_job_run("Retag container images for GA")
+
+    assert '--tag "ghcr.io/$image_name:v$VERSION_NUM"' in retag
+    assert '--tag "ghcr.io/$image_name:$VERSION_NUM"' in retag
+    assert '--tag "ghcr.io/$image_name:latest"' in retag
+    # The fallback path must publish the same tag set, or a retag that degrades
+    # to pull/tag/push would silently drop the tag the GA bundle pins.
+    assert 'docker push "ghcr.io/$image_name:v$VERSION_NUM"' in retag
+    assert 'docker push "ghcr.io/$image_name:$VERSION_NUM"' in retag
+    assert 'docker push "ghcr.io/$image_name:latest"' in retag
+
+
 def test_release_signature_heredocs_compile_as_python() -> None:
     workflows = ((BUNDLE_WORKFLOW, "PYEOF"), (RELEASE_WORKFLOW, "PY"))
     for workflow_path, marker in workflows:
@@ -99,8 +154,9 @@ def test_release_signature_heredocs_compile_as_python() -> None:
             for step in job.get("steps", [])
             if "verify_signature" in step.get("run", "") and "MANIFEST_SIGNING_KEY" in step.get("run", "")
         ]
-        assert len(scripts) == 1, f"expected one signing script in {workflow_path}"
-        compile(_python_heredoc(scripts[0], marker), str(workflow_path), "exec")
+        assert scripts, f"expected at least one signing script in {workflow_path}"
+        for script in scripts:
+            compile(_python_heredoc(script, marker), str(workflow_path), "exec")
 
 
 def test_rehearsal_step_exists_before_real_migrations_per_leg() -> None:
