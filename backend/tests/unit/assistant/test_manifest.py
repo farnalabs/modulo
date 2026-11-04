@@ -171,10 +171,15 @@ class TestManifestLoad:
         - ``private_preview`` + ``system_maps_access`` - the System Maps
           authoring surfaces (FAR-2288), which deliberately use their own grant
           separate from the lifecycle-map one; or
-        - the published System Maps reads, which are ``public`` in manifest
+        - the published System Maps reads (``/system-maps`` and
+          ``/system-maps/:id`` only), which are ``public`` in manifest
           vocabulary but still require an authenticated viewer and the dedicated
-          ``system_maps.read`` permission (FAR-2363). Their backend router is
-          published-only, so this is not anonymous access.
+          ``system_maps.read`` permission (FAR-2363). Drafts are 404 for any
+          caller without the internal gate, and the backend's published-only
+          filter is pinned by ``tests/unit/api/test_system_maps_routes.py``
+          (``list_maps_by_org``/``list_revisions_history`` receive
+          ``published_only=True``) plus
+          ``tests/integration/test_system_maps_published_read.py``.
 
         Every widened route must therefore carry a matching permission gate;
         public visibility is allowed only for the explicit published-read
@@ -191,7 +196,8 @@ class TestManifestLoad:
         }
         # Deliberately viewer-readable PUBLIC community routes (FAR-2363):
         # published System Maps reads for every authenticated principal, gated
-        # by the dedicated system_maps.read permission.
+        # by the dedicated system_maps.read permission. The exception is narrow:
+        # only these two paths, and only with exactly [system_maps.read].
         viewer_visible_public_routes = {
             "/system-maps": "system_maps.read",
             "/system-maps/:id": "system_maps.read",
