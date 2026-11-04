@@ -17,6 +17,7 @@ from modulo.auth.scim_auth import (
     require_scim_feature,
 )
 from modulo.settings import Settings
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _settings(scim_token: str = "valid-scim-token", default_org_id: str = "") -> Settings:
@@ -35,6 +36,7 @@ def _credentials(token: str = "valid-scim-token") -> HTTPAuthorizationCredential
 
 def _make_session(org_id: uuid.UUID | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.scalar_one_or_none.return_value = MagicMock(id=org_id) if org_id else None
     session.execute.return_value = result

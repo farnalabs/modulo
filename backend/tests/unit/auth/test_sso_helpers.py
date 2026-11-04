@@ -22,11 +22,13 @@ from modulo.auth.sso import (
     _set_default_rls_org,
     apply_group_mappings,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def _mock_session(scalar_value=None):
     """AsyncSession mock whose execute() returns a result with scalar_one_or_none()."""
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.scalar_one_or_none.return_value = scalar_value
     session.execute.return_value = result

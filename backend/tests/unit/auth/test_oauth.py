@@ -52,6 +52,7 @@ from modulo.auth.oauth import (
     verify_pkce,
 )
 from modulo.auth.permissions import PERMISSIONS, grants_permit
+from tests.unit.api.mock_session import configure_permissive_session
 from tests.unit.auth.conftest import _make_session_mock
 
 _SECRET_KEY = "abcdefghijklmnopqrstuvwxyz0123456789ab"
@@ -69,6 +70,7 @@ _CODE_CHALLENGE = compute_pkce_challenge(_CODE_VERIFIER)
 
 def _make_session(key_return: object = None) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     scalar_result = MagicMock()
     scalar_result.scalar_one_or_none.return_value = key_return
     scalars_result = MagicMock()

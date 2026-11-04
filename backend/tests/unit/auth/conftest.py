@@ -11,6 +11,7 @@ import pytest
 from modulo.auth.sso import sign_state
 from modulo.core.ssrf import PinnedTarget
 from modulo.settings import Settings
+from tests.unit.api.mock_session import configure_permissive_session
 
 _VALID_32 = "a" * 32
 
@@ -86,5 +87,6 @@ def _make_session_mock() -> AsyncMock:
 
     cm = _AsyncSessionContextManager()
     session = AsyncMock()
+    configure_permissive_session(session)
     session.begin = MagicMock(return_value=cm)
     return session

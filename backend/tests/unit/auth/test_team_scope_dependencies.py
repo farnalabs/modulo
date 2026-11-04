@@ -24,6 +24,7 @@ from modulo.api.team_scope import (
     resolve_pipeline_team_scope,
 )
 from modulo.auth.jwt import TenantPrincipal
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG = uuid.uuid4()
 _ACCOUNT = uuid.uuid4()
@@ -57,6 +58,7 @@ def _make_team_session(*, member: bool) -> AsyncMock:
     only ``session.execute`` is the stubbed membership query.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

@@ -28,6 +28,7 @@ from modulo.auth.api_key import (
 )
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.run import TERMINAL_STATUSES
+from tests.unit.api.mock_session import configure_permissive_session
 
 # ---------------------------------------------------------------------------
 # generate_api_key
@@ -80,6 +81,7 @@ def _make_key_row(full_key: str) -> MagicMock:
 
 def _make_session(key_row: MagicMock | None) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     scalar_result = MagicMock()
     scalar_result.scalars.return_value = [key_row] if key_row else []
     session.execute = AsyncMock(return_value=scalar_result)
@@ -321,6 +323,7 @@ def _make_list_session(rows: list[tuple]) -> AsyncMock:
     scalar_result = MagicMock()
     scalar_result.all.return_value = rows
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(return_value=scalar_result)
     return session
 
@@ -563,6 +566,7 @@ async def test_update_api_key_updates_expires_at() -> None:
 
 def _mint_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.add = MagicMock()
     session.flush = AsyncMock()
     return session

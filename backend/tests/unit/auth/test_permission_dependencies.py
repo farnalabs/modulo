@@ -17,6 +17,7 @@ from modulo.api.dependencies import (
     require_target_org_role,
 )
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_A = uuid.uuid4()
 _ORG_B = uuid.uuid4()
@@ -336,6 +337,7 @@ def _make_session(*, role: str | None) -> AsyncMock:
     is an async mock (calling it yields an unawaited coroutine).
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -352,6 +354,7 @@ def _make_session_with_enforce(*, role: str | None, enforce: bool) -> AsyncMock:
     second returns the authz_enforce read (so kill-switch-off scenarios can be
     tested with a real role string)."""
     session = AsyncMock()
+    configure_permissive_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

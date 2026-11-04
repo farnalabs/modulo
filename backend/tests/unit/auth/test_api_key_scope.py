@@ -31,6 +31,7 @@ from modulo.auth.api_key import (
 )
 from modulo.auth.permissions import _clamp_role
 from modulo.db.models.api_key import OrgApiKey
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -39,6 +40,7 @@ _RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 def _mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.add = MagicMock()
     session.flush = AsyncMock()
     return session

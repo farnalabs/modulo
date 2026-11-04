@@ -22,6 +22,7 @@ from modulo.auth.api_key import (
     update_api_key,
 )
 from modulo.db.models.account import KIND_HUMAN, KIND_SERVICE
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.uuid4()
 _ACCOUNT_ID = uuid.uuid4()
@@ -30,6 +31,7 @@ _KEY_ID = uuid.uuid4()
 
 def _session(owner: object | None) -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.add = MagicMock()
     session.flush = AsyncMock()
     session.get = AsyncMock(return_value=owner)

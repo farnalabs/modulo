@@ -15,6 +15,7 @@ from modulo.auth.secret_storage import (
     decode_stored_secret_scoped,
     encrypt_stored_secret,
 )
+from tests.unit.api.mock_session import configure_permissive_session
 
 _FERNET_KEY = Fernet.generate_key().decode()
 _ORG_ID = uuid.uuid4()
@@ -29,6 +30,7 @@ def _make_session(
 ) -> AsyncMock:
     """Build an AsyncSession mock that supports the scoped-helper contract."""
     session = AsyncMock()
+    configure_permissive_session(session)
     # ``in_transaction`` is SYNC on the real Session — use a sync mock so the
     # truthiness guard behaves (AsyncMock would return an un-awaited coroutine).
     session.in_transaction = MagicMock(return_value=in_tx)
