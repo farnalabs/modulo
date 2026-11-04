@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_system_db_session
 from modulo.core.system_audit_logger import append_system_audit_event
+from modulo.db.crud._gate_advisory_lock import acquire_deployment_drain_lock
 from modulo.db.crud.run import count_active_runner_dispatches_for_deployment
 from modulo.db.crud.system_config import update_config
 from modulo.db.models.system_config import SystemConfig
@@ -38,6 +39,7 @@ def _drain_value(active: bool) -> dict[str, object]:
 
 
 async def _set_drain(session: AsyncSession, active: bool) -> None:
+    await acquire_deployment_drain_lock(session)
     await update_config(session, _DRAIN_KEY, _drain_value(active))
     await append_system_audit_event(
         session,

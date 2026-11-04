@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 _GATE_LOCK_TIMEOUT_SQL = "SET LOCAL statement_timeout = '5s'"
 _GATE_ADVISORY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext(:key))"
 GATE_LOCK_KEY_PREFIX = "policy_gate:"
+DEPLOYMENT_DRAIN_LOCK_KEY = "deployment_drain"
 
 
 def policy_gate_lock_key(eval_id: uuid.UUID) -> str:
@@ -33,6 +34,14 @@ def policy_gate_lock_key(eval_id: uuid.UUID) -> str:
     themselves.
     """
     return f"{GATE_LOCK_KEY_PREFIX}{eval_id}"
+
+
+async def acquire_deployment_drain_lock(session: AsyncSession) -> None:
+    """Serialize drain toggles with sandbox admission on one transaction lock."""
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    await session.execute(text(_GATE_LOCK_TIMEOUT_SQL))
+    await session.execute(text(_GATE_ADVISORY_LOCK_SQL), {"key": DEPLOYMENT_DRAIN_LOCK_KEY})
 
 
 async def acquire_gate_advisory_lock(eval_id: uuid.UUID, session: AsyncSession) -> None:

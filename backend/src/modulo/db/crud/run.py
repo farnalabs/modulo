@@ -30,6 +30,7 @@ from modulo.core.exceptions import (
     RateLimitConflictError,
     TriggersPausedError,
 )
+from modulo.db.crud._gate_advisory_lock import acquire_deployment_drain_lock
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.notifications import create_notification
 from modulo.db.crud.organisation import get_organisation
@@ -1061,12 +1062,13 @@ DEPLOYMENT_DRAIN_CONFIG_KEY = "deployment_drain"
 async def _enforce_deployment_drain_gate(session: AsyncSession, snapshot_id: uuid.UUID) -> None:
     """Refuse new sandbox pipelines while a deployment drain is active.
 
-    The workflow writes the instance-wide ``system_config`` row before polling.
-    Reads propagate on failure so an unavailable control plane cannot admit work
-    while worker replacement is in progress.
+    Admission and drain activation take the same transaction-scoped advisory
+    lock. The lock is acquired before reading the flag, so activation cannot
+    commit between this decision and the caller's run insert.
     """
     from modulo.db.models.system_config import SystemConfig
 
+    await acquire_deployment_drain_lock(session)
     try:
         result = await session.execute(
             select(SystemConfig.value).where(SystemConfig.key == DEPLOYMENT_DRAIN_CONFIG_KEY)
@@ -4566,13 +4568,15 @@ async def count_active_runner_dispatches_for_deployment(session: AsyncSession) -
     This is the deploy-drain population: the same running/live-marker/
     tombstone semantics as the org capacity gate, without a tenant filter.
     """
-    from modulo.settings import get_settings
-
-    stmt = select(func.count()).select_from(Run).where(Run.sandbox_dispatch_state.isnot(None))
-    if get_settings().runner_capacity_gate_enabled:
-        stmt = stmt.where(Run.status == "running", text(RUNNER_TOMBSTONE_EXCLUSION_SQL))
-    else:
-        stmt = stmt.where(Run.status.in_(ACTIVE_RUN_STATUSES))
+    stmt = (
+        select(func.count())
+        .select_from(Run)
+        .where(
+            Run.status == "running",
+            Run.sandbox_dispatch_state.isnot(None),
+            text(RUNNER_TOMBSTONE_EXCLUSION_SQL),
+        )
+    )
     result = (await session.execute(stmt)).scalar_one()
     return int(result) if result is not None else 0
 
@@ -4590,19 +4594,12 @@ async def count_active_runner_dispatches_for_org(
     is marker-backed — it counts runs whose ``sandbox_dispatch_state`` holds a
     live dispatch marker.
 
-    The POPULATION is flag-dependent (qa F6 — the flag-off window keeps the
-    pre-D8 behaviour EXACTLY):
+    The population is always marker-backed: only ``running`` rows with a live
+    marker count. ``awaiting_human``/``pending``/``claimed``/``unknown``/
+    ``hitl_parked`` hold no live sandbox, and ``cleared_at_hitl`` tombstones are
+    capacity-neutral. This remains true when the runner-capacity feature flag is
+    disabled, so deployment drain and capacity accounting cannot disagree.
 
-    - Flag ON (D8): ``running`` runs ONLY — the only status a marker can
-      legally exist on (the fenced marker UPDATE requires ``status =
-      'running'``). ``awaiting_human``/``pending``/``claimed``/``unknown``/
-      ``hitl_parked`` hold NO slot: a parked HITL run cannot starve the org,
-      and the resume path re-acquires a slot when the HITL approval
-      re-dispatches. Tombstoned markers (``cleared_at_hitl``) are excluded —
-      the HITL-boundary tombstone is capacity-neutral.
-    - Flag OFF: ``ACTIVE_RUN_STATUSES`` with NO tombstone exclusion — the
-      exact pre-D8 population (the D8 tombstone never fires with the flag
-      off, so there is nothing to exclude).
 
     The count EXCLUDES the run's own marker (``exclude_run_id``) so a
     re-dispatch of a run still carrying a fence-carrying stale marker cannot
@@ -4615,8 +4612,6 @@ async def count_active_runner_dispatches_for_org(
     legacy tier-less markers attributed to ``runner_docker`` (fail-safe — see
     ``modulo.core.runner_capacity``).
     """
-    from modulo.settings import get_settings
-
     stmt = (
         select(func.count())
         .select_from(Run)
@@ -4627,13 +4622,9 @@ async def count_active_runner_dispatches_for_org(
     )
     if exclude_run_id is not None:
         stmt = stmt.where(Run.id != exclude_run_id)
-    if get_settings().runner_capacity_gate_enabled:
-        # D8: running-only + tombstone exclusion (SQL fragments — the marker
-        # is a Text column holding our own JSON vocabulary).
-        stmt = stmt.where(Run.status == "running", text(RUNNER_TOMBSTONE_EXCLUSION_SQL))
-    else:
-        # Flag-off: the pre-D8 population exactly.
-        stmt = stmt.where(Run.status.in_(ACTIVE_RUN_STATUSES))
+    # A live marker is the source of truth in both feature-flag modes. A
+    # cleared_at_hitl tombstone is explicitly capacity-neutral.
+    stmt = stmt.where(text(RUNNER_TOMBSTONE_EXCLUSION_SQL))
     if host_resource_only:
         stmt = stmt.where(text(RUNNER_HOST_RESOURCE_FILTER_SQL))
     result = (await session.execute(stmt)).scalar_one()
