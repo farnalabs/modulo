@@ -55,6 +55,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
+from modulo.db.models.system_config import SystemConfig
 from modulo.db.models.team import Team
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -82,6 +83,7 @@ _TABLES: list[Table] = cast(
         EnvironmentProfile.__table__,
         RunNodeOutput.__table__,
         Evidence.__table__,
+        SystemConfig.__table__,
     ],
 )
 
