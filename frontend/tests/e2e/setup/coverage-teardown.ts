@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 const COVERAGE_DIR = resolve(__dirname, '../../../.coverage/e2e')
 const REPORT_DIR = join(COVERAGE_DIR, 'report')
 
-async function coverageTeardown(config: any) {
+async function coverageTeardown(_config?: any) {
   if (!existsSync(COVERAGE_DIR)) {
     console.log('\n  E2E code coverage: no coverage directory found')
     return

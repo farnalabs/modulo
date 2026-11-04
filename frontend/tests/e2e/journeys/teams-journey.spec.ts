@@ -66,6 +66,7 @@ test.describe('Real-stack journeys: team lifecycle', { tag: '@regression' }, () 
       const list = await listTeams(apiBase, token)
       const created = list.items.find((t) => t.name === name)
       expect(created, 'created team must be returned by GET /api/v1/admin/teams').toBeTruthy()
+      if (!created) throw new Error('created team must be returned by GET /api/v1/admin/teams')
       teamId = created.id
 
       // Scope the card by the row's OWN toggle. A `.card` text filter also
