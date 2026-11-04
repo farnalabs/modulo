@@ -103,10 +103,10 @@ iscc /DVERSION_NUM=0.4.0 /DBUNDLE_ARCH=amd64 /DBUNDLE_DIR=C:\bundle deploy\windo
 release invocations through `workflow_call` and on pull requests that touch
 `deploy/windows/**`, `scripts/create-windows-launcher.ps1`,
 `scripts/windows/build-launcher.ps1`, `scripts/test-windows-installer.ps1` or
-`.github/workflows/windows-installer.yml`. The unified release pipeline invokes
-it only when its Beta Windows input (`include_windows`) is enabled, so Windows
-native packaging is not part of the Alpha release path. All proofs live in
-`scripts/test-windows-installer.ps1`:
+`.github/workflows/windows-installer.yml` itself. The unified release pipeline
+invokes it only when its Beta Windows input (`include_windows`) is enabled, so
+Windows native packaging does not run on the Alpha release path. All proofs live
+in `scripts/test-windows-installer.ps1`:
 
 - Job `compile-check` (Windows runner, Inno Setup 6.2.2 via Chocolatey) runs
   `./scripts/test-windows-installer.ps1 -RequireIscc`. It compiles `modulo.iss`
