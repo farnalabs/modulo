@@ -15,7 +15,7 @@ from modulo.core.hitl_manager.overdue_warning import (
     get_overdue_claims,
 )
 from modulo.db.models.hitl_claim import HitlClaim
-from tests.unit.api.mock_session import configure_rls_preamble
+from tests.unit.api.mock_session import configure_permissive_session, configure_rls_preamble
 
 from .conftest import mock_begin as _mock_begin
 from .conftest import session_factory as _mock_session_factory
@@ -52,6 +52,7 @@ def _mock_session(claims: list) -> AsyncMock:
     result_mock.scalars.return_value = scalars_mock
 
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(return_value=result_mock)
     return session
 
@@ -177,6 +178,7 @@ def _overdue_row(
 
 def _org_list_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.scalars.return_value = [_ORG]
     session.execute = AsyncMock(return_value=result)

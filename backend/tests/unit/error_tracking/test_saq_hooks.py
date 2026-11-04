@@ -16,6 +16,7 @@ import pytest
 from saq import Status
 
 from modulo.core.error_tracking import saq_hooks
+from tests.unit.api.mock_session import configure_permissive_session
 
 RUN_ID = str(uuid.uuid4())
 ORG_ID = str(uuid.uuid4())
@@ -27,6 +28,7 @@ def _job(function: str, status: Status | str, error: str | None = None, kwargs: 
 
 def _make_async_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     begin_cm = AsyncMock()

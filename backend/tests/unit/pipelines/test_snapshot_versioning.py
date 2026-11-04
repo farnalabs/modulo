@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from tests.unit.api.mock_session import configure_permissive_session
 
 from modulo.db.crud.pipeline_snapshot_versioning import (
     _compute_edge_changes,
@@ -65,6 +66,7 @@ def _scoped_diff_session(snapshots: list[MagicMock]) -> AsyncMock:
     finds it.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
 
     async def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
         params = dict(stmt.compile().params)  # type: ignore[attr-defined]
@@ -82,6 +84,7 @@ def _scoped_diff_session(snapshots: list[MagicMock]) -> AsyncMock:
 def _diff_session(snap_a: MagicMock, snap_b: MagicMock) -> AsyncMock:
     """Return an AsyncMock session resolving snapshot lookups to *snap_a*/*snap_b*."""
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(
         side_effect=[
             MagicMock(scalar_one_or_none=lambda: snap_a),

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import ProgrammingError
+from tests.unit.api.mock_session import configure_permissive_session
 
 from modulo.db.crud.hitl_review_guard import (
     DiffResult,
@@ -32,6 +33,7 @@ def _sequenced_session(results: list[MagicMock]) -> AsyncMock:
     MagicMock instead of exhausting the sequence.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     session.add = MagicMock()
     pending = list(results)
 

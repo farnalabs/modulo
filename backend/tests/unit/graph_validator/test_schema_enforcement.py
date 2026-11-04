@@ -18,6 +18,7 @@ import pytest
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 from modulo.db.crud.schema import SchemaDeletionProtectedError, delete_schema
+from tests.unit.api.mock_session import configure_permissive_session
 from tests.unit.graph_validator._helpers import (
     schema_version_row as _schema_version_row,
 )
@@ -55,6 +56,7 @@ def _deletion_session(
         "library_primitives": library_count,
     }
     session = AsyncMock()
+    configure_permissive_session(session)
 
     def _exec(stmt, *_a, **_kw):
         tables = [f.name for f in stmt.get_final_froms() if hasattr(f, "name")]

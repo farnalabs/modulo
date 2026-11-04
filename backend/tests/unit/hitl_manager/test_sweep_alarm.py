@@ -21,6 +21,7 @@ import pytest
 from modulo.core.hitl_manager import HITLManager, sweep_alarm
 from modulo.core.hitl_manager.sweep_alarm import AUDIT_EVENT_TYPE, maybe_alarm_approve_sweep
 from modulo.core.notifier.event_mapper import NotificationEventMapper
+from tests.unit.api.mock_session import configure_permissive_session
 
 from .conftest import _session_decide
 from .test_hitl_manager import _GATE, _ORG, _RUN, _USER, _gate
@@ -52,6 +53,7 @@ def _stub_begin_nested(session: AsyncMock) -> None:
 def _alarm_session(count: int, distinct_pipelines: int) -> AsyncMock:
     """Session whose execute serves the detection aggregate: .one() -> (count, distinct)."""
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.one.return_value = (count, distinct_pipelines)
     session.execute = AsyncMock(return_value=result)
@@ -61,6 +63,7 @@ def _alarm_session(count: int, distinct_pipelines: int) -> AsyncMock:
 
 def _broken_session() -> AsyncMock:
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(side_effect=RuntimeError("detection db down"))
     _stub_begin_nested(session)
     return session

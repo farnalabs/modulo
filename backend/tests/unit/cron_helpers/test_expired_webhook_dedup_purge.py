@@ -37,6 +37,7 @@ from modulo.core.housekeeping import _scan_expired_webhook_dedups
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.db.models.base import Base
 from modulo.db.models.webhook import WebhookDedupHash
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_A = uuid.uuid4()
 _ORG_B = uuid.uuid4()
@@ -66,6 +67,7 @@ def _sqlite_session(ids: list[uuid.UUID]) -> AsyncMock:
     is non-empty a second ``execute`` returns the DELETE result.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session.get_bind = MagicMock(return_value=bind)
@@ -136,6 +138,7 @@ class TestEngineLimitBatching:
 
     def _sqlite_session(self) -> AsyncMock:
         session = AsyncMock()
+        configure_permissive_session(session)
         bind = MagicMock()
         bind.dialect.name = "sqlite"
         session.get_bind = MagicMock(return_value=bind)

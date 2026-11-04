@@ -29,6 +29,7 @@ import modulo.core.error_tracking as et
 from modulo.core.error_tracking.alert_dispatcher import SmtpPasswordDecryptError, dispatch_alert
 from modulo.core.error_tracking.alerting import AlertEngine, TriggeredAlert
 from modulo.db.models.organisation import Organisation
+from tests.unit.api.mock_session import configure_permissive_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
@@ -98,6 +99,7 @@ def _dispatch_session(stored_password: str | None) -> AsyncMock:
     so the decrypt exercised here is the production path rather than a mock.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     session.in_transaction = MagicMock(return_value=True)
     session.info = {}
 

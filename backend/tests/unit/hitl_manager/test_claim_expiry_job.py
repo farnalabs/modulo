@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob, expire_stale_claims
+from tests.unit.api.mock_session import configure_permissive_session
 
 from .conftest import mock_begin as _mock_begin
 from .conftest import session_factory as _mock_session_factory
@@ -27,6 +28,7 @@ _GATE_B = "gate-b"
 def _org_list_session() -> AsyncMock:
     """Session mock that returns a single org ID on execute."""
     session = AsyncMock()
+    configure_permissive_session(session)
     result = MagicMock()
     result.scalars.return_value = [_ORG]
     session.execute = AsyncMock(return_value=result)
@@ -55,6 +57,7 @@ def _tx_session(
     tests can exercise the lock-acquired, lock-denied, and lock-failure branches.
     """
     tx_session = AsyncMock(name="tx_session")
+    configure_permissive_session(tx_session)
     tx_session.add = MagicMock()
     tx_session.flush = AsyncMock()
     begin_cm = AsyncMock()
@@ -507,6 +510,7 @@ def _expire_sql_session(*execute_results: Any) -> AsyncMock:
     ``execute`` calls asserted implicitly.
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     session.in_transaction = MagicMock(return_value=True)
     session.get_bind = MagicMock(return_value=SimpleNamespace(dialect=SimpleNamespace(name="sqlite")))
     begin_cm = MagicMock()

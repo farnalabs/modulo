@@ -31,6 +31,7 @@ from modulo.core.hitl_manager.deadline_warning import (
     review_window_seconds,
 )
 from modulo.db.models.hitl_claim import HitlClaim
+from tests.unit.api.mock_session import configure_permissive_session
 
 from .conftest import mock_begin as _mock_begin
 
@@ -249,6 +250,7 @@ def _cm(session: AsyncMock) -> MagicMock:
 
 def _org_list_session(orgs: list[uuid.UUID]) -> AsyncMock:
     session = AsyncMock(name="org_session")
+    configure_permissive_session(session)
     _mock_begin(session)
     result = MagicMock()
     result.scalars.return_value = orgs
@@ -279,6 +281,7 @@ def _tx_session(
     raises on that first call (then continues through *results*).
     """
     session = AsyncMock(name="tx_session")
+    configure_permissive_session(session)
     _mock_begin(session)
     executed: list[Any] = []
     call_count = 0

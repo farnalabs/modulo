@@ -5,6 +5,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from modulo.db.models.hitl_claim import HitlClaim
+from tests.unit.api.mock_session import configure_permissive_session
 
 
 def mock_begin(session: AsyncMock) -> None:
@@ -37,6 +38,7 @@ def _session_decide(
       If update_returns_id is not None: session.get() returns session_get_gate
     """
     session = AsyncMock()
+    configure_permissive_session(session)
     session.add = MagicMock()
     session.flush = AsyncMock()
 

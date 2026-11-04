@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
+from tests.unit.api.mock_session import configure_permissive_session
 from tests.unit.graph_validator._helpers import codes_of as _codes
 
 
@@ -48,6 +49,7 @@ def _node(nid: str, **refs) -> dict:
 def _session_with(schema_rows: list[MagicMock] | None = None, set_rows: list[MagicMock] | None = None) -> AsyncMock:
     """Mock session that returns schema rows on first execute and set rows on second."""
     session = AsyncMock()
+    configure_permissive_session(session)
     calls: list[list[MagicMock]] = []
     if schema_rows is not None:
         calls.append(schema_rows)

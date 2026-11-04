@@ -22,7 +22,7 @@ from sqlalchemy import Delete, Select, Update
 from modulo.core import cron_helpers as ch
 from modulo.db.crud.run import ERROR_CODE_PIPELINE_CAPACITY
 from modulo.db.models.pipeline import Pipeline
-from tests.unit.api.mock_session import make_redis_client
+from tests.unit.api.mock_session import configure_permissive_session, make_redis_client
 from tests.unit.cron_helpers._helpers import _Begin as _MockBegin
 from tests.unit.cron_helpers._helpers import _org_result, _patch_env, _rows_result
 
@@ -2303,6 +2303,7 @@ class TestAwaitingHumanHasCommittedDecision:
         1-3 queries: latest decision -> claimed-undecided row -> any-undecided
         row)."""
         session = AsyncMock()
+        configure_permissive_session(session)
         queued = list(results)
         result_mocks: list[MagicMock] = []
         for row in queued:
@@ -2659,6 +2660,7 @@ class TestCommittedDecisionResumeData:
 
     def _mock_session(self, row: tuple[Any, ...] | None) -> AsyncMock:
         session = AsyncMock()
+        configure_permissive_session(session)
         result = MagicMock()
         result.first.return_value = row
         session.execute = AsyncMock(return_value=result)

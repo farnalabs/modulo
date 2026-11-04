@@ -30,6 +30,7 @@ from sqlalchemy.sql.elements import BinaryExpression, BooleanClauseList
 from sqlalchemy.sql.operators import eq
 
 from modulo.core.graph_validator import ValidationResult
+from tests.unit.api.mock_session import configure_permissive_session
 
 UUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 UUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -44,6 +45,7 @@ def codes_of(result: ValidationResult) -> set[str]:
 def session_returning(rows: list[Any]) -> AsyncMock:
     """Mock session whose execute() returns the given rows via .scalars().all()."""
     session = AsyncMock()
+    configure_permissive_session(session)
     scalars_result = MagicMock()
     scalars_result.all.return_value = rows
     execute_result = MagicMock()
@@ -167,5 +169,6 @@ def schema_version_session(rows: list[MagicMock]) -> AsyncMock:
         return result
 
     session = AsyncMock()
+    configure_permissive_session(session)
     session.execute = AsyncMock(side_effect=_execute_side)
     return session
