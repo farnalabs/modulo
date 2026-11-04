@@ -1,8 +1,6 @@
 <template>
-  <div class="min-h-screen">
-    <header class="bg-card border-b border-border px-6 py-4">
-      <div class="mx-auto max-w-6xl">
-        <PageHeader :title="$t('views.LibraryView.title')" :subtitle="$t('views.LibraryView.subtitle')">
+  <div class="page-wide">
+    <PageHeader :title="$t('views.LibraryView.title')" :subtitle="$t('views.LibraryView.subtitle')">
           <template #right>
             <Button as="router-link" to="/library?type=pipeline_template" class="px-4 py-1.5" data-testid="library-create-pipeline-header">
               {{ $t('views.LibraryView.create_pipeline') }}
@@ -45,12 +43,9 @@
               </div>
             </div>
           </template>
-        </PageHeader>
-      </div>
-    </header>
+    </PageHeader>
 
-    <section class="page-wide">
-      <div v-if="selectedTypes.length > 0" class="flex flex-wrap items-center gap-2 py-2">
+    <div v-if="selectedTypes.length > 0" class="flex flex-wrap items-center gap-2 py-2">
         <span
           v-for="type in selectedTypes"
           :key="type"
@@ -220,8 +215,7 @@
         >
           {{ $t('views.LibraryView.next_page') }}
         </button>
-      </div>
-    </section>
+    </div>
   </div>
 </template>
 

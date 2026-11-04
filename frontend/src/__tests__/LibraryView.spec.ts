@@ -552,16 +552,19 @@ describe('LibraryView responsive layout (FAR-640)', () => {
     expect(dropdownHost.closest('header')).not.toBeNull()
   })
 
-  it('does not hand-roll the responsive header container at page level', async () => {
+  it('uses the centralized PageHeader directly inside the page container (FAR-2364)', async () => {
     const wrapper = await mountLibrary()
 
-    const bandWrapper = wrapper.find('header > div')
-    expect(bandWrapper.exists()).toBe(true)
-    const classes = bandWrapper.classes()
-    expect(classes).not.toContain('flex-col')
-    expect(classes).not.toContain('sm:flex-row')
-    expect(classes).not.toContain('sm:items-center')
-    expect(classes).not.toContain('sm:justify-between')
+    // The old layout wrapped PageHeader in a bespoke card/header band
+    // (`header.bg-card.border-b` + a centred max-width div) and then opened a
+    // separate `.page-wide` section. That put the title in a different width
+    // and spacing context from every other page. PageHeader must now be a
+    // direct child of the shared page container.
+    const header = wrapper.find('.page-wide > header.page-header')
+    expect(header.exists()).toBe(true)
+    expect(wrapper.find('header.bg-card.border-b').exists()).toBe(false)
+    expect(wrapper.find('.min-h-screen').exists()).toBe(false)
+    expect(header.find('[data-testid="page-header-right"]').exists()).toBe(true)
   })
 
   it('shows collections tab and create button', async () => {

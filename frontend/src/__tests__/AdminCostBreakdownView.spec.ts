@@ -94,6 +94,27 @@ describe('AdminCostBreakdownView', () => {
     expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(4)
   })
 
+  it('uses the shared page rhythm and a spaced FeatureGate as the content stack (FAR-2364)', async () => {
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [createPinia()] },
+    })
+    await flushPromises()
+
+    // Header and tab bar are direct children of the shared `.page-wide`
+    // container, so the existing adjacent-sibling rhythm spaces them; the
+    // FeatureGate is the next sibling and owns the gaps between content cards.
+    // This replaces the old ad-hoc nested `div.space-y-6` wrapper.
+    const page = wrapper.get('.page-wide')
+    expect(page.find('.page-wide > header.page-header').exists()).toBe(true)
+    expect(page.find('.page-wide > .page-tabs-wrapper').exists()).toBe(true)
+    const gate = page.get('.page-wide > [data-testid="feature-gate"]')
+    expect(gate.classes()).toContain('space-y-6')
+    expect(gate.find('.space-y-6').exists()).toBe(false)
+  })
+
   it('dismisses an anomaly via POST', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -676,6 +697,9 @@ describe('AdminCostBreakdownView', () => {
     expect(unattributed.exists()).toBe(true)
     expect(unattributed.text()).toContain('$5.50')
     expect(unattributed.text()).toContain('unassigned component spend')
+    // The per-team card is `padding="none"` so the table can run edge-to-edge;
+    // the disclosure line still carries the shared horizontal/bottom inset.
+    expect(unattributed.classes()).toEqual(expect.arrayContaining(['px-6', 'pb-6']))
     // legacy_total is NOT excluded from team rows (team-owned legacy spend is
     // written to the owner team's ledger row), so it must never be disclosed here.
     expect(unattributed.text()).not.toContain('99.99')
