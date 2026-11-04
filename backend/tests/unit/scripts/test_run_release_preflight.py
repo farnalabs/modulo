@@ -671,8 +671,8 @@ def test_windows_native_artifacts_dry_run_passes(tmp_path: Path):
 def test_windows_native_artifacts_payload_missing_fails_cut_and_recut(tmp_path: Path, mode: str):
     """Windows native packaging is Alpha scope (FAR-2338 / FAR-2250).
 
-    A cut/recut with no payload must FAIL here rather than passing on the
-    retired Beta-scope deferral (FAR-2213) and failing in the packaging job.
+    A cut/recut with no payload must FAIL here rather than passing on a stale
+    deferral and failing later in the packaging job.
     """
     repo = _make_dummy_repo(tmp_path)
     checker = ReleasePreflightChecker(mode=mode, version="0.1.0", repo_root=repo, env={})
@@ -681,15 +681,18 @@ def test_windows_native_artifacts_payload_missing_fails_cut_and_recut(tmp_path: 
     assert "windows-native-artifacts.zip" in res.details
     assert "missing" in res.details
     assert mode in res.details
+    assert "FAR-2338" in res.details
+    assert "FAR-2250" in res.details
 
 
-def test_windows_native_artifacts_fails_when_missing_even_in_scope(tmp_path: Path):
-    """The explicit in-scope flag no longer decides whether the payload gates."""
+def test_windows_native_artifacts_failure_names_the_alpha_scope_tickets(tmp_path: Path):
+    """There is no opt-out: every cut requires the Alpha payload (FAR-2338 / FAR-2250)."""
     repo = _make_dummy_repo(tmp_path)
-    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, windows_native_in_scope=True)
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo)
     res = checker.check_windows_native_artifacts()
     assert not res.passed
-    assert "windows-native-artifacts.zip" in res.details
+    assert "FAR-2338" in res.details
+    assert "FAR-2250" in res.details
 
 
 def test_windows_native_artifacts_non_dry_run_passes_when_zip_exists(tmp_path: Path):
@@ -712,9 +715,10 @@ def test_azure_signing_secrets_dry_run_passes_even_if_missing(tmp_path: Path):
     assert "Dry-run mode" in res.details
 
 
-def test_azure_signing_secrets_cut_fails_when_missing(tmp_path: Path):
+@pytest.mark.parametrize("mode", ["cut", "recut"])
+def test_azure_signing_secrets_cut_and_recut_fail_when_missing(tmp_path: Path, mode: str):
     repo = _make_dummy_repo(tmp_path)
-    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env={})
+    checker = ReleasePreflightChecker(mode=mode, version="0.1.0", repo_root=repo, env={})
     res = checker.check_azure_signing_secrets()
     assert not res.passed
     assert "Missing required release secret(s)" in res.details
@@ -722,7 +726,8 @@ def test_azure_signing_secrets_cut_fails_when_missing(tmp_path: Path):
     assert "MODULO_RELEASE_PR_TOKEN" in res.details
 
 
-def test_azure_signing_secrets_missing_azure_does_not_fail_alpha_release(tmp_path: Path):
+def test_azure_signing_secrets_cut_fails_when_only_azure_secrets_missing(tmp_path: Path):
+    """A cut needs the Azure Trusted Signing credentials the Windows sign job uses (FAR-2338)."""
     repo = _make_dummy_repo(tmp_path)
     env = {
         "BUNDLE_MANIFEST_SIGNING_KEY": "key-123",
@@ -730,24 +735,35 @@ def test_azure_signing_secrets_missing_azure_does_not_fail_alpha_release(tmp_pat
     }
     checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env=env)
     res = checker.check_azure_signing_secrets()
-    assert res.passed
+    assert not res.passed
+    assert "Missing required release secret(s)" in res.details
     assert "AZURE_CLIENT_ID" in res.details
-    assert "not required by this gate" in res.details
 
 
-def test_azure_signing_secrets_cut_fails_when_missing_azure_and_windows_in_scope(tmp_path: Path):
+def test_azure_signing_secrets_recut_fails_when_only_azure_secrets_missing(tmp_path: Path):
+    """A recut is a full re-release: the Windows sign job runs and needs Azure credentials."""
     repo = _make_dummy_repo(tmp_path)
     env = {
         "BUNDLE_MANIFEST_SIGNING_KEY": "key-123",
         "MODULO_RELEASE_PR_TOKEN": "token-123",
     }
-    checker = ReleasePreflightChecker(
-        mode="cut", version="0.1.0", repo_root=repo, env=env, windows_native_in_scope=True
-    )
+    checker = ReleasePreflightChecker(mode="recut", version="0.1.0", repo_root=repo, env=env)
     res = checker.check_azure_signing_secrets()
     assert not res.passed
     assert "Missing required release secret(s)" in res.details
     assert "AZURE_CLIENT_ID" in res.details
+
+
+def test_azure_signing_secrets_promote_passes_without_azure_secrets(tmp_path: Path):
+    """Promote does not build or sign a Windows installer, so Azure credentials are not required."""
+    repo = _make_dummy_repo(tmp_path)
+    env = {
+        "BUNDLE_MANIFEST_SIGNING_KEY": "key-123",
+        "MODULO_RELEASE_PR_TOKEN": "token-123",
+    }
+    checker = ReleasePreflightChecker(mode="promote", version="0.1.0", repo_root=repo, env=env)
+    res = checker.check_azure_signing_secrets()
+    assert res.passed
 
 
 def test_azure_signing_secrets_cut_passes_when_present(tmp_path: Path):

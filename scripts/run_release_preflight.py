@@ -14,7 +14,7 @@ Checks included:
   6. uv.lock freshness for release version bump.
   7. Release-freeze marker state valid and movable (FAR-2317 tag ruleset).
   8. Windows native artifacts payload present.
-  9. Azure Trusted Signing resource / secrets presence check (values never printed!).
+  9. Azure Trusted Signing + release secret presence check, required for cut/recut (values never printed!).
  10. Branch merge-conflict check against main.
 """
 
@@ -85,16 +85,12 @@ class ReleasePreflightChecker:
         repo_root: Path | str | None = None,
         env: dict[str, str] | None = None,
         run_cmd: Callable[..., tuple[int, str, str]] | None = None,
-        windows_native_in_scope: bool = False,
     ) -> None:
         self.mode = mode.strip()
         self.version = version.strip()
         self.freeze = freeze
         self.env = env if env is not None else dict(os.environ)
         self.run_cmd = run_cmd if run_cmd is not None else default_run_cmd
-        self.windows_native_in_scope = (
-            windows_native_in_scope or self.env.get("WINDOWS_NATIVE_IN_SCOPE", "false").lower() == "true"
-        )
 
         if repo_root is not None:
             self.repo_root = Path(repo_root).resolve()
@@ -754,7 +750,7 @@ class ReleasePreflightChecker:
             False,
             f"Windows native artifacts payload '{_WINDOWS_ARTIFACTS_ZIP}' is missing: no local zip and no "
             f"successful windows-artifacts.yml run found. The Alpha Windows package (FAR-2338) requires it for "
-            f"mode '{self.mode}'",
+            f"mode '{self.mode}'; real-host validation (FAR-2250) runs the installer it produces",
         )
 
     def _find_local_windows_payload(self) -> Path | None:
@@ -812,20 +808,19 @@ class ReleasePreflightChecker:
             "AZURE_TENANT_ID",
             "AZURE_SUBSCRIPTION_ID",
         ]
-        alpha_required_secrets = [
+        release_secrets = [
             "BUNDLE_MANIFEST_SIGNING_KEY",
             "MODULO_RELEASE_PR_TOKEN",
         ]
-        missing_alpha = [s for s in alpha_required_secrets if not self.env.get(s)]
-        missing_azure = [s for s in signing_secrets if not self.env.get(s)]
 
         if self.mode == "dry-run":
-            all_missing = missing_alpha + missing_azure
+            all_missing = [s for s in signing_secrets + release_secrets if not self.env.get(s)]
             if all_missing:
                 return PreflightCheckResult(
                     name,
                     True,
-                    f"Dry-run mode: signing secrets not required (unconfigured: {', '.join(all_missing)}; values redacted)",
+                    "Dry-run mode: signing secrets not required "
+                    f"(unconfigured: {', '.join(all_missing)}; values redacted)",
                 )
             return PreflightCheckResult(
                 name,
@@ -833,37 +828,24 @@ class ReleasePreflightChecker:
                 "All signing and release secrets configured (values redacted)",
             )
 
-        if self.windows_native_in_scope:
-            all_missing = missing_alpha + missing_azure
-            if all_missing:
-                return PreflightCheckResult(
-                    name,
-                    False,
-                    f"Missing required release secret(s): {', '.join(all_missing)} (values redacted)",
-                )
-            return PreflightCheckResult(
-                name,
-                True,
-                "All required Azure Trusted Signing and release secrets are configured (values redacted)",
-            )
+        # Windows native packaging is Alpha scope (FAR-2338) and the Windows
+        # signing job (windows-installer.yml) fails closed without the Azure
+        # Trusted Signing credentials. A cut/recut that passed this gate
+        # without them would only fail later, at the signing job - the
+        # serial-unveiling failure this preflight exists to prevent. Promote
+        # does not build or sign a Windows installer, so it only requires the
+        # release secrets.
+        required = list(release_secrets)
+        if self.mode in ("cut", "recut"):
+            required = signing_secrets + release_secrets
 
-        # Windows native packaging is Alpha scope: the payload check (8) already
-        # gates a cut/recut on the artifacts zip. Azure Trusted Signing is only
-        # enforced here when Windows packaging is explicitly declared in scope.
-        if missing_alpha:
+        all_missing = [s for s in required if not self.env.get(s)]
+        if all_missing:
             return PreflightCheckResult(
                 name,
                 False,
-                f"Missing required release secret(s): {', '.join(missing_alpha)} (values redacted)",
+                f"Missing required release secret(s): {', '.join(all_missing)} (values redacted)",
             )
-
-        if missing_azure:
-            return PreflightCheckResult(
-                name,
-                True,
-                f"Required release secrets configured (values redacted); Azure Trusted Signing secrets unconfigured ({', '.join(missing_azure)}; values redacted, not required by this gate unless Windows native packaging is declared in scope)",
-            )
-
         return PreflightCheckResult(
             name,
             True,
@@ -1090,12 +1072,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Release freeze flag (default: $RELEASE_FREEZE == true)",
     )
     parser.add_argument(
-        "--windows-native-in-scope",
-        action="store_true",
-        default=os.environ.get("WINDOWS_NATIVE_IN_SCOPE", "false").lower() == "true",
-        help="Require the Azure Trusted Signing secrets (Windows native packaging in scope; default: false)",
-    )
-    parser.add_argument(
         "--repo-root",
         default=None,
         help="Path to repository root",
@@ -1113,7 +1089,6 @@ def main(argv: list[str] | None = None) -> int:
         version=args.version,
         freeze=args.freeze,
         repo_root=args.repo_root,
-        windows_native_in_scope=args.windows_native_in_scope,
     )
 
     print(
