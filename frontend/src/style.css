@@ -622,6 +622,32 @@
 .light .badge-context-amber { color: hsl(var(--warning-text)); background-color: hsla(38 92% 35% / 0.1); }
 .light .badge-context-green { color: hsl(var(--success-text)); background-color: hsla(142 71% 28% / 0.1); }
 
+/* FAR-2351 — PrimeVue's neutral badge (`severity="secondary"`) must not inherit
+   PrimeVue's colour scheme. Its default pair is surface.100/surface.600 in light
+   and surface.800/surface.300 in dark, and the token bridge maps
+   `--p-surface-800` onto `hsl(var(--muted))`. That couples the badge to the
+   agreement of TWO independent theme switches: our palette flips on `.light`,
+   while PrimeVue flips on `.dark` (`main.ts` `darkModeSelector: '.dark'`, and
+   `index.html` ships `class="dark"`). A page that is light but still carries
+   `.dark` therefore read the ink from PrimeVue's DARK scheme
+   (`--p-surface-300` = #d4d4d8) on the LIGHT muted fill (#dbe0e6) — measured
+   1.11:1 at 10px bold, far below the WCAG AA 4.5:1 floor, on
+   /admin/trigger-events and /admin/audit.
+   Pin the neutral badge to our own text-safe pair, so it holds whether the two
+   switches agree or not. Measured after (10px bold):
+     light  #4b5563 on #dbe0e6  5.71:1
+   The severity variants (primary/success/info/warn/danger/contrast) keep their
+   own saturated fills with a matching on-fill ink and are deliberately not
+   touched: only the neutral pair recycles the surface scale this override
+   replaces.
+   Dark (`.dark`) and agent (`[data-theme="agent"]`) render the badge from our
+   dark muted pair (measured 10.42:1 / 9.79:1) and are unaffected because this
+   rule requires `.light`. */
+html.light .p-badge-secondary {
+  background-color: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
 [data-theme="agent"] {
   --background: 222 30% 8%;
   --foreground: 210 30% 96%;
