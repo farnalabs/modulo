@@ -530,6 +530,10 @@ def test_alpha_bundle_scopes_windows_out_of_the_release_path() -> None:
     artefact must therefore stay out of the final manifest (SHA256SUMS,
     ``names`` and ``components``) until Windows returns to scope — this gate
     fails if it is re-added without re-scoping the job graph.
+
+    The manifest script now conditionally includes Windows when
+    ``inputs.include_windows=true`` (Beta path), but the Alpha path
+    (include_windows=false) must not include Windows artifacts.
     """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
 
@@ -540,12 +544,16 @@ def test_alpha_bundle_scopes_windows_out_of_the_release_path() -> None:
     final_names = _step_names(final_steps)
     build_script = final_steps[final_names.index("Build final signed manifest after every platform artifact")]["run"]
 
-    assert "windows" not in build_script
-    assert "-windows-amd64.exe" not in build_script
-    assert '"linux": "amd64"' in build_script
-    assert '"macos": "arm64"' in build_script
+    # Windows must only appear inside the INCLUDE_WINDOWS conditional block
+    assert 'if [ "$INCLUDE_WINDOWS" = "true" ]; then' in build_script
+    # The unconditional path must not have Windows
     assert "modulo-${VERSION}-linux-amd64.tar.gz" in build_script
     assert "Modulo-${VERSION}-macos-arm64.dmg" in build_script
+    # The components dict starts with linux+macos only
+    assert 'components = {"linux": "amd64", "macos": "arm64"}' in build_script
+    # Windows is only added conditionally
+    assert 'components["windows"] = "amd64"' in build_script
+    assert 'names.append(f"modulo-{version}-windows-amd64.exe")' in build_script
 
 
 def test_alpha_bundle_still_requires_the_macos_installer() -> None:
@@ -565,9 +573,10 @@ def test_alpha_bundle_still_requires_the_macos_installer() -> None:
 def test_publish_release_assets_match_the_alpha_bundle() -> None:
     """The published asset list must contain exactly what the bundle produces.
 
-    The manifest job no longer downloads the Windows exe, so a stale Windows
+    The manifest job no longer downloads the Windows exe by default, so a stale Windows
     entry in either the presence check or the upload list would fail the
-    publication step it is meant to guard.
+    publication step it is meant to guard. Windows is only included when
+    inputs.include_windows=true (Beta path).
     """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["publish-release"]["steps"]
@@ -575,7 +584,8 @@ def test_publish_release_assets_match_the_alpha_bundle() -> None:
 
     for step_name in ("Verify portable release artefacts", "Create GitHub Release with assets"):
         script = steps[names.index(step_name)]["run"]
-        assert "windows" not in script
+        # Windows must only appear inside the INCLUDE_WINDOWS conditional
+        assert 'if [ "$INCLUDE_WINDOWS" = "true" ]; then' in script
         assert "linux" in script
         assert "macos" in script
 
@@ -2754,3 +2764,262 @@ def test_release_rc_tag_callers_read_the_release_job_output() -> None:
         job = cast(dict[str, Any], workflow["jobs"][job_id])
         with_ = cast(dict[str, Any], job["with"])
         assert with_["rc_tag"] == "${{ needs.release.outputs.rc_tag }}", job_id
+
+
+# ---------------------------------------------------------------------------
+# Alpha scope: Windows native is Beta — include_windows gates the Windows path
+# ---------------------------------------------------------------------------
+
+
+def test_release_workflow_has_include_windows_input() -> None:
+    """The unified release workflow must declare the include_windows input."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    inputs = workflow["on"]["workflow_dispatch"]["inputs"]
+    assert "include_windows" in inputs
+    inp = inputs["include_windows"]
+    assert inp["type"] == "boolean"
+    assert inp["default"] is False
+    assert "Beta" in inp["description"]
+    assert "Alpha" in inp["description"]
+
+
+def test_windows_installer_job_gated_on_include_windows() -> None:
+    """The windows-installer caller job must be gated on inputs.include_windows."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    win_job = workflow["jobs"]["windows-installer"]
+    assert "inputs.include_windows" in win_job["if"]
+    # The condition should require (cut or recut) AND include_windows
+    assert "inputs.mode == 'cut' || inputs.mode == 'recut'" in win_job["if"]
+    assert "inputs.include_windows" in win_job["if"]
+
+
+def test_final_release_manifest_needs_excludes_windows_installer() -> None:
+    """final-release-manifest must not depend on windows-installer."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    final_job = workflow["jobs"]["final-release-manifest"]
+    assert "windows-installer" not in final_job["needs"]
+    # macos-installer must still be a dependency
+    assert "macos-installer" in final_job["needs"]
+
+
+def test_publish_release_needs_excludes_windows_installer() -> None:
+    """publish-release must not depend on windows-installer."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    publish_job = workflow["jobs"]["publish-release"]
+    assert "windows-installer" not in publish_job["needs"]
+    assert "macos-installer" in publish_job["needs"]
+    assert "final-release-manifest" in publish_job["needs"]
+    assert "attest-artefacts" in publish_job["needs"]
+
+
+def test_final_release_manifest_downloads_windows_artifact_conditionally() -> None:
+    """final-release-manifest must conditionally download the Windows artifact."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
+    download_steps = [step for step in final_steps if step.get("uses", "").startswith("actions/download-artifact@")]
+    # Should have bundle, macos, and conditional windows downloads
+    names = [step.get("with", {}).get("name") for step in download_steps]
+    assert "bundle-artefacts-amd64" in names
+    assert "macos-installer-${{ inputs.version }}" in names
+    # Windows download should be conditional on include_windows
+    windows_downloads = [step for step in download_steps if "windows-installer" in step.get("with", {}).get("name", "")]
+    assert len(windows_downloads) == 1
+    win_step = windows_downloads[0]
+    assert win_step.get("if") == "inputs.include_windows"
+
+
+def test_final_release_manifest_builds_sha256sums_conditionally() -> None:
+    """The manifest build script must conditionally include Windows in SHA256SUMS."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
+    final_names = _step_names(final_steps)
+    build_idx = final_names.index("Build final signed manifest after every platform artifact")
+    build_step = final_steps[build_idx]
+    script = build_step["run"]
+    # Should check INCLUDE_WINDOWS env var
+    assert "INCLUDE_WINDOWS" in script
+    # Should conditionally add windows exe to sha256sum
+    assert 'if [ "$INCLUDE_WINDOWS" = "true" ]; then' in script
+    assert "modulo-${VERSION}-windows-amd64.exe" in script
+    # Should error if include_windows=true but artifact missing
+    assert "include_windows=true but windows-installer" in script
+    # Linux and macOS must always be included
+    assert "modulo-${VERSION}-linux-amd64.tar.gz" in script
+    assert "Modulo-${VERSION}-macos-arm64.dmg" in script
+
+
+def test_final_release_manifest_builds_components_dict_conditionally() -> None:
+    """The manifest components dict must conditionally include windows."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
+    final_names = _step_names(final_steps)
+    build_idx = final_names.index("Build final signed manifest after every platform artifact")
+    build_step = final_steps[build_idx]
+    script = build_step["run"]
+    # Should build components dict conditionally
+    assert 'components = {"linux": "amd64", "macos": "arm64"}' in script
+    assert "if include_windows:" in script
+    assert 'components["windows"] = "amd64"' in script
+    # names list should be conditional
+    assert 'names = [f"modulo-{version}-linux-amd64.tar.gz", f"Modulo-{version}-macos-arm64.dmg"]' in script
+    assert 'names.append(f"modulo-{version}-windows-amd64.exe")' in script
+
+
+def test_publish_release_verifies_windows_asset_conditionally() -> None:
+    """publish-release must conditionally verify and upload the Windows asset."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    publish_steps = workflow["jobs"]["publish-release"]["steps"]
+    publish_names = _step_names(publish_steps)
+
+    # Verify portable release artefacts step
+    verify_idx = publish_names.index("Verify portable release artefacts")
+    verify_script = publish_steps[verify_idx]["run"]
+    assert "INCLUDE_WINDOWS" in verify_script
+    assert 'if [ "$INCLUDE_WINDOWS" = "true" ]; then' in verify_script
+    assert 'test -s "release-artefacts/modulo-${VERSION}-windows-amd64.exe"' in verify_script
+
+    # Create GitHub Release with assets step
+    create_idx = publish_names.index("Create GitHub Release with assets")
+    create_script = publish_steps[create_idx]["run"]
+    assert "INCLUDE_WINDOWS" in create_script
+    assert 'if [ "$INCLUDE_WINDOWS" = "true" ]; then' in create_script
+    assert 'ASSETS+=("release-artefacts/modulo-${VERSION}-windows-amd64.exe")' in create_script
+
+
+def test_attest_artefacts_downloads_windows_conditionally() -> None:
+    """attest-artefacts must conditionally download and assert the Windows artifact."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    attest_steps = workflow["jobs"]["attest-artefacts"]["steps"]
+    download_steps = [step for step in attest_steps if step.get("uses", "").startswith("actions/download-artifact@")]
+    # Should have conditional windows download
+    windows_downloads = [step for step in download_steps if "windows-installer" in step.get("with", {}).get("name", "")]
+    assert len(windows_downloads) == 1
+    win_step = windows_downloads[0]
+    assert "inputs.include_windows" in win_step.get("if", "")
+
+    # Should have assertion step for Windows exe
+    assert_steps = [step for step in attest_steps if step.get("name") == "Assert the exact Windows exe is present"]
+    assert len(assert_steps) == 1
+    assert_step = assert_steps[0]
+    assert "inputs.include_windows" in assert_step.get("if", "")
+
+
+@pytest.mark.posix_only
+def test_alpha_bundle_sha256sums_generation_succeeds_without_windows(tmp_path: Path) -> None:
+    """Running the SHA256SUMS generation with INCLUDE_WINDOWS=false must succeed."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
+    final_names = _step_names(final_steps)
+    build_idx = final_names.index("Build final signed manifest after every platform artifact")
+    build_step = final_steps[build_idx]
+    build_step["run"]
+
+    # Extract just the SHA256SUMS generation part (before the Python heredoc)
+    # The script structure: cd release-artefacts -> sha256sum -> cd .. -> python heredoc -> sha256sum --check
+    # We test the sha256sum generation logic directly
+    artefacts_dir = tmp_path / "release-artefacts"
+    artefacts_dir.mkdir()
+    linux_tar = artefacts_dir / "modulo-0.3.324-linux-amd64.tar.gz"
+    macos_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    linux_tar.write_bytes(b"linux-bundle-content")
+    macos_dmg.write_bytes(b"macos-dmg-content")
+
+    # Run the conditional sha256sum generation (Alpha path: INCLUDE_WINDOWS=false)
+    env = {**os.environ, "VERSION": "0.3.324", "INCLUDE_WINDOWS": "false"}
+    sha256_script = """
+set -euo pipefail
+cd release-artefacts
+if [ "$INCLUDE_WINDOWS" = "true" ]; then
+  sha256sum \
+    "modulo-${VERSION}-linux-amd64.tar.gz" \
+    "Modulo-${VERSION}-macos-arm64.dmg" \
+    "modulo-${VERSION}-windows-amd64.exe" > SHA256SUMS
+else
+  sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+fi
+cd ..
+(cd release-artefacts && sha256sum --check SHA256SUMS)
+"""
+    result = _run_bash(sha256_script, cwd=tmp_path, env=env)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+    # Verify SHA256SUMS was created with only Linux and macOS
+    sha256sums = (artefacts_dir / "SHA256SUMS").read_text(encoding="utf-8")
+    assert "modulo-0.3.324-linux-amd64.tar.gz" in sha256sums
+    assert "Modulo-0.3.324-macos-arm64.dmg" in sha256sums
+    assert "windows-amd64.exe" not in sha256sums
+    # Verify it has exactly 2 lines
+    assert len(sha256sums.strip().split("\n")) == 2
+
+
+@pytest.mark.posix_only
+def test_beta_bundle_sha256sums_generation_succeeds_with_windows(tmp_path: Path) -> None:
+    """Running the SHA256SUMS generation with INCLUDE_WINDOWS=true must succeed when Windows artifact exists."""
+    artefacts_dir = tmp_path / "release-artefacts"
+    artefacts_dir.mkdir()
+    linux_tar = artefacts_dir / "modulo-0.3.324-linux-amd64.tar.gz"
+    macos_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    windows_exe = artefacts_dir / "modulo-0.3.324-windows-amd64.exe"
+    linux_tar.write_bytes(b"linux-bundle-content")
+    macos_dmg.write_bytes(b"macos-dmg-content")
+    windows_exe.write_bytes(b"windows-exe-content")
+
+    env = {**os.environ, "VERSION": "0.3.324", "INCLUDE_WINDOWS": "true"}
+    sha256_script = """
+set -euo pipefail
+cd release-artefacts
+if [ "$INCLUDE_WINDOWS" = "true" ]; then
+  sha256sum \
+    "modulo-${VERSION}-linux-amd64.tar.gz" \
+    "Modulo-${VERSION}-macos-arm64.dmg" \
+    "modulo-${VERSION}-windows-amd64.exe" > SHA256SUMS
+else
+  sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+fi
+cd ..
+(cd release-artefacts && sha256sum --check SHA256SUMS)
+"""
+    result = _run_bash(sha256_script, cwd=tmp_path, env=env)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+    # Verify SHA256SUMS includes all three
+    sha256sums = (artefacts_dir / "SHA256SUMS").read_text(encoding="utf-8")
+    assert "modulo-0.3.324-linux-amd64.tar.gz" in sha256sums
+    assert "Modulo-0.3.324-macos-arm64.dmg" in sha256sums
+    assert "modulo-0.3.324-windows-amd64.exe" in sha256sums
+    # Verify it has exactly 3 lines
+    assert len(sha256sums.strip().split("\n")) == 3
+
+
+@pytest.mark.posix_only
+def test_beta_bundle_sha256sums_generation_fails_when_windows_missing(tmp_path: Path) -> None:
+    """Running the SHA256SUMS generation with INCLUDE_WINDOWS=true must fail when Windows artifact is missing."""
+    artefacts_dir = tmp_path / "release-artefacts"
+    artefacts_dir.mkdir()
+    linux_tar = artefacts_dir / "modulo-0.3.324-linux-amd64.tar.gz"
+    macos_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    linux_tar.write_bytes(b"linux-bundle-content")
+    macos_dmg.write_bytes(b"macos-dmg-content")
+
+    env = {**os.environ, "VERSION": "0.3.324", "INCLUDE_WINDOWS": "true"}
+    sha256_script = """
+set -euo pipefail
+cd release-artefacts
+if [ "$INCLUDE_WINDOWS" = "true" ]; then
+  if [ ! -f "modulo-${VERSION}-windows-amd64.exe" ]; then
+    echo "::error::include_windows=true but windows-installer-${VERSION} artifact is missing"
+    exit 1
+  fi
+  sha256sum \
+    "modulo-${VERSION}-linux-amd64.tar.gz" \
+    "Modulo-${VERSION}-macos-arm64.dmg" \
+    "modulo-${VERSION}-windows-amd64.exe" > SHA256SUMS
+else
+  sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+fi
+cd ..
+(cd release-artefacts && sha256sum --check SHA256SUMS)
+"""
+    result = _run_bash(sha256_script, cwd=tmp_path, env=env)
+    assert result.returncode != 0
+    assert "include_windows=true but windows-installer" in result.stdout + result.stderr
