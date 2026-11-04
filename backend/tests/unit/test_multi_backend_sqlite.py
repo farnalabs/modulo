@@ -1,11 +1,10 @@
-import os
-
 """Smoke test: SQLite backend with create_all, CRUD, and tenant filtering.
 
 Verifies that core ORM operations work on the sqlite+aiosqlite driver
 without any Postgres-specific features (RLS, advisory locks, etc.).
 """
 
+import os
 import uuid
 
 import anyio
@@ -26,9 +25,7 @@ from modulo.db.models.organisation import Organisation
 
 
 @pytest.fixture(scope="module")
-def engine(request):
-    import os
-
+def engine():
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
     db_path = f"./test_multi_backend_{worker_id}.db"
     db_url = f"sqlite+aiosqlite:///{db_path}"
@@ -38,12 +35,10 @@ def engine(request):
 @pytest.fixture(scope="module")
 async def _tables(engine):
     # SQLite does not support ARRAY type - skip tables that use it
-    import os
-
     from sqlalchemy import ARRAY
 
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
-    db_path = f"./test_multi_backend_{os.environ.get('PYTEST_XDIST_WORKER', 'master')}.db"
+    db_path = f"./test_multi_backend_{worker_id}.db"
 
     tables_to_create = [t for t in Base.metadata.sorted_tables if not any(isinstance(c.type, ARRAY) for c in t.columns)]
     async with engine.begin() as conn:
@@ -58,11 +53,7 @@ async def _tables(engine):
 
 @pytest.fixture(autouse=True)
 async def _clear_data(engine, _tables):
-    import os
-
     from sqlalchemy import ARRAY
-
-    db_path = f"./test_multi_backend_{os.environ.get('PYTEST_XDIST_WORKER', 'master')}.db"
 
     async with engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
