@@ -34,7 +34,7 @@ Verified properties:
 | Community tier, pipelines, runs, connectors, evals, HITL, audit | Kept. No license is required. |
 | Source, local patches, your own fork | Kept. Build from your fork at any time. |
 | A released version after its Change Date | Apache-2.0, per `LICENSE`. |
-| Team tier (SSO, team RBAC, audit viewer) | Not automatic. It needs a license key signed by an anchor you trust. Recoverable by issuing your own key: see [The Team license trust anchor](#the-team-licence-trust-anchor). |
+| Team tier (SSO, team RBAC, audit viewer) | Not automatic. It needs a license key signed by an anchor you trust. Recoverable by issuing your own key: see [The Team license trust anchor](#the-team-license-trust-anchor). |
 | Farnalabs' future patches and releases | Not kept. You maintain your fork from the Change Date onward, or from the last release you mirrored. |
 
 ## Build the image from source

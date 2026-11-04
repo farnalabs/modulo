@@ -405,7 +405,7 @@ a replacement against the anchor you still have.
 A successor can also issue Team licenses without Farnalabs: generate your own
 Ed25519 keypair, set its public half as `MODULO_LICENSE_PUBLIC_KEY`, and sign
 licenses with the private half. The full procedure is in
-[Continuity and Escrow](../continuity-and-escrow.md#issue-your-own-team-licence).
+[Continuity and Escrow](../continuity-and-escrow.md#issue-your-own-team-license).
 
 ---
 
