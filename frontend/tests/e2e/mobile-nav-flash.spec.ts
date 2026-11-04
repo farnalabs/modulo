@@ -233,7 +233,7 @@ async function boot(page: Page, opts: { rail: boolean; cachedRail?: boolean; wai
       value?: number
       sources?: Array<{ node?: Node | null }>
     }
-    const w = window as unknown as { __far1237Cls?: number; __far1237Shifts?: ShiftRecord[] }
+    const w = window as unknown as { __far1237Cls: number; __far1237Shifts: ShiftRecord[] }
     w.__far1237Cls = 0
     w.__far1237Shifts = []
     try {

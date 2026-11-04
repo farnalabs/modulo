@@ -105,14 +105,6 @@ const DEACTIVATED_ROUTES: Record<string, string> = {
   // /settings/monitoring, /feedback/inbox, /assistant, /settings/assistant)
   // were removed after they were observed RENDERING on staging; if the
   // staging dev-mode flag is turned off again they must come back.
-  // --- permission-gated (FAR-2104 moved /settings/license out of the FAR-938
-  // SYSTEM group into the ADMIN group behind `org.license.manage`) ---
-  // The staging e2e org admin HOLDS that permission, so the route renders there
-  // and every check runs (this entry only licenses the redirect it causes
-  // locally). The local mock's catch-all answers GET /api/v1/auth/permissions
-  // without a `permissions` array, so the router's permission gate fails closed
-  // and bounces to the dashboard.
-  '/settings/license': 'permission-gated — org.license.manage absent from the local mock permission list (the staging org admin holds it and the route renders there)',
 }
 
 const DEACTIVATED_ROUTES_SET = new Set(Object.keys(DEACTIVATED_ROUTES))
@@ -569,9 +561,10 @@ async function preparePage(page: Page, route: string, env: TestEnv): Promise<Pag
 // Check 1 — viewport meta must opt into device-width rendering.
 async function checkViewportMeta(page: Page) {
   const meta = page.locator('meta[name="viewport"]').first()
-  await expect(meta).toHaveAttribute('content', /width=device-width/, {
-    message: 'No <meta name="viewport" content="width=device-width, ...> found — page renders at 980px desktop width scaled down to ~38% on phones.',
-  })
+  await expect(
+    meta,
+    'No <meta name="viewport" content="width=device-width, ...> found — page renders at 980px desktop width scaled down to ~38% on phones.',
+  ).toHaveAttribute('content', /width=device-width/)
 }
 
 // Check 2 — no horizontal page overflow; log suspected 100vw-width culprits.
@@ -770,7 +763,7 @@ async function checkAxeMobile(page: Page) {
     const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()
     violations = filterViolations(results.violations)
   } finally {
-    await transitionOverride.evaluate((node) => node.remove())
+    await transitionOverride.evaluate((node) => (node as Element).remove())
   }
   if (violations.length > 0) {
     process.stdout.write(`\n=== ${page.url()} mobile WCAG violations ===\n`)
@@ -918,8 +911,13 @@ test.describe('Mobile layout audit — narrow viewport bounding sweep', { tag: '
   // defaultBrowserType is stripped from the Pixel 5 spread: Playwright forbids
   // use({ defaultBrowserType }) inside a describe group (it forces a new worker).
   const pixel5 = devices['Pixel 5']
+  // Playwright populates `screen` on the device descriptor at runtime (Pixel 5:
+  // 393x851, taller than its 393x727 viewport) but omits it from the public
+  // `DeviceDescriptor` type, so widen the type rather than dropping the
+  // emulated physical screen size.
+  const pixel5Screen = (pixel5 as unknown as { screen?: { width: number; height: number } }).screen
   const narrowViewports = [
-    { name: 'pixel5', viewport: pixel5.viewport, userAgent: pixel5.userAgent, screen: pixel5.screen, isMobile: true, hasTouch: true, deviceScaleFactor: 1 },
+    { name: 'pixel5', viewport: pixel5.viewport, userAgent: pixel5.userAgent, screen: pixel5Screen, isMobile: true, hasTouch: true, deviceScaleFactor: 1 },
     { name: '320x568', viewport: { width: 320, height: 568 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 },
     { name: '768x1024', viewport: { width: 768, height: 1024 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 },
   ]

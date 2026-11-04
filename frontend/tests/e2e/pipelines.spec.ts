@@ -11,7 +11,7 @@ test.describe('Pipelines Page', { tag: "@regression" }, () => {
     await expect(page.getByTestId('filter-bar-search')).toBeVisible()
   })
 
-  test('shows New Pipeline CTA button', { tag: "@regression" }, async ({ page, env }) => {
+  test('shows New Pipeline CTA button', { tag: "@regression" }, async ({ page }) => {
     await loginAsAdmin(page, getTestEnv())
     // The header CTA stays `invisible` until the pipelines list resolves, and
     // it was repeatedly flaky across staging @regression runs while the real

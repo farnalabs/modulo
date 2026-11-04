@@ -74,7 +74,7 @@ async function findExistingPipeline(
 async function createPipeline(
   apiBase: string,
   token: string,
-): Promise<ApiPipeline | undefined> {
+): Promise<ApiPipeline> {
   const res = await fetch(apiBase + '/api/v1/pipelines', {
     method: 'POST',
     headers: authHeaders(token),
