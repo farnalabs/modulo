@@ -55,6 +55,33 @@ class TestWebhookNotificationLogFlag:
         assert flag.description
 
 
+class TestDashboardChartsFlag:
+    """FAR-2235: dashboard charts (sparklines) is active by default on community tier."""
+
+    def test_flag_is_registered(self) -> None:
+        registry = FeatureFlagRegistry()
+        flag = registry.get_flag("dashboard_charts")
+        assert flag is not None, "dashboard_charts flag must be registered in _KNOWN_FLAGS"
+
+    def test_flag_tier_is_community(self) -> None:
+        registry = FeatureFlagRegistry()
+        flag = registry.get_flag("dashboard_charts")
+        assert flag is not None
+        assert flag.tier == "community"
+
+    def test_flag_active_on_community_by_default(self) -> None:
+        registry = FeatureFlagRegistry(current_tier="community")
+        flag = registry.get_flag("dashboard_charts")
+        assert flag is not None
+        assert flag.currently_active is True
+
+    def test_flag_has_description(self) -> None:
+        registry = FeatureFlagRegistry()
+        flag = registry.get_flag("dashboard_charts")
+        assert flag is not None
+        assert flag.description
+
+
 class TestUserManagementFlag:
     """FAR-462: basic user management is a community-tier feature — the Users
     admin view must not be tier-locked on any plan."""
