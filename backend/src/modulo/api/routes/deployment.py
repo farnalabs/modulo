@@ -1,17 +1,51 @@
 """Deployment info endpoint — returns build and runtime metadata."""
 
+import hmac
 import os
 import time
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_system_db_session
-from modulo.db.models.run import Run
+from modulo.core.system_audit_logger import append_system_audit_event
+from modulo.db.crud.run import count_active_runner_dispatches_for_deployment
+from modulo.db.crud.system_config import update_config
+from modulo.db.models.system_config import SystemConfig
 from modulo.version import get_version
+
+_DRAIN_KEY = "deployment_drain"
+_DRAIN_TOKEN_ENV = "MODULO_DEPLOY_DRAIN_TOKEN"
+
+
+def _require_drain_token(authorization: str | None) -> None:
+    expected = os.environ.get(_DRAIN_TOKEN_ENV, "")
+    if not expected or not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="deployment drain control unavailable",
+        )
+    supplied = authorization.removeprefix("Bearer ")
+    if not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid deployment drain credential")
+
+
+def _drain_value(active: bool) -> dict[str, object]:
+    return {"active": active, "updated_at": datetime.now(UTC).isoformat(), "source": "deploy-workflow"}
+
+
+async def _set_drain(session: AsyncSession, active: bool) -> None:
+    await update_config(session, _DRAIN_KEY, _drain_value(active))
+    await append_system_audit_event(
+        session,
+        event_type="deployment_drain_changed",
+        resource_type="deployment",
+        payload_json={"active": active, "source": "deploy-workflow"},
+    )
+
 
 router = APIRouter(prefix="/api/v1/deployment", tags=["deployment"])
 
@@ -42,15 +76,9 @@ async def deployment_info(
     # customer may build from a private fork), and no consumer reads them
     # (FAR-1975). Keep the response to build identifiers that are useless
     # without the repo itself.
-    active_runs = await session.execute(
-        select(func.count())
-        .select_from(Run)
-        .where(
-            Run.status == "running",
-            Run.dispatch_phase == "first_node_dispatched",
-            Run.sandbox_dispatch_state.is_not(None),
-        )
-    )
+    active_sandbox_runs = await count_active_runner_dispatches_for_deployment(session)
+    drain = await session.execute(select(SystemConfig.value).where(SystemConfig.key == _DRAIN_KEY))
+    drain_value = drain.scalar_one_or_none()
     return {
         "version": get_version(),
         "uptime_seconds": int(time.time() - _start_time),
@@ -60,5 +88,20 @@ async def deployment_info(
         "git_sha": os.environ.get("GIT_SHA", ""),
         "git_commit_timestamp": os.environ.get("GIT_COMMIT_TIMESTAMP", ""),
         "build_timestamp": os.environ.get("BUILD_TIMESTAMP", ""),
-        "active_sandbox_runs": int(active_runs.scalar_one()),
+        "active_sandbox_runs": active_sandbox_runs,
+        "deployment_drain": bool(isinstance(drain_value, dict) and drain_value.get("active") is True),
     }
+
+
+@router.post("/drain")
+@handle_db_errors("deployment.drain")
+async def set_deployment_drain(
+    active: bool,
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_system_db_session),
+) -> dict[str, object]:
+    """Enter or leave the deploy drain; workflow failures must fail closed."""
+    _require_drain_token(authorization)
+    async with session.begin():
+        await _set_drain(session, active)
+    return {"active": active}

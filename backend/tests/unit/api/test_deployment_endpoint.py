@@ -136,11 +136,9 @@ class TestDeploymentInfo:
         result.scalar_one.return_value = 0
         session.execute = AsyncMock(return_value=result)
         client.get("/api/v1/deployment")
-        statement = session.execute.call_args.args[0]
-        sql = str(statement)
-        assert "runs.status = :status_1" in sql
-        assert "runs.dispatch_phase = :dispatch_phase_1" in sql
-        assert "runs.sandbox_dispatch_state IS NOT NULL" in sql
+        statements = [str(call.args[0]) for call in session.execute.call_args_list]
+        assert any("runs.status" in sql for sql in statements)
+        assert any("sandbox_dispatch_state" in sql for sql in statements)
 
     def test_build_metadata_falls_back_to_empty(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")

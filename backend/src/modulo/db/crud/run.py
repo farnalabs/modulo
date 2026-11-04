@@ -24,7 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
 
 from modulo.connectors.base import connector_binding_operation
-from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, RateLimitConflictError
+from modulo.core.exceptions import (
+    OrgDeletedError,
+    PipelineNotRunnableError,
+    RateLimitConflictError,
+    TriggersPausedError,
+)
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.notifications import create_notification
 from modulo.db.crud.organisation import get_organisation
@@ -1048,6 +1053,35 @@ async def _read_guardrails_kill_switch(session: AsyncSession, org_id: uuid.UUID)
     except SQLAlchemyError:
         _log.warning("guardrails.kill_switch_read_unavailable", extra={"org_id": str(org_id)})
     return False
+
+
+DEPLOYMENT_DRAIN_CONFIG_KEY = "deployment_drain"
+
+
+async def _enforce_deployment_drain_gate(session: AsyncSession, snapshot_id: uuid.UUID) -> None:
+    """Refuse new sandbox pipelines while a deployment drain is active.
+
+    The workflow writes the instance-wide ``system_config`` row before polling.
+    Reads propagate on failure so an unavailable control plane cannot admit work
+    while worker replacement is in progress.
+    """
+    from modulo.db.models.system_config import SystemConfig
+
+    try:
+        result = await session.execute(
+            select(SystemConfig.value).where(SystemConfig.key == DEPLOYMENT_DRAIN_CONFIG_KEY)
+        )
+    except SQLAlchemyError:
+        _log.exception("create_run.deployment_drain_read_failed")
+        raise
+    value = result.scalar_one_or_none()
+    if not isinstance(value, dict) or value.get("active") is not True:
+        return
+    snapshot = (
+        await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
+    ).scalar_one_or_none()
+    if _graph_contains_sandbox_agent(snapshot):
+        raise TriggersPausedError
 
 
 async def _enforce_pause_gate(
@@ -2375,6 +2409,9 @@ async def create_run(
     # pipelines from REST/rerun entry reads (404 upstream), so this gate's
     # reliable subjects are ARCHIVED and PAUSED pipelines (both stay visible).
     await _enforce_pipeline_state_gate(session, pipeline_id, org_id)
+
+    # Deployment drain is an instance-wide admission freeze for sandbox work.
+    await _enforce_deployment_drain_gate(session, snapshot_id)
 
     # Guardrails kill-switch (FAR-223 item 9) — pinned at run start alongside
     # the guardrail rows, never re-read mid-run. Defaults to OFF on read
@@ -4521,6 +4558,23 @@ RUNNER_HOST_RESOURCE_FILTER_SQL = (
     '\'"provider"[[:space:]]*:[[:space:]]*"([a-z_]+)"\') END, '
     "'runner_docker') IN ('runner_docker', 'local', 'kubernetes')"
 )
+
+
+async def count_active_runner_dispatches_for_deployment(session: AsyncSession) -> int:
+    """Count every live sandbox marker across the instance.
+
+    This is the deploy-drain population: the same running/live-marker/
+    tombstone semantics as the org capacity gate, without a tenant filter.
+    """
+    from modulo.settings import get_settings
+
+    stmt = select(func.count()).select_from(Run).where(Run.sandbox_dispatch_state.isnot(None))
+    if get_settings().runner_capacity_gate_enabled:
+        stmt = stmt.where(Run.status == "running", text(RUNNER_TOMBSTONE_EXCLUSION_SQL))
+    else:
+        stmt = stmt.where(Run.status.in_(ACTIVE_RUN_STATUSES))
+    result = (await session.execute(stmt)).scalar_one()
+    return int(result) if result is not None else 0
 
 
 async def count_active_runner_dispatches_for_org(
