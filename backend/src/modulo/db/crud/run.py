@@ -4617,6 +4617,7 @@ async def count_active_runner_dispatches_for_org(
         .select_from(Run)
         .where(
             Run.organisation_id == org_id,
+            Run.status == "running",
             Run.sandbox_dispatch_state.isnot(None),
         )
     )

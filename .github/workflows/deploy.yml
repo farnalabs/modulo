@@ -3241,23 +3241,6 @@ jobs:
           echo "::error::Deploy failed after $MAX_RETRIES attempts - failing the run so the throttle does not count it as a fresh deploy (2026-08-27: masked failure poisoned the throttle for 3h)."
           exit 1
 
-      - name: Clear production sandbox drain
-        if: ${{ success() }}
-        shell: bash
-        env:
-          MODULO_DEPLOY_DRAIN_TOKEN: ${{ secrets.MODULO_DEPLOY_DRAIN_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "$MODULO_DEPLOY_DRAIN_TOKEN" ]; then
-            echo "::error::Drain remains active: MODULO_DEPLOY_DRAIN_TOKEN is not configured. Run the manual recovery command in the job summary."
-            exit 1
-          fi
-          curl -fsS --max-time 15 -X POST "https://app.modulo.run/api/v1/deployment/drain?active=false" \
-            -H "Authorization: Bearer $MODULO_DEPLOY_DRAIN_TOKEN" \
-            -H "Content-Type: application/json" >/tmp/deploy-drain-clear.json
-          jq -e '.active == false' /tmp/deploy-drain-clear.json >/dev/null
-          echo "Production sandbox admission restored."
-
       - name: Destroy pre-migrate machine
         if: always()
         shell: bash
@@ -3611,6 +3594,22 @@ jobs:
           done
           echo "::error::worker_health never passed within ${TIMEOUT_MIN} minutes - SAQ workers did not come up after deploy"
           exit 1
+
+      - name: Clear production sandbox drain
+        shell: bash
+        env:
+          MODULO_DEPLOY_DRAIN_TOKEN: ${{ secrets.MODULO_DEPLOY_DRAIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MODULO_DEPLOY_DRAIN_TOKEN" ]; then
+            echo "::error::Drain remains active: MODULO_DEPLOY_DRAIN_TOKEN is not configured. Run the manual recovery command in the job summary."
+            exit 1
+          fi
+          curl -fsS --max-time 15 -X POST "https://app.modulo.run/api/v1/deployment/drain?active=false" \
+            -H "Authorization: Bearer $MODULO_DEPLOY_DRAIN_TOKEN" \
+            -H "Content-Type: application/json" >/tmp/deploy-drain-clear.json
+          jq -e '.active == false' /tmp/deploy-drain-clear.json >/dev/null
+          echo "Production sandbox admission restored."
 
       - name: Clean up stray machines (no process group)
         shell: bash

@@ -14,7 +14,7 @@ generalise) and no deploy workflow reads them.
 
 from collections.abc import Generator
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -45,6 +45,60 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[deployment.get_system_db_session] = lambda: session
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+class TestDeploymentDrain:
+    @pytest.mark.parametrize(
+        ("authorization", "expected_status"),
+        [(None, 503), ("Basic secret", 503), ("Bearer wrong", 403)],
+    )
+    def test_missing_or_invalid_token_is_rejected(
+        self, client: TestClient, authorization: str | None, expected_status: int
+    ) -> None:
+        headers = {} if authorization is None else {"Authorization": authorization}
+        with patch.dict("os.environ", {"MODULO_DEPLOY_DRAIN_TOKEN": "right"}, clear=False):
+            response = client.post("/api/v1/deployment/drain?active=true", headers=headers)
+        assert response.status_code == expected_status
+
+    def test_unconfigured_token_is_rejected(self, client: TestClient) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            response = client.post("/api/v1/deployment/drain?active=true", headers={"Authorization": "Bearer right"})
+        assert response.status_code == 503
+
+    @pytest.mark.parametrize("active", [True, False])
+    def test_valid_token_persists_value_and_audits(self, client: TestClient, active: bool) -> None:
+        session = app.dependency_overrides[deployment.get_system_db_session]()
+        with (
+            patch.dict("os.environ", {"MODULO_DEPLOY_DRAIN_TOKEN": "right"}, clear=False),
+            patch.object(deployment, "_set_drain", new_callable=AsyncMock) as set_drain,
+        ):
+            response = client.post(
+                f"/api/v1/deployment/drain?active={str(active).lower()}",
+                headers={"Authorization": "Bearer right"},
+            )
+        assert response.status_code == 200
+        assert response.json() == {"active": active}
+        set_drain.assert_awaited_once_with(session, active)
+
+    @pytest.mark.asyncio
+    async def test_set_drain_writes_config_and_audit(self) -> None:
+        session = MagicMock()
+        with (
+            patch.object(deployment, "acquire_deployment_drain_lock", new_callable=AsyncMock) as lock,
+            patch.object(deployment, "update_config", new_callable=AsyncMock) as update,
+            patch.object(deployment, "append_system_audit_event", new_callable=AsyncMock) as audit,
+        ):
+            await deployment._set_drain(session, True)
+        lock.assert_awaited_once_with(session)
+        update.assert_awaited_once()
+        assert update.await_args.args[:2] == (session, "deployment_drain")
+        assert update.await_args.args[2]["active"] is True
+        audit.assert_awaited_once_with(
+            session,
+            event_type="deployment_drain_changed",
+            resource_type="deployment",
+            payload_json={"active": True, "source": "deploy-workflow"},
+        )
 
 
 class TestDeploymentInfo:
