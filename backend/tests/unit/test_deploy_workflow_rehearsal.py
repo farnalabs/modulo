@@ -276,8 +276,7 @@ def test_release_installer_callers_grant_permissions_their_jobs_require() -> Non
 def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["attest-artefacts"]
-    # windows-installer removed from needs to avoid transitive skip (FAR-2363)
-    assert job["needs"] == ["produce-sbom", "final-release-manifest", "release"]
+    assert job["needs"] == ["produce-sbom", "final-release-manifest", "release", "windows-installer"]
     names = _step_names(job["steps"])
     assert "Download the SBOM artefact" in names
     assert "Download the final cross-platform release artefact" in names
@@ -3080,17 +3079,17 @@ def test_windows_installer_gated_steps_use_parenthesised_condition() -> None:
             )
 
 
-def test_attest_artefacts_needs_excludes_windows_installer() -> None:
-    """attest-artefacts job must not depend on windows-installer to avoid transitive skip."""
+def test_attest_artefacts_needs_includes_windows_installer() -> None:
+    """attest-artefacts job must depend on windows-installer for the Windows artifact."""
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     attest_job = workflow["jobs"]["attest-artefacts"]
     needs = attest_job.get("needs", [])
-    assert "windows-installer" not in needs, (
-        f"attest-artefacts.needs must not include 'windows-installer', got: {needs}"
-    )
-    # The job uses always() so promote still attests the SBOM without waiting on the bundle job
+    assert "windows-installer" in needs, f"attest-artefacts.needs must include 'windows-installer', got: {needs}"
+    # The job uses always() so a skipped windows-installer must not block it
     condition = attest_job.get("if", "")
-    assert "always()" in condition, f"attest-artefacts must use always() for promote mode, got: {condition}"
+    assert "always()" in condition, (
+        f"attest-artefacts must use always() to not block on skipped windows-installer, got: {condition}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3289,7 +3288,7 @@ set -euo pipefail
 
 
 def test_publish_release_if_uses_always_and_restricts_to_cut_recut() -> None:
-    """publish-release must run via always() to avoid transitive skip, but still
+    """publish-release must run via always() to prevent silent skipping, but still
     only for cut/recut modes."""
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["publish-release"]
@@ -3332,7 +3331,9 @@ def _extract_publish_release_guard_script() -> str:
     steps = workflow["jobs"]["publish-release"]["steps"]
     names = _step_names(steps)
     guard_idx = names.index("Validate publication dependencies")
-    return steps[guard_idx]["run"]
+    script = steps[guard_idx]["run"]
+    assert isinstance(script, str)
+    return script
 
 
 @pytest.mark.posix_only

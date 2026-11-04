@@ -1739,10 +1739,9 @@ jobs:
     # Windows is Beta scope (windows-installer.yml fails closed) and is
     # intentionally not a dependency of Alpha publication. When include_windows=true
     # (Beta path), the Windows artifact is included via final-release-manifest.
-    # Use always() to prevent transitive skip from windows-installer (skipped when
-    # include_windows=false) -> attest-artefacts (always()) -> publish-release.
-    # A guard step validates every dependency explicitly and fails closed with a
-    # specific error naming the offending job and its result.
+    # GitHub skipped Create GitHub Release while every direct need reported
+    # success; always() plus an explicit guard makes that impossible to reproduce
+    # silently and converts any bad state into a named failure.
     if: always() && (inputs.mode == 'cut' || inputs.mode == 'recut')
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
@@ -2075,13 +2074,7 @@ jobs:
   # ---------------------------------------------------------------------------
   attest-artefacts:
     name: Attest released artefacts
-    # windows-installer removed from needs to avoid transitive skip:
-    # when include_windows=false, windows-installer is skipped, and even
-    # though attest-artefacts uses always(), GitHub propagates the skip to
-    # downstream jobs (publish-release) that don't use always(). The Windows
-    # artifact is downloaded conditionally below only when include_windows=true,
-    # which only runs when windows-installer actually executes and produces it.
-    needs: [produce-sbom, final-release-manifest, release]
+    needs: [produce-sbom, final-release-manifest, release, windows-installer]
     # The bundle is available for cut/recut; promote still attests the SBOM
     # without waiting on the intentionally skipped bundle job.
     if: always() && inputs.mode != 'dry-run' && needs.produce-sbom.result == 'success' && (inputs.mode == 'promote' || needs.final-release-manifest.result == 'success')
@@ -2116,9 +2109,6 @@ jobs:
           path: release-artefacts
 
       - name: Download the Windows installer artefact
-        # Only download when include_windows=true (Beta path). This step runs
-        # only when windows-installer actually executed and produced the artifact
-        # (its if: includes inputs.include_windows), so no skipped-need edge.
         if: (inputs.mode == 'cut' || inputs.mode == 'recut') && inputs.include_windows
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -2244,7 +2234,7 @@ jobs:
   # ---------------------------------------------------------------------------
   freeze-cleanup:
     name: Clear release freeze after a failed cut or recut
-    needs: [preflight, release, bundle, macos-installer, final-release-manifest, attest-artefacts, publish-release]
+    needs: [preflight, release, bundle, windows-installer, macos-installer, final-release-manifest, attest-artefacts, publish-release]
     # `always()` lets this run after a failed publication chain; `failure()`
     # keeps it out of a successful release (where the freeze is deliberate).
     # `needs.preflight.result == 'success'` keeps it out of a run whose
