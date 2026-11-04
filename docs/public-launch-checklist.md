@@ -13,6 +13,8 @@ Production deployment readiness checklist for the Modulo Alpha public launch. Ea
 - [ ] **Redis 8+** is provisioned (required for every production deployment because SAQ handles dispatch and scheduling)
   - `protected-mode yes` with `requirepass`
   - TLS enabled if Redis is configured with `tls-port`
+  - Redis is reachable only from the application network; never publish port 6379 on a public interface or expose it through an unrestricted host port
+
 - [ ] **Docker images** are published to ghcr.io with anonymous pull enabled
   - `ghcr.io/farnalabs/modulo:<version>` (pin the version; see version pin table below)
   - `ghcr.io/farnalabs/modulo:latest` is available but **must not be used in production**

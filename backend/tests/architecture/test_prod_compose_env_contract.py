@@ -44,6 +44,14 @@ _ENV_EXAMPLE = _REPO_ROOT / ".env.prod.example"
 #: ``environment`` reaches the backend (postgres/redis/watchdog are separate).
 _APP_SERVICE = "modulo"
 
+#: Every supported Compose stack keeps Redis on the container network. A host
+#: port would make the queue store reachable outside the deployment boundary.
+_COMPOSE_REDIS: tuple[tuple[str, str], ...] = (
+    ("docker-compose.yml", "redis"),
+    ("docker-compose.local.yml", "redis-local"),
+    ("deploy/compose/docker-compose.prod.yml", "redis"),
+)
+
 #: Env vars the application reads straight from ``os.environ`` rather than
 #: through ``Settings`` - with the source files that read them, asserted to
 #: exist and to mention the name, so an allowlist entry cannot outlive the code
@@ -175,6 +183,25 @@ def _interpolate(value: str) -> str:
     resolved = _VAR_REF.sub(_replace, value)
     assert "${" not in resolved, f"unresolved compose interpolation left in {value!r}"
     return resolved
+
+
+@pytest.mark.parametrize(("relative_path", "service"), _COMPOSE_REDIS)
+def test_shipped_compose_redis_has_no_public_host_binding(relative_path: str, service: str) -> None:
+    """Redis host mappings, when needed locally, must be loopback-only."""
+    path = _REPO_ROOT / relative_path
+    with path.open(encoding="utf-8") as fh:
+        compose = yaml.safe_load(fh)
+
+    ports = compose["services"][service].get("ports", [])
+    for port in ports:
+        assert isinstance(port, str), (
+            f"{relative_path} services.{service} uses a non-string Redis port mapping {port!r}"
+        )
+        assert port.startswith("127.0.0.1:"), (
+            f"{relative_path} services.{service} publishes Redis through {port!r}; "
+            "Redis is an internal queue store and must not be publicly reachable. "
+            "Use a 127.0.0.1-only mapping for local development or the Compose network."
+        )
 
 
 def test_every_env_var_passed_to_the_app_is_read_by_the_app():

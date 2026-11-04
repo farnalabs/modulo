@@ -30,6 +30,13 @@ def test_helm_redis_has_a_maxmemory_bound() -> None:
     assert _flagged_value("--maxmemory").endswith(("mb", "gb"))
 
 
+def test_helm_embedded_redis_requires_authentication() -> None:
+    text = _TEMPLATE.read_text(encoding="utf-8")
+
+    assert 'required "redis.password or redis.existingSecret is required when redis.embedded=true"' in text
+    assert '"--requirepass" "$(REDIS_PASSWORD)"' in text
+
+
 def test_helm_redis_policy_only_evicts_ttl_bearing_keys() -> None:
     policy = _flagged_value("--maxmemory-policy")
     assert policy.startswith("volatile-"), (
