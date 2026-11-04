@@ -88,7 +88,8 @@ jobs:
     # slots in (scripts/bundle-versions.env already carries the arm64 pins).
     name: Bundle linux-${{ matrix.arch }}
     needs: version-parity
-    runs-on: ubuntu-latest
+    # Ubuntu 22.04 (glibc 2.35) build baseline — see scripts/bundle-versions.env. Do NOT change without re-checking the glibc floor.
+    runs-on: ubuntu-22.04
     # The caller supplies the workflow token, but this reusable job only checks
     # out the requested ref and uploads workflow artefacts. It never creates a
     # tag, pushes a ref, or calls a repository-write API, so read is sufficient
@@ -125,6 +126,9 @@ jobs:
             echo "PBS_RELEASE=${PBS_RELEASE}"
             echo "PBS_TARBALL=${PBS_TARBALL}"
             echo "PBS_SHA256=${PBS_SHA256}"
+            echo "PG_VERSION=${PG_VERSION}"
+            echo "PG_DEB_VERSION=${PG_DEB_VERSION}"
+            echo "REDIS_VERSION=${REDIS_VERSION}"
             echo "BUNDLE_ROOT=modulo-${VERSION_NUM}-linux-${{ matrix.arch }}"
             echo "TARBALL_NAME=modulo-${VERSION_NUM}-linux-${{ matrix.arch }}.tar.gz"
           } >> "$GITHUB_ENV"
@@ -137,13 +141,13 @@ jobs:
             "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/${PBS_TARBALL}"
           echo "${PBS_SHA256}  ${PBS_TARBALL}" | (cd downloads && sha256sum --check --strict -)
 
-      - name: Download and sha256-verify pinned PostgreSQL + Redis debs
+      - name: Download and sha256-verify pinned PostgreSQL debs
         run: |
           set -euo pipefail
           source scripts/bundle-versions.env
           case "$ARCH" in
-            amd64) PG_SRV_SHA="$PG_SERVER_AMD64_SHA256"; PG_CLI_SHA="$PG_CLIENT_AMD64_SHA256"; REDIS_SRV_SHA="$REDIS_SERVER_AMD64_SHA256"; REDIS_TOOLS_SHA="$REDIS_TOOLS_AMD64_SHA256" ;;
-            arm64) PG_SRV_SHA="$PG_SERVER_ARM64_SHA256"; PG_CLI_SHA="$PG_CLIENT_ARM64_SHA256"; REDIS_SRV_SHA="$REDIS_SERVER_ARM64_SHA256"; REDIS_TOOLS_SHA="$REDIS_TOOLS_ARM64_SHA256" ;;
+            amd64) PG_SRV_SHA="$PG_SERVER_AMD64_SHA256"; PG_CLI_SHA="$PG_CLIENT_AMD64_SHA256" ;;
+            arm64) PG_SRV_SHA="$PG_SERVER_ARM64_SHA256"; PG_CLI_SHA="$PG_CLIENT_ARM64_SHA256" ;;
             *) echo "::error::unsupported arch: $ARCH"; exit 1 ;;
           esac
 
@@ -155,21 +159,33 @@ jobs:
 
           download_and_verify "${PG_POOL_BASE_URL}/postgresql-16_${PG_DEB_VERSION}_${ARCH}.deb" "postgresql-16.deb" "$PG_SRV_SHA"
           download_and_verify "${PG_POOL_BASE_URL}/postgresql-client-16_${PG_DEB_VERSION}_${ARCH}.deb" "postgresql-client-16.deb" "$PG_CLI_SHA"
-          download_and_verify "${REDIS_POOL_BASE_URL}/redis-server_${REDIS_DEB_VERSION}_${ARCH}.deb" "redis-server.deb" "$REDIS_SRV_SHA"
-          download_and_verify "${REDIS_POOL_BASE_URL}/redis-tools_${REDIS_DEB_VERSION}_${ARCH}.deb" "redis-tools.deb" "$REDIS_TOOLS_SHA"
 
           # Chain-of-custody assert: the deb's own Version field must equal the pin.
-          for spec in "postgresql-16.deb:${PG_DEB_VERSION}" "postgresql-client-16.deb:${PG_DEB_VERSION}" "redis-server.deb:${REDIS_DEB_VERSION}" "redis-tools.deb:${REDIS_DEB_VERSION}"; do
+          for spec in "postgresql-16.deb:${PG_DEB_VERSION}" "postgresql-client-16.deb:${PG_DEB_VERSION}"; do
             deb="${spec%%:*}"
             want="${spec#*:}"
-             got="$(dpkg-deb -f "downloads/${deb}" Version)"
-             got="${got#*:}"
-             if [ "$got" != "$want" ]; then
-
+            got="$(dpkg-deb -f "downloads/${deb}" Version)"
+            got="${got#*:}"
+            if [ "$got" != "$want" ]; then
               echo "::error::${deb} Version field is '${got}' but the pin is '${want}' -- refusing to ship a mismatched package"
               exit 1
             fi
           done
+
+      - name: Build and sha256-verify Redis from pinned upstream source
+        run: |
+          set -euo pipefail
+          source scripts/bundle-versions.env
+          curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/redis-src.tar.gz" "${REDIS_SOURCE_URL}"
+          echo "${REDIS_SOURCE_SHA256}  downloads/redis-src.tar.gz" | (cd downloads && sha256sum --check --strict -)
+          rm -rf redis-src
+          mkdir -p redis-src
+          tar -xzf downloads/redis-src.tar.gz -C redis-src --strip-components=1
+          make -C redis-src -j"$(nproc)"
+          rm -rf build/redis-install
+          make -C redis-src PREFIX="$PWD/build/redis-install" install
+          test -x build/redis-install/bin/redis-server
+          test -x build/redis-install/bin/redis-cli
 
       - name: Assemble bundle layout
         run: |
@@ -194,11 +210,10 @@ jobs:
           cp -a debx/pg-server/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/"
           cp -a debx/pg-client/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/"
 
-          # redis-server (server deb) + redis-cli and friends (redis-tools deb).
-          dpkg-deb -x downloads/redis-server.deb debx/redis-server
-          dpkg-deb -x downloads/redis-tools.deb debx/redis-tools
-          cp -a debx/redis-server/usr/bin/redis-server "$BUNDLE/redis/"
-          cp -a debx/redis-tools/usr/bin/. "$BUNDLE/redis/"
+          # Redis, compiled from source on this runner (see the build step above).
+          cp -a build/redis-install/bin/. "$BUNDLE/redis/"
+          test -x "$BUNDLE/redis/redis-server"
+          test -x "$BUNDLE/redis/redis-cli"
 
           # Native bundle entrypoint. Keep this as a small POSIX wrapper so the
           # shipped command uses the bundled CPython runtime and dependencies,
@@ -224,6 +239,34 @@ jobs:
 
           echo "${{ inputs.rc_tag }}" > "$BUNDLE/RC_TAG"
           echo "bundle-v${VERSION_NUM}" > "$BUNDLE/VERSION"
+
+      - name: Assert bundled service binaries stay within the glibc 2.35 floor
+        run: |
+          set -euo pipefail
+          BUNDLE="build/${BUNDLE_ROOT}"
+          floor="2.35"
+          fail=0
+          check_binary() {
+            local bin="$1"
+            local max
+            max="$(objdump -p "$bin" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -Vu | tail -n1)"
+            if [ -z "$max" ]; then
+              echo "::error::could not determine the glibc requirement of ${bin}" >&2
+              fail=1
+              return
+            fi
+            if [ "$(printf '%s\n%s\n' "$floor" "$max" | sort -V | tail -n1)" != "$floor" ]; then
+              echo "::error::${bin} requires GLIBC_${max}, above the ${floor} floor (would fail on Ubuntu 22.04)" >&2
+              fail=1
+            else
+              echo "ok: ${bin} max GLIBC_${max} (<= ${floor})"
+            fi
+          }
+          check_binary "$BUNDLE/redis/redis-server"
+          check_binary "$BUNDLE/redis/redis-cli"
+          check_binary "$BUNDLE/pg/bin/postgres"
+          check_binary "$BUNDLE/pg/bin/pg_dump"
+          exit "$fail"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
@@ -340,8 +383,8 @@ jobs:
           tarball_name = os.environ["TARBALL_NAME"]
           bundle_dirname = os.environ["BUNDLE_ROOT"]
           build_root = os.path.join("..", "build")
-          pg_version = os.environ.get("PG_DEB_VERSION", "unknown").split("+")[0]
-          redis_version = os.environ.get("REDIS_DEB_VERSION", "unknown").split("+")[0]
+          pg_version = os.environ.get("PG_VERSION") or "unknown"
+          redis_version = os.environ.get("REDIS_VERSION") or "unknown"
 
           def digest_for(path):
               with open(path, "rb") as handle:
