@@ -81,7 +81,10 @@
           {{ $t('views.AgentOutputDiffView.compare') }}
         </Button>
           </div>
-        <p v-if="!loadingRuns && recentRuns.length === 0" class="mt-4 text-sm text-muted-foreground" data-testid="diff-recent-runs-empty">
+        <div v-if="runsError" class="mt-4">
+          <ErrorAlert :message="runsErrorMessage" :on-retry="loadRuns" />
+        </div>
+        <p v-else-if="!loadingRuns && recentRuns.length === 0" aria-live="polite" class="mt-4 text-sm text-muted-foreground" data-testid="diff-recent-runs-empty">
           {{ $t('views.AgentOutputDiffView.no_eligible_runs') }}
         </p>
       </div>
@@ -205,7 +208,9 @@ interface RecentRun {
 }
 
 const { get: getUntyped } = useApi()
-const { loading: loadingRuns, data: summaryResp } = useDataFetch(
+// `runsError` is the summary fetch's own failure channel: a failed fetch must
+// render a retryable error, never the "no recent runs" empty state.
+const { loading: loadingRuns, error: runsError, data: summaryResp, load: loadRuns } = useDataFetch(
   async () => ({ data: await getUntyped<{ recent_runs: RecentRun[] }>('/api/v1/dashboard/summary') }),
   { immediate: true },
 )
@@ -213,6 +218,9 @@ const { loading: loadingRuns, data: summaryResp } = useDataFetch(
 const recentRuns = computed<RecentRun[]>(() => summaryResp.value?.recent_runs ?? [])
 
 const { t } = useI18n()
+const runsErrorMessage = computed(() =>
+  runsError.value ? `${t('views.AgentOutputDiffView.recent_runs_load_failed')} ${runsError.value}` : '',
+)
 const recentRunOptions = computed(() =>
   recentRuns.value.map(run => ({
     value: run.id,
