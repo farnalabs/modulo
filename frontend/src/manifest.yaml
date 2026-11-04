@@ -10,6 +10,11 @@ x-team: &team
     required_roles: [admin]
     required_permissions:
 
+x-team-viewer: &team_viewer
+    required_tier: team
+    required_roles: [admin, viewer]
+    required_permissions:
+
 routes:
     /:
         name: dashboard
@@ -782,7 +787,7 @@ routes:
         sidebar_group: monitor
         sidebar_order: 1
         type: list_page
-        <<: *team
+        <<: *team_viewer
         deprecated: false
 
     /admin/errors/:id:
@@ -796,7 +801,7 @@ routes:
         pattern: /admin/errors/:id
         dynamic_params:
           - id
-        <<: *team
+        <<: *team_viewer
         deprecated: false
 
     /admin/notification-delivery:

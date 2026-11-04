@@ -211,10 +211,17 @@ class TestManifestLoad:
         overrides it to null, so the explicit key must win and the route is
         gated by `system_admin_only` alone. The frontend
         `manifestGating.spec.ts` pins the same contract.
+
+        Exception (FAR-2356): the error dashboard is deliberately reachable by
+        the demo org's read-only `viewer` principal as well as an `admin`, so
+        these routes carry `required_roles: [admin, viewer]`. The exception is
+        an explicit allowlist: any other team-tier /admin route widening past
+        `["admin"]` still fails here.
         """
         _reset_manifest()
         from modulo.core.manifest import load_manifest
 
+        viewer_visible_admin_routes = {"/admin/errors", "/admin/errors/:id"}
         manifest = load_manifest()
         for path, route in manifest["routes"].items():
             if not (path.startswith("/admin/") and route["required_tier"] == "team"):
@@ -224,7 +231,10 @@ class TestManifestLoad:
                     f"system_admin_only route {path} must not carry an org-role gate"
                 )
             else:
-                assert route["required_roles"] == ["admin"], f"Route {path} should require admin role"
+                expected_roles = ["admin", "viewer"] if path in viewer_visible_admin_routes else ["admin"]
+                assert route["required_roles"] == expected_roles, (
+                    f"Route {path} should require {expected_roles} role(s)"
+                )
 
 
 class TestManifestEndpoint:
