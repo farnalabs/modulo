@@ -76,10 +76,12 @@
       v-else-if="items.length === 0"
       data-testid="settings-notification-log-empty"
       :title="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found')"
-      :description="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_in_range')"
+      :description="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_for_filters')"
     >
        <button
          type="button"
+         data-testid="settings-notification-log-empty-reset"
+         :aria-label="$t('views.AdminNotificationDeliveryLogView.reset_all_filters')"
          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
          @click="resetFilters"
        >
@@ -159,6 +161,7 @@ import { api } from '../lib/api/client'
 import type { paths } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useCursorPageStack } from '../composables/useCursorPageStack'
+import { dateRangeQuery, defaultDateRange } from '../lib/formatDate'
 import PageHeader from '../components/shared/PageHeader.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -185,20 +188,6 @@ const {
 // refs. Declaring them after caused a TDZ ReferenceError on the initial fetch
 // (FAR-2173 — surfaced in production as "Cannot access 'Z' before
 // initialization" after minification, the same defect class as FAR-608).
-function formatDateInput(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function defaultDateRange(): { from: string; to: string } {
-  const to = new Date()
-  const from = new Date(to)
-  from.setDate(from.getDate() - 30)
-  return { from: formatDateInput(from), to: formatDateInput(to) }
-}
-
 const initialDateRange = defaultDateRange()
 const filterStatus = ref('__all__')
 const filterDateFrom = ref(initialDateRange.from)
@@ -209,8 +198,7 @@ const { loading, error, data: responseData, load: loadDeliveries } = useDataFetc
     const params: DeliveryLogQuery = { limit: 50 }
     if (currentCursor.value) params.cursor = currentCursor.value
     if (filterStatus.value !== '__all__') params.status = filterStatus.value
-    if (filterDateFrom.value) params.from = filterDateFrom.value
-    if (filterDateTo.value) params.to = filterDateTo.value
+    Object.assign(params, dateRangeQuery(filterDateFrom.value, filterDateTo.value))
     const res = await api.GET('/api/v1/admin/notifications/deliveries', {
       params: { query: params },
     })

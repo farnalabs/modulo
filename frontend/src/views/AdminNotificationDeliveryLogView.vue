@@ -139,10 +139,12 @@
       v-else-if="items.length === 0"
       data-testid="admin-notification-log-empty"
       :title="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found')"
-      :description="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_in_range')"
+      :description="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_for_filters')"
     >
        <button
          type="button"
+         data-testid="admin-notification-log-empty-reset"
+         :aria-label="$t('views.AdminNotificationDeliveryLogView.reset_all_filters')"
          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
          @click="resetFilters"
        >
@@ -303,6 +305,7 @@ import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
+import { dateRangeQuery, defaultDateRange } from '../lib/formatDate'
 import type { components, paths } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -314,20 +317,6 @@ import { ChevronRight } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 
 const { t, te } = useI18n()
-
-function formatDateInput(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function defaultDateRange(): { from: string; to: string } {
-  const to = new Date()
-  const from = new Date(to)
-  from.setDate(from.getDate() - 30)
-  return { from: formatDateInput(from), to: formatDateInput(to) }
-}
 
 type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
 interface DeliveryLogPage {
@@ -351,8 +340,7 @@ const { data: deliveriesData, loading, error, load: loadDeliveries } = useDataFe
     if (cursor.value) params.cursor = cursor.value
     if (filterStatus.value !== '__all__') params.status = filterStatus.value
     if (filterEventType.value !== '__all__') params.event_type = filterEventType.value
-    if (filterDateFrom.value) params.from = filterDateFrom.value
-    if (filterDateTo.value) params.to = filterDateTo.value
+    Object.assign(params, dateRangeQuery(filterDateFrom.value, filterDateTo.value))
     const response = await api.GET('/api/v1/admin/notifications/deliveries', { params: { query: params } })
     return { data: response.data as unknown as DeliveryLogPage | undefined, error: response.error }
   },

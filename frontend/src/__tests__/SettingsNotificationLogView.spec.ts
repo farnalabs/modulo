@@ -61,8 +61,12 @@ describe('SettingsNotificationLogView', () => {
     const wrapper = mount(SettingsNotificationLogView)
     await flushPromises()
     expect(wrapper.text()).toContain('No delivery logs found')
-    expect(wrapper.text()).toContain('No webhook deliveries were recorded in the selected date range')
-    expect(wrapper.text()).toContain('Reset')
+    expect(wrapper.text()).toContain('No notification deliveries match the current filters')
+    // Target the empty-state CTA by testid: a bare `toContain('Reset')` also
+    // matches the filter-bar Reset button and would pass without the CTA.
+    const emptyReset = wrapper.find('[data-testid="settings-notification-log-empty-reset"]')
+    expect(emptyReset.exists()).toBe(true)
+    expect(emptyReset.attributes('aria-label')).toBe('Reset all filters')
   })
 
   it('shows loading skeleton while fetching', async () => {
@@ -95,6 +99,67 @@ describe('SettingsNotificationLogView', () => {
         },
       }),
     )
+  })
+
+  it('sends the last-30-days default range on first load', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 10, 4, 12, 0, 0))
+      const wrapper = mount(SettingsNotificationLogView)
+      await flushPromises()
+      expect(getMock).toHaveBeenCalledWith('/api/v1/admin/notifications/deliveries', {
+        params: { query: { limit: 50, from: '2026-10-06', to: '2026-11-04' } },
+      })
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reset restores the default range and clears the status filter', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 10, 4, 12, 0, 0))
+      const wrapper = mount(SettingsNotificationLogView)
+      await flushPromises()
+      const vm = wrapper.vm as unknown as {
+        filterStatus: string
+        filterDateFrom: string
+        filterDateTo: string
+      }
+      vm.filterStatus = 'failed'
+      vm.filterDateFrom = '2026-01-01'
+      vm.filterDateTo = '2026-01-31'
+
+      await wrapper.find('[data-testid="settings-notification-log-reset"]').trigger('click')
+      await flushPromises()
+
+      expect(getMock).toHaveBeenLastCalledWith('/api/v1/admin/notifications/deliveries', {
+        params: { query: { limit: 50, from: '2026-10-06', to: '2026-11-04' } },
+      })
+      expect(vm.filterStatus).toBe('__all__')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('omits the date bounds when no date is selected', async () => {
+    const wrapper = mount(SettingsNotificationLogView)
+    await flushPromises()
+    const vm = wrapper.vm as unknown as {
+      filterDateFrom: string
+      filterDateTo: string
+    }
+    vm.filterDateFrom = ''
+    vm.filterDateTo = ''
+
+    await wrapper.find('[data-testid="settings-notification-log-apply"]').trigger('click')
+    await flushPromises()
+
+    expect(getMock).toHaveBeenLastCalledWith('/api/v1/admin/notifications/deliveries', {
+      params: { query: { limit: 50 } },
+    })
   })
 
   it('sends the selected filters through the real fetcher', async () => {
