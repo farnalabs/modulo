@@ -7643,6 +7643,92 @@ async def _resume_run_after_mcp_approval(
     return {"status": "approved", "review_id": review_id, "run_id": str(run_id)}
 
 
+def _mcp_resume_expected_claim_status(run: Any) -> str:
+    """Map a run's post-decision status to the executor's expected claim status.
+
+    ``hitl_parked`` is the pre-resume status the REST approve path expects;
+    every other status passes through unchanged. Extracted from
+    ``_review_hitl_impl`` to keep its cognitive complexity within S3776.
+    """
+    status = getattr(run, "status", "awaiting_human")
+    return "awaiting_human" if status == "hitl_parked" else status
+
+
+async def _resume_missing_claim_token_response(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    decision: dict[str, Any],
+) -> dict[str, Any]:
+    """Report an approval whose resume claim fence could not be established.
+
+    Extracted from ``_review_hitl_impl`` (FAR-2328) to keep that function's
+    cognitive complexity within the S3776 bound.
+    """
+    try:
+        recoverable = await _run_is_f6a_reconcile_candidate(
+            engine=get_or_create_engine(get_settings()),
+            org_id=org_id,
+            run_id=run_id,
+        )
+    except SQLAlchemyError:
+        recoverable = False
+        _log.exception(
+            "mcp.review_hitl.approve_resume_missing_claim_token_reconcile_check_failed",
+            extra={"run_id": str(run_id)},
+        )
+    _log.log(
+        logging.INFO if recoverable else logging.ERROR,
+        "mcp.review_hitl.approve_resume_missing_claim_token",
+        extra={"run_id": str(run_id), "reconcile_recoverable": recoverable},
+    )
+    recovery_detail = (
+        "The reconciliation sweep will retry the resume."
+        if recoverable
+        else ("Automatic recovery could not restore the run for reconciliation; operator intervention is required.")
+    )
+    return {
+        **decision,
+        "run_id": str(run_id),
+        "resume_status": "failed",
+        "reconcile_status": "queued" if recoverable else "failed",
+        "detail": ("Approval recorded, but the resume claim fence could not be established; " + recovery_detail),
+    }
+
+
+async def _resume_after_mcp_approval_decision(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    review_id: str,
+    resume_data: dict[str, Any],
+    run: Any,
+    decision: dict[str, Any],
+) -> dict[str, Any]:
+    """Resume a just-approved run inline (FAR-2328) after its decision commits.
+
+    Extracted from ``_review_hitl_impl`` to keep that function's cognitive
+    complexity within the S3776 bound. Callers MUST invoke this only after the
+    decision transaction has committed — ``executor.resume`` uses its own
+    connection and would otherwise read the pre-commit ``awaiting_human`` row.
+    """
+    resume_claim_token = getattr(run, "claim_token", None)
+    if not isinstance(resume_claim_token, str) or not resume_claim_token:
+        return await _resume_missing_claim_token_response(
+            org_id=org_id,
+            run_id=run_id,
+            decision=decision,
+        )
+    return await _resume_run_after_mcp_approval(
+        org_id=org_id,
+        run_id=run_id,
+        review_id=review_id,
+        resume_data=resume_data,
+        claim_token=resume_claim_token,
+        expected_claim_status=_mcp_resume_expected_claim_status(run),
+    )
+
+
 def _hitl_error_response(exc: BaseException, run_id: str, review_id: str) -> dict[str, Any]:
     if isinstance(exc, GateNotFoundError):
         return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
@@ -7773,53 +7859,13 @@ async def _review_hitl_impl(
     # ``approve_review`` gets by awaiting ``_run_hitl_manager`` (which owns its
     # own ``session.begin()``) before calling ``executor.resume``.
     if action == "approve" and decision.get("status") == "approved":
-        resume_claim_token = getattr(run, "claim_token", None)
-        if not isinstance(resume_claim_token, str) or not resume_claim_token:
-            try:
-                recoverable = await _run_is_f6a_reconcile_candidate(
-                    engine=get_or_create_engine(get_settings()),
-                    org_id=org_id,
-                    run_id=rid,
-                )
-            except SQLAlchemyError:
-                recoverable = False
-                _log.exception(
-                    "mcp.review_hitl.approve_resume_missing_claim_token_reconcile_check_failed",
-                    extra={"run_id": str(rid)},
-                )
-            _log.log(
-                logging.INFO if recoverable else logging.ERROR,
-                "mcp.review_hitl.approve_resume_missing_claim_token",
-                extra={"run_id": str(rid), "reconcile_recoverable": recoverable},
-            )
-            recovery_detail = (
-                "The reconciliation sweep will retry the resume."
-                if recoverable
-                else (
-                    "Automatic recovery could not restore the run for reconciliation; "
-                    "operator intervention is required."
-                )
-            )
-            return {
-                **decision,
-                "run_id": str(rid),
-                "resume_status": "failed",
-                "reconcile_status": "queued" if recoverable else "failed",
-                "detail": (
-                    "Approval recorded, but the resume claim fence could not be established; " + recovery_detail
-                ),
-            }
-        return await _resume_run_after_mcp_approval(
+        return await _resume_after_mcp_approval_decision(
             org_id=org_id,
             run_id=rid,
             review_id=review_id,
             resume_data=resume_payload,
-            claim_token=resume_claim_token,
-            expected_claim_status=(
-                "awaiting_human"
-                if getattr(run, "status", "awaiting_human") == "hitl_parked"
-                else getattr(run, "status", "awaiting_human")
-            ),
+            run=run,
+            decision=decision,
         )
     return decision
 
