@@ -85,7 +85,9 @@ on:
     # FAR-2369: run every 30 minutes at off-boundary minutes. This deliberately
     # accepts slower breadth-over-speed recovery to reduce runner spend; dropped
     # ticks remain covered by the escalation below and repository_dispatch.
-    - cron: "7,37 * * * *"
+    # Offset from merge-queue.yml's hourly :07 tick so a healthy hourly pass is
+    # never re-armed by a simultaneous watchdog dispatch.
+    - cron: "22,52 * * * *"
   workflow_dispatch:
     inputs:
       max_freeze_hours:
