@@ -224,6 +224,29 @@ def make_session_factory() -> MagicMock:
     return MagicMock(return_value=make_session_scope())
 
 
+def configure_permissive_session(session: AsyncMock) -> AsyncMock:
+    """A bare session double with the FULL synchronous ``AsyncSession`` contract.
+
+    Test helpers that build a session double and return it are exercised by
+    arbitrary production code the test cannot see (the 2026-10-21 defect shape),
+    so the double must express every synchronous member up front: the RLS
+    preamble reads (``in_transaction`` / ``get_bind``), the audit/report writes
+    (``add`` / ``add_all`` / ``expunge``), ``begin`` / ``begin_nested`` as async
+    context managers, and an ``execute`` result whose readers are synchronous.
+
+    Unlike ``configure_mock_session`` this keeps the historical bare-AsyncMock
+    shape of an un-stubbed ``execute``: a truthy ``MagicMock`` row rather than
+    the strict-mock "no rows" empty result. That matters for helpers whose
+    callers depend on the permissive truthiness while still requiring that no
+    reader returns a never-awaited coroutine.
+    """
+    configure_mock_session(session, allow_empty_execute=True)
+    # A plain MagicMock result: its readers (``scalar_one_or_none`` / ``first``
+    # / ``scalars().all()`` / ...) are synchronous and cannot leak a coroutine.
+    session.execute = AsyncMock(return_value=MagicMock())
+    return session
+
+
 def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = False) -> AsyncMock:
     """Configure AsyncSession contracts, requiring explicit query results by default."""
     configure_rls_preamble(session)

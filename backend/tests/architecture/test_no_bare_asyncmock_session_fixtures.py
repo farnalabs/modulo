@@ -25,23 +25,28 @@ the CI step exits 1 — which is how this class of fixture took the merge queue
 down on 2026-10-21.
 
 The contract-correct way to build the double lives in
-``tests/unit/api/mock_session.py``: ``configure_mock_session`` (or the narrower
+``tests/unit/api/mock_session.py``: ``configure_mock_session`` (or the
+permissive full-contract ``configure_permissive_session``, or the narrower
 ``configure_rls_preamble``), plus ``make_empty_execute_result`` when the code
-needs a real synchronous ``Result``.
+needs a real synchronous ``Result``. The BDD suite's ``harden_session_double``
+(``tests/bdd/conftest.py``) types the same synchronous surface.
 
 What this test enforces
 -----------------------
-For every session-ish ``AsyncMock()`` binding under ``tests/unit/api``:
+For every session-ish ``AsyncMock()`` binding under the whole ``tests/`` tree:
 
 1. **a double returned from its enclosing function — a shared helper like
    ``_make_mock_session()`` / ``_make_session()`` — must go through
-   ``configure_mock_session`` / ``configure_rls_preamble``.** This is the exact
+   ``configure_mock_session`` / ``configure_permissive_session`` /
+   ``configure_rls_preamble`` / ``harden_session_double``.** This is the exact
    shape of the 2026-10-21 defect: the helper builds the double, and arbitrary
    production code reached through the route decides which session members get
    touched. There is no way to see that from the test, so the double has to
    express the whole synchronous contract up front.
 2. every **synchronous** member it is driven through in the test itself is
-   explicitly typed as a ``MagicMock`` (the sync contract); and
+   explicitly typed as a ``MagicMock`` (the sync contract) — unless the double
+   is ``AsyncMock(spec=AsyncSession)``, whose spec already gives mock the
+   sync/async split; and
 3. every ``begin()`` / ``begin_nested()`` it is driven through is typed as an
    async context manager — a ``MagicMock`` returning an async CM, or an
    ``@asynccontextmanager`` function; and
@@ -49,7 +54,8 @@ For every session-ish ``AsyncMock()`` binding under ``tests/unit/api``:
    ``execute`` is explicitly stubbed with a result (``return_value=`` /
    ``side_effect=`` / a plain ``make_empty_execute_result()`` / ``MagicMock``).
 
-Rules 2-4 apply to **every** session-ish binding, helper-built or inline. Rule
+Rules 2-4 apply to **every** session-ish binding, helper-built or inline, with
+the ``spec=AsyncSession`` narrowing on rules 2-3 described above. Rule
 1 is scoped to helper-built doubles on purpose: an inline double lives in one
 test and rule 2-4 already flag it when the test itself drives a leaky member.
 Requiring *every* session-ish ``AsyncMock`` to use the helper would mean
@@ -103,7 +109,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_API_TESTS = Path(__file__).resolve().parent.parent / "unit" / "api"
+import pytest
+
+#: The whole test tree. The guard started scoped to ``tests/unit/api``; the
+#: 2026-11 sweep hardened the rest of the tree and widened enforcement so the
+#: class cannot regress outside that package. Parsing is AST-only and runs in a
+#: couple of seconds, so full-tree enforcement is cheap enough for CI.
+_TESTS_ROOT = Path(__file__).resolve().parent.parent
 
 #: ``session``/``db`` as a whole component of the name: ``session``,
 #: ``mock_session``, ``db``, ``db_session``, ``auth_session``, ...
@@ -143,7 +155,12 @@ _RESULT_READERS = frozenset(
 #: name must be exempted member-by-member rather than skipped wholesale.
 _CONFIGURE_MEMBERS: dict[str, frozenset[str]] = {
     "configure_mock_session": _SYNC_MEMBERS | _ASYNC_CM_MEMBERS | {"execute"},
+    "configure_permissive_session": _SYNC_MEMBERS | _ASYNC_CM_MEMBERS | {"execute"},
     "configure_rls_preamble": frozenset({"in_transaction", "get_bind", "add"}),
+    # BDD's shared double (tests/bdd/conftest.py) types the whole SYNC surface
+    # plus begin_nested as an async CM. It leaves ``begin`` and the execute
+    # result to the scenario, so both stay flagged when a scenario drives them.
+    "harden_session_double": frozenset({"in_transaction", "get_bind", "add", "add_all", "expunge", "begin_nested"}),
 }
 _CONFIGURE_HELPERS = frozenset(_CONFIGURE_MEMBERS)
 
@@ -153,12 +170,27 @@ _ASYNC_CM_DECORATORS = frozenset({"asynccontextmanager"})
 _ASYNC_MOCK = "AsyncMock"
 _MAGIC_MOCK = "MagicMock"
 
+#: A ``spec=``-ed double inherits mock's own async/sync split: ``AsyncMock(spec=
+#: AsyncSession)`` makes the synchronous methods (``begin`` / ``begin_nested`` /
+#: ``in_transaction`` / ``get_bind`` / ``add`` / ...) plain ``MagicMock`` children
+#: automatically, while only the genuinely-awaitable members (``execute`` /
+#: ``flush`` / ...) stay ``AsyncMock``. Rules 2-3 therefore cannot fire on such a
+#: double; its ``execute`` *result* is still an AsyncMock child, so rules 1 and 4
+#: keep applying.
+_SPEC_CONTRACT_CLASS = "AsyncSession"
+
 
 @dataclass
 class _Facts:
     """What one lexical scope does with the names it can see."""
 
     used: dict[str, set[str]] = field(default_factory=dict)
+    #: Members actually INVOKED as ``session.member(...)`` in this scope.
+    #: A bare attribute read (``session.add.assert_not_called()``) cannot leak
+    #: a coroutine, so it must not count as "driven through" the member.
+    called: dict[str, set[str]] = field(default_factory=dict)
+    #: Members invoked as ``async with session.member():`` in this scope.
+    async_cm_used: dict[str, set[str]] = field(default_factory=dict)
     typed: dict[str, dict[str, str]] = field(default_factory=dict)
     execute_result_reads: dict[str, set[str]] = field(default_factory=dict)
     execute_stubbed: set[str] = field(default_factory=set)
@@ -220,7 +252,30 @@ def _collect_facts(scope: ast.AST) -> _Facts:
 
     # Pass 1: attribute reads / assignments, execute() result variables, returns.
     execute_vars: dict[str, set[str]] = {}
+    # Local ``x = <expr>`` bindings, so ``session.execute = x`` can be resolved
+    # to tell a safe replacement from an AsyncMock that still auto-creates its
+    # result.
+    name_values: dict[str, ast.expr] = {}
     for node in nodes:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    name_values[target.id] = node.value
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+        ):
+            facts.called.setdefault(node.func.value.id, set()).add(node.func.attr)
+        if isinstance(node, ast.AsyncWith):
+            for item in node.items:
+                ctx = item.context_expr
+                if (
+                    isinstance(ctx, ast.Call)
+                    and isinstance(ctx.func, ast.Attribute)
+                    and isinstance(ctx.func.value, ast.Name)
+                ):
+                    facts.async_cm_used.setdefault(ctx.func.value.id, set()).add(ctx.func.attr)
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
@@ -237,6 +292,20 @@ def _collect_facts(scope: ast.AST) -> _Facts:
                         # ``make_empty_execute_result()`` / ``MagicMock()`` — a
                         # real synchronous result, not an auto-created child.
                         facts.execute_stubbed.add(name)
+                    if attr == "execute" and isinstance(node.value, ast.Name):
+                        # ``session.execute = _execute`` replaces the AsyncMock
+                        # child with a plain callable (a local ``async def``,
+                        # typically). An alias of an AsyncMock with no result
+                        # configured still auto-creates a leaky result, so it
+                        # does NOT count.
+                        binding = name_values.get(node.value.id)
+                        aliases_bare_asyncmock = (
+                            isinstance(binding, ast.Call)
+                            and _call_name(binding.func) == _ASYNC_MOCK
+                            and not _call_has_result_keyword(binding)
+                        )
+                        if not aliases_bare_asyncmock:
+                            facts.execute_stubbed.add(name)
                 if (
                     isinstance(target, ast.Attribute)
                     and isinstance(target.value, ast.Attribute)
@@ -307,6 +376,29 @@ def _session_bindings(scope: ast.AST) -> Iterator[tuple[str, int]]:
                 yield target.id, node.lineno
 
 
+def _spec_contract_bindings(scope: ast.AST) -> set[str]:
+    """Names bound to ``AsyncMock(spec=AsyncSession)`` in this scope.
+
+    ``mock`` derives a spec'd double's child types from the spec: synchronous
+    methods become ``MagicMock`` and only async methods become ``AsyncMock``.
+    Such a double already satisfies the synchronous half of the contract, so the
+    explicit-typing rules do not apply to it.
+    """
+    names: set[str] = set()
+    for node in _direct_nodes(scope):
+        if not (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and _call_name(node.value.func) == _ASYNC_MOCK
+        ):
+            continue
+        specs = [kw.value for kw in node.value.keywords if kw.arg in {"spec", "spec_set"}]
+        if not any(isinstance(spec, ast.Name) and spec.id == _SPEC_CONTRACT_CLASS for spec in specs):
+            continue
+        names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return names
+
+
 def _helper_alias_usage(tree: ast.Module, helper_returns: dict[str, set[str]]) -> dict[str, _Facts]:
     """Facts for ``x = helper()`` call sites, keyed by the helper's name.
 
@@ -314,6 +406,8 @@ def _helper_alias_usage(tree: ast.Module, helper_returns: dict[str, set[str]]) -
     the caller's use of the returned value has to count towards the double.
     """
     alias: dict[str, _Facts] = {}
+    if not helper_returns:
+        return alias
     for scope in _scopes(tree):
         facts = _collect_facts(scope)
         for node in _direct_nodes(scope):
@@ -331,6 +425,10 @@ def _helper_alias_usage(tree: ast.Module, helper_returns: dict[str, set[str]]) -
                 folded = alias.setdefault(helper, _Facts())
                 for attr in facts.used.get(target.id, set()):
                     folded.used.setdefault(target.id, set()).add(attr)
+                for attr in facts.called.get(target.id, set()):
+                    folded.called.setdefault(target.id, set()).add(attr)
+                for attr in facts.async_cm_used.get(target.id, set()):
+                    folded.async_cm_used.setdefault(target.id, set()).add(attr)
                 for reader in facts.execute_result_reads.get(target.id, set()):
                     folded.execute_result_reads.setdefault(target.id, set()).add(reader)
                 folded.returns.update(facts.returns)
@@ -339,6 +437,14 @@ def _helper_alias_usage(tree: ast.Module, helper_returns: dict[str, set[str]]) -
 
 def _violations_in_source(source: str, filename: str) -> list[str]:
     """Return a human-readable violation per leaking session double."""
+    # Fast path: a file that never mentions AsyncMock or session/db cannot
+    # contain a violating session binding matching ``_SESSION_NAME``.
+    if "AsyncMock" not in source:
+        return []
+    src_lower = source.lower()
+    if "session" not in src_lower and "db" not in src_lower:
+        return []
+
     tree = ast.parse(source, filename=filename)
     cm_functions = _async_cm_function_names(tree)
 
@@ -355,6 +461,7 @@ def _violations_in_source(source: str, filename: str) -> list[str]:
     seen: set[tuple[int, str]] = set()
     for scope in _scopes(tree):
         facts = _collect_facts(scope)
+        spec_contract = _spec_contract_bindings(scope)
         helper_name = scope.name if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)) else ""
         for name, lineno in _session_bindings(scope):
             if (lineno, name) in seen:
@@ -362,32 +469,50 @@ def _violations_in_source(source: str, filename: str) -> list[str]:
             seen.add((lineno, name))
             configured_members = facts.configured.get(name, set())
             used = set(facts.used.get(name, set()))
+            driven = set(facts.called.get(name, set()))
+            cm_driven = set(facts.async_cm_used.get(name, set()))
             result_readers = set(facts.execute_result_reads.get(name, set()))
             is_shared_helper = helper_name in helper_returns and name in helper_returns[helper_name]
             if is_shared_helper:
                 folded = alias_usage.get(helper_name, _Facts())
                 used |= folded.used.get(name, set())
+                driven |= folded.called.get(name, set())
+                cm_driven |= folded.async_cm_used.get(name, set())
                 result_readers |= folded.execute_result_reads.get(name, set())
             typed = facts.typed.get(name, {})
 
             problems: list[str] = []
-            if is_shared_helper and name not in facts.configured:
+            # A spec'd helper that also stubs execute expresses the whole
+            # contract already: the spec types every sync/CM member and the
+            # execute stub keeps result readers synchronous, so there is nothing
+            # left for a configure helper to add.
+            spec_safe_helper = name in spec_contract and name in facts.execute_stubbed
+            if is_shared_helper and name not in facts.configured and not spec_safe_helper:
                 # Rule 1: a double built by a helper is driven by arbitrary
                 # production code the test cannot see, so it must express the
                 # whole synchronous contract (i.e. go through the helper).
                 problems.append(
-                    "shared helper double is not built through configure_mock_session/configure_rls_preamble"
+                    "shared helper double is not built through "
+                    "configure_mock_session/configure_permissive_session/configure_rls_preamble"
                 )
-            untyped_sync = sorted((used & _SYNC_MEMBERS) - set(typed) - configured_members)
-            if untyped_sync:
-                problems.append(f"sync member(s) not typed as MagicMock: {', '.join(untyped_sync)}")
-            for member in sorted((used & _ASYNC_CM_MEMBERS) - configured_members):
-                kind = typed.get(member, "")
-                if kind == f"call:{_MAGIC_MOCK}":
-                    continue
-                if kind.startswith("name:") and kind.removeprefix("name:") in cm_functions:
-                    continue
-                problems.append(f"{member}() is not an async context manager")
+            if name not in spec_contract:
+                # Rules 2-3 do not apply to ``AsyncMock(spec=AsyncSession)``:
+                # mock derives the sync/async split from the spec itself.
+                # Only an actual call is a leak surface; an attribute read for
+                # an assertion (``session.add.assert_not_called()``) is inert.
+                untyped_sync = sorted((driven & _SYNC_MEMBERS) - set(typed) - configured_members)
+                if untyped_sync:
+                    problems.append(f"sync member(s) not typed as MagicMock: {', '.join(untyped_sync)}")
+                # Only ``async with session.begin*()`` requires an async CM.
+                # ``await session.begin_nested()`` legitimately needs an
+                # AsyncMock (the awaited callable shape), so it is not flagged.
+                for member in sorted((cm_driven & _ASYNC_CM_MEMBERS) - configured_members):
+                    kind = typed.get(member, "")
+                    if kind == f"call:{_MAGIC_MOCK}":
+                        continue
+                    if kind.startswith("name:") and kind.removeprefix("name:") in cm_functions:
+                        continue
+                    problems.append(f"{member}() is not an async context manager")
             if result_readers and name not in facts.execute_stubbed and "execute" not in configured_members:
                 readers = ", ".join(sorted(result_readers & _RESULT_READERS)) or ", ".join(sorted(result_readers))
                 problems.append(f"execute() result read ({readers}) without a stubbed synchronous result")
@@ -396,20 +521,64 @@ def _violations_in_source(source: str, filename: str) -> list[str]:
     return violations
 
 
-def _all_violations() -> list[str]:
+#: The packages and directories cleaned in the 2026-11 bare-AsyncMock sweep.
+#: The guard started scoped to ``tests/unit/api``; this set widens enforcement
+#: across the full surface that was cleaned, preventing regression across all
+#: unit-test areas and BDD steps/features.
+_ENFORCED_PACKAGES: tuple[str, ...] = (
+    "unit/api",
+    "unit/assistant",
+    "unit/auth",
+    "unit/cleanup_jobs",
+    "unit/cli",
+    "unit/core",
+    "unit/cron_helpers",
+    "unit/crud",
+    "unit/db",
+    "unit/error_tracking",
+    "unit/graph_validator",
+    "unit/hitl_manager",
+    "unit/library_service",
+    "unit/mcp",
+    "unit/notifier",
+    "unit/pipeline_engine",
+    "unit/pipelines",
+    "unit/product_analytics",
+    "unit/rate_limiter",
+    "unit/workflow_import_export",
+    "bdd/steps",
+    "bdd/features",
+)
+
+
+def _paths_for_target(target: str) -> list[Path]:
+    if target == "unit_root":
+        return sorted((_TESTS_ROOT / "unit").glob("*.py"))
+    target_dir = _TESTS_ROOT / target
+    if not target_dir.is_dir():
+        return []
+    return sorted(target_dir.rglob("*.py"))
+
+
+def _all_violations(target: str | None = None) -> list[str]:
     violations: list[str] = []
-    for path in sorted(_API_TESTS.rglob("*.py")):
-        violations.extend(
-            _violations_in_source(path.read_text(encoding="utf-8"), str(path.relative_to(_API_TESTS.parent.parent)))
-        )
+    targets = [target] if target is not None else (*_ENFORCED_PACKAGES, "unit_root")
+    for t in targets:
+        for path in _paths_for_target(t):
+            try:
+                src = path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            violations.extend(_violations_in_source(src, str(path.relative_to(_TESTS_ROOT.parent.parent))))
     return violations
 
 
-def test_no_bare_asyncmock_session_doubles() -> None:
+@pytest.mark.parametrize("package", [*_ENFORCED_PACKAGES, "unit_root"])
+def test_no_bare_asyncmock_session_doubles(package: str) -> None:
     """Every driven session double expresses the synchronous session contract."""
-    violations = _all_violations()
+    violations = _all_violations(package)
     assert not violations, (
-        "Session test doubles leaking un-awaited coroutines — build the double with "
+        f"Session test doubles in {package} leaking un-awaited coroutines — build the double with "
         "tests/unit/api/mock_session.configure_mock_session (or type the synchronous "
         "session contract explicitly):\n" + "\n".join(violations)
     )
@@ -484,6 +653,50 @@ def _make_mock_session():
     return session
 """
     assert not _violations_in_source(shared_configured, "shared_configured.py")
+
+    # A spec'd double derives the sync/async split from AsyncSession itself:
+    # begin/begin_nested/in_transaction/get_bind/add are MagicMock children, so
+    # rules 2-3 must not fire on it.
+    spec_typed = """
+from unittest.mock import AsyncMock
+from sqlalchemy.ext.asyncio import AsyncSession
+
+async def test_x():
+    session = AsyncMock(spec=AsyncSession)
+    session.get_bind.return_value.dialect.name = "sqlite"
+    session.in_transaction()
+    session.add(object())
+    async with session.begin_nested():
+        pass
+"""
+    assert not _violations_in_source(spec_typed, "spec_typed.py")
+
+    # ... but a spec'd double still auto-creates execute's RESULT as an
+    # AsyncMock, so an un-stubbed result read still leaks and must be flagged.
+    spec_execute_leak = """
+from unittest.mock import AsyncMock
+from sqlalchemy.ext.asyncio import AsyncSession
+
+async def test_x():
+    session = AsyncMock(spec=AsyncSession)
+    result = await session.execute(object())
+    result.scalar_one_or_none()
+"""
+    violations = _violations_in_source(spec_execute_leak, "spec_execute_leak.py")
+    assert len(violations) == 1
+    assert "execute() result read" in violations[0]
+
+    # A spec'd double built by a shared helper is still driven by production
+    # code whose execute result readers the test cannot see, so rule 1 stands.
+    spec_shared_helper = """
+from unittest.mock import AsyncMock
+from sqlalchemy.ext.asyncio import AsyncSession
+
+def _make_session():
+    session = AsyncMock(spec=AsyncSession)
+    return session
+"""
+    assert _violations_in_source(spec_shared_helper, "spec_shared_helper.py")
 
     # An AsyncMock for a non-session collaborator is not a finding.
     unrelated = """
