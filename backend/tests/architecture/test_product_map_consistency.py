@@ -490,12 +490,14 @@ OWNED_PAGES = {
     ),
     "/admin/audit": (
         "frontend/src/views/AdminAuditView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/shared/JsonViewer.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
     "/admin/connectors": (
         "frontend/src/views/AdminConnectorsView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
@@ -511,6 +513,7 @@ OWNED_PAGES = {
     ),
     "/admin/costs/components": (
         "frontend/src/views/CostComponentsView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
@@ -521,6 +524,7 @@ OWNED_PAGES = {
     ),
     "/admin/evidence-redaction": (
         "frontend/src/views/AdminEvidenceRedactionView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/shared/ErrorAlert.vue",
     ),
     "/admin/compliance/evidence-index": ("frontend/src/views/ComplianceEvidenceIndexView.vue",),
@@ -532,6 +536,7 @@ OWNED_PAGES = {
     ),
     "/admin/errors/:id": (
         "frontend/src/views/AdminErrorDetailView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/shared/JsonViewer.vue",
         "frontend/src/components/shared/ErrorAlert.vue",
         "frontend/src/components/FeatureGate.vue",
@@ -582,17 +587,20 @@ OWNED_PAGES = {
     ),
     "/admin/system/config": (
         "frontend/src/views/AdminSystemConfigView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/shared/JsonViewer.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
     "/admin/users": (
         "frontend/src/views/AdminUsersView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
     "/admin/node-categories": (
         "frontend/src/views/AdminNodeCategoriesView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
@@ -605,6 +613,7 @@ OWNED_PAGES = {
     ),
     "/admin/plugins": (
         "frontend/src/views/AdminPluginsView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
@@ -656,7 +665,10 @@ OWNED_PAGES = {
         "frontend/src/components/hitl/HitlReviewCard.vue",
         "frontend/src/components/HitlBriefing.vue",
     ),
-    "/settings/guardrails": "frontend/src/views/SettingsGuardrailsView.vue",
+    "/settings/guardrails": (
+        "frontend/src/views/SettingsGuardrailsView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+    ),
     "/settings/mcp": (
         "frontend/src/views/SettingsMcpView.vue",
         "frontend/src/components/settings/McpOauthClientsCard.vue",
@@ -670,6 +682,7 @@ OWNED_PAGES = {
     ),
     "/settings/sso": (
         "frontend/src/views/SettingsSsoView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/SsoProviderForm.vue",
         "frontend/src/components/shared/JsonViewer.vue",
         "frontend/src/components/FeatureGate.vue",
@@ -677,11 +690,13 @@ OWNED_PAGES = {
     ),
     "/settings/teams": (
         "frontend/src/views/SettingsTeamsView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
     "/settings/triggers": (
         "frontend/src/views/SettingsTriggersView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
@@ -708,9 +723,13 @@ OWNED_PAGES = {
         "frontend/src/views/SettingsLicenseView.vue",
         "frontend/src/components/licence/LicenceRenewalNotice.vue",
     ),
-    "/settings/assistant": "frontend/src/views/UserAssistantSkillsView.vue",
+    "/settings/assistant": (
+        "frontend/src/views/UserAssistantSkillsView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+    ),
     "/admin/model-backends": (
         "frontend/src/views/AdminModelBackendsView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
@@ -719,7 +738,10 @@ OWNED_PAGES = {
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
-    "/admin/parameter-schemas": "frontend/src/views/ParameterSchemasView.vue",
+    "/admin/parameter-schemas": (
+        "frontend/src/views/ParameterSchemasView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+    ),
     "/admin/product-analytics": (
         "frontend/src/views/AdminProductAnalyticsView.vue",
         "frontend/src/components/product-analytics/ProductAnalyticsConsentPrompt.vue",
@@ -785,6 +807,7 @@ OWNED_PAGES = {
     ),
     "/schemas/editor/:id": (
         "frontend/src/views/SchemaEditorView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/shared/FilterBar.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",

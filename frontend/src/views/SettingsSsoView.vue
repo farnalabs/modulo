@@ -2,12 +2,13 @@
   <FeatureGate feature-name="sso" required-tier="team" show-disabled>
 
     <div class="page-wide">
-      <header class="flex items-center justify-between">
-        <PageHeader :title="$t('views.SettingsSsoView.title')" :subtitle="$t('views.SettingsSsoView.description')" />
-        <Button class="border-primary/30 hover:border-primary/60" data-testid="settings-sso-add-provider" @click="openAddForm">
-          {{ $t('views.SettingsSsoView.add_provider') }}
-        </Button>
-      </header>
+      <PageHeader :title="$t('views.SettingsSsoView.title')" :subtitle="$t('views.SettingsSsoView.description')">
+        <template #right>
+          <Button class="border-primary/30 hover:border-primary/60" data-testid="settings-sso-add-provider" @click="openAddForm">
+            {{ $t('views.SettingsSsoView.add_provider') }}
+          </Button>
+        </template>
+      </PageHeader>
 
       <LoadingSpinner v-if="loading" />
 

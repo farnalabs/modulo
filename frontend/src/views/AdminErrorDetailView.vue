@@ -2,8 +2,11 @@
   <FeatureGate feature-name="error_tracking" required-tier="team" show-disabled>
   <div class="page-wide">
     <BackLink :to="isInstanceScope ? '/admin/errors?scope=instance' : '/admin/errors'" :label="$t('views.AdminErrorDetailView.back_to_error_dashboard')" />
-    <header class="flex items-center justify-between">
-      <div class="flex items-center gap-3">
+    <PageHeader
+      :title="$t('views.AdminErrorDetailView.error_group_detail')"
+      :subtitle="$t('views.AdminErrorDetailView.subtitle')"
+    >
+      <template #right>
         <button
           type="button"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
@@ -13,24 +16,20 @@
           <ArrowLeft class="mr-1 inline-block h-4 w-4" aria-hidden="true" />
           {{ $t('views.AdminErrorDetailView.back') }}
         </button>
-        <PageHeader
-          :title="$t('views.AdminErrorDetailView.error_group_detail')"
-          :subtitle="$t('views.AdminErrorDetailView.subtitle')"
-        />
-      </div>
-      <!-- FAR-2304: the canonical support reference (group id, fingerprint,
-           level, count, source) in one copy action. Available in instance scope
-           too — copying is read-only. -->
-      <button
-        v-if="group"
-        type="button"
-        class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        data-testid="admin-error-detail-copy-support"
-        @click="copySupportReference"
-      >
-        {{ supportCopied ? $t('views.AdminErrorDetailView.support_reference_copied') : $t('views.AdminErrorDetailView.copy_support_reference') }}
-      </button>
-    </header>
+        <!-- FAR-2304: the canonical support reference (group id, fingerprint,
+             level, count, source) in one copy action. Available in instance scope
+             too — copying is read-only. -->
+        <button
+          v-if="group"
+          type="button"
+          class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          data-testid="admin-error-detail-copy-support"
+          @click="copySupportReference"
+        >
+          {{ supportCopied ? $t('views.AdminErrorDetailView.support_reference_copied') : $t('views.AdminErrorDetailView.copy_support_reference') }}
+        </button>
+      </template>
+    </PageHeader>
 
     <div v-if="loading" data-testid="admin-error-detail-loading">
       <!-- Live region carries only the status text; the skeleton blocks are

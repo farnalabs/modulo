@@ -1,12 +1,13 @@
 <template>
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
     <div class="page-wide">
-    <header class="flex items-center justify-between">
-      <PageHeader :title="$t('views.SettingsTeamsView.page_title')" :subtitle="$t('views.SettingsTeamsView.page_subtitle')" />
-      <Button class="border-primary/30 hover:border-primary/60" data-testid="settings-teams-create-team" @click="showCreateForm = true">
-        {{ $t('views.SettingsTeamsView.create_team') }}
-      </Button>
-    </header>
+    <PageHeader :title="$t('views.SettingsTeamsView.page_title')" :subtitle="$t('views.SettingsTeamsView.page_subtitle')">
+      <template #right>
+        <Button class="border-primary/30 hover:border-primary/60" data-testid="settings-teams-create-team" @click="showCreateForm = true">
+          {{ $t('views.SettingsTeamsView.create_team') }}
+        </Button>
+      </template>
+    </PageHeader>
 
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadTeams" />

@@ -1,12 +1,13 @@
 <template>
   <FeatureGate feature-name="plugin_management" show-disabled>
     <div class="page-wide">
-      <header class="flex items-center justify-between">
-        <PageHeader title="Plugins" :subtitle="$t('views.AdminPluginsView.manage_installed_modulo_plugins_and_extensions')" />
-        <Button type="button" class="border-primary/30 hover:border-primary/60" data-testid="admin-plugins-refresh" @click="loadPlugins">
-          Refresh
-        </Button>
-      </header>
+      <PageHeader title="Plugins" :subtitle="$t('views.AdminPluginsView.manage_installed_modulo_plugins_and_extensions')">
+        <template #right>
+          <Button type="button" class="border-primary/30 hover:border-primary/60" data-testid="admin-plugins-refresh" @click="loadPlugins">
+            Refresh
+          </Button>
+        </template>
+      </PageHeader>
 
       <LoadingSpinner v-if="loading" />
 

@@ -2,12 +2,13 @@
   <FeatureGate feature-name="plugin_management" required-tier="community" show-disabled>
 
     <div class="page-wide">
-    <header class="flex items-center justify-between">
-      <PageHeader :title="$t('views.AdminConnectorsView.title')" :subtitle="$t('views.AdminConnectorsView.subtitle')" />
-      <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-connectors-add" @click="openAddForm">
-        {{ $t('views.AdminConnectorsView.add_connector') }}
-      </Button>
-    </header>
+    <PageHeader :title="$t('views.AdminConnectorsView.title')" :subtitle="$t('views.AdminConnectorsView.subtitle')">
+      <template #right>
+        <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-connectors-add" @click="openAddForm">
+          {{ $t('views.AdminConnectorsView.add_connector') }}
+        </Button>
+      </template>
+    </PageHeader>
 
     <!-- STATE-3 (ux-conformance): the column layout is known before the first
          row arrives, so the loading placeholder is a determinate table
