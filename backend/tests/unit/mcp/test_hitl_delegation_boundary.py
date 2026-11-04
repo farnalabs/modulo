@@ -124,6 +124,7 @@ def _run_and_snapshot(human_only: bool) -> tuple[MagicMock, MagicMock, str]:
     run = MagicMock()
     run.id = uuid.uuid4()
     run.snapshot_id = uuid.uuid4()
+    run.claim_token = "claim-current"
     snapshot = MagicMock()
     snapshot.graph_json = {
         "nodes": [],
@@ -139,10 +140,12 @@ class TestHitlDelegationTokenBoundary(_DelegatedTokenContext):
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._build_resume_executor")
     @patch("modulo.api.mcp_server._session")
     async def test_hitl_grant_decides_non_human_only_gate(
         self,
         mock_session: AsyncMock,
+        mock_build_resume_executor: MagicMock,
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
@@ -169,12 +172,17 @@ class TestHitlDelegationTokenBoundary(_DelegatedTokenContext):
         )
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
+        executor = MagicMock()
+        executor.resume = AsyncMock()
+        mock_build_resume_executor.return_value = executor
 
         result = await review_hitl(run_id=str(run.id), review_id=review_id, action="approve", claim_token="tok-123")
 
         assert result.get("status") == "approved", result
         assert result.get("review_id") == review_id
         manager.approve.assert_awaited_once()
+        # FAR-2328: a successful approve resumes inline via the executor.
+        executor.resume.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
