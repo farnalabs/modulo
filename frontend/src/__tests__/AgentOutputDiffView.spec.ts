@@ -252,7 +252,56 @@ describe('AgentOutputDiffView', () => {
     const selects = wrapper.findAllComponents({ name: 'Select' })
     expect(selects.length).toBeGreaterThanOrEqual(2)
     expect(selects[0].props('options')).toEqual([])
-    expect(wrapper.text()).toContain('Select recent run')
+    expect(selects[1].props('options')).toEqual([])
+    expect(selects[0].props('disabled')).toBe(true)
+    expect(selects[1].props('disabled')).toBe(true)
+    expect(wrapper.text()).toContain('No recent runs are available to compare')
+  })
+
+  it('populates both selectors from the dashboard recent-runs payload', async () => {
+    vi.mocked(fetch as unknown as () => Promise<unknown>).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        recent_runs: [
+          { id: 'run-a', pipeline_name: 'Build', status: 'complete', created_at: '2026-11-04T10:00:00Z' },
+          { id: 'run-b', pipeline_name: 'Build', status: 'failed', created_at: '2026-11-04T09:00:00Z' },
+        ],
+      }),
+    })
+
+    router.push('/runs/diff')
+    await router.isReady()
+    const wrapper = mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const selects = wrapper.findAllComponents({ name: 'Select' })
+    expect(selects).toHaveLength(2)
+    const expectedOptions = [
+      { value: 'run-a', label: 'Build — complete (2026-11-04T10:00:00Z)' },
+      { value: 'run-b', label: 'Build — failed (2026-11-04T09:00:00Z)' },
+    ]
+    expect(selects[0].props('options')).toEqual(expectedOptions)
+    expect(selects[1].props('options')).toEqual(expectedOptions)
+    expect(selects[0].props('disabled')).toBe(false)
+    expect(selects[1].props('disabled')).toBe(false)
+  })
+
+  it('uses the viewer dashboard endpoint for recent runs', async () => {
+    router.push('/runs/diff')
+    await router.isReady()
+    mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      '/api/v1/dashboard/summary',
+      expect.objectContaining({ method: 'GET' }),
+    )
   })
 
   it('renders pure-return node outputs with no telemetry keys', async () => {

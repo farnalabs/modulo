@@ -9,16 +9,18 @@
           <div v-for="n in 3" :key="n" class="h-9 animate-pulse rounded-lg bg-muted" />
         </div>
       </div>
-      <div v-else class="flex flex-wrap items-end gap-4 rounded-lg border bg-card p-6">
-        <div class="flex flex-col gap-1.5">
+      <div v-else class="rounded-lg border bg-card p-6">
+        <div class="flex flex-wrap items-end gap-4">
+          <div class="flex flex-col gap-1.5">
           <label for="agentoutputdiffview-field-run-a" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a') }}</label>
           <div class="flex gap-2">
             <Select
-  :aria-label="$t('views.AgentOutputDiffView.select_run_a')"
-  v-model="runIdA"
-  :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
-  data-testid="diff-recent-runs-a"
-  class="w-72"
+              :aria-label="$t('views.AgentOutputDiffView.select_run_a')"
+              v-model="runIdA"
+              :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
+              :disabled="loadingRuns || recentRuns.length === 0"
+              data-testid="diff-recent-runs-a"
+              class="w-72"
   :options="recentRunOptions"
   option-label="label"
   option-value="value"
@@ -51,11 +53,12 @@
           <label for="agentoutputdiffview-field-run-b" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b') }}</label>
           <div class="flex gap-2">
             <Select
-  :aria-label="$t('views.AgentOutputDiffView.select_run_b')"
-  v-model="runIdB"
-  :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
-  data-testid="diff-recent-runs-b"
-  class="w-72"
+              :aria-label="$t('views.AgentOutputDiffView.select_run_b')"
+              v-model="runIdB"
+              :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
+              :disabled="loadingRuns || recentRuns.length === 0"
+              data-testid="diff-recent-runs-b"
+              class="w-72"
   :options="recentRunOptions"
   option-label="label"
   option-value="value"
@@ -77,6 +80,10 @@
         <Button :disabled="!canCompare || loading" :loading="loading" data-testid="diff-compare-btn" class="px-5 py-2" @click="handleCompare">
           {{ $t('views.AgentOutputDiffView.compare') }}
         </Button>
+          </div>
+        <p v-if="!loadingRuns && recentRuns.length === 0" class="mt-4 text-sm text-muted-foreground" data-testid="diff-recent-runs-empty">
+          {{ $t('views.AgentOutputDiffView.no_eligible_runs') }}
+        </p>
       </div>
 
       <div v-if="loading" class="rounded-lg border bg-card p-6" data-testid="diff-comparing">
@@ -199,7 +206,7 @@ interface RecentRun {
 
 const { get: getUntyped } = useApi()
 const { loading: loadingRuns, data: summaryResp } = useDataFetch(
-  async () => ({ data: await getUntyped<{ recent_runs: RecentRun[] }>('/api/v1/admin/dashboard/summary') }),
+  async () => ({ data: await getUntyped<{ recent_runs: RecentRun[] }>('/api/v1/dashboard/summary') }),
   { immediate: true },
 )
 

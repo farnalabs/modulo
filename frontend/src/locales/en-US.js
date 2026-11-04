@@ -527,6 +527,7 @@ export default {
       "recent_run_option": "{pipeline} — {status} ({createdAt})",
       "select_run_a": "Select run A",
       "select_run_b": "Select run B",
+      "no_eligible_runs": "No recent runs are available to compare. Complete at least two pipeline runs, then return here to select them.",
       "loading": "Loading...",
       "compare": "Compare",
       "outputs_identical": "Outputs are identical",
