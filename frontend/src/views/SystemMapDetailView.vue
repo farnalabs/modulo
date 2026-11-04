@@ -17,9 +17,10 @@
           :active-map="activeMap"
           @select-revision="selectRevision"
           @select-current="selectCurrentRevision"
-          @select-by-time="selectRevisionByTime"
-          @new-draft="createNewDraft"
-          @discover="runDiscovery"
+           @select-by-time="selectRevisionByTime"
+           :read-only="readOnly"
+           @new-draft="createNewDraft"
+           @discover="runDiscovery"
         />
       </div>
 
@@ -46,8 +47,9 @@
           @toggle-sidebar="showSidebar = !showSidebar"
           @save="saveDraft"
           @publish="publishRevision"
-          @archive="archiveRevision"
-          @discover="runDiscovery"
+           @archive="archiveRevision"
+           :read-only="readOnly"
+           @discover="runDiscovery"
           data-testid="system-map-detail-header"
         />
 
@@ -146,7 +148,7 @@ const relationshipTypes = RELATIONSHIP_TYPES
 
 const isPublished = computed(() => activeRevision.value?.status === 'published')
 const isArchived = computed(() => activeRevision.value?.status === 'archived')
-const readOnly = computed(() => isPublished.value || isArchived.value)
+const readOnly = computed(() => !store.hasAccess || isPublished.value || isArchived.value)
 
 watch(graph, (value) => {
   editedNodes.value = (value?.nodes ?? []).map((node) => ({ ...node, config_json: { ...node.config_json } }))

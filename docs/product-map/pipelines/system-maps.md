@@ -72,22 +72,31 @@ bdd:
 status: partial
 ---
 
-# System Maps (Beta, internal dogfood)
+# System Maps (Beta, published reads + internal authoring)
 
-An internal, default-off preview that inspects an organisation's existing
-inventory (pipelines, triggers, connector instances and pipeline folders),
-materialises a deterministic, unpublished draft graph from it, and lets an
-operator author, revise and publish that graph as a delivery System Map. It has
-its own routed surface (`/system-maps` and `/system-maps/:id`, both
-`private_preview`) and its own schema, registered in the manifest `features:`
-registry as `feat-system-maps`.
+System Maps inspects an organisation's existing inventory (pipelines, triggers,
+connector instances and pipeline folders), materialises a deterministic,
+unpublished draft graph from it, and lets an operator author, revise and
+publish that graph as a delivery System Map. Since FAR-2363 the surface has two
+access classes: every principal with the viewer-level `system_maps.read`
+permission can read the **published** maps, revisions, overview, history,
+by-time and diff views (routes `/system-maps` and `/system-maps/:id`, visible in
+the manifest as `public` and gated on `required_permissions:
+[system_maps.read]`), while authoring — discovery, create, update, delete,
+publish, archive, restore-as-new, apply, loop dispatch and MCP discovery —
+remains behind the internal-only `system_maps` gate. Both classes are registered
+in the manifest `features:` registry as `feat-system-maps`.
 
-Every route sits behind the internal-only `system_maps` gate: developer mode,
-the operator role floor, the `system_maps_access` grant for grant-bearing API
-keys, and the `system_maps` feature flag, all resolved server-side on each
-request. Legacy JWTs and keys with no grant set keep the role-based behaviour
-rather than being refused for the missing grant. The surface is deliberately
-invisible to ordinary customers and never publishes automatically.
+The published-read routes sit on their own router
+(`published_router` in `api/routes/system_maps.py`) with
+`_require_published_system_maps_read` (viewer floor + API-key grant check) and
+`require_feature("system_maps_read")`, and the repository is asked for
+`published_only=True` maps/revisions; a draft or an unpublished map is a 404 to
+a viewer. The authoring routes keep the internal gate: developer mode, the
+operator role floor, the `system_maps_access` grant for grant-bearing API keys,
+and the `system_maps` feature flag, all resolved server-side on each request.
+Legacy JWTs and keys with no grant set keep the role-based behaviour rather
+than being refused for the missing grant. Nothing publishes automatically.
 
 The map is stored in dedicated System Maps tables (migration
 `0341_system_maps.py`: `system_maps`, `system_map_revisions`,
@@ -124,6 +133,26 @@ The map is stored in dedicated System Maps tables (migration
       operator key denied without the grant and allowed with it; the
       grant-denial case presents a grant-bearing key, so the ungranted-JWT path
       is not covered there (`test_system_maps_routes.py`)
+- [x] Published reads are a distinct, viewer-level surface (FAR-2363):
+      `system_maps.read` is a viewer permission and `system_maps_read` is a
+      community-tier entitlement flag that is NOT internal/default-OFF, so a
+      viewer (and the read-only demo principal, whose demo org role is
+      `viewer`) can list/get published maps, the current/published revision,
+      by-time, history, overview and diff. Drafts and unpublished maps are
+      filtered in the repository (`published_only=True`) and re-checked in the
+      route (404), never merely hidden in the UI. The authoring gate is
+      unchanged: `system_maps_access` (operator, developer mode,
+      `system_maps` flag) still guards create/update/delete, revision
+      create/publish/archive/delete, restore-as-new, attribution bindings,
+      discovery, apply, loop dispatch and MCP discovery. The two route groups
+      are registered as separate routers with the published router included
+      first so a GET resolves to the viewer gate rather than the internal one
+      (`auth/permissions.py`, `api/dependencies.py`, `api/routes/system_maps.py`,
+      `core/feature_flags.py`, `api/main.py`;
+      `test_system_maps_routes.py`, `test_permissions.py`,
+      `test_feature_flag_registry.py`). The demo path needs no developer mode
+      and no elevated role: the seeded demo viewer reaches the published read
+      model through the same permission, while writes still 403
 - [x] The permission vocabulary is registered and enforced on every shipped
       route: `system_maps_access` is operator; `system_map.list`,
       `system_map.revision.get`, `system_map.revision.diff` and

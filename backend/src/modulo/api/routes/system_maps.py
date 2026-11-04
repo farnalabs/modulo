@@ -21,6 +21,8 @@ from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_FEATU
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     _require_internal_system_maps_access,
+    _require_published_system_maps_read,
+    _system_maps_internal_access,
     get_db_session,
     get_or_create_engine,
     get_or_create_session_factory,
@@ -63,7 +65,7 @@ from modulo.api.schemas.system_maps import (
 from modulo.api.team_scope import validate_owner_team_for_create
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.permissions import SYSTEM_MAPS_ACCESS_PERMISSION
+from modulo.auth.permissions import SYSTEM_MAPS_ACCESS_PERMISSION, SYSTEM_MAPS_READ_PERMISSION
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
@@ -81,6 +83,7 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
 _CODE_SYSTEM_MAPS_AUDIT_FAILED = "system_maps.audit_failed"
+_CODE_SYSTEM_MAPS_READ = SYSTEM_MAPS_READ_PERMISSION
 _CODE_SYSTEM_MAP_LIST = "system_map.list"
 _CODE_SYSTEM_MAP_CREATE = "system_map.create"
 _CODE_SYSTEM_MAP_UPDATE = "system_map.update"
@@ -150,6 +153,7 @@ _UNHEALTHY_FAILURE_RATE_THRESHOLD = 0.5
 
 _INTERNAL_SYSTEM_MAP_PERMISSION = SYSTEM_MAPS_ACCESS_PERMISSION
 _require_system_maps_feature = require_feature("system_maps")
+_require_system_maps_read_feature = require_feature("system_maps_read")
 
 _log = logging.getLogger(__name__)
 
@@ -167,6 +171,12 @@ async def _get_repo() -> SystemMapRepository:
 
     return SystemMapRepository(session_factory=session_generator)
 
+
+published_router = APIRouter(
+    prefix="/api/v1/system-maps",
+    tags=["system_maps"],
+    dependencies=[Depends(_require_published_system_maps_read), _require_system_maps_read_feature],
+)
 
 router = APIRouter(
     prefix="/api/v1/system-maps",
@@ -208,7 +218,7 @@ async def get_repo() -> SystemMapRepository:
 # ─── SystemMap CRUD ───
 
 
-@router.get("")
+@published_router.get("")
 @handle_db_errors(_EP_LIST_SYSTEM_MAPS)
 async def list_system_maps_endpoint(
     page: int = Query(default=1, ge=1),
@@ -217,7 +227,7 @@ async def list_system_maps_endpoint(
     owner_team_id: uuid.UUID | None = Query(default=None),
     visibility: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_LIST),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapListResponse:
     """List published maps for org (pagination, filtering by name/owner_team_id)."""
@@ -230,6 +240,7 @@ async def list_system_maps_endpoint(
             maps = await repository.list_maps_by_org(
                 session,
                 organisation_id=principal.organisation_id,
+                published_only=True,
                 visibility=visibility,
                 owner_team_id=owner_team_id,
                 name=name,
@@ -245,7 +256,7 @@ async def list_system_maps_endpoint(
                 .select_from(SystemMap)
                 .where(SystemMap.organisation_id == principal.organisation_id)
             )
-            count_stmt = count_stmt.where(SystemMap.deleted_at.is_(None))
+            count_stmt = count_stmt.where(SystemMap.deleted_at.is_(None), SystemMap.published_revision_id.is_not(None))
             if visibility:
                 count_stmt = count_stmt.where(SystemMap.visibility == visibility)
             if owner_team_id:
@@ -357,12 +368,12 @@ async def create_system_map_endpoint(
     return SystemMapResponse.model_validate(system_map)
 
 
-@router.get("/{map_id}")
+@published_router.get("/{map_id}")
 @handle_db_errors(_EP_GET_SYSTEM_MAP)
 async def get_system_map_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_LIST),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapResponse:
     """Get map with latest published revision summary."""
@@ -373,6 +384,8 @@ async def get_system_map_endpoint(
             system_map = await repository.get_map_by_id(
                 session, organisation_id=principal.organisation_id, map_id=map_id
             )
+            if system_map is not None and system_map.published_revision_id is None:
+                system_map = None
     except ProgrammingError as exc:
         _log.exception(_EP_GET_SYSTEM_MAP)
         raise HTTPException(
@@ -563,13 +576,13 @@ async def delete_system_map_endpoint(
 # ─── Version-aware Revision Endpoints (FAR-2288) ───
 
 
-@router.get("/{map_id}/revisions/by-time")
+@published_router.get("/{map_id}/revisions/by-time")
 @handle_db_errors(_EP_GET_REVISION_BY_TIME)
 async def get_revision_by_time_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     at: datetime = Query(..., description="ISO8601 timestamp to find the active revision at"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapRevisionByTimeResponse:
     """Get the revision active at a specific timestamp.
@@ -591,7 +604,7 @@ async def get_revision_by_time_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
             revision = await repository.get_revision_by_time(
-                session, organisation_id=principal.organisation_id, system_map_id=map_id, at=at
+                session, organisation_id=principal.organisation_id, system_map_id=map_id, at=at, published_only=True
             )
     except ProgrammingError as exc:
         _log.exception(_EP_GET_REVISION_BY_TIME)
@@ -629,12 +642,12 @@ async def get_revision_by_time_endpoint(
     )
 
 
-@router.get("/{map_id}/revisions/current")
+@published_router.get("/{map_id}/revisions/current")
 @handle_db_errors(_EP_GET_CURRENT_REVISION)
 async def get_current_revision_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapCurrentRevisionResponse:
     """Get the currently active (published) revision.
@@ -687,12 +700,12 @@ async def get_current_revision_endpoint(
     return SystemMapCurrentRevisionResponse(revision=SystemMapRevisionResponse.model_validate(revision))
 
 
-@router.get("/{map_id}/revisions/history")
+@published_router.get("/{map_id}/revisions/history")
 @handle_db_errors(_EP_GET_REVISION_HISTORY)
 async def get_revision_history_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapRevisionHistoryResponse:
     """List all revisions for a system map with their effective time ranges.
@@ -714,7 +727,7 @@ async def get_revision_history_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
             revisions = await repository.list_revisions_history(
-                session, organisation_id=principal.organisation_id, system_map_id=map_id
+                session, organisation_id=principal.organisation_id, system_map_id=map_id, published_only=True
             )
     except ProgrammingError as exc:
         _log.exception(_EP_GET_REVISION_HISTORY)
@@ -755,14 +768,14 @@ async def get_revision_history_endpoint(
     )
 
 
-@router.get("/{map_id}/revisions/{rev_id}")
+@published_router.get("/{map_id}/revisions/{rev_id}")
 @handle_db_errors(_EP_GET_SYSTEM_MAP_REVISION)
 async def get_system_map_revision_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     rev_id: uuid.UUID = Path(..., description=_DESC_REVISION_ID),
     include_graph: bool = Query(default=False, description="Include full graph (nodes, relationships, loop_configs)"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapRevisionResponse | SystemMapRevisionDetailResponse:
     """Get specific revision."""
@@ -782,7 +795,9 @@ async def get_system_map_revision_endpoint(
             revision = await repository.get_revision_by_id(
                 session, organisation_id=principal.organisation_id, revision_id=rev_id
             )
-            if include_graph:
+            if revision is not None and revision.status == "draft" and principal.org_role in {"viewer", "runner"}:
+                revision = None
+            if include_graph and revision is not None:
                 graph = await repository.get_full_revision_graph(
                     session, organisation_id=principal.organisation_id, revision_id=rev_id
                 )
@@ -1193,7 +1208,7 @@ async def archive_system_map_revision_endpoint(
     return SystemMapRevisionResponse.model_validate(revision)
 
 
-@router.post(
+@published_router.post(
     "/{map_id}/revisions/{rev_id}/diff",
     response_model=SystemMapRevisionDiffResponse,
 )
@@ -1205,8 +1220,14 @@ async def diff_system_map_revision_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_DIFF),
     repository: SystemMapRepository = Depends(get_repo),
+    internal_access: bool = Depends(_system_maps_internal_access),
 ) -> SystemMapRevisionDiffResponse:
-    """Diff a revision against another revision or the current draft."""
+    """Diff a revision against another revision or the current draft.
+
+    Viewers may only diff published/archived revisions: a draft base or target
+    is a 404, and the default target is the currently published revision rather
+    than the draft. Internal authors keep the draft-aware behaviour.
+    """
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1225,30 +1246,45 @@ async def diff_system_map_revision_endpoint(
             )
             if not base_revision or base_revision.system_map_id != map_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+            if not internal_access and base_revision.status == "draft":
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
 
             # Determine target revision
             target_revision_id = req.against_revision_id
             if target_revision_id is None:
-                # Try to find the current draft revision
-                draft_revisions = await repository.list_revisions(
-                    session,
-                    organisation_id=principal.organisation_id,
-                    system_map_id=map_id,
-                    status="draft",
-                    limit=1,
-                )
-                if not draft_revisions:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail="No draft revision found to diff against; specify against_revision_id",
+                if internal_access:
+                    # Try to find the current draft revision
+                    draft_revisions = await repository.list_revisions(
+                        session,
+                        organisation_id=principal.organisation_id,
+                        system_map_id=map_id,
+                        status="draft",
+                        limit=1,
                     )
-                target_revision_id = draft_revisions[0].id
+                    if not draft_revisions:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail="No draft revision found to diff against; specify against_revision_id",
+                        )
+                    target_revision_id = draft_revisions[0].id
+                else:
+                    published_revision = await repository.get_published_revision(
+                        session, organisation_id=principal.organisation_id, system_map_id=map_id
+                    )
+                    if not published_revision:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail="No published revision found to diff against",
+                        )
+                    target_revision_id = published_revision.id
             else:
                 # Verify target revision exists and belongs to map
                 target_revision = await repository.get_revision_by_id(
                     session, organisation_id=principal.organisation_id, revision_id=target_revision_id
                 )
                 if not target_revision or target_revision.system_map_id != map_id:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+                if not internal_access and target_revision.status == "draft":
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
 
             diff_result = await repository.diff_revisions(
@@ -1486,12 +1522,14 @@ async def _resolve_overview_revision(
         revision = await repository.get_revision_by_id(
             session, organisation_id=organisation_id, revision_id=revision_id
         )
+        if revision is not None and revision.status == "draft":
+            revision = None
         if not revision or revision.system_map_id != map_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
         return revision
     if at:
         revision = await repository.get_revision_by_time(
-            session, organisation_id=organisation_id, system_map_id=map_id, at=at
+            session, organisation_id=organisation_id, system_map_id=map_id, at=at, published_only=True
         )
         if not revision:
             raise HTTPException(
@@ -1510,7 +1548,7 @@ async def _resolve_overview_revision(
     return revision
 
 
-@router.get("/{map_id}/overview")
+@published_router.get("/{map_id}/overview")
 @handle_db_errors(_EP_GET_SYSTEM_MAP_OVERVIEW)
 async def get_system_map_overview_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
@@ -1519,7 +1557,7 @@ async def get_system_map_overview_endpoint(
         default=None, description="ISO8601 timestamp to get overview for the revision active at that time"
     ),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_OVERVIEW),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapOverviewResponse:
     """Aggregate read model with node health, loop configs, and bottleneck detection.

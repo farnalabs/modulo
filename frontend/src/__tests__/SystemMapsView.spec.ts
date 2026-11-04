@@ -441,6 +441,38 @@ describe('SystemMapsView fallback branches', () => {
     expect(wrapper.text()).toContain('Discover')
   })
 
+
+  it('renders a viewer read-only list without authoring controls', async () => {
+    mockIsOperator.value = false
+    mockPlanStore.devMode = false
+    mockPlanStore.userPermissions = ['system_maps.read']
+    mockGet.mockImplementation(() => Promise.resolve(listResponse([map()])))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(mockGet).not.toHaveBeenCalledWith('/api/v1/admin/feature-flags')
+    expect(wrapper.find('[data-testid="system-maps-create"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-maps-read-only"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Map one')
+    expect(wrapper.find('[data-testid="system-map-action-map-1"]').exists()).toBe(false)
+  })
+
+  it('keeps the operator action menu for an authoring operator', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve(listResponse([map()]))
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="system-maps-create"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-maps-read-only"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="system-map-action-map-1"]').trigger('click')
+    expect((wrapper.findComponent(MenuStub).props('model') as unknown[]).length).toBe(5)
+  })
+
   it('uses the localized delete fallback for a non-Error rejection', async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())

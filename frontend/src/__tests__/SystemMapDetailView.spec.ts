@@ -60,6 +60,10 @@ describe('SystemMapDetailView load failures', () => {
     mockRoute.params = { id: 'map-1' }
     mockRoute.query = {}
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
   })
 
   it('offers an inline retry that re-runs the failed load', async () => {
@@ -91,7 +95,7 @@ describe('SystemMapDetailView load failures', () => {
 describe('SystemMapDetailView authoring actions', () => {
   const HeaderStub = {
     name: 'HeaderBar',
-    props: ['map', 'revision', 'saving'],
+    props: ['map', 'revision', 'saving', 'readOnly'],
     emits: ['toggle-sidebar', 'save', 'publish', 'archive', 'discover'],
     template: '<div data-testid="header-stub" />',
   }
@@ -103,7 +107,7 @@ describe('SystemMapDetailView authoring actions', () => {
   }
   const RevisionStub = {
     name: 'RevisionSidebar',
-    props: ['mapId', 'revisions', 'activeRevisionId', 'activeMap'],
+    props: ['mapId', 'revisions', 'activeRevisionId', 'activeMap', 'readOnly'],
     emits: ['select-revision', 'select-current', 'select-by-time', 'new-draft', 'discover'],
     template: '<div data-testid="revision-stub" />',
   }
@@ -150,6 +154,10 @@ describe('SystemMapDetailView authoring actions', () => {
     mockRoute.query = {}
     if (mockPost) mockPost.mockReset()
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
       if (path === '/api/v1/system-maps/{map_id}/revisions/{rev_id}') return Promise.resolve({ data: { revision: { id: 'rev-2', revision_number: 2, status: 'draft' }, nodes: [], relationships: [] } })
@@ -461,6 +469,38 @@ describe('SystemMapDetailView authoring actions', () => {
 
     expect(wrapper.findComponent(GraphStub).props('readOnly')).toBe(true)
   })
+
+  it('renders the published detail read-only for a viewer', async () => {
+    mockIsOperator.value = false
+    mockPlanStore.devMode = false
+    mockPlanStore.userPermissions = ['system_maps.read']
+    mockGet.mockImplementation(() =>
+      Promise.resolve({ data: { id: 'map-1', name: 'Demo Delivery System', published_revision_id: 'rev-1' } }),
+    )
+
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+    store.graph = { revision: { id: 'rev-1', revision_number: 1, status: 'published' }, nodes: [], relationships: [], loop_configs: [] } as never
+    await flushPromises()
+
+    expect(mockGet).not.toHaveBeenCalledWith('/api/v1/admin/feature-flags')
+    expect(wrapper.findComponent(HeaderStub).props('readOnly')).toBe(true)
+    expect(wrapper.findComponent(GraphStub).props('readOnly')).toBe(true)
+    expect(wrapper.findComponent(RevisionStub).props('readOnly')).toBe(true)
+  })
+
+  it('keeps the operator authoring view editable', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+    store.graph = { revision: { id: 'rev-1', revision_number: 1, status: 'draft' }, nodes: [], relationships: [], loop_configs: [] } as never
+    await flushPromises()
+
+    expect(wrapper.findComponent(HeaderStub).props('readOnly')).toBe(false)
+    expect(wrapper.findComponent(GraphStub).props('readOnly')).toBe(false)
+    expect(wrapper.findComponent(RevisionStub).props('readOnly')).toBe(false)
+  })
 })
 
 describe('SystemMapDetailView guards and non-Error failures', () => {
@@ -485,6 +525,10 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     mockRoute.params = { id: 'map-1' }
     mockRoute.query = {}
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
       return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
@@ -592,6 +636,10 @@ describe('SystemMapDetailView loading and graph state lifecycle (STATE-1 / STATE
     setActivePinia(createPinia())
     mockGet.mockReset()
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
   })
 
   it('renders loading state while store.loading is true and does not render empty state', async () => {
@@ -727,4 +775,5 @@ describe('SystemMapDetailView loading and graph state lifecycle (STATE-1 / STATE
     expect(wrapper.find('[data-testid="system-map-detail-loading"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(true)
   })
+
 })

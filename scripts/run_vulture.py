@@ -21,7 +21,7 @@ Gate semantics (FAR-252):
   (already covered by ruff F401) and unreachable code — dead functions sailed
   through. At 60, unused functions/methods/classes block.
 - ``--ignore-decorators``: framework-registration decorators whose callers
-  vulture cannot see (FastAPI ``@router.*`` route handlers, ``@mcp.tool`` /
+  vulture cannot see (FastAPI ``@router.*`` / ``@published_router.*`` route handlers, ``@mcp.tool`` /
   ``@mcp.resource`` tools, Pydantic ``@field_validator`` / ``@model_validator``
   / ``@field_serializer``, SQLAlchemy ``@compiles`` / ``@event.listens_for``,
   Click ``@cli.command`` / ``@click.*``, the internal ``@_rls`` RLS wrapper).
@@ -86,7 +86,7 @@ _GIT_STATE_ENV = {
 # see. Empirically derived: this set clears the decorator-based framework noise
 # at --min-confidence 60 and no wider.
 _IGNORE_DECORATORS = (
-    "@router.*,@pipeline_triggers_router.*,@mcp.tool,@mcp.resource,"
+    "@router.*,@published_router.*,@pipeline_triggers_router.*,@mcp.tool,@mcp.resource,"
     "@field_validator,@model_validator,@field_serializer,@compiles,@event.listens_for,"
     "@cli.command,@click.*,@_rls"
 )

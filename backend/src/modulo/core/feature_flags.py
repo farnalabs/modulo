@@ -213,10 +213,15 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Retired internal Lifecycle Map journey display",
         tier="community",
     ),
-    # ── Community tier — System Maps (Beta, internal dogfood only) ─────────────
+    # ── Community tier — System Maps authoring and published read model ────────
     FeatureFlag(
         name="system_maps",
-        description="Beta System Maps (Delivery System Maps)",
+        description="Beta System Maps authoring (internal operator surface)",
+        tier="community",
+    ),
+    FeatureFlag(
+        name="system_maps_read",
+        description="Published System Maps read model",
         tier="community",
     ),
     # ── Community tier — webhook notification delivery log (default ON, FAR-2235) ──

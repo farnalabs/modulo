@@ -92,8 +92,10 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const planStore = usePlanStore()
   const { isOperator, isSystemAdmin } = useCurrentUser()
   const hasSystemMapsAccess = computed(() => planStore.userPermissions.includes('system_maps_access'))
+  const hasSystemMapsRead = computed(() => planStore.userPermissions.includes('system_maps.read'))
   const canProbeInternalFlags = computed(() => planStore.userPermissions.includes(SYSTEM_CONFIG_MANAGE_PERMISSION))
   const hasAccess = computed(() => systemMapsEnabled.value && (isOperator.value || isSystemAdmin.value) && hasSystemMapsAccess.value)
+  const hasReadAccess = computed(() => systemMapsEnabled.value && hasSystemMapsRead.value)
 
   function reset(): void {
     accessGeneration += 1
@@ -152,13 +154,14 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     error.value = null
     systemMapsEnabled.value = false
     try {
-      if (!isOperator.value && !isSystemAdmin.value) return
       const planRequest = planStore.loaded || planStore.currentTier !== 'community' ? Promise.resolve() : planStore.fetchPlan()
       await Promise.all([planRequest, planStore.fetchPermissions()])
+      if (hasSystemMapsRead.value) systemMapsEnabled.value = true
+      if (!isOperator.value && !isSystemAdmin.value) return
       if (!planStore.devMode || !hasSystemMapsAccess.value || !canProbeInternalFlags.value) return
       const response = await withTimeout(api.GET('/api/v1/admin/feature-flags'), 15000, 'Internal feature flags request')
       const flags = (response.data as InternalFeatureFlagsPayload | undefined)?.flags
-      if (current()) systemMapsEnabled.value = Array.isArray(flags) && flags.some((flag) => flag.name === 'system_maps' && flag.currently_active)
+      if (current() && Array.isArray(flags)) systemMapsEnabled.value = flags.some((flag) => flag.name === 'system_maps' && flag.currently_active) || hasReadAccess.value
     } catch (err: unknown) {
       if (current()) error.value = err instanceof Error ? err.message : tr('systemMaps.errors.feature_flags')
     } finally {
@@ -382,5 +385,5 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   // Kept for the dashboard's preview card; discovery is now a real operation.
   async function fetchDiscovery(): Promise<void> { loaded.value = true }
 
-  return { loaded, loading, error, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadCurrentRevision, loadRevisionByTime, saveDraft, publish, archive, discover, clearActive, fetchDiscovery }
+  return { loaded, loading, error, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, hasReadAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadCurrentRevision, loadRevisionByTime, saveDraft, publish, archive, discover, clearActive, fetchDiscovery }
 })

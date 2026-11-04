@@ -1958,6 +1958,7 @@ export default {
       "last_updated": "Last updated",
       "actions": "Actions for {name}",
       "actions_header": "Actions",
+      "read_only": "Published read-only view",
       "revision_count": "{count} revision | {count} revisions",
       "page_of": "Page {page} of {total}",
       "draft": "Draft",

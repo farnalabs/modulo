@@ -194,6 +194,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         *,
         organisation_id: uuid.UUID,
         include_deleted: bool = False,
+        published_only: bool = False,
         visibility: str | None = None,
         owner_team_id: uuid.UUID | None = None,
         name: str | None = None,
@@ -203,6 +204,8 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         """List system maps for an organisation."""
         stmt = select(SystemMap).where(SystemMap.organisation_id == organisation_id)
         stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMap.deleted_at.is_(None))
+        if published_only:
+            stmt = stmt.where(SystemMap.published_revision_id.is_not(None))
         if visibility:
             stmt = stmt.where(SystemMap.visibility == visibility)
         if owner_team_id:
@@ -383,6 +386,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         organisation_id: uuid.UUID,
         system_map_id: uuid.UUID,
         at: datetime,
+        published_only: bool = False,
     ) -> SystemMapRevision | None:
         """Get the revision active at a specific timestamp.
 
@@ -395,18 +399,16 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         effective_from <= at predicate already excludes drafts (their
         effective_from is NULL).
         """
-        stmt = (
-            select(SystemMapRevision)
-            .where(
-                SystemMapRevision.system_map_id == system_map_id,
-                SystemMapRevision.organisation_id == organisation_id,
-                SystemMapRevision.deleted_at.is_(None),
-                SystemMapRevision.effective_from <= at,
-                (SystemMapRevision.effective_to.is_(None)) | (SystemMapRevision.effective_to > at),
-            )
-            .order_by(SystemMapRevision.effective_from.desc())
-            .limit(1)
+        stmt = select(SystemMapRevision).where(
+            SystemMapRevision.system_map_id == system_map_id,
+            SystemMapRevision.organisation_id == organisation_id,
+            SystemMapRevision.deleted_at.is_(None),
+            SystemMapRevision.effective_from <= at,
+            (SystemMapRevision.effective_to.is_(None)) | (SystemMapRevision.effective_to > at),
         )
+        if published_only:
+            stmt = stmt.where(SystemMapRevision.status.in_(("published", "archived")))
+        stmt = stmt.order_by(SystemMapRevision.effective_from.desc()).limit(1)
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -430,6 +432,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         *,
         organisation_id: uuid.UUID,
         system_map_id: uuid.UUID,
+        published_only: bool = False,
     ) -> Sequence[SystemMapRevision]:
         """List all revisions for a system map with their effective time ranges.
 
@@ -450,6 +453,8 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             )
             .order_by(SystemMapRevision.revision_number.asc())
         )
+        if published_only:
+            stmt = stmt.where(SystemMapRevision.status.in_(("published", "archived")))
         result = await session.execute(stmt)
         return result.scalars().all()
 

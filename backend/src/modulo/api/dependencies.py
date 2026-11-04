@@ -45,6 +45,7 @@ from modulo.auth.dependencies import (
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, decode_principal
 from modulo.auth.permissions import (
     SYSTEM_MAPS_ACCESS_PERMISSION,
+    SYSTEM_MAPS_READ_PERMISSION,
     PermissionConfigurationError,
     PermissionDenied,
     assert_grant,
@@ -256,6 +257,54 @@ def _require_internal_system_maps_access(
         settings=settings,
     )
     return principal
+
+
+def _require_published_system_maps_read(
+    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+) -> TenantPrincipal:
+    """Authorize the published System Maps read model for every viewer.
+
+    This is intentionally separate from the internal authoring gate: published
+    maps are a viewer-readable product surface, while discovery and every
+    mutation remain developer-mode/operator-only. The feature entitlement is
+    checked by the router dependency; this dependency only establishes the
+    tenant permission and API-key grant boundary.
+    """
+    required = resolve_required(SYSTEM_MAPS_READ_PERMISSION)
+    try:
+        assert_org_role(principal.org_role, required, SYSTEM_MAPS_READ_PERMISSION)
+    except PermissionDenied as exc:
+        logger.warning(
+            _CODE_PERMISSION_DENIED,
+            extra={
+                "permission": SYSTEM_MAPS_READ_PERMISSION,
+                "required": required,
+                "actual": principal.org_role,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{SYSTEM_MAPS_READ_PERMISSION}' requires '{required}' role",
+        ) from exc
+    _enforce_key_grant(principal, SYSTEM_MAPS_READ_PERMISSION)
+    return principal
+
+
+def _system_maps_internal_access(
+    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+) -> bool:
+    """Return whether a read caller may also inspect unpublished revisions.
+
+    Resolves the settings from the module-level ``get_settings`` name at call
+    time rather than binding a ``Depends`` default, so the internal gate is
+    always evaluated against the same settings surface as
+    ``_require_internal_system_maps_access``.
+    """
+    try:
+        _require_internal_system_maps_access(principal, get_settings())
+    except HTTPException:
+        return False
+    return True
 
 
 def require_permission_any_credential(permission: str) -> Any:
