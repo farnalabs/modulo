@@ -106,9 +106,8 @@ describe('DataTable horizontal scroll region', () => {
     expect(scrollRegion.attributes('tabindex')).toBe('0')
     // A11Y-3: a focus stop must be visible.
     expect(scrollRegion.classes()).toContain('focus-visible:ring-2')
-    // A static element must not add a role or a handler it does not need —
-    // that is the pattern that drew the static-element-interaction warning.
-    expect(scrollRegion.attributes('role')).toBeUndefined()
+    // The named region role identifies this keyboard-reachable scroll viewport.
+    expect(scrollRegion.attributes('role')).toBe('region')
   })
 
   it('stays reachable when the table has nothing focusable inside it', () => {
