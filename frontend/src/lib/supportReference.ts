@@ -43,10 +43,18 @@ const FIELD_SEPARATOR = ' · '
  * Returns null outside a browser (SSR / a DOM-less test) — the caller then
  * omits the url line rather than emitting a broken one.
  */
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value[end - 1] === '/') {
+    end -= 1
+  }
+  return value.slice(0, end)
+}
+
 function resolveOrigin(origin?: string | null): string | null {
-  if (origin) return origin.replace(/\/+$/, '')
+  if (origin) return withoutTrailingSlashes(origin)
   if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin.replace(/\/+$/, '')
+    return withoutTrailingSlashes(window.location.origin)
   }
   return null
 }
