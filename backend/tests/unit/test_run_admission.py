@@ -59,6 +59,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.system_config import SystemConfig
 from modulo.db.models.team import Team
 from modulo.db.models.variant_group import VariantGroup
 
@@ -594,6 +595,7 @@ class TestCiFailureInflightSuppression:
                 Journey.__table__,
                 VariantGroup.__table__,
                 Eval.__table__,
+                SystemConfig.__table__,
             ]
             await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
             await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")

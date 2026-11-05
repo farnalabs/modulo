@@ -123,12 +123,16 @@ class TestActiveWorkspaceCountPopulation:
             assert f"'{terminal}'" not in sql
 
     async def test_terminal_runs_never_counted_flag_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Flag-off window: the pre-D8 ACTIVE_RUN_STATUSES population — none of
-        # which is terminal, so a terminal marker never feeds the figure.
+        # Deployment drain and capacity accounting share one live-running
+        # population even when the historical capacity flag is disabled.
         sql, _ = await _count_sql_and_value(flag_on=False, monkeypatch=monkeypatch)
-        assert "IN (" in sql
+        assert "runs.status = 'running'" in sql
         for terminal in TERMINAL_STATUSES:
             assert f"'{terminal}'" not in sql
+
+    async def test_hitl_tombstone_markers_excluded_flag_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        sql, _ = await _count_sql_and_value(flag_on=False, monkeypatch=monkeypatch)
+        assert _pg_like(RUNNER_TOMBSTONE_EXCLUSION_SQL) in sql
 
     async def test_hitl_tombstone_markers_excluded_flag_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # A HITL-boundary tombstone marker holds no slot — it must not feed

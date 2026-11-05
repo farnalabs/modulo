@@ -12,13 +12,15 @@ operator may keep private, so the "the repo is public" premise does not
 generalise) and no deploy workflow reads them.
 """
 
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from modulo.api.main import app
+from modulo.api.routes import deployment
 from modulo.settings import Settings, get_settings
 
 
@@ -35,9 +37,68 @@ def _make_settings() -> Settings:
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     # Deliberately NO auth principal override: the endpoint is public.
+    session = MagicMock()
+    result = MagicMock()
+    result.scalar_one.return_value = 0
+    session.execute = AsyncMock(return_value=result)
     app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[deployment.get_system_db_session] = lambda: session
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+class TestDeploymentDrain:
+    @pytest.mark.parametrize(
+        ("authorization", "expected_status"),
+        [(None, 503), ("Basic secret", 503), ("Bearer wrong", 403)],
+    )
+    def test_missing_or_invalid_token_is_rejected(
+        self, client: TestClient, authorization: str | None, expected_status: int
+    ) -> None:
+        headers = {} if authorization is None else {"Authorization": authorization}
+        with patch.dict("os.environ", {"MODULO_DEPLOY_DRAIN_TOKEN": "right"}, clear=False):
+            response = client.post("/api/v1/deployment/drain?active=true", headers=headers)
+        assert response.status_code == expected_status
+
+    def test_unconfigured_token_is_rejected(self, client: TestClient) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            response = client.post("/api/v1/deployment/drain?active=true", headers={"Authorization": "Bearer right"})
+        assert response.status_code == 503
+
+    @pytest.mark.parametrize("active", [True, False])
+    def test_valid_token_persists_value_and_audits(self, client: TestClient, active: bool) -> None:
+        session = app.dependency_overrides[deployment.get_system_db_session]()
+        with (
+            patch.dict("os.environ", {"MODULO_DEPLOY_DRAIN_TOKEN": "right"}, clear=False),
+            patch.object(deployment, "_set_drain", new_callable=AsyncMock) as set_drain,
+        ):
+            response = client.post(
+                f"/api/v1/deployment/drain?active={str(active).lower()}",
+                headers={"Authorization": "Bearer right"},
+            )
+        assert response.status_code == 200
+        assert response.json() == {"active": active}
+        set_drain.assert_awaited_once_with(session, active)
+
+    @pytest.mark.asyncio
+    async def test_set_drain_writes_config_and_audit(self) -> None:
+        session = MagicMock()
+        with (
+            patch.object(deployment, "acquire_deployment_drain_lock", new_callable=AsyncMock) as lock,
+            patch.object(deployment, "update_config", new_callable=AsyncMock) as update,
+            patch.object(deployment, "append_system_audit_event", new_callable=AsyncMock) as audit,
+        ):
+            await deployment._set_drain(session, True)
+        lock.assert_awaited_once_with(session)
+        update.assert_awaited_once()
+        assert update.await_args.args[:2] == (session, "deployment_drain")
+        assert update.await_args.args[2]["active"] is True
+        audit.assert_awaited_once_with(
+            session,
+            event_type="deployment_drain_changed",
+            resource_type="deployment",
+            payload_json={"active": True, "source": "deploy-workflow"},
+        )
 
 
 class TestDeploymentInfo:
@@ -57,6 +118,7 @@ class TestDeploymentInfo:
         assert "git_sha" in body
         assert "git_commit_timestamp" in body
         assert "build_timestamp" in body
+        assert body["active_sandbox_runs"] == 0
 
     def test_source_repo_free_text_absent(self, client: TestClient) -> None:
         """FAR-1975: no free text from the deployment's source repo is exposed."""
@@ -114,7 +176,65 @@ class TestDeploymentInfo:
         ):
             assert isinstance(body[field], str), f"{field} should be a string"
 
+    def test_active_sandbox_runs_is_reported(self, client: TestClient) -> None:
+        session = app.dependency_overrides[deployment.get_system_db_session]()
+        result = MagicMock()
+        result.scalar_one.return_value = 3
+        session.execute = AsyncMock(return_value=result)
+        body = client.get("/api/v1/deployment").json()
+        assert body["active_sandbox_runs"] == 3
+
+    def test_active_sandbox_query_excludes_non_running_runs(self, client: TestClient) -> None:
+        session = app.dependency_overrides[deployment.get_system_db_session]()
+        result = MagicMock()
+        result.scalar_one.return_value = 0
+        session.execute = AsyncMock(return_value=result)
+        client.get("/api/v1/deployment")
+        statements = [str(call.args[0]) for call in session.execute.call_args_list]
+        assert any("runs.status" in sql for sql in statements)
+        assert any("sandbox_dispatch_state" in sql for sql in statements)
+
     def test_build_metadata_falls_back_to_empty(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")
         body = resp.json()
         assert not body["git_sha"]
+
+
+class TestDeploymentInfoAutobeginDisabledSession:
+    """Regression: ``deployment_info`` must not read on an untransacted session.
+
+    The unit fixture above mocks ``session.execute`` wholesale, which is exactly
+    why the missing ``session.begin()`` was invisible. This drives a real
+    sqlite session built with ``autobegin=False`` (the system DI session
+    contract) so an unwrapped read raises
+    ``InvalidRequestError: Autobegin is disabled on this Session``.
+    """
+
+    def test_reads_on_autobegin_disabled_session(self) -> None:
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+        from modulo.db.models.run import Run
+        from modulo.db.models.system_config import SystemConfig
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+        async def override_session() -> AsyncGenerator[AsyncSession, None]:
+            async with engine.begin() as conn:
+                await conn.run_sync(Run.__table__.create)
+                await conn.run_sync(SystemConfig.__table__.create)
+            factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+            async with factory() as session:
+                yield session
+            await engine.dispose()
+
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[deployment.get_system_db_session] = override_session
+        try:
+            resp = TestClient(app).get("/api/v1/deployment")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["active_sandbox_runs"] == 0
+        assert body["deployment_drain"] is False

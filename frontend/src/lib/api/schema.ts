@@ -2355,6 +2355,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/deployment/drain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Deployment Drain
+         * @description Enter or leave the deploy drain; workflow failures must fail closed.
+         */
+        post: operations["set_deployment_drain_api_v1_deployment_drain_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/costs": {
         parameters: {
             query?: never;
@@ -28807,6 +28827,41 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    set_deployment_drain_api_v1_deployment_drain_post: {
+        parameters: {
+            query: {
+                active: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
                 };
             };
         };
