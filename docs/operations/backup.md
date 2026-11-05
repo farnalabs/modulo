@@ -8,7 +8,7 @@ OpenSSL.
 
 ## Prerequisites
 
-- Python 3.12+
+- Python 3.12-3.14 (the Docker images build on 3.14)
 - `uv` (package manager)
 - `pg_dump` >= 16 (Postgres client)
 - `pg_restore` >= 16 (Postgres client, restore only)
