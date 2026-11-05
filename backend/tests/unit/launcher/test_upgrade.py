@@ -1927,8 +1927,8 @@ def test_extract_rejects_symlink_listed_artifact(tmp_path):
         upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
 
 
-def test_extract_accepts_root_version_with_dot_prefix_and_rejects_near_match(tmp_path: Path) -> None:
-    """``./VERSION`` is allowed; a dot-prefixed near-match must still be present."""
+def test_extract_accepts_root_version_and_safe_dot_prefixed_artifact(tmp_path: Path) -> None:
+    """A leading ``./`` is safe after canonicalisation when the file exists."""
     import tarfile
 
     bundle = tmp_path / "modulo-1.2.0-linux-amd64"
@@ -1944,11 +1944,31 @@ def test_extract_accepts_root_version_with_dot_prefix_and_rejects_near_match(tmp
     extracted = upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
     assert (extracted / "VERSION").read_text(encoding="utf-8") == "bundle-v1.2.0\n"
 
-    (bundle / "foo").write_text("near-match\n", encoding="utf-8")
-    (bundle / "SHA256SUMS").write_text(f"{digest}  ./foo\n", encoding="utf-8")
+    foo = bundle / "foo"
+    foo.write_text("near-match\n", encoding="utf-8")
+    foo_digest = hashlib.sha256(foo.read_bytes()).hexdigest()
+    (bundle / "SHA256SUMS").write_text(f"{foo_digest}  ./foo\n", encoding="utf-8")
     with tarfile.open(archive, "w:gz") as handle:
         handle.add(bundle, arcname=bundle.name, recursive=True)
-    with pytest.raises(UpgradeError, match=r"\./foo .*is missing"):
+    extracted = upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract-safe")
+    assert (extracted / "foo").read_text(encoding="utf-8") == "near-match\n"
+
+
+def test_extract_rejects_dot_prefixed_malformed_artifact_path(tmp_path: Path) -> None:
+    """A genuinely unsafe near-match reaches the path-shape guard."""
+    import tarfile
+
+    bundle = tmp_path / "modulo-1.2.0-linux-amd64"
+    bundle.mkdir()
+    foo = bundle / "foo"
+    foo.write_text("near-match\n", encoding="utf-8")
+    digest = hashlib.sha256(foo.read_bytes()).hexdigest()
+    (bundle / "SHA256SUMS").write_text(f"{digest}  ./.\n", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-amd64.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(bundle, arcname=bundle.name, recursive=True)
+
+    with pytest.raises(UpgradeError, match="unsafe artifact path"):
         upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract-malformed")
 
 
