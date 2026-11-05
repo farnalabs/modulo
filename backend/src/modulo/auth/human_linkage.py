@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -186,12 +186,25 @@ async def resolve_human_linkage(
         if membership is None:
             return base
         _live_role, kind = membership
-        base = replace(base, principal_kind=kind)
         if kind != KIND_HUMAN:
-            return base
+            return HumanLinkage(
+                linked=False,
+                auth_type=auth_type,
+                account_id=account_id,
+                token_family=token_family,
+                principal_kind=kind,
+                linkage=LINKAGE_NONE,
+            )
         # No consent grant-set on a key: authority is its live-clamped role,
         # enforced by the tool/route permission chokepoint.
-        return replace(base, linked=True, linkage=LINKAGE_USER_SCOPED_KEY)
+        return HumanLinkage(
+            linked=True,
+            auth_type=auth_type,
+            account_id=account_id,
+            token_family=token_family,
+            principal_kind=kind,
+            linkage=LINKAGE_USER_SCOPED_KEY,
+        )
 
     # (a) Purpose-bound signed OAuth access token with a non-empty account_id
     # and token_family. `auth_type == "oauth"` is only ever set after
@@ -208,13 +221,33 @@ async def resolve_human_linkage(
     if membership is None:
         return base
     _live_role, kind = membership
-    base = replace(base, principal_kind=kind)
     if kind != KIND_HUMAN:
-        return base
+        return HumanLinkage(
+            linked=False,
+            auth_type=auth_type,
+            account_id=account_id,
+            token_family=token_family,
+            principal_kind=kind,
+            linkage=LINKAGE_NONE,
+        )
     # (d) The consented grant set must cover the action.
     if grants is None or required_permission not in grants:
-        return base
-    return replace(base, linked=True, linkage=LINKAGE_OAUTH_CONSENT)
+        return HumanLinkage(
+            linked=False,
+            auth_type=auth_type,
+            account_id=account_id,
+            token_family=token_family,
+            principal_kind=kind,
+            linkage=LINKAGE_NONE,
+        )
+    return HumanLinkage(
+        linked=True,
+        auth_type=auth_type,
+        account_id=account_id,
+        token_family=token_family,
+        principal_kind=kind,
+        linkage=LINKAGE_OAUTH_CONSENT,
+    )
 
 
 def required_permission_for_action(action: str) -> str:
