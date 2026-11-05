@@ -12,7 +12,7 @@ operator may keep private, so the "the repo is public" premise does not
 generalise) and no deploy workflow reads them.
 """
 
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -198,3 +198,43 @@ class TestDeploymentInfo:
         resp = client.get("/api/v1/deployment")
         body = resp.json()
         assert not body["git_sha"]
+
+
+class TestDeploymentInfoAutobeginDisabledSession:
+    """Regression: ``deployment_info`` must not read on an untransacted session.
+
+    The unit fixture above mocks ``session.execute`` wholesale, which is exactly
+    why the missing ``session.begin()`` was invisible. This drives a real
+    sqlite session built with ``autobegin=False`` (the system DI session
+    contract) so an unwrapped read raises
+    ``InvalidRequestError: Autobegin is disabled on this Session``.
+    """
+
+    def test_reads_on_autobegin_disabled_session(self) -> None:
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+        from modulo.db.models.run import Run
+        from modulo.db.models.system_config import SystemConfig
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+        async def override_session() -> AsyncGenerator[AsyncSession, None]:
+            async with engine.begin() as conn:
+                await conn.run_sync(Run.__table__.create)
+                await conn.run_sync(SystemConfig.__table__.create)
+            factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+            async with factory() as session:
+                yield session
+            await engine.dispose()
+
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[deployment.get_system_db_session] = override_session
+        try:
+            resp = TestClient(app).get("/api/v1/deployment")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["active_sandbox_runs"] == 0
+        assert body["deployment_drain"] is False

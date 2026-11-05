@@ -78,9 +78,10 @@ async def deployment_info(
     # customer may build from a private fork), and no consumer reads them
     # (FAR-1975). Keep the response to build identifiers that are useless
     # without the repo itself.
-    active_sandbox_runs = await count_active_runner_dispatches_for_deployment(session)
-    drain = await session.execute(select(SystemConfig.value).where(SystemConfig.key == _DRAIN_KEY))
-    drain_value = drain.scalar_one_or_none()
+    async with session.begin():
+        active_sandbox_runs = await count_active_runner_dispatches_for_deployment(session)
+        drain = await session.execute(select(SystemConfig.value).where(SystemConfig.key == _DRAIN_KEY))
+        drain_value = drain.scalar_one_or_none()
     return {
         "version": get_version(),
         "uptime_seconds": int(time.time() - _start_time),
