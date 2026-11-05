@@ -500,6 +500,37 @@ describe('SystemMapDetailView authoring actions', () => {
     expect(wrapper.find('[data-testid="system-map-revision-diff-result"]').exists()).toBe(false)
   })
 
+  it('clears a rendered diff when switching revisions or time', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    store.activeMap = { id: 'map-1', name: 'Map one', published_revision_id: 'rev-1' } as never
+    await flushPromises()
+    vi.spyOn(store, 'diffRevision').mockResolvedValue({
+      base_revision_id: 'rev-2',
+      base_revision_number: 2,
+      target_revision_id: 'rev-1',
+      target_revision_number: 1,
+      nodes_added: ['node-a'],
+    } as never)
+
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-revision-diff-result"]').exists()).toBe(true)
+
+    wrapper.findComponent(RevisionStub).vm.$emit('select-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-revision-diff-result"]').exists()).toBe(false)
+
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-revision-diff-result"]').exists()).toBe(true)
+
+    wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2026-01-15T10:30:00Z')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-revision-diff-result"]').exists()).toBe(false)
+  })
+
   it('skips diffing when the map has no published revision or is not loaded', async () => {
     const wrapper = mountWithStubs()
     await flushPromises()

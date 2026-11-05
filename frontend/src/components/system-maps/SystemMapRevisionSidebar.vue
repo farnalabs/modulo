@@ -33,17 +33,16 @@
              v-if="!props.readOnly && revision.status !== 'draft'"
              type="button"
              class="mt-1 w-full rounded border px-2 py-1 text-xs"
-              @click="$emit('restore-revision', revision.id)"
-              data-testid="system-map-revision-restore"
-            >{{ $t('views.SystemMapDetailView.restore_as_new') }}</button>
-            <button
-              v-if="activeMap?.published_revision_id && revision.id !== activeMap.published_revision_id"
-              type="button"
-              class="mt-1 w-full rounded border px-2 py-1 text-xs"
-              @click="$emit('diff-revision', revision.id)"
-              data-testid="system-map-revision-diff"
-            >{{ $t('views.SystemMapDetailView.diff') }}</button>
-
+             @click="$emit('restore-revision', revision.id)"
+             data-testid="system-map-revision-restore"
+           >{{ $t('views.SystemMapDetailView.restore_as_new') }}</button>
+           <button
+             v-if="activeMap?.published_revision_id && revision.id !== activeMap.published_revision_id"
+             type="button"
+             class="mt-1 w-full rounded border px-2 py-1 text-xs"
+             @click="$emit('diff-revision', revision.id)"
+             data-testid="system-map-revision-diff"
+           >{{ $t('views.SystemMapDetailView.diff') }}</button>
 
         </li>
       </ol>

@@ -1981,8 +1981,7 @@ export default {
       "delete": "Delete",
       "delete_confirm": "Delete {name}? This removes the map from your organization.",
       "create_failed": "Could not create the system map.",
-      "delete_failed": "Could not delete the system map.",
-      "diff_revision": "Could not compare revisions."
+      "delete_failed": "Could not delete the system map."
     },
     "SystemMapDetailView": {
       "title": "System Map",

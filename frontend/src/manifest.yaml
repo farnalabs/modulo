@@ -1268,7 +1268,6 @@ elements:
       - testid: system-map-discovery-panel
         type: dialog
         dynamic_testid: false
-
       - testid: system-map-discovery-backdrop
         type: button
         dynamic_testid: false

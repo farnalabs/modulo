@@ -242,6 +242,7 @@ async function diffRevision(revisionId: string): Promise<void> {
 async function selectRevision(revisionId: string): Promise<void> {
   if (!activeMap.value) return
   actionError.value = null
+  diffResult.value = null
   try {
     await store.loadRevision(activeMap.value.id, revisionId)
   } catch (err) {
@@ -252,6 +253,7 @@ async function selectRevision(revisionId: string): Promise<void> {
 async function selectCurrentRevision(): Promise<void> {
   if (!activeMap.value) return
   actionError.value = null
+  diffResult.value = null
   try {
     await store.loadCurrentRevision(activeMap.value.id)
   } catch (err) {
@@ -262,6 +264,7 @@ async function selectCurrentRevision(): Promise<void> {
 async function selectRevisionByTime(at: string): Promise<void> {
   if (!activeMap.value) return
   actionError.value = null
+  diffResult.value = null
   try {
     await store.loadRevisionByTime(activeMap.value.id, at)
   } catch (err) {
