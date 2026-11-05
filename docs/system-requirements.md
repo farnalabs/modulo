@@ -102,7 +102,8 @@ supported native-install targets.
 |--------------|--------|
 | linux-amd64 (x86_64) | Supported |
 | linux-arm64 | Planned (pins exist; no artifact published yet) |
-| macOS arm64 | Supported native artifact; Apple Silicon only |
+| macOS arm64 | Supported native artifact; Apple Silicon (`Modulo-<version>-macos-arm64.dmg`) |
+| macOS x86_64 | Supported native artifact; Intel (`Modulo-<version>-macos-x86_64.dmg`) |
 
 `linux-arm64` is not installable yet: the bundle build matrix carries only
 `amd64`, so no `linux-arm64` tarball is published even though the arm64 pins

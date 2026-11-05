@@ -168,10 +168,12 @@ with the [system requirements](docs/system-requirements.md), then follow the
 [deployment guide](docs/deployment.md). The [release process](docs/release-process.md)
 documents what must exist before the native path can become available.
 
-Native installation on macOS uses the supported, signed and notarized arm64
-`.dmg` for Apple Silicon only; x64/Rosetta is not supported (see the
-[system requirements](docs/system-requirements.md)). It is not installable
-today because no signed `bundle-v*` release is published yet.
+Native installation on macOS uses separate supported, signed and notarized
+`.dmg` artifacts for Apple Silicon (`macos-arm64`) and Intel (`macos-x86_64`);
+Rosetta is not required (see the [system requirements](docs/system-requirements.md)).
+The arm64 artifact is validated on `macos-15` and the x86_64 artifact on
+`macos-15-intel`. It is not installable today because no signed `bundle-v*`
+release is published yet.
 Native Windows installation is Beta scope, planned after Alpha: the native
 installer is still in progress and no signed Windows artifact is published yet.
 

@@ -627,7 +627,8 @@ def test_alpha_bundle_still_requires_the_macos_installer() -> None:
     downloads = [
         step.get("with", {}).get("name") for step in final_steps if "download-artifact" in str(step.get("uses", ""))
     ]
-    assert "macos-installer-${{ inputs.version }}" in downloads
+    assert "macos-installer-${{ inputs.version }}-arm64" in downloads
+    assert "macos-installer-${{ inputs.version }}-x86_64" in downloads
 
 
 def test_publish_release_assets_match_the_alpha_bundle() -> None:
@@ -646,8 +647,9 @@ def test_publish_release_assets_match_the_alpha_bundle() -> None:
         script = steps[names.index(step_name)]["run"]
         # Windows must only appear inside the INCLUDE_WINDOWS conditional
         assert 'if [ "$INCLUDE_WINDOWS" = "true" ]; then' in script
-        assert "linux" in script
-        assert "macos" in script
+        assert "modulo-${VERSION}-linux-amd64.tar.gz" in script
+        assert "Modulo-${VERSION}-macos-arm64.dmg" in script
+        assert "Modulo-${VERSION}-macos-x86_64.dmg" in script
 
 
 def test_portable_artifact_presence_check_is_not_signature_gate() -> None:
@@ -2901,10 +2903,11 @@ def test_final_release_manifest_downloads_windows_artifact_conditionally() -> No
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
     download_steps = [step for step in final_steps if step.get("uses", "").startswith("actions/download-artifact@")]
-    # Should have bundle, macos, and conditional windows downloads
+    # Should have bundle, both architecture-suffixed macOS downloads, and conditional Windows.
     names = [step.get("with", {}).get("name") for step in download_steps]
     assert "bundle-artefacts-amd64" in names
-    assert "macos-installer-${{ inputs.version }}" in names
+    assert "macos-installer-${{ inputs.version }}-arm64" in names
+    assert "macos-installer-${{ inputs.version }}-x86_64" in names
     # Windows download should be conditional on include_windows
     windows_downloads = [step for step in download_steps if "windows-installer" in step.get("with", {}).get("name", "")]
     assert len(windows_downloads) == 1
@@ -2927,9 +2930,10 @@ def test_final_release_manifest_builds_sha256sums_conditionally() -> None:
     assert "modulo-${VERSION}-windows-amd64.exe" in script
     # Should error if include_windows=true but artifact missing
     assert "include_windows=true but windows-installer" in script
-    # Linux and macOS must always be included
+    # Linux and both native macOS DMGs must always be included.
     assert "modulo-${VERSION}-linux-amd64.tar.gz" in script
     assert "Modulo-${VERSION}-macos-arm64.dmg" in script
+    assert "Modulo-${VERSION}-macos-x86_64.dmg" in script
 
 
 def test_final_release_manifest_builds_components_dict_conditionally() -> None:
@@ -2940,12 +2944,17 @@ def test_final_release_manifest_builds_components_dict_conditionally() -> None:
     build_idx = final_names.index("Build final signed manifest after every platform artifact")
     build_step = final_steps[build_idx]
     script = build_step["run"]
-    # Should build components dict conditionally
-    assert 'components = {"linux": "amd64", "macos": "arm64"}' in script
+    # The manifest must describe both native macOS architectures as one
+    # platform family, with Windows remaining conditional.
+    assert 'components = {"linux": "amd64", "macos": "native"}' in script
     assert "if include_windows:" in script
     assert 'components["windows"] = "amd64"' in script
-    # names list should be conditional
-    assert 'names = [f"modulo-{version}-linux-amd64.tar.gz", f"Modulo-{version}-macos-arm64.dmg"]' in script
+    # Both architecture-suffixed DMGs are unconditional manifest assets.
+    assert (
+        'names = [f"modulo-{version}-linux-amd64.tar.gz", '
+        'f"Modulo-{version}-macos-arm64.dmg", '
+        'f"Modulo-{version}-macos-x86_64.dmg"]'
+    ) in script
     assert 'names.append(f"modulo-{version}-windows-amd64.exe")' in script
 
 
@@ -3004,9 +3013,11 @@ def test_alpha_bundle_sha256sums_generation_succeeds_without_windows(tmp_path: P
     artefacts_dir = tmp_path / "release-artefacts"
     artefacts_dir.mkdir()
     linux_tar = artefacts_dir / "modulo-0.3.324-linux-amd64.tar.gz"
-    macos_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    macos_arm64_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    macos_x86_64_dmg = artefacts_dir / "Modulo-0.3.324-macos-x86_64.dmg"
     linux_tar.write_bytes(b"linux-bundle-content")
-    macos_dmg.write_bytes(b"macos-dmg-content")
+    macos_arm64_dmg.write_bytes(b"macos-arm64-dmg-content")
+    macos_x86_64_dmg.write_bytes(b"macos-x86_64-dmg-content")
 
     # Run the conditional sha256sum generation (Alpha path: INCLUDE_WINDOWS=false)
     env = {**os.environ, "VERSION": "0.3.324", "INCLUDE_WINDOWS": "false"}
@@ -3017,9 +3028,13 @@ if [ "$INCLUDE_WINDOWS" = "true" ]; then
   sha256sum \
     "modulo-${VERSION}-linux-amd64.tar.gz" \
     "Modulo-${VERSION}-macos-arm64.dmg" \
+    "Modulo-${VERSION}-macos-x86_64.dmg" \
     "modulo-${VERSION}-windows-amd64.exe" > SHA256SUMS
 else
-  sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+  sha256sum \
+    "modulo-${VERSION}-linux-amd64.tar.gz" \
+    "Modulo-${VERSION}-macos-arm64.dmg" \
+    "Modulo-${VERSION}-macos-x86_64.dmg" > SHA256SUMS
 fi
 cd ..
 (cd release-artefacts && sha256sum --check SHA256SUMS)
@@ -3027,13 +3042,16 @@ cd ..
     result = _run_bash(sha256_script, cwd=tmp_path, env=env)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 
-    # Verify SHA256SUMS was created with only Linux and macOS
+    # Verify SHA256SUMS contains Linux and both native macOS DMGs.
     sha256sums = (artefacts_dir / "SHA256SUMS").read_text(encoding="utf-8")
-    assert "modulo-0.3.324-linux-amd64.tar.gz" in sha256sums
-    assert "Modulo-0.3.324-macos-arm64.dmg" in sha256sums
+    expected_assets = {
+        "modulo-0.3.324-linux-amd64.tar.gz",
+        "Modulo-0.3.324-macos-arm64.dmg",
+        "Modulo-0.3.324-macos-x86_64.dmg",
+    }
+    assert {line.split("  ", 1)[1] for line in sha256sums.strip().splitlines()} == expected_assets
     assert "windows-amd64.exe" not in sha256sums
-    # Verify it has exactly 2 lines
-    assert len(sha256sums.strip().split("\n")) == 2
+    assert len(sha256sums.strip().splitlines()) == 3
 
 
 @pytest.mark.posix_only
@@ -3042,10 +3060,12 @@ def test_beta_bundle_sha256sums_generation_succeeds_with_windows(tmp_path: Path)
     artefacts_dir = tmp_path / "release-artefacts"
     artefacts_dir.mkdir()
     linux_tar = artefacts_dir / "modulo-0.3.324-linux-amd64.tar.gz"
-    macos_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    macos_arm64_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    macos_x86_64_dmg = artefacts_dir / "Modulo-0.3.324-macos-x86_64.dmg"
     windows_exe = artefacts_dir / "modulo-0.3.324-windows-amd64.exe"
     linux_tar.write_bytes(b"linux-bundle-content")
-    macos_dmg.write_bytes(b"macos-dmg-content")
+    macos_arm64_dmg.write_bytes(b"macos-arm64-dmg-content")
+    macos_x86_64_dmg.write_bytes(b"macos-x86_64-dmg-content")
     windows_exe.write_bytes(b"windows-exe-content")
 
     env = {**os.environ, "VERSION": "0.3.324", "INCLUDE_WINDOWS": "true"}
@@ -3056,9 +3076,13 @@ if [ "$INCLUDE_WINDOWS" = "true" ]; then
   sha256sum \
     "modulo-${VERSION}-linux-amd64.tar.gz" \
     "Modulo-${VERSION}-macos-arm64.dmg" \
+    "Modulo-${VERSION}-macos-x86_64.dmg" \
     "modulo-${VERSION}-windows-amd64.exe" > SHA256SUMS
 else
-  sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+  sha256sum \
+    "modulo-${VERSION}-linux-amd64.tar.gz" \
+    "Modulo-${VERSION}-macos-arm64.dmg" \
+    "Modulo-${VERSION}-macos-x86_64.dmg" > SHA256SUMS
 fi
 cd ..
 (cd release-artefacts && sha256sum --check SHA256SUMS)
@@ -3066,13 +3090,16 @@ cd ..
     result = _run_bash(sha256_script, cwd=tmp_path, env=env)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 
-    # Verify SHA256SUMS includes all three
+    # Verify SHA256SUMS includes Linux, both native macOS DMGs, and Windows.
     sha256sums = (artefacts_dir / "SHA256SUMS").read_text(encoding="utf-8")
-    assert "modulo-0.3.324-linux-amd64.tar.gz" in sha256sums
-    assert "Modulo-0.3.324-macos-arm64.dmg" in sha256sums
-    assert "modulo-0.3.324-windows-amd64.exe" in sha256sums
-    # Verify it has exactly 3 lines
-    assert len(sha256sums.strip().split("\n")) == 3
+    expected_assets = {
+        "modulo-0.3.324-linux-amd64.tar.gz",
+        "Modulo-0.3.324-macos-arm64.dmg",
+        "Modulo-0.3.324-macos-x86_64.dmg",
+        "modulo-0.3.324-windows-amd64.exe",
+    }
+    assert {line.split("  ", 1)[1] for line in sha256sums.strip().splitlines()} == expected_assets
+    assert len(sha256sums.strip().splitlines()) == 4
 
 
 @pytest.mark.posix_only
@@ -3081,9 +3108,11 @@ def test_beta_bundle_sha256sums_generation_fails_when_windows_missing(tmp_path: 
     artefacts_dir = tmp_path / "release-artefacts"
     artefacts_dir.mkdir()
     linux_tar = artefacts_dir / "modulo-0.3.324-linux-amd64.tar.gz"
-    macos_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    macos_arm64_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    macos_x86_64_dmg = artefacts_dir / "Modulo-0.3.324-macos-x86_64.dmg"
     linux_tar.write_bytes(b"linux-bundle-content")
-    macos_dmg.write_bytes(b"macos-dmg-content")
+    macos_arm64_dmg.write_bytes(b"macos-arm64-dmg-content")
+    macos_x86_64_dmg.write_bytes(b"macos-x86_64-dmg-content")
 
     env = {**os.environ, "VERSION": "0.3.324", "INCLUDE_WINDOWS": "true"}
     sha256_script = """
@@ -3097,9 +3126,13 @@ if [ "$INCLUDE_WINDOWS" = "true" ]; then
   sha256sum \
     "modulo-${VERSION}-linux-amd64.tar.gz" \
     "Modulo-${VERSION}-macos-arm64.dmg" \
+    "Modulo-${VERSION}-macos-x86_64.dmg" \
     "modulo-${VERSION}-windows-amd64.exe" > SHA256SUMS
 else
-  sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+  sha256sum \
+    "modulo-${VERSION}-linux-amd64.tar.gz" \
+    "Modulo-${VERSION}-macos-arm64.dmg" \
+    "Modulo-${VERSION}-macos-x86_64.dmg" > SHA256SUMS
 fi
 cd ..
 (cd release-artefacts && sha256sum --check SHA256SUMS)
