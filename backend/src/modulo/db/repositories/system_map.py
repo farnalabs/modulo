@@ -127,7 +127,11 @@ def _apply_budget_observations(
 class SystemMapRepository(BaseRepository):  # vulture: ignore
     """Repository for System Maps entities."""
 
-    def apply_tenant_filter(self, stmt: Select[Any], _org_id: uuid.UUID) -> Select[Any]:
+    def apply_tenant_filter(
+        self,
+        stmt: Select[Any],
+        _org_id: uuid.UUID,  # NOSONAR S1172 - BaseRepository override contract
+    ) -> Select[Any]:
         """Rely on PostgreSQL RLS for tenant isolation."""
         return stmt
 
