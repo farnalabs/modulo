@@ -1,12 +1,10 @@
 {{- if .Values.redis.embedded }}
 {{- $redisPassword := include "modulo.redisPassword" . }}
+{{- $redisPassword = required "redis.password or redis.existingSecret is required when redis.embedded=true" $redisPassword }}
 {{- /* FAR-2002: volatile-lru evicts ONLY TTL-bearing keys. The SAQ queue's
 structural keys (queued/active lists, incomplete zset) carry no TTL and must
 never be evicted; an allkeys-* policy can lose them with nothing to repair. */}}
 {{- $redisArgs := list "redis-server" "--maxmemory" "256mb" "--maxmemory-policy" "volatile-lru" }}
-{{- if $redisPassword }}
-{{- $redisArgs = concat $redisArgs (list "--requirepass" "$(REDIS_PASSWORD)") }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -51,8 +49,14 @@ spec:
             - name: http-redis
               containerPort: 6379
               protocol: TCP
+          {{- if $redisPassword }}
+          command: ["sh", "-c"]
+          args:
+            - exec redis-server --maxmemory 256mb --maxmemory-policy volatile-lru --requirepass "$REDIS_PASSWORD"
+          {{- else }}
           command:
             {{- toYaml $redisArgs | nindent 12 }}
+          {{- end }}
           {{- if $redisPassword }}
           env:
             - name: REDIS_PASSWORD

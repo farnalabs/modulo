@@ -96,7 +96,7 @@ SAQ_AUTH_USERNAME=admin SAQ_AUTH_PASSWORD=admin uv run python -m modulo.core.saq
 
 Notes:
 - `python -m saq` takes the **settings module** as its only positional arg; there is no `worker` subcommand in the pinned SAQ version (`saq==0.26.5` in `backend/pyproject.toml`).
-- A local Redis is required (`REDIS_URL`, e.g. `redis://localhost:6380/0` from the compose `redis-local` service).
+- A local Redis is required (`REDIS_URL`, e.g. `redis://localhost:6380/0` from the compose `redis-local` service). The compose mapping is loopback-only; do not publish Redis on `0.0.0.0` or expose port 6379 beyond the local machine.
 - `MODULO_SYSTEM_DATABASE_URL` (set in the step-2 `.env`) is what lets the system worker run its cross-org crons. Without it, `dispatcher_reconcile` never runs and `/healthz/ready` stays `503`.
 - The compose stack (`docker-compose.local.yml`) ships `saq-runner` + `saq-system` services that launch both workers; `saq-system` is **required** for local cron/triggers to fire.
 
