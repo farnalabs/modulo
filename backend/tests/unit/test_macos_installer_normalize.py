@@ -110,6 +110,19 @@ def _line_numbers(script: str, pattern: str) -> list[int]:
     return [index for index, line in enumerate(script.splitlines()) if re.search(pattern, line)]
 
 
+def test_macos_finder_heredoc_terminator_is_at_column_zero_after_yaml_parsing() -> None:
+    """Keep YAML parsing from indenting bash's AppleScript heredoc terminator."""
+    _step, build_run = _native_installer_step()
+    lines = build_run.splitlines()
+    opener_index = next(index for index, line in enumerate(lines) if "<<'APPLESCRIPT'" in line)
+    terminator_indexes = [index for index, line in enumerate(lines) if line.strip() == "APPLESCRIPT"]
+
+    assert len(terminator_indexes) == 1
+    terminator_index = terminator_indexes[0]
+    assert terminator_index > opener_index
+    assert lines[terminator_index] == "APPLESCRIPT"
+
+
 def test_macos_dmg_contract_structurally_verifies_staging_and_post_mount_gates() -> None:
     """Verify the DMG workflow contract without attempting a macOS DMG build on Windows."""
     step, build_run = _native_installer_step()
