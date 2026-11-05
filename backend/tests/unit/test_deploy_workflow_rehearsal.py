@@ -609,8 +609,9 @@ def test_windows_bundle_is_scoped_into_the_alpha_release_path() -> None:
     # The unconditional path must not have Windows
     assert "modulo-${VERSION}-linux-amd64.tar.gz" in build_script
     assert "Modulo-${VERSION}-macos-arm64.dmg" in build_script
+    assert "Modulo-${VERSION}-macos-x86_64.dmg" in build_script
     # The components dict starts with linux+macos only
-    assert 'components = {"linux": "amd64", "macos": "arm64"}' in build_script
+    assert 'components = {"linux": "amd64", "macos": "native"}' in build_script
     # Windows is only added conditionally
     assert 'components["windows"] = "amd64"' in build_script
     assert 'names.append(f"modulo-{version}-windows-amd64.exe")' in build_script
