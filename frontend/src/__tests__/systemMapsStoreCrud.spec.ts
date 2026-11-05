@@ -342,6 +342,37 @@ describe('useSystemMapsStore CRUD', () => {
     await expect(store.restoreRevisionAsNew('map-1', 'rev-1')).rejects.toThrow('Could not restore revision')
   })
 
+  it('diffs a revision against the current draft', async () => {
+    const diff = { base_revision_id: 'rev-1', target_revision_id: 'rev-2', content_json_changed: true }
+    mockPost.mockResolvedValue({ data: diff })
+    const store = useSystemMapsStore()
+
+    await expect(store.diffRevision('map-1', 'rev-1')).resolves.toEqual(diff)
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff', {
+      params: { path: { map_id: 'map-1', rev_id: 'rev-1' } },
+      body: {},
+    })
+  })
+
+  it('diffs a revision against an explicit revision', async () => {
+    mockPost.mockResolvedValue({ data: { base_revision_id: 'rev-1', target_revision_id: 'rev-3' } })
+    const store = useSystemMapsStore()
+
+    await store.diffRevision('map-1', 'rev-1', 'rev-3')
+
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff', {
+      params: { path: { map_id: 'map-1', rev_id: 'rev-1' } },
+      body: { against_revision_id: 'rev-3' },
+    })
+  })
+
+  it('throws when diffing a revision fails', async () => {
+    mockPost.mockResolvedValue({ error: { detail: 'nope' } })
+    const store = useSystemMapsStore()
+
+    await expect(store.diffRevision('map-1', 'rev-1')).rejects.toThrow('Could not diff revision')
+  })
+
   it('discovers a map and loads the created draft revision', async () => {
     mockPost.mockResolvedValue({ data: { draft_map_id: 'map-9', draft_revision_id: 'rev-9', inferred_nodes: [], inferred_edges: [] } })
     mockGet.mockImplementation((path: string) => {

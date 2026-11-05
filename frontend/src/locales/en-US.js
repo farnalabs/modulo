@@ -1981,7 +1981,8 @@ export default {
       "delete": "Delete",
       "delete_confirm": "Delete {name}? This removes the map from your organization.",
       "create_failed": "Could not create the system map.",
-      "delete_failed": "Could not delete the system map."
+      "delete_failed": "Could not delete the system map.",
+      "diff_revision": "Could not compare revisions."
     },
     "SystemMapDetailView": {
       "title": "System Map",
@@ -2005,6 +2006,7 @@ export default {
       "current_revision": "Current",
       "new_draft": "New draft",
       "restore_as_new": "Restore as new draft",
+      "diff": "Compare revisions",
       "effective_from": "Effective from",
       "no_revisions": "No revisions have been created yet.",
       "unavailable": "This system map is not available on your plan. System Maps is switched off for this organisation, so retrying will not help.",
@@ -4650,6 +4652,7 @@ export default {
       "load_revision": "Could not load revision",
       "create_draft": "Could not create draft",
       "restore_revision": "Could not restore revision",
+      "diff_revision": "Could not compare revisions",
       "save_draft": "Could not save draft",
       "discovery_failed": "Discovery failed"
     }

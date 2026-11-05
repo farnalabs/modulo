@@ -21,6 +21,7 @@
           :read-only="readOnly"
            @new-draft="createNewDraft"
            @restore-revision="restoreRevision"
+           @diff-revision="diffRevision"
            @discover="runDiscovery"
 
         />
@@ -50,6 +51,30 @@
           :dismiss-label="$t('common.dismiss')"
           class="m-3"
         />
+        <div v-if="diffResult" class="m-3 rounded-lg border bg-card p-3 text-sm" data-testid="system-map-revision-diff-result">
+          <div class="flex items-center justify-between gap-2">
+            <h2 class="font-semibold">{{ $t('views.SystemMapDetailView.diff') }}</h2>
+            <button type="button" class="rounded border px-2 py-1 text-xs" @click="diffResult = null">{{ $t('common.dismiss') }}</button>
+          </div>
+          <p class="mt-1 text-xs text-muted-foreground">
+            {{ $t('views.SystemMapDetailView.revision', { number: diffResult.base_revision_number }) }} →
+            {{ $t('views.SystemMapDetailView.revision', { number: diffResult.target_revision_number }) }}
+          </p>
+          <ul class="mt-2 grid gap-1 text-xs sm:grid-cols-2">
+            <li v-for="item in [
+              ['nodes_added', diffResult.nodes_added?.length ?? 0],
+              ['nodes_removed', diffResult.nodes_removed?.length ?? 0],
+              ['nodes_modified', diffResult.nodes_modified?.length ?? 0],
+              ['relationships_added', diffResult.relationships_added?.length ?? 0],
+              ['relationships_removed', diffResult.relationships_removed?.length ?? 0],
+              ['relationships_modified', diffResult.relationships_modified?.length ?? 0],
+              ['loop_configs_added', diffResult.loop_configs_added?.length ?? 0],
+              ['loop_configs_removed', diffResult.loop_configs_removed?.length ?? 0],
+              ['loop_configs_modified', diffResult.loop_configs_modified?.length ?? 0],
+            ]" :key="item[0]" v-if="item[1]">{{ item[0] }}: {{ item[1] }}</li>
+            <li v-if="diffResult.content_json_changed">content_json: changed</li>
+          </ul>
+        </div>
 
         <HeaderBar
           :map="activeMap"
@@ -124,7 +149,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSystemMapsStore, NODE_TYPES, RELATIONSHIP_TYPES } from '../stores/systemMaps'
-import type { DiscoverySelection, SystemMapNode, SystemMapRelationship } from '../stores/systemMaps'
+import type { DiscoverySelection, SystemMapNode, SystemMapRelationship, SystemMapRevisionDiff } from '../stores/systemMaps'
 import BackLink from '../components/BackLink.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import HeaderBar from '../components/system-maps/SystemMapHeaderBar.vue'
@@ -152,6 +177,7 @@ const showSidebar = ref(true)
 const discoveryOpen = ref(false)
 const saving = ref(false)
 const actionError = ref<string | null>(null)
+const diffResult = ref<SystemMapRevisionDiff | null>(null)
 const editedNodes = ref<SystemMapNode[]>([])
 const editedRelationships = ref<SystemMapRelationship[]>([])
 
@@ -202,6 +228,16 @@ async function loadData(): Promise<void> {
     await store.loadRevisionHistory(mapId.value)
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.load_revision_history')
+  }
+}
+
+async function diffRevision(revisionId: string): Promise<void> {
+  if (!activeMap.value || !activeMap.value.published_revision_id) return
+  actionError.value = null
+  try {
+    diffResult.value = await store.diffRevision(activeMap.value.id, revisionId, activeMap.value.published_revision_id)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.diff_revision')
   }
 }
 

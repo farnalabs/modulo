@@ -438,10 +438,6 @@ The map is stored in dedicated System Maps tables (migration
   inventory scan and persist an unpublished draft, but there is no MCP tool to
   author a map, publish / archive / diff / restore a revision, read a revision
   or its history, or read the overview; those remain REST-only.
-- **Version-aware diff is not wired into the UI.**
-  `revisions/current`, `revisions/by-time`, `revisions/history` and
-  `restore-as-new` now drive the revision sidebar, but
-  `revisions/{rev_id}/diff` has no UI affordance.
 - **Discovery is create-only.** Each discovery persists a new map plus a draft
   revision; a repeat with a colliding name is a 409. There is no re-scan into an
   existing draft, so the "added / removed / ambiguous" reconciliation described
@@ -452,6 +448,13 @@ The map is stored in dedicated System Maps tables (migration
   concurrency are not enforced (deferred to Beta 3).
 
 ## QA History
+
+- 2026-11-05: **Improve Architecture product-map walk** - wired the existing
+  revision diff endpoint into the System Maps UI. Operators can now compare a
+  historical revision with the published revision from the revision sidebar,
+  with the result showing changed node, relationship, loop-config, and content
+  counts. Added store regression coverage for current-draft and explicit-target
+  requests, and kept the MCP-only and re-scan gaps unchanged.
 
 - 2026-11-04: **Improve Architecture product-map walk** - fixed stale revision
   metadata in the history sidebar. `loadRevision` only appended an unseen
