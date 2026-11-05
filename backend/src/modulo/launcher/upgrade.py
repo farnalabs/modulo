@@ -890,10 +890,9 @@ def fetch_release_assets(
 
 def _checksum_artifact(bundle_dir: Path, name: str) -> Path:
     """Validate a SHA256SUMS name without following untrusted path components."""
-    # Native bundles intentionally ship root VERSION metadata. Some checksum
-    # generators record that root entry as ./VERSION; canonicalize only this
-    # exact legacy spelling so arbitrary dot-prefixed paths remain rejected.
-    canonical_name = "VERSION" if name == "./VERSION" else name
+    # Native bundle checksum generators prefix every path with ./; remove
+    # exactly one leading prefix before applying the path-safety validation.
+    canonical_name = name.removeprefix("./")
     path = Path(canonical_name)
     raw_components = canonical_name.split("/")
     if (
