@@ -102,7 +102,7 @@ describe('api client withAuth (non-retryable verbs)', () => {
       headers: [['X-Request-Id', 'request-1']],
     } as never)
 
-    const request = fetchMock.mock.calls[0][1] as RequestInit
+    const request = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
     const headers = new Headers(request.headers)
     expect(headers.get('authorization')).toBe('Bearer token-1')
     expect(headers.get('x-request-id')).toBe('request-1')
