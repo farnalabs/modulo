@@ -1818,6 +1818,38 @@ def test_shell_checksum_verifier_rejects_windows_manifest_paths_before_filesyste
     assert "No such file" not in result.stderr
 
 
+@pytest.mark.posix_only
+def test_shell_checksum_verifier_accepts_native_bundle_version_metadata(tmp_path: Path) -> None:
+    """The native bundle's ``./VERSION`` checksum entry is legitimate metadata."""
+    source = (Path(__file__).resolve().parents[4] / "scripts" / "install.sh").read_text(encoding="utf-8")
+    function_start = source.index("verify_sums_in_dir() {")
+    function_end = source.index("\n\nvalidate_legacy_shim_collision()", function_start)
+    verifier = source[function_start:function_end]
+    sums_dir = tmp_path / "bundle"
+    sums_dir.mkdir()
+    version = sums_dir / "VERSION"
+    version.write_text("bundle-v0.3.325\n", encoding="utf-8")
+    digest = hashlib.sha256(version.read_bytes()).hexdigest()
+    (sums_dir / "SHA256SUMS").write_text(f"{digest}  ./VERSION\n", encoding="utf-8")
+    harness = tmp_path / "verify.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "die() { printf 'ERROR: %b\\n' \"$*\" >&2; exit 1; }\n"
+        "sha256_of() { sha256sum \"$1\" | awk '{print $1}'; }\n"
+        f"{verifier}\n"
+        f"verify_sums_in_dir {shlex.quote(str(sums_dir))}\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    bash_bin = shutil.which("bash")
+    assert bash_bin is not None
+    result = subprocess.run(  # noqa: S603 - resolved bash and test-owned harness
+        [bash_bin, str(harness)], capture_output=True, text=True, timeout=30, check=False
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_installer_rejects_legacy_shim_before_install_root_mutation(tmp_path: Path) -> None:
     legacy_shim = tmp_path / "legacy-modulo"
     legacy_shim.write_text("legacy", encoding="utf-8")
@@ -1887,6 +1919,30 @@ def test_extract_rejects_symlink_listed_artifact(tmp_path):
         handle.add(bundle, arcname=bundle.name, recursive=True)
     with pytest.raises(UpgradeError, match="not a regular file"):
         upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+
+
+def test_extract_accepts_root_version_with_dot_prefix_and_rejects_near_match(tmp_path: Path) -> None:
+    """The native bundle's ``./VERSION`` entry is allowed, but not ``./foo``."""
+    import tarfile
+
+    bundle = tmp_path / "modulo-1.2.0-linux-amd64"
+    bundle.mkdir()
+    version = bundle / "VERSION"
+    version.write_text("bundle-v1.2.0\n", encoding="utf-8")
+    digest = hashlib.sha256(version.read_bytes()).hexdigest()
+    (bundle / "SHA256SUMS").write_text(f"{digest}  ./VERSION\n", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-amd64.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(bundle, arcname=bundle.name, recursive=True)
+
+    extracted = upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+    assert (extracted / "VERSION").read_text(encoding="utf-8") == "bundle-v1.2.0\n"
+
+    (bundle / "SHA256SUMS").write_text(f"{digest}  ./foo\n", encoding="utf-8")
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(bundle, arcname=bundle.name, recursive=True)
+    with pytest.raises(UpgradeError, match="unsafe artifact path"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract-malformed")
 
 
 def _checksum_archive(tmp_path: Path, listed_name: str, *, symlink_parent: bool = False) -> Path:

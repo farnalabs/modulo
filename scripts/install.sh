@@ -390,6 +390,10 @@ verify_sums_in_dir() {
     path="${line#*  }"
     [[ "${sum}" =~ ^[[:xdigit:]]{64}$ && "${path}" != "${line}" && -n "${path}" ]] || \
       die "bundle integrity check FAILED: malformed SHA256SUMS line '${line}'"
+    # Native bundles intentionally ship root VERSION metadata. Some checksum
+    # generators record that root entry as ./VERSION; canonicalize only this
+    # exact legacy spelling so arbitrary dot-prefixed paths remain rejected.
+    [[ "${path}" == "./VERSION" ]] && path="VERSION"
     case "${path}" in
       *\\* | [[:alpha:]]:* | ../* | */../* | */.. | . | .. | /* | *// | */)
         die "bundle integrity check FAILED: unsafe artifact path '${path}'"
