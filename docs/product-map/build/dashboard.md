@@ -26,7 +26,7 @@ spend, HITL volume/rejection/correlation, feedback volume), and daily run counts
 down by status. Summary responses are cached per
 org/`days` to keep the landing page fast.
 
-## Behaviours
+## Behaviors
 
 - [x] `GET /api/v1/dashboard/summary` returns `total_runs` (excluding pending/claimed),
       `active_pipelines`, `run_counts_by_status`, per-team metrics, `eval_pass_rate`,
@@ -105,8 +105,8 @@ org/`days` to keep the landing page fast.
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-08-28: **product-map review pass**: added this behaviour-tracker
+- 2026-08-28: **product-map review pass**: added this behavior-tracker
   for the registered manifest feature `feat-dashboard`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/dashboard.py`
+  `docs/product-map/` entry. Behaviors verified against `api/routes/dashboard.py`
   and `api/routes/views.py` and the dashboard/views
   unit+BDD suites. Status: covered.

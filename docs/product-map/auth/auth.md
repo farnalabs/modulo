@@ -36,7 +36,7 @@ JWT login (email/password), demo auto-login, invitation enrollment, token rotati
 logout, profile management, password change, and the OAuth consent screen for MCP
 clients.
 
-## Behaviours
+## Behaviors
 
 - [x] Login authenticates credentials, resolves org membership, and mints JWT
       access+refresh token pairs via token families; break-glass credentials are
@@ -53,11 +53,11 @@ clients.
       (reuse_replay=True for logging). Reuse outside the window, ahead of max, or
       from a blacklisted family blacklists the family as theft
       (`backend/src/modulo/db/crud/token_family.py`)
-- [x] Cross-tab refresh serialisation: the refresh token rides the httpOnly
+- [x] Cross-tab refresh serialization: the refresh token rides the httpOnly
       `modulo_refresh` cookie (FAR-1197 - no longer persisted in localStorage),
       which the browser shares across tabs, so a rotation by one tab is
       immediately visible to the others and no cross-tab adopt/retry loop is
-      needed. Refresh attempts are still serialised with the Web Locks API
+      needed. Refresh attempts are still serialized with the Web Locks API
       (`navigator.locks.request('modulo-auth-refresh', ...)`) and an in-tab
       single-flight promise, falling back to a direct refresh when Web Locks are
       unavailable (older browsers, test environments)
@@ -96,7 +96,7 @@ clients.
       call – a removed member's JWT is rejected 401 (`OrganisationMembershipNotFound`)
       on the next API call, so they cannot list pipelines or view runs, and a
       removed member's refresh token is rejected 401 ("Account no longer has
-      access to this organisation") BEFORE the family sequence advances
+      access to this organization") BEFORE the family sequence advances
       (`backend/src/modulo/auth/dependencies.py` `_verify_identity` /
       `get_current_tenant_user`, `backend/src/modulo/api/routes/auth.py`
       `_advance_refresh_sequence`, `backend/src/modulo/db/crud/org_membership.py`)
@@ -107,7 +107,7 @@ clients.
   revokes access" persona-journey gap (pinned `@awaiting-implementation` since
   2026-08 while the feature shipped underneath it). The scenario now executes
   against the REAL ADR 047 seams via `steps/test_personas.py`: a real in-memory
-  aiosqlite DB (Account / Organisation / OrgMembership / TokenFamily rows),
+  aiosqlite DB (Account / Organization / OrgMembership / TokenFamily rows),
   REAL minted access + refresh tokens (`create_access_token` /
   `create_refresh_token`), the real `get_current_tenant_user` /
   `get_current_tenant_user_or_api_key` JWT branch (which composes
@@ -122,7 +122,7 @@ clients.
   transaction" scenario (driven by `steps/test_change_password.py`), asserting the
   `must_change_password` flag App.vue's forced-change gate arms on is cleared by the
   real `PUT /api/v1/me/password` route in the same transaction as the hash swap –
-  the flagship forced-flow behaviour that was previously unit-tested only
+  the flagship forced-flow behavior that was previously unit-tested only
   (`tests/unit/api/test_me_password.py::test_successful_password_change_clears_must_change_flag`).
 
 - 2026-09-13: **product-map review pass**: removed the phantom
@@ -159,6 +159,6 @@ clients.
   `/api/v1/manifest`.
 
 - 2026-09-07: **product-map review pass**: added this
-  behaviour-tracker for `feat-auth`, which previously had behaviours only in
-  `manifest.yaml` inline. Behaviours verified against `routes/auth.py`,
+  behavior-tracker for `feat-auth`, which previously had behaviors only in
+  `manifest.yaml` inline. Behaviors verified against `routes/auth.py`,
   `routes/sso.py`, the auth unit+BDD suites, and frontend views. Status: covered.

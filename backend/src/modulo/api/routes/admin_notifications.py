@@ -6,8 +6,9 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -18,6 +19,7 @@ from sqlalchemy import func as sa_func
 from sqlalchemy import select, update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
@@ -304,11 +306,7 @@ async def _list_deliveries(
         if endpoint_id_filter:
             query = query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
 
-        if date_from:
-            query = query.where(NotificationDeliveryLog.created_at >= _parse_delivery_date(date_from, "from date"))
-
-        if date_to:
-            query = query.where(NotificationDeliveryLog.created_at <= _parse_delivery_date(date_to, "to date"))
+        query = query.where(*_delivery_date_conditions(date_from, date_to))
 
         if cursor:
             query = query.where(NotificationDeliveryLog.created_at < _parse_delivery_date(cursor, "cursor"))
@@ -323,6 +321,8 @@ async def _list_deliveries(
             status_filter=status_filter,
             event_type_filter=event_type_filter,
             endpoint_id_filter=endpoint_id_filter,
+            date_from=date_from,
+            date_to=date_to,
         )
 
     has_more = len(rows) > limit
@@ -338,14 +338,61 @@ async def _list_deliveries(
     return DeliveryLogResponse(items=items, next_cursor=next_cursor, total=total)
 
 
+_BARE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def _parse_delivery_date(value: str, field: str) -> datetime:
+    """Parse an ISO-8601 query value into an explicitly UTC-aware datetime.
+
+    ``datetime.fromisoformat`` returns a NAIVE datetime for any offset-less
+    value (including a bare ``YYYY-MM-DD`` date). Binding a naive value to a
+    ``timestamptz`` column makes asyncpg interpret it in the host's local
+    timezone, so the same filter would mean a different instant on every
+    deployment. Normalise it to UTC explicitly.
+    """
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Invalid {field} format",
         ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _is_bare_date(value: str) -> bool:
+    """True when *value* is a date-only ``YYYY-MM-DD`` string (no time part)."""
+    return _BARE_DATE_RE.match(value) is not None
+
+
+def _parse_delivery_upper_bound(value: str, field: str) -> tuple[datetime, bool]:
+    """Return the ``to`` filter bound and whether that bound is inclusive.
+
+    A bare date means "through the end of that day", so it becomes an EXCLUSIVE
+    next-day bound (``created_at < date + 1 day``): comparing ``<= midnight``
+    would drop everything recorded after 00:00 on the day the user selected. An
+    explicit timestamp keeps its exact instant and stays inclusive.
+    """
+    parsed = _parse_delivery_date(value, field)
+    if _is_bare_date(value):
+        return parsed + timedelta(days=1), False
+    return parsed, True
+
+
+def _delivery_date_conditions(date_from: str | None, date_to: str | None) -> list[ColumnElement[bool]]:
+    """Build the shared ``from``/``to`` predicates for a delivery-log query."""
+    conditions: list[ColumnElement[bool]] = []
+    if date_from:
+        conditions.append(NotificationDeliveryLog.created_at >= _parse_delivery_date(date_from, "from date"))
+    if date_to:
+        bound, inclusive = _parse_delivery_upper_bound(date_to, "to date")
+        if inclusive:
+            conditions.append(NotificationDeliveryLog.created_at <= bound)
+        else:
+            conditions.append(NotificationDeliveryLog.created_at < bound)
+    return conditions
 
 
 def _delivery_entry(d: Any) -> DeliveryLogEntry:
@@ -370,6 +417,8 @@ async def _count_deliveries(
     status_filter: str | None,
     event_type_filter: str | None,
     endpoint_id_filter: uuid.UUID | None,
+    date_from: str | None,
+    date_to: str | None,
 ) -> int:
     count_query = select(sa_func.count(NotificationDeliveryLog.id)).where(
         NotificationDeliveryLog.organisation_id == principal.organisation_id,
@@ -380,6 +429,7 @@ async def _count_deliveries(
         count_query = count_query.where(NotificationDeliveryLog.event_type == event_type_filter)
     if endpoint_id_filter:
         count_query = count_query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
+    count_query = count_query.where(*_delivery_date_conditions(date_from, date_to))
     count_result = await session.execute(count_query)
     return count_result.scalar() or 0
 

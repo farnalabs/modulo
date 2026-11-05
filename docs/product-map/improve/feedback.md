@@ -28,7 +28,7 @@ also reachable), feed a review inbox and an eval
 `/feedback/inbox` and the `/api/v1/feedback*` API; orchestration lives in
 `core/feedback_manager/*` (state-machine guards, org RLS, correction dispatch).
 
-## Behaviours
+## Behaviors
 
 - [x] `POST /runs/{run_id}/feedback` creates a feedback record (type `human`,
       status `pending`), 201 when the run exists, 404 when it does not, and it
@@ -113,8 +113,8 @@ also reachable), feed a review inbox and an eval
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-28: **product-map review pass** - added this behaviour-tracker
+- 2026-08-28: **product-map review pass** - added this behavior-tracker
   for the registered manifest feature `feat-feedback`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/feedback.py`,
+  `docs/product-map/` entry. Behaviors verified against `api/routes/feedback.py`,
   `core/feedback_manager/*`, `test_feedback_endpoint.py` and the feedback BDD/integration
   suites. Status: covered.

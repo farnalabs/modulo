@@ -6,7 +6,7 @@
       <div class="rounded-lg border p-6">
         <h2 class="text-base font-semibold">{{ $t('views.AdminSystemOrgsView.create_organisation') }}</h2>
         <p class="mt-1 text-sm text-muted-foreground">
-          Create a new tenant organisation with a unique slug. The creator is automatically added as an admin.
+          Create a new tenant organization with a unique slug. The creator is automatically added as an admin.
         </p>
         <div class="mt-3">
           <code class="rounded bg-muted px-2 py-1 text-xs font-mono">{{ $t('views.AdminSystemOrgsView.post_apiv1adminorgs') }}</code>
@@ -19,7 +19,7 @@
       <div class="rounded-lg border p-6">
         <h2 class="text-base font-semibold">{{ $t('views.AdminSystemOrgsView.create_user_in_organisation') }}</h2>
         <p class="mt-1 text-sm text-muted-foreground">
-          Provision a new user account within a specific organisation and assign a role.
+          Provision a new user account within a specific organization and assign a role.
         </p>
         <div class="mt-3">
           <code class="rounded bg-muted px-2 py-1 text-xs font-mono">{{ $t('views.AdminSystemOrgsView.post_apiv1adminorgsorgidusers') }}</code>

@@ -38,9 +38,9 @@ This satisfies the "no external DNS calls in default config" requirement.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | not set | When set + telemetry enabled: HTTPS POST to configured endpoint |
 | OTel test connection (`POST /api/v1/settings/observability/test`) | – | Manual test: HTTPS POST to user-specified endpoint |
 
-✅ **Data residency OK**: Telemetry is off by default. When opted in via `MODULO_TELEMETRY_ENABLED=true` (Settings > Runtime Configuration), only aggregate counters and sanitised error categories are exported, no personal data, pipeline content, API keys, or raw error messages. Organisation ids are truncated hashes, not raw identifiers.
+✅ **Data residency OK**: Telemetry is off by default. When opted in via `MODULO_TELEMETRY_ENABLED=true` (Settings > Runtime Configuration), only aggregate counters and sanitized error categories are exported, no personal data, pipeline content, API keys, or raw error messages. Organization ids are truncated hashes, not raw identifiers.
 
-> **Cross-process note:** the runtime-config override applies to the web process immediately. The SAQ worker is a separate process with its own store instance, so for consistent cross-process behaviour, set `MODULO_TELEMETRY_ENABLED` in the deployment environment rather than relying on the runtime override.
+> **Cross-process note:** the runtime-config override applies to the web process immediately. The SAQ worker is a separate process with its own store instance, so for consistent cross-process behavior, set `MODULO_TELEMETRY_ENABLED` in the deployment environment rather than relying on the runtime override.
 
 ### LangSmith
 
@@ -82,7 +82,7 @@ webhook payloads are sent to hardcoded endpoints.
 - Delivery retries: up to 4 attempts (1 initial + 3 retries) with backoff
   delays of 1s, 5s, 30s (`MAX_ATTEMPTS` / `RETRY_DELAYS` in
   `backend/src/modulo/core/notifier/__init__.py`); a 429 `Retry-After`
-  response header is honoured (capped at 60s)
+  response header is honored (capped at 60s)
 - Signing: HMAC-SHA256 with per-webhook secret
 - Payload: JSON body with run/event context
 

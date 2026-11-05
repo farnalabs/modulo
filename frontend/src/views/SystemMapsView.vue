@@ -6,7 +6,8 @@
         :subtitle="$t('views.SystemMapsView.subtitle')"
       >
         <template #right>
-          <button type="button" class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" @click="openCreateDialog" data-testid="system-maps-create">{{ $t('views.SystemMapsView.create_map') }}</button>
+          <button v-if="store.hasAccess" type="button" class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" @click="openCreateDialog" data-testid="system-maps-create">{{ $t('views.SystemMapsView.create_map') }}</button>
+          <span v-else-if="store.hasReadAccess" class="rounded bg-muted px-2.5 py-1.5 text-xs text-muted-foreground" data-testid="system-maps-read-only">{{ $t('views.SystemMapsView.read_only') }}</span>
         </template>
       </PageHeader>
     </div>
@@ -21,11 +22,22 @@
           class="mb-3"
         />
 
-        <ErrorAlert v-if="error" :message="error" :on-retry="loadMaps" />
+        <!-- A 402 feature_required is an entitlement answer, not a transient
+             failure: show the honest unavailable state and never offer a retry
+             that cannot succeed. -->
+        <div
+          v-if="unavailable"
+          class="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground"
+          aria-live="polite"
+        >
+          {{ $t('views.SystemMapsView.unavailable') }}
+        </div>
+
+        <ErrorAlert v-else-if="error" :message="error" :on-retry="loadMaps" />
 
         <TableSkeleton
           v-else-if="loading"
-          :columns="5"
+          :columns="store.hasAccess ? 5 : 4"
           :rows="5"
           :aria-label="$t('common.loading')"
           data-testid="system-maps-loading"
@@ -43,7 +55,7 @@
                     <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.description') }}</th>
                     <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.status') }}</th>
                     <th class="px-4 py-3 font-medium">{{ $t('views.SystemMapsView.last_updated') }}</th>
-                    <th class="px-4 py-3 font-medium text-right">{{ $t('views.SystemMapsView.actions_header') }}</th>
+                    <th v-if="store.hasAccess" class="px-4 py-3 font-medium text-right">{{ $t('views.SystemMapsView.actions_header') }}</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y">
@@ -66,7 +78,7 @@
                       </span>
                     </td>
                     <td class="px-4 py-3 text-muted-foreground">{{ formatDate(map.updated_at) }}</td>
-                    <td class="px-4 py-3 text-right">
+                    <td v-if="store.hasAccess" class="px-4 py-3 text-right">
                       <button
                         type="button"
                         class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -170,10 +182,12 @@ const page = computed(() => store.page)
 const pageSize = computed(() => store.pageSize)
 const loading = computed(() => store.loading)
 const error = computed(() => store.error)
+const unavailable = computed(() => store.unavailable)
 
 const actionMenuItems = computed(() => {
   const map = actionMenuMap.value
   if (!map) return []
+  if (!store.hasAccess) return [{ label: t('views.SystemMapsView.view'), command: () => openMap(map) }]
   return [
     { label: t('views.SystemMapsView.view'), command: () => openMap(map) },
     { label: t('views.SystemMapsView.edit'), command: () => openMap(map) },

@@ -490,7 +490,7 @@ describe('AdminProductAnalyticsView', () => {
     await nextTick()
 
     expect(wrapper.find('[data-testid="instance-switch-source"]').text()).toContain(
-      'On because your licence requires it',
+      'On because your license requires it',
     )
     // A licence-derived value is not an operator override, so there is nothing
     // to "reset" - the toggle is the way to veto it.

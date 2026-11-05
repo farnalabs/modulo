@@ -5,17 +5,17 @@ describes the mechanism that produces and checks it.
 
 ## Definition
 
-**Offline-verifiable evidence** is an exported compliance artefact that a party
+**Offline-verifiable evidence** is an exported compliance artifact that a party
 holding **only**:
 
-1. the artefact, and
+1. the artifact, and
 2. a pre-published public verification key,
 
 can verify - with no Modulo service, no Farnalabs-operated endpoint, no network
 and no login. Three things are checked, each by re-deriving it rather than
 trusting it:
 
-- **Authorship** - the artefact's canonical manifest carries a valid Ed25519
+- **Authorship** - the artifact's canonical manifest carries a valid Ed25519
   signature under the published key.
 - **Integrity of every file** - each file's SHA-256 and size are recomputed and
   compared against the signed manifest's file list.
@@ -34,7 +34,7 @@ the sensors that captured them are infallible, or anything about execution that
 happened outside Modulo. A signed chain is still a chain of *observations*.
 
 Use the phrase **"offline-verifiable evidence"** rather than the bare claim
-"independently verifiable": the artefact proves authorship, integrity and
+"independently verifiable": the artifact proves authorship, integrity and
 reproducibility against a pre-published key, not that the recorded facts are
 independently true.
 
@@ -43,21 +43,21 @@ independently true.
 `build_evidence_pack` (in `backend/src/modulo/core/evidence_pack/`) assembles a
 pack:
 
-1. The organisation's audit events are written into the bundle file
+1. The organization's audit events are written into the bundle file
    `audit-events.ndjson` (one canonical JSON event per line).
 2. The chain is re-derived from those events, producing the chain summary
    (`valid`, `event_count`, `head_hash`, `first_gap_index`, `first_tampered_id`,
    `truncated`).
-3. A **canonical manifest** is built: pack version, organisation id, exporter
+3. A **canonical manifest** is built: pack version, organization id, exporter
    identity, creation time, run ids, the file list with per-file SHA-256 + size,
    and the chain summary.
-4. The manifest is serialised canonically (compact JSON, sorted keys,
+4. The manifest is serialized canonically (compact JSON, sorted keys,
    `ensure_ascii=False`, UTF-8) and signed with the instance's Ed25519 key.
 5. The pack is returned as a self-contained object: `pack_version`, `manifest`,
    `signature`, `verification_key` and the file bytes.
 
 The `GET /api/v1/admin/audit/evidence-pack` endpoint produces a pack over the
-organisation's audit chain (gated by `audit_viewer` + `audit.manage`).
+organization's audit chain (gated by `audit_viewer` + `audit.manage`).
 
 ## Publishing the verification key
 
@@ -65,12 +65,12 @@ The public key is derived from the configured signing key and is published two
 ways:
 
 - **In the pack** - the `verification_key` section carries the PEM public key,
-  so the artefact is self-describing.
+  so the artifact is self-describing.
 - **As an endpoint** - `GET /api/v1/admin/audit/verification-key` returns the
   PEM public key and its `key_id` fingerprint.
 
 Verification always uses the **caller-supplied, pre-published key**, never the
-one embedded in the artefact. If a pack's embedded key differs from the supplied
+one embedded in the artifact. If a pack's embedded key differs from the supplied
 key, verification fails - so a pack cannot be silently re-keyed.
 
 ## Verifying a pack offline

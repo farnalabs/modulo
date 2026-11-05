@@ -70,11 +70,11 @@ and the immutable per-trigger event log. Configured via `/settings/triggers`;
 webhook delivery is HMAC-authenticated, timestamp-bounded, deduplicated, and
 rate-limited by the `TriggerEngine`.
 
-## Behaviours
+## Behaviors
 
 - [x] Per-funnel queueing is bounded per state class, and the capacity queue
       waits INDEFINITELY by default (FAR-1883): the old instance-wide
-      120-minute `capacity_timeout` terminalisation is retired. An operator may
+      120-minute `capacity_timeout` terminalization is retired. An operator may
       set the pipeline's nullable `queue_timeout_seconds` (anchored on
       `created_at`, "time queued"); on expiry the capacity-queued run is ENDED
       as a supersession - status `rejected`, code `queue.expired` - which is
@@ -189,7 +189,7 @@ rate-limited by the `TriggerEngine`.
       EXTENDED from the snapshot edges, so an edge-synthesized HITL gate node
       (absent from `graph_json.nodes`) resolves to `gate`. An unknown/unsplittable
       type – or a caller that supplies no type – keeps the value verbatim
-      (pre-split legacy behaviour), and a splittable type with no contract output
+      (pre-split legacy behavior), and a splittable type with no contract output
       OMITS the `node_output` key (never a bare `None`) (FAR-131)
 - [x] Org-wide pause kill-switch (`PUT /api/v1/admin/orgs/{org}/triggers/pause`):
       webhooks delivered to a paused org are dropped with a paused response and
@@ -285,7 +285,7 @@ rate-limited by the `TriggerEngine`.
       connector is usable by any team's pipeline), an unresolvable reference
       fails CLOSED as `ConnectorBindingMissingError`, a non-UUID value is a loud
       no-op warning, and the check is a NEW-binding check (an unchanged
-      `connector_instance_id` is not re-judged). READ-time defence-in-depth:
+      `connector_instance_id` is not re-judged). READ-time defense-in-depth:
       `trigger_engine.polling.enforce_polling_team_scope` runs BEFORE any
       credential is decrypted (alongside `enforce_polling_read_acl`) and
       re-validates the connector's team scope against the owning trigger's
@@ -328,7 +328,7 @@ rate-limited by the `TriggerEngine`.
   save-time (`_validate_connector_instance_team_scope` over REST create/update/
   polling-config and the MCP trigger tools, 409 `connector_team_mismatch`,
   NEW-binding-only) or read-time (`enforce_polling_team_scope`, fail-closed on a
-  missing pipeline context) halves. Added the checked behaviour line plus the
+  missing pipeline context) halves. Added the checked behavior line plus the
   `polling.py` / `mcp_server.py` / `cron_helpers.py` code and
   `test_polling_acl.py` / `test_triggers_routes_coverage.py` /
   `test_trigger_crud_tools.py` / `test_trigger_mgmt_tools.py` unit-test
@@ -338,7 +338,7 @@ rate-limited by the `TriggerEngine`.
   against a team-private pipeline, merged in PR #1376): the trigger team-gate
   shipped with NO coverage in either product-map layer - the manifest
   `feat-triggers` registry and this tracker both predated it. Added the checked
-  behaviour line (owning-pipeline derivation, the single `evaluate_team_gate`
+  behavior line (owning-pipeline derivation, the single `evaluate_team_gate`
   matrix, the in-transaction FOR UPDATE re-check, the restore-resolution rule)
   plus the `api/team_scope.py` / `db/crud/team_scope.py` / `db/crud/row_lock.py`
   code citations and the unit/integration/BDD citations.
@@ -347,10 +347,10 @@ rate-limited by the `TriggerEngine`.
   `feat-triggers` tracker lag left by FAR-1387 (cron no-delivery streak
   engine, merged 2026-09-26) and FAR-1405 (no-delivery streak badge,
   merged 2026-09-27): the manifest `feat-triggers` registry carried the
-  shipped cron-streak behaviour and the badge rendering rule, but the
-  human-readable graph entry lagged behind (no behaviour line for either,
+  shipped cron-streak behavior and the badge rendering rule, but the
+  human-readable graph entry lagged behind (no behavior line for either,
   and the `SettingsTriggersView.spec.ts` unit citation was absent from the
-  frontmatter). Added the two checked behaviours - the notify-only-by-default
+  frontmatter). Added the two checked behaviors - the notify-only-by-default
   cron streak trip (opt-in `no_delivery_auto_deactivate`, the 48h minimum
   window, `cron_trigger.*` audit event types) and the
   `STREAK_COVERED_TRIGGER_TYPES` badge rule where "Deactivated" wording is
@@ -364,7 +364,7 @@ rate-limited by the `TriggerEngine`.
   wire surface and the `SettingsTriggersView` "Agent-reported" qualifier chip
   (vocabulary renamed from `self_reported` by FAR-1388)
   shipped with no product-map home – the manifest registry only mentioned the
-  streak UI and the tracker not at all. Added the checked behaviour line plus
+  streak UI and the tracker not at all. Added the checked behavior line plus
   the `core/trigger_streak.py` code and `test_trigger_streak_engine.py` /
   `SettingsTriggersView.spec.ts` unit-test citations. The run-outcome
   classification record the streak derives from is tracked under `feat-runs`.
@@ -387,7 +387,7 @@ rate-limited by the `TriggerEngine`.
   duplicated `triggers/cron.feature` / `triggers/polling.feature` (the file now
   ships only its cron-CRUD scenarios). The webhook expired-timestamp rejection
   (`TimestampExpiredError` → 400, ±300s replay window) remains unit-pinned by
-  `test_trigger_engine.py`. All trigger-delivery behaviour stays cited from this
+  `test_trigger_engine.py`. All trigger-delivery behavior stays cited from this
   entry; `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-17: **product-map review pass** – closed the
   "Slack app-mention triggering is unit-tested only" gap: registered
@@ -419,9 +419,9 @@ rate-limited by the `TriggerEngine`.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-29: **product-map review pass** – new behaviour
+- 2026-08-29: **product-map review pass** – new behavior
   tracker for the registered `feat-triggers` manifest feature (route
-  `/settings/triggers`, previously absent from the feature graph). Behaviours
+  `/settings/triggers`, previously absent from the feature graph). Behaviors
   verified against `api/routes/triggers.py`, `api/routes/webhooks.py`, the
   `core/trigger_engine/*` package, `core/cron_helpers.py`, and the trigger
   unit/BDD suites. Status: covered.

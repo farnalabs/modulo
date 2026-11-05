@@ -163,6 +163,58 @@ describe('useSystemMapsStore CRUD', () => {
     await expect(store.loadRevision('map-1', 'rev-2')).rejects.toThrow('Could not load map revision')
   })
 
+  it('refreshes a cached revision instead of keeping stale metadata', async () => {
+    mockGet.mockResolvedValueOnce({ data: { revision: { id: 'rev-1', revision_number: 1, status: 'draft' }, nodes: [], relationships: [] } })
+    const store = useSystemMapsStore()
+    await store.loadRevision('map-1', 'rev-1')
+    expect(store.revisions.map((revision) => revision.status)).toEqual(['draft'])
+
+    mockGet.mockResolvedValueOnce({ data: { revision: { id: 'rev-1', revision_number: 1, status: 'published' }, nodes: [], relationships: [] } })
+    await store.loadRevision('map-1', 'rev-1')
+
+    expect(store.revisions).toHaveLength(1)
+    expect(store.revisions[0].status).toBe('published')
+  })
+
+  it('reflects the published status in the history sidebar after publishing', async () => {
+    mockPost.mockResolvedValue({ data: undefined })
+    mockGet.mockImplementation((path: string, options: { params: { path: { rev_id?: string } } }) => {
+      if (path === '/api/v1/system-maps/{map_id}') return Promise.resolve({ data: { id: 'map-1', published_revision_id: 'rev-1' } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/{rev_id}') {
+        const status = options.params.path.rev_id === 'rev-1' ? 'published' : 'draft'
+        return Promise.resolve({ data: { revision: { id: options.params.path.rev_id, revision_number: 1, status }, nodes: [], relationships: [] } })
+      }
+      return Promise.resolve({ data: {} })
+    })
+    const store = useSystemMapsStore()
+
+    await store.loadRevision('map-1', 'rev-1')
+    await store.publish('map-1', 'rev-1')
+
+    expect(store.revisions).toHaveLength(1)
+    expect(store.revisions[0].status).toBe('published')
+  })
+
+  it('loads the complete revision history', async () => {
+    mockGet.mockResolvedValue({ data: { system_map_id: 'map-1', revisions: [
+      { revision: { id: 'rev-1', revision_number: 1 } },
+      { revision: { id: 'rev-2', revision_number: 2 } },
+    ] } })
+    const store = useSystemMapsStore()
+
+    await store.loadRevisionHistory('map-1')
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/history', { params: { path: { map_id: 'map-1' } } })
+    expect(store.revisions.map((item) => item.id)).toEqual(['rev-1', 'rev-2'])
+  })
+
+  it('reports revision history failures', async () => {
+    mockGet.mockResolvedValue({ error: { detail: 'down' } })
+    const store = useSystemMapsStore()
+
+    await expect(store.loadRevisionHistory('map-1')).rejects.toThrow('Could not load revision history')
+  })
+
   it('loads the current revision through the version-aware endpoint', async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/system-maps/{map_id}/revisions/current') {
@@ -263,6 +315,31 @@ describe('useSystemMapsStore CRUD', () => {
 
     mockPost.mockResolvedValue({ error: { detail: 'nope' } })
     await expect(store.archive('map-1', 'rev-1')).rejects.toThrow('Could not archive revision')
+  })
+
+  it('restores a historical revision as a new active draft', async () => {
+    mockPost.mockResolvedValue({ data: { new_revision: { id: 'rev-3', revision_number: 3, status: 'draft' } } })
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/system-maps/{map_id}/revisions/history') return Promise.resolve({ data: { revisions: [{ revision: { id: 'rev-3', revision_number: 3, status: 'draft' } }] } })
+      return Promise.resolve({ data: { revision: { id: 'rev-3', revision_number: 3, status: 'draft' }, nodes: [], relationships: [], loop_configs: [] } })
+    })
+    const store = useSystemMapsStore()
+
+    const restored = await store.restoreRevisionAsNew('map-1', 'rev-1')
+
+    expect(restored.id).toBe('rev-3')
+    expect(store.activeRevision?.id).toBe('rev-3')
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/{rev_id}/restore-as-new', {
+      params: { path: { map_id: 'map-1', rev_id: 'rev-1' } },
+      body: { notes: 'Restored from revision' },
+    })
+  })
+
+  it('throws when restoring a revision fails', async () => {
+    mockPost.mockResolvedValue({ error: { detail: 'nope' } })
+    const store = useSystemMapsStore()
+
+    await expect(store.restoreRevisionAsNew('map-1', 'rev-1')).rejects.toThrow('Could not restore revision')
   })
 
   it('discovers a map and loads the created draft revision', async () => {

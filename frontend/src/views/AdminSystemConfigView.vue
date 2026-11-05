@@ -1,18 +1,19 @@
 <template>
   <FeatureGate feature-name="runtime_config" required-tier="team" show-disabled>
   <div class="page-wide">
-    <header class="flex items-center justify-between">
-      <PageHeader :title="$t('views.AdminSystemConfigView.system_admin_config')" :subtitle="$t('views.AdminSystemConfigView.deploymentwide_system_configuration_system_admin_only')" />
-      <button
-        type="button"
-        class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-        :disabled="loading"
-        data-testid="admin-system-config-refresh"
-        @click="loadConfig"
-      >
-        {{ $t('views.AdminSystemConfigView.refresh') }}
-      </button>
-    </header>
+    <PageHeader :title="$t('views.AdminSystemConfigView.system_admin_config')" :subtitle="$t('views.AdminSystemConfigView.deploymentwide_system_configuration_system_admin_only')">
+      <template #right>
+        <button
+          type="button"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+          :disabled="loading"
+          data-testid="admin-system-config-refresh"
+          @click="loadConfig"
+        >
+          {{ $t('views.AdminSystemConfigView.refresh') }}
+        </button>
+      </template>
+    </PageHeader>
 
     <ErrorAlert v-if="error" :message="error" :on-retry="loadConfig" />
 

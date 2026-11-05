@@ -2,11 +2,13 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.mcp_server import (
+    _resume_run_after_mcp_approval,
     copy_library_primitive,
     create_pipeline,
     delete_pipeline,
@@ -45,8 +47,43 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
 def _make_run_lookup_result(run: MagicMock | None = None) -> MagicMock:
     """A session.execute() result that resolves a run for the get_run boundary check."""
     result = MagicMock()
-    result.scalar_one_or_none.return_value = run if run is not None else MagicMock()
+    resolved_run = run if run is not None else MagicMock()
+    if not isinstance(getattr(resolved_run, "claim_token", None), str):
+        resolved_run.claim_token = "claim-current"
+    result.scalar_one_or_none.return_value = resolved_run
     return result
+
+
+def _stub_resume_executor(mock_build_resume_executor: MagicMock) -> MagicMock:
+    """Wire ``mcp_server._build_resume_executor`` to a no-op executor (FAR-2328).
+
+    Since FAR-2328 the MCP approve resumes the pipeline inline after the
+    decision commits, so any test that reaches a successful approve must stub
+    the executor rather than let it open a real DB connection.
+    """
+    executor = MagicMock()
+    executor.resume = AsyncMock()
+    mock_build_resume_executor.return_value = executor
+    return executor
+
+
+def _wire_restore_session(
+    mock_sessionmaker: MagicMock,
+    *,
+    update_rowcount: int,
+    row: tuple[str, str] | None,
+) -> MagicMock:
+    """Wire the restore helper's session: CAS UPDATE, then the F6a row re-read."""
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.begin.return_value = _make_session_context(session)
+    update_result = MagicMock(rowcount=update_rowcount)
+    select_result = MagicMock()
+    select_result.first.return_value = row
+    session.execute = AsyncMock(side_effect=[update_result, select_result])
+    mock_sessionmaker.return_value = MagicMock(return_value=session)
+    return session
 
 
 def _make_page_result(items: list, *, total: int | None = None, next_cursor=None, has_more: bool = False) -> MagicMock:
@@ -822,31 +859,458 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
     async def test_approve_success(
         self,
+        mock_build_resume_executor: MagicMock,
         mock_session: AsyncMock,
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
         self._set_role_operator()
+        events: list[str] = []
         manager = MagicMock()
-        manager.approve = AsyncMock()
+
+        async def approve(*_args: Any, **_kwargs: Any) -> None:
+            events.append("decision")
+
+        manager.approve = AsyncMock(side_effect=approve)
+        run = MagicMock()
+        run.claim_token = "claim-current"
         run_result = MagicMock()
-        run_result.scalar_one_or_none.return_value = MagicMock()  # the run
+        run_result.scalar_one_or_none.return_value = run
         gate_row_result = MagicMock()
         gate_row_result.scalar_one_or_none.return_value = None
 
         mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+
+        async def close_session() -> None:
+            events.append("commit")
+
+        mock_sesh.commit = AsyncMock(side_effect=close_session)
         mock_sesh.execute = AsyncMock(side_effect=[run_result, gate_row_result])
-        mock_session.return_value = _make_session_context(mock_sesh)
+        session_context = _make_session_context(mock_sesh)
+
+        async def exit_session(*_args: Any) -> bool:
+            events.append("commit")
+            return False
+
+        session_context.__aexit__ = AsyncMock(side_effect=exit_session)
+        mock_session.return_value = session_context
         mock_manager_cls.return_value = manager
+        executor = _stub_resume_executor(mock_build_resume_executor)
+
+        async def resume_after_commit(**_kwargs: Any) -> None:
+            events.append("resume")
+
+        executor.resume.side_effect = resume_after_commit
 
         run_id = str(uuid.uuid4())
         result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
 
-        assert result == {"status": "approved", "review_id": "gate-1"}
+        assert result == {"status": "approved", "review_id": "gate-1", "run_id": run_id}
         manager.approve.assert_awaited_once()
         # FAR-541: the persisted decision payload is stamped with the gate id.
+        assert manager.approve.await_args.kwargs["decision_payload"] == {
+            "action": "approved",
+            "review_id": "gate-1",
+        }
+        # FAR-2328: the approval resumes the pipeline inline, after the decision
+        # commits, and the resumed payload is the committed decision itself.
+        executor.resume.assert_awaited_once()
+        assert executor.resume.await_args.kwargs["run_id"] == uuid.UUID(run_id)
+        assert executor.resume.await_args.kwargs["resume_data"] == {"action": "approved", "review_id": "gate-1"}
+        assert events == ["decision", "commit", "resume"]
+
+    @patch("modulo.api.routes.hitl._awaiting_human_has_committed_decision", new_callable=AsyncMock)
+    @patch("modulo.api.routes.hitl.async_sessionmaker")
+    @patch("modulo.api.mcp_server.get_or_create_engine")
+    @patch("modulo.api.mcp_server._build_resume_executor")
+    async def test_resume_failure_restores_run_for_reconcile(
+        self,
+        mock_build_resume_executor: MagicMock,
+        mock_get_engine: MagicMock,
+        mock_sessionmaker: MagicMock,
+        mock_committed_decision: AsyncMock,
+    ) -> None:
+        """A post-claim resume failure restores a stale F6a candidate."""
+        mock_committed_decision.return_value = True
+        engine = MagicMock()
+        mock_get_engine.return_value = engine
+        executor = MagicMock()
+
+        async def resume_after_claim(**_kwargs: Any) -> None:
+            raise RuntimeError("graph compile failed")
+
+        executor.resume = AsyncMock(side_effect=resume_after_claim)
+        mock_build_resume_executor.return_value = executor
+        session = _wire_restore_session(mock_sessionmaker, update_rowcount=1, row=("awaiting_human", "saq"))
+
+        run_id = uuid.uuid4()
+        result = await _resume_run_after_mcp_approval(
+            org_id=_PLACEHOLDER_ORG_ID,
+            run_id=run_id,
+            review_id="gate-1",
+            resume_data={"action": "approved", "review_id": "gate-1"},
+            claim_token="claim-old",
+        )
+
+        assert result["resume_status"] == "failed"
+        assert result["reconcile_status"] == "queued"
+        assert "reconciliation sweep will retry" in result["detail"]
+        executor.resume.assert_awaited_once()
+        assert executor.resume.await_args.kwargs["claim_token"] == "claim-old"
+        assert executor.resume.await_args.kwargs["expected_claim_status"] == "awaiting_human"
+        assert session.execute.await_count == 2
+
+        # The repair UPDATE is fenced to the exact executor lease it repairs,
+        # and stamps the row back into the F6a-recoverable state.
+        update_statement = session.execute.await_args_list[0].args[0]
+        compiled = update_statement.compile()
+        assert "claim-old" in compiled.params.values()
+        assert "running" in compiled.params.values()
+        assert compiled.params["status"] == "awaiting_human"
+        assert compiled.params["dispatcher"] == "saq"
+        assert compiled.params["completed_at"] is None
+        assert compiled.params["heartbeat_at"] is not None
+
+    @patch("modulo.api.routes.hitl._awaiting_human_has_committed_decision", new_callable=AsyncMock)
+    @patch("modulo.api.routes.hitl.async_sessionmaker")
+    @patch("modulo.api.mcp_server.get_or_create_engine")
+    @patch("modulo.api.mcp_server._build_resume_executor")
+    async def test_resume_failure_before_claim_reports_reconcile_queued(
+        self,
+        mock_build_resume_executor: MagicMock,
+        mock_get_engine: MagicMock,
+        mock_sessionmaker: MagicMock,
+        mock_committed_decision: AsyncMock,
+    ) -> None:
+        """A pre-claim failure leaves an already-recoverable row — not operator work.
+
+        ``executor.resume`` can fail before its claim transaction commits (graph
+        load, validation, connection loss). The repair UPDATE then matches no
+        row, but the run is still ``awaiting_human`` with its committed decision
+        and is therefore a valid F6a candidate. Recovery must be judged on that
+        row state, never on the UPDATE's rowcount.
+        """
+        mock_committed_decision.return_value = True
+        mock_get_engine.return_value = MagicMock()
+        executor = MagicMock()
+        executor.resume = AsyncMock(side_effect=RuntimeError("setup failed before claim"))
+        mock_build_resume_executor.return_value = executor
+        _wire_restore_session(mock_sessionmaker, update_rowcount=0, row=("awaiting_human", "saq"))
+
+        result = await _resume_run_after_mcp_approval(
+            org_id=_PLACEHOLDER_ORG_ID,
+            run_id=uuid.uuid4(),
+            review_id="gate-1",
+            resume_data={"action": "approved", "review_id": "gate-1"},
+            claim_token="claim-old",
+        )
+
+        assert result["resume_status"] == "failed"
+        assert result["reconcile_status"] == "queued"
+        assert "reconciliation sweep will retry" in result["detail"]
+        assert "operator intervention" not in result["detail"]
+
+    @patch("modulo.api.routes.hitl._awaiting_human_has_committed_decision", new_callable=AsyncMock)
+    @patch("modulo.api.routes.hitl.async_sessionmaker")
+    @patch("modulo.api.mcp_server.get_or_create_engine")
+    @patch("modulo.api.mcp_server._build_resume_executor")
+    async def test_resume_failure_unrecoverable_reports_operator_intervention(
+        self,
+        mock_build_resume_executor: MagicMock,
+        mock_get_engine: MagicMock,
+        mock_sessionmaker: MagicMock,
+        mock_committed_decision: AsyncMock,
+    ) -> None:
+        """Only a row that is genuinely not F6a-recoverable reports operator work."""
+        mock_committed_decision.return_value = True
+        mock_get_engine.return_value = MagicMock()
+        executor = MagicMock()
+        executor.resume = AsyncMock(side_effect=RuntimeError("successor owns the run"))
+        mock_build_resume_executor.return_value = executor
+        _wire_restore_session(mock_sessionmaker, update_rowcount=0, row=("running", "saq"))
+
+        result = await _resume_run_after_mcp_approval(
+            org_id=_PLACEHOLDER_ORG_ID,
+            run_id=uuid.uuid4(),
+            review_id="gate-1",
+            resume_data={"action": "approved", "review_id": "gate-1"},
+            claim_token="claim-old",
+        )
+
+        assert result["resume_status"] == "failed"
+        assert result["reconcile_status"] == "failed"
+        assert "operator intervention is required" in result["detail"]
+        mock_committed_decision.assert_not_awaited()
+
+    @patch("modulo.api.mcp_server.get_or_create_engine")
+    @patch("modulo.api.mcp_server._build_resume_executor")
+    @patch(
+        "modulo.api.mcp_server._restore_failed_mcp_resume_for_reconcile",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError("restore read failed"),
+    )
+    async def test_resume_failure_restore_error_fails_closed(
+        self,
+        mock_restore: AsyncMock,
+        mock_build_resume_executor: MagicMock,
+        mock_get_engine: MagicMock,
+    ) -> None:
+        """A failed repair read must report unrecoverable, never claim a retry."""
+        mock_get_engine.return_value = MagicMock()
+        executor = MagicMock()
+        executor.resume = AsyncMock(side_effect=RuntimeError("legacy resume failed"))
+        mock_build_resume_executor.return_value = executor
+
+        result = await _resume_run_after_mcp_approval(
+            org_id=_PLACEHOLDER_ORG_ID,
+            run_id=uuid.uuid4(),
+            review_id="gate-1",
+            resume_data={"action": "approved", "review_id": "gate-1"},
+            claim_token="claim-old",
+        )
+
+        assert result["reconcile_status"] == "failed"
+        assert "operator intervention is required" in result["detail"]
+        mock_restore.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
+    @patch(
+        "modulo.api.mcp_server._run_is_f6a_reconcile_candidate",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError("candidate read failed"),
+    )
+    async def test_approve_missing_claim_token_candidate_read_error_fails_closed(
+        self,
+        mock_candidate: AsyncMock,
+        mock_build_resume_executor: MagicMock,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A failed recoverability read must not claim the sweep will retry."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+        run = MagicMock()
+        run.claim_token = ""
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(None)])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+        _stub_resume_executor(mock_build_resume_executor)
+
+        result = await review_hitl(
+            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
+        )
+
+        assert result["reconcile_status"] == "failed"
+        assert "operator intervention is required" in result["detail"]
+        mock_candidate.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.get_or_create_engine")
+    @patch("modulo.api.mcp_server._build_resume_executor")
+    async def test_resume_superseded_claim_reports_not_needed(
+        self,
+        mock_build_resume_executor: MagicMock,
+        mock_get_engine: MagicMock,
+    ) -> None:
+        """A lost CAS reports superseded, not a failure needing reconcile."""
+        from modulo.core.pipeline_engine.errors import ResumeClaimSupersededError
+
+        mock_get_engine.return_value = MagicMock()
+        executor = MagicMock()
+        run_id = uuid.uuid4()
+        executor.resume = AsyncMock(side_effect=ResumeClaimSupersededError(run_id))
+        mock_build_resume_executor.return_value = executor
+
+        result = await _resume_run_after_mcp_approval(
+            org_id=_PLACEHOLDER_ORG_ID,
+            run_id=run_id,
+            review_id="gate-1",
+            resume_data={"action": "approved", "review_id": "gate-1"},
+            claim_token="claim-old",
+        )
+
+        assert result == {
+            "status": "approved",
+            "review_id": "gate-1",
+            "run_id": str(run_id),
+            "resume_status": "superseded",
+            "reconcile_status": "not_needed",
+            "detail": "Approval recorded, but another resume claim won before inline execution started.",
+        }
+        executor.resume.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
+    async def test_approve_capacity_deferral_is_queued_success(
+        self,
+        mock_build_resume_executor: MagicMock,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A committed approval survives a sandbox-capacity deferral."""
+        from modulo.core.pipeline_engine.executor import SandboxCapacityExceededError
+
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        run = MagicMock()
+        run.claim_token = "claim-current"
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(None)])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+        executor = _stub_resume_executor(mock_build_resume_executor)
+        run_id = str(uuid.uuid4())
+        executor.resume.side_effect = SandboxCapacityExceededError(_PLACEHOLDER_ORG_ID)
+
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
+
+        assert result == {"status": "queued", "run_id": run_id, "review_id": "gate-1"}
+        manager.approve.assert_awaited_once()
+        executor.resume.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
+    async def test_approve_parked_run_resumes_from_unparked_status(
+        self,
+        mock_build_resume_executor: MagicMock,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A decision on a ``hitl_parked`` run resumes from the un-parked status."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+        run = MagicMock()
+        run.claim_token = "claim-current"
+        run.status = "hitl_parked"
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(None)])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+        executor = _stub_resume_executor(mock_build_resume_executor)
+
+        run_id = str(uuid.uuid4())
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
+
+        assert result == {"status": "approved", "review_id": "gate-1", "run_id": run_id}
+        executor.resume.assert_awaited_once()
+        assert executor.resume.await_args.kwargs["expected_claim_status"] == "awaiting_human"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
+    @patch("modulo.api.mcp_server._run_is_f6a_reconcile_candidate", new_callable=AsyncMock)
+    async def test_approve_missing_claim_token_uses_row_recoverability(
+        self,
+        mock_candidate: AsyncMock,
+        mock_build_resume_executor: MagicMock,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """Missing the captured token must not claim the run is unrecoverable.
+
+        The row is already in the claimable HITL state with its committed
+        decision, so dispatcher_reconcile will resume it. The MCP response must
+        say so instead of demanding operator intervention.
+        """
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+        run = MagicMock()
+        run.claim_token = ""
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(None)])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+        mock_candidate.return_value = True
+        _stub_resume_executor(mock_build_resume_executor)
+
+        run_id = str(uuid.uuid4())
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
+
+        assert result["status"] == "approved"
+        assert result["run_id"] == run_id
+        assert result["resume_status"] == "failed"
+        assert result["reconcile_status"] == "queued"
+        assert "operator intervention" not in result["detail"]
+        mock_candidate.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
+    @patch("modulo.api.mcp_server._run_is_f6a_reconcile_candidate", new_callable=AsyncMock)
+    async def test_approve_missing_claim_token_unrecoverable_reports_operator(
+        self,
+        mock_candidate: AsyncMock,
+        mock_build_resume_executor: MagicMock,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A genuinely unreconcilable row still reports operator intervention."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+        run = MagicMock()
+        run.claim_token = ""
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(None)])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+        mock_candidate.return_value = False
+        _stub_resume_executor(mock_build_resume_executor)
+
+        result = await review_hitl(
+            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
+        )
+
+        assert result["reconcile_status"] == "failed"
+        assert "operator intervention is required" in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_hitl_answer", new_callable=AsyncMock)
+    async def test_dispatch_hitl_approve_without_resume_payload_uses_default(
+        self,
+        mock_validate_answer: AsyncMock,
+    ) -> None:
+        """The direct dispatch path (no inline resume payload) keeps the old payload."""
+        from modulo.api.mcp_server import _dispatch_hitl_approve
+
+        mock_validate_answer.return_value = None
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+        run_id = uuid.uuid4()
+
+        result = await _dispatch_hitl_approve(
+            manager,
+            AsyncMock(),
+            rid=run_id,
+            review_id="gate-1",
+            org_id=_PLACEHOLDER_ORG_ID,
+            claim_token="tok-123",
+            actor_account_id=_PLACEHOLDER_USER_ID,
+            answer=None,
+            client_type="mcp",
+        )
+
+        assert result == {"status": "approved", "review_id": "gate-1"}
         assert manager.approve.await_args.kwargs["decision_payload"] == {
             "action": "approved",
             "review_id": "gate-1",
@@ -924,8 +1388,10 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
     async def test_approve_attributes_decision_to_account_id(
         self,
+        mock_build_resume_executor: MagicMock,
         mock_session: AsyncMock,
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
@@ -941,12 +1407,12 @@ class TestReviewHitl(_AuthContext):
         mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
+        _stub_resume_executor(mock_build_resume_executor)
 
-        result = await review_hitl(
-            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
-        )
+        run_id = str(uuid.uuid4())
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
 
-        assert result == {"status": "approved", "review_id": "gate-1"}
+        assert result == {"status": "approved", "review_id": "gate-1", "run_id": run_id}
         assert manager.approve.await_args.kwargs["actor_id"] == _PLACEHOLDER_USER_ID
         assert manager.approve.await_args.kwargs["client_type"] == "mcp"
 
@@ -1021,8 +1487,10 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
     async def test_oauth_sentinel_key_id_does_not_leak_into_audit(
         self,
+        mock_build_resume_executor: MagicMock,
         mock_session: AsyncMock,
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
@@ -1042,20 +1510,22 @@ class TestReviewHitl(_AuthContext):
         mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
+        _stub_resume_executor(mock_build_resume_executor)
 
-        result = await review_hitl(
-            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
-        )
+        run_id = str(uuid.uuid4())
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
 
-        assert result == {"status": "approved", "review_id": "gate-1"}
+        assert result == {"status": "approved", "review_id": "gate-1", "run_id": run_id}
         assert manager.approve.await_args.kwargs["actor_id"] == account_id
         assert manager.approve.await_args.kwargs["actor_id"] != uuid.UUID(int=0)
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
     async def test_approve_without_user_context_omits_actor(
         self,
+        mock_build_resume_executor: MagicMock,
         mock_session: AsyncMock,
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
@@ -1073,12 +1543,12 @@ class TestReviewHitl(_AuthContext):
         mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
+        _stub_resume_executor(mock_build_resume_executor)
 
-        result = await review_hitl(
-            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
-        )
+        run_id = str(uuid.uuid4())
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
 
-        assert result == {"status": "approved", "review_id": "gate-1"}
+        assert result == {"status": "approved", "review_id": "gate-1", "run_id": run_id}
         assert manager.approve.await_args.kwargs["actor_id"] is None
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -1458,8 +1928,10 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._build_resume_executor")
     async def test_approve_unresolvable_gate_without_claim_allowed(
         self,
+        mock_build_resume_executor: MagicMock,
         mock_session: AsyncMock,
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
@@ -1496,10 +1968,11 @@ class TestReviewHitl(_AuthContext):
         )
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
+        _stub_resume_executor(mock_build_resume_executor)
 
         result = await review_hitl(run_id=str(run.id), review_id=review_id, action="approve", claim_token="tok-123")
 
-        assert result == {"status": "approved", "review_id": review_id}
+        assert result == {"status": "approved", "review_id": review_id, "run_id": str(run.id)}
         manager.approve.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)

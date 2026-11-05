@@ -45,6 +45,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import RUN_GROUP_KIND_RESUME, RUN_GROUP_KIND_RETRY, Run
+from modulo.db.models.system_config import SystemConfig
 from modulo.db.models.team import Team
 from modulo.db.models.variant_group import VariantGroup
 
@@ -68,6 +69,7 @@ _TABLES: list[Table] = cast(
         Journey.__table__,
         VariantGroup.__table__,
         Eval.__table__,
+        SystemConfig.__table__,
     ],
 )
 

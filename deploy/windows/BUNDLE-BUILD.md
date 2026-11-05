@@ -3,7 +3,9 @@
 `deploy/windows/modulo.iss` compiles a Windows installer around a **native
 Windows bundle directory**. The installer is fail-closed: it refuses to compile
 unless the bundle's required inputs are present, so a partial artifact or a
-relabelled Linux build can never be published as a Windows installer.
+relabelled Linux build can never be published as a Windows installer. Windows
+native packaging is Beta scope: the Alpha release path does not build, sign or
+publish it.
 
 ## How the bundle directory is built
 
@@ -44,8 +46,10 @@ passes `-Version`, `version`.
 whatever main happened to produce.
 
 `.github/workflows/release-unified.yml` calls it as `windows-native-artifacts`
-(cut/recut, gated on `include_windows`), then calls
-`.github/workflows/windows-installer.yml` with that job as a dependency.
+for cut/recut only when `include_windows` is explicitly set to true - the
+Beta-scope opt-in, which defaults to false so the ordinary Alpha release path
+excludes Windows - then calls `.github/workflows/windows-installer.yml`
+with that job as a dependency.
 
 Inside `windows-installer.yml`:
 
@@ -71,9 +75,11 @@ Dry-run still skips the payload download, compile-against-real-payload, signing
 and attestation. It runs `scripts/test-windows-installer.ps1 -RequireIscc`, so
 the dry-run proves the installer contract compiles without publishing anything.
 
-`final-release-manifest` depends on `windows-installer` when
-`include_windows` is true, so the `windows-installer-<version>` artefact exists
-before the manifest downloads and hashes it.
+`final-release-manifest` depends on `windows-installer` when the Beta-only
+`include_windows` opt-in is true, so the `windows-installer-<version>` artefact
+exists before the manifest downloads and hashes it. With the default
+`include_windows: false`, the Windows job and artifact are omitted from the
+Alpha manifest.
 
 ## Installer bundle contract
 
@@ -96,10 +102,14 @@ iscc /DVERSION_NUM=0.4.0 /DBUNDLE_ARCH=amd64 /DBUNDLE_DIR=C:\bundle deploy\windo
 
 ## CI gate: `.iss` changes are compiled, not read
 
-`.github/workflows/windows-installer.yml` runs on every release invocation and on
-pull requests that touch `deploy/windows/**`, `scripts/create-windows-launcher.ps1`,
-`scripts/windows/build-launcher.ps1`, `scripts/test-windows-installer.ps1` or the
-workflow itself. All proofs live in `scripts/test-windows-installer.ps1`:
+`.github/workflows/windows-installer.yml` runs its compile and redaction gates on
+release invocations through `workflow_call` and on pull requests that touch
+`deploy/windows/**`, `scripts/create-windows-launcher.ps1`,
+`scripts/windows/build-launcher.ps1`, `scripts/test-windows-installer.ps1` or
+`.github/workflows/windows-installer.yml` itself. The unified release pipeline
+invokes it only when its Beta Windows input (`include_windows`) is enabled, so
+Windows native packaging does not run on the Alpha release path. All proofs live
+in `scripts/test-windows-installer.ps1`:
 
 - Job `compile-check` (Windows runner, using the preinstalled Inno Setup compiler
   when available and an unpinned Chocolatey fallback otherwise) runs

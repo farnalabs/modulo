@@ -66,6 +66,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.system_config import SystemConfig
 from modulo.db.models.team import Team
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -90,6 +91,7 @@ _TABLES: list[Table] = cast(
         AuditEvent.__table__,
         AuditChainHead.__table__,
         EnvironmentProfile.__table__,
+        SystemConfig.__table__,
     ],
 )
 
@@ -486,6 +488,15 @@ async def pg_url() -> AsyncIterator[str]:
             env_url = env_url.replace("postgresql://", "postgresql+asyncpg://", 1)
         yield env_url
         return
+
+    from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
+
+    # Resolve Docker availability BEFORE constructing a container: docker-py
+    # leaks an unclosed socket when a container is built against a missing
+    # daemon, which the warning-as-error gate then reports.
+    docker_skip = docker_endpoint_skip_reason()
+    if docker_skip is not None:
+        pytest.skip(f"testcontainers Postgres unavailable ({docker_skip})")
 
     try:
         from testcontainers.community.postgres import PostgresContainer

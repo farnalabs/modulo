@@ -26,7 +26,7 @@ real org state, or manually completed/skipped, and the checklist can be dismisse
 Rapid-start helpers seed a "Truth Classifier" example (schema, schema version,
 agent, pipeline) and create a starter pipeline.
 
-## Behaviours
+## Behaviors
 
 - [x] `GET /api/v1/onboarding/status` returns `is_first_run`, `progress_pct`,
       `completed_actions`, `skipped_actions`, `dismissed` and the ordered action list;
@@ -97,7 +97,7 @@ agent, pipeline) and create a starter pipeline.
   had no model backend (`agent_id: null` in a 201 response, no lint anywhere).
   It now refuses the seed with a 409 and an actionable detail pointing at the
   "Add an AI Model" step, before any write, so a fresh org either gets a complete
-  executable example or nothing. Behaviour bullet updated; unit
+  executable example or nothing. Behavior bullet updated; unit
   `test_seed_examples_no_model_backend` now asserts the 409 reject-and-refuse
   semantics.
 - 2026-09-13: **product-map review pass**: corrected the
@@ -128,7 +128,7 @@ agent, pipeline) and create a starter pipeline.
   product-map home. `test_mapped_route_elements_cover_owning_view_testids` now
   maps `/` to both components so a newly shipped banner/spotlight testid cannot
   drift invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-08-28: **product-map review pass**: added this behaviour-tracker
+- 2026-08-28: **product-map review pass**: added this behavior-tracker
   for the registered manifest feature `feat-onboarding`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/onboarding.py` and
+  `docs/product-map/` entry. Behaviors verified against `api/routes/onboarding.py` and
   `test_onboarding.py`. Status: covered.

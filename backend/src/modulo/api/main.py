@@ -132,6 +132,7 @@ from modulo.api.routes.service_accounts import router as service_accounts_router
 from modulo.api.routes.slack import router as slack_router
 from modulo.api.routes.sso import router as sso_router
 from modulo.api.routes.stripe_webhook import router as stripe_webhook_router
+from modulo.api.routes.system_maps import published_router as system_maps_published_router
 from modulo.api.routes.system_maps import router as system_maps_router
 from modulo.api.routes.teams import router as teams_router
 from modulo.api.routes.templates import router as templates_router
@@ -1335,6 +1336,7 @@ app.include_router(library_router)
 app.include_router(community_library_router)
 app.include_router(compliance_router)
 app.include_router(lifecycle_maps_router)
+app.include_router(system_maps_published_router)
 app.include_router(system_maps_router)
 # OAuth discovery metadata (RFC 8414 authorization-server, RFC 9728
 # protected-resource) -- unauthenticated and org-less, so it deliberately

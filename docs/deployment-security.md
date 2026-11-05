@@ -185,7 +185,7 @@ SELECT * FROM users;
 ```
 
 The application sets `app.organisation_id` at connection pool checkout via
-`set_config`. If RLS is bypassed, the query returns rows across organisations.
+`set_config`. If RLS is bypassed, the query returns rows across organizations.
 
 **Checklist:**
 - [ ] Every table has `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY;`
@@ -199,7 +199,7 @@ multi-tenant isolation.
 ### 3.2 Connection Encryption
 
 - **In-transit:** Postgres connections must use TLS. The `sslmode` in
-  `DATABASE_URL` is honoured end-to-end (asyncpg's `ssl` connect arg is built
+  `DATABASE_URL` is honored end-to-end (asyncpg's `ssl` connect arg is built
   from it): `postgresql+asyncpg://user:pass@host:5432/db?sslmode=require`
 - **Certificate validation:** Use `sslmode=verify-full` with a CA certificate
   in production to prevent MITM within the VPC.
@@ -288,8 +288,9 @@ Backups are encrypted with AES-256-CBC (PBKDF2, 600K iterations). See
 
 ### 4.1 Rate Limiting Configuration
 
-Rate limiting uses a Redis token-bucket algorithm. Auth-specific rate limiting
-is configured via environment variables:
+Route-level rate limiting uses a Redis sliding-window algorithm (ZADD +
+ZREMRANGEBYSCORE). Auth-specific rate limiting is configured via environment
+variables:
 
 ```env
 # Auth rate limiting
@@ -320,8 +321,12 @@ done
 # Expected: once the 60-second window has seen 100 requests, responses return 429
 ```
 
-Without Redis, rate limiting falls back to in-memory token bucket – this does
-not coordinate across replicas. See `docs/deployment.md` §Scaling for details.
+Without Redis, route-level rate limiting becomes a no-op that allows every
+request (except the demo auto-login rule, which keeps a process-local
+token-bucket floor). Auth rate limiting is disabled without Redis.
+Application-level limits that use a per-process `TokenBucketRegistry` (MCP
+`trigger_pipeline` and HITL decisions, guardrail override) still apply but do not
+coordinate across replicas. See `docs/deployment.md` §Scaling for details.
 
 ### 4.2 CSRF Protection
 
@@ -520,9 +525,9 @@ of the previous entry, forming a tamper-evident chain:
 A row does not store its own hash. `verify_chain` recomputes each event's
 SHA-256 over its canonical JSON (including `previous_hash`) and compares it
 with the next event's `previous_hash`, then checks the final hash against the
-organisation's `audit_chain_heads.last_event_hash`.
+organization's `audit_chain_heads.last_event_hash`.
 
-Recording is not licence-gated: the append-only triggers and hash chaining are
+Recording is not license-gated: the append-only triggers and hash chaining are
 always active, so a Community install records the chain too. Reading it through
 the product is Team-tier.
 

@@ -47,8 +47,8 @@ test.describe('Admin Org Settings', { tag: "@regression" }, () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ organisation: { id: 'org1', name: 'Test Org', slug: 'test-org', created_at: '2025-01-01T00:00:00Z' }, exported_at: '2025-06-01T12:00:00Z' }) })
     })
     await page.goto('/admin/org')
-    await expect(page.locator('h1')).toContainText('Organisation Settings')
-    await expect(page.locator('text=Organisation Info')).toBeVisible()
+    await expect(page.locator('h1')).toContainText('Organization Settings')
+    await expect(page.locator('text=Organization Info')).toBeVisible()
   })
 })
 

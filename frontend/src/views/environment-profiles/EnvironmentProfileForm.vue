@@ -1,19 +1,17 @@
 <template>
   <div class="page-wide">
-    <header class="flex items-center gap-3 mb-6">
-      <button type="button"
-        class="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-        data-testid="envprofile-form-back"
-        :aria-label="$t('views.EnvironmentProfileForm.back_to_profiles')"
-        @click="$router.push('/environment-profiles')"
-      >
-        <ArrowLeft :size="18" aria-hidden="true" />
-      </button>
-      <PageHeader
-        :title="isEdit ? $t('views.EnvironmentProfileForm.edit_title') : $t('views.EnvironmentProfileForm.create_title')"
-        :subtitle="isEdit ? $t('views.EnvironmentProfileForm.edit_subtitle') : $t('views.EnvironmentProfileForm.create_subtitle')"
-      />
-    </header>
+    <button type="button"
+      class="mb-4 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+      data-testid="envprofile-form-back"
+      :aria-label="$t('views.EnvironmentProfileForm.back_to_profiles')"
+      @click="$router.push('/environment-profiles')"
+    >
+      <ArrowLeft :size="18" aria-hidden="true" />
+    </button>
+    <PageHeader
+      :title="isEdit ? $t('views.EnvironmentProfileForm.edit_title') : $t('views.EnvironmentProfileForm.create_title')"
+      :subtitle="isEdit ? $t('views.EnvironmentProfileForm.edit_subtitle') : $t('views.EnvironmentProfileForm.create_subtitle')"
+    />
 
     <form @submit.prevent="handleSubmit" class="card max-w-3xl p-6 space-y-5">
       <div>

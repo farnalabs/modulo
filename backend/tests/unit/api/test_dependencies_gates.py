@@ -264,6 +264,47 @@ class TestRequireFeature:
         ctx.feature_enabled.assert_called_once_with("audit_viewer")
 
 
+class TestFeatureRequiredDetail:
+    """The 402 detail must only claim a licence when one would actually help.
+
+    A community-tier flag that is default-off (``DEFAULT_OFF_FLAGS`` /
+    ``INTERNAL_FLAGS``, e.g. ``system_maps``) is not enabled by any licence, so
+    naming a Team licence is false and unactionable. The detail therefore reads
+    the flag's declared tier from the catalog.
+    """
+
+    def test_team_tier_below_plan_names_the_licence(self) -> None:
+        from modulo.api.dependencies import _feature_required_detail
+
+        detail = _feature_required_detail("sso", "community")
+        assert "requires a Team licence" in detail
+        assert "system or organisation scope" in detail
+
+    def test_community_tier_disabled_does_not_claim_a_licence(self) -> None:
+        from modulo.api.dependencies import _feature_required_detail
+
+        detail = _feature_required_detail("system_maps", "community")
+        assert "system_maps is not enabled for this organisation" in detail
+        assert "switched off" in detail
+        assert "Team licence" not in detail
+        assert "requires a licence" not in detail
+
+    def test_unknown_feature_fails_closed_neutrally(self) -> None:
+        from modulo.api.dependencies import _feature_required_detail
+
+        detail = _feature_required_detail("not_a_real_flag", "community")
+        assert detail == "not_a_real_flag is not available"
+        assert "licence" not in detail
+
+    def test_team_feature_on_a_team_plan_does_not_claim_a_missing_licence(self) -> None:
+        """Below-or-equal tier disables via an override, not an entitlement gap."""
+        from modulo.api.dependencies import _feature_required_detail
+
+        detail = _feature_required_detail("sso", "team")
+        assert "Team licence" not in detail
+        assert "switched off" in detail
+
+
 class TestRequireFeatureAnonymous:
     """Pre-auth gate: fail-closed by default, degrade-only for authentication.
 
@@ -578,3 +619,36 @@ class TestSystemEnginePoolRecycle:
         finally:
             deps._SYSTEM_ASYNC_ENGINE = saved_engine
             deps._SYSTEM_ENGINE_IS_FALLBACK = saved_flag
+
+
+class TestSystemMapsReadDependencies:
+    """The published-read gate and the internal-access probe (FAR-2363)."""
+
+    def test_published_read_allows_a_viewer(self) -> None:
+        from modulo.api.dependencies import _require_published_system_maps_read
+
+        principal = _tenant("viewer")
+        assert _require_published_system_maps_read(principal) is principal
+
+    def test_published_read_below_viewer_is_denied_403(self) -> None:
+        from modulo.api.dependencies import _require_published_system_maps_read
+
+        with pytest.raises(HTTPException) as excinfo:
+            _require_published_system_maps_read(_tenant(""))
+        assert excinfo.value.status_code == 403
+
+    def test_internal_access_true_when_the_internal_gate_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies as deps
+
+        principal = _tenant("operator")
+        monkeypatch.setattr(deps, "_require_internal_system_maps_access", lambda *_a, **_k: principal)
+        assert deps._system_maps_internal_access(principal) is True
+
+    def test_internal_access_false_when_the_internal_gate_denies(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies as deps
+
+        def _deny(*_a: object, **_k: object) -> None:
+            raise HTTPException(status_code=403, detail="denied")
+
+        monkeypatch.setattr(deps, "_require_internal_system_maps_access", _deny)
+        assert deps._system_maps_internal_access(_tenant("viewer")) is False

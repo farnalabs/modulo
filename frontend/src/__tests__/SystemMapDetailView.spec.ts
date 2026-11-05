@@ -60,6 +60,10 @@ describe('SystemMapDetailView load failures', () => {
     mockRoute.params = { id: 'map-1' }
     mockRoute.query = {}
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
   })
 
   it('offers an inline retry that re-runs the failed load', async () => {
@@ -67,6 +71,9 @@ describe('SystemMapDetailView load failures', () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') {
         return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      if (path === '/api/v1/system-maps/{map_id}/revisions/history') {
+        return Promise.resolve({ data: { system_map_id: 'map-1', revisions: [] } })
       }
       mapCalls += 1
       if (mapCalls === 1) return Promise.resolve({ error: { detail: 'map unavailable' } })
@@ -86,12 +93,50 @@ describe('SystemMapDetailView load failures', () => {
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(true)
   })
+
+  it('renders the unavailable state without a retry on a 402 feature_required', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      return Promise.resolve({
+        error: {
+          type: 'urn:problem:modulo:feature_required',
+          status: 402,
+          detail: 'system_maps_read is not enabled for this organisation',
+        },
+        response: { status: 402 },
+      })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('This system map is not available on your plan')
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(false)
+  })
+
+  it('keeps the retryable error state for a genuine server failure', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      return Promise.resolve({ error: { detail: 'down' }, response: { status: 500 } })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('This system map is not available on your plan')
+  })
 })
 
 describe('SystemMapDetailView authoring actions', () => {
   const HeaderStub = {
     name: 'HeaderBar',
-    props: ['map', 'revision', 'saving'],
+    props: ['map', 'revision', 'saving', 'readOnly'],
     emits: ['toggle-sidebar', 'save', 'publish', 'archive', 'discover'],
     template: '<div data-testid="header-stub" />',
   }
@@ -103,7 +148,7 @@ describe('SystemMapDetailView authoring actions', () => {
   }
   const RevisionStub = {
     name: 'RevisionSidebar',
-    props: ['mapId', 'revisions', 'activeRevisionId', 'activeMap'],
+    props: ['mapId', 'revisions', 'activeRevisionId', 'activeMap', 'readOnly'],
     emits: ['select-revision', 'select-current', 'select-by-time', 'new-draft', 'discover'],
     template: '<div data-testid="revision-stub" />',
   }
@@ -150,6 +195,10 @@ describe('SystemMapDetailView authoring actions', () => {
     mockRoute.query = {}
     if (mockPost) mockPost.mockReset()
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
       if (path === '/api/v1/system-maps/{map_id}/revisions/{rev_id}') return Promise.resolve({ data: { revision: { id: 'rev-2', revision_number: 2, status: 'draft' }, nodes: [], relationships: [] } })
@@ -389,6 +438,39 @@ describe('SystemMapDetailView authoring actions', () => {
     expect(wrapper.text()).toContain('Could not save draft revision')
   })
 
+  it('restores a historical revision as a new draft from the sidebar', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+    const restore = vi.spyOn(store, 'restoreRevisionAsNew').mockResolvedValue({ id: 'rev-3', revision_number: 3, status: 'draft' } as never)
+
+    wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-2')
+    await flushPromises()
+
+    expect(restore).toHaveBeenCalledWith('map-1', 'rev-2')
+    expect(wrapper.text()).not.toContain('Could not restore revision')
+  })
+
+  it('reports restore failures and falls back for non-Error rejections', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+    const restore = vi.spyOn(store, 'restoreRevisionAsNew')
+
+    restore.mockRejectedValueOnce(new Error('Could not restore revision'))
+    wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not restore revision')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    restore.mockRejectedValueOnce('offline')
+    wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not restore revision')
+  })
+
   it('runs discovery, opens the review panel and saves selections', async () => {
     seed(mockPost)
     const report = { draft_map_id: 'map-1', draft_revision_id: 'rev-1', inferred_nodes: [{ node_key: 'agent-1', node_type: 'agent', display_name: 'Agent' }], inferred_edges: [] }
@@ -461,12 +543,44 @@ describe('SystemMapDetailView authoring actions', () => {
 
     expect(wrapper.findComponent(GraphStub).props('readOnly')).toBe(true)
   })
+
+  it('renders the published detail read-only for a viewer', async () => {
+    mockIsOperator.value = false
+    mockPlanStore.devMode = false
+    mockPlanStore.userPermissions = ['system_maps.read']
+    mockGet.mockImplementation(() =>
+      Promise.resolve({ data: { id: 'map-1', name: 'Demo Delivery System', published_revision_id: 'rev-1' } }),
+    )
+
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+    store.graph = { revision: { id: 'rev-1', revision_number: 1, status: 'published' }, nodes: [], relationships: [], loop_configs: [] } as never
+    await flushPromises()
+
+    expect(mockGet).not.toHaveBeenCalledWith('/api/v1/admin/feature-flags')
+    expect(wrapper.findComponent(HeaderStub).props('readOnly')).toBe(true)
+    expect(wrapper.findComponent(GraphStub).props('readOnly')).toBe(true)
+    expect(wrapper.findComponent(RevisionStub).props('readOnly')).toBe(true)
+  })
+
+  it('keeps the operator authoring view editable', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+    store.graph = { revision: { id: 'rev-1', revision_number: 1, status: 'draft' }, nodes: [], relationships: [], loop_configs: [] } as never
+    await flushPromises()
+
+    expect(wrapper.findComponent(HeaderStub).props('readOnly')).toBe(false)
+    expect(wrapper.findComponent(GraphStub).props('readOnly')).toBe(false)
+    expect(wrapper.findComponent(RevisionStub).props('readOnly')).toBe(false)
+  })
 })
 
 describe('SystemMapDetailView guards and non-Error failures', () => {
   const HeaderStub = { name: 'HeaderBar', emits: ['toggle-sidebar', 'save', 'publish', 'archive', 'discover'], template: '<div />' }
   const GraphStub = { name: 'GraphEditor', emits: ['nodes-change', 'relationships-change'], template: '<div />' }
-  const RevisionStub = { name: 'RevisionSidebar', emits: ['select-revision', 'new-draft', 'discover'], template: '<div />' }
+  const RevisionStub = { name: 'RevisionSidebar', emits: ['select-revision', 'new-draft', 'restore-revision', 'discover'], template: '<div />' }
   const DiscoveryStub = { name: 'DiscoveryPanel', emits: ['close', 'save'], template: '<div />' }
 
   function mountWithStubs() {
@@ -485,6 +599,10 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     mockRoute.params = { id: 'map-1' }
     mockRoute.query = {}
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
       return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
@@ -510,6 +628,7 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
 
     wrapper.findComponent(RevisionStub).vm.$emit('select-revision', 'rev-1')
     wrapper.findComponent(RevisionStub).vm.$emit('new-draft')
+    wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-1')
     wrapper.findComponent(RevisionStub).vm.$emit('discover')
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
     wrapper.findComponent(HeaderStub).vm.$emit('save')
@@ -566,6 +685,17 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     expect(wrapper.text()).toContain('Could not archive revision')
   })
 
+  it('uses the localized fallback when revision history loading rejects with a non-Error', async () => {
+    const store = useSystemMapsStore()
+    vi.spyOn(store, 'loadRevisionHistory').mockRejectedValue('offline')
+
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    expect(store.activeMap?.id).toBe('map-1')
+    expect(wrapper.text()).toContain('Could not load revision history')
+  })
+
   it('keeps the discovery panel open when applying selections fails to save', async () => {
     const { wrapper, store } = await mountedWithMap()
     vi.spyOn(store, 'discover').mockResolvedValue({ draft_map_id: 'map-1', inferred_nodes: [], inferred_edges: [] } as never)
@@ -592,6 +722,10 @@ describe('SystemMapDetailView loading and graph state lifecycle (STATE-1 / STATE
     setActivePinia(createPinia())
     mockGet.mockReset()
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
   })
 
   it('renders loading state while store.loading is true and does not render empty state', async () => {
@@ -727,4 +861,5 @@ describe('SystemMapDetailView loading and graph state lifecycle (STATE-1 / STATE
     expect(wrapper.find('[data-testid="system-map-detail-loading"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(true)
   })
+
 })

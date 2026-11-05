@@ -153,7 +153,7 @@ describe('SystemMapRevisionSidebar', () => {
       ],
     })
 
-    const buttons = wrapper.findAll('ol li > button')
+    const buttons = wrapper.findAll('ol li > button:not([data-testid="system-map-revision-restore"])')
     expect(buttons.map((button) => button.attributes('data-testid'))).toEqual([
       'system-map-revision-3',
       'system-map-revision-2',
@@ -166,21 +166,24 @@ describe('SystemMapRevisionSidebar', () => {
     expect(wrapper.get('[data-testid="system-map-revision-2"]').classes()).toContain('border-primary')
   })
 
-  it('emits select, new-draft and discover events', async () => {
+  it('emits select, new-draft, restore and discover events', async () => {
     const wrapper = mountSidebar({
       mapId: 'map-1',
       activeRevisionId: 'rev-1',
       activeMap: map(),
-      revisions: [revision()],
-    })
+       revisions: [revision({ status: 'published' })],
+     })
 
-    await wrapper.get('[data-testid="system-map-revision-1"]').trigger('click')
-    await wrapper.get('[data-testid="system-map-new-draft"]').trigger('click')
-    await wrapper.get('[data-testid="system-map-sidebar-discover"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-revision-1"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-new-draft"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-revision-restore"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-sidebar-discover"]').trigger('click')
 
-    expect(wrapper.emitted('select-revision')![0]).toEqual(['rev-1'])
-    expect(wrapper.emitted('new-draft')).toBeTruthy()
-    expect(wrapper.emitted('discover')).toBeTruthy()
+     expect(wrapper.emitted('select-revision')![0]).toEqual(['rev-1'])
+     expect(wrapper.emitted('new-draft')).toBeTruthy()
+     expect(wrapper.emitted('restore-revision')![0]).toEqual(['rev-1'])
+     expect(wrapper.emitted('discover')).toBeTruthy()
+
   })
 
   it('emits current and by-time switching events', async () => {
@@ -207,6 +210,43 @@ describe('SystemMapRevisionSidebar', () => {
     const at = wrapper.emitted('select-by-time')![0][0] as string
     expect(Number.isNaN(new Date(at).getTime())).toBe(false) // nosemgrep: new-date-without-guard
     expect(at).toMatch(/Z$/)
+  })
+
+  it('filters drafts and authoring controls for a read-only viewer', () => {
+    const wrapper = mountSidebar({
+      mapId: 'map-1',
+      activeMap: map(),
+      readOnly: true,
+      revisions: [
+        revision({ id: 'rev-1', revision_number: 1, status: 'draft' }),
+        revision({ id: 'rev-2', revision_number: 2, status: 'published' }),
+      ],
+    })
+
+    expect(wrapper.find('[data-testid="system-map-revision-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-revision-2"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-map-new-draft"]').exists()).toBe(false)
+     expect(wrapper.find('[data-testid="system-map-sidebar-discover"]').exists()).toBe(false)
+     expect(wrapper.find('[data-testid="system-map-revision-restore"]').exists()).toBe(false)
+
+  })
+
+  it('keeps a draft revision and authoring controls for an operator', () => {
+    const wrapper = mountSidebar({
+      mapId: 'map-1',
+      activeMap: map(),
+      readOnly: false,
+      revisions: [
+        revision({ id: 'rev-1', revision_number: 1, status: 'draft' }),
+        revision({ id: 'rev-2', revision_number: 2, status: 'published' }),
+      ],
+    })
+
+    expect(wrapper.find('[data-testid="system-map-revision-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-map-new-draft"]').exists()).toBe(true)
+     expect(wrapper.find('[data-testid="system-map-sidebar-discover"]').exists()).toBe(true)
+     expect(wrapper.find('[data-testid="system-map-revision-restore"]').exists()).toBe(true)
+
   })
 
   it('marks the currently published revision', () => {

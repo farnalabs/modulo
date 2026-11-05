@@ -441,6 +441,95 @@ describe('SystemMapsView fallback branches', () => {
     expect(wrapper.text()).toContain('Discover')
   })
 
+
+  it('renders a viewer read-only list without authoring controls', async () => {
+    mockIsOperator.value = false
+    mockPlanStore.devMode = false
+    mockPlanStore.userPermissions = ['system_maps.read']
+    mockGet.mockImplementation(() => Promise.resolve(listResponse([map()])))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(mockGet).not.toHaveBeenCalledWith('/api/v1/admin/feature-flags')
+    expect(wrapper.find('[data-testid="system-maps-create"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-maps-read-only"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Map one')
+    expect(wrapper.find('[data-testid="system-map-action-map-1"]').exists()).toBe(false)
+  })
+
+  it('renders the unavailable state without a retry on a 402 feature_required', async () => {
+    mockIsOperator.value = false
+    mockPlanStore.devMode = false
+    mockPlanStore.userPermissions = ['system_maps.read']
+    mockGet.mockResolvedValue({
+      error: {
+        type: 'urn:problem:modulo:feature_required',
+        status: 402,
+        detail: 'system_maps_read is not enabled for this organisation',
+      },
+      response: { status: 402 },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('System Maps is not available on your plan')
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-maps-loading"]').exists()).toBe(false)
+  })
+
+  it('keeps the retryable error state for a genuine server failure', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve({ error: { detail: 'down' }, response: { status: 500 } })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('System Maps is not available on your plan')
+  })
+
+  it('keeps the operator action menu for an authoring operator', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve(listResponse([map()]))
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="system-maps-create"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-maps-read-only"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="system-map-action-map-1"]').trigger('click')
+    expect((wrapper.findComponent(MenuStub).props('model') as unknown[]).length).toBe(5)
+  })
+
+  it('narrows an open action menu to view-only when authoring access is lost', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve(listResponse([map()]))
+    })
+    const store = useSystemMapsStore()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="system-map-action-map-1"]').trigger('click')
+    expect((wrapper.findComponent(MenuStub).props('model') as unknown[]).length).toBe(5)
+
+    // The entitlement can be revoked while the menu is open; the reactive
+    // menu must then expose only the read action and never a mutation.
+    store.systemMapsEnabled = false
+    await wrapper.vm.$nextTick()
+
+    const model = wrapper.findComponent(MenuStub).props('model') as Array<{ label: string }>
+    expect(model).toHaveLength(1)
+    expect(model[0].label).toBe('View')
+  })
+
   it('uses the localized delete fallback for a non-Error rejection', async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())

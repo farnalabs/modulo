@@ -897,7 +897,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     FormDialog: slotStub,
     LoadingSpinner: true,
     FeatureGate: featureGateStub,
-    PageHeader: { template: '<div />' },
+    PageHeader: { template: '<div><slot name="right" /></div>' },
   }
 
   const cronTrigger = {

@@ -1,12 +1,13 @@
 <template>
   <FeatureGate feature-name="user_management" required-tier="community" show-disabled>
   <div class="page-wide">
-    <div class="flex items-center justify-between">
-      <PageHeader :title="$t('views.AdminUsersView.users_title')" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')" />
-      <Button class="border-primary/30" data-testid="admin-users-add-user" @click="openAddUser">
-        {{ $t('views.AdminUsersView.add_user') }}
-      </Button>
-    </div>
+    <PageHeader :title="$t('views.AdminUsersView.users_title')" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')">
+      <template #right>
+        <Button class="border-primary/30" data-testid="admin-users-add-user" @click="openAddUser">
+          {{ $t('views.AdminUsersView.add_user') }}
+        </Button>
+      </template>
+    </PageHeader>
 
     <!-- STATE-3 (ux-conformance): the column layout is known before the first
          row arrives, so the loading placeholder is a determinate table

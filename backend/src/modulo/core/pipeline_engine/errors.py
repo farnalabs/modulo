@@ -7,6 +7,14 @@ Kept in a leaf module (no internal pipeline_engine imports) so both
 from __future__ import annotations
 
 
+class ResumeClaimSupersededError(RuntimeError):
+    """The expected inline-resume claim was replaced before execution began."""
+
+    def __init__(self, run_id: object) -> None:
+        self.run_id = run_id
+        super().__init__(f"resume claim for run {run_id} was superseded")
+
+
 class RouterNoMatchError(Exception):
     """Raised by a Router node's routing function when no rule matches and
     there is no ``default`` rule.

@@ -7,7 +7,7 @@
 Alpha means all four of:
 
 1. **The code is public.** Source is published under the Business Source License 1.1 - source-available and world-readable, not OSI open-source.
-2. **The product is available to buy.** A paid Team tier can be purchased, and licence enforcement ships with alpha - Ed25519-signed licence keys are verified at startup.
+2. **The product is available to buy.** A paid Team tier can be purchased, and license enforcement ships with alpha - Ed25519-signed license keys are verified at startup.
 3. **All docs are valid and up to date.**
 4. **A user can pull it down and start using it in anger**, via various distribution methods.
 
@@ -20,13 +20,13 @@ Alpha and beta are gated purely by deliverables in the code: the scoped Alpha-mi
 ## What alpha is not
 
 - Not a hosted SaaS, and not a hosted trial.
-- Not a public contributor programme (tracked separately).
+- Not a public contributor program (tracked separately).
 - Not the complete planned feature set - depth items continue after alpha.
 
 ## Scope - what lands before alpha
 
 - **Distribution:** published container images with unauthenticated pull, a worked `install.sh` path, and the supported install methods documented.
-- **Buyable:** licence issuance, Team-tier unlock, invoicing, and the contributor/legal paperwork a public repo needs.
+- **Buyable:** license issuance, Team-tier unlock, invoicing, and the contributor/legal paperwork a public repo needs.
 - **Documentation:** the public docs and quickstart valid and current, with no stale org/path/version references.
 - **Contribution path:** the public repo is usable by an outside contributor (CI runs for forks, internal references scrubbed).
 - **Release engineering:** signed images/artifacts and an SBOM per release.
@@ -45,6 +45,6 @@ Alpha and beta are gated purely by deliverables in the code: the scoped Alpha-mi
 
 ## Commercial decisions (settled)
 
-- **Free vs paid:** paid and enforced - a paid Team tier exists and licence enforcement is live. Licence terms, refunds and the customer-facing ToS/privacy for the paid self-hosted product are an alpha dependency (tracked as FAR-1112).
+- **Free vs paid:** paid and enforced - a paid Team tier exists and license enforcement is live. License terms, refunds and the customer-facing ToS/privacy for the paid self-hosted product are an alpha dependency (tracked as FAR-1112).
 - **Version:** the release carries the next clean 0.x minor at cut (expected 0.4); the git tag is reconciled with the served version at cut.
 - **Launch:** a hard public launch, gated by a fixed go/no-go checklist - exit criteria met; zero open P0s; anonymous `docker pull` succeeds; a real end-to-end Team-tier purchase succeeds; the production deploy SHA equals the release tag; the docs sweep is clean.

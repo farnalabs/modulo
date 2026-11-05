@@ -146,7 +146,7 @@ Expected metrics:
 | Variable | Type | Source | Purpose |
 |---|---|---|---|
 | `datasource` | Data source | Prometheus | Select your Prometheus backend |
-| `org` | Query result | `label_values(...)` | Filter by organisation ID |
+| `org` | Query result | `label_values(...)` | Filter by organization ID |
 | `pipeline` | Query result (dependent on `$org`) | `label_values(...)` | Filter by pipeline ID |
 | `model` | Query result (dependent on `$org`, `$pipeline`) | `label_values(...)` | Filter by model ID |
 

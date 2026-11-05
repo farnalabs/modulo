@@ -25,7 +25,7 @@ error-forwarder config (``error_forwarder_config.py``), the library-sync client
 and the REST connector composition root (ADR 025). Infra-only surface - no UI
 route, so it is tracked here rather than in the manifest registry.
 
-## Behaviours
+## Behaviors
 
 - [x] Strict URL pre-parsing before any resolution: rejects non-http(s)
       schemes, embedded userinfo credentials, missing hostname, and
@@ -68,7 +68,7 @@ route, so it is tracked here rather than in the manifest registry.
 - [x] Redirects default to not-followed; a redirect hop to an unpinned
       host raises ``UnpinnedHostError`` (fail-closed, never connect to an
       unvalidated destination)
-- [x] Host keys are normalised (lowercased, trailing dot stripped) so a
+- [x] Host keys are normalized (lowercased, trailing dot stripped) so a
       ``rebind.example.`` host pins against the same key validation
       produced, without changing SNI/cert hostname
 - [x] ``trust_env=False`` is the safe default for the pinned transport (a
@@ -77,7 +77,7 @@ route, so it is tracked here rather than in the manifest registry.
       present logs a loud warning
 - [x] Pinned hosts are re-resolved after ``SSRF_RESOLVE_TTL`` (default
       300s) so a decommissioned or changed IP self-heals without a restart;
-      proxy environment variables are honoured only when
+      proxy environment variables are honored only when
       ``SSRF_TRUST_PROXY`` is enabled
 
 ## Known Gaps
@@ -93,7 +93,7 @@ route, so it is tracked here rather than in the manifest registry.
 ## QA History
 
 - 2026-10-10: **qa-iterate product-map pass** - corrected the hard-floor
-  behaviour line: loopback is blocked by default but is deliberately
+  behavior line: loopback is blocked by default but is deliberately
   **allowlistable** (`_is_blocked_ip` consults `SSRF_ALLOW_PRIVATE_RANGES` before
   the private fall-through), so it does not belong in the non-negotiable floor.
   Also noted the `loudness_guard` un-pin guard is opt-in (default off). Status:
@@ -115,7 +115,7 @@ route, so it is tracked here rather than in the manifest registry.
 
 - 2026-08-27: **product-map review pass** - entry added to
   close the feature-graph gap for a shipped infra-only surface whose tests
-  and call sites were previously invisible to the product map. Behaviours
+  and call sites were previously invisible to the product map. Behaviors
   verified against ``backend/src/modulo/core/ssrf.py`` and the 73-test-function
   ``backend/tests/unit/core/test_ssrf.py`` suite; consumers confirmed in
   ``admin_sso.py``, ``notifications.py``, ``observability.py``,

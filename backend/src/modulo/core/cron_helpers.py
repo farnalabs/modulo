@@ -7219,10 +7219,12 @@ async def _awaiting_human_has_committed_decision(
       engaged with.
     * NO undecided rows at all + a STAMPED decision: the run is parked at the
       decided interrupt with its resume job lost — mid-resume crash recovery,
-      and the MCP flow's resume path (``review_hitl`` never dispatches a
-      resume itself). The resume is accepted only when the decision's
-      identity routes it to a consumer that will actually accept it:
-      ``hitl_review_*`` / guardrail identities accept only verdict actions
+      and the compensating path for the MCP approve flow (which now resumes
+      inline AFTER committing the decision; a resume that fails before its
+      claim, or is lost after it, lands here). The resume is accepted only
+      when the decision's identity routes it to a consumer that will actually
+      accept it: ``hitl_review_*`` / guardrail identities accept only verdict
+      actions
       (a ``manual_output`` at either would bounce the run straight back to
       awaiting_human and re-dispatch-loop — FAR-541 iteration 3), while a
       MANUAL-NODE park (identity = the node id) also accepts a committed

@@ -55,11 +55,11 @@ The script fails loudly (non-zero exit, nothing written) if any mirror has drift
 ### Native single-install (Linux and macOS arm64)
 
 The native single-install path supports the published Linux bundle and the
-signed, notarized macOS arm64 `.dmg`. Windows native installer support is Alpha
-scope (FAR-2337 / FAR-2338): the release pipeline builds the native payload,
-compiles, signs (Azure Trusted Signing) and attests the installer, and includes it
-in `SHA256SUMS` and the release manifest when `include_windows` is enabled (the
-default). Publication only happens when a release runs, so no signed Windows
+signed, notarized macOS arm64 `.dmg`. Windows native installer support is Beta
+scope, opt-in only (FAR-2337 / FAR-2338): the release pipeline builds the native
+payload, compiles, signs (Azure Trusted Signing) and attests the installer, and
+includes it in `SHA256SUMS` and the release manifest only when the Beta-only
+`include_windows` input is explicitly enabled (it defaults to false). Publication only happens when a release runs, so no signed Windows
 installer is published yet: there is no published native Windows upgrade path
 today, and real-host validation is outstanding under FAR-2250. Linux uses
 `scripts/install.sh`; macOS uses `scripts/macos/install.sh` and installs the
@@ -168,7 +168,7 @@ curl http://localhost:8000/healthz
 
 ---
 
-## Migration Behaviour
+## Migration Behavior
 
 Migrations run automatically on backend startup:
 

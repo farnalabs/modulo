@@ -78,8 +78,8 @@ standard LangGraph Checkpoint JSON:
 
 ### 2.2 `checkpoint_blobs`
 
-Stores per-channel serialised state referenced by checkpoints. Each blob is a
-byte stream (Python pickle or JSON-serialised value).
+Stores per-channel serialized state referenced by checkpoints. Each blob is a
+byte stream (Python pickle or JSON-serialized value).
 
 ```sql
 CREATE TABLE checkpoint_blobs (

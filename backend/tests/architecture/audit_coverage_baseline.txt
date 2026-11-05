@@ -20,6 +20,7 @@ api_keys.py:revoke_api_key_endpoint
 audit.py:batch_detail_endpoint
 auth.py:accept_invite
 composite_templates.py:detect_params_endpoint
+deployment.py:set_deployment_drain
 environment_profiles.py:test_profile
 evals.py:compare_evals
 library.py:analyse_import_bundle_endpoint

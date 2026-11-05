@@ -1895,6 +1895,25 @@ def test_throttle_anchor_is_the_deploy_job_conclusion_not_the_run_conclusion() -
     assert not violations, "the throttle anchor is not a real-deploy signal:\n" + "\n".join(violations)
 
 
+def test_production_deploy_waits_for_active_sandbox_runs_before_fly_swap() -> None:
+    """The production worker is not replaced while sandbox work is active."""
+    production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
+    names = [step.get("name") for step in production_steps if isinstance(step, dict)]
+    assert "Wait for active sandbox runs to finish (production)" in names
+    wait_step = next(
+        step
+        for step in production_steps
+        if isinstance(step, dict) and step.get("name") == "Wait for active sandbox runs to finish (production)"
+    )
+    script = str(wait_step.get("run") or "")
+    deploy_index = names.index("Deploy to app-modulo")
+    wait_index = names.index("Wait for active sandbox runs to finish (production)")
+    assert wait_index < deploy_index
+    assert "/api/v1/deployment" in script
+    assert "active_sandbox_runs" in script
+    assert "exit 1" in script
+
+
 def test_production_deploy_still_verifies_the_shipped_sha() -> None:
     """A deploying run must still prove production serves what it shipped.
 
@@ -1913,6 +1932,29 @@ def test_production_deploy_still_verifies_the_shipped_sha() -> None:
     if "exit 1" not in run:
         violations.append("  a SHA mismatch no longer fails the step")
     assert not violations, "the production SHA verification was weakened:\n" + "\n".join(violations)
+
+
+def test_production_drain_clears_only_after_all_post_deploy_gates() -> None:
+    """A failed verification must leave admission frozen for manual recovery."""
+    production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
+    names = [step.get("name") for step in production_steps if isinstance(step, dict)]
+    required = [
+        "Post-deploy verify + auto-rollback (never leave prod down)",
+        "Check deployed SHA",
+        "Wait for worker liveness check (production)",
+        "Clear production sandbox drain",
+    ]
+    missing = [name for name in required if name not in names]
+    assert not missing, f"deploy.yml production drain validation steps missing: {missing}"
+    indices = [names.index(name) for name in required]
+    assert indices == sorted(indices), "production sandbox drain must clear after verify, SHA, and worker health"
+    clear_step = next(step for step in production_steps if step.get("name") == "Clear production sandbox drain")
+    assert "if" not in clear_step, "drain clear must use the default success gate, not always()/failure()"
+    for name in required[:3]:
+        step = next(step for step in production_steps if step.get("name") == name)
+        assert "if" not in step or "rolled_back == 'false'" in str(step.get("if")), (
+            f"{name} must remain gated against a rollback"
+        )
 
 
 def test_deploy_consumers_classify_a_throttled_noop_by_the_deploy_job() -> None:

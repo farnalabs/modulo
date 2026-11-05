@@ -23,7 +23,7 @@ and comparison surfaces eval scores per node, prompt diffs and eval
 coverage gaps. A batch-compare flow (`/variants/compare/:batchId`) is activated
 by the `variant_batch_compare` feature flag.
 
-## Behaviours
+## Behaviors
 
 - [x] A variant group is creatable with weighted variants that fuse
       `run_context_overrides` into each run's input payload
@@ -36,7 +36,7 @@ by the `variant_batch_compare` feature flag.
       one shared `batch_id`)
       (`tests/bdd/features/variants/variant_groups.feature`)
 - [x] Variant groups can be listed, fetched, updated, deleted and restored
-      (ownership asserted per organisation, `api/routes/variants.py`)
+      (ownership asserted per organization, `api/routes/variants.py`)
 - [x] Comparison surfaces include coverage gaps, prompt diffs and the batch-compare
       summary (`prompt_diffs`, `coverage_gaps`, `batch_compare` endpoints)
 - [x] Eval coverage gaps report the pipeline eval definitions each variant is
@@ -58,7 +58,7 @@ by the `variant_batch_compare` feature flag.
       and hard-replaces the legacy AB-test view when enabled (frontend router guard)
 - [x] Variant groups are created and batch-fired from the inline builder on
       `/variants/compare` (`components/variants/VariantGroupBuilder.vue`), which
-      honours the `pipeline_id` deep-link from a pipeline's "Run as variant" action
+      honors the `pipeline_id` deep-link from a pipeline's "Run as variant" action
 - [x] A terminal `rejected` run (FAR-1487) aggregates exactly like `cancelled`
       in the server-computed batch status: `_CANCELLED = {"cancelled",
       "rejected"}` in `api/routes/variant_batches.py`, so a batch whose runs are
@@ -87,10 +87,10 @@ the per-token breakdown comparison the manifest previously parked as the lone
   inventory). The manifest `feat-variants` status is now `covered`.
 - 2026-09-25: **Improve Architecture product-map walk**: reconciled the
   manifest `feat-variants` registry entry with this tracker: per-node eval-score
-  comparison (the `[x]` "eval scores per node" behaviour above) is now ticked, and
+  comparison (the `[x]` "eval scores per node" behavior above) is now ticked, and
   the unchecked item is narrowed to the genuinely missing per-token breakdown only.
   The tracker's Known Gaps wording ("per-node eval-score / per-token breakdown drafts")
-  is clarified by the Behaviours line that already ships per-node eval scores.
+  is clarified by the Behaviors line that already ships per-node eval scores.
 - 2026-09-23: **product-map review pass**: removed the stale
   `pipelines/run_variants.feature` "Coverage gaps are reported for a variant
   group" scenario (`@awaiting-implementation`, deselected) and its dead step
@@ -142,8 +142,8 @@ the per-token breakdown comparison the manifest previously parked as the lone
   opens the builder, the `pipeline_id` deep-link from PipelineListView pre-selects
   the pipeline, and firing a batch navigates to the batch-compare detail route.
 
-- 2026-08-27: **product-map review pass**: added this behaviour-tracker
+- 2026-08-27: **product-map review pass**: added this behavior-tracker
   for the registered manifest feature `feat-variants`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/variants.py` and
+  `docs/product-map/` entry. Behaviors verified against `api/routes/variants.py` and
   `tests/bdd/features/variants/variant_groups.feature`. Status: covered (with the known
   BDD gaps called out above).

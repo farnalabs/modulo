@@ -18,15 +18,27 @@
           @select-revision="selectRevision"
           @select-current="selectCurrentRevision"
           @select-by-time="selectRevisionByTime"
-          @new-draft="createNewDraft"
-          @discover="runDiscovery"
+          :read-only="readOnly"
+           @new-draft="createNewDraft"
+           @restore-revision="restoreRevision"
+           @discover="runDiscovery"
+
         />
       </div>
 
       <!-- Main Editor Area -->
       <main class="flex-1 flex flex-col min-w-0 overflow-hidden relative">
+        <!-- 402 feature_required is an entitlement answer, not a failed load:
+             no retry affordance, and an honest unavailable message. -->
+        <div
+          v-if="unavailable"
+          class="m-3 rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground"
+          aria-live="polite"
+        >
+          {{ $t('views.SystemMapDetailView.unavailable') }}
+        </div>
         <ErrorAlert
-          v-if="loadError"
+          v-else-if="loadError"
           :message="loadError"
           :on-retry="loadData"
           class="m-3"
@@ -47,6 +59,7 @@
           @save="saveDraft"
           @publish="publishRevision"
           @archive="archiveRevision"
+          :read-only="readOnly"
           @discover="runDiscovery"
           data-testid="system-map-detail-header"
         />
@@ -84,7 +97,7 @@
               data-testid="system-map-graph-canvas"
             />
 
-            <div v-else-if="!loadError" class="flex items-center justify-center h-full text-muted-foreground" data-testid="system-map-empty-state">
+            <div v-else-if="!loadError && !unavailable" class="flex items-center justify-center h-full text-muted-foreground" data-testid="system-map-empty-state">
               <div class="text-center">
                 <p class="text-lg">{{ $t('views.SystemMapDetailView.no_graph') }}</p>
                 <p class="text-sm mt-2">{{ $t('views.SystemMapDetailView.no_graph_hint') }}</p>
@@ -132,6 +145,7 @@ const graph = computed(() => store.graph)
 const revisions = computed(() => store.revisions)
 const discovery = computed(() => store.discovery)
 const loadError = computed(() => store.error)
+const unavailable = computed(() => store.unavailable)
 const loading = computed(() => store.loading)
 
 const showSidebar = ref(true)
@@ -146,7 +160,7 @@ const relationshipTypes = RELATIONSHIP_TYPES
 
 const isPublished = computed(() => activeRevision.value?.status === 'published')
 const isArchived = computed(() => activeRevision.value?.status === 'archived')
-const readOnly = computed(() => isPublished.value || isArchived.value)
+const readOnly = computed(() => !store.hasAccess || isPublished.value || isArchived.value)
 
 watch(graph, (value) => {
   editedNodes.value = (value?.nodes ?? []).map((node) => ({ ...node, config_json: { ...node.config_json } }))
@@ -183,6 +197,12 @@ async function loadData(): Promise<void> {
   actionError.value = null
   await store.fetchAccess()
   await store.loadMap(mapId.value)
+  if (!activeMap.value) return
+  try {
+    await store.loadRevisionHistory(mapId.value)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.load_revision_history')
+  }
 }
 
 async function selectRevision(revisionId: string): Promise<void> {
@@ -228,6 +248,19 @@ async function createNewDraft(): Promise<void> {
     )
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.create_draft')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function restoreRevision(revisionId: string): Promise<void> {
+  if (!activeMap.value) return
+  saving.value = true
+  actionError.value = null
+  try {
+    await store.restoreRevisionAsNew(activeMap.value.id, revisionId)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.restore_revision')
   } finally {
     saving.value = false
   }

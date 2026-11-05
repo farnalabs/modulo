@@ -84,25 +84,19 @@
 import { computed, ref } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, isFeatureRequiredProblem } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import DataCard from '../components/ui/DataCard.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 
-function isFeatureRequiredError(err: unknown): boolean {
-  if (typeof err !== 'object' || err === null) return false
-  const obj = err as Record<string, unknown>
-  return obj.status === 402 || obj.type === 'urn:problem:modulo:feature_required'
-}
-
 const featureRequired = ref(false)
 const { loading, error: loadError, data, load: loadRules } = useDataFetch(
   async () => {
     const res = await api.GET('/api/v1/admin/rate-limits')
     if (res.error) {
-      if (isFeatureRequiredError(res.error)) {
+      if (isFeatureRequiredProblem(res.error, res.response)) {
         featureRequired.value = true
         return { data: { mode: 'in_memory', rules: [] }, error: undefined }
       }

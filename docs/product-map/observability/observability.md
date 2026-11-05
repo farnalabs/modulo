@@ -61,14 +61,14 @@ observability exports (OTLP metrics/traces). Surfaces: `/admin/errors`,
 
 _All three settings pages are hidden from the MVP nav via `visibility:
 private_preview` (the router redirects them to the dashboard unless dev mode is
-on). `/settings/observability` ships with its behaviour detail below; Error
+on). `/settings/observability` ships with its behavior detail below; Error
 Forwarders (`/settings/error-forwarders`) and Browser Monitoring config
 (`/settings/monitoring`) are deferred from the MVP cut - their routes, views and
-API surfaces ship but stay hidden behind `private_preview`, and their behaviour
+API surfaces ship but stay hidden behind `private_preview`, and their behavior
 detail is removed from this tracker, so restore it from git history when
 re-enabling. See FAR-547 (error forwarders) and FAR-543 (browser monitoring)._
 
-## Behaviours
+## Behaviors
 
 - [x] Error ingestion: two ingest surfaces with different trust boundaries. The
       authenticated `POST /api/v1/errors/ingest` requires a per-session HMAC key
@@ -89,6 +89,15 @@ re-enabling. See FAR-547 (error forwarders) and FAR-543 (browser monitoring)._
 - [x] Error dashboard: list groups, filter by status, view group detail, resolve a
       group, and 404 on a missing group (`error_dashboard.feature`,
       `routes/errors.py` + `db/crud/error_tracking.py`)
+- [x] Error reads and error mutations are separate permissions (FAR-2373 /
+      FAR-2374): every tenant read route requires `errors.resolve`, which viewers
+      hold, while acknowledging, resolving, archiving and reassigning a group
+      require `errors.manage` (admin-only). A viewer keeps the whole read
+      surface but no write control is actionable: the detail view disables the
+      status and assignee controls and explains why through an
+      `aria-describedby` help line plus the shared tooltip affordance
+      (`api/routes/errors.py`, `AdminErrorDetailView.vue`,
+      `__tests__/AdminErrorDetailView.spec.ts`)
 - [x] Scheduler-starvation detection (FAR-604):
       `GET /api/v1/errors/scheduler-starvation` surfaces pipelines whose
       unstarted pending runs (`status='pending'`, `started_at IS NULL`) carry a
@@ -131,7 +140,7 @@ re-enabling. See FAR-547 (error forwarders) and FAR-543 (browser monitoring)._
       webhook rules are also refused 402) (`error_notifications.feature`,
       `api/routes/error_notification_rules.py`,
       `core/error_tracking/alerting.py`)
-- _Error forwarders behaviour detail removed for the MVP cut (see the pointer above)._
+- _Error forwarders behavior detail removed for the MVP cut (see the pointer above)._
 - [x] OTLP observability export: `GET/PUT /api/v1/settings/observability`
       reads/updates the OTel endpoint + export interval (and the LangSmith key),
       serves stale cache on DB outage (degraded response, never hangs), masks
@@ -141,7 +150,7 @@ re-enabling. See FAR-547 (error forwarders) and FAR-543 (browser monitoring)._
       settings, falling back to the last cache or defaults on a DB timeout /
       outage rather than failing (`metrics.feature`,
       `unit/api/test_observability_routes.py`)
-- _Browser monitoring config behaviour detail removed for the MVP cut (see the pointer above)._
+- _Browser monitoring config behavior detail removed for the MVP cut (see the pointer above)._
 - [x] Frontend views behind the shipped routes render the settings and the admin
       error dashboard/detail surfaces (`SettingsObservabilityView.vue`,
       `AdminErrorsView.vue`, `AdminErrorDetailView.vue`)
@@ -196,13 +205,13 @@ re-enabling. See FAR-547 (error forwarders) and FAR-543 (browser monitoring)._
   preview endpoint to the observability bullet. Also corrected "deferred
   entirely" for the forwarders / browser-monitoring pages: their routes, views
   and API surfaces ship, hidden only by `visibility: private_preview`. Mirrored
-  the starvation and preview behaviours into the manifest `feat-observability`
+  the starvation and preview behaviors into the manifest `feat-observability`
   registry. Product-map architecture suite re-run green.
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
   FAR-1545 sub-surface (route-specific RFC 9457 problem types, merged in PR
   #1375): the specific `urn:problem:modulo:<code>` problem types shipped while
   neither the manifest `feat-observability` registry nor this tracker mentioned
-  the error-envelope contract. Added the checked behaviour line plus the
+  the error-envelope contract. Added the checked behavior line plus the
   `api/models/problem.py` / `formatError.ts` / `test_problem.py` citations, and
   recorded the deliberate no-mint guards (status-derived generics) so the sparse
   code→type map is auditable.
@@ -212,10 +221,10 @@ re-enabling. See FAR-547 (error forwarders) and FAR-543 (browser monitoring)._
   `/instance/{error_id}`, `/instance/{error_id}/events` in
   `backend/src/modulo/api/routes/errors.py`, already cited above), the
   `backend/tests/unit/error_tracking/test_error_instance_scope.py` suite and the
-  two frontend scope-toggle spec files, plus a ticked behaviour bullet for the
-  two-partition boundary. Behaviour and `status: covered` re-verified against
+  two frontend scope-toggle spec files, plus a ticked behavior bullet for the
+  two-partition boundary. Behavior and `status: covered` re-verified against
   `routes/errors.py`, the test suite and the manifest `feat-observability`
-  registry (which already carries the matching FAR-1547 behaviour line and the
+  registry (which already carries the matching FAR-1547 behavior line and the
   `admin-errors-scope*` / `admin-error-detail-instance-readonly` testids) - no
   drift found, so the manifest needed no change.
 
@@ -283,7 +292,7 @@ re-enabling. See FAR-547 (error forwarders) and FAR-543 (browser monitoring)._
 
 - 2026-08-27: **product-map review pass** - added this entry to
   close the coverage gap for the registered `feat-observability` feature (no
-  behaviour-tracker existed). Behaviours verified against `core/error_tracking/`,
+  behavior-tracker existed). Behaviors verified against `core/error_tracking/`,
   the `/api/v1/errors*` + `/api/v1/settings/observability` +
   `/api/v1/admin/monitor-config` routes, the error-observability BDD features,
   and the observability-forwarder-monitor unit suites. Status: covered.

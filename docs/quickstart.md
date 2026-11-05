@@ -39,7 +39,7 @@ This starts:
 
 If `FERNET_KEY` is unset, `docker compose up` fails immediately with
 `required variable FERNET_KEY is missing a value` and the generation command –
-that is the intended behaviour, not a bug.
+that is the intended behavior, not a bug.
 
 ## 2. Set up the backend
 
@@ -145,7 +145,7 @@ A failure names its own fix. The two signatures it catches:
 
 | Failed step | What it means |
 |---|---|
-| `readiness checkpointer 'degraded'` | `startup.checkpointer_init_failed` – the checkpointer could not initialise, so `checkpoints` / `checkpoint_migrations` were never created |
+| `readiness checkpointer 'degraded'` | `startup.checkpointer_init_failed` – the checkpointer could not initialize, so `checkpoints` / `checkpoint_migrations` were never created |
 | `creating a model backend returned HTTP 500` | `ValueError: FernetSecretsBackend: invalid fernet_key` – the key only passed the `Settings` length check, not Fernet's shape check |
 
 Both mean no credential has ever been stored successfully, so the fix is to

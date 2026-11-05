@@ -42,13 +42,14 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, nullslast, select
+from sqlalchemy import func, nullslast, select, update
 from sqlalchemy.exc import PendingRollbackError, ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
@@ -72,6 +73,7 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import CLIENT_KIND_BROWSER, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.cron_helpers import _awaiting_human_has_committed_decision
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
@@ -84,10 +86,7 @@ from modulo.core.hitl_manager import (
     RunNotAwaitingError,
 )
 from modulo.core.notifier import Notifier
-from modulo.core.pipeline_engine.executor import (
-    PipelineExecutor,
-    SandboxCapacityExceededError,
-)
+from modulo.core.pipeline_engine.executor import PipelineExecutor, SandboxCapacityExceededError
 from modulo.db.crud.hitl_review_config import (
     EVENT_HUMAN_ONLY_DENIED,
     edge_source_or_target,
@@ -99,6 +98,7 @@ from modulo.db.crud.hitl_review_config import (
     resolve_review_descriptions,
     snapshot_review_config_map,
 )
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import get_run, transition_run
 from modulo.db.crud.team_scope import account_team_scope_clause, viewer_run_scope_visible
 from modulo.db.models.account import Account
@@ -106,7 +106,7 @@ from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
-from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, Run
+from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_ACTIONABLE_RUN_STATUSES, Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.settings import get_settings
@@ -311,6 +311,107 @@ _REVIEW_PAGE_SIZE_MAX = 100
 #: is still actionable. ``approved``/``rejected`` (decided history) and ``all``
 #: (audit view) are deliberately unfenced — see ``list_org_reviews``.
 _PENDING_WORK_REVIEW_STATUSES = frozenset({"undecided", "pending", "claimed"})
+
+
+def _is_sandbox_capacity_exceeded(exc: BaseException) -> bool:
+    """Return whether a resume failure is the capacity-deferred outcome.
+
+    Kept beside the REST handler's exception import so other API adapters can
+    preserve the same mapping without importing the pipeline engine directly.
+    """
+    return isinstance(exc, SandboxCapacityExceededError)
+
+
+async def _session_row_is_f6a_reconcile_candidate(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> bool:
+    """Whether *run_id* is in the F6a reconcile-recoverable shape.
+
+    Recovery is a property of the ROW, not of whether a repair UPDATE matched:
+    a resume that fails BEFORE its claim transaction commits leaves the run in
+    its committed HITL state, which is already a valid F6a candidate. The
+    row must be in an actionable HITL status, dispatched by SAQ, and carry a
+    committed gate decision the reconcile guard accepts.
+    """
+    row = (
+        await session.execute(
+            select(Run.status, Run.dispatcher).where(
+                Run.id == run_id,
+                Run.organisation_id == org_id,
+            )
+        )
+    ).first()
+    if row is None:
+        return False
+    status, dispatcher = row
+    if status not in HITL_ACTIONABLE_RUN_STATUSES or dispatcher != "saq":
+        return False
+    return await _awaiting_human_has_committed_decision(session, org_id, run_id)
+
+
+async def _run_is_f6a_reconcile_candidate(
+    *,
+    engine: AsyncEngine,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> bool:
+    """Open a short RLS session and evaluate the F6a reconcile-candidate state."""
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        return await _session_row_is_f6a_reconcile_candidate(session, org_id=org_id, run_id=run_id)
+
+
+async def _restore_failed_mcp_resume_for_reconcile(
+    *,
+    engine: AsyncEngine,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    claim_token: str,
+) -> bool:
+    """Return this failed inline HITL resume to the F6a reconcile state.
+
+    ``PipelineExecutor.resume`` claims the run as ``running`` before loading
+    setup and compiling the graph. A failure after that claim cannot be left
+    with a fresh heartbeat: dispatcher_reconcile deliberately ignores a fresh
+    running row, so the durable approval would be stranded. The repair is
+    fenced to the exact executor claim token. A later executor/reconcile claim
+    therefore wins the row and this stale failure cannot rewrite it back to
+    ``awaiting_human``.
+
+    Returns whether the row is NOW an F6a reconcile candidate. A pre-claim
+    failure matches no UPDATE (the run never left its HITL status) but is
+    still recoverable, so the row is re-read rather than judging recovery by
+    the UPDATE's rowcount.
+    """
+    stale_seconds = max(1, int(get_settings().saq_job_heartbeat) * 2)
+    stale_heartbeat = datetime.now(UTC) - timedelta(seconds=stale_seconds)
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        # FAR-1584/1592/1601/1610 caller-bound convention: this is a
+        # request-path hot-row write, so bound the lock wait at the top of the
+        # transaction — before the repair UPDATE's first lock.
+        await set_mutation_row_lock_timeout(session)
+        await session.execute(
+            update(Run)
+            .where(
+                Run.id == run_id,
+                Run.organisation_id == org_id,
+                Run.status == "running",
+                Run.claim_token == claim_token,
+            )
+            .values(
+                status=AWAITING_HUMAN_STATUS,
+                heartbeat_at=stale_heartbeat,
+                dispatcher="saq",
+                completed_at=None,
+            )
+        )
+        return await _session_row_is_f6a_reconcile_candidate(session, org_id=org_id, run_id=run_id)
 
 
 def _capacity_deferred_response(run_id: uuid.UUID, action: str) -> dict[str, str]:

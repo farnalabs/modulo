@@ -45,6 +45,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.system_config import SystemConfig
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 
@@ -236,6 +237,7 @@ async def sqlite_engine() -> AsyncEngine:
             ErrorNotificationRule.__table__,
             DeletedDefault.__table__,
             TeamMembership.__table__,
+            SystemConfig.__table__,
         ],
     )
     async with eng.begin() as conn:

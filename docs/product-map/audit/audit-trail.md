@@ -68,16 +68,16 @@ status: covered
 # Audit Trail & Audit Log
 
 Immutable, hash-chained audit trail of significant actions across the
-organisation, plus the admin log surface (`/admin/audit`) that lists, filters,
+organization, plus the admin log surface (`/admin/audit`) that lists, filters,
 verifies, and exports events for security review and SOC 2-style compliance
 evidence. Every substantial product action (HITL decisions, org deletion,
 secret/key rotation, run lifecycle) appends an `AuditEvent`, and the chain is
 guarded against tampering at both the ORM and the database layer.
 
-## Behaviours
+## Behaviors
 
 - [x] Significant actions append an `AuditEvent` carrying event_type, actor,
-      resource type/id, organisation, JSON payload, and request_id, with a
+      resource type/id, organization, JSON payload, and request_id, with a
       SHA-256 hash of the canonical payload
 - [x] Events form a tamper-evident hash chain – each event's `previous_hash`
       links to the prior event in the org's chain, appends are serialized under
@@ -95,7 +95,7 @@ guarded against tampering at both the ORM and the database layer.
 - [x] `GET /api/v1/admin/audit/verify` recomputes and reports per-org chain
       integrity with an event count
 - [x] `GET /api/v1/admin/audit/export` streams a paginated CSV export
-      (items/total/page/page_size) honouring the same filters – compliance
+      (items/total/page/page_size) honoring the same filters – compliance
       evidence surface
 - [x] `GET /api/v1/admin/audit/scan` streams the WHOLE matching event set in
       ONE response (NDJSON by default, or a Content-Disposition CSV attachment)
@@ -112,14 +112,14 @@ guarded against tampering at both the ORM and the database layer.
 - [x] An audit export can be emitted as offline-verifiable evidence
       (FAR-1697): `GET /api/v1/admin/audit/evidence-pack` (`audit_viewer` +
       `audit.manage`) returns a self-contained pack - the audit events as
-      `audit-events.ndjson`, a canonical manifest (organisation id, exporter
+      `audit-events.ndjson`, a canonical manifest (organization id, exporter
       identity, `created_at`, run ids, per-file SHA-256 + size, and the
       re-derived chain summary
       `valid`/`event_count`/`head_hash`/`first_gap_index`/`first_tampered_id`/`truncated`),
       an Ed25519 signature over the canonical manifest, and the PEM
-      verification key as an artefact - while
+      verification key as an artifact - while
       `GET /api/v1/admin/audit/verification-key` publishes the org's public
-      key + `key_id` fingerprint. A party holding ONLY the artefact + the
+      key + `key_id` fingerprint. A party holding ONLY the artifact + the
       pre-published key verifies authorship, re-derives every file digest and
       re-derives the embedded audit chain with no Modulo service and no login
       (the `modulo evidence verify` CLI); any tampered file, mutated event,
@@ -132,7 +132,7 @@ guarded against tampering at both the ORM and the database layer.
       + `verification_key_endpoint`, `cli/evidence.py`,
       `docs/offline-verifiable-evidence.md`,
       `test_evidence_pack.py`, `test_audit_evidence_pack_route.py`)
-- [x] Recording is not licence-gated: every tier appends to the hash-chained,
+- [x] Recording is not license-gated: every tier appends to the hash-chained,
       append-only trail. The READ surface (browse, verify, export, scan, evidence
       pack and verification key) is admin-only and gated by the Team-tier
       `audit_viewer` feature key plus `audit.manage` – 402 on an unlicensed
@@ -183,9 +183,9 @@ guarded against tampering at both the ORM and the database layer.
       its ENTIRE chain with it – including the `org_deletion_requested` row
       written moments earlier – and a post-commit append could never satisfy
       the FK on an org that no longer exists. The org-lifecycle writers that
-      can still change the active organisation's lifecycle – `PATCH
+      can still change the active organization's lifecycle – `PATCH
       /api/v1/admin/org/deletion-cancel` – and the system-admin
-      cross-organisation `DELETE /api/v1/admin/orgs/{org_id}` mirror the same
+      cross-organization `DELETE /api/v1/admin/orgs/{org_id}` mirror the same
       evidence (`org_deletion_cancelled` / `org_deletion_completed`) into
       `system_audit_events` **inside the same transaction, before the org row
       is removed**: the record commits only if the delete commits, and a
@@ -194,7 +194,7 @@ guarded against tampering at both the ORM and the database layer.
       `SQLAlchemyError` family to 5xx). The three self-service delete routes
       (`DELETE /api/v1/admin/org`, `POST /api/v1/admin/org/deletion-request`,
       `POST /api/v1/admin/org/deletion-confirm`) no longer write lifecycle
-      events at all: they unconditionally refuse active-organisation deletion
+      events at all: they unconditionally refuse active-organization deletion
       with 403 (FAR-2225), and their only audit output is the `audited()`
       refused-attempt record on the org chain. The table
       deliberately has **no `organisation_id` tenant column and no FK**: the
@@ -203,7 +203,7 @@ guarded against tampering at both the ORM and the database layer.
       the org is gone. UPDATE/DELETE are rejected by database append-only
       triggers, the same structural guard `audit_events` carries (the ledger is
       deliberately **not** hash-chained: the tamper-evident chain is
-      per-organisation and its head cascades away, so immutability here comes
+      per-organization and its head cascades away, so immutability here comes
       from the triggers). `admin_orgs.py:admin_delete_org` remains in
       `tests/architecture/audit_coverage_baseline.txt` because `audited()`'s
       post-commit org-scoped append cannot record anything after a hard delete;
@@ -276,7 +276,7 @@ guarded against tampering at both the ORM and the database layer.
 
 ## Known Gaps
 
-- **Chain is per-organisation**: the hash chain, verification, and export are
+- **Chain is per-organization**: the hash chain, verification, and export are
   scoped to one org (multi-tenant RLS); there is no system-wide cross-org
   chain. The org-independent `system_audit_events` ledger (FAR-1517) survives a
   hard delete and now has a system-admin read surface (FAR-1538 -
@@ -287,15 +287,15 @@ guarded against tampering at both the ORM and the database layer.
 ## QA History
 - 2026-10-14: **Improve Architecture product-map walk** - reconciled this
   tracker with FAR-1697 (PR #1761): the offline-verifiable evidence pack
-  shipped with a manifest-registry behaviour line but no human-readable
+  shipped with a manifest-registry behavior line but no human-readable
   tracker home, so a reader of the graph (or Assistant's docs indexer) could
   not find the `evidence-pack` / `verification-key` endpoints, the
   `core/evidence_pack/` module, the `modulo evidence verify` CLI, or the
-  `hashing.py` extraction. Added the checked behaviour line plus the
+  `hashing.py` extraction. Added the checked behavior line plus the
   `core/evidence_pack/`, `core/audit_logger/hashing.py`, `cli/evidence.py`
   code citations and the `test_evidence_pack.py` /
   `test_audit_evidence_pack_route.py` unit-test citations; the manifest
-  line is unchanged. No behaviour change - graph accuracy only.
+  line is unchanged. No behavior change - graph accuracy only.
   `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-08: **Audit-cleanup reconciliation (FAR-1561)** - three cleanups out
   of the FAR-1472/1549/1561/1574 audit work. (1) Deleted `run_scheduled_suite`
@@ -322,11 +322,11 @@ guarded against tampering at both the ORM and the database layer.
   `core/audit_logger/background.py` helper plus an architecture ratchet
   (`test_background_audit_coverage.py`) that mechanically enumerates every SAQ
   task, cron job, reconciler, seeder and boot seed and fails until each is
-  classified audited / exempt / gap; added the checked behaviour line and the
+  classified audited / exempt / gap; added the checked behavior line and the
   code + unit-test citations. (2) FAR-1538 added the system-admin read surface
   for the durable `system_audit_events` ledger (`GET /api/v1/admin/system-audit`
   + the `/admin/audit` system tab), narrowing the "no read API/UI" half of the
-  per-organisation-chain Known Gap; added the checked behaviour line and
+  per-organization-chain Known Gap; added the checked behavior line and
   citations. `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-06: **Improve Architecture product-map walk** - closed the untracked
   FAR-1516 surface: pre-auth and webhook routes (sign-in/out, token refresh,
@@ -335,7 +335,7 @@ guarded against tampering at both the ORM and the database layer.
   `SYSTEM_ACTOR` marker + `actor_source` admission basis with the tenant
   published by the route (`bind_audit_org`, unattributed `SYSTEM_ORG_ID`
   sentinel fallback) and promotable via `bind_audit_actor_source` - but did not
-  appear in either product-map layer. Added the checked behaviour line and the
+  appear in either product-map layer. Added the checked behavior line and the
   `code:` / `unit-tests:` citations (`core/audit_coverage.py`;
   `test_audit_coverage.py`, `test_webhooks_endpoint.py`,
   `test_far1464_route_arm_coverage.py`) plus the `frontend/src/manifest.yaml`
@@ -344,11 +344,11 @@ guarded against tampering at both the ORM and the database layer.
   FAR-1517 surface. Org-lifecycle events (`org_deletion_requested`,
   `org_deletion_completed`, `org_deletion_cancelled`) previously lived only in
   the org-scoped `audit_events` chain, which cascades away with a hard-deleted
-  organisation; they are now mirrored IN the deleting transaction into the
+  organization; they are now mirrored IN the deleting transaction into the
   org-independent, append-only `system_audit_events` ledger
   (`core/system_audit_logger.py`, `db/models/system_audit_event.py`, migration
-  0285). Added the checked behaviour line, the code and integration/unit test
-  citations, and clarified the existing "per-organisation chain" Known Gap (the
+  0285). Added the checked behavior line, the code and integration/unit test
+  citations, and clarified the existing "per-organization chain" Known Gap (the
   ledger is durable but not chained and has no read surface). `_ORPHANED_BDD_FEATURES`
   stays empty.
 - 2026-10-05: **Improve Architecture product-map walk**: closed the untracked
@@ -356,7 +356,7 @@ guarded against tampering at both the ORM and the database layer.
   write path and `rollback_to_snapshot`) now appends a `pipeline.graph_updated`
   audit event in the same transaction, with an IDs-and-counts-only before/after
   payload, and MCP graph writes stamp the caller's account id as `changed_by`.
-  Added the checked behaviour line plus the `db/crud/pipeline.py`,
+  Added the checked behavior line plus the `db/crud/pipeline.py`,
   `db/crud/pipeline_snapshot_versioning.py`, `api/mcp_server.py` code citations
   and the `test_pipeline_graph_updated_audit.py` unit citation.
   `_ORPHANED_BDD_FEATURES` stays empty.
@@ -414,8 +414,8 @@ guarded against tampering at both the ORM and the database layer.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-29: **product-map review pass**: new behaviour
+- 2026-08-29: **product-map review pass**: new behavior
   tracker for the registered `feat-audit` manifest feature (route `/admin/audit`,
-  previously absent from the feature graph). Behaviours verified against
+  previously absent from the feature graph). Behaviors verified against
   `api/routes/audit.py`, `core/audit_logger/*`, the hash-chain model, and the
   unit/integration/BDD suites. Status: covered.

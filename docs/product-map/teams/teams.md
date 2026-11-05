@@ -60,7 +60,7 @@ with RBAC enforced by `auth/team_rbac.py` and row/visibility scoping by
 `/settings/teams` and `/admin/users` surfaces plus the team memberships shown on the
 org profile, and is the product-map home for user roles.
 
-## Behaviours
+## Behaviors
 
 - [x] Team CRUD: create with name/description (201), duplicate name 409, empty name 422,
       non-admin create 403, paginated list, get by id (404 when missing), rename (409 on
@@ -81,7 +81,7 @@ org profile, and is the product-map home for user roles.
       as `connector_team_mismatch`, org-wide resources stay shared, and there is no
       "N hidden" enumeration leak (`cross_team_isolation.feature`). The sharing rule is
       explicit (FAR-1618): teams are a VISIBILITY GROUPING, not a credential trust
-      boundary. `visibility: org` means shared across the organisation - it binds to
+      boundary. `visibility: org` means shared across the organization - it binds to
       ANY pipeline, including one owned by a team (an org-wide connector, model backend
       or environment profile never produces a mismatch). `visibility: team` means
       owner-team-only - it binds only to a pipeline owned by the same team, and a
@@ -148,13 +148,13 @@ org profile, and is the product-map home for user roles.
   edge, not deeply here** - this entry cites the BDD coverage; gate-claim semantics live in
   `feat-hitl`.
 - **`stale_jwt_revocation.feature` and `admin_override.feature`** exercise JWT/override
-  surfaces under the teams BDD directory that are not cited by this entry's behaviours
+  surfaces under the teams BDD directory that are not cited by this entry's behaviors
   (they belong to the auth/JWT feature edges).
 - **`team_deletion.feature` and `team_deletion_blocked.feature` scenarios are mocked** -
   both patch `delete_team` with client-constructed 409s, so neither exercises the shipped
   resource guard (the real 409 is raised by the route's owned-resource count loop); the
   active-run-blocking scenarios in `team_deletion.feature` describe a guard that does not
-  ship (the route blocks on owned resources - see the Deletion safety behaviour above).
+  ship (the route blocks on owned resources - see the Deletion safety behavior above).
   The shipped block is covered by the unit test
   `test_delete_team_with_owned_resources_returns_409`
   (`tests/unit/api/test_teams_routes_coverage.py`), which drives the real route to a 409
@@ -166,7 +166,7 @@ org profile, and is the product-map home for user roles.
   `eval_suites`, merged in PR #1378): the last neither-layer tables gained the
   `rls_team_isolation` policy while the manifest `feat-teams` registry and this
   tracker still described only the application-layer isolation. Added the
-  checked behaviour line plus the migration / integration / architecture-test
+  checked behavior line plus the migration / integration / architecture-test
   citations.
 - 2026-09-25: **Improve Architecture product-map walk** - reconciled the
   manifest `feat-teams` registry entry with this tracker (both now
@@ -191,8 +191,8 @@ org profile, and is the product-map home for user roles.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-27: **product-map review pass** - added this behaviour-tracker
+- 2026-08-27: **product-map review pass** - added this behavior-tracker
   for the registered manifest feature `feat-teams`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/teams.py`,
+  `docs/product-map/` entry. Behaviors verified against `api/routes/teams.py`,
   `auth/team_rbac.py`, `core/team_visibility.py` and the teams BDD/unit suites.
   Status: covered.

@@ -1,15 +1,16 @@
 <template>
   <div class="page-wide">
     <template v-if="!editorOpen">
-      <header class="flex items-center justify-between">
-        <PageHeader
-          :title="$t('views.ParameterSchemasView.title')"
-          :subtitle="$t('views.ParameterSchemasView.subtitle')"
-        />
-        <Button data-testid="paramschema-new" @click="startNewSchema">
-          {{ $t('views.ParameterSchemasView.new_schema') }}
-        </Button>
-      </header>
+      <PageHeader
+        :title="$t('views.ParameterSchemasView.title')"
+        :subtitle="$t('views.ParameterSchemasView.subtitle')"
+      >
+        <template #right>
+          <Button data-testid="paramschema-new" @click="startNewSchema">
+            {{ $t('views.ParameterSchemasView.new_schema') }}
+          </Button>
+        </template>
+      </PageHeader>
 
       <TableSkeleton
         v-if="loading"

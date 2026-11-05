@@ -307,7 +307,8 @@ describe('AdminErrorsView', () => {
     await nextTick()
     expect(routerMocks.push).not.toHaveBeenCalled()
 
-    const row = wrapper.find('tbody tr')
+    const row = wrapper.find('[data-testid="admin-errors-row"]')
+    expect(row.exists()).toBe(true)
     await row.trigger('click')
     expect(routerMocks.push).toHaveBeenCalledTimes(1)
     expect(routerMocks.push).toHaveBeenCalledWith('/admin/errors/eg-long-1')

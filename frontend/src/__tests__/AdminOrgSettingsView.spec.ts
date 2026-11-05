@@ -258,7 +258,7 @@ describe('AdminOrgSettingsView', () => {
     const wrapper = await mountWindowView()
     const input = wrapper.find('[data-testid="org-hitl-review-window-value"]') as any
     expect((input.element as HTMLInputElement).value).toBe('')
-    expect(wrapper.find('[data-testid="org-hitl-review-window-status"]').text()).toContain('No organisation default')
+    expect(wrapper.find('[data-testid="org-hitl-review-window-status"]').text()).toContain('No organization default')
     wrapper.unmount()
   })
 
@@ -307,7 +307,7 @@ describe('AdminOrgSettingsView', () => {
     await flushPromises()
 
     expect(windowPutBodies()).toEqual([{ hitl_review_window_seconds: null }])
-    expect(wrapper.find('[data-testid="org-hitl-review-window-status"]').text()).toContain('No organisation default')
+    expect(wrapper.find('[data-testid="org-hitl-review-window-status"]').text()).toContain('No organization default')
     wrapper.unmount()
   })
 
@@ -398,7 +398,7 @@ describe('AdminOrgSettingsView', () => {
     hitlWindowState.reject = true
     const wrapper = await mountWindowView()
 
-    expect(wrapper.text()).toContain('Organisation Settings')
+    expect(wrapper.text()).toContain('Organization Settings')
     expect(wrapper.find('[data-testid="org-hitl-review-window-load-error"]').text()).toContain('window unreachable')
     expect(wrapper.find('[data-testid="org-hitl-review-window-retry"]').exists()).toBe(true)
     wrapper.unmount()
@@ -460,7 +460,7 @@ describe('AdminOrgSettingsView', () => {
     // moved out, the rest of the page did not.
     const disabled = wrapper.find('[data-testid="feature-gate-disabled"]')
     expect(disabled.find('[data-testid="community-objects-toggle"]').exists()).toBe(true)
-    expect(disabled.text()).not.toContain('Delete Organisation')
+    expect(disabled.text()).not.toContain('Delete Organization')
 
     // Interactive end to end: type, save, and the API is called with the
     // converted seconds payload.
@@ -585,7 +585,7 @@ describe('AdminOrgSettingsView', () => {
     hitlWindowState.data = { hitl_review_window_seconds: null, is_default: false }
     const wrapper = await mountWindowView()
     expect((wrapper.find('[data-testid="org-hitl-review-window-value"]').element as HTMLInputElement).value).toBe('')
-    expect(wrapper.find('[data-testid="org-hitl-review-window-status"]').text()).toContain('No organisation default')
+    expect(wrapper.find('[data-testid="org-hitl-review-window-status"]').text()).toContain('No organization default')
     wrapper.unmount()
   })
 
@@ -600,12 +600,12 @@ describe('AdminOrgSettingsView', () => {
   it('renders without crashing', async () => {
     const wrapper = await mountView()
     expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('Organisation Settings')
+    expect(wrapper.text()).toContain('Organization Settings')
   })
 
   it('renders the organisation info section', async () => {
     const wrapper = await mountView()
-    expect(wrapper.text()).toContain('Organisation Info')
+    expect(wrapper.text()).toContain('Organization Info')
     expect(wrapper.text()).toContain('Test Org')
     expect(wrapper.text()).toContain('test-org')
     expect(wrapper.text()).toContain('5')
@@ -936,7 +936,7 @@ describe('AdminOrgSettingsView', () => {
       wrapper.find('[data-testid="org-feature-flag-toggle-dashboard_charts"]').attributes('aria-checked'),
     ).toBe('false')
     const statuses = wrapper.findAll('[data-testid="org-feature-flag-status"]').map(node => node.text())
-    expect(statuses).toEqual(['Using the default', 'Overridden for this organisation'])
+    expect(statuses).toEqual(['Using the default', 'Overridden for this organization'])
     expect(wrapper.find('[data-testid="org-feature-flags-note"]').text()).toContain('system administrator')
     wrapper.unmount()
   })
@@ -1055,7 +1055,7 @@ describe('AdminOrgSettingsView', () => {
       wrapper.find('[data-testid="org-feature-flag-toggle-webhook_notification_log"]').attributes('aria-checked'),
     ).toBe('false')
     expect(wrapper.findAll('[data-testid="org-feature-flag-status"]')[0].text()).toContain(
-      'Overridden for this organisation',
+      'Overridden for this organization',
     )
     wrapper.unmount()
   })

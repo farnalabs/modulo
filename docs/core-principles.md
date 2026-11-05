@@ -61,15 +61,15 @@ A failed output produces a new run with feedback attached; the original stays as
 ## 9. Self-hosted, no telemetry by default
 Your infra, your data, no cloud dependency. Runs on Docker Compose or Fly; no telemetry by default. Operators can opt in via Settings > Runtime Configuration (`MODULO_TELEMETRY_ENABLED`); when enabled, only aggregate counters and error categories are exported: no personal data, pipeline content, or API keys.
 Modulo runs without requiring a Farnalabs-operated service.
-**Why:** governance without data ownership is theatre for regulated and IP-sensitive teams.
+**Why:** governance without data ownership is theater for regulated and IP-sensitive teams.
 **Where:** deployment docs, `docs/architecture.md`.
 **Benefit:** adoption is not blocked by data-residency concerns.
 
 ## 10. Capacity is a supported state – the boundary is not an error path
 
 Reaching a capacity limit is a normal, supported operating state and evidence the
-system is being fully used – never a failure. Modulo's behaviour at the concurrency
-boundary must be indistinguishable in quality from its behaviour below it: at the
+system is being fully used – never a failure. Modulo's behavior at the concurrency
+boundary must be indistinguishable in quality from its behavior below it: at the
 limit, work is queued and explained rather than refused; every capacity decision
 names the limit that bound it; nothing recoverable is lost; no pipeline's saturation
 may starve another; the boundary is instrumented and alertable before work fails; an
@@ -91,8 +91,8 @@ observable and controllable; at the limit it must be the same product.
 on – not a 429 nobody can explain and a slot nobody can see.
 
 ## 11. Run-level truth is free
-Everything needed to understand and trust a single run - its frozen snapshot, events, gate decisions, evidence, provenance, and audit trail - is available in the free Community tier. Paid tiers charge for organisation-scale aggregation, long-term retention, and export, never for basic safety, inspection, or execution of a run.
-**Why:** trust in a single run is the foundation the product rests on, and a governance record that is inaccessible to the operator who needs to verify it is not governance; commercial value comes from scale, retention, and organisation-wide controls, not from withholding run-level truth.
+Everything needed to understand and trust a single run - its frozen snapshot, events, gate decisions, evidence, provenance, and audit trail - is available in the free Community tier. Paid tiers charge for organization-scale aggregation, long-term retention, and export, never for basic safety, inspection, or execution of a run.
+**Why:** trust in a single run is the foundation the product rests on, and a governance record that is inaccessible to the operator who needs to verify it is not governance; commercial value comes from scale, retention, and organization-wide controls, not from withholding run-level truth.
 **Where:** run-level API and UI surfaces; plan-tier gating such as `docs/system-maps.md` §11.3 Decision 2.
 **Benefit:** a self-hoster can always inspect and trust what a run did, while paid tiers stay compelling for multi-team scale and long-horizon governance.
 
