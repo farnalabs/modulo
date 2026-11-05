@@ -36,7 +36,6 @@ defineProps<{
 
 <style scoped>
 .page-header {
-  font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
   display: flex;
   flex-direction: column;
   gap: 1rem;

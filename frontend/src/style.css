@@ -701,6 +701,10 @@ body {
   font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
 }
 
+.page-header--display {
+  font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
+}
+
 ::selection {
   background-color: hsla(var(--primary) / 0.3);
   color: #fff;
