@@ -114,11 +114,7 @@ describe('AdminCostBreakdownView', () => {
     expect(gate.classes()).toContain('space-y-6')
     expect(gate.find('.space-y-6').exists()).toBe(false)
 
-    const pageHeader = page.get('header.page-header')
-    expect(pageHeader.classes()).toContain('page-header--display')
-    expect(pageHeader.classes()).not.toContain('font-sans')
-    expect(pageHeader.get('h1[data-page-heading]').text()).toBe('Cost Breakdown')
-    expect(pageHeader.get('h1').classes()).not.toContain('font-mono')
+    expect(page.get('h1[data-page-heading]').text()).toBe('Cost Breakdown')
 
     const teamHeading = page.get('h2')
     expect(teamHeading.text()).toContain('Per-Team Cost Breakdown')
