@@ -83,7 +83,19 @@ def test_helm_embedded_redis_auth_runtime_wiring() -> None:
         assert '--requirepass "$REDIS_PASSWORD"' in rendered
         assert "runtime-test-password" not in rendered
         assert "REDIS_PASSWORD" in rendered
-        assert "redis://:runtime-test-password@redis-auth-test-modulo-redis:6379/0" in rendered
+
+        # The REDIS_URL in the Secret is base64-encoded. Extract it, decode, and verify.
+        import yaml
+
+        redis_url_b64 = None
+        for doc in yaml.safe_load_all(rendered):
+            if doc and doc.get("kind") == "Secret":
+                redis_url_b64 = doc.get("data", {}).get("REDIS_URL")
+                break
+        assert redis_url_b64 is not None, "REDIS_URL not found in rendered Secret"
+        redis_url_plain = base64.b64decode(redis_url_b64).decode()
+        assert redis_url_plain == "redis://:runtime-test-password@redis-auth-test-modulo-redis:6379/0"
+
         assert base64.b64encode(b"runtime-test-password").decode() in rendered
     else:
         assert shutil.which("helm") is None
