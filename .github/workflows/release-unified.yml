@@ -1631,9 +1631,13 @@ jobs:
   # Build macOS installer (cut and recut)
   # ---------------------------------------------------------------------------
   macos-installer:
-    name: Build and notarize macOS installer
+    name: Build and notarize macOS ${{ matrix.architecture }} installer
     needs: [release, bundle]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [arm64, x86_64]
     # macOS currently declares only contents: read. The structural test derives
     # this from the called workflow and forces a caller update if macOS ever
     # adds an attest/OIDC job that requires a stronger permission.
@@ -1645,6 +1649,7 @@ jobs:
       rc_tag: ${{ needs.release.outputs.rc_tag }}
       ref: ${{ needs.release.outputs.rc_tag }}
       mode: ${{ inputs.mode }}
+      architecture: ${{ matrix.architecture }}
     secrets: inherit
 
 
@@ -1688,7 +1693,11 @@ jobs:
           path: release-artefacts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: macos-installer-${{ inputs.version }}
+          name: macos-installer-${{ inputs.version }}-arm64
+          path: release-artefacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-installer-${{ inputs.version }}-x86_64
           path: release-artefacts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: inputs.include_windows
@@ -1748,9 +1757,9 @@ jobs:
               echo "::error::include_windows=true but windows-installer-${VERSION} artifact is missing"
               exit 1
             fi
-            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "modulo-${VERSION}-windows-amd64.exe" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
+            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "Modulo-${VERSION}-macos-x86_64.dmg" "modulo-${VERSION}-windows-amd64.exe" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
           else
-            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
+            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "Modulo-${VERSION}-macos-x86_64.dmg" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
           fi
           cd ..
           uv run --no-project --no-sync --no-build python - <<'PY'
@@ -1761,8 +1770,8 @@ jobs:
           root = Path("release-artefacts")
           version = os.environ["VERSION"]
           include_windows = os.environ["INCLUDE_WINDOWS"] == "true"
-          names = [f"modulo-{version}-linux-amd64.tar.gz", f"Modulo-{version}-macos-arm64.dmg"]
-          components = {"linux": "amd64", "macos": "arm64"}
+          names = [f"modulo-{version}-linux-amd64.tar.gz", f"Modulo-{version}-macos-arm64.dmg", f"Modulo-{version}-macos-x86_64.dmg"]
+          components = {"linux": "amd64", "macos": "native"}
           if include_windows:
             names.append(f"modulo-{version}-windows-amd64.exe")
             components["windows"] = "amd64"
@@ -1868,9 +1877,13 @@ jobs:
           INCLUDE_WINDOWS: ${{ inputs.include_windows }}
         run: |
           set -euo pipefail
+          # Both native macOS installers are mandatory publication inputs. Keep
+          # this inventory explicit so publication cannot succeed with only the
+          # Apple Silicon DMG present.
           for artifact in \
             "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz" \
             "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg" \
+            "release-artefacts/Modulo-${VERSION}-macos-x86_64.dmg" \
             "release-artefacts/modulo-${VERSION}-compose.tar.gz" \
             release-artefacts/SHA256SUMS \
             release-artefacts/RELEASE_MANIFEST.json \
@@ -1882,9 +1895,9 @@ jobs:
           fi
           (cd release-artefacts && sha256sum --check SHA256SUMS)
           if [ "$INCLUDE_WINDOWS" = "true" ]; then
-            echo "Final signed manifest and SHA256SUMS cover Linux amd64, macOS arm64, Windows amd64 artifacts and the self-hosted compose bundle."
+             echo "Final signed manifest and SHA256SUMS cover Linux amd64, macOS arm64 and x86_64, Windows amd64 artifacts and the self-hosted compose bundle."
           else
-            echo "Final signed manifest and SHA256SUMS cover Linux amd64 and macOS arm64 artifacts and the self-hosted compose bundle."
+             echo "Final signed manifest and SHA256SUMS cover Linux amd64, macOS arm64 and x86_64 artifacts and the self-hosted compose bundle."
           fi
 
       - name: Set up Python 3.12 for OpenAPI dump
@@ -1980,9 +1993,10 @@ jobs:
             --output CHANGELOG.md > "$NOTES_FILE"
 
           ASSETS=(
-            "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz"
-            "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg"
-            "release-artefacts/modulo-${VERSION}-compose.tar.gz"
+              "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz"
+             "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg"
+             "release-artefacts/Modulo-${VERSION}-macos-x86_64.dmg"
+             "release-artefacts/modulo-${VERSION}-compose.tar.gz"
             "release-artefacts/SHA256SUMS"
             "release-artefacts/RELEASE_MANIFEST.json"
             "release-artefacts/RELEASE_MANIFEST.json.sig"
@@ -2432,11 +2446,18 @@ jobs:
           name: final-release-artefacts-${{ inputs.version }}
           path: release-artefacts
 
-      - name: Download the macOS installer artefact
+      - name: Download the macOS arm64 installer artefact
         if: inputs.mode == 'cut' || inputs.mode == 'recut'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: macos-installer-${{ inputs.version }}
+          name: macos-installer-${{ inputs.version }}-arm64
+          path: release-artefacts
+
+      - name: Download the macOS x86_64 installer artefact
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-installer-${{ inputs.version }}-x86_64
           path: release-artefacts
 
       - name: Download the Windows installer artefact
@@ -2453,9 +2474,12 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          DMG="release-artefacts/Modulo-${VERSION}-macos-arm64.dmg"
-          test -s "$DMG"
-          printf 'Attestation subject: %s\n' "$DMG"
+           for DMG in \
+             "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg" \
+             "release-artefacts/Modulo-${VERSION}-macos-x86_64.dmg"; do
+             test -s "$DMG"
+             printf 'Attestation subject: %s\n' "$DMG"
+           done
 
       - name: Assert the exact Windows exe is present
         if: (inputs.mode == 'cut' || inputs.mode == 'recut') && inputs.include_windows

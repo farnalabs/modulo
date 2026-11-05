@@ -52,10 +52,10 @@ The script fails loudly (non-zero exit, nothing written) if any mirror has drift
 
 ## Upgrade Paths
 
-### Native single-install (Linux and macOS arm64)
+### Native single-install (Linux and macOS)
 
 The native single-install path supports the published Linux bundle and the
-signed, notarized macOS arm64 `.dmg`. Windows native installer support is Beta
+signed, notarized native macOS arm64 and x86_64 `.dmg` artifacts. Windows native installer support is Beta
 scope, opt-in only (FAR-2337 / FAR-2338): the release pipeline builds the native
 payload, compiles, signs (Azure Trusted Signing) and attests the installer, and
 includes it in `SHA256SUMS` and the release manifest only when the Beta-only
@@ -67,9 +67,14 @@ LaunchAgent seam from the app bundle. See the platform support matrix in
 [`docs/system-requirements.md`](./system-requirements.md).
 
 The native upgrade swaps the `current` symlink after a verified data
-snapshot; migrations run through the new bundle's boot lifespan. On macOS arm64,
-install the signed/notarized `.dmg` on Apple Silicon only; x64/Rosetta is not
-supported. The Linux installer verifies the signed release manifest/checksum
+snapshot; migrations run through the new bundle's boot lifespan. On macOS, install the signed/notarized DMG matching the host architecture:
+
+| Mac | Native artifact | Rosetta |
+|-----|-----------------|---------|
+| Apple Silicon | `Modulo-<version>-macos-arm64.dmg` | Not required |
+| Intel | `Modulo-<version>-macos-x86_64.dmg` | Not required |
+
+These are separate native bundles, not a universal artifact. The installer validates the mounted app's launcher architecture as well as the host architecture, so renaming a DMG cannot bypass the check. The Linux installer verifies the signed release manifest/checksum
 chain before copying the app; the macOS installer does not read the release
 manifest and instead verifies the DMG and app bundle through `hdiutil verify`
 plus Apple Developer ID signing/notarization. Two entry points perform the same
