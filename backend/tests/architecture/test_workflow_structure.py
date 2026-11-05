@@ -1957,6 +1957,55 @@ def test_production_drain_clears_only_after_all_post_deploy_gates() -> None:
         )
 
 
+def test_production_drain_bootstrap_does_not_deadlock_the_deploy() -> None:
+    """The drain control must tolerate the build that first ships it.
+
+    FAR-2382 made the production deploy depend on a secret and on a live
+    ``POST /api/v1/deployment/drain`` route. Neither exists on the build that
+    introduces the feature, so a hard failure there deadlocks every production
+    deploy (observed at 07fe115a: the drain step refused to deploy because the
+    token was unset, and the live build 404s the route). The control is a
+    best-effort admission freeze layered on the active-run wait gate, so a
+    missing credential or a 404 must degrade with a loud warning - while a
+    genuine control failure still fails closed.
+    """
+    production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
+
+    def _run(name: str) -> str:
+        step = next(s for s in production_steps if isinstance(s, dict) and s.get("name") == name)
+        return str(step.get("run") or "")
+
+    violations: list[str] = []
+
+    enter = _run("Enter production sandbox drain")
+    if "MODULO_DEPLOY_DRAIN_TOKEN is not configured" not in enter:
+        violations.append("  the enter step no longer names the missing-token bootstrap case")
+    if "::warning::" not in enter:
+        violations.append("  the enter step degrades silently (no ::warning::) when the freeze is unavailable")
+    if '= "404"' not in enter:
+        violations.append("  the enter step does not tolerate the live build lacking the drain route")
+    if "exit 1" not in enter:
+        violations.append("  the enter step no longer fails closed on a genuine control failure")
+
+    wait = _run("Wait for active sandbox runs to finish (production)")
+    if "ABSENT" not in wait:
+        violations.append("  the wait step does not distinguish the bootstrap (field-absent) case")
+    if "active_sandbox_runs" not in wait:
+        violations.append("  the wait step no longer reads active_sandbox_runs")
+    if "exit 1" not in wait:
+        violations.append("  the wait step no longer fails closed when active runs never drain")
+
+    clear = _run("Clear production sandbox drain")
+    if '= "404"' not in clear:
+        violations.append("  the clear step does not tolerate the live build lacking the drain route")
+    if "MODULO_DEPLOY_DRAIN_TOKEN is not configured" not in clear:
+        violations.append("  the clear step does not tolerate nothing being engaged without a token")
+    if "exit 1" not in clear:
+        violations.append("  the clear step no longer fails closed when a real freeze cannot be cleared")
+
+    assert not violations, "production drain bootstrap can deadlock the deploy again:\n" + "\n".join(violations)
+
+
 def test_deploy_consumers_classify_a_throttled_noop_by_the_deploy_job() -> None:
     """Both escalation consumers read the deploy JOB, not the run's colour.
 

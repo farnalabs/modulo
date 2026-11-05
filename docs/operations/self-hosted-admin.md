@@ -30,7 +30,7 @@ application-layer validation and audit logging**.
 | Situation | Do this |
 |-----------|---------|
 | A pipeline run is stuck and `POST /api/v1/runs/{id}/cancel` cannot recover it | Follow `docs/operations/admin-bypass.md` |
-| An admin user forgot their password | **Reset via CLI below** (§2) |
+| An admin user forgot their password | **Reset via `modulo users reset-password`** (§2) |
 | `SECRET_KEY` was rotated and all sessions are invalid | Restart services – sessions re-negotiate (§3.1) |
 | `FERNET_KEY` was rotated and credentials fail to decrypt | Re-enter credentials under the new key; `modulo restore --previous-fernet-key` does not recover a lost key (§3.2) |
 | Both `SECRET_KEY` and `FERNET_KEY` are lost | **You cannot recover encrypted data** – restore from backup (§4) |
@@ -49,15 +49,37 @@ application-layer validation and audit logging**.
 
 ## 2. Admin Password Reset
 
-If the last admin user is locked out (forgotten password, lost SSO provider,
-corrupt user record), reset the password via the database:
+If a local admin is locked out (forgotten password, lost SSO provider, corrupt
+user record), use the supported CLI path first:
 
-### 2.1 Identify the Admin User
+```bash
+# Native single-install: resolves the bundled database from the launcher data dir.
+modulo users reset-password admin@example.com
+
+# Docker Compose / self-hosted: resolves DATABASE_URL from the environment.
+DATABASE_URL=... modulo users reset-password admin@example.com
+```
+
+The command prompts for the new password (or accepts `--password`), refuses
+break-glass accounts, and invalidates the account's refresh-token families.
+Access JWTs already issued remain valid until they expire. Add `--force` when
+`MODULO_USERS` is set, and `--data-dir <dir>` when the launcher data dir is not
+the default.
+
+If the CLI is unavailable, reset the hash directly in the database. Identity
+lives in `accounts`; org-role membership lives in `org_memberships`.
+
+### 2.1 Identify the Admin Account
 
 ```sql
-SELECT id, email, username
-FROM users
-WHERE is_admin = true;
+SELECT a.id, a.email, om.role, om.organisation_id
+FROM accounts a
+JOIN org_memberships om ON om.account_id = a.id
+WHERE om.role = 'admin'
+  AND om.deactivated_at IS NULL
+  AND a.active
+  AND a.kind = 'human'
+ORDER BY a.email;
 ```
 
 ### 2.2 Generate a bcrypt Password Hash
@@ -75,22 +97,23 @@ print(hashed.decode())
 ### 2.3 Update the Password
 
 ```sql
-UPDATE users
-SET hashed_password = '<bcrypt-hash-from-step-2>',
-    password_updated_at = NOW()
-WHERE id = '<admin-user-uuid>';
+UPDATE accounts
+SET password_hash = '<bcrypt-hash-from-step-2>',
+    must_change_password = TRUE
+WHERE id = '<admin-account-uuid>';
 ```
 
 ### 2.4 Verify
 
 1. Log in via the admin UI or API with the new password.
-2. Force a password change on next login if desired.
+2. The `must_change_password` flag forces a change on next login.
 3. If SSO is the primary auth method, also re-enable the IdP provider in
    admin settings before logging out.
 
-> ⚠️ This bypass does not invalidate existing sessions. If the password reset
-> is part of a security incident, rotate `SECRET_KEY` and restart services to
-> invalidate all outstanding JWTs (see §3.1).
+> ⚠️ The direct database path does not invalidate existing sessions. The CLI
+> path signs out refresh-token families but does not revoke access JWTs that
+> have already been issued. If the reset is part of a security incident, rotate
+> `SECRET_KEY` and restart services to invalidate all outstanding JWTs (see §3.1).
 
 ---
 
@@ -143,9 +166,14 @@ NEW_FERNET_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Ferne
 
 # Update environment and restart for SECRET_KEY
 export SECRET_KEY="$NEW_SECRET_KEY"
-# FERNET_KEY rotation requires re-entering stored credentials under the new key
-export FERNET_KEY="$NEW_FERNET_KEY"
 ```
+
+For `FERNET_KEY`, do not re-enter every credential. Set the new key as
+`FERNET_KEY`, keep the previous key in `FERNET_KEY_OLD`, restart, then run the
+authenticated rotation endpoint; it re-encrypts stored values in the background
+while the old key remains valid for reads. See
+[`docs/security/secret-management.md`](../security/secret-management.md) for the
+exact request, polling step and `FERNET_KEY_OLD` cleanup.
 
 ---
 
@@ -208,10 +236,12 @@ locally.
 
 ### 5.1 Local Access
 
-The `modulo` CLI only exposes `backup` and `restore` (see §4). Emergency
-admin actions (password reset, token creation) require direct database
-access as described in §2 and below – there is no `modulo users` or
-`modulo sessions` command.
+The `modulo` CLI exposes the launcher commands (`start`, `stop`, `status`,
+`logs`, `doctor`, `support`, `upgrade`, `service`, `clear-degraded`), the
+`backup` / `restore` / `apply` commands, and the `users` group. Password reset
+is `modulo users reset-password` (§2). Token creation and the other emergency
+actions below still require direct database access; there is no `modulo
+sessions` command.
 
 ### 5.2 Create a Temporary Admin API Token
 
@@ -308,8 +338,8 @@ Each entry is a single JSON line:
   "operator": "admin@example.com",
   "operation": "reset_password | create_api_token | key_rotation | db_restore",
   "reason": "Lost admin access after SSO provider decommission",
-  "sql_or_command": "UPDATE users SET hashed_password = ... WHERE id = ...",
-  "affected_resources": ["users:<user-uuid>"],
+  "sql_or_command": "modulo users reset-password admin@example.com",
+  "affected_resources": ["accounts:<account-uuid>"],
   "backup_taken": true
 }
 ```
@@ -349,7 +379,7 @@ Emergency situation
   ├─ Is it a password/key issue?
   │     └─ Lost SECRET_KEY → Generate new one, restart (§3.1)
   │     └─ Lost FERNET_KEY → Restore from backup (§4) or accept data loss
-  │     └─ Forgotten admin password → Reset via DB (§2)
+  │     └─ Forgotten admin password → Reset via CLI (§2)
   │
   ├─ Is it a stuck pipeline?
   │     └─ Yes → Follow docs/operations/admin-bypass.md

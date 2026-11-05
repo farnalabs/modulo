@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
-# Build the genuine arm64 macOS bundle. Every input is downloaded from an
+# Build a genuine native macOS bundle. Every input is downloaded from an
 # upstream source and verified before it is compiled or copied into the app.
 #
 # The Python runtime is the pinned python-build-standalone CPython distribution,
-# not a CPython source build. It is trusted here as a native arm64 runtime input;
-# the workflow proves its architecture, version, and linkage before packaging.
+# not a CPython source build. The third argument selects the native architecture
+# (arm64 or x86_64); arm64 remains the default for existing callers.
 set -euo pipefail
 
 VERSION=${1:?version required}
 BUILD_ROOT=${2:?build root required}
+MACOS_ARCH=${3:-arm64}
+case "${MACOS_ARCH}" in
+  arm64) PBS_ARCH=aarch64; PBS_MACHO_ARCH=arm64 ;;
+  x86_64) PBS_ARCH=x86_64; PBS_MACHO_ARCH=x86_64 ;;
+  *) echo "unsupported macOS architecture: ${MACOS_ARCH}" >&2; exit 2 ;;
+esac
 ROOT_DIR="$(cd -- "$(dirname -- "$0")/../.." && pwd)"
 APP_NAME="Modulo-${VERSION}.app"
 APP_ROOT="${BUILD_ROOT}/${APP_NAME}"
@@ -41,8 +47,12 @@ test -s "${APP_ROOT}/Contents/Resources/Modulo.icns"
 
 PBS_RELEASE=20260901
 PBS_VERSION=3.12.14
-PBS_TARBALL="cpython-${PBS_VERSION}+${PBS_RELEASE}-aarch64-apple-darwin-install_only.tar.gz"
-PBS_SHA256="3ee3ee547cedfeb7c2b16b2b7156039f7b470bb8f857e226fd3d2eb11db83c76"
+PBS_TARBALL="cpython-${PBS_VERSION}+${PBS_RELEASE}-${PBS_ARCH}-apple-darwin-install_only.tar.gz"
+if [[ "${MACOS_ARCH}" == arm64 ]]; then
+  PBS_SHA256="3ee3ee547cedfeb7c2b16b2b7156039f7b470bb8f857e226fd3d2eb11db83c76"
+else
+  PBS_SHA256="2e31b23f3f1319f707d0e620b48847a0046577541d357276821f9f1b5492e0ba"
+fi
 PG_VERSION=16.15
 PG_SHA256="4f200ca23dfb120ff9838f13ce06014aad1d3c432d16ee9f93ab2000c0eeef7b"
 REDIS_VERSION=8.0.2
@@ -50,7 +60,7 @@ REDIS_SHA256="caf3c0069f06fc84c5153bd2a348b204c578de80490c73857bee01d9b5d7401f"
 
 # A placeholder digest is a deliberate build-stop, never a release path.
 case "${PBS_SHA256}" in
-  REPLACE_*|'' ) echo "::error::python-build-standalone macOS arm64 SHA-256 has not been provisioned" >&2; exit 1 ;;
+  REPLACE_*|'' ) echo "::error::python-build-standalone macOS ${MACOS_ARCH} SHA-256 has not been provisioned" >&2; exit 1 ;;
   * ) ;;
 esac
 
@@ -67,7 +77,7 @@ download_verify "https://github.com/redis/redis/archive/refs/tags/${REDIS_VERSIO
 tar -xzf "${DOWNLOADS}/${PBS_TARBALL}" -C "${BUNDLE_ROOT}"
 mv "${BUNDLE_ROOT}/python" "${BUNDLE_ROOT}/runtime"
 # Verify the trusted runtime input before it becomes part of the release bundle.
-file "${BUNDLE_ROOT}/runtime/bin/python3" | grep -E 'Mach-O 64-bit executable arm64' >/dev/null
+file "${BUNDLE_ROOT}/runtime/bin/python3" | grep -E "Mach-O 64-bit executable ${PBS_MACHO_ARCH}" >/dev/null
 otool -L "${BUNDLE_ROOT}/runtime/bin/python3" | grep -q '/usr/lib/libSystem.B.dylib'
 "${BUNDLE_ROOT}/runtime/bin/python3" --version | grep -Fqx "Python ${PBS_VERSION}"
 
@@ -246,7 +256,7 @@ chmod 755 "${APP_ROOT}/Contents/MacOS/modulo"
 # scripts/ owns the Info.plist contents (the gate0 filter watches it too).
 (
   cd "${APP_ROOT}/Contents"
-  "${ROOT_DIR}/scripts/create-macos-info-plist.sh" "${VERSION}" "Info.plist"
+  "${ROOT_DIR}/scripts/create-macos-info-plist.sh" "${VERSION}" "Info.plist" "${MACOS_ARCH}"
 )
 
 echo "${VERSION}" > "${BUNDLE_ROOT}/VERSION"

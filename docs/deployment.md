@@ -27,7 +27,7 @@ setup is in [quickstart.md](./quickstart.md).
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.12-3.14 (the Docker images build on 3.14)
 - PostgreSQL 16+
 - Redis 8+ (required for the SAQ task queue, scheduling, and coordination)
 

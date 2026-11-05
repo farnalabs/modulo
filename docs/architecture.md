@@ -47,7 +47,7 @@ Modulo is a self-hosted Agentic Delivery Governance platform: an autonomous soft
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| **Backend** | Python 3.12+ | Runtime |
+| **Backend** | Python 3.12-3.14 | Runtime (the Docker images build on 3.14) |
 | **API framework** | FastAPI | REST + WebSocket + MCP server |
 | **Graph execution** | LangGraph (StateGraph) | Pipeline agent orchestration |
 | **ORM** | SQLAlchemy 2.0 (async) | Database access |

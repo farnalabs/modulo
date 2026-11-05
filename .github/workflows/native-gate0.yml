@@ -1,8 +1,9 @@
 name: "Gate 0: native bundle offline boot proof (PR)"
 
 # FAR-673 / ADR 031 Decision 10: the per-PR verification gate for the
-# native single-install bundle. Linux-only; macOS arm64 validation runs in the
-# macos-14 release workflow. This gate runs when a PR touches a path
+# native single-install bundle. Linux-only; native macOS arm64 and x86_64
+# validation runs in the macos-15 and macos-15-intel release jobs. This gate runs
+# when a PR touches a path
 # on the launcher's direct boot path. The always-run paths list is checked
 # in (.github/native-gate0-paths.txt) and asserted by
 # backend/tests/unit/tools/test_gate0_paths.py, so the filter cannot rot

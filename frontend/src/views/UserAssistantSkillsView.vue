@@ -3,18 +3,17 @@
     <PageHeader :title="$t('views.UserAssistantSkillsView.my_assistant_skills')" :subtitle="$t('views.UserAssistantSkillsView.manage_your_personal_skills_for_the_assistant_ai_assistant')">
       <template #right>
         <Button class="border border-primary/30" data-testid="assistant-user-skills-add" @click="skillDialogRef?.openCreate()">
-          Add Skill
+          {{ $t('views.UserAssistantSkillsView.add_skill') }}
         </Button>
       </template>
     </PageHeader>
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadSkills" />
-    <div v-else-if="skills.length === 0" class="rounded-lg border bg-card p-8 text-center">
-      <p class="text-lg font-medium">{{ $t('views.UserAssistantSkillsView.no_personal_skills_configured') }}</p>
-      <p class="mt-1 text-sm text-muted-foreground">
-        Create skills to give Assistant custom instructions and behaviours.
-      </p>
-    </div>
+    <EmptyState
+      v-else-if="skills.length === 0"
+      :title="$t('views.UserAssistantSkillsView.no_personal_skills_configured')"
+      :description="$t('views.UserAssistantSkillsView.no_skills_description')"
+    />
     <template v-else>
       <div class="overflow-hidden rounded-lg border bg-card shadow-sm">
         <table class="w-full text-left text-sm">
@@ -31,10 +30,11 @@
             <tr
               v-for="skill in skills"
               :key="skill.id"
+              :data-testid="`assistant-user-skill-row-${skill.id}`"
               class="transition-colors hover:bg-muted/30"
             >
               <td class="px-4 py-3 font-medium">{{ skill.name }}</td>
-              <td class="px-4 py-3 text-muted-foreground max-w-xs truncate" v-tooltip.top="skill.description || '—'">{{ skill.description || '—' }}</td>
+              <td class="px-4 py-3 text-muted-foreground max-w-xs truncate" v-tooltip.top="skill.description || $t('views.UserAssistantSkillsView.empty_value')">{{ skill.description || $t('views.UserAssistantSkillsView.empty_value') }}</td>
               <td class="px-4 py-3">
                 <div class="flex flex-wrap gap-1">
                   <span
@@ -44,44 +44,47 @@
                   >
                     {{ trigger }}
                   </span>
-                  <span v-if="!skill.triggers?.length" class="text-xs text-muted-foreground">—</span>
+                  <span v-if="!skill.triggers?.length" class="text-xs text-muted-foreground">{{ $t('views.UserAssistantSkillsView.empty_value') }}</span>
                 </div>
               </td>
               <td class="px-4 py-3">
-                <button type="button"
+                <button
+                  type="button"
+                  :data-testid="`assistant-user-skill-toggle-${skill.id}`"
                   class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors"
                   :class="skill.active ? 'bg-success/10 text-success-text' : 'bg-muted text-muted-foreground'"
                   :disabled="!!skillToggling[skill.id]"
+                  :aria-pressed="skill.active"
                   @click="toggleSkillActive(skill)"
                 >
                   <span
                     class="h-1.5 w-1.5 rounded-full"
                     :class="skill.active ? 'bg-success' : 'bg-muted-foreground'"
                   />
-                  {{ skillToggling[skill.id] ? '...' : (skill.active ? 'Active' : 'Inactive') }}
+                  {{ skillToggling[skill.id] ? $t('views.UserAssistantSkillsView.loading') : (skill.active ? $t('views.UserAssistantSkillsView.active') : $t('views.UserAssistantSkillsView.inactive')) }}
                 </button>
               </td>
               <td class="px-4 py-3 text-right">
                 <div class="flex items-center justify-end gap-1">
-                  <button type="button"
-                    class="rounded p-1 text-muted-foreground hover:bg-accent"
+                  <button
+                    type="button"
+                    :data-testid="`assistant-user-skill-edit-${skill.id}`"
+                    class="rounded p-1 text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     :aria-label="$t('views.AdminAssistantView.edit_skill')"
                     :title="$t('views.AdminAssistantView.edit_skill')"
                     @click="skillDialogRef?.openEdit(skill)"
                   >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
-                      <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                    </svg>
+                    <Pencil class="h-4 w-4" aria-hidden="true" focusable="false" />
                   </button>
-                  <button type="button"
-                    class="rounded p-1 text-destructive hover:bg-destructive/10"
+                  <button
+                    type="button"
+                    :data-testid="`assistant-user-skill-delete-${skill.id}`"
+                    class="rounded p-1 text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     :aria-label="$t('views.AdminAssistantView.delete_skill')"
                     :title="$t('components.assistant.AssistantSkillDialog.delete_skill')"
                     @click="skillDialogRef?.openDelete(skill)"
                   >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
-                      <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                    </svg>
+                    <Trash2 class="h-4 w-4" aria-hidden="true" focusable="false" />
                   </button>
                 </div>
               </td>
@@ -93,8 +96,8 @@
     </template>
     <AssistantSkillDialog
       ref="skillDialogRef"
-      create-description="Create a new personal skill for Assistant."
-      edit-description="Update your personal skill."
+      :create-description="$t('views.UserAssistantSkillsView.create_description')"
+      :edit-description="$t('views.UserAssistantSkillsView.edit_description')"
       create-endpoint="/api/v1/me/assistant/skills"
       update-endpoint="/api/v1/me/assistant/skills/{skill_id}"
       delete-endpoint="/api/v1/me/assistant/skills/{skill_id}"
@@ -104,6 +107,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import Button from 'primevue/button'
+import { Pencil, Trash2 } from '@lucide/vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
@@ -111,6 +115,7 @@ import { useAssistantStore } from '../composables/useAssistantStore'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import AssistantSkillDialog from '../components/assistant/AssistantSkillDialog.vue'
 import type { SkillItem } from '../types/assistant'
 

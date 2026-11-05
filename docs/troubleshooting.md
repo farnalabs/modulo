@@ -29,7 +29,7 @@ passes the `Settings` length check and then breaks later:
 
 | Symptom | Cause | Resolution |
 |---|---|---|
-| `POST /api/v1/model-backends` returns **500** while `GET /api/v1/auth/login` returns 200 | `ValueError: FernetSecretsBackend: invalid fernet_key: must be a base64-encoded 32-byte Fernet key` – the api_key is Fernet-encrypted at rest | Replace `FERNET_KEY` with a generated key (`openssl rand -base64 32`) and recreate the stack |
+| `POST /api/v1/model-backends` returns **500** while `POST /api/v1/auth/login` returns 200 | `ValueError: FernetSecretsBackend: invalid fernet_key: must be a base64-encoded 32-byte Fernet key` – the api_key is Fernet-encrypted at rest | Replace `FERNET_KEY` with a generated key (`openssl rand -base64 32`) and recreate the stack |
 | `/healthz/ready` reports `"checkpointer": {"status": "degraded"}`; `checkpoints` / `checkpoint_migrations` do not exist | `startup.checkpointer_init_failed` – checkpointer init uses the same key | Same fix; the tables are created on the next successful startup |
 
 Run `./scripts/smoke-compose.sh` to check both in one command (it creates and

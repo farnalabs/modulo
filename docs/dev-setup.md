@@ -13,7 +13,7 @@ See [Deployment](deployment.md) for production deployment.
 
 ## Required Tools
 
-- Python 3.12+
+- Python 3.12-3.14 (the Docker images build on 3.14)
 - Node.js 20+ (CI pins 22) with `pnpm` - the repo pins `pnpm@11.28.10` in
   `frontend/package.json` (`packageManager`), so use pnpm rather than npm
 - Docker Desktop (for local Postgres/Redis)

@@ -6,6 +6,8 @@ validates the ``eval_condition`` block of a HITL gate edge.
 
 import uuid
 
+import pytest
+
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 from tests.unit.graph_validator._helpers import codes_of as _codes
 
@@ -113,12 +115,12 @@ def test_threshold_below_range_is_error():
     assert "HITL_EVAL_CONDITION_THRESHOLD_RANGE" in _codes(result)
 
 
-def test_threshold_boundaries_valid():
-    for threshold in (0.0, 1.0):
-        result = _check(
-            _edge(hitl_review_config={"eval_condition": {"eval_name": "q", "threshold": threshold, "operator": "gte"}})
-        )
-        assert result.is_valid
+@pytest.mark.parametrize("threshold", [0.0, 1.0], ids=["minimum", "maximum"])
+def test_threshold_boundaries_valid(threshold):
+    result = _check(
+        _edge(hitl_review_config={"eval_condition": {"eval_name": "q", "threshold": threshold, "operator": "gte"}})
+    )
+    assert result.is_valid
 
 
 # ---------------------------------------------------------------------------
@@ -138,11 +140,11 @@ def test_missing_operator_is_error():
     assert "HITL_EVAL_CONDITION_INVALID_OPERATOR" in _codes(result)
 
 
-def test_valid_operators_accepted():
-    for op in ("lt", "gt", "lte", "gte", "eq", "neq"):
-        cond = {"eval_name": "q", "threshold": 0.5, "operator": op}
-        result = _check(_edge(hitl_review_config={"eval_condition": cond}))
-        assert result.is_valid, op
+@pytest.mark.parametrize("operator", ["lt", "gt", "lte", "gte", "eq", "neq"])
+def test_valid_operator_accepted(operator):
+    cond = {"eval_name": "q", "threshold": 0.5, "operator": operator}
+    result = _check(_edge(hitl_review_config={"eval_condition": cond}))
+    assert result.is_valid
 
 
 def test_invalid_operator_message_lists_valid_ops():
