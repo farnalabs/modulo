@@ -1921,6 +1921,30 @@ def test_extract_rejects_symlink_listed_artifact(tmp_path):
         upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
 
 
+def test_extract_accepts_root_version_with_dot_prefix_and_rejects_near_match(tmp_path: Path) -> None:
+    """The native bundle's ``./VERSION`` entry is allowed, but not ``./foo``."""
+    import tarfile
+
+    bundle = tmp_path / "modulo-1.2.0-linux-amd64"
+    bundle.mkdir()
+    version = bundle / "VERSION"
+    version.write_text("bundle-v1.2.0\n", encoding="utf-8")
+    digest = hashlib.sha256(version.read_bytes()).hexdigest()
+    (bundle / "SHA256SUMS").write_text(f"{digest}  ./VERSION\n", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-amd64.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(bundle, arcname=bundle.name, recursive=True)
+
+    extracted = upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+    assert (extracted / "VERSION").read_text(encoding="utf-8") == "bundle-v1.2.0\n"
+
+    (bundle / "SHA256SUMS").write_text(f"{digest}  ./foo\n", encoding="utf-8")
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(bundle, arcname=bundle.name, recursive=True)
+    with pytest.raises(UpgradeError, match="unsafe artifact path"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract-malformed")
+
+
 def _checksum_archive(tmp_path: Path, listed_name: str, *, symlink_parent: bool = False) -> Path:
     import tarfile
 
