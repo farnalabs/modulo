@@ -370,7 +370,7 @@ describe('useSystemMapsStore CRUD', () => {
     mockPost.mockResolvedValue({ error: { detail: 'nope' } })
     const store = useSystemMapsStore()
 
-    await expect(store.diffRevision('map-1', 'rev-1')).rejects.toThrow('Could not diff revision')
+    await expect(store.diffRevision('map-1', 'rev-1')).rejects.toThrow('Could not compare revisions')
   })
 
   it('discovers a map and loads the created draft revision', async () => {

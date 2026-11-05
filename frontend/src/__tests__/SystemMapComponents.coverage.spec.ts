@@ -258,6 +258,18 @@ describe('SystemMapRevisionSidebar', () => {
 
     expect(wrapper.get('[data-testid="system-map-revision-current-badge"]').text()).toContain('Current')
   })
+
+  it('emits a diff request for a revision other than the published one', async () => {
+    const wrapper = mountSidebar({
+      mapId: 'map-1',
+      activeMap: map({ published_revision_id: 'rev-2' }),
+      revisions: [revision({ id: 'rev-1', revision_number: 1, status: 'published' })],
+    })
+
+    await wrapper.get('[data-testid="system-map-revision-diff"]').trigger('click')
+
+    expect(wrapper.emitted('diff-revision')![0]).toEqual(['rev-1'])
+  })
 })
 
 describe('SystemMapDiscoveryPanel coverage', () => {

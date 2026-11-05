@@ -61,17 +61,7 @@
             {{ $t('views.SystemMapDetailView.revision', { number: diffResult.target_revision_number }) }}
           </p>
           <ul class="mt-2 grid gap-1 text-xs sm:grid-cols-2">
-            <li v-for="item in [
-              ['nodes_added', diffResult.nodes_added?.length ?? 0],
-              ['nodes_removed', diffResult.nodes_removed?.length ?? 0],
-              ['nodes_modified', diffResult.nodes_modified?.length ?? 0],
-              ['relationships_added', diffResult.relationships_added?.length ?? 0],
-              ['relationships_removed', diffResult.relationships_removed?.length ?? 0],
-              ['relationships_modified', diffResult.relationships_modified?.length ?? 0],
-              ['loop_configs_added', diffResult.loop_configs_added?.length ?? 0],
-              ['loop_configs_removed', diffResult.loop_configs_removed?.length ?? 0],
-              ['loop_configs_modified', diffResult.loop_configs_modified?.length ?? 0],
-            ]" :key="item[0]" v-if="item[1]">{{ item[0] }}: {{ item[1] }}</li>
+            <li v-for="item in diffSummaryItems" :key="item[0]">{{ item[0] }}: {{ item[1] }}</li>
             <li v-if="diffResult.content_json_changed">content_json: changed</li>
           </ul>
         </div>
@@ -183,6 +173,13 @@ const editedRelationships = ref<SystemMapRelationship[]>([])
 
 const nodeTypes = NODE_TYPES
 const relationshipTypes = RELATIONSHIP_TYPES
+
+const DIFF_FIELDS = ['nodes_added', 'nodes_removed', 'nodes_modified', 'relationships_added', 'relationships_removed', 'relationships_modified', 'loop_configs_added', 'loop_configs_removed', 'loop_configs_modified'] as const
+
+const diffSummaryItems = computed<Array<[string, number]>>(() => {
+  const diff = diffResult.value as SystemMapRevisionDiff
+  return DIFF_FIELDS.map((field) => [field, diff[field]?.length ?? 0] as [string, number]).filter(([, count]) => count !== 0)
+})
 
 const isPublished = computed(() => activeRevision.value?.status === 'published')
 const isArchived = computed(() => activeRevision.value?.status === 'archived')
