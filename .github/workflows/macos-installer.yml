@@ -1036,6 +1036,7 @@ jobs:
               sed -n '1,20p' "$finder_layout_output" >&2
             fi
           fi
+          printf 'pre_smoke: finder_layout_status=%s\n' "$finder_layout_status"
           test -L "$DMG_STAGING/Applications"
           # shellcheck disable=SC2016
 
@@ -1118,9 +1119,13 @@ jobs:
           MOUNT_ATTACHED=1
           MOUNTED_APP="$MOUNT/Modulo-${VERSION_NUM}.app"
           RUNTIME="$MOUNTED_APP/Contents/Resources/bundle/runtime/bin/python3"
+          # shellcheck disable=SC2016
           run_pre_smoke mounted_dmg_app bash -c '[[ -d "$1" && ! -L "$1" ]]' bash "$MOUNTED_APP"
+          # shellcheck disable=SC2016
           run_pre_smoke mounted_dmg_applications_alias bash -c '[[ -L "$1" && "$(readlink "$1")" == "/Applications" ]]' bash "$MOUNT/Applications"
+          # shellcheck disable=SC2016
           run_pre_smoke mounted_dmg_icon bash -c '[[ -s "$1" ]]' bash "$MOUNTED_APP/Contents/Resources/Modulo.icns"
+          # shellcheck disable=SC2016
           run_pre_smoke mounted_dmg_plist_icon bash -c 'plutil -extract CFBundleIconFile raw -o - "$1" | grep -Fxq Modulo.icns' bash "$MOUNTED_APP/Contents/Info.plist"
           # shellcheck disable=SC2016
           run_pre_smoke mounted_runtime_contract bash -c '[[ -x "$1" ]]' bash "$RUNTIME"
