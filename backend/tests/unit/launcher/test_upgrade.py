@@ -1928,7 +1928,7 @@ def test_extract_rejects_symlink_listed_artifact(tmp_path):
 
 
 def test_extract_accepts_root_version_with_dot_prefix_and_rejects_near_match(tmp_path: Path) -> None:
-    """The native bundle's ``./VERSION`` entry is allowed, but not ``./foo``."""
+    """``./VERSION`` is allowed; a dot-prefixed near-match must still be present."""
     import tarfile
 
     bundle = tmp_path / "modulo-1.2.0-linux-amd64"
@@ -1947,7 +1947,7 @@ def test_extract_accepts_root_version_with_dot_prefix_and_rejects_near_match(tmp
     (bundle / "SHA256SUMS").write_text(f"{digest}  ./foo\n", encoding="utf-8")
     with tarfile.open(archive, "w:gz") as handle:
         handle.add(bundle, arcname=bundle.name, recursive=True)
-    with pytest.raises(UpgradeError, match="unsafe artifact path"):
+    with pytest.raises(UpgradeError, match=r"\./foo .*is missing"):
         upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract-malformed")
 
 
@@ -1980,7 +1980,7 @@ def test_extract_rejects_symlinked_checksum_parent(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "listed_name",
-    ["../VERSION", "./../VERSION", "./VERSION/../VERSION", "./", "./foo"],
+    ["../VERSION", "./../VERSION", "./VERSION/../VERSION", "./", "./."],
 )
 def test_extract_rejects_malformed_leading_dot_checksum_paths(tmp_path: Path, listed_name: str) -> None:
     archive = _checksum_archive(tmp_path, listed_name)
