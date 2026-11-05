@@ -94,7 +94,7 @@ describe('AdminCostBreakdownView', () => {
     expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(4)
   })
 
-  it('uses the shared page rhythm and a spaced FeatureGate as the content stack (FAR-2364)', async () => {
+  it('uses the shared page rhythm and keeps Costs headings readable and spaced', async () => {
     const store = usePlanStore()
     store.$patch({ features: { admin_cost_breakdown: true } })
 
@@ -113,6 +113,14 @@ describe('AdminCostBreakdownView', () => {
     const gate = page.get('.page-wide > [data-testid="feature-gate"]')
     expect(gate.classes()).toContain('space-y-6')
     expect(gate.find('.space-y-6').exists()).toBe(false)
+
+    const pageHeader = page.get('header.page-header')
+    expect(pageHeader.classes()).toContain('font-sans')
+    expect(pageHeader.get('h1').classes()).not.toContain('font-mono')
+
+    const teamHeading = page.get('h2')
+    expect(teamHeading.text()).toContain('Per-Team Cost Breakdown')
+    expect(teamHeading.classes()).toEqual(expect.arrayContaining(['px-6', 'pt-6']))
   })
 
   it('dismisses an anomaly via POST', async () => {
