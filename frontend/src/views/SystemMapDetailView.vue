@@ -54,15 +54,15 @@
         <div v-if="diffResult" class="m-3 rounded-lg border bg-card p-3 text-sm" data-testid="system-map-revision-diff-result">
           <div class="flex items-center justify-between gap-2">
             <h2 class="font-semibold">{{ $t('views.SystemMapDetailView.diff') }}</h2>
-            <button type="button" class="rounded border px-2 py-1 text-xs" @click="diffResult = null">{{ $t('common.dismiss') }}</button>
+            <button type="button" class="rounded border px-2 py-1 text-xs" data-testid="system-map-revision-diff-dismiss" @click="diffResult = null">{{ $t('common.dismiss') }}</button>
           </div>
           <p class="mt-1 text-xs text-muted-foreground">
             {{ $t('views.SystemMapDetailView.revision', { number: diffResult.base_revision_number }) }} →
             {{ $t('views.SystemMapDetailView.revision', { number: diffResult.target_revision_number }) }}
           </p>
           <ul class="mt-2 grid gap-1 text-xs sm:grid-cols-2">
-            <li v-for="item in diffSummaryItems" :key="item[0]">{{ item[0] }}: {{ item[1] }}</li>
-            <li v-if="diffResult.content_json_changed">content_json: changed</li>
+            <li v-for="item in diffSummaryItems" :key="item[0]">{{ $t(`views.SystemMapDetailView.diff_fields.${item[0]}`) }}: {{ item[1] }}</li>
+            <li v-if="diffResult.content_json_changed">{{ $t('views.SystemMapDetailView.diff_content_changed') }}</li>
           </ul>
         </div>
 
@@ -218,6 +218,7 @@ function relationshipPayload(relationships: SystemMapRelationship[]) {
 
 async function loadData(): Promise<void> {
   actionError.value = null
+  diffResult.value = null
   await store.fetchAccess()
   await store.loadMap(mapId.value)
   if (!activeMap.value) return

@@ -1262,6 +1262,9 @@ elements:
       - testid: system-map-revision-diff-result
         type: element
         dynamic_testid: false
+      - testid: system-map-revision-diff-dismiss
+        type: button
+        dynamic_testid: false
       - testid: system-map-discovery-panel
         type: dialog
         dynamic_testid: false

@@ -492,11 +492,11 @@ describe('SystemMapDetailView authoring actions', () => {
 
     expect(diff).toHaveBeenCalledWith('map-1', 'rev-2', 'rev-1')
     const panel = wrapper.get('[data-testid="system-map-revision-diff-result"]')
-    expect(panel.text()).toContain('nodes_added: 1')
-    expect(panel.text()).not.toContain('nodes_removed')
-    expect(panel.text()).toContain('content_json: changed')
+    expect(panel.text()).toContain('Nodes added: 1')
+    expect(panel.text()).not.toContain('Nodes removed')
+    expect(panel.text()).toContain('Content changed')
 
-    await panel.find('button').trigger('click')
+    await panel.get('[data-testid="system-map-revision-diff-dismiss"]').trigger('click')
     expect(wrapper.find('[data-testid="system-map-revision-diff-result"]').exists()).toBe(false)
   })
 
