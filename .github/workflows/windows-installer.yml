@@ -236,7 +236,7 @@ jobs:
           }
       - name: Upload unsigned Windows installer
         if: ${{ inputs.mode != 'dry-run' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607be02 # v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-installer-unsigned-${{ inputs.version }}
           path: ${{ runner.temp }}\native-installer
@@ -275,7 +275,7 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
       - name: Upload signed Windows installer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607be02 # v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-installer-signed-${{ inputs.version }}
           path: ${{ runner.temp }}\native-installer
@@ -310,7 +310,7 @@ jobs:
         with:
           subject-path: release-artefacts/modulo-*-windows-amd64.exe
       - name: Upload attested Windows installer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607be02 # v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-installer-${{ inputs.version }}
           path: release-artefacts/modulo-*-windows-amd64.exe
