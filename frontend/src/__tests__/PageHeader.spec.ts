@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import PageHeader, { PAGE_HEADER_DISPLAY_FONT_FAMILY } from '../components/shared/PageHeader.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 
 const RIGHT_SLOT_FILTERS = '<span data-testid="right-slot-content">Filters</span>'
 
@@ -101,7 +101,7 @@ describe('PageHeader', () => {
     expect(header.classes()).not.toContain('font-sans')
     expect(header.get('h1').classes()).not.toContain('font-mono')
 
-    expect(header.attributes('style')).toContain(`font-family: ${PAGE_HEADER_DISPLAY_FONT_FAMILY}`.replaceAll("'", '"'))
+    expect(header.attributes('style')).toBeUndefined()
   })
 
   it('stacks title and actions vertically on mobile and rows them at sm+ (FAR-627)', () => {
