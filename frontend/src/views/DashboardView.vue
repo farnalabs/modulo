@@ -196,7 +196,7 @@
             <Sparkline class="h-16 w-full" :data="trendRejectionRate" :labels="trendLabels" unit="%" color="hsl(var(--destructive-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
         </div>
-        <div v-else class="flex flex-col items-center justify-center gap-1 py-6 text-sm text-muted-foreground">
+        <div v-else class="flex flex-col items-center justify-center gap-1 py-6 text-sm text-muted-foreground" aria-live="polite">
           <p class="italic">{{ $t('views.DashboardView.no_data_trends') }}</p>
         </div>
       </div>
@@ -313,10 +313,9 @@ const evalSparklineData = computed((): Array<number | null> => {
 
 const lastEvalRates = computed(() => evalSparklineData.value.filter((r): r is number => r !== null && Number.isFinite(r)))
 
-// A sparkline needs at least two real observations to draw a line. Keep the
-// meaningful summary value visible above it, but render the same deliberate
-// compact empty state as the rest of the dashboard instead of an empty chart
-// stretched across the card.
+// Sparkline only draws once it has two real observations. Keep the meaningful
+// summary value visible above that threshold, but avoid mounting the primitive
+// (and its full-width empty plot) when there is nothing to chart.
 const hasEvalChartData = computed(() => lastEvalRates.value.length >= 2)
 
 const evalTrend = computed(() => {

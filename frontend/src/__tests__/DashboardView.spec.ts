@@ -118,6 +118,21 @@ function setupEmptyMocks() {
         error: undefined,
       })
     }
+    if (url === '/api/v1/dashboard/trends') {
+      return Promise.resolve({
+        data: {
+          days: 3,
+          run_counts: [],
+          eval_pass_rates: [],
+          token_spend: [],
+          hitl_volume: [],
+          rejection_trend: [],
+          correlation: [],
+          feedback_volume: [],
+        },
+        error: undefined,
+      })
+    }
     if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
     if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
     if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
@@ -425,6 +440,12 @@ describe('DashboardView', () => {
               per_pipeline: {},
               per_team_pipeline: {},
             },
+            period: {
+              days: 3,
+              metrics: {
+                eval_pass_rate: { current: 100, previous: 90, delta_pct: 11.1 },
+              },
+            },
             trend: [],
           },
           error: undefined,
@@ -460,10 +481,56 @@ describe('DashboardView', () => {
     expect(evalCard.text()).toContain('No data')
     expect(evalCard.find('[data-testid="sparkline"]').exists()).toBe(false)
     expect(evalCard.find('polyline').exists()).toBe(false)
-    const emptyChart = evalCard.get('.h-12')
-    expect(emptyChart.classes()).toEqual(expect.arrayContaining([
-      'flex', 'h-12', 'items-center', 'justify-center',
-    ]))
+    const emptyChart = evalCard.get('[aria-live="polite"]')
+    expect(emptyChart.classes()).toContain('h-12')
+    expect(emptyChart.classes()).not.toContain('flex-1')
+    expect(emptyChart.classes()).not.toContain('min-h-[200px]')
+    wrapper.unmount()
+  })
+
+  it('treats a single eval observation as a chart empty state (FAR-2390)', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            eval_pass_rate: {
+              overall_pass_rate: 100,
+              total_evals: 1,
+              passed_evals: 1,
+              per_pipeline: {},
+              per_team_pipeline: {},
+            },
+            trend: [],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/dashboard/trends') {
+        return Promise.resolve({
+          data: {
+            days: 3,
+            run_counts: [{ date: '2026-06-23', run_count: 1 }],
+            eval_pass_rates: [{ date: '2026-06-23', total_evals: 1, passed_evals: 1, pass_rate: 100 }],
+            token_spend: [],
+            hitl_volume: [],
+            rejection_trend: [],
+            correlation: [],
+            feedback_volume: [],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+
+    const evalCard = wrapper.get('[data-testid="dashboard-eval-rate"]')
+    expect(evalCard.text()).toContain('100%')
+    expect(evalCard.find('[data-testid="sparkline"]').exists()).toBe(false)
+    expect(evalCard.get('[aria-live="polite"]').classes()).toContain('h-12')
     wrapper.unmount()
   })
 
@@ -475,10 +542,12 @@ describe('DashboardView', () => {
     const runActivity = wrapper.get('[data-testid="dashboard-run-activity"]')
     expect(runActivity.text()).toContain('No data yet')
     expect(runActivity.find('[data-testid="sparkline"]').exists()).toBe(false)
-    expect(runActivity.html()).not.toContain('min-h-[200px]')
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).exists()).toBe(false)
 
-    const message = runActivity.get('p.italic')
-    expect(message.element.parentElement?.className).toEqual(expect.stringContaining('py-6'))
+    const emptyState = runActivity.get('[aria-live="polite"]')
+    expect(emptyState.classes()).toContain('py-6')
+    expect(emptyState.classes()).not.toContain('flex-1')
+    expect(emptyState.classes()).not.toContain('min-h-[200px]')
     wrapper.unmount()
   })
 
@@ -533,15 +602,24 @@ describe('DashboardView', () => {
   it('clears finite chart data when switching to All time', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
-    const finiteSparkline = wrapper.findAllComponents({ name: 'SparklineChart' })[0]
+    const evalCard = wrapper.get('[data-testid="dashboard-eval-rate"]')
+    const finiteSparkline = evalCard.getComponent({ name: 'SparklineChart' })
     expect(finiteSparkline.props('data')).toEqual([88, 81, 84])
 
     await wrapper.find('[data-testid="trend-toggle-all"]').trigger('click')
     await flushPromises()
 
-    const allTimeSparkline = wrapper.findAllComponents({ name: 'SparklineChart' })[0]
-    expect(allTimeSparkline.props('data')).toEqual([])
-    expect(allTimeSparkline.props('labels')).toEqual([])
+    // All time has no chart source: the eval summary stays, but its finite
+    // sparkline is replaced by the compact chart empty state. Re-query the card
+    // because the summary refetch swaps the whole tree through the skeleton.
+    const allTimeEvalCard = wrapper.get('[data-testid="dashboard-eval-rate"]')
+    expect(allTimeEvalCard.text()).toContain('82.5%')
+    expect(allTimeEvalCard.find('[data-testid="sparkline"]').exists()).toBe(false)
+    const spendSparkline = wrapper
+      .get('[data-testid="dashboard-token-spend"]')
+      .getComponent({ name: 'SparklineChart' })
+    expect(spendSparkline.props('data')).toEqual([])
+    expect(spendSparkline.props('labels')).toEqual([])
   })
 
   it('uses timeframe-aware spend labels for 24h, 30d and All time', async () => {
