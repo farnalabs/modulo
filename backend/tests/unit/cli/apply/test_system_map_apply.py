@@ -340,6 +340,8 @@ def test_apply_one_system_map_create() -> None:
     executor = _MockExecutor()
     entity = _system_map_entity(name="New Map")
     current_system_maps: dict[str, dict[str, Any]] = {}
+    report = _MockReport()
+    report["created"] = [{"kind": "system_map", "name": "New Map"}]
     map_ids: dict[str, str] = {}
 
     map_id = _apply_one_system_map(
@@ -364,6 +366,8 @@ def test_apply_one_system_map_create_with_revision() -> None:
     rev = _revision_entity(nodes=[node], loop_configs=[loop])
     entity = _system_map_entity(name="New Map", revision=rev)
     current_system_maps: dict[str, dict[str, Any]] = {}
+    report = _MockReport()
+    report["created"] = [{"kind": "system_map", "name": "New Map"}]
     map_ids: dict[str, str] = {}
 
     map_id = _apply_one_system_map(
@@ -389,6 +393,8 @@ def test_apply_one_system_map_update() -> None:
     current_system_maps: dict[str, dict[str, Any]] = {
         "Existing Map": {"id": str(_MAP_ID), "name": "Existing Map", "description": "Original"}
     }
+    report = _MockReport()
+    report["updated"] = [{"kind": "system_map", "name": "Existing Map"}]
     map_ids: dict[str, str] = {"Existing Map": str(_MAP_ID)}
 
     map_id = _apply_one_system_map(
