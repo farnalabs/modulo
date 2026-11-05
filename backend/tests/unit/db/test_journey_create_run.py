@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import Table, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.exceptions import TriggersPausedError
@@ -180,6 +181,27 @@ class TestDeploymentDrainAdmission:
         await session.flush()
         run = await _create(session)
         assert run.status == "pending"
+
+    async def test_drain_flag_read_failure_propagates(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A read failure of the drain flag must propagate (fail closed), never
+        silently admit a sandbox run while a drain may be active."""
+        await _seed_org(session)
+        await _seed_pipeline(session, owner_team_id=None)
+        await _seed_snapshot_graph(session, {"nodes": [], "edges": []})
+
+        original_execute = session.execute
+
+        async def _flaky_execute(statement: Any, *args: Any, **kwargs: Any) -> Any:
+            if "system_config" in str(statement).lower():
+                raise SQLAlchemyError("system_config unavailable")
+            return await original_execute(statement, *args, **kwargs)
+
+        monkeypatch.setattr(session, "execute", _flaky_execute)
+
+        with pytest.raises(SQLAlchemyError):
+            await _create(session)
 
 
 class TestReservedKeyStripBeforeHash:
