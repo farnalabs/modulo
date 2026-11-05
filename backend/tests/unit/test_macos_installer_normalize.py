@@ -89,9 +89,15 @@ def test_macos_normalize_direct_dispatch_dry_run_still_works(tmp_path: Path) -> 
     assert outputs["run_native_build"] == "true"
 
 
-def test_macos_dmg_contract_keeps_icon_and_applications_alias() -> None:
+def test_macos_dmg_contract_validates_deterministic_contents_and_optional_finder_layout() -> None:
     workflow_path = REPO_ROOT / ".github" / "workflows" / "macos-installer.yml"
-    workflow = workflow_path.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    build_run = next(
+        step["run"]
+        for step in workflow["jobs"]["build"]["steps"]
+        if step.get("name") == "Sign, notarize and smoke-test native installer"
+    )
+    assert isinstance(build_run, str)
     plist_script = (REPO_ROOT / "scripts" / "create-macos-info-plist.sh").read_text(encoding="utf-8")
     bundle_script = (REPO_ROOT / "scripts" / "macos" / "build-native-bundle.sh").read_text(encoding="utf-8")
     icon_path = REPO_ROOT / "scripts" / "macos" / "assets" / "Modulo.svg"
@@ -100,10 +106,31 @@ def test_macos_dmg_contract_keeps_icon_and_applications_alias() -> None:
     assert icon_path.stat().st_size > 0
     assert "CFBundleIconFile</key><string>Modulo.icns" in plist_script
     assert "iconutil --convert icns" in bundle_script
-    assert 'ln -s /Applications "$DMG_STAGING/Applications"' in workflow
-    assert 'set position of item "Applications" of dmgWindow' in workflow
-    assert "mounted_dmg_icon" in workflow
-    assert "mounted_dmg_plist_icon" in workflow
+    assert 'ln -s /Applications "$DMG_STAGING/Applications"' in build_run
+    assert "run_pre_smoke mounted_dmg_applications_alias" in build_run
+    assert "run_pre_smoke mounted_dmg_icon" in build_run
+    assert "run_pre_smoke mounted_dmg_plist_icon" in build_run
+    assert "Finder automation unavailable" in build_run
+    assert "finder_layout_status=persisted" in build_run
+    assert "DMG layout is not guaranteed" in build_run
+
+
+def test_macos_dmg_finder_failure_is_non_blocking_but_alias_check_remains_hard() -> None:
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "macos-installer.yml"
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    build_run = next(
+        step["run"]
+        for step in workflow["jobs"]["build"]["steps"]
+        if step.get("name") == "Sign, notarize and smoke-test native installer"
+    )
+    assert isinstance(build_run, str)
+
+    finder_block = build_run.split("finder_layout_status=not_attempted", 1)[1].split("run_pre_smoke dmg_create", 1)[0]
+    assert "set +e" in finder_block
+    assert "finder_layout_exit=$?" in finder_block
+    assert "set -e" in finder_block
+    assert 'test -L "$DMG_STAGING/Applications"' in finder_block
+    assert "exit 1" not in finder_block
 
 
 def test_macos_normalize_direct_dispatch_rejects_non_dry_run(tmp_path: Path) -> None:

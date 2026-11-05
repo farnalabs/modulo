@@ -997,27 +997,48 @@ jobs:
           ln -s /Applications "$DMG_STAGING/Applications"
           test -L "$DMG_STAGING/Applications"
           test -d "$DMG_STAGING/Modulo-${VERSION_NUM}.app"
-          # Finder metadata is best-effort presentation only; app contents and
-          # signing gates remain authoritative and are never weakened here.
-          osascript - "$DMG_STAGING" "$VERSION_NUM" <<'APPLESCRIPT'
-          on run argv
-            tell application "Finder"
-              set staging to POSIX file (item 1 of argv) as alias
-              set dmgWindow to make new window at staging
-              set current view of dmgWindow to icon view
-              set toolbar visible of dmgWindow to false
-              set statusbar visible of dmgWindow to false
-              set bounds of dmgWindow to {120, 120, 920, 620}
-              set arrangement of icon view options of dmgWindow to not arranged
-              set icon size of icon view options of dmgWindow to 128
-              set position of item "Modulo-" & (item 2 of argv) & ".app" of dmgWindow to {220, 260}
-              set position of item "Applications" of dmgWindow to {700, 260}
-              close dmgWindow
-            end tell
-          end run
-          APPLESCRIPT
-          test -L "$DMG_STAGING/Applications"
-          # shellcheck disable=SC2016
+           # Finder metadata is optional presentation only. The deterministic
+           # acceptance contract is the app, /Applications alias and app icon;
+           # signing, notarization and Gatekeeper checks below remain hard gates.
+           finder_layout_status=not_attempted
+           finder_layout_output="$DATA/finder-layout.log"
+           rm -f "$finder_layout_output"
+           set +e
+           osascript - "$DMG_STAGING" "$VERSION_NUM" <<'APPLESCRIPT' >"$finder_layout_output" 2>&1
+           on run argv
+             tell application "Finder"
+               set staging to POSIX file (item 1 of argv) as alias
+               set dmgWindow to make new window at staging
+               set current view of dmgWindow to icon view
+               set toolbar visible of dmgWindow to false
+               set statusbar visible of dmgWindow to false
+               set bounds of dmgWindow to {120, 120, 920, 620}
+               set arrangement of icon view options of dmgWindow to not arranged
+               set icon size of icon view options of dmgWindow to 128
+               set position of item "Modulo-" & (item 2 of argv) & ".app" of dmgWindow to {220, 260}
+               set position of item "Applications" of dmgWindow to {700, 260}
+               close dmgWindow
+             end tell
+           end run
+           APPLESCRIPT
+           finder_layout_exit=$?
+           set -e
+           if [[ "$finder_layout_exit" -eq 0 && -s "$DMG_STAGING/.DS_Store" ]]; then
+             finder_layout_status=persisted
+             echo 'pre_smoke: finder_layout=persisted (optional presentation metadata)'
+           elif [[ "$finder_layout_exit" -eq 0 ]]; then
+             finder_layout_status=not_persisted
+             echo '::warning::Finder automation completed but produced no .DS_Store; DMG layout is not guaranteed.'
+           else
+             finder_layout_status=unavailable
+             echo "::warning::Finder automation unavailable (exit=$finder_layout_exit); continuing with deterministic DMG contents only."
+             if [[ -s "$finder_layout_output" ]]; then
+               sed -n '1,20p' "$finder_layout_output" >&2
+             fi
+           fi
+           test -L "$DMG_STAGING/Applications"
+           # shellcheck disable=SC2016
+
           run_pre_smoke dmg_create bash -c '
             set -euo pipefail
             hdiutil create -volname "Modulo $1" -srcfolder "$2" -ov -format UDZO "$3"
