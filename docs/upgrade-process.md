@@ -52,7 +52,7 @@ The script fails loudly (non-zero exit, nothing written) if any mirror has drift
 
 ## Upgrade Paths
 
-### Native single-install (Linux and macOS arm64)
+### Native single-install (Linux and macOS)
 
 The native single-install path supports the published Linux bundle and the
 signed, notarized macOS arm64 `.dmg`. Windows native installer support is Beta
@@ -67,9 +67,9 @@ LaunchAgent seam from the app bundle. See the platform support matrix in
 [`docs/system-requirements.md`](./system-requirements.md).
 
 The native upgrade swaps the `current` symlink after a verified data
-snapshot; migrations run through the new bundle's boot lifespan. On macOS arm64,
-install the signed/notarized `.dmg` on Apple Silicon only; x64/Rosetta is not
-supported. The Linux installer verifies the signed release manifest/checksum
+snapshot; migrations run through the new bundle's boot lifespan. On macOS, install the signed/notarized `.dmg` matching the host architecture:
+arm64 for Apple Silicon or x86_64 for Intel Macs. The artifacts are separate native
+bundles; Rosetta is not required. The Linux installer verifies the signed release manifest/checksum
 chain before copying the app; the macOS installer does not read the release
 manifest and instead verifies the DMG and app bundle through `hdiutil verify`
 plus Apple Developer ID signing/notarization. Two entry points perform the same

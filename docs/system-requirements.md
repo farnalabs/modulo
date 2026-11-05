@@ -1,12 +1,12 @@
 # System Requirements
 
-Supported platforms, minimum resources, and database backends for running Modulo in production. Modulo v1 supports Linux hosts and the native macOS arm64 single-install artifact.
+Supported platforms, minimum resources, and database backends for running Modulo in production. Modulo v1 supports Linux hosts and native macOS arm64 and x86_64 single-install artifacts.
 
 ---
 
 ## Supported Platforms
 
-Modulo v1 targets Linux hosts and Apple Silicon macOS for the native single-install
+Modulo v1 targets Linux hosts and native macOS for the native single-install
 artifact. Windows native support is Beta scope, opt-in only: the native installer (delivered
 by FAR-2337 / FAR-2338) is built, signed and attested by the unified release pipeline
 on a `cut`/`recut` release only when the Beta-only `include_windows` input is enabled,
@@ -25,6 +25,7 @@ below).
 |----------------------|-----------|
 | **Linux** | Supported (native single-install and container paths) |
 | **macOS arm64** | Supported native single-install host (signed/notarized `.dmg`, macos-15 validation) |
+| **macOS x86_64 (Intel)** | Supported native single-install host (signed/notarized `.dmg`, macos-15-intel validation) |
 | **Windows** | Beta scope, opt-in only: native installer built, signed (Azure Trusted Signing) and attested by the release pipeline when the Beta-only `include_windows` input is enabled (FAR-2337 / FAR-2338). Publication depends on a release run (no signed installer published yet); real-host validation (FAR-2250) is outstanding |
 
 Docker Desktop (see Development / Evaluation below) is a developer
@@ -32,9 +33,10 @@ convenience on macOS and Windows: it runs the Linux containers inside a Linux
 VM, so the deployed stack is still Linux. It is not a supported production
 host.
 
-macOS arm64 is a native release target. The signed and notarized `.dmg` is built
-on `macos-15` with the pinned native runtime and is validated separately from the
-Linux bundle. It requires Apple Silicon; x64/Rosetta is not supported. The
+macOS arm64 and x86_64 are native release targets. Separate signed and notarized
+`.dmg` artifacts are built on `macos-15` and `macos-15-intel` with pinned native
+runtimes and validated separately from the Linux bundle. Intel Macs use the x86_64
+artifact; Apple Silicon Macs use arm64. Rosetta is not required. The
 macOS installer's trust boundary is Apple Developer ID signing/notarization and
 stapling, verified with `codesign`, `spctl` and `hdiutil verify`; it does not
 consume the Linux signed release manifest.
@@ -80,7 +82,8 @@ actually ship - do not widen these rows until the packaging tickets land):
 | Ubuntu 22.04 LTS+ | 2.35+ | Supported |
 | Debian 12+ | 2.36+ | Supported |
 | Ubuntu 20.04 and earlier | 2.31 and below | Not supported (below the bundled service-binary floor) |
-| macOS arm64 | Apple Silicon | Supported native `.dmg`; x64/Rosetta is not supported |
+| macOS arm64 | Apple Silicon | Supported native `.dmg` |
+| macOS x86_64 | Intel | Supported native `.dmg`; use the Intel artifact on Intel Macs |
 | Windows | - | Beta scope, opt-in only; native installer built, signed and attested by the release pipeline when the Beta-only `include_windows` input is enabled (FAR-2337 / FAR-2338), published only by a release run (no installer published yet); real-host validation outstanding (FAR-2250) |
 
 The hard requirement is **glibc 2.35 or newer**. The bundle is assembled on an

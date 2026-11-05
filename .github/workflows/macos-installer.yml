@@ -15,6 +15,9 @@ on:
       mode:
         type: string
         default: dry-run
+      architecture:
+        type: string
+        default: arm64
     secrets:
       MACOS_DEVELOPER_ID_CERTIFICATE_P12:
         required: false
@@ -49,6 +52,14 @@ on:
         default: dry-run
         options:
           - dry-run
+      architecture:
+        description: "Native macOS architecture"
+        type: choice
+        required: true
+        default: arm64
+        options:
+          - arm64
+          - x86_64
       build_native:
         description: "Run the real native build/signing/smoke rehearsal (dry-run only)"
         type: boolean
@@ -80,6 +91,7 @@ jobs:
       rc_tag: ${{ steps.normalize.outputs.rc_tag }}
       ref: ${{ steps.normalize.outputs.ref }}
       mode: ${{ steps.normalize.outputs.mode }}
+      architecture: ${{ steps.normalize.outputs.architecture }}
       run_native_build: ${{ steps.normalize.outputs.run_native_build }}
     steps:
       - id: normalize
@@ -88,18 +100,21 @@ jobs:
           CALL_RC_TAG: ${{ inputs.rc_tag }}
           CALL_REF: ${{ inputs.ref }}
           CALL_MODE: ${{ inputs.mode }}
+          CALL_ARCHITECTURE: ${{ inputs.architecture }}
           DISPATCH_VERSION: ${{ github.event.inputs.version }}
           DISPATCH_RC_TAG: ${{ github.event.inputs.rc_tag }}
           DISPATCH_REF: ${{ github.event.inputs.ref }}
           DISPATCH_MODE: ${{ github.event.inputs.mode }}
+          DISPATCH_ARCHITECTURE: ${{ github.event.inputs.architecture }}
           DISPATCH_BUILD_NATIVE: ${{ github.event.inputs.build_native }}
         run: |
           set -euo pipefail
-          version="$CALL_VERSION"
-          rc_tag="$CALL_RC_TAG"
-          ref="$CALL_REF"
-          mode="$CALL_MODE"
-          run_native_build=false
+           version="${CALL_VERSION:-}"
+           rc_tag="${CALL_RC_TAG:-}"
+           ref="${CALL_REF:-}"
+           mode="${CALL_MODE:-}"
+           architecture="${CALL_ARCHITECTURE:-arm64}"
+           run_native_build=false
           # Inside a reusable-workflow call GITHUB_EVENT_NAME is still the CALLER's event,
           # so a dispatched release-unified run reports workflow_dispatch too. build_native is
           # a required input of THIS workflow's own dispatch only, so it identifies a direct
@@ -112,16 +127,18 @@ jobs:
             version="$DISPATCH_VERSION"
             rc_tag="$DISPATCH_RC_TAG"
             ref="$DISPATCH_REF"
-            mode="$DISPATCH_MODE"
-            run_native_build="${DISPATCH_BUILD_NATIVE:-false}"
+             mode="$DISPATCH_MODE"
+             architecture="${DISPATCH_ARCHITECTURE:-arm64}"
+             run_native_build="${DISPATCH_BUILD_NATIVE:-false}"
             [[ -n "$ref" ]] || ref="$GITHUB_REF"
           else
             [[ "$mode" != "dry-run" ]] && run_native_build=true
           fi
           [[ -n "$version" ]] || { echo '::error::version input is required' >&2; exit 1; }
           [[ -n "$rc_tag" ]] || { echo '::error::rc_tag input is required' >&2; exit 1; }
-          [[ -n "$ref" ]] || { echo '::error::ref input is required' >&2; exit 1; }
-          if [[ "$direct_dispatch" == true && "$mode" != "dry-run" ]]; then
+           [[ -n "$ref" ]] || { echo '::error::ref input is required' >&2; exit 1; }
+           [[ "$architecture" == arm64 || "$architecture" == x86_64 ]] || { echo "::error::architecture must be arm64 or x86_64, got: $architecture" >&2; exit 1; }
+           if [[ "$direct_dispatch" == true && "$mode" != "dry-run" ]]; then
             echo "::error::unsupported manual dispatch mode: $mode" >&2
             exit 1
           fi
@@ -137,19 +154,21 @@ jobs:
             printf 'version=%s\n' "$version"
             printf 'rc_tag=%s\n' "$rc_tag"
             printf 'ref=%s\n' "$ref"
-            printf 'mode=%s\n' "$mode"
-            printf 'run_native_build=%s\n' "$run_native_build"
+             printf 'mode=%s\n' "$mode"
+             printf 'architecture=%s\n' "$architecture"
+             printf 'run_native_build=%s\n' "$run_native_build"
           } >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build and smoke-test macOS arm64 bundle
+    name: Build and smoke-test macOS ${{ needs.normalize-inputs.outputs.architecture }} bundle
     needs: normalize-inputs
-    runs-on: macos-15
+    runs-on: ${{ needs.normalize-inputs.outputs.architecture == 'x86_64' && 'macos-15-intel' || 'macos-15' }}
     timeout-minutes: 90
     env:
       VERSION_NUM: ${{ needs.normalize-inputs.outputs.version }}
       MODE: ${{ needs.normalize-inputs.outputs.mode }}
       RC_TAG: ${{ needs.normalize-inputs.outputs.rc_tag }}
+      MACOS_ARCH: ${{ needs.normalize-inputs.outputs.architecture }}
       RUN_NATIVE_BUILD: ${{ needs.normalize-inputs.outputs.run_native_build }}
     steps:
       - uses: actions/checkout@v4
@@ -167,7 +186,7 @@ jobs:
           clang --version
           sw_vers
           uname -m
-          test "$(uname -m)" = arm64
+           test "$(uname -m)" = "$([[ "$MACOS_ARCH" == x86_64 ]] && printf x86_64 || printf arm64)"
 
       - name: Validate workflow contract
         if: ${{ env.RUN_NATIVE_BUILD == 'false' }}
@@ -192,7 +211,7 @@ jobs:
           {
             echo '## macOS native installer dry-run (artifact rehearsal)'
             echo ''
-            echo "This run is \`dry-run/build_native=true\`: the real arm64 build, signing, notarization, stapling and smoke suite will run."
+             echo "This run is \`dry-run/build_native=true\`: the real $MACOS_ARCH build, signing, notarization, stapling and smoke suite will run."
             echo 'The DMG is uploaded only as a workflow artifact. No release publication or tag creation is performed.'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -222,17 +241,17 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf build
-          scripts/macos/build-native-bundle.sh "$VERSION_NUM" "$PWD/build"
+           scripts/macos/build-native-bundle.sh "$VERSION_NUM" "$PWD/build" "$MACOS_ARCH"
           APP="build/Modulo-${VERSION_NUM}.app"
           test -x "$APP/Contents/MacOS/modulo"
-          file "$APP/Contents/MacOS/modulo" | grep -E 'Mach-O 64-bit executable arm64'
+          file "$APP/Contents/MacOS/modulo" | grep -E "Mach-O 64-bit executable $MACOS_ARCH"
           otool -L "$APP/Contents/MacOS/modulo"
           RUNTIME="$APP/Contents/Resources/bundle/runtime/bin/python3"
           echo '::group::Verify bundled Python runtime artifact contract'
           RUNTIME_FILE_OUTPUT="$(file "$RUNTIME")"
           printf '%s\n' "$RUNTIME_FILE_OUTPUT"
-          [[ "$RUNTIME_FILE_OUTPUT" == *'Mach-O 64-bit executable arm64'* ]] || {
-            echo '::error::bundled Python runtime is not a native arm64 Mach-O executable' >&2
+           [[ "$RUNTIME_FILE_OUTPUT" == *"Mach-O 64-bit executable $MACOS_ARCH"* ]] || {
+             echo "::error::bundled Python runtime is not a native $MACOS_ARCH Mach-O executable" >&2
             exit 1
           }
           RUNTIME_LINK_OUTPUT="$(otool -L "$RUNTIME")"
@@ -905,7 +924,8 @@ jobs:
           # Discover only genuine Mach-O files. A bundled Python runtime ships
           # executable-bit files that are not binaries (empty .py modules, shell
           # script wrappers such as bin/pip3); those must not be signed or be
-          # required to be Mach-O. Any Mach-O that is not arm64 still fails in
+           # required to be Mach-O. Any Mach-O that is not the selected native
+
           # the per-binary check below, so this stays strict.
           # shellcheck disable=SC2016
           run_pre_smoke nested_binary_discovery bash -c '
@@ -958,9 +978,9 @@ jobs:
               identity="$2"
               kind="$(file -b "$binary")"
               case "$kind" in
-                *"Mach-O 64-bit executable arm64"*|*"Mach-O 64-bit bundle arm64"*|*"Mach-O 64-bit dynamically linked shared library arm64"*)
-                  codesign --force --options runtime --timestamp --sign "$identity" "$binary" >/dev/null
-                  printf "signed Mach-O arm64: %s\n" "$binary"
+                 *"Mach-O 64-bit executable $MACOS_ARCH"*|*"Mach-O 64-bit bundle $MACOS_ARCH"*|*"Mach-O 64-bit dynamically linked shared library $MACOS_ARCH"*)
+                   codesign --force --options runtime --timestamp --sign "$identity" "$binary" >/dev/null
+                   printf "signed Mach-O %s: %s\n" "$MACOS_ARCH" "$binary"
                   ;;
                 *Mach-O*)
                   printf "unexpected Mach-O architecture: %s (%s)\n" "$binary" "$kind" >&2
@@ -983,8 +1003,8 @@ jobs:
           run_pre_smoke app_codesign_verify codesign --verify --deep --strict --verbose=2 "$APP"
 
 
-          DMG="build/Modulo-${VERSION_NUM}-macos-arm64.dmg"
-          DMG_TEMP="$RUNNER_TEMP/Modulo-${VERSION_NUM}-macos-arm64-$$.dmg"
+           DMG="build/Modulo-${VERSION_NUM}-macos-${MACOS_ARCH}.dmg"
+           DMG_TEMP="$RUNNER_TEMP/Modulo-${VERSION_NUM}-macos-${MACOS_ARCH}-$$.dmg"
           # shellcheck disable=SC2016
           run_pre_smoke dmg_create bash -c '
             set -euo pipefail
@@ -1053,7 +1073,7 @@ jobs:
           # shellcheck disable=SC2016
           run_pre_smoke dmg_verify hdiutil verify "$DMG"
 
-          DMG_WITH_SPACES="$RUNNER_TEMP/Modulo ${VERSION_NUM} macos arm64.dmg"
+           DMG_WITH_SPACES="$RUNNER_TEMP/Modulo ${VERSION_NUM} macos ${MACOS_ARCH}.dmg"
           # shellcheck disable=SC2016
           run_pre_smoke dmg_copy cp "$DMG" "$DMG_WITH_SPACES"
 
@@ -1067,7 +1087,7 @@ jobs:
           # shellcheck disable=SC2016
           run_pre_smoke mounted_runtime_contract bash -c '[[ -x "$1" ]]' bash "$RUNTIME"
           # shellcheck disable=SC2016
-          run_pre_smoke mounted_app_file bash -c 'file "$1" | grep -E "Mach-O 64-bit executable arm64"' bash "$MOUNTED_APP/Contents/MacOS/modulo"
+           run_pre_smoke mounted_app_file bash -c 'file "$1" | grep -E "Mach-O 64-bit executable $2"' bash "$MOUNTED_APP/Contents/MacOS/modulo" "$MACOS_ARCH"
           # shellcheck disable=SC2016
           run_pre_smoke mounted_app_codesign codesign --verify --deep --strict "$MOUNTED_APP"
           if [[ "$dmg_staple_ticket_unavailable" -eq 1 ]]; then
@@ -1079,7 +1099,7 @@ jobs:
           # shellcheck disable=SC2016
           run_pre_smoke mounted_app_help "$MOUNTED_APP/Contents/MacOS/modulo" --help
           # shellcheck disable=SC2016
-          run_pre_smoke runtime_file bash -c 'file "$1" | grep -F "Mach-O 64-bit executable arm64"' bash "$RUNTIME"
+           run_pre_smoke runtime_file bash -c 'file "$1" | grep -F "Mach-O 64-bit executable $2"' bash "$RUNTIME" "$MACOS_ARCH"
           # shellcheck disable=SC2016
           run_pre_smoke runtime_link bash -c 'otool -L "$1" | grep -F "/usr/lib/libSystem.B.dylib"' bash "$RUNTIME"
           # shellcheck disable=SC2016
@@ -1297,7 +1317,7 @@ jobs:
 
 
            run_assertion "service_binary_macho" \
-             file "$SERVICE_BINARY" | grep -E 'Mach-O 64-bit executable arm64' || exit 1
+             file "$SERVICE_BINARY" | grep -E "Mach-O 64-bit executable $MACOS_ARCH" || exit 1
 
            # Owned PID tree collection
            # shellcheck disable=SC2016
@@ -1351,7 +1371,7 @@ jobs:
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: macos-installer-${{ needs.normalize-inputs.outputs.version }}
-          path: build/Modulo-${{ needs.normalize-inputs.outputs.version }}-macos-arm64.dmg
+          name: macos-installer-${{ needs.normalize-inputs.outputs.version }}-${{ needs.normalize-inputs.outputs.architecture }}
+          path: build/Modulo-${{ needs.normalize-inputs.outputs.version }}-macos-${{ needs.normalize-inputs.outputs.architecture }}.dmg
           if-no-files-found: error
           retention-days: 30

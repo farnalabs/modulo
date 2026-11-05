@@ -1,11 +1,22 @@
 #!/usr/bin/env bash
-# Install a signed, notarized Modulo arm64 .dmg for the current macOS user.
+# Install a signed, notarized Modulo native .dmg for the current macOS user.
 # The app bundle owns the service contract; this script only verifies/copies it.
 set -euo pipefail
 
-DMG=${1:?usage: install.sh <Modulo-version-macos-arm64.dmg>}
+DMG=${1:?usage: install.sh <Modulo-version-macos-{arm64,x86_64}.dmg>}
 [[ -f "$DMG" ]] || { echo "ERROR: DMG not found: $DMG" >&2; exit 1; }
-[[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo 'ERROR: this installer requires macOS arm64 (Apple Silicon); x64/Rosetta is not supported' >&2; exit 1; }
+[[ "$(uname -s)" == Darwin ]] || { echo 'ERROR: this installer requires macOS' >&2; exit 1; }
+HOST_ARCH="$(uname -m)"
+case "$HOST_ARCH" in
+  arm64|x86_64) ;;
+  *) echo "ERROR: unsupported macOS architecture: $HOST_ARCH" >&2; exit 1 ;;
+esac
+case "$(basename "$DMG")" in
+  *-macos-arm64.dmg) EXPECTED_ARCH=arm64 ;;
+  *-macos-x86_64.dmg) EXPECTED_ARCH=x86_64 ;;
+  *) echo 'ERROR: DMG filename must identify macOS arm64 or x86_64 architecture' >&2; exit 1 ;;
+esac
+[[ "$HOST_ARCH" == "$EXPECTED_ARCH" ]] || { echo "ERROR: native installer architecture mismatch: host=$HOST_ARCH artifact=$EXPECTED_ARCH" >&2; exit 1; }
 MOUNT=$(mktemp -d)
 MOUNT_ATTACHED=0
 cleanup() {
