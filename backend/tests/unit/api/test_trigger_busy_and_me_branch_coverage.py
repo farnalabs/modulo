@@ -13,6 +13,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api import trigger_busy
 from modulo.api.routes import me
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -33,6 +34,7 @@ class _SessionContext:
 
 def _fresh_session(*, source_hash: str | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.add = MagicMock()
     session.flush = AsyncMock()
     result = MagicMock()
