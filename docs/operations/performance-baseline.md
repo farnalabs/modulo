@@ -15,7 +15,7 @@
 | **Postgres** | 16-alpine, shared_buffers=512MB, max_connections=200, work_mem=16MB |
 | **Redis** | 8-alpine, Redis defaults (no `maxmemory` bound, `maxmemory-policy=noeviction`) |
 | **Backend** | 4 uvicorn workers, 3 async DB pool connections per worker |
-| **Python** | 3.12+ |
+| **Python** | 3.12-3.14 |
 | **Network** | Loopback (localhost) |
 
 **Eviction policy when Redis memory is bounded:** the Compose stack this baseline is measured on sets no memory bound, so Redis runs its defaults (`maxmemory=0`, `noeviction`) and evicts nothing. Bound it and the policy matters: use a `volatile-*` policy (`volatile-lru`), never an `allkeys-*` one. A `volatile-*` policy evicts only keys that carry a TTL; the queue's structural keys (`queued` / `active` lists, `incomplete` zset) carry none, so they are never evicted. An `allkeys-*` policy can evict a structural key and drop queued work. Of the bundled artifacts only the Helm chart bounds Redis (256 MB, `allkeys-lru`); a managed/external Redis reached via `REDIS_URL` sets its own policy and is outside the bundled artifacts.

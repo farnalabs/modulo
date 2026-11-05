@@ -107,8 +107,8 @@ guarded against tampering at both the ORM and the database layer.
       `api/routes/audit.py` `scan_chain_endpoint`,
       `tests/unit/api/test_audit_scan_route.py`,
       `TestScanChain` in `tests/unit/api/test_audit.py`)
-- [x] `GET /api/v1/admin/audit/batch-detail` resolves a batch of event ids into
-      full records
+- [x] `POST /api/v1/admin/audit/batch-detail` resolves a batch of event ids
+      (`{"event_ids": [...]}`) into full records
 - [x] An audit export can be emitted as offline-verifiable evidence
       (FAR-1697): `GET /api/v1/admin/audit/evidence-pack` (`audit_viewer` +
       `audit.manage`) returns a self-contained pack - the audit events as

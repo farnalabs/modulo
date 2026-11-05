@@ -9,7 +9,7 @@ Modulo is a self-hosted Agentic Delivery Governance platform: an autonomous soft
 | Dependency | Version | Required For |
 |---|---|---|
 | **Docker Desktop** | 24+ | PostgreSQL 16 + Redis 8 (local dev) |
-| **Python** | 3.12+ | Backend runtime |
+| **Python** | 3.12-3.14 | Backend runtime (the Docker images build on 3.14) |
 | **`uv`** | 0.11.13 | Python package manager ([install](https://docs.astral.sh/uv/getting-started/installation/)); this is the exact version the Docker images pin |
 | **Node.js** | 20+ | Frontend development (optional). CI pins Node 22; install `pnpm` (the repo pins `pnpm@11.28.10`) rather than npm |
 
