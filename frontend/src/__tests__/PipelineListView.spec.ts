@@ -974,6 +974,67 @@ describe('PipelineListView', () => {
     expect(blocked?.tooltip).toBeTruthy()
   })
 
+  // A11Y-3 (PR #2905 review): the action-menu item root must stay an <a>.
+  // PrimeVue 4.5.5's Menu.onEnterKey activates the focused item by finding
+  // `a[data-pc-section="itemlink"]` inside the focused `li` and clicking it;
+  // with a <button> that selector misses and the fallback click lands on the
+  // `li`, so list-focus -> ArrowDown -> Enter never runs the command. The
+  // stub renders the `item` slot exactly as PrimeVue's Menuitem does, so a
+  // future tag swap fails here rather than only in a real browser.
+  it('renders action menu items as the anchor PrimeVue keyboard activation requires', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Anchor Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: true }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: {
+        plugins: [router],
+        stubs: {
+          ErrorAlert: true,
+          FolderTree: true,
+          Menu: {
+            props: ['model', 'popup'],
+            template: `<div><template v-for="item in model" :key="item.label"><slot name="item" :item="item" :label="item.label" :props="{ action: { tabindex: -1, 'data-pc-section': 'itemlink' }, label: {} }" /></template></div>`,
+            methods: { toggle: () => false },
+          },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void }
+    vm.openActionMenu({} as MouseEvent, pipeline)
+    await nextTick()
+
+    const itemLink = wrapper.find('[data-pc-section="itemlink"]')
+    expect(itemLink.exists()).toBe(true)
+    expect(itemLink.element.tagName).toBe('A')
+    wrapper.unmount()
+  })
+
+  // The wide pipeline table scrolls horizontally, so the scroll viewport must
+  // be keyboard-reachable (WCAG 2.1.1; axe `scrollable-region-focusable`) and
+  // announced by its sr-only scroll instruction. Web:S6845 is scoped-ignored
+  // for this file because the rule does not model scrollable containers.
+  it('keeps the table scroll region keyboard-focusable and described', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Scroll Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: true }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const scrollRegion = wrapper.find('[aria-describedby="pipeline-list-table-scroll-instructions"]')
+    expect(scrollRegion.exists()).toBe(true)
+    expect(scrollRegion.attributes('tabindex')).toBe('0')
+    expect(wrapper.find('#pipeline-list-table-scroll-instructions').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   // FAR-1530: the badge help is reason-aware - a breaker trip is NOT
   // resumable by the reader, so a generic "paused until resumed" would be
   // misleading. The help is also mirrored sr-only: `title` alone reaches
