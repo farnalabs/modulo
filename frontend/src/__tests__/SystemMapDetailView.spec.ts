@@ -149,7 +149,7 @@ describe('SystemMapDetailView authoring actions', () => {
   const RevisionStub = {
     name: 'RevisionSidebar',
     props: ['mapId', 'revisions', 'activeRevisionId', 'activeMap', 'readOnly'],
-    emits: ['select-revision', 'select-current', 'select-by-time', 'new-draft', 'discover'],
+    emits: ['select-revision', 'select-current', 'select-by-time', 'new-draft', 'discover', 'restore-revision', 'diff-revision'],
     template: '<div data-testid="revision-stub" />',
   }
   const DiscoveryStub = {
@@ -469,6 +469,103 @@ describe('SystemMapDetailView authoring actions', () => {
     wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-2')
     await flushPromises()
     expect(wrapper.text()).toContain('Could not restore revision')
+  })
+
+  it('has no revision diff items before a comparison is requested', () => {
+    const wrapper = mountWithStubs()
+
+    expect((wrapper.vm as unknown as { diffItems: unknown[] }).diffItems).toEqual([])
+  })
+
+  it('compares a historical revision with the active revision from the sidebar', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    seed(mockPost)
+    await flushPromises()
+    mockPost.mockResolvedValue({
+      data: {
+        base_revision_id: 'rev-1',
+        base_revision_number: 1,
+        target_revision_id: 'rev-2',
+        target_revision_number: 2,
+        nodes_added: ['pipeline-1'],
+        nodes_removed: ['pipeline-2'],
+        nodes_modified: [],
+        relationships_added: ['flow'],
+        relationships_removed: undefined,
+        relationships_modified: ['data'],
+        loop_configs_added: ['loop-1'],
+        loop_configs_removed: undefined,
+        loop_configs_modified: [],
+        content_json_changed: true,
+      },
+    })
+
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff', {
+      params: { path: { map_id: 'map-1', rev_id: 'rev-2' } },
+      body: { against_revision_id: 'rev-1' },
+    })
+    const panel = wrapper.get('[data-testid="system-map-revision-diff-panel"]')
+    expect(panel.text()).toContain('Nodes added: 1')
+    expect(panel.text()).toContain('Nodes removed: 1')
+    expect(panel.text()).toContain('Relationships removed: 0')
+    expect(panel.text()).toContain('Loop configurations changed: 1')
+
+    await panel.get('button').trigger('click')
+    expect(wrapper.find('[data-testid="system-map-revision-diff-panel"]').exists()).toBe(false)
+  })
+
+  it('compares a revision with itself and renders zero counts for an empty diff', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    seed(mockPost)
+    await flushPromises()
+    mockPost.mockResolvedValue({
+      data: { base_revision_id: 'rev-1', base_revision_number: 1, target_revision_id: 'rev-1', target_revision_number: 1, content_json_changed: false },
+    })
+
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-1')
+    await flushPromises()
+
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff', {
+      params: { path: { map_id: 'map-1', rev_id: 'rev-1' } },
+      body: {},
+    })
+    expect(wrapper.get('[data-testid="system-map-revision-diff-panel"]').text()).toContain('Nodes added: 0')
+  })
+
+  it('ignores a diff request when no map is loaded', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+    store.activeMap = null
+    const diff = vi.spyOn(store, 'diffRevision')
+
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+
+    expect(diff).not.toHaveBeenCalled()
+  })
+
+  it('reports diff failures and falls back for non-Error rejections', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+
+    mockPost.mockResolvedValue({ error: { detail: 'nope' } })
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not compare revisions')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    vi.spyOn(store, 'diffRevision').mockRejectedValueOnce('offline')
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not compare revisions')
   })
 
   it('runs discovery, opens the review panel and saves selections', async () => {

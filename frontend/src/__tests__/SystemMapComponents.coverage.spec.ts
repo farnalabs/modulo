@@ -153,7 +153,7 @@ describe('SystemMapRevisionSidebar', () => {
       ],
     })
 
-    const buttons = wrapper.findAll('ol li > button:not([data-testid="system-map-revision-restore"])')
+    const buttons = wrapper.findAll('ol li > button:not([data-testid="system-map-revision-restore"]):not([data-testid="system-map-revision-diff"])')
     expect(buttons.map((button) => button.attributes('data-testid'))).toEqual([
       'system-map-revision-3',
       'system-map-revision-2',
@@ -177,11 +177,13 @@ describe('SystemMapRevisionSidebar', () => {
      await wrapper.get('[data-testid="system-map-revision-1"]').trigger('click')
      await wrapper.get('[data-testid="system-map-new-draft"]').trigger('click')
      await wrapper.get('[data-testid="system-map-revision-restore"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-revision-diff"]').trigger('click')
      await wrapper.get('[data-testid="system-map-sidebar-discover"]').trigger('click')
 
      expect(wrapper.emitted('select-revision')![0]).toEqual(['rev-1'])
      expect(wrapper.emitted('new-draft')).toBeTruthy()
      expect(wrapper.emitted('restore-revision')![0]).toEqual(['rev-1'])
+     expect(wrapper.emitted('diff-revision')![0]).toEqual(['rev-1'])
      expect(wrapper.emitted('discover')).toBeTruthy()
 
   })

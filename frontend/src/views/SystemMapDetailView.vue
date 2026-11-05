@@ -171,7 +171,6 @@ const editedNodes = ref<SystemMapNode[]>([])
 const editedRelationships = ref<SystemMapRelationship[]>([])
 const revisionDiff = ref<components['schemas']['SystemMapRevisionDiffResponse'] | null>(null)
 
-const nodeTypes = NODE_TYPES
 const diffItems = computed(() => {
   if (!revisionDiff.value) return []
   return [
