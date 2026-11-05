@@ -13,6 +13,7 @@
       :heading-level="headingLevel"
       :title-class="titleClass"
       :description-class="descriptionClass"
+      :header-class="headerClass"
       :data-testid="dataTestId ? `${dataTestId}-header` : undefined"
     >
       <template v-if="$slots.headerActions" #actions>
@@ -52,6 +53,7 @@ const props = defineProps<{
   elevation?: 'none' | 'sm' | 'md' | 'lg'
   titleClass?: string
   descriptionClass?: string
+  headerClass?: string
   dataTestId?: string
   cardClass?: string
 }>()

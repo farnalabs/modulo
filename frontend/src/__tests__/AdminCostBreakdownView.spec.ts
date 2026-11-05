@@ -118,7 +118,16 @@ describe('AdminCostBreakdownView', () => {
 
     const teamHeading = page.get('h2')
     expect(teamHeading.text()).toContain('Per-Team Cost Breakdown')
-    expect(teamHeading.classes()).toEqual(expect.arrayContaining(['px-6', 'pt-6']))
+    const teamHeader = teamHeading.element.closest('.card-header')
+    expect(teamHeader).not.toBeNull()
+    expect(Array.from(teamHeader!.classList)).toEqual(expect.arrayContaining(['px-6', 'pt-6']))
+    const teamDescription = teamHeader!.querySelector('p')
+    expect(teamDescription?.textContent).toContain('Monthly spend, run count, and average cost per run')
+    expect(teamDescription?.classList.contains('px-6')).toBe(false)
+    expect(teamDescription?.parentElement).toBe(teamHeading.element.parentElement)
+    const anomalyHeader = page.findAll('.card-header')[1]
+    expect(anomalyHeader.classes()).not.toEqual(expect.arrayContaining(['px-6', 'pt-6']))
+    expect(page.get('[data-testid="cost-team-table"]').element.closest('.card-base')?.classList.contains('p-0')).toBe(true)
   })
 
   it('dismisses an anomaly via POST', async () => {

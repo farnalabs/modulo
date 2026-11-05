@@ -46,8 +46,8 @@
           :description="$t('views.AdminCostBreakdownView.monthly_spend_run_count_and_avg_by_team')"
           padding="none"
           heading-level="h2"
-          title-class="px-6 pt-6"
-         >
+          header-class="px-6 pt-6"
+        >
           <template #default>
             <EmptyState
               v-if="items.length === 0"
