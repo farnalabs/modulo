@@ -24,8 +24,8 @@ from pathlib import Path
 
 import yaml
 
-_GIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,40}$")
-_SEMVER_PATTERN = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$")
+_GIT_SHA_PATTERN = re.compile(r"^[\da-fA-F]{7,40}$")
+_SEMVER_PATTERN = re.compile(r"^v?\d+\.\d+\.\d+(-[a-zA-Z\d.]+)?$")
 _COMPOSE_FILENAME = "docker-compose.prod.yml"
 
 
@@ -72,11 +72,10 @@ def transform_compose_content(content: str, tag: str) -> str:
     # next top-level key (a line starting in column 0). The result is
     # re-parsed and asserted below, so a mis-cut fails loudly instead of
     # shipping a subtly broken compose file.
-    watchdog_pattern = re.compile(
-        r"\n(?:(?:[ \t]*#[^\n]*\n)+)?[ \t]*watchdog:\n(?:(?:[ \t]+[^\n]*)?\n)*(?=[A-Za-z_])",
-        re.MULTILINE,
-    )
-    transformed = watchdog_pattern.sub("\n", transformed, count=1)
+    watchdog_comments = re.compile(r"(?m)(?:^[ \t]*#[^\n]*\n)+(?=^[ \t]*watchdog:)")
+    watchdog_service = re.compile(r"(?m)^[ \t]*watchdog:\n(?:^[ \t]+.*(?:\n|$))*")
+    transformed = watchdog_comments.sub("", transformed, count=1)
+    transformed = watchdog_service.sub("", transformed, count=1)
 
     # 3. Validate parsed YAML
     data = yaml.safe_load(transformed)
