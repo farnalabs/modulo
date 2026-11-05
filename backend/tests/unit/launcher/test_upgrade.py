@@ -1818,6 +1818,38 @@ def test_shell_checksum_verifier_rejects_windows_manifest_paths_before_filesyste
     assert "No such file" not in result.stderr
 
 
+@pytest.mark.posix_only
+def test_shell_checksum_verifier_accepts_native_bundle_version_metadata(tmp_path: Path) -> None:
+    """The native bundle's ``./VERSION`` checksum entry is legitimate metadata."""
+    source = (Path(__file__).resolve().parents[4] / "scripts" / "install.sh").read_text(encoding="utf-8")
+    function_start = source.index("verify_sums_in_dir() {")
+    function_end = source.index("\n\nvalidate_legacy_shim_collision()", function_start)
+    verifier = source[function_start:function_end]
+    sums_dir = tmp_path / "bundle"
+    sums_dir.mkdir()
+    version = sums_dir / "VERSION"
+    version.write_text("bundle-v0.3.325\n", encoding="utf-8")
+    digest = hashlib.sha256(version.read_bytes()).hexdigest()
+    (sums_dir / "SHA256SUMS").write_text(f"{digest}  ./VERSION\n", encoding="utf-8")
+    harness = tmp_path / "verify.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "die() { printf 'ERROR: %b\\n' \"$*\" >&2; exit 1; }\n"
+        "sha256_of() { sha256sum \"$1\" | awk '{print $1}'; }\n"
+        f"{verifier}\n"
+        f"verify_sums_in_dir {shlex.quote(str(sums_dir))}\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    bash_bin = shutil.which("bash")
+    assert bash_bin is not None
+    result = subprocess.run(  # noqa: S603 - resolved bash and test-owned harness
+        [bash_bin, str(harness)], capture_output=True, text=True, timeout=30, check=False
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_installer_rejects_legacy_shim_before_install_root_mutation(tmp_path: Path) -> None:
     legacy_shim = tmp_path / "legacy-modulo"
     legacy_shim.write_text("legacy", encoding="utf-8")
