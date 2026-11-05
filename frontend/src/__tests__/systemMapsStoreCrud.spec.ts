@@ -36,6 +36,20 @@ describe('useSystemMapsStore CRUD', () => {
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
   })
 
+  it('diffs a revision against the active revision', async () => {
+    mockPost.mockResolvedValue({
+      data: { base_revision_id: 'base', base_revision_number: 1, target_revision_id: 'target', target_revision_number: 2, nodes_added: ['new-node'], content_json_changed: false },
+      error: undefined,
+    })
+    const store = useSystemMapsStore()
+    const result = await store.diffRevision('map-1', 'base', 'target')
+    expect(result.nodes_added).toEqual(['new-node'])
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff', {
+      params: { path: { map_id: 'map-1', rev_id: 'base' } },
+      body: { against_revision_id: 'target' },
+    })
+  })
+
   it('fetches a page of maps and records pagination', async () => {
     mockGet.mockResolvedValue({ data: { items: [{ id: 'map-1' }], total: 41, page: 2, page_size: 20 } })
     const store = useSystemMapsStore()

@@ -21,7 +21,9 @@
           :read-only="readOnly"
            @new-draft="createNewDraft"
            @restore-revision="restoreRevision"
-           @discover="runDiscovery"
+           @diff-revision="diffRevision"
+            @discover="runDiscovery"
+
 
         />
       </div>
@@ -43,15 +45,27 @@
           :on-retry="loadData"
           class="m-3"
         />
-        <ErrorAlert
-          v-else-if="actionError"
-          :message="actionError"
-          :on-dismiss="clearActionError"
-          :dismiss-label="$t('common.dismiss')"
-          class="m-3"
-        />
+         <ErrorAlert
+           v-else-if="actionError"
+           :message="actionError"
+           :on-dismiss="clearActionError"
+           :dismiss-label="$t('common.dismiss')"
+           class="m-3"
+         />
 
-        <HeaderBar
+         <div v-if="revisionDiff" class="m-3 rounded-lg border bg-card p-4" data-testid="system-map-revision-diff-panel">
+           <div class="flex items-center justify-between gap-3">
+             <h2 class="font-semibold">{{ $t('views.SystemMapDetailView.revision_diff') }}</h2>
+             <button type="button" class="rounded border px-2 py-1 text-xs" @click="revisionDiff = null">{{ $t('common.dismiss') }}</button>
+           </div>
+           <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.SystemMapDetailView.revision_diff_summary', { base: revisionDiff.base_revision_number, target: revisionDiff.target_revision_number }) }}</p>
+           <ul class="mt-3 grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
+             <li v-for="item in diffItems" :key="item.label">{{ item.label }}: {{ item.count }}</li>
+           </ul>
+         </div>
+
+         <HeaderBar
+
           :map="activeMap"
           :revision="activeRevision"
           :saving="saving"
@@ -125,6 +139,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSystemMapsStore, NODE_TYPES, RELATIONSHIP_TYPES } from '../stores/systemMaps'
 import type { DiscoverySelection, SystemMapNode, SystemMapRelationship } from '../stores/systemMaps'
+import type { components } from '../lib/api/schema'
 import BackLink from '../components/BackLink.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import HeaderBar from '../components/system-maps/SystemMapHeaderBar.vue'
@@ -154,6 +169,21 @@ const saving = ref(false)
 const actionError = ref<string | null>(null)
 const editedNodes = ref<SystemMapNode[]>([])
 const editedRelationships = ref<SystemMapRelationship[]>([])
+const revisionDiff = ref<components['schemas']['SystemMapRevisionDiffResponse'] | null>(null)
+
+const nodeTypes = NODE_TYPES
+const diffItems = computed(() => {
+  if (!revisionDiff.value) return []
+  return [
+    { label: t('views.SystemMapDetailView.nodes_added'), count: revisionDiff.value.nodes_added?.length ?? 0 },
+    { label: t('views.SystemMapDetailView.nodes_removed'), count: revisionDiff.value.nodes_removed?.length ?? 0 },
+    { label: t('views.SystemMapDetailView.nodes_modified'), count: revisionDiff.value.nodes_modified?.length ?? 0 },
+    { label: t('views.SystemMapDetailView.relationships_added'), count: revisionDiff.value.relationships_added?.length ?? 0 },
+    { label: t('views.SystemMapDetailView.relationships_removed'), count: revisionDiff.value.relationships_removed?.length ?? 0 },
+    { label: t('views.SystemMapDetailView.relationships_modified'), count: revisionDiff.value.relationships_modified?.length ?? 0 },
+    { label: t('views.SystemMapDetailView.loop_configs_changed'), count: (revisionDiff.value.loop_configs_added?.length ?? 0) + (revisionDiff.value.loop_configs_removed?.length ?? 0) + (revisionDiff.value.loop_configs_modified?.length ?? 0) },
+  ]
+})
 
 const nodeTypes = NODE_TYPES
 const relationshipTypes = RELATIONSHIP_TYPES
@@ -250,6 +280,16 @@ async function createNewDraft(): Promise<void> {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.create_draft')
   } finally {
     saving.value = false
+  }
+}
+
+async function diffRevision(revisionId: string): Promise<void> {
+  if (!activeMap.value) return
+  actionError.value = null
+  try {
+    revisionDiff.value = await store.diffRevision(activeMap.value.id, revisionId, activeRevision.value?.id === revisionId ? undefined : activeRevision.value?.id)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.diff_revision')
   }
 }
 

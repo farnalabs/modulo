@@ -33,9 +33,17 @@
              v-if="!props.readOnly && revision.status !== 'draft'"
              type="button"
              class="mt-1 w-full rounded border px-2 py-1 text-xs"
-             @click="$emit('restore-revision', revision.id)"
-             data-testid="system-map-revision-restore"
-           >{{ $t('views.SystemMapDetailView.restore_as_new') }}</button>
+              @click="$emit('restore-revision', revision.id)"
+              data-testid="system-map-revision-restore"
+            >{{ $t('views.SystemMapDetailView.restore_as_new') }}</button>
+            <button
+              v-if="!props.readOnly && revision.status !== 'draft'"
+              type="button"
+              class="mt-1 w-full rounded border px-2 py-1 text-xs"
+              @click="$emit('diff-revision', revision.id)"
+              data-testid="system-map-revision-diff"
+            >{{ $t('views.SystemMapDetailView.view_diff') }}</button>
+
 
         </li>
       </ol>
@@ -47,7 +55,7 @@
 import { computed, ref } from 'vue'
 import type { SystemMap, SystemMapRevision } from '../../stores/systemMaps'
 const props = defineProps<{ mapId: string; revisions: SystemMapRevision[]; activeRevisionId?: string; activeMap: SystemMap | null; readOnly?: boolean; dataTestId?: string }>()
-const emit = defineEmits<{ (e: 'select-revision', revisionId: string): void; (e: 'select-current'): void; (e: 'select-by-time', at: string): void; (e: 'new-draft'): void; (e: 'discover'): void; (e: 'restore-revision', revisionId: string): void }>()
+const emit = defineEmits<{ (e: 'select-revision', revisionId: string): void; (e: 'select-current'): void; (e: 'select-by-time', at: string): void; (e: 'new-draft'): void; (e: 'discover'): void; (e: 'restore-revision', revisionId: string): void; (e: 'diff-revision', revisionId: string): void }>()
 const sortedRevisions = computed(() => [...props.revisions].filter((revision) => props.readOnly ? revision.status !== 'draft' : true).sort((a, b) => b.revision_number - a.revision_number))
 const atValue = ref('')
 // datetime-local carries no timezone; convert it to an absolute instant here so

@@ -1256,6 +1256,13 @@ elements:
       - testid: system-map-revision-restore
         type: button
         dynamic_testid: false
+      - testid: system-map-revision-diff
+        type: button
+        dynamic_testid: false
+      - testid: system-map-revision-diff-panel
+        type: region
+        dynamic_testid: false
+
       - testid: system-map-discovery-panel
         type: dialog
         dynamic_testid: false
