@@ -412,6 +412,76 @@ describe('DashboardView', () => {
     wrapper.unmount()
   })
 
+  it('keeps the 100% eval summary while rendering a compact chart empty state (FAR-2390)', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            eval_pass_rate: {
+              overall_pass_rate: 100,
+              total_evals: 3,
+              passed_evals: 3,
+              per_pipeline: {},
+              per_team_pipeline: {},
+            },
+            trend: [],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/dashboard/trends') {
+        return Promise.resolve({
+          data: {
+            days: 3,
+            run_counts: [],
+            eval_pass_rates: [],
+            token_spend: [],
+            hitl_volume: [],
+            rejection_trend: [],
+            correlation: [],
+            feedback_volume: [],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+
+    const evalCard = wrapper.get('[data-testid="dashboard-eval-rate"]')
+    // FAR-2390: a 100% pass rate is a meaningful summary value and must stay
+    // visible even when there is no trend series to plot.
+    expect(evalCard.text()).toContain('100%')
+    // The chart itself renders a compact, deliberately sized empty state
+    // instead of an empty sparkline stretched across the card.
+    expect(evalCard.text()).toContain('No data')
+    expect(evalCard.find('[data-testid="sparkline"]').exists()).toBe(false)
+    expect(evalCard.find('polyline').exists()).toBe(false)
+    const emptyChart = evalCard.get('.h-12')
+    expect(emptyChart.classes()).toEqual(expect.arrayContaining([
+      'flex', 'h-12', 'items-center', 'justify-center',
+    ]))
+    wrapper.unmount()
+  })
+
+  it('renders the Run Activity empty state compactly instead of stretching to the chart area (FAR-2390)', async () => {
+    setupEmptyMocks()
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+
+    const runActivity = wrapper.get('[data-testid="dashboard-run-activity"]')
+    expect(runActivity.text()).toContain('No data yet')
+    expect(runActivity.find('[data-testid="sparkline"]').exists()).toBe(false)
+    expect(runActivity.html()).not.toContain('min-h-[200px]')
+
+    const message = runActivity.get('p.italic')
+    expect(message.element.parentElement?.className).toEqual(expect.stringContaining('py-6'))
+    wrapper.unmount()
+  })
+
   it('shows the rolling-window toggle with 6 values including All time', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
@@ -813,14 +883,31 @@ describe('DashboardView', () => {
   it('passes raw eval_pass_rate nulls (not flattened to 0) to the eval sparkline', async () => {
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({ data: mockSummaryData, error: undefined })
+      }
+      if (url === '/api/v1/dashboard/trends') {
         return Promise.resolve({
           data: {
-            ...mockSummaryData,
-            trend: [
-              { date: '2026-06-23', run_count: 1, eval_pass_rate: null, token_spend_usd: 2.0 },
-              { date: '2026-06-24', run_count: 2, eval_pass_rate: 80, token_spend_usd: 3.0 },
-              { date: '2026-06-25', run_count: 3, eval_pass_rate: null, token_spend_usd: 4.0 },
+            days: 3,
+            run_counts: [
+              { date: '2026-06-23', run_count: 1 },
+              { date: '2026-06-24', run_count: 2 },
+              { date: '2026-06-25', run_count: 3 },
             ],
+            eval_pass_rates: [
+              { date: '2026-06-23', total_evals: 0, passed_evals: 0, pass_rate: null },
+              { date: '2026-06-24', total_evals: 1, passed_evals: 1, pass_rate: 80 },
+              { date: '2026-06-25', total_evals: 1, passed_evals: 0, pass_rate: 75 },
+            ],
+            token_spend: [
+              { date: '2026-06-23', total_spend_usd: 2.0 },
+              { date: '2026-06-24', total_spend_usd: 3.0 },
+              { date: '2026-06-25', total_spend_usd: 4.0 },
+            ],
+            hitl_volume: [],
+            rejection_trend: [],
+            correlation: [],
+            feedback_volume: [],
           },
           error: undefined,
         })
@@ -835,12 +922,12 @@ describe('DashboardView', () => {
     expect(evalSparkline).toBeDefined()
     // Nulls must reach the sparkline untouched — flattening to 0 would render
     // "no evals" days as a 0% pass-rate crash to the chart floor.
-    expect(evalSparkline!.props('data')).toEqual([])
+    expect(evalSparkline!.props('data')).toEqual([null, 80, 75])
     expect(evalSparkline!.attributes('missing-data')).toBeUndefined()
     // The spend sparkline is untouched by the null-handling change.
     const spendSparkline = sparklines.find(s => s.props('unit') === '$')
     expect(spendSparkline).toBeDefined()
-    expect(spendSparkline!.props('data')).toEqual([])
+    expect(spendSparkline!.props('data')).toEqual([2, 3, 4])
   })
 
   it('renders the compact Token Spend empty state instead of an empty sparkline when the trend is empty', async () => {
