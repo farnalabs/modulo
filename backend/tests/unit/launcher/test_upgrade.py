@@ -1819,18 +1819,24 @@ def test_shell_checksum_verifier_rejects_windows_manifest_paths_before_filesyste
 
 
 @pytest.mark.posix_only
-def test_shell_checksum_verifier_accepts_native_bundle_version_metadata(tmp_path: Path) -> None:
-    """The native bundle's ``./VERSION`` checksum entry is legitimate metadata."""
+@pytest.mark.parametrize(
+    ("listed_name", "relative_path"),
+    [("./VERSION", "VERSION"), ("./backend/nested/payload.txt", "backend/nested/payload.txt")],
+)
+def test_shell_checksum_verifier_accepts_native_bundle_leading_dot_paths(
+    tmp_path: Path, listed_name: str, relative_path: str
+) -> None:
+    """A single leading ``./`` is accepted for root and nested bundle files."""
     source = (Path(__file__).resolve().parents[4] / "scripts" / "install.sh").read_text(encoding="utf-8")
     function_start = source.index("verify_sums_in_dir() {")
     function_end = source.index("\n\nvalidate_legacy_shim_collision()", function_start)
     verifier = source[function_start:function_end]
     sums_dir = tmp_path / "bundle"
-    sums_dir.mkdir()
-    version = sums_dir / "VERSION"
-    version.write_text("bundle-v0.3.325\n", encoding="utf-8")
-    digest = hashlib.sha256(version.read_bytes()).hexdigest()
-    (sums_dir / "SHA256SUMS").write_text(f"{digest}  ./VERSION\n", encoding="utf-8")
+    artifact = sums_dir / relative_path
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("bundle payload\n", encoding="utf-8")
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    (sums_dir / "SHA256SUMS").write_text(f"{digest}  {listed_name}\n", encoding="utf-8")
     harness = tmp_path / "verify.sh"
     harness.write_text(
         "#!/usr/bin/env bash\n"
@@ -1921,8 +1927,8 @@ def test_extract_rejects_symlink_listed_artifact(tmp_path):
         upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
 
 
-def test_extract_accepts_root_version_with_dot_prefix_and_rejects_near_match(tmp_path: Path) -> None:
-    """The native bundle's ``./VERSION`` entry is allowed, but not ``./foo``."""
+def test_extract_accepts_root_version_and_safe_dot_prefixed_artifact(tmp_path: Path) -> None:
+    """A leading ``./`` is safe after canonicalisation when the file exists."""
     import tarfile
 
     bundle = tmp_path / "modulo-1.2.0-linux-amd64"
@@ -1938,9 +1944,30 @@ def test_extract_accepts_root_version_with_dot_prefix_and_rejects_near_match(tmp
     extracted = upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
     assert (extracted / "VERSION").read_text(encoding="utf-8") == "bundle-v1.2.0\n"
 
-    (bundle / "SHA256SUMS").write_text(f"{digest}  ./foo\n", encoding="utf-8")
+    foo = bundle / "foo"
+    foo.write_text("near-match\n", encoding="utf-8")
+    foo_digest = hashlib.sha256(foo.read_bytes()).hexdigest()
+    (bundle / "SHA256SUMS").write_text(f"{foo_digest}  ./foo\n", encoding="utf-8")
     with tarfile.open(archive, "w:gz") as handle:
         handle.add(bundle, arcname=bundle.name, recursive=True)
+    extracted = upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract-safe")
+    assert (extracted / "foo").read_text(encoding="utf-8") == "near-match\n"
+
+
+def test_extract_rejects_dot_prefixed_malformed_artifact_path(tmp_path: Path) -> None:
+    """A genuinely unsafe near-match reaches the path-shape guard."""
+    import tarfile
+
+    bundle = tmp_path / "modulo-1.2.0-linux-amd64"
+    bundle.mkdir()
+    foo = bundle / "foo"
+    foo.write_text("near-match\n", encoding="utf-8")
+    digest = hashlib.sha256(foo.read_bytes()).hexdigest()
+    (bundle / "SHA256SUMS").write_text(f"{digest}  ./.\n", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-amd64.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(bundle, arcname=bundle.name, recursive=True)
+
     with pytest.raises(UpgradeError, match="unsafe artifact path"):
         upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract-malformed")
 
@@ -1972,7 +1999,17 @@ def test_extract_rejects_symlinked_checksum_parent(tmp_path: Path) -> None:
         upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
 
 
-@pytest.mark.parametrize("listed_name", ["./real/payload.txt", "real/../real/payload.txt", "C:relative/payload.txt"])
+@pytest.mark.parametrize(
+    "listed_name",
+    ["../VERSION", "./../VERSION", "./VERSION/../VERSION", "./", "./."],
+)
+def test_extract_rejects_malformed_leading_dot_checksum_paths(tmp_path: Path, listed_name: str) -> None:
+    archive = _checksum_archive(tmp_path, listed_name)
+    with pytest.raises(UpgradeError, match="unsafe artifact path"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+
+
+@pytest.mark.parametrize("listed_name", ["real/../real/payload.txt", "C:relative/payload.txt"])
 def test_extract_rejects_explicit_dot_checksum_components(tmp_path: Path, listed_name: str) -> None:
     archive = _checksum_archive(tmp_path, listed_name)
     with pytest.raises(UpgradeError, match="unsafe artifact path"):
