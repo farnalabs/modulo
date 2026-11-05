@@ -14,9 +14,12 @@ esac
 case "$(basename "$DMG")" in
   *-macos-arm64.dmg) EXPECTED_ARCH=arm64 ;;
   *-macos-x86_64.dmg) EXPECTED_ARCH=x86_64 ;;
-  *) echo 'ERROR: DMG filename must identify macOS arm64 or x86_64 architecture' >&2; exit 1 ;;
+  *) EXPECTED_ARCH='' ;;
 esac
-[[ "$HOST_ARCH" == "$EXPECTED_ARCH" ]] || { echo "ERROR: native installer architecture mismatch: host=$HOST_ARCH artifact=$EXPECTED_ARCH" >&2; exit 1; }
+if [[ -n "$EXPECTED_ARCH" && "$HOST_ARCH" != "$EXPECTED_ARCH" ]]; then
+  echo "ERROR: native installer filename architecture mismatch: host=$HOST_ARCH artifact=$EXPECTED_ARCH" >&2
+  exit 1
+fi
 MOUNT=$(mktemp -d)
 MOUNT_ATTACHED=0
 cleanup() {
@@ -62,6 +65,18 @@ done < <(for candidate in "$MOUNT"/*.app; do [[ -d "$candidate" && ! -L "$candid
 [[ "$app_count" -eq 1 ]] || { echo "ERROR: expected exactly one non-symlink .app bundle on the DMG, found ${app_count}" >&2; exit 1; }
 [[ -d "$APP" && ! -L "$APP" ]] || { echo 'ERROR: DMG does not contain the expected non-symlink .app bundle' >&2; exit 1; }
 codesign --verify --deep --strict "$APP"
+LAUNCHER="$APP/Contents/MacOS/modulo"
+[[ -f "$LAUNCHER" && ! -L "$LAUNCHER" ]] || { echo "ERROR: app bundle is missing its native launcher: $LAUNCHER" >&2; exit 1; }
+LAUNCHER_FILE_OUTPUT="$(file "$LAUNCHER" 2>&1)"
+case "$LAUNCHER_FILE_OUTPUT" in
+  *'Mach-O 64-bit executable arm64'*) APP_ARCH=arm64 ;;
+  *'Mach-O 64-bit executable x86_64'*) APP_ARCH=x86_64 ;;
+  *) echo "ERROR: app launcher is not a supported 64-bit Mach-O executable: $LAUNCHER_FILE_OUTPUT" >&2; exit 1 ;;
+esac
+[[ "$HOST_ARCH" == "$APP_ARCH" ]] || {
+  echo "ERROR: mounted app architecture mismatch: host=$HOST_ARCH app=$APP_ARCH" >&2
+  exit 1
+}
 if [[ "${MODULO_MACOS_REHEARSAL_ALLOW_UNSTAPLED_TICKET:-}" == '1' && "${MODULO_MACOS_REHEARSAL_ALLOW_UNSTAPLED_TICKET_REASON:-}" == 'apple_cloudkit_ticket_unavailable' ]]; then
   printf '%s\n' '::warning::Rehearsal-only: deferring mounted-app Gatekeeper assessment because the Apple CloudKit notarization ticket is unavailable.' >&2
 else
