@@ -15,7 +15,7 @@ name = "farnalabs-modulo"
 # scripts/bump-version.py into backend/uv.lock, frontend/package.json and
 # deploy/helm/modulo/Chart.yaml (version + appVersion). Files carry X.Y.Z only;
 # -rcN prerelease suffixes live in git tags only. See docs/upgrade-process.md.
-version = "0.3.324"
+version = "0.3.325"
 description = "Agent governance for your agentic SDLC"
 license = "BUSL-1.1"
 license-files = ["LICENSE"]
@@ -106,9 +106,9 @@ dependencies = [
     # Kubernetes runtime provider (FAR-1051): async client for the
     # exec-shaped pod provider (repo is async end-to-end; aiohttp is
     # already a dependency). The provider itself is env-gated
-    # (MODULO_KUBERNETES_ENABLED) — the dependency is inert until then.
+    # (MODULO_KUBERNETES_ENABLED) â€” the dependency is inert until then.
     "kubernetes-asyncio>=36.0.0",
-    # Retry library — replaces hand-rolled retry-with-backoff patterns
+    # Retry library â€” replaces hand-rolled retry-with-backoff patterns
     "tenacity>=9.0.0",
     # CLI
     "click>=8.1.0",
@@ -179,12 +179,12 @@ exclude = ["*.feature", "tests/connectors/__init__.py", ".semgrep/tests/"]
 [tool.ruff.lint]
 select = [
     "E", "W",   # pycodestyle
-    "F",        # pyflakes (dead code, unused imports — F841 catches uncovered vars, F811 catches redefs)
+    "F",        # pyflakes (dead code, unused imports â€” F841 catches uncovered vars, F811 catches redefs)
     "I",        # isort
     "N",        # pep8-naming
     "UP",       # pyupgrade
-    "B",        # flake8-bugbear (real bugs — B006 mutating defaults, B023 loop var in closure)
-    "S",        # flake8-bandit (security — S608 detects raw f-string SQL injection)
+    "B",        # flake8-bugbear (real bugs â€” B006 mutating defaults, B023 loop var in closure)
+    "S",        # flake8-bandit (security â€” S608 detects raw f-string SQL injection)
     "ASYNC",    # flake8-async (ASYNC251 catches unclosed event loops, ASYNC109 sync in async)
     "RUF",      # ruff-specific rules (RUF012 mutable class defaults)
     "SIM",      # flake8-simplify (SIM115 `open()` without context manager, SIM222 bool expr)
@@ -192,8 +192,8 @@ select = [
     "T20",      # flake8-print (T201 bare print in production code)
     "RET",      # flake8-return (RET503 missing explicit return)
     "PYI",      # flake8-pyi (PYI041 redundant `Optional` on union)
-     "FURB",     # refurb (FURB125 `while` → `for` loop, FURB163 unnecessary `None` check)
-     "PERF",     # perflint (PERF401 manual list-building loop — use comprehension/extend)
+     "FURB",     # refurb (FURB125 `while` â†’ `for` loop, FURB163 unnecessary `None` check)
+     "PERF",     # perflint (PERF401 manual list-building loop â€” use comprehension/extend)
      "ISC",      # flake8-implicit-str-concat (ISC003/ISC004 inconsistent string concatenation)
      "PIE",      # flake8-pie (PIE810 single startswith/endswith tuple, PIE807 useless lambda)
      "RSE",      # flake8-raise (RSE102 raise in except handler)
@@ -300,7 +300,7 @@ select = [
     "SLOT002",
     # flake8-use-pathlib: every member of the family now has zero current call
     # sites across the whole tree (incl. scripts/, which were migrated to match)
-    # — the PTH118/PTH120/PTH123 backlog was cleared in a scan-by-scan migration.
+    # â€” the PTH118/PTH120/PTH123 backlog was cleared in a scan-by-scan migration.
     "PTH100", "PTH101", "PTH102", "PTH103", "PTH104", "PTH105", "PTH106", "PTH107",
     "PTH108", "PTH109", "PTH110", "PTH111", "PTH112", "PTH113", "PTH114", "PTH115",
     "PTH116", "PTH117", "PTH118", "PTH119", "PTH120", "PTH121", "PTH122", "PTH123",
@@ -314,7 +314,7 @@ select = [
     # violations with ruff==0.16.5: `ruff check . --extend-select <codes>
     # --statistics`). Mirrors the repo-root ruff.toml gate. These families
     # close drift and block future regressions: B007 (unused loop variable),
-    # B904 (raise without `from` — chain exceptions), RUF009/RUF012/RUF013
+    # B904 (raise without `from` â€” chain exceptions), RUF009/RUF012/RUF013
     # (mutable defaults / typed-class hygiene), the TODO-comment TD family
     # (author/link/capitalization hygiene), and FIX001 (no stray FIXME).
     "B007", "B904",
@@ -353,8 +353,8 @@ select = [
     "PT022",  # no unused-yield fixture (use plain return instead)
     "PT024",  # no redundant @pytest.mark.asyncio on an already-coroutine fixture
     "PT025",  # no erroneous use_fixtures() marker on a fixture
-    "PT030",  # pytest.warns() too broad (bare Exception) — narrow to the concrete warning
-    "PT031",  # pytest.warns() with multiple statements — assert inside the block
+    "PT030",  # pytest.warns() too broad (bare Exception) â€” narrow to the concrete warning
+    "PT031",  # pytest.warns() with multiple statements â€” assert inside the block
     # Ninth wave of defensive gate-strengthening: unlike the pass-to-enable waves
     # above, these rules had a small existing backlog that this PR FIXED, so the
     # gate now also locks the fixes in against future regressions (verified zero
@@ -375,18 +375,18 @@ select = [
     # evaluated and dropped: the one join site feeds raw SQL text, so ruff's
     # S608 security gate and FLY002 cannot both be satisfied there.)
     "LOG007",  # logging.exception() must not set exc_info=False (defeats its capture)
-    "G010",    # logger.warn() is deprecated — use logger.warning()
+    "G010",    # logger.warn() is deprecated â€” use logger.warning()
     "G101",    # logging `extra=` key must not clash with a LogRecord attribute
     "G202",    # no redundant exc_info= on logging calls that pass an exception
     "Q001",    # multiline string quote style must follow the configured inline-quotes
     "Q002",    # docstring quote style must follow the configured inline-quotes
-    "UP033",   # @lru_cache(maxsize=None) → @functools.cache
+    "UP033",   # @lru_cache(maxsize=None) â†’ @functools.cache
     # Tenth wave (repo-root sync): T10/TID families block future regressions
     # (verified zero current violations with ruff==0.16.5:
     # `ruff check . --extend-select T10,TID --statistics`).
     "T10",     # no committed debuggers (pdb/ipdb/breakpoint)
-    "TID",     # tidy imports — absolute imports only, no out-of-package relatives
-    # Eleventh wave of defensive gate-strengthening — merged from both sides of
+    "TID",     # tidy imports â€” absolute imports only, no out-of-package relatives
+    # Eleventh wave of defensive gate-strengthening â€” merged from both sides of
     # the main/branch merge. The branch side (verified zero current violations
     # with ruff==0.16.5 under both this gate and the repo-root ruff.toml:
     # `ruff check . --select TRY002,PLE0101,PLE2502,PLW0711,PLW0128,PLC0207,
@@ -395,12 +395,12 @@ select = [
     # sites) that wave FIXED. The main side fixed a small PT006/PT013 backlog
     # (verified zero remaining with ruff==0.16.5: `ruff check . --select
     # PT006,PT013 --statistics`).
-    "TRY002",   # raise bare Exception/BaseException — prefer the concrete class
+    "TRY002",   # raise bare Exception/BaseException â€” prefer the concrete class
     "PLE0101",  # `__init__` must not return a value
     "PLE2502",  # no bidirectional-formatting Unicode control characters
     "PLW0711",  # except clause must guard a generator, not binary-op exceptions
-    "PLW0128",  # redeclared-assigned-name — redundant double assignment
-    "PLC0207",  # str.split('sep')[0] → split('sep', maxsplit=1)[0]
+    "PLW0128",  # redeclared-assigned-name â€” redundant double assignment
+    "PLC0207",  # str.split('sep')[0] â†’ split('sep', maxsplit=1)[0]
     "PLC0208",  # iterate a tuple literal, not a set literal, in a for-loop
     "PT006",   # @pytest.mark.parametrize() names must be a tuple, not a bare str
     "PT013",   # no shadowing `import pytest as _pytest` when `import pytest` exists
@@ -414,9 +414,9 @@ select = [
     # underscore fixture parameter). PT019 is per-file-ignored for the two
     # FastAPI route modules that use underscore-prefixed dependency-injection
     # binding targets, which are not pytest fixtures.
-    "PT011",   # `pytest.raises(X)` too broad — set `match` or use a more specific exception
+    "PT011",   # `pytest.raises(X)` too broad â€” set `match` or use a more specific exception
     "PT012",   # `pytest.raises()` block should contain a single simple statement
-    "PT019",   # underscore fixture param without value — use `@pytest.mark.usefixtures`
+    "PT019",   # underscore fixture param without value â€” use `@pytest.mark.usefixtures`
     # Thirteenth wave of defensive gate-strengthening (a real fixed backlog,
     # then pass-to-enable): PT018 flagged 47 composite `assert a and b`
     # statements across the tree that this PR FIXED by splitting them into one
@@ -429,7 +429,7 @@ select = [
     # in tests/architecture/test_test_suite_quality.py): they are the
     # intentional "any of these" idiom and cannot be split without changing
     # short-circuit semantics. Mirrors the repo-root ruff.toml gate.
-    "PT018",   # composite assertion — break `assert a and b` into one assert per condition
+    "PT018",   # composite assertion â€” break `assert a and b` into one assert per condition
 ]
 ignore = [
     "S101",     # assert allowed in tests
@@ -542,7 +542,7 @@ markers = [
     "slow: marks tests as slow",
     "awaiting-implementation: marks scenarios that define desired behaviour not yet delivered",
     "runtime_provider_conformance: runtime-provider conformance suite against a live Kubernetes cluster (FAR-1053) - deselected by default; select explicitly with -m runtime_provider_conformance",
-    "connector_conformance: connector contract conformance suite — every ConnectorType must pass",
+    "connector_conformance: connector contract conformance suite â€” every ConnectorType must pass",
     "breakglass_gate: break-glass admin recovery deploy-gate regression (boot allow-list posture + connectivity smoke)",
     "real_ssrf_dns: opt out of the autouse SSRF DNS shim so the real fail-closed guard runs",
     "docker: marks tests that require a live Docker engine (excluded from default CI lanes; run explicitly via -m docker)",
@@ -628,7 +628,7 @@ parallel = true
 # (``greenlet_spawn``). Without ``greenlet`` here, coverage's line tracer loses
 # the lines that follow a greenlet switch, so genuinely-executed statements
 # (e.g. a synchronous assignment between two awaits in an async route) are
-# reported as uncovered — a false negative that fails the changed-lines gate on
+# reported as uncovered â€” a false negative that fails the changed-lines gate on
 # correct code (FAR-247). ``thread`` is retained for the TestClient portal.
 concurrency = ["thread", "greenlet"]
 source = ["src/modulo"]
@@ -686,7 +686,7 @@ dev = [
     "bandit>=1.9.4",
     "factory-boy>=3.3.3",
     # In-process Redis double for the FAR-250 relay integration tests
-    # (subscribe-before-publish, echo suppression, backfill dedupe) — no
+    # (subscribe-before-publish, echo suppression, backfill dedupe) â€” no
     # real Redis server required in the unit suite.
     "fakeredis>=2.26.0",
     "httpx>=0.28.1",
