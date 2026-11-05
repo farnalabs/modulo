@@ -16,6 +16,29 @@ BUNDLE_ROOT="${APP_ROOT}/Contents/Resources/bundle"
 DOWNLOADS="${BUILD_ROOT}/downloads"
 mkdir -p "${DOWNLOADS}" "${BUNDLE_ROOT}" "${APP_ROOT}/Contents/MacOS" "${APP_ROOT}/Contents/Resources"
 
+# Render the checked-in brand mark into the native icon format before signing.
+# qlmanage is part of macOS and preserves the SVG's existing Modulo mark without
+# introducing a second logo source. iconutil then embeds the complete @1x/@2x
+# icon family in Contents/Resources, where Finder and LaunchServices read it.
+ICON_SOURCE="${ROOT_DIR}/scripts/macos/assets/Modulo.svg"
+ICONSET_DIR="${BUILD_ROOT}/Modulo.iconset"
+test -s "${ICON_SOURCE}"
+rm -rf "${ICONSET_DIR}"
+mkdir -p "${ICONSET_DIR}"
+qlmanage -t -s 1024 -o "${BUILD_ROOT}" "${ICON_SOURCE}" >/dev/null
+ICON_RENDERED="${BUILD_ROOT}/Modulo.svg.png"
+test -s "${ICON_RENDERED}"
+sips -z 16 16 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_16x16.png" >/dev/null
+sips -z 32 32 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_16x16@2x.png" >/dev/null
+sips -z 128 128 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_128x128.png" >/dev/null
+sips -z 256 256 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_128x128@2x.png" >/dev/null
+sips -z 256 256 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_256x256.png" >/dev/null
+sips -z 512 512 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_256x256@2x.png" >/dev/null
+sips -z 512 512 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_512x512.png" >/dev/null
+sips -z 1024 1024 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_512x512@2x.png" >/dev/null
+iconutil --convert icns --output "${APP_ROOT}/Contents/Resources/Modulo.icns" "${ICONSET_DIR}"
+test -s "${APP_ROOT}/Contents/Resources/Modulo.icns"
+
 PBS_RELEASE=20260901
 PBS_VERSION=3.12.14
 PBS_TARBALL="cpython-${PBS_VERSION}+${PBS_RELEASE}-aarch64-apple-darwin-install_only.tar.gz"

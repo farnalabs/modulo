@@ -89,6 +89,23 @@ def test_macos_normalize_direct_dispatch_dry_run_still_works(tmp_path: Path) -> 
     assert outputs["run_native_build"] == "true"
 
 
+def test_macos_dmg_contract_keeps_icon_and_applications_alias() -> None:
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "macos-installer.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    plist_script = (REPO_ROOT / "scripts" / "create-macos-info-plist.sh").read_text(encoding="utf-8")
+    bundle_script = (REPO_ROOT / "scripts" / "macos" / "build-native-bundle.sh").read_text(encoding="utf-8")
+    icon_path = REPO_ROOT / "scripts" / "macos" / "assets" / "Modulo.svg"
+
+    assert icon_path.is_file()
+    assert icon_path.stat().st_size > 0
+    assert "CFBundleIconFile</key><string>Modulo.icns" in plist_script
+    assert "iconutil --convert icns" in bundle_script
+    assert 'ln -s /Applications "$DMG_STAGING/Applications"' in workflow
+    assert 'set position of item "Applications" of dmgWindow' in workflow
+    assert "mounted_dmg_icon" in workflow
+    assert "mounted_dmg_plist_icon" in workflow
+
+
 def test_macos_normalize_direct_dispatch_rejects_non_dry_run(tmp_path: Path) -> None:
     result, _outputs = _run_macos_normalize(
         tmp_path,

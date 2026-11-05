@@ -175,6 +175,11 @@ jobs:
           set -euo pipefail
           test -x scripts/macos/build-native-bundle.sh
           test -x scripts/macos/install.sh
+          test -s scripts/macos/assets/Modulo.svg
+          grep -q 'CFBundleIconFile' scripts/create-macos-info-plist.sh
+          grep -q 'iconutil --convert icns' scripts/macos/build-native-bundle.sh
+          grep -q 'ln -s /Applications' .github/workflows/macos-installer.yml
+          grep -q 'Finder' .github/workflows/macos-installer.yml
           shellcheck scripts/macos/build-native-bundle.sh
           shellcheck scripts/macos/install.sh
           bash -n scripts/macos/build-native-bundle.sh
@@ -985,12 +990,40 @@ jobs:
 
           DMG="build/Modulo-${VERSION_NUM}-macos-arm64.dmg"
           DMG_TEMP="$RUNNER_TEMP/Modulo-${VERSION_NUM}-macos-arm64-$$.dmg"
+          DMG_STAGING="$RUNNER_TEMP/modulo-dmg-staging-$$"
+          rm -rf "$DMG_STAGING"
+          mkdir -p "$DMG_STAGING"
+          cp -R "$APP" "$DMG_STAGING/"
+          ln -s /Applications "$DMG_STAGING/Applications"
+          test -L "$DMG_STAGING/Applications"
+          test -d "$DMG_STAGING/Modulo-${VERSION_NUM}.app"
+          # Finder metadata is best-effort presentation only; app contents and
+          # signing gates remain authoritative and are never weakened here.
+          osascript - "$DMG_STAGING" "$VERSION_NUM" <<'APPLESCRIPT'
+          on run argv
+            tell application "Finder"
+              set staging to POSIX file (item 1 of argv) as alias
+              set dmgWindow to make new window at staging
+              set current view of dmgWindow to icon view
+              set toolbar visible of dmgWindow to false
+              set statusbar visible of dmgWindow to false
+              set bounds of dmgWindow to {120, 120, 920, 620}
+              set arrangement of icon view options of dmgWindow to not arranged
+              set icon size of icon view options of dmgWindow to 128
+              set position of item "Modulo-" & (item 2 of argv) & ".app" of dmgWindow to {220, 260}
+              set position of item "Applications" of dmgWindow to {700, 260}
+              close dmgWindow
+            end tell
+          end run
+          APPLESCRIPT
+          test -L "$DMG_STAGING/Applications"
           # shellcheck disable=SC2016
           run_pre_smoke dmg_create bash -c '
             set -euo pipefail
             hdiutil create -volname "Modulo $1" -srcfolder "$2" -ov -format UDZO "$3"
             mv -f "$3" "$4"
-          ' bash "$VERSION_NUM" "$APP" "$DMG_TEMP" "$DMG"
+          ' bash "$VERSION_NUM" "$DMG_STAGING" "$DMG_TEMP" "$DMG"
+          rm -rf "$DMG_STAGING"
 
           # shellcheck disable=SC2016
           run_pre_smoke dmg_codesign codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
@@ -1064,6 +1097,10 @@ jobs:
           MOUNT_ATTACHED=1
           MOUNTED_APP="$MOUNT/Modulo-${VERSION_NUM}.app"
           RUNTIME="$MOUNTED_APP/Contents/Resources/bundle/runtime/bin/python3"
+          run_pre_smoke mounted_dmg_app bash -c '[[ -d "$1" && ! -L "$1" ]]' bash "$MOUNTED_APP"
+          run_pre_smoke mounted_dmg_applications_alias bash -c '[[ -L "$1" && "$(readlink "$1")" == "/Applications" ]]' bash "$MOUNT/Applications"
+          run_pre_smoke mounted_dmg_icon bash -c '[[ -s "$1" ]]' bash "$MOUNTED_APP/Contents/Resources/Modulo.icns"
+          run_pre_smoke mounted_dmg_plist_icon bash -c 'plutil -extract CFBundleIconFile raw -o - "$1" | grep -Fxq Modulo.icns' bash "$MOUNTED_APP/Contents/Info.plist"
           # shellcheck disable=SC2016
           run_pre_smoke mounted_runtime_contract bash -c '[[ -x "$1" ]]' bash "$RUNTIME"
           # shellcheck disable=SC2016

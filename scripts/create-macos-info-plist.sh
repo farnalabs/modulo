@@ -37,6 +37,8 @@ cat > "$OUTPUT_PATH" <<EOF
 <key>CFBundleName</key><string>Modulo</string>
 <key>CFBundleExecutable</key><string>modulo</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleIconFile</key><string>Modulo.icns</string>
+<key>CFBundleIconName</key><string>Modulo</string>
 <key>CFBundleShortVersionString</key><string>${VERSION}</string>
 <key>CFBundleVersion</key><string>${VERSION}</string>
 </dict></plist>
