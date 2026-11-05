@@ -109,12 +109,12 @@ jobs:
           DISPATCH_BUILD_NATIVE: ${{ github.event.inputs.build_native }}
         run: |
           set -euo pipefail
-           version="${CALL_VERSION:-}"
-           rc_tag="${CALL_RC_TAG:-}"
-           ref="${CALL_REF:-}"
-           mode="${CALL_MODE:-}"
-           architecture="${CALL_ARCHITECTURE:-arm64}"
-           run_native_build=false
+          version="${CALL_VERSION:-}"
+          rc_tag="${CALL_RC_TAG:-}"
+          ref="${CALL_REF:-}"
+          mode="${CALL_MODE:-}"
+          architecture="${CALL_ARCHITECTURE:-arm64}"
+          run_native_build=false
           # Inside a reusable-workflow call GITHUB_EVENT_NAME is still the CALLER's event,
           # so a dispatched release-unified run reports workflow_dispatch too. build_native is
           # a required input of THIS workflow's own dispatch only, so it identifies a direct

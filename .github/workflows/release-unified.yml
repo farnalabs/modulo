@@ -1770,8 +1770,8 @@ jobs:
           root = Path("release-artefacts")
           version = os.environ["VERSION"]
           include_windows = os.environ["INCLUDE_WINDOWS"] == "true"
-           names = [f"modulo-{version}-linux-amd64.tar.gz", f"Modulo-{version}-macos-arm64.dmg", f"Modulo-{version}-macos-x86_64.dmg"]
-           components = {"linux": "amd64", "macos": "native"}
+          names = [f"modulo-{version}-linux-amd64.tar.gz", f"Modulo-{version}-macos-arm64.dmg", f"Modulo-{version}-macos-x86_64.dmg"]
+          components = {"linux": "amd64", "macos": "native"}
           if include_windows:
             names.append(f"modulo-{version}-windows-amd64.exe")
             components["windows"] = "amd64"
