@@ -158,7 +158,7 @@ _require_system_maps_read_feature = require_feature("system_maps_read")
 _log = logging.getLogger(__name__)
 
 
-async def _get_repo() -> SystemMapRepository:
+async def _get_repo() -> SystemMapRepository:  # NOSONAR S7503 - async dependency factory seam
     """Get a SystemMapRepository instance with the shared session factory."""
 
     settings = get_settings()
@@ -1262,7 +1262,6 @@ async def _resolve_diff_target_revision(
 
 @published_router.post(
     "/{map_id}/revisions/{rev_id}/diff",
-    response_model=SystemMapRevisionDiffResponse,
 )
 @handle_db_errors(_EP_DIFF_SYSTEM_MAP_REVISION)
 async def diff_system_map_revision_endpoint(
@@ -1345,7 +1344,6 @@ async def diff_system_map_revision_endpoint(
 
 @router.post(
     "/{map_id}/revisions/{rev_id}/restore-as-new",
-    response_model=SystemMapRevisionRestoreAsNewResponse,
     dependencies=[
         Depends(
             audited(
@@ -2191,7 +2189,6 @@ async def _persist_discovery_draft(
 
 @router.post(
     "/discover",
-    response_model=SystemMapDiscoveryReport,
     status_code=status.HTTP_201_CREATED,
     dependencies=[
         Depends(
