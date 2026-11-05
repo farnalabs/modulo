@@ -33,9 +33,9 @@ overrides:
   # openapi-typescript upgrades to @redocly/openapi-core 2.x (js-yaml ^5.2.2).
   "@redocly/openapi-core>js-yaml": "4.3.2"
   "postcss>nanoid": "^6.0.0"
-  rollup: "4.67.3"
-  "@tanstack/query-core": "5.105.0"
-  "@tanstack/vue-query": "5.105.0"
+  rollup: "4.67.4"
+  "@tanstack/query-core": "5.106.0"
+  "@tanstack/vue-query": "5.106.0"
   # GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404): zod <4.6.6 affected. Scoped to its
   # only consumer (mutation-server-protocol, dev-only Stryker toolchain) and
   # capped to the 4.x major. Remove once mutation-server-protocol ships zod
@@ -334,3 +334,6 @@ minimumReleaseAgeExclude:
   - 'eslint@10.14.0'
   - '@lucide/vue@1.66.0'
   - '@lucide/vue@1.67.0'
+  - '@lucide/vue@1.68.0'
+  - '@tanstack/query-core@5.106.0'
+  - '@tanstack/vue-query@5.106.0'
