@@ -39,7 +39,7 @@ name: "Release: Unified Pipeline"
         required: false
         default: false
       include_windows:
-        description: "Beta-only opt-in: include the signed Windows native installer in the release (not part of Alpha)"
+        description: "Beta scope: opt in to the signed Windows native installer in the release (Beta-only, not part of Alpha)"
         type: boolean
         required: false
         default: false
@@ -1651,10 +1651,11 @@ jobs:
   # ---------------------------------------------------------------------------
   # Final cross-platform manifest (cut and recut)
   #
-  # Windows is Beta-only: the signed Windows installer is a dependency of the
-  # manifest when explicitly opted in, so its artefact exists before the download
-  # step runs. When include_windows=false (the default), the installer job is
-  # skipped and the manifest proceeds with the Alpha Linux+macOS scope.
+  # Windows is Beta scope (FAR-2338) and a Beta-only opt-in: the signed Windows
+  # installer is a dependency of the manifest when include_windows=true, so its
+  # artefact exists before the download step runs. When include_windows=false
+  # (the default), the installer job is skipped and the manifest proceeds with
+  # the Alpha Linux+macOS scope.
   # ---------------------------------------------------------------------------
   final-release-manifest:
     name: Generate final release manifest
@@ -1728,10 +1729,11 @@ jobs:
             --output-dir release-artefacts
           test -s "release-artefacts/modulo-${VERSION}-compose.tar.gz"
           tar -tzf "release-artefacts/modulo-${VERSION}-compose.tar.gz"
-      # Windows is Beta-only: the signed installer is included in SHA256SUMS and
-      # the manifest `names`/`components` only when include_windows is explicitly
-      # true. The Linux and macOS artefacts are always required; the Windows entry
-      # is added only for the Beta opt-in path.
+      # Windows is Beta scope (FAR-2338) and included only via the Beta-only
+      # opt-in: the signed installer is included in SHA256SUMS and the manifest
+      # `names`/`components` only when include_windows is explicitly true. The
+      # Linux and macOS artefacts are always required; the Windows entry is
+      # added only for the Beta opt-in path.
       - name: Build final signed manifest after every platform artifact
         env:
           MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
@@ -1806,8 +1808,8 @@ jobs:
     name: Create GitHub Release
     needs: [release, final-release-manifest, attest-artefacts, macos-installer]
     # Do not publish until the final signed manifest covers the macOS DMG and the
-    # optional signed Windows installer. Windows is Beta-only:
-    # windows-installer is a need of final-release-manifest when
+    # signed Windows installer. Windows is Beta scope (FAR-2338) and a Beta-only
+    # opt-in: windows-installer is a need of final-release-manifest when
     # include_windows=true, and that job only runs once the installer reports
     # success - so an explicitly opted-in Windows build fails the release rather
     # than publishing without it. When include_windows=false (the default), the

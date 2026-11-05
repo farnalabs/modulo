@@ -46,10 +46,10 @@ passes `-Version`, `version`.
 whatever main happened to produce.
 
 `.github/workflows/release-unified.yml` calls it as `windows-native-artifacts`
-for cut/recut only when the Beta-only `include_windows` input is explicitly
-set to true. That input defaults to false, so the ordinary Alpha release path
-excludes Windows; the workflow then calls `.github/workflows/windows-installer.yml`
-with that job as a dependency only for the opt-in path.
+for cut/recut only when `include_windows` is explicitly set to true - the
+Beta-scope opt-in, which defaults to false so the ordinary Alpha release path
+excludes Windows - then calls `.github/workflows/windows-installer.yml`
+with that job as a dependency.
 
 Inside `windows-installer.yml`:
 
@@ -111,7 +111,8 @@ invokes it only when its Beta Windows input (`include_windows`) is enabled, so
 Windows native packaging does not run on the Alpha release path. All proofs live
 in `scripts/test-windows-installer.ps1`:
 
-- Job `compile-check` (Windows runner, Inno Setup 6.2.2 via Chocolatey) runs
+- Job `compile-check` (Windows runner, using the preinstalled Inno Setup compiler
+  when available and an unpinned Chocolatey fallback otherwise) runs
   `./scripts/test-windows-installer.ps1 -RequireIscc`. It compiles `modulo.iss`
   against fixture bundles: a bundle missing `bin\modulo.exe` (or with the
   launcher at the bundle root) **must fail**, a bundle missing
