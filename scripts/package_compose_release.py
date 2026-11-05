@@ -24,8 +24,8 @@ from pathlib import Path
 
 import yaml
 
-_GIT_SHA_PATTERN = re.compile(r"^[\da-fA-F]{7,40}$")
-_SEMVER_PATTERN = re.compile(r"^v?\d+\.\d+\.\d+(-[a-zA-Z\d.]+)?$")
+_GIT_SHA_PATTERN = re.compile(r"^[\da-fA-F]{7,40}$", re.ASCII)
+_SEMVER_PATTERN = re.compile(r"^v?\d+\.\d+\.\d+(-[a-zA-Z\d.]+)?$", re.ASCII)
 _COMPOSE_FILENAME = "docker-compose.prod.yml"
 
 
@@ -73,7 +73,7 @@ def transform_compose_content(content: str, tag: str) -> str:
     # re-parsed and asserted below, so a mis-cut fails loudly instead of
     # shipping a subtly broken compose file.
     watchdog_comments = re.compile(r"(?m)(?:^[ \t]*#[^\n]*\n)+(?=^[ \t]*watchdog:)")
-    watchdog_service = re.compile(r"(?m)^[ \t]*watchdog:\n(?:^[ \t]+.*(?:\n|$))*")
+    watchdog_service = re.compile(r"(?m)^[ \t]*watchdog:\n(?:^[ \t]+.*(?:\n|$)|\n)*")
     transformed = watchdog_comments.sub("", transformed, count=1)
     transformed = watchdog_service.sub("", transformed, count=1)
 
