@@ -1,6 +1,7 @@
 <template>
   <div data-theme="agent" class="page-wide">
     <PageHeader
+      class="font-sans"
       :title="$t('views.AdminCostBreakdownView.cost_breakdown')"
       :subtitle="$t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams')"
        :tabs="costPageTabs"
@@ -44,8 +45,9 @@
         <DataCard
           :title="$t('views.AdminCostBreakdownView.per_team_cost_breakdown')"
           :description="$t('views.AdminCostBreakdownView.monthly_spend_run_count_and_avg_by_team')"
-           padding="none"
-           heading-level="h2"
+          padding="none"
+          heading-level="h2"
+          title-class="px-6 pt-6"
          >
           <template #default>
             <EmptyState
