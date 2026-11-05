@@ -430,9 +430,9 @@
            the native title keeps the hover explanation on the disabled row. -->
       <Menu ref="actionMenuRef" :key="actionMenuKey" :model="actionMenuItems" popup>
         <template #item="{ item, label, props }">
-          <a v-bind="props.action" :title="item.tooltip">
+          <button type="button" v-bind="props.action" :title="item.tooltip">
             <span v-bind="props.label">{{ label }}</span>
-          </a>
+          </button>
         </template>
       </Menu>
   </div>
