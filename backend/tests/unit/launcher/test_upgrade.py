@@ -1944,6 +1944,7 @@ def test_extract_accepts_root_version_with_dot_prefix_and_rejects_near_match(tmp
     extracted = upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
     assert (extracted / "VERSION").read_text(encoding="utf-8") == "bundle-v1.2.0\n"
 
+    (bundle / "foo").write_text("near-match\n", encoding="utf-8")
     (bundle / "SHA256SUMS").write_text(f"{digest}  ./foo\n", encoding="utf-8")
     with tarfile.open(archive, "w:gz") as handle:
         handle.add(bundle, arcname=bundle.name, recursive=True)
