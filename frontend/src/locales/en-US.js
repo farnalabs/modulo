@@ -3194,10 +3194,18 @@ export default {
       "my_assistant_skills": "My Assistant Skills",
       "manage_your_personal_skills_for_the_assistant_ai_assistant": "Manage your personal skills for the Modulo assistant",
       "no_personal_skills_configured": "No personal skills configured",
+      "no_skills_description": "Create skills to give Assistant custom instructions and behaviours.",
       "name": "Name",
       "description": "Description",
       "triggers": "Triggers",
-      "actions": "Actions"
+      "actions": "Actions",
+      "add_skill": "Add Skill",
+      "active": "Active",
+      "inactive": "Inactive",
+      "empty_value": "—",
+      "loading": "...",
+      "create_description": "Create a new personal skill for Assistant.",
+      "edit_description": "Update your personal skill."
     },
     "AdminOrgSettingsView": {
       "team_rbac_is_not_available_on_your_current_plan": "Team RBAC is not available on your current plan.",
