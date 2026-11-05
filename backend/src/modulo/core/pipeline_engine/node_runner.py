@@ -2359,7 +2359,7 @@ class _BoundedFinalDrain:
             # logged by ``_log_late_failure``; one that failed before the
             # timeout propagates through the ``except Exception`` arm above.
             if not self._log_boundary_failure(task):
-                _log.exception("sandbox_agent.cancel_retention_drain_timed_out", extra=self._log_context)
+                _log.warning("sandbox_agent.cancel_retention_drain_timed_out", extra=self._log_context)
         except Exception:
             # The drain itself failed. Logged HERE (the callback stays silent
             # while awaited) so the failure is never swallowed.
