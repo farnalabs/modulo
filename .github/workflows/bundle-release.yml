@@ -88,7 +88,7 @@ jobs:
     # slots in (scripts/bundle-versions.env already carries the arm64 pins).
     name: Bundle linux-${{ matrix.arch }}
     needs: version-parity
-    # Ubuntu 22.04 (glibc 2.35) build baseline — see scripts/bundle-versions.env. Do NOT change without re-checking the glibc floor.
+    # Ubuntu 22.04 (glibc 2.35) build baseline -- see scripts/bundle-versions.env. Do NOT change without re-checking the glibc floor.
     runs-on: ubuntu-22.04
     # The caller supplies the workflow token, but this reusable job only checks
     # out the requested ref and uploads workflow artefacts. It never creates a
@@ -247,7 +247,6 @@ jobs:
           LAUNCHER
           chmod 755 "$BUNDLE/launcher"
 
-          echo "${{ inputs.rc_tag }}" > "$BUNDLE/RC_TAG"
           echo "bundle-v${VERSION_NUM}" > "$BUNDLE/VERSION"
 
       - name: Assert bundled service binaries stay within the glibc 2.35 floor
