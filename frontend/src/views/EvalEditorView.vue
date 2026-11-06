@@ -1251,7 +1251,7 @@ function restoreDeterministicDraft(type: DeterministicType): string {
 }
 
 function onMechanismChange(value: unknown): void {
-  const mechanism = String(value)
+  const mechanism = typeof value === 'string' ? value : ''
   const typed = mechanism === 'typed_questions'
   if (typed === isTyped.value) return
   if (typed) {
@@ -1264,7 +1264,7 @@ function onMechanismChange(value: unknown): void {
 }
 
 function onDeterministicTypeChange(value: unknown): void {
-  const next = String(value) as DeterministicType
+  const next = typeof value === 'string' ? value as DeterministicType : '' as DeterministicType
   if (!DETERMINISTIC_TYPES.has(next)) return
   if (next === deterministicType.value) return
   rememberDeterministicDraft()
@@ -1274,7 +1274,7 @@ function onDeterministicTypeChange(value: unknown): void {
 }
 
 function setQuestionType(question: QuestionDraft, value: unknown): void {
-  const next = String(value) as QuestionType
+  const next = typeof value === 'string' ? value as QuestionType : '' as QuestionType
   if (next !== 'noul' && next !== 'choice' && next !== 'score') return
   question.type = next
   seedAnswerSpace(question)

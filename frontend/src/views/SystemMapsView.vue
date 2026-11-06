@@ -289,5 +289,5 @@ async function executeDelete(): Promise<void> {
   } finally { deleting.value = false }
 }
 
-onMounted(async () => { await store.fetchAccess(); await loadMaps() })
+onMounted(() => { void store.fetchAccess().then(() => loadMaps()) })
 </script>

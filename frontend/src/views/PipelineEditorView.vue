@@ -4808,7 +4808,7 @@ const pipelineLoadError = ref<string | null>(null)
 // ---------------------------------------------------------------------------
 
 function readQueryValue(value: unknown): string | null {
-  const raw = Array.isArray(value) ? value[0] : value
+  const raw = Array.isArray(value) ? value.at(0) : value
   return typeof raw === 'string' && raw.length > 0 ? raw : null
 }
 
@@ -4827,7 +4827,7 @@ const compareParam = computed(() => readQueryValue(route.query.compare))
 
 // The latest saved version (the snapshot list is version-DESCENDING and
 // loadCatalog filters version 0) — the default "compare against" target.
-const latestSnapshotId = computed<string | null>(() => snapshots.value[0]?.id ?? null)
+const latestSnapshotId = computed<string | null>(() => snapshots.value.at(0)?.id ?? null)
 
 /** `?version=<n>`: the positive integer, -1 when malformed, null when absent. */
 const requestedVersion = computed(() => {
@@ -4906,7 +4906,7 @@ async function findSnapshotIdByVersion(version: number): Promise<string | null> 
   if (onFirst) return onFirst.id
   if (pageOne.items.length === 0) return null // no snapshots at all
   // Sorted version-DESC: page 1 spans [newest … oldest-on-page-1].
-  if (version > pageOne.items[0].snapshot_version) return null // newer than the newest
+  if (version > pageOne.items.at(0)!.snapshot_version) return null // newer than the newest
   if (version >= pageOne.items.at(-1)!.snapshot_version) {
     return null // inside page 1's range, not present — absent
   }
@@ -4933,7 +4933,7 @@ async function findSnapshotIdByVersion(version: number): Promise<string | null> 
     }
     const hit = find(page.items)
     if (hit) return hit.id
-    if (version > page.items[0].snapshot_version) {
+    if (version > page.items.at(0)!.snapshot_version) {
       hi = mid - 1 // belongs above this page
       continue
     }
@@ -5402,7 +5402,7 @@ async function loadRestoreDiff(): Promise<void> {
   // config. Without it (or when the target IS the current snapshot) there is
   // nothing to compare — but that outcome must still be stated explicitly
   // (C2), never left as an empty box.
-  const latest = snapshots.value[0]?.id as string | undefined
+  const latest = snapshots.value.at(0)?.id as string | undefined
   if (!target || !latest) {
     restoreDiffNoBaseline.value = true
     return
