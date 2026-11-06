@@ -1,7 +1,7 @@
 <template>
   <div class="fixed inset-0 z-50" :data-testid="dataTestId">
     <button type="button" class="absolute inset-0 bg-black/50" :aria-label="$t('common.close')" @click="$emit('close')" data-testid="system-map-discovery-backdrop" />
-    <aside class="absolute right-0 top-0 h-full w-full max-w-2xl bg-card shadow-2xl overflow-hidden flex flex-col" role="dialog" aria-modal="true" aria-labelledby="discovery-panel-title">
+    <dialog open class="absolute right-0 top-0 h-full w-full max-w-2xl m-0 bg-card shadow-2xl overflow-hidden flex flex-col" aria-labelledby="discovery-panel-title">
       <header class="border-b px-4 py-3 flex items-center justify-between">
         <h2 id="discovery-panel-title" class="font-semibold">{{ $t('views.SystemMapDetailView.discovery_results') }}</h2>
         <button type="button" class="rounded p-1 text-muted-foreground hover:text-foreground" @click="$emit('close')" :aria-label="$t('common.close')" data-testid="system-map-discovery-close">×</button>
@@ -72,7 +72,7 @@
         <button type="button" class="rounded border px-3 py-1.5 text-sm" @click="$emit('close')" data-testid="system-map-discovery-cancel">{{ $t('common.cancel') }}</button>
         <button type="button" class="rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground" @click="onSave" :data-testid="`system-map-discovery-save`">{{ $t('views.SystemMapDetailView.apply_changes') }}</button>
       </footer>
-    </aside>
+    </dialog>
   </div>
 </template>
 <script setup lang="ts">
@@ -94,10 +94,14 @@ function toggle(key: string, decision: Decision): void {
 function onAccept(key: string): void { toggle(key, 'accepted') }
 function onReject(key: string): void { toggle(key, 'rejected') }
 function decisionClass(key: string): string {
-  return decisions.value[key] === 'accepted' ? 'border-success bg-success/5' : decisions.value[key] === 'rejected' ? 'border-destructive bg-destructive/5 opacity-70' : ''
+  const decision = decisions.value[key]
+  if (decision === 'accepted') return 'border-success bg-success/5'
+  if (decision === 'rejected') return 'border-destructive bg-destructive/5 opacity-70'
+  return ''
 }
 function activeClass(key: string, decision: Decision): string {
-  return decisions.value[key] === decision ? (decision === 'accepted' ? 'border-success text-success-text' : 'border-destructive text-destructive') : ''
+  if (decisions.value[key] !== decision) return ''
+  return decision === 'accepted' ? 'border-success text-success-text' : 'border-destructive text-destructive'
 }
 function onSave(): void {
   const acceptedNodes: number[] = []

@@ -133,6 +133,7 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
          a static element claiming an interaction it does not have. -->
     <div
       class="overflow-x-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      role="region"
       tabindex="0"
       :aria-describedby="scrollInstructionsId"
     >

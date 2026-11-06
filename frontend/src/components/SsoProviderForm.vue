@@ -53,14 +53,11 @@
 
     <!-- SSO Preset selector (OIDC only) -->
     <div v-if="data.provider_type === 'oidc' && presets.length > 0">
-      <span class="mb-1 block text-sm font-medium" id="sso-preset-heading">
-        {{ $t('components.SsoProviderForm.sso_preset') }}
-      </span>
-      <div
-        class="grid grid-cols-2 gap-2 sm:grid-cols-3"
-        role="group"
-        aria-labelledby="sso-preset-heading"
-      >
+      <fieldset class="border-0 p-0">
+        <legend class="mb-1 block text-sm font-medium">
+          {{ $t('components.SsoProviderForm.sso_preset') }}
+        </legend>
+        <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
         <button
           v-for="p in presets"
           :key="p.id"
@@ -78,7 +75,8 @@
           <SsoBrandMark :preset="p.id" />
           {{ p.label }}
         </button>
-      </div>
+        </div>
+      </fieldset>
     </div>
 
     <!-- Name -->
