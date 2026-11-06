@@ -554,6 +554,144 @@ async def test_sweep_skips_without_redis() -> None:
     assert summary["dispatched"] == 0
 
 
+async def test_sweep_does_not_alert_for_a_transient_unhealthy_bounce(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+) -> None:
+    """A warning must stay unhealthy for the sustain window before opening."""
+    redis, notifier, state = sweep_env
+    pid = uuid.uuid4()
+    org_id = uuid.uuid4()
+    unhealthy = _report(
+        pending_by_pipeline=[_pipeline(pid, count=4, oldest=900.0)],
+        pending_total=4,
+    )
+    state["report"] = unhealthy
+
+    await _run(redis, notifier, org_id, _NOW)
+    assert not notifier.events
+
+    # A healthy tick clears the pending sustain marker, but has no open alert to
+    # recover. The next unhealthy episode starts a new clock.
+    state["report"] = _report(pending_total=0)
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
+    state["report"] = unhealthy
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=2))
+    assert not notifier.events
+
+
+async def test_sweep_warning_notice_warning_restarts_the_sustain_window() -> None:
+    """A real NOTICE alert remains open while warning sustain is pending."""
+    redis = FakeRedis()
+    notifier = FakeNotifier()
+    org_id = uuid.uuid4()
+    subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+    warning = ca.Candidate(subject=subject, rung=ca.WARNING_RUNG, event_type=ca.EVENT_QUEUE_PRESSURE_WARNING)
+    notice = ca.Candidate(subject=subject, rung=ca.NOTICE_RUNG, event_type=ca.EVENT_QUEUE_PRESSURE_NOTICE)
+    summary = _empty_summary()
+
+    await ca._apply_org_candidates(
+        redis,
+        notifier,
+        org_id=org_id,
+        candidates={subject: notice},
+        summary=summary,
+        now=_NOW,
+    )
+    open_key = ca._open_key(org_id)
+    state_key = ca._state_key(org_id, subject)
+    assert await ca._read_state(redis, state_key) is not None
+    assert subject in redis.sets[open_key]
+
+    await ca._apply_org_candidates(
+        redis,
+        notifier,
+        org_id=org_id,
+        candidates={subject: warning},
+        summary=summary,
+        now=_NOW + timedelta(seconds=1),
+    )
+    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+    assert await ca._read_state(redis, marker_key) is not None
+    assert await ca._read_state(redis, state_key) is not None
+    assert subject in redis.sets[open_key]
+    assert [event[1] for event in notifier.events] == [ca.EVENT_QUEUE_PRESSURE_NOTICE]
+
+    await ca._apply_org_candidates(
+        redis,
+        notifier,
+        org_id=org_id,
+        candidates={subject: warning},
+        summary=summary,
+        now=_NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS - 1),
+    )
+    assert await ca._read_state(redis, state_key) is not None
+    assert subject in redis.sets[open_key]
+    assert [event[1] for event in notifier.events] == [ca.EVENT_QUEUE_PRESSURE_NOTICE]
+
+    await ca._apply_org_candidates(
+        redis,
+        notifier,
+        org_id=org_id,
+        candidates={subject: warning},
+        summary=summary,
+        now=_NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS + 1),
+    )
+    assert await ca._read_state(redis, state_key) is not None
+    assert subject in redis.sets[open_key]
+    assert [event[1] for event in notifier.events] == [
+        ca.EVENT_QUEUE_PRESSURE_NOTICE,
+        ca.EVENT_QUEUE_PRESSURE_WARNING,
+    ]
+
+
+async def test_sweep_alerts_after_a_sustained_unhealthy_episode(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+) -> None:
+    redis, notifier, state = sweep_env
+    pid = uuid.uuid4()
+    org_id = uuid.uuid4()
+    state["report"] = _report(
+        pending_by_pipeline=[_pipeline(pid, count=4, oldest=900.0)],
+        pending_total=4,
+    )
+
+    await _run(redis, notifier, org_id, _NOW)
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS - 1))
+    assert not notifier.events
+
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS))
+    assert [event[1] for event in notifier.events] == ["queue_pressure_warning"]
+
+
+async def test_sweep_report_gap_restarts_unhealthy_sustain_window(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A report-read gap cannot count as an observed part of the episode."""
+    redis, notifier, state = sweep_env
+    pid = uuid.uuid4()
+    org_id = uuid.uuid4()
+    unhealthy = _report(
+        pending_by_pipeline=[_pipeline(pid, count=4, oldest=900.0)],
+        pending_total=4,
+    )
+    state["report"] = unhealthy
+
+    await _run(redis, notifier, org_id, _NOW)
+    monkeypatch.setattr(
+        ca,
+        "read_capacity_report",
+        AsyncMock(side_effect=[RuntimeError("report unavailable"), unhealthy, unhealthy, unhealthy]),
+    )
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
+
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=ca.UNHEALTHY_SUSTAIN_SECONDS))
+    assert not notifier.events
+
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=2 * ca.UNHEALTHY_SUSTAIN_SECONDS + 1))
+    assert [event[1] for event in notifier.events] == ["queue_pressure_warning"]
+
+
 async def test_sweep_fires_once_then_suppresses_identical_tick(
     sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
 ) -> None:
@@ -566,11 +704,14 @@ async def test_sweep_fires_once_then_suppresses_identical_tick(
     )
 
     await _run(redis, notifier, org_id, _NOW)
+    assert not notifier.events
+
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS))
     first = [e[1] for e in notifier.events]
     assert first == ["queue_pressure_warning"]
 
     # The same observation one tick later must NOT re-notify.
-    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=6))
     assert [e[1] for e in notifier.events] == first
 
 
@@ -599,7 +740,14 @@ async def test_sweep_escalates_to_critical(
         drain_ratio=0.0,
     )
     await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
+    assert [e[1] for e in notifier.events] == ["queue_pressure_notice"]
 
+    await _run(
+        redis,
+        notifier,
+        org_id,
+        _NOW + timedelta(minutes=1, seconds=ca.UNHEALTHY_SUSTAIN_SECONDS + 1),
+    )
     assert [e[1] for e in notifier.events] == ["queue_pressure_notice", "queue_pressure_critical"]
 
 
@@ -614,10 +762,11 @@ async def test_sweep_auto_clears_on_drain(
         pending_total=4,
     )
     await _run(redis, notifier, org_id, _NOW)
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS))
 
     # The queue drains: the pipeline disappears from the report entirely.
     state["report"] = _report(pending_total=0)
-    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=6))
 
     assert [e[1] for e in notifier.events] == ["queue_pressure_warning", "capacity_recovered"]
 
@@ -697,6 +846,7 @@ async def test_sweep_backpressure_candidate_notifies(
     ca._add_backpressure_candidates.side_effect = _hit  # type: ignore[attr-defined]
     state["report"] = _report(pending_by_pipeline=[_pipeline(pid, count=9)], pending_total=9)
     await _run(redis, notifier, org_id, _NOW)
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS))
 
     assert [e[1] for e in notifier.events] == ["capacity_backpressure"]
     payload = notifier.events[0][2]
@@ -816,6 +966,12 @@ async def test_sweep_recovers_and_re_alerts_after_a_full_drain_without_injected_
         notifier=notifier,
         now=_NOW,  # type: ignore[arg-type]
     )
+    await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,
+        notifier=notifier,
+        now=_NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS),
+    )
     assert [e[1] for e in notifier.events] == ["queue_pressure_critical"]
 
     # The org's last pending run starts: the pending-run scan no longer sees it.
@@ -842,7 +998,13 @@ async def test_sweep_recovers_and_re_alerts_after_a_full_drain_without_injected_
         factory=AsyncMock(),
         redis_client=redis,  # type: ignore[arg-type]
         notifier=notifier,
-        now=_NOW + timedelta(minutes=2),
+        now=_NOW + timedelta(minutes=6),
+    )
+    await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,  # type: ignore[arg-type]
+        notifier=notifier,
+        now=_NOW + timedelta(minutes=11),
     )
     assert [e[1] for e in notifier.events] == [
         "queue_pressure_critical",
@@ -873,6 +1035,7 @@ async def test_sweep_backpressure_evaluation_failure_does_not_recover(
     ca._add_backpressure_candidates.side_effect = _hit
     state["report"] = _report(pending_by_pipeline=[_pipeline(pid, count=9)], pending_total=9)
     await _run(redis, notifier, org_id, _NOW)
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS))
     assert [e[1] for e in notifier.events] == ["capacity_backpressure"]
 
     # The evaluation itself fails while the queue is unchanged.
@@ -915,6 +1078,7 @@ async def test_sweep_backpressure_truncation_does_not_recover(
 
     ca._add_backpressure_candidates.side_effect = _hit
     await _run(redis, notifier, org_id, _NOW)
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS))
     assert [e[1] for e in notifier.events] == ["capacity_backpressure"]
 
     # Truncated read: the alerted subject is beyond the checked window.
@@ -1149,6 +1313,81 @@ async def test_org_ids_with_open_alerts_dedupes_and_skips_invalid(monkeypatch: p
     assert await ca._org_ids_with_open_alerts(redis) == [org_id]
 
 
+async def test_org_ids_with_open_alerts_discovers_unhealthy_markers() -> None:
+    org_id = uuid.uuid4()
+    redis = FakeRedis()
+    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:queue:{uuid.uuid4()}")
+    await ca._write_state(redis, marker_key, rung=ca.CLEAR_RUNG, label="queue", now=_NOW)
+
+    assert await ca._org_ids_with_open_alerts(redis) == [org_id]
+
+
+async def test_sweep_clears_a_pre_alert_marker_during_a_discovery_gap(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A queue that disappears must not retain sustain time across reintroduction."""
+    redis, notifier, state = sweep_env
+    pid = uuid.uuid4()
+    org_id = uuid.uuid4()
+    unhealthy = _report(
+        pending_by_pipeline=[_pipeline(pid, count=4, oldest=900.0)],
+        pending_total=4,
+    )
+    monkeypatch.setattr(ca, "_org_ids_with_pending", AsyncMock(return_value=[org_id]))
+    state["report"] = unhealthy
+
+    await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,
+        notifier=notifier,
+        now=_NOW,
+    )
+    marker_key = ca._state_key(
+        org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=pid)}"
+    )
+    assert await ca._read_state(redis, marker_key) is not None
+    assert not notifier.events
+
+    # The org has no pending run and no open alert, but its marker source keeps
+    # it in the normal discovery set so this healthy observation clears it.
+    state["report"] = _report(pending_total=0)
+    monkeypatch.setattr(ca, "_org_ids_with_pending", AsyncMock(return_value=[]))
+    summary = await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,
+        notifier=notifier,
+        now=_NOW + timedelta(minutes=1),
+    )
+    assert summary["orgs_evaluated"] == 1
+    assert await ca._read_state(redis, marker_key) is None
+
+    # Reintroducing the same unhealthy queue starts a fresh sustain window.
+    state["report"] = unhealthy
+    monkeypatch.setattr(ca, "_org_ids_with_pending", AsyncMock(return_value=[org_id]))
+    await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,
+        notifier=notifier,
+        now=_NOW + timedelta(minutes=2),
+    )
+    await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,
+        notifier=notifier,
+        now=_NOW + timedelta(minutes=2) + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS - 1),
+    )
+    assert not notifier.events
+
+    await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,
+        notifier=notifier,
+        now=_NOW + timedelta(minutes=2) + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS),
+    )
+    assert [event[1] for event in notifier.events] == [ca.EVENT_QUEUE_PRESSURE_WARNING]
+
+
 # ---------------------------------------------------------------------------
 # Fake session plumbing for the backpressure + org-discovery DB paths
 # ---------------------------------------------------------------------------
@@ -1304,6 +1543,63 @@ async def test_sweep_org_reraises_cancelled_from_backpressure(
         )
 
 
+async def test_sweep_cancellation_after_report_invalidates_marker_but_preserves_alert(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis, notifier, state = sweep_env
+    org_id = uuid.uuid4()
+    subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+    await ca._write_state(redis, marker_key, rung=ca.CLEAR_RUNG, label=subject, now=_NOW)
+    await redis.sadd(ca._open_key(org_id), subject)
+    await ca._write_state(redis, ca._state_key(org_id, subject), rung=ca.WARNING_RUNG, label="queue", now=_NOW)
+    state["report"] = _report(pending_total=0)
+    monkeypatch.setattr(ca, "_apply_org_candidates", AsyncMock(side_effect=asyncio.CancelledError()))
+    summary = {"orgs_evaluated": 0, "org_errors": 0, "dispatched": 0, "notify_failed": 0}
+
+    with pytest.raises(asyncio.CancelledError):
+        await ca._sweep_org(
+            factory=AsyncMock(),
+            org_id=org_id,
+            settings=AsyncMock(),
+            redis_client=redis,  # type: ignore[arg-type]
+            notifier=notifier,
+            now=_NOW,
+            summary=summary,
+        )
+
+    assert await ca._read_state(redis, marker_key) is None
+    assert await ca._read_state(redis, ca._state_key(org_id, subject)) is not None
+    assert subject in redis.sets[ca._open_key(org_id)]
+
+
+async def test_marker_only_orgs_beyond_tick_cap_are_invalidated(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis, notifier, state = sweep_env
+    orgs = [uuid.uuid4() for _ in range(ca.MAX_ORGS_PER_TICK + 1)]
+    marker_keys: list[str] = []
+    for org_id in orgs:
+        subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+        marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+        marker_keys.append(marker_key)
+        await ca._write_state(redis, marker_key, rung=ca.CLEAR_RUNG, label=subject, now=_NOW)
+    monkeypatch.setattr(ca, "_org_ids_with_pending", AsyncMock(return_value=[]))
+    state["report"] = _report(pending_total=0)
+
+    summary = await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,  # type: ignore[arg-type]
+        notifier=notifier,
+        now=_NOW,
+    )
+
+    assert summary["orgs_considered"] == ca.MAX_ORGS_PER_TICK
+    assert await ca._read_state(redis, marker_keys[-1]) is None
+
+
 async def test_run_orgs_swallows_an_unexpected_sweep_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _boom(**_: Any) -> None:
         raise RuntimeError("boom")
@@ -1338,3 +1634,102 @@ async def test_evaluate_reraises_cancelled_during_org_discovery(monkeypatch: pyt
             notifier=FakeNotifier(),
             now=_NOW,
         )
+
+
+def test_org_from_unhealthy_marker_key_parses_and_rejects_invalid_keys() -> None:
+    org_id = uuid.uuid4()
+    subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+    key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+    assert ca._org_from_unhealthy_marker_key(key) == org_id
+    assert ca._org_from_unhealthy_marker_key("not-a-key") is None
+    assert (
+        ca._org_from_unhealthy_marker_key(f"{ca._STATE_KEY_PREFIX}:not-a-uuid:{ca._QUEUE_UNHEALTHY_MARKER}:x") is None
+    )
+
+
+async def test_org_ids_with_open_alerts_does_not_duplicate_a_marker_org() -> None:
+    """An org with both an open alert and a sustain marker is returned once."""
+    org_id = uuid.uuid4()
+    redis = FakeRedis()
+    await redis.sadd(ca._open_key(org_id), ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4()))
+    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:queue:{uuid.uuid4()}")
+    await ca._write_state(redis, marker_key, rung=ca.CLEAR_RUNG, label="queue", now=_NOW)
+
+    assert await ca._org_ids_with_open_alerts(redis) == [org_id]
+
+
+async def test_sweep_org_invalidates_markers_when_candidate_apply_fails(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis, notifier, state = sweep_env
+    org_id = uuid.uuid4()
+    subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+    await ca._write_state(redis, marker_key, rung=ca.CLEAR_RUNG, label=subject, now=_NOW)
+    state["report"] = _report(pending_total=0)
+    monkeypatch.setattr(ca, "_apply_org_candidates", AsyncMock(side_effect=RuntimeError("boom")))
+    summary = {"orgs_evaluated": 0, "org_errors": 0, "dispatched": 0, "notify_failed": 0}
+
+    completed = await ca._sweep_org(
+        factory=AsyncMock(),
+        org_id=org_id,
+        settings=AsyncMock(),
+        redis_client=redis,  # type: ignore[arg-type]
+        notifier=notifier,
+        now=_NOW,
+        summary=summary,
+    )
+
+    assert completed is False
+    assert summary["org_errors"] == 1
+    assert await ca._read_state(redis, marker_key) is None
+
+
+async def test_evaluate_returns_summary_when_org_discovery_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _boom(*_: Any, **__: Any) -> list[uuid.UUID]:
+        raise RuntimeError("redis down")
+
+    monkeypatch.setattr(ca, "_org_ids_with_unhealthy_markers", _boom)
+
+    summary = await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=FakeRedis(),  # type: ignore[arg-type]
+        notifier=FakeNotifier(),
+        now=_NOW,
+    )
+
+    assert summary["orgs_considered"] == 0
+    assert summary["orgs_evaluated"] == 0
+
+
+async def test_hard_timeout_invalidates_only_orgs_not_already_evaluated(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis, notifier, _state = sweep_env
+    evaluated_org, pending_org = uuid.uuid4(), uuid.uuid4()
+    marker_keys: dict[uuid.UUID, str] = {}
+    for org_id in (evaluated_org, pending_org):
+        subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+        marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+        marker_keys[org_id] = marker_key
+        await ca._write_state(redis, marker_key, rung=ca.CLEAR_RUNG, label=subject, now=_NOW)
+
+    async def _wedge(*, evaluated_org_ids: set[uuid.UUID], org_ids: list[uuid.UUID], **_: Any) -> None:
+        evaluated_org_ids.add(org_ids[0])
+        raise TimeoutError
+
+    monkeypatch.setattr(ca, "_run_orgs", _wedge)
+
+    summary = await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,  # type: ignore[arg-type]
+        notifier=notifier,
+        now=_NOW,
+        org_ids=[evaluated_org, pending_org],
+    )
+
+    assert summary["budget_exhausted"] is True
+    assert await ca._read_state(redis, marker_keys[evaluated_org]) is not None
+    assert await ca._read_state(redis, marker_keys[pending_org]) is None
