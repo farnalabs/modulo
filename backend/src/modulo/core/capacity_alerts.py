@@ -683,13 +683,18 @@ async def _hold_unsustained_unhealthy_candidates(
     org_id: uuid.UUID,
     candidates: dict[str, Candidate],
     now: datetime,
-) -> None:
+) -> set[str]:
     """Suppress first unhealthy notifications until the episode is sustained.
 
     Existing warning/critical alerts remain actionable immediately: only a
     subject without an already-open warning-or-worse state starts a sustain
     clock. This leaves notice events and recovery/escalation semantics intact.
+
+    The returned subjects were observed as unhealthy but suppressed while their
+    warning sustain clock runs. They remain evaluated for this tick: a pending
+    warning must not make an existing NOTICE alert look recovered.
     """
+    held_subjects: set[str] = set()
     for subject, candidate in list(candidates.items()):
         if not _needs_unhealthy_sustain(candidate):
             continue
@@ -703,11 +708,14 @@ async def _hold_unsustained_unhealthy_candidates(
         if started is None:
             await _write_state(redis_client, marker_key, rung=CLEAR_RUNG, label=subject, now=now)
             candidates.pop(subject)
+            held_subjects.add(subject)
             continue
         if (now - started).total_seconds() < UNHEALTHY_SUSTAIN_SECONDS:
             candidates.pop(subject)
+            held_subjects.add(subject)
             continue
         await _delete_state(redis_client, marker_key)
+    return held_subjects
 
 
 async def _apply_subject(
@@ -801,8 +809,13 @@ async def _apply_org_candidates(
         if candidate is None or not _needs_unhealthy_sustain(candidate):
             await _delete_state(redis_client, marker_key)
 
-    await _hold_unsustained_unhealthy_candidates(redis_client, org_id=org_id, candidates=candidates, now=now)
-    current = set(candidates)
+    held_subjects = await _hold_unsustained_unhealthy_candidates(
+        redis_client,
+        org_id=org_id,
+        candidates=candidates,
+        now=now,
+    )
+    current = set(candidates) | held_subjects
 
     for subject in sorted(open_subjects - current):
         kind = subject.split(":", 1)[0]

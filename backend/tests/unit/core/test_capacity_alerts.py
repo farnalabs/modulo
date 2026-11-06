@@ -580,7 +580,7 @@ async def test_sweep_does_not_alert_for_a_transient_unhealthy_bounce(
 
 
 async def test_sweep_warning_notice_warning_restarts_the_sustain_window() -> None:
-    """A real NOTICE alert does not satisfy the warning sustain window."""
+    """A real NOTICE alert remains open while warning sustain is pending."""
     redis = FakeRedis()
     notifier = FakeNotifier()
     org_id = uuid.uuid4()
@@ -593,23 +593,40 @@ async def test_sweep_warning_notice_warning_restarts_the_sustain_window() -> Non
         redis,
         notifier,
         org_id=org_id,
-        candidates={subject: warning},
+        candidates={subject: notice},
         summary=summary,
         now=_NOW,
     )
-    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
-    assert await ca._read_state(redis, marker_key) is not None
+    open_key = ca._open_key(org_id)
+    state_key = ca._state_key(org_id, subject)
+    assert await ca._read_state(redis, state_key) is not None
+    assert subject in redis.sets[open_key]
 
     await ca._apply_org_candidates(
         redis,
         notifier,
         org_id=org_id,
-        candidates={subject: notice},
+        candidates={subject: warning},
         summary=summary,
-        now=_NOW + timedelta(minutes=1),
+        now=_NOW + timedelta(seconds=1),
     )
+    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+    assert await ca._read_state(redis, marker_key) is not None
+    assert await ca._read_state(redis, state_key) is not None
+    assert subject in redis.sets[open_key]
     assert [event[1] for event in notifier.events] == [ca.EVENT_QUEUE_PRESSURE_NOTICE]
-    assert await ca._read_state(redis, marker_key) is None
+
+    await ca._apply_org_candidates(
+        redis,
+        notifier,
+        org_id=org_id,
+        candidates={subject: warning},
+        summary=summary,
+        now=_NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS - 1),
+    )
+    assert await ca._read_state(redis, state_key) is not None
+    assert subject in redis.sets[open_key]
+    assert [event[1] for event in notifier.events] == [ca.EVENT_QUEUE_PRESSURE_NOTICE]
 
     await ca._apply_org_candidates(
         redis,
@@ -619,17 +636,8 @@ async def test_sweep_warning_notice_warning_restarts_the_sustain_window() -> Non
         summary=summary,
         now=_NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS + 1),
     )
-    assert await ca._read_state(redis, marker_key) is not None
-    assert [event[1] for event in notifier.events] == [ca.EVENT_QUEUE_PRESSURE_NOTICE]
-
-    await ca._apply_org_candidates(
-        redis,
-        notifier,
-        org_id=org_id,
-        candidates={subject: warning},
-        summary=summary,
-        now=_NOW + timedelta(seconds=2 * ca.UNHEALTHY_SUSTAIN_SECONDS + 2),
-    )
+    assert await ca._read_state(redis, state_key) is not None
+    assert subject in redis.sets[open_key]
     assert [event[1] for event in notifier.events] == [
         ca.EVENT_QUEUE_PRESSURE_NOTICE,
         ca.EVENT_QUEUE_PRESSURE_WARNING,
