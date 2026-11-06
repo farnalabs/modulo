@@ -1634,3 +1634,102 @@ async def test_evaluate_reraises_cancelled_during_org_discovery(monkeypatch: pyt
             notifier=FakeNotifier(),
             now=_NOW,
         )
+
+
+def test_org_from_unhealthy_marker_key_parses_and_rejects_invalid_keys() -> None:
+    org_id = uuid.uuid4()
+    subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+    key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+    assert ca._org_from_unhealthy_marker_key(key) == org_id
+    assert ca._org_from_unhealthy_marker_key("not-a-key") is None
+    assert (
+        ca._org_from_unhealthy_marker_key(f"{ca._STATE_KEY_PREFIX}:not-a-uuid:{ca._QUEUE_UNHEALTHY_MARKER}:x") is None
+    )
+
+
+async def test_org_ids_with_open_alerts_does_not_duplicate_a_marker_org() -> None:
+    """An org with both an open alert and a sustain marker is returned once."""
+    org_id = uuid.uuid4()
+    redis = FakeRedis()
+    await redis.sadd(ca._open_key(org_id), ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4()))
+    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:queue:{uuid.uuid4()}")
+    await ca._write_state(redis, marker_key, rung=ca.CLEAR_RUNG, label="queue", now=_NOW)
+
+    assert await ca._org_ids_with_open_alerts(redis) == [org_id]
+
+
+async def test_sweep_org_invalidates_markers_when_candidate_apply_fails(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis, notifier, state = sweep_env
+    org_id = uuid.uuid4()
+    subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+    await ca._write_state(redis, marker_key, rung=ca.CLEAR_RUNG, label=subject, now=_NOW)
+    state["report"] = _report(pending_total=0)
+    monkeypatch.setattr(ca, "_apply_org_candidates", AsyncMock(side_effect=RuntimeError("boom")))
+    summary = {"orgs_evaluated": 0, "org_errors": 0, "dispatched": 0, "notify_failed": 0}
+
+    completed = await ca._sweep_org(
+        factory=AsyncMock(),
+        org_id=org_id,
+        settings=AsyncMock(),
+        redis_client=redis,  # type: ignore[arg-type]
+        notifier=notifier,
+        now=_NOW,
+        summary=summary,
+    )
+
+    assert completed is False
+    assert summary["org_errors"] == 1
+    assert await ca._read_state(redis, marker_key) is None
+
+
+async def test_evaluate_returns_summary_when_org_discovery_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _boom(*_: Any, **__: Any) -> list[uuid.UUID]:
+        raise RuntimeError("redis down")
+
+    monkeypatch.setattr(ca, "_org_ids_with_unhealthy_markers", _boom)
+
+    summary = await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=FakeRedis(),  # type: ignore[arg-type]
+        notifier=FakeNotifier(),
+        now=_NOW,
+    )
+
+    assert summary["orgs_considered"] == 0
+    assert summary["orgs_evaluated"] == 0
+
+
+async def test_hard_timeout_invalidates_only_orgs_not_already_evaluated(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis, notifier, _state = sweep_env
+    evaluated_org, pending_org = uuid.uuid4(), uuid.uuid4()
+    marker_keys: dict[uuid.UUID, str] = {}
+    for org_id in (evaluated_org, pending_org):
+        subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+        marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+        marker_keys[org_id] = marker_key
+        await ca._write_state(redis, marker_key, rung=ca.CLEAR_RUNG, label=subject, now=_NOW)
+
+    async def _wedge(*, evaluated_org_ids: set[uuid.UUID], org_ids: list[uuid.UUID], **_: Any) -> None:
+        evaluated_org_ids.add(org_ids[0])
+        raise TimeoutError
+
+    monkeypatch.setattr(ca, "_run_orgs", _wedge)
+
+    summary = await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,  # type: ignore[arg-type]
+        notifier=notifier,
+        now=_NOW,
+        org_ids=[evaluated_org, pending_org],
+    )
+
+    assert summary["budget_exhausted"] is True
+    assert await ca._read_state(redis, marker_keys[evaluated_org]) is not None
+    assert await ca._read_state(redis, marker_keys[pending_org]) is None

@@ -771,6 +771,48 @@ async def _apply_subject(
     return "hold"
 
 
+async def _prune_unhealthy_markers(
+    redis_client: AsyncRedis,
+    *,
+    org_id: uuid.UUID,
+    candidates: dict[str, Candidate],
+) -> None:
+    """Drop sustain markers for subjects that are absent or no longer unhealthy.
+
+    A marker only asserts continuity for a subject this tick still observes as
+    warning-or-worse; anything else must restart its sustain clock.
+    """
+    marker_prefix = f"{_state_key(org_id, _QUEUE_UNHEALTHY_MARKER)}:"
+    async for raw_marker_key in redis_client.scan_iter(match=f"{marker_prefix}*"):
+        marker_key = _decode(raw_marker_key)
+        marked_subject = marker_key[len(marker_prefix) :]
+        candidate = candidates.get(marked_subject)
+        if candidate is None or not _needs_unhealthy_sustain(candidate):
+            await _delete_state(redis_client, marker_key)
+
+
+async def _apply_present_candidates(
+    redis_client: AsyncRedis,
+    notifier: Any,
+    *,
+    org_id: uuid.UUID,
+    candidates: dict[str, Candidate],
+    summary: dict[str, Any],
+    now: datetime,
+    open_key: str,
+) -> None:
+    """Apply the state machine to this tick's candidates and track open subjects."""
+    for subject, candidate in sorted(candidates.items()):
+        action = await _apply_subject(
+            redis_client, notifier, org_id=org_id, candidate=candidate, summary=summary, now=now
+        )
+        if action == "notify":
+            await redis_client.sadd(open_key, subject)
+            await redis_client.expire(open_key, _STATE_TTL_SECONDS)
+        elif action == "recover":
+            await redis_client.srem(open_key, subject)
+
+
 async def _apply_org_candidates(
     redis_client: AsyncRedis,
     notifier: Any,
@@ -801,13 +843,7 @@ async def _apply_org_candidates(
     open_key = _open_key(org_id)
     open_subjects = {_decode(raw) for raw in await redis_client.smembers(open_key)}
     current = set(candidates)
-    marker_prefix = f"{_state_key(org_id, _QUEUE_UNHEALTHY_MARKER)}:"
-    async for raw_marker_key in redis_client.scan_iter(match=f"{marker_prefix}*"):
-        marker_key = _decode(raw_marker_key)
-        marked_subject = marker_key[len(marker_prefix) :]
-        candidate = candidates.get(marked_subject)
-        if candidate is None or not _needs_unhealthy_sustain(candidate):
-            await _delete_state(redis_client, marker_key)
+    await _prune_unhealthy_markers(redis_client, org_id=org_id, candidates=candidates)
 
     held_subjects = await _hold_unsustained_unhealthy_candidates(
         redis_client,
@@ -834,15 +870,15 @@ async def _apply_org_candidates(
         if action != "notify":
             await redis_client.srem(open_key, subject)
 
-    for subject, candidate in sorted(candidates.items()):
-        action = await _apply_subject(
-            redis_client, notifier, org_id=org_id, candidate=candidate, summary=summary, now=now
-        )
-        if action == "notify":
-            await redis_client.sadd(open_key, subject)
-            await redis_client.expire(open_key, _STATE_TTL_SECONDS)
-        elif action == "recover":
-            await redis_client.srem(open_key, subject)
+    await _apply_present_candidates(
+        redis_client,
+        notifier,
+        org_id=org_id,
+        candidates=candidates,
+        summary=summary,
+        now=now,
+        open_key=open_key,
+    )
 
 
 def build_candidates(
@@ -1083,6 +1119,65 @@ async def _read_redis_memory(redis_client: AsyncRedis, summary: dict[str, Any]) 
     return info
 
 
+async def _read_report_or_none(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    settings: Settings,
+    redis_client: AsyncRedis,
+    now: datetime,
+    summary: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Read one org's capacity report, invalidating markers on failure.
+
+    Cancellation is not caught here: it propagates to the caller, which owns
+    the same invalidation for the org as a whole.
+    """
+    try:
+        return await read_capacity_report(
+            org_id=org_id,
+            params=CapacityParams(),
+            factory=factory,
+            settings=settings,
+            now=now,
+        )
+    except Exception:
+        summary["org_errors"] += 1
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+        _log.warning("capacity_alerts.report_failed org=%s", org_id, exc_info=True)
+        return None
+
+
+def _redis_pressure_candidates(
+    report: dict[str, Any],
+    redis_memory: dict[str, Any] | None,
+) -> tuple[dict[str, Candidate], set[str]]:
+    """Redis-bound candidate (if any) and unverified subject kinds for one org.
+
+    FAR-2002 — the Redis bound is instance-wide, but it is attached per org only
+    when that org has pending work at risk (an empty queue has nothing to shed).
+    A failed INFO read is UNKNOWN, never "clear".
+    """
+    if redis_memory is None:
+        return {}, {_SUBJECT_REDIS}
+    if int((report.get("pending") or {}).get("total") or 0) <= 0:
+        return {}, set()
+    rung = redis_memory_rung(redis_memory)
+    if rung == CLEAR_RUNG:
+        return {}, set()
+    return (
+        {
+            _SUBJECT_REDIS: Candidate(
+                subject=_SUBJECT_REDIS,
+                rung=rung,
+                event_type=EVENT_CAPACITY_REDIS_PRESSURE,
+                payload=_redis_pressure_payload(redis_memory),
+            )
+        },
+        set(),
+    )
+
+
 async def _sweep_org_impl(
     *,
     factory: async_sessionmaker[AsyncSession],
@@ -1101,20 +1196,15 @@ async def _sweep_org_impl(
     later failure must invalidate pre-alert markers so they cannot assert
     continuity on the next tick.
     """
-    try:
-        report = await read_capacity_report(
-            org_id=org_id,
-            params=CapacityParams(),
-            factory=factory,
-            settings=settings,
-            now=now,
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        summary["org_errors"] += 1
-        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
-        _log.warning("capacity_alerts.report_failed org=%s", org_id, exc_info=True)
+    report = await _read_report_or_none(
+        factory=factory,
+        org_id=org_id,
+        settings=settings,
+        redis_client=redis_client,
+        now=now,
+        summary=summary,
+    )
+    if report is None:
         return False
 
     # Saturation sustain clock: start/extend the marker while the org limit is
@@ -1131,21 +1221,8 @@ async def _sweep_org_impl(
 
     candidates = build_candidates(report, bound_since=bound_since, now=now)
     unverified_subjects: set[str] = set()
-    unverified_kinds: set[str] = set()
-    # FAR-2002 — the Redis bound is instance-wide, but it is attached per org
-    # only when that org has pending work at risk (an empty queue has nothing to
-    # shed). A failed INFO read is UNKNOWN, never "clear".
-    if redis_memory is None:
-        unverified_kinds.add(_SUBJECT_REDIS)
-    elif int((report.get("pending") or {}).get("total") or 0) > 0:
-        redis_rung = redis_memory_rung(redis_memory)
-        if redis_rung != CLEAR_RUNG:
-            candidates[_SUBJECT_REDIS] = Candidate(
-                subject=_SUBJECT_REDIS,
-                rung=redis_rung,
-                event_type=EVENT_CAPACITY_REDIS_PRESSURE,
-                payload=_redis_pressure_payload(redis_memory),
-            )
+    redis_candidates, unverified_kinds = _redis_pressure_candidates(report, redis_memory)
+    candidates.update(redis_candidates)
     try:
         unverified_subjects = await _add_backpressure_candidates(factory, report, org_id=org_id, candidates=candidates)
     except asyncio.CancelledError:
@@ -1267,6 +1344,45 @@ async def _run_orgs(
             _log.warning("capacity_alerts.org_sweep_failed org=%s", org_id, exc_info=True)
 
 
+async def _discover_candidate_orgs(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    redis_client: AsyncRedis,
+    org_ids: list[uuid.UUID] | None,
+) -> tuple[list[uuid.UUID], list[uuid.UUID]] | None:
+    """Return ``(candidate orgs, marker orgs)`` for this tick, or ``None``.
+
+    Candidates are the requested slice or the union of orgs with queued work and
+    orgs holding an open alert (see :func:`_merge_org_sources` for why both are
+    needed). Marker orgs are reported separately so a marker outside the slice
+    can be invalidated. A scan failure yields ``None``.
+    """
+    if org_ids is not None:
+        return list(org_ids), []
+    try:
+        marker_orgs = await _org_ids_with_unhealthy_markers(redis_client)
+        candidates = _merge_org_sources(
+            await _org_ids_with_open_alerts(redis_client),
+            await _org_ids_with_pending(factory),
+        )[:MAX_ORGS_PER_TICK]
+    except Exception:
+        _log.warning("capacity_alerts.org_scan_failed", exc_info=True)
+        return None
+    return candidates, marker_orgs
+
+
+def _log_redis_pressure(redis_memory: dict[str, Any] | None) -> None:
+    """Emit one alert-grade log per tick when the queue store is under pressure."""
+    if redis_memory is not None and redis_memory_rung(redis_memory) >= WARNING_RUNG:
+        _log.warning(
+            "capacity_alerts.redis_pressure used=%s maxmemory=%s policy=%s — the queue store is "
+            "shedding/at risk of refusing enqueues (FAR-2002)",
+            redis_memory.get("used_memory"),
+            redis_memory.get("maxmemory"),
+            redis_memory.get("maxmemory_policy"),
+        )
+
+
 async def evaluate_capacity_alerts(
     *,
     factory: async_sessionmaker[AsyncSession],
@@ -1313,34 +1429,18 @@ async def evaluate_capacity_alerts(
     # FAR-2002 — read the queue store's memory bound once per tick. A failed
     # read is UNKNOWN (see _read_redis_memory), never "clear".
     redis_memory = await _read_redis_memory(redis_client, summary)
-    if redis_memory is not None and redis_memory_rung(redis_memory) >= WARNING_RUNG:
-        # One alert-grade log per tick in addition to the (deduped) notification,
-        # so the condition is visible even when no org is evaluated this tick.
-        _log.warning(
-            "capacity_alerts.redis_pressure used=%s maxmemory=%s policy=%s — the queue store is "
-            "shedding/at risk of refusing enqueues (FAR-2002)",
-            redis_memory.get("used_memory"),
-            redis_memory.get("maxmemory"),
-            redis_memory.get("maxmemory_policy"),
-        )
+    # One alert-grade log per tick in addition to the (deduped) notification, so
+    # the condition is visible even when no org is evaluated this tick.
+    _log_redis_pressure(redis_memory)
 
-    marker_orgs: list[uuid.UUID] = []
-    try:
-        if org_ids is not None:
-            candidates = list(org_ids)
-        else:
-            # Union two sets: orgs with queued work AND orgs holding an open
-            # alert (see :func:`_merge_org_sources` for why both are needed).
-            marker_orgs = await _org_ids_with_unhealthy_markers(redis_client)
-            candidates = _merge_org_sources(
-                await _org_ids_with_open_alerts(redis_client),
-                await _org_ids_with_pending(factory),
-            )[:MAX_ORGS_PER_TICK]
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("capacity_alerts.org_scan_failed", exc_info=True)
+    discovered = await _discover_candidate_orgs(
+        factory=factory,
+        redis_client=redis_client,
+        org_ids=org_ids,
+    )
+    if discovered is None:
         return summary
+    candidates, marker_orgs = discovered
 
     summary["orgs_considered"] = len(candidates)
     evaluated_org_ids: set[uuid.UUID] = set()
