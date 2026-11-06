@@ -2889,9 +2889,6 @@ elements:
         type: element
         dynamic_testid: false
     /settings/monitoring:
-      - testid: settings-monitor-config-permission-denied
-        type: element
-        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -2905,6 +2902,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: lock-icon
+        type: element
+        dynamic_testid: false
+      - testid: settings-monitor-permission-denied
         type: element
         dynamic_testid: false
     /admin/users:

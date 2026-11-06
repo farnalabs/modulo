@@ -1,6 +1,9 @@
 <template>
   <FeatureGate feature-name="error_tracking" required-tier="team" show-disabled>
   <div class="page-wide pt-4">
+    <!-- A single hardcoded tab is not navigation: PageTabs renders a redundant
+         one-item control here. The dashboard is the only surface on this route,
+         so omit the tabs prop entirely (FAR-2394). -->
     <PageHeader
       :title="$t('views.AdminErrorsView.error_dashboard')"
       :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')"

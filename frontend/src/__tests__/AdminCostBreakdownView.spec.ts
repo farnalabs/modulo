@@ -120,14 +120,21 @@ describe('AdminCostBreakdownView', () => {
     expect(teamHeading.text()).toContain('Per-Team Cost Breakdown')
     const teamHeader = teamHeading.element.closest('.card-header')
     expect(teamHeader).not.toBeNull()
-    expect(Array.from(teamHeader!.classList)).toEqual(expect.arrayContaining(['px-6', 'pt-6']))
+    // The per-team card uses the shared DataCard padding like the anomaly card
+    // below it; it no longer relies on one-off px-6/pt-6 header styling with an
+    // unpadded content area (FAR-2394).
+    expect(Array.from(teamHeader!.classList)).not.toEqual(expect.arrayContaining(['px-6', 'pt-6']))
     const teamDescription = teamHeader!.querySelector('p')
     expect(teamDescription?.textContent).toContain('Monthly spend, run count, and average cost per run')
-    expect(teamDescription?.classList.contains('px-6')).toBe(false)
     expect(teamDescription?.parentElement).toBe(teamHeading.element.parentElement)
     const anomalyHeader = page.findAll('.card-header')[1]
     expect(anomalyHeader.classes()).not.toEqual(expect.arrayContaining(['px-6', 'pt-6']))
-    expect(page.get('[data-testid="cost-team-table"]').element.closest('.card-base')?.classList.contains('p-0')).toBe(true)
+
+    const teamCard = page.get('[data-testid="cost-team-table"]').element.closest('.card-base')
+    const anomalyCard = anomalyHeader.element.closest('.card-base')
+    expect(teamCard?.classList.contains('p-4')).toBe(true)
+    expect(teamCard?.classList.contains('p-0')).toBe(false)
+    expect(anomalyCard?.classList.contains('p-4')).toBe(true)
   })
 
   it('dismisses an anomaly via POST', async () => {
@@ -707,15 +714,16 @@ describe('AdminCostBreakdownView', () => {
     const table = wrapper.find('[data-testid="cost-team-table"]')
     expect(table.text()).toContain('Alpha')
     expect(table.text()).toContain('250.00')
-    expect(table.classes()).toContain('p-6')
 
     const unattributed = wrapper.find('[data-testid="cost-team-unattributed"]')
     expect(unattributed.exists()).toBe(true)
     expect(unattributed.text()).toContain('$5.50')
     expect(unattributed.text()).toContain('unassigned component spend')
-    // The per-team card is `padding="none"` so the table can run edge-to-edge;
-    // the disclosure line still carries the shared horizontal/bottom inset.
-    expect(unattributed.classes()).toEqual(expect.arrayContaining(['px-6', 'pb-6']))
+    // The per-team card uses the shared DataCard padding like the anomaly card
+    // below it, so the disclosure line needs no one-off inset (FAR-2394).
+    const teamCard = table.element.closest('.card-base')
+    expect(teamCard?.classList.contains('p-4')).toBe(true)
+    expect(unattributed.classes()).not.toEqual(expect.arrayContaining(['px-6', 'pb-6']))
     // legacy_total is NOT excluded from team rows (team-owned legacy spend is
     // written to the owner team's ledger row), so it must never be disclosed here.
     expect(unattributed.text()).not.toContain('99.99')

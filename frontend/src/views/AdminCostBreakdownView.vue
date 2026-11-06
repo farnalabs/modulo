@@ -44,9 +44,7 @@
         <DataCard
           :title="$t('views.AdminCostBreakdownView.per_team_cost_breakdown')"
           :description="$t('views.AdminCostBreakdownView.monthly_spend_run_count_and_avg_by_team')"
-          padding="none"
           heading-level="h2"
-          header-class="px-6 pt-6"
         >
           <template #default>
             <EmptyState
@@ -54,7 +52,7 @@
               :title="$t('views.AdminCostBreakdownView.no_team_cost_data_available')"
               data-testid="cost-team-empty"
             />
-            <div v-else class="overflow-x-auto p-6" data-testid="cost-team-table">
+            <div v-else class="overflow-x-auto" data-testid="cost-team-table">
               <DataTable
                 :columns="[
                   { key: 'entity_name', label: $t('views.AdminCostBreakdownView.team') },
@@ -86,7 +84,7 @@
             </div>
             <p
               v-if="hasUnattributedSpend"
-              class="mt-3 px-6 pb-6 text-xs text-muted-foreground"
+              class="mt-3 text-xs text-muted-foreground"
               data-testid="cost-team-unattributed"
             >
               {{ $t('views.AdminCostBreakdownView.unattributed_spend_line', {
@@ -95,7 +93,7 @@
             </p>
             <p
               v-else-if="unassignedUnavailable"
-              class="mt-3 px-6 pb-6 text-xs text-warning-text"
+              class="mt-3 text-xs text-warning-text"
               data-testid="cost-team-unattributed-unavailable"
             >
               {{ $t('views.AdminCostBreakdownView.unattributed_spend_unavailable') }}
