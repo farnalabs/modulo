@@ -61,7 +61,7 @@
             {{ $t('views.SystemMapDetailView.revision', { number: diffResult.target_revision_number }) }}
           </p>
           <ul class="mt-2 grid gap-1 text-xs sm:grid-cols-2">
-            <li v-for="item in diffSummaryItems" :key="item[0]">{{ $t(`views.SystemMapDetailView.diff_fields.${item[0]}`) }}: {{ item[1] }}</li>
+            <li v-for="item in diffSummaryItems" :key="item.at(0)!">{{ $t(`views.SystemMapDetailView.diff_fields.${item.at(0)!}`) }}: {{ item.at(1)! }}</li>
             <li v-if="diffResult.content_json_changed">{{ $t('views.SystemMapDetailView.diff_content_changed') }}</li>
           </ul>
         </div>

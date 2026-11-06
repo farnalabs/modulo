@@ -494,4 +494,21 @@ describe('CostComponentsView', () => {
     expect(vm.editing).toBe(true)
     expect(vm.editingId).toBe('comp-1')
   })
+
+  it('normalises the env_fallback select value to a non-empty string or null', async () => {
+    const wrapper = await mountView()
+    const vm = wrapper.vm as unknown as {
+      form: { rate_fallback: string | null }
+      onFallbackChange: (value: unknown) => void
+    }
+
+    vm.onFallbackChange('e2b_rate')
+    expect(vm.form.rate_fallback).toBe('e2b_rate')
+
+    vm.onFallbackChange('')
+    expect(vm.form.rate_fallback).toBeNull()
+
+    vm.onFallbackChange(null)
+    expect(vm.form.rate_fallback).toBeNull()
+  })
 })

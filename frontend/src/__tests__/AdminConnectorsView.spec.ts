@@ -1263,4 +1263,17 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
     expect((wrapper.find('[data-testid="rest-connector-method"]').element as HTMLSelectElement).value).toBe('GET')
     expect((wrapper.find('[data-testid="rest-connector-timeout"]').element as HTMLInputElement).value).toBe('30')
   })
+
+  it('restores a stored query apiKeyIn when pre-filling a REST connector', async () => {
+    const wrapper = mountView()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as {
+      applyRestCredentials: (cfg: Record<string, unknown>) => string
+      restCreds: { apiKeyIn: string }
+    }
+    vm.applyRestCredentials({ in: 'query' })
+
+    expect(vm.restCreds.apiKeyIn).toBe('query')
+  })
 })

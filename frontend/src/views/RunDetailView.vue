@@ -1847,7 +1847,7 @@ const failingNodeName = computed<string | null>(() => {
     if (status === 'failed') return name
   }
   const liveFailed = Object.entries(liveNodeStates.value).find(([, state]) => state === 'failed')
-  return liveFailed ? liveFailed[0] : null
+  return liveFailed?.at(0) ?? null
 })
 
 /** Payload for the Analyze button — null until the run detail has loaded. */

@@ -237,8 +237,8 @@ async function loadLatestVersion(schemaId: string) {
       params: { path: { schema_id: schemaId }, query: { page: 1, page_size: 1 } },
     })
     if (error) return
-    if (data.items && data.items.length > 0) {
-      const latest = data.items[0]
+    const latest = data.items?.at(0)
+    if (latest) {
       schemaVersion.value = latest.version
       fields.value = parseDefinitionToFields(latest.definition_json)
     }
