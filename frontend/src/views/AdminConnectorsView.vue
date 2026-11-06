@@ -587,7 +587,7 @@ function applyRestCredentials(cfg: Record<string, unknown>): string {
   const creds = defaultRestCreds()
   const storedMode = typeof cfg.auth_mode === 'string' ? cfg.auth_mode.toLowerCase() : ''
   if (AUTH_MODE_OPTIONS.includes(storedMode)) creds.auth_mode = storedMode
-  if (String(cfg.in) === 'query') creds.apiKeyIn = 'query'
+  if (cfg.in === 'query') creds.apiKeyIn = 'query'
   if (typeof cfg.header_name === 'string') creds.header_name = cfg.header_name
   if (typeof cfg.query_param_name === 'string') creds.query_param_name = cfg.query_param_name
   Object.assign(restCreds.value, creds)
@@ -625,7 +625,7 @@ function buildRestConfig(): Record<string, unknown> {
     ...advanced,
     description: formData.description.trim(),
     base_url: restConfig.value.base_url.trim(),
-    method: String(restConfig.value.method).toUpperCase(),
+    method: restConfig.value.method.toUpperCase(),
     timeout_seconds: Number(restConfig.value.timeout_seconds) || 30,
     verify_tls: !!restConfig.value.verify_tls,
     on_unknown: restConfig.value.on_unknown,
