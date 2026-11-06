@@ -141,16 +141,32 @@ def validate_target_dir(pgdata: Path) -> None:
     )
 
 
+def _bundled_share_dir(bin_dir: Path) -> Path | None:
+    """Return the bundled share dir when it actually holds initdb's runtime data.
+
+    The Linux bundle lays PostgreSQL out as ``pg/bin`` beside
+    ``pg/share/postgresql/<major>`` (the layout the deb extraction produces).
+    Only that layout may receive an explicit ``-L``: initdb aborts before it
+    creates the datadir when ``-L`` points at a directory without
+    ``postgres.bki``. Other bundle layouts (macOS ships ``bin`` as a symlink
+    beside ``pg``) must keep initdb's exec-path-relative relocation, so return
+    ``None`` unless the versioned path really contains ``postgres.bki``.
+    """
+    share_dir = bin_dir.parent / "share" / "postgresql" / PG_MAJOR
+    if (share_dir / "postgres.bki").is_file():
+        return share_dir
+    return None
+
+
 def initdb_argv(tmp_pgdata: Path, bin_dir: Path, username: str, pwfile: Path) -> list[str]:
     """Build the pinned initdb invocation (every argument explicit).
 
-    The native bundle keeps PostgreSQL's versioned share data beside the
-    bundled binaries at ``pg/share/postgresql/<major>``.  ``-L`` is initdb's
-    explicit share-path option; passing it avoids falling back to PostgreSQL's
-    host-compiled ``/usr/share/postgresql/<major>`` location.
+    ``-L`` pins initdb's share-data path so Linux bundles never fall back to
+    the host's ``/usr/share/postgresql/<major>`` location. It is emitted only
+    when the bundled share dir holds ``postgres.bki`` — a wrong explicit path
+    is fatal, so other bundle layouts keep initdb's exec-path relocation.
     """
-    share_dir = bin_dir.parent / "share" / "postgresql" / PG_MAJOR
-    return [
+    argv = [
         _binary(bin_dir, "initdb"),
         "--pgdata",
         str(tmp_pgdata),
@@ -158,12 +174,16 @@ def initdb_argv(tmp_pgdata: Path, bin_dir: Path, username: str, pwfile: Path) ->
         username,
         "--locale",
         initdb_locale(),
-        "-L",
-        str(share_dir),
+    ]
+    share_dir = _bundled_share_dir(bin_dir)
+    if share_dir is not None:
+        argv += ["-L", str(share_dir)]
+    argv += [
         "--auth=scram-sha-256",
         "--pwfile",
         str(pwfile),
     ]
+    return argv
 
 
 def postgres_server_argv(pgdata: Path, host: str, port: int, bin_dir: Path) -> list[str]:

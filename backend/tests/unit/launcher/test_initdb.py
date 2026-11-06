@@ -92,9 +92,18 @@ def test_validate_target_refuses_dotfiles_only_dir(tmp_path: Path) -> None:
         validate_target_dir(target)
 
 
+def _seed_linux_share_dir(bin_dir: Path) -> Path:
+    """Create the Linux bundle's versioned share dir with initdb's runtime data."""
+    share_dir = bin_dir.parent / "share" / "postgresql" / PG_MAJOR
+    share_dir.mkdir(parents=True)
+    (share_dir / "postgres.bki").write_text("x")
+    return share_dir
+
+
 def test_initdb_argv_pins_every_argument(tmp_path: Path) -> None:
     tmp_pgdata = tmp_path / "tmp"
     bin_dir = tmp_path / "pg" / "bin"
+    share_dir = _seed_linux_share_dir(bin_dir)
     pwfile = tmp_path / "pw"
     argv = initdb_argv(tmp_pgdata, bin_dir, BOOTSTRAP_USERNAME, pwfile)
     assert Path(argv[0]).stem == "initdb"
@@ -105,10 +114,33 @@ def test_initdb_argv_pins_every_argument(tmp_path: Path) -> None:
     assert "--locale" in argv
     # The Windows locale seam pins "C" (no POSIX C.UTF-8); see test_platform.py.
     assert ("C" if sys.platform == "win32" else INITDB_LOCALE) in argv
-    assert argv[argv.index("-L") + 1] == str(bin_dir.parent / "share" / "postgresql" / PG_MAJOR)
+    assert argv[argv.index("-L") + 1] == str(share_dir)
     assert "--auth=scram-sha-256" in argv
     assert "--pwfile" in argv
     assert str(pwfile) in argv
+
+
+def test_initdb_argv_omits_share_dir_when_postgres_bki_is_absent(tmp_path: Path) -> None:
+    # A versioned share dir that lacks postgres.bki must not get an explicit
+    # -L: initdb aborts before creating the datadir on a wrong -L path.
+    tmp_pgdata = tmp_path / "tmp"
+    bin_dir = tmp_path / "pg" / "bin"
+    (bin_dir.parent / "share" / "postgresql" / PG_MAJOR).mkdir(parents=True)
+    pwfile = tmp_path / "pw"
+    argv = initdb_argv(tmp_pgdata, bin_dir, BOOTSTRAP_USERNAME, pwfile)
+    assert "-L" not in argv
+
+
+def test_initdb_argv_omits_share_dir_for_macos_layout(tmp_path: Path) -> None:
+    # The macOS bundle symlinks bin/ beside pg/ and ships share data at
+    # pg/share/postgresql (no version subdir). The Linux-layout -L path does
+    # not exist there, so initdb must keep its exec-path-relative relocation.
+    tmp_pgdata = tmp_path / "tmp"
+    bin_dir = tmp_path / "bin"
+    (tmp_path / "pg" / "share" / "postgresql").mkdir(parents=True)
+    pwfile = tmp_path / "pw"
+    argv = initdb_argv(tmp_pgdata, bin_dir, BOOTSTRAP_USERNAME, pwfile)
+    assert "-L" not in argv
 
 
 def test_initdb_argv_uses_windows_locale_and_executable_seam(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -116,9 +148,10 @@ def test_initdb_argv_uses_windows_locale_and_executable_seam(monkeypatch: pytest
     pwfile = tmp_path / "pw"
     monkeypatch.setattr(sys, "platform", "win32")
     bin_dir = tmp_path / "pg" / "bin"
+    share_dir = _seed_linux_share_dir(bin_dir)
     argv = initdb_argv(tmp_pgdata, bin_dir, BOOTSTRAP_USERNAME, pwfile)
     assert argv[argv.index("--locale") + 1] == "C"
-    assert argv[argv.index("-L") + 1] == str(tmp_path / "pg" / "share" / "postgresql" / PG_MAJOR)
+    assert argv[argv.index("-L") + 1] == str(share_dir)
     assert argv[0].endswith("initdb.exe")
 
 
