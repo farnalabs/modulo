@@ -485,7 +485,7 @@ async function loadUsers() {
   }
 }
 
-loadEvents(0)
+void loadEvents(0)
 // The assignee picker lives in the tenant-only actions card; the instance
 // view is read-only, so skip the admin user lookup there entirely.
 //

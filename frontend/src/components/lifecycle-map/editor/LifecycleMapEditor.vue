@@ -475,6 +475,6 @@ onMounted(loadData)
 
 watch(() => props.mapId, () => {
   loading.value = true
-  loadData()
+  void loadData()
 })
 </script>

@@ -1399,7 +1399,7 @@ function toggleNodeLogs(name: string) {
   else s.add(name)
   // FAR-582: fetch artifacts when opening the logs panel for the first time
   if (s.has(name) && !nodeArtifactMap.value[name] && !nodeArtifactFetched.value.has(name)) {
-    fetchNodeArtifacts(name)
+    void fetchNodeArtifacts(name)
   }
 }
 
@@ -1441,7 +1441,7 @@ async function fetchNodeArtifacts(nodeName: string) {
 function retryNodeArtifacts(nodeName: string) {
   nodeArtifactError.value[nodeName] = false
   nodeArtifactFetched.value.delete(nodeName)
-  fetchNodeArtifacts(nodeName)
+  void fetchNodeArtifacts(nodeName)
 }
 
 function artifactDownloadUrl(
@@ -2706,7 +2706,7 @@ async function fetchRunData(runId: string) {
     if (runData) {
       run.value = runData as unknown as RunResponse
       if (isHitlActionableStatus(run.value.status)) {
-        fetchHitlReviews(runId)
+        void fetchHitlReviews(runId)
       }
     }
     const { data: ioData } = await api.GET('/api/v1/runs/{run_id}/io', {
@@ -2803,7 +2803,7 @@ const { loading, error, load: loadRun } = useDataFetch<RunFetchResult>(
       if (runData) {
         run.value = runData as unknown as RunResponse
         if (isHitlActionableStatus(run.value.status)) {
-          fetchHitlReviews(runId)
+          void fetchHitlReviews(runId)
         }
       }
       if (ioData) runIO.value = ioData as unknown as RunIOResponse
@@ -2828,5 +2828,5 @@ onUnmounted(() => {
   }
 })
 
-loadCurrency()
+void loadCurrency()
 </script>

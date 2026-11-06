@@ -170,7 +170,7 @@ async function resetToDefaults() {
 }
 
 onMounted(() => {
-  fetchSources();
+  void fetchSources();
 });
 </script>
 

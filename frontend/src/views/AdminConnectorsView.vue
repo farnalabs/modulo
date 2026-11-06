@@ -961,5 +961,5 @@ function connectorActions(connector: ConnectorItem) {
   ]
 }
 
-onMounted(() => { planStore.fetchPlan(); loadConnectors(); loadConnectorTypes() })
+onMounted(() => { void planStore.fetchPlan(); void loadConnectors(); void loadConnectorTypes() })
 </script>

@@ -157,7 +157,7 @@ const dashboardLevel = ref<DashboardLevel>(DEFAULT_DASHBOARD_LEVEL)
 
 // The category set is driven entirely by the GET response (the backend derives
 // it from notification_categories()). No hardcoded list or count lives here.
-const categories = computed(() => Object.keys(optOuts.value).sort())
+const categories = computed(() => Object.keys(optOuts.value).sort((a, b) => a.localeCompare(b)))
 
 const busy = computed(
   () => loading.value || savingCategory.value !== null || savingLevel.value,

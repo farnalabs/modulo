@@ -772,7 +772,7 @@ function toggleRefsExpand(backendId: string, event: Event) {
   if (refsState[backendId]) return
   const state = reactive<RefsPanelState>({ loading: true, error: null, data: null })
   refsState[backendId] = state
-  fetchPipelineRefs(backendId, 1, state)
+  void fetchPipelineRefs(backendId, 1, state)
 }
 
 async function fetchPipelineRefs(backendId: string, page: number, state: RefsPanelState) {
@@ -796,12 +796,12 @@ async function fetchPipelineRefs(backendId: string, page: number, state: RefsPan
 
 function retryRefs(backendId: string) {
   const state = refsState[backendId]
-  if (state) fetchPipelineRefs(backendId, 1, state)
+  if (state) void fetchPipelineRefs(backendId, 1, state)
 }
 
 function pageRefs(backendId: string, page: number) {
   const state = refsState[backendId]
-  if (state) fetchPipelineRefs(backendId, page, state)
+  if (state) void fetchPipelineRefs(backendId, page, state)
 }
 
 function refsPage(backendId: string): number {
@@ -981,7 +981,7 @@ async function createBackend() {
     } else if (data) {
       track(ANALYTICS_EVENTS.MODEL_BACKEND_ADDED, { model_backend_id: data.id })
       closeForm()
-      loadBackends()
+      void loadBackends()
     }
   } catch (e: unknown) {
     formError.value = formatApiError(e)
@@ -1005,7 +1005,7 @@ async function updateBackend() {
       formError.value = formatApiError(err)
     } else if (data) {
       closeEditForm()
-      loadBackends()
+      void loadBackends()
     }
   } catch (e: unknown) {
     formError.value = formatApiError(e)
@@ -1033,7 +1033,7 @@ async function deleteBackend() {
       deleteError.value = formatApiError(err)
     } else if (response.status === 204 || response.ok) {
       deleteConfirmBackendId.value = null
-      loadBackends()
+      void loadBackends()
     }
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)

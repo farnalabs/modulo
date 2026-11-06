@@ -324,14 +324,14 @@ const filterSearch = ref('')
 watchDebounced(filterSearch, () => {
   currentPage.value = 1
   offset.value = 0
-  loadGroups()
+  void loadGroups()
 }, { debounce: 300 })
 
 // Auto-apply on dropdown filter changes (immediate)
 watch([filterLevel, filterStatus, filterSource], () => {
   currentPage.value = 1
   offset.value = 0
-  loadGroups()
+  void loadGroups()
 })
 
 // FAR-1547: organisation scope reads the tenant partition (existing helper);
@@ -411,7 +411,7 @@ watch(scope, () => {
   offset.value = 0
   expandedMessageIds.value = new Set()
   copiedGroupId.value = ''
-  loadGroups()
+  void loadGroups()
 })
 
 async function copyGroupSupport(row: Record<string, unknown>) {
@@ -463,7 +463,7 @@ function resetFilters() {
   filterSearch.value = ''
   currentPage.value = 1
   offset.value = 0
-  loadGroups()
+  void loadGroups()
 }
 
 function nextPage() {
@@ -471,7 +471,7 @@ function nextPage() {
   if (newOffset >= total.value) return
   currentPage.value++
   offset.value = newOffset
-  loadGroups()
+  void loadGroups()
 }
 
 function prevPage() {
@@ -479,7 +479,7 @@ function prevPage() {
   if (newOffset === offset.value) return
   currentPage.value--
   offset.value = newOffset
-  loadGroups()
+  void loadGroups()
 }
 
 function navigateToDetail(id: string) {

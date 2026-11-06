@@ -396,6 +396,6 @@ async function saveTeamLimit(team: TeamRow) {
 }
 
 planStore.fetchPlan()
-loadCurrency()
-loadCeiling()
+void loadCurrency()
+void loadCeiling()
 </script>

@@ -440,6 +440,6 @@ async function handleDelete() {
 }
 
 onMounted(() => {
-  loadFolders()
+  void loadFolders()
 })
 </script>

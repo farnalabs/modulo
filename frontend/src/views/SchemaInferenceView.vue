@@ -337,6 +337,6 @@ function resetForm() {
 }
 
 onMounted(() => {
-  loadConnectors()
+  void loadConnectors()
 })
 </script>

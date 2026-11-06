@@ -498,7 +498,7 @@ function rowActions(component: CostComponent) {
 
 onMounted(() => {
   planStore.fetchPlan()
-  loadComponents()
-  loadCurrency()
+  void loadComponents()
+  void loadCurrency()
 })
 </script>
