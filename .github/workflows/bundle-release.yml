@@ -146,8 +146,8 @@ jobs:
           set -euo pipefail
           source scripts/bundle-versions.env
           case "$ARCH" in
-            amd64) PG_SRV_SHA="$PG_SERVER_AMD64_SHA256"; PG_CLI_SHA="$PG_CLIENT_AMD64_SHA256" ;;
-            arm64) PG_SRV_SHA="$PG_SERVER_ARM64_SHA256"; PG_CLI_SHA="$PG_CLIENT_ARM64_SHA256" ;;
+            amd64) PG_SRV_SHA="$PG_SERVER_AMD64_SHA256"; PG_CLI_SHA="$PG_CLIENT_AMD64_SHA256"; PG_LIBPQ_SHA="$PG_LIBPQ_AMD64_SHA256" ;;
+            arm64) PG_SRV_SHA="$PG_SERVER_ARM64_SHA256"; PG_CLI_SHA="$PG_CLIENT_ARM64_SHA256"; PG_LIBPQ_SHA="$PG_LIBPQ_ARM64_SHA256" ;;
             *) echo "::error::unsupported arch: $ARCH"; exit 1 ;;
           esac
 
@@ -161,9 +161,10 @@ jobs:
 
           download_and_verify "${PG_POOL_BASE_URL}/postgresql-16_${PG_DEB_VERSION}_${ARCH}.deb" "postgresql-16.deb" "$PG_SRV_SHA"
           download_and_verify "${PG_POOL_BASE_URL}/postgresql-client-16_${PG_DEB_VERSION}_${ARCH}.deb" "postgresql-client-16.deb" "$PG_CLI_SHA"
+          download_and_verify "${PG_LIBPQ_POOL_BASE_URL}/libpq5_${PG_DEB_VERSION}_${ARCH}.deb" "libpq5.deb" "$PG_LIBPQ_SHA"
 
           # Chain-of-custody assert: the deb's own Version field must equal the pin.
-          for spec in "postgresql-16.deb:${PG_DEB_VERSION}" "postgresql-client-16.deb:${PG_DEB_VERSION}"; do
+          for spec in "postgresql-16.deb:${PG_DEB_VERSION}" "postgresql-client-16.deb:${PG_DEB_VERSION}" "libpq5.deb:${PG_DEB_VERSION}"; do
             deb="${spec%%:*}"
             want="${spec#*:}"
             got="$(dpkg-deb -f "downloads/${deb}" Version)"
@@ -197,6 +198,13 @@ jobs:
           test -x build/redis-install/bin/redis-server
           test -x build/redis-install/bin/redis-cli
 
+      - name: Install patchelf (bundle RUNPATH tool)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends patchelf
+          patchelf --version
+
       - name: Assemble bundle layout
         run: |
           set -euo pipefail
@@ -228,9 +236,28 @@ jobs:
           cp -a build/redis-install/bin/. "$BUNDLE/pg/bin/"
           test -x "$BUNDLE/pg/bin/redis-server"
           test -x "$BUNDLE/pg/bin/redis-cli"
-          # Copy system libpq.so.5 to pg/lib so postgres binaries can find it.
-          cp /usr/lib/x86_64-linux-gnu/libpq.so.5* "${BUNDLE}/pg/lib/"
+          # The PG16 client tools (pg_dump, psql, pg_isready, ...) NEED
+          # libpq.so.5 but ship no RPATH of their own, and the launcher scrubs
+          # every LD_* variable at boot (ADR 031 Decision 2). Take libpq from
+          # the pinned, ABI-matched PGDG build of the SAME version as the
+          # server/client debs, then bake an $ORIGIN-relative RUNPATH into
+          # every bundled pg ELF so the loader finds pg/lib with no inherited
+          # environment at all.
+          case "$ARCH" in
+            amd64) ARCH_TRIPLE="x86_64-linux-gnu" ;;
+            arm64) ARCH_TRIPLE="aarch64-linux-gnu" ;;
+            *) echo "::error::unsupported arch: $ARCH" >&2; exit 1 ;;
+          esac
+          mkdir -p debx/libpq
+          dpkg-deb -x downloads/libpq5.deb debx/libpq
+          cp -a debx/libpq/usr/lib/"${ARCH_TRIPLE}"/libpq.so.5* "${BUNDLE}/pg/lib/"
           test -f "${BUNDLE}/pg/lib/libpq.so.5"
+          for binary in "${BUNDLE}"/pg/bin/*; do
+            [ -f "$binary" ] || continue
+            if readelf -h "$binary" >/dev/null 2>&1; then
+              patchelf --set-rpath "\$ORIGIN/../lib" "$binary"
+            fi
+          done
 
           # Native bundle entrypoint. Keep this as a small POSIX wrapper so the
           # shipped command uses the bundled CPython runtime and dependencies,
@@ -333,6 +360,48 @@ jobs:
           fi
           env -i HOME="$HOME" PATH="$BUNDLE/runtime/bin:$BUNDLE/pg/bin:$BUNDLE/redis" \
             "$BUNDLE/launcher" apply --help
+
+      - name: Assert bundled libpq is reachable and loaded from the bundle
+        run: |
+          set -euo pipefail
+          BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
+          test -f "$BUNDLE/pg/lib/libpq.so.5"
+          checked=0
+          for binary in "$BUNDLE"/pg/bin/*; do
+            [ -f "$binary" ] || continue
+            if ! readelf -d "$binary" 2>/dev/null | grep -Fq 'libpq.so.5'; then
+              continue
+            fi
+            checked=$((checked + 1))
+            if ! readelf -d "$binary" | grep -Fq 'ORIGIN/../lib'; then
+              echo "::error::$(basename "$binary") does not carry RUNPATH \$ORIGIN/../lib; bundled libpq is unreachable at runtime" >&2
+              exit 1
+            fi
+            resolved="$(env -i PATH=/usr/bin:/bin ldd "$binary" | grep -F 'libpq.so.5 =>' | sed 's/.* => //; s/ .*//')"
+            if [ -z "$resolved" ] || [ "$(realpath "$resolved")" != "$(realpath "$BUNDLE/pg/lib/libpq.so.5")" ]; then
+              echo "::error::$(basename "$binary") resolves libpq outside the bundle: ${resolved:-<none>}" >&2
+              exit 1
+            fi
+          done
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no bundled binary links libpq.so.5 - cannot prove reachability" >&2
+            exit 1
+          fi
+
+          # Execute with the loader's library trace and pin the loaded libpq to
+          # the bundle. This is deliberately stronger than `ldd`: on a host
+          # that HAS libpq, a missing/incorrect RUNPATH would silently fall
+          # back to the system copy, so asserting the resolved path is inside
+          # the bundle is what catches the regression. On a libpq-less host an
+          # unreachable bundle fails the exec outright.
+          trace="$(env -i LD_DEBUG=libs "$BUNDLE/pg/bin/pg_dump" --version 2>&1 >/dev/null)"
+          if ! printf '%s\n' "$trace" | grep -Fq "$BUNDLE/pg/lib/libpq.so.5" \
+            && ! printf '%s\n' "$trace" | grep -Fq "$BUNDLE/pg/bin/../lib/libpq.so.5"; then
+            echo "::error::pg_dump did not load libpq from the bundle" >&2
+            printf '%s\n' "$trace" | head -50 >&2
+            exit 1
+          fi
+          echo "checked ${checked} binary/binaries; libpq loaded from $BUNDLE/pg/lib/libpq.so.5"
 
       - name: Set up Node + pnpm (pinned to match frontend/package.json)
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
