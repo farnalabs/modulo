@@ -696,7 +696,7 @@ const chainResult = ref<{ valid: boolean; checked_events?: number; error?: strin
 function formatActor(event: AuditEvent): string {
   // Prefer the semantic actor label the backend composed at emit time
   // (trigger identity / "system"); fall back to the user id rendering.
-  const label = (event.payload_json ?? {})['actor']
+  const label = (event.payload_json as Record<string, unknown> | null | undefined)?.actor
   if (typeof label === 'string' && label.length > 0) return label
   if (!event.actor_user_id) return '—'
   return 'usr_' + shortId(event.actor_user_id).replace('#', '')
@@ -734,7 +734,7 @@ function summarize(event: Summarisable): string {
   // Prefer the descriptive summary the backend composed at emit time (part of
   // the hash-chained payload); the heuristic below is the legacy fallback for
   // events written before summaries existed.
-  const provided = (event.payload_json ?? {})['summary']
+  const provided = event.payload_json?.summary
   if (typeof provided === 'string' && provided.length > 0) return provided
 
   const et = event.event_type
@@ -752,7 +752,7 @@ function summarize(event: Summarisable): string {
     ? t('views.AdminAuditView.summary_fallback_named', {
         action: capitalisedAction,
         resource,
-        name: String(name),
+        name: typeof name === 'string' ? name : JSON.stringify(name),
       })
     : t('views.AdminAuditView.summary_fallback', {
         action: capitalisedAction,

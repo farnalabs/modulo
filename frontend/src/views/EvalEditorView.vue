@@ -1557,7 +1557,7 @@ function handleEvalWriteError(error: unknown): void {
     typeof (error as { code?: unknown } | null)?.code === 'string'
       ? (error as { code: string }).code
       : null
-  if (code && code.startsWith('judge_')) {
+  if (code?.startsWith('judge_')) {
     serverConfigError.value = { code, message: formatApiError(error) }
     formError.value = null
     return

@@ -571,7 +571,7 @@ function applyRestConfigFields(cfg: Record<string, unknown>): void {
   // Match case-insensitively and normalise on prefill: a stored 'FAIL_CLOSED'
   // must display as fail_closed and re-save unchanged, never silently
   // downgrade to fail_open (FAR-532). Mirrors the backend's normalisation.
-  const storedOnUnknown = String(cfg.on_unknown ?? '').trim().toLowerCase()
+  const storedOnUnknown = typeof cfg.on_unknown === 'string' ? cfg.on_unknown.trim().toLowerCase() : ''
   restConfig.value.on_unknown = ON_UNKNOWN_OPTIONS.includes(storedOnUnknown) ? storedOnUnknown : 'fail_open'
   restConfig.value.records_path = typeof cfg.records_path === 'string' ? cfg.records_path : ''
   // Stored allowed_hosts may be a list (canonical) or a legacy string; anything
@@ -585,7 +585,7 @@ function applyRestConfigFields(cfg: Record<string, unknown>): void {
 // write-only in the API, so only these non-secret fields are restored.
 function applyRestCredentials(cfg: Record<string, unknown>): string {
   const creds = defaultRestCreds()
-  const storedMode = String(cfg.auth_mode || '').toLowerCase()
+  const storedMode = typeof cfg.auth_mode === 'string' ? cfg.auth_mode.toLowerCase() : ''
   if (AUTH_MODE_OPTIONS.includes(storedMode)) creds.auth_mode = storedMode
   if (String(cfg.in) === 'query') creds.apiKeyIn = 'query'
   if (typeof cfg.header_name === 'string') creds.header_name = cfg.header_name

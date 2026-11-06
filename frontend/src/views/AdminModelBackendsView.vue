@@ -639,7 +639,7 @@ function isMetadataHost(host: string): boolean {
   // IPv4-mapped IPv6 in hex form ([::ffff:a9fe:a9fe] normalises here). The URL
   // parser canonicalises IPv6 to hex, so a dotted mapped form never reaches
   // this function and does not need a separate prefix check.
-  const mapped = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(normalized)
   if (mapped) {
     const high = Number.parseInt(mapped[1], 16)
     const low = Number.parseInt(mapped[2], 16)

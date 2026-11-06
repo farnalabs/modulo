@@ -424,7 +424,7 @@ async function saveSchema() {
   }
 }
 
-async function restoreVersion(version: SchemaVersion) {
+function restoreVersion(version: SchemaVersion) {
   schemaVersion.value = version.version
   fields.value = parseDefinitionToFields(version.definition_json)
 }
