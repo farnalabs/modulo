@@ -4,8 +4,8 @@ description: >-
   Vendor-neutral Helm chart for the Modulo stack — backend API, SAQ workers,
   frontend SPA, and Redis. Postgres is external/optional.
 type: application
-version: 0.3.325
-appVersion: "0.3.325"
+version: 0.3.328
+appVersion: "0.3.328"
 keywords:
   - modulo
   - agent-governance
