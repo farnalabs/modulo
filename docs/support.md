@@ -25,7 +25,7 @@ modulo support
 - If something looked like it might carry a credential, the bundle leaves it
   out rather than shipping it, and names it in a `withheld:` line:
   `withheld: <member> — <n> item(s) removed (<reason>)`. A whole small member
-  that cannot be split is withheld entire, as
+  that cannot be split is withheld entirely, as
   `withheld: <member> — member removed (<reason>)`.
 - Pass `--out <path>` to write the zip somewhere else.
 
