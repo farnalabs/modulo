@@ -144,9 +144,9 @@ async def _process_callback(
 ) -> dict[str, str]:
     if expected_nonce != "fixture-nonce" or code_verifier != "fixture-code-verifier":
         raise ValueError("fixture flow binding mismatch")
-    if code not in {"ci-auth-code", "ci-invalid-code"}:
-        raise ValueError("fixture IdP rejected authorization code")
     if code == "ci-invalid-code":
+        raise ValueError("fixture IdP rejected authorization code")
+    if code != "ci-auth-code":
         raise ValueError("fixture IdP rejected authorization code")
     return {"access_token": _FIXTURE_ACCESS_TOKEN, "refresh_token": _FIXTURE_REFRESH_TOKEN}
 

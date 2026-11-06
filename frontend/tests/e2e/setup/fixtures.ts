@@ -39,6 +39,7 @@ async function startLocalSsoBackend(): Promise<SsoBackendProcess> {
       MODULO_PUBLIC_URL: `http://127.0.0.1:${port}`,
       MODULO_FRONTEND_URL: getLocalE2eBaseUrl(),
       MODULO_MULTI_ORG_ENABLED: 'false',
+      MODULO_AUTH_RATE_LIMIT_ENABLED: 'false',
     },
   })
   child.stdout?.on('data', (chunk) => process.stderr.write(`[sso-fixture] ${chunk}`))
