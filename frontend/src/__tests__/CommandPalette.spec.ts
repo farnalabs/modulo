@@ -111,6 +111,19 @@ describe('CommandPalette', () => {
     expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()
   })
 
+  it('opens on the document-level Cmd/Ctrl+K shortcut when closed', async () => {
+    const wrapper = mount(CommandPalette, { attachTo: document.body })
+    mounted.push(wrapper)
+    expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()
+
+    // The closed-palette branch of the shortcut opens it.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))
+    await nextTick()
+    await nextTick()
+
+    expect(document.querySelector('input[placeholder="Search pages..."]')).not.toBeNull()
+  })
+
   it('moves the selection with ArrowUp and clamps at the first item', async () => {
     await openPalette()
     const input = paletteInput()

@@ -703,7 +703,7 @@ async function createUser() {
     openCredentialDialog('created', email, password)
     resetNewUser()
     showFlash('success', t('views.AdminUsersView.user_created', { email }))
-    loadUsers()
+    void loadUsers()
   } catch (e: unknown) {
     createError.value = e instanceof Error ? e.message : t('views.AdminUsersView.failed_to_create_user')
   } finally {
@@ -728,7 +728,7 @@ async function sendInvite() {
     })
     showCreate.value = false
     resetNewUser()
-    loadInvitations()
+    void loadInvitations()
     await showCredential(
       'invite',
       data.invite_url,
@@ -761,7 +761,7 @@ async function revokeInvitation() {
     await httpDelete(`/api/v1/admin/users/invitations/${inv.id}`)
     showRevokeDialog.value = false
     showFlash('success', t('views.AdminUsersView.invitation_revoked', { email: inv.email }))
-    loadInvitations()
+    void loadInvitations()
   } catch (e) {
     showFlash('error', e instanceof Error ? e.message : t('views.AdminUsersView.failed_to_revoke_invitation'))
   } finally {

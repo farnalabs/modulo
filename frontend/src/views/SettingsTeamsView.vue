@@ -364,7 +364,7 @@ function toggleExpand(teamId: string) {
     deleteConfirmTeamId.value = null
     addMemberTeamId.value = null
     if (!membersByTeam.value[teamId]) {
-      loadMembers(teamId)
+      void loadMembers(teamId)
     }
   }
 }

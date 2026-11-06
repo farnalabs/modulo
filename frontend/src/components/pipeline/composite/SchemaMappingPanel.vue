@@ -81,7 +81,7 @@ async function loadSchemas() {
 
 watch(
   () => [props.compositeRef, props.precedingNodeSchemaId, props.downstreamNodeSchemaId],
-  () => { loadSchemas() },
+  () => { void loadSchemas() },
   { immediate: true },
 )
 

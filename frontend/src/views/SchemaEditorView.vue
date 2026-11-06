@@ -206,8 +206,8 @@ function selectSchema(id: string) {
   schemaVersion.value = '1.0.0'
   fields.value = []
 
-  loadLatestVersion(id)
-  loadVersions(id)
+  void loadLatestVersion(id)
+  void loadVersions(id)
 }
 
 function createNewSchema() {
@@ -444,7 +444,7 @@ watch(() => route.params.id, (newId) => {
 })
 
 onMounted(() => {
-  loadSchemas()
+  void loadSchemas()
   const id = route.params.id
   if (id && typeof id === 'string') {
     selectSchema(id)

@@ -2854,7 +2854,7 @@ jobs:
           # wait gate below with a loud warning instead; genuine control
           # failures still fail closed.
           if [ -z "$MODULO_DEPLOY_DRAIN_TOKEN" ]; then
-            echo "::warning::MODULO_DEPLOY_DRAIN_TOKEN is not configured; skipping the sandbox admission freeze. Provision the secret to enable it - the active-run wait gate below still applies."
+            echo "::warning::MODULO_DEPLOY_DRAIN_TOKEN is not configured; skipping the sandbox admission freeze. Without the freeze the active-run wait gate below cannot converge, so it degrades to the legacy deploy path. Provision the secret on both the GitHub repo and the production app to enable the drain."
             exit 0
           fi
           status=$(curl -sS --max-time 15 -o /tmp/deploy-drain-enter.json -w '%{http_code}' \
@@ -2865,7 +2865,7 @@ jobs:
             exit 1
           }
           if [ "$status" = "404" ]; then
-            echo "::warning::the live production build has no deployment drain control yet (bootstrap deploy); skipping the sandbox admission freeze - the active-run wait gate below still applies."
+            echo "::warning::the live production build has no deployment drain control yet (bootstrap deploy); skipping the sandbox admission freeze - without it the active-run wait gate cannot converge, so it degrades to the legacy deploy path."
             exit 0
           fi
           if [ "$status" != "200" ]; then
@@ -3196,11 +3196,40 @@ jobs:
           # durable sandbox activity rather than re-executing side effects.
           # This endpoint is unauthenticated specifically for CI/CD probes and
           # reads through the BYPASSRLS system session, so the count is deployment-wide.
+          #
+          # The wait is only meaningful while the admission freeze is ACTIVE:
+          # when new sandbox runs are still being admitted the count can rise at
+          # any moment and a quiescent window can never form. Waiting anyway
+          # deadlocked production deploys for the full timeout (observed on
+          # 33306b9: MODULO_DEPLOY_DRAIN_TOKEN was unconfigured, so the freeze
+          # was skipped, and 60 minutes of continuous sandbox activity kept the
+          # count above zero). Degrade to the legacy deploy path with a loud
+          # warning when the freeze is not active; still fail closed when it is.
           timeout_s=$((WORKER_DRAIN_TIMEOUT_MINUTES * 60))
           deadline=$(( $(date +%s) + timeout_s ))
           while [ "$(date +%s)" -lt "$deadline" ]; do
             body=""
             if body=$(curl -fsS --max-time 15 "https://app.modulo.run/api/v1/deployment" 2>/dev/null); then
+              drain_state=$(printf '%s' "$body" | jq -r '
+                if type != "object" then "ERROR"
+                elif (has("deployment_drain") | not) then "ABSENT"
+                elif (.deployment_drain == true) then "ACTIVE"
+                else "INACTIVE" end' 2>/dev/null) || drain_state="ERROR"
+              case "$drain_state" in
+                ABSENT)
+                  echo "::warning::the live production build does not report deployment_drain yet (bootstrap deploy); proceeding without the active-run wait gate."
+                  exit 0
+                  ;;
+                INACTIVE)
+                  echo "::warning::production sandbox admission is not frozen (deployment_drain=false), so new sandbox runs can start at any moment and the active-run count cannot converge. Skipping the active-run wait gate and proceeding with the deploy. Provision MODULO_DEPLOY_DRAIN_TOKEN on both the GitHub repo and the production app to enable the drain."
+                  exit 0
+                  ;;
+                *)
+                  # ACTIVE, or ERROR when the endpoint could not be classified:
+                  # fall through to the active-run probe and fail closed via its
+                  # own ERROR/deadline paths. Never degrade to the legacy path.
+                  ;;
+              esac
               probe=$(printf '%s' "$body" | jq -r '
                 if type != "object" then "ERROR"
                 elif (has("active_sandbox_runs") | not) then "ABSENT"

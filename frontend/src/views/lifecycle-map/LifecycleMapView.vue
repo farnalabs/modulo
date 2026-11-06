@@ -529,7 +529,7 @@ async function persistPositions(positions: Record<string, { x: number; y: number
 
 function handlePositionsChanged(positions: Record<string, { x: number; y: number }>): void {
   savedPositions.value = positions
-  persistPositions(positions)
+  void persistPositions(positions)
 }
 
 onBeforeUnmount(() => {
@@ -753,7 +753,7 @@ onMounted(async () => {
     await planStore.fetchPlan()
   }
   if (journeysVisible.value) {
-    loadJourneys()
+    void loadJourneys()
   }
 })
 
@@ -769,7 +769,7 @@ watch(selectedVersion, () => {
 // is idempotent and guards against concurrency.
 watch(journeysEnabled, (enabled) => {
   if (enabled && showWorkItems.value && mapId.value) {
-    loadJourneys()
+    void loadJourneys()
   }
 })
 
@@ -777,7 +777,7 @@ watch(journeysEnabled, (enabled) => {
 // filters); unchecking only hides the UI, it never refetches.
 watch(showWorkItems, (checked) => {
   if (checked && journeysEnabled.value && mapId.value) {
-    loadJourneys()
+    void loadJourneys()
   }
 })
 
@@ -787,7 +787,7 @@ watch(
   () => [store.journeysFilters.period, store.journeysFilters.status] as const,
   () => {
     if (journeysVisible.value && mapId.value) {
-      loadJourneys()
+      void loadJourneys()
     }
   },
 )

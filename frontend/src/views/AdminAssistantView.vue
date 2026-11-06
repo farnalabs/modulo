@@ -907,5 +907,5 @@ async function loadAll() {
   initSkillModes()
 }
 
-loadAll()
+void loadAll()
 </script>

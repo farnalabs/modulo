@@ -352,13 +352,13 @@ function resultBadge(result: string): string {
 
 function applyFilters() {
   resetCursor()
-  loadEvents()
+  void loadEvents()
 }
 
 function resetFilters() {
   filterTriggerType.value = '__all__'
   filterResult.value = '__all__'
   resetCursor()
-  loadEvents()
+  void loadEvents()
 }
 </script>

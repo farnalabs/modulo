@@ -533,6 +533,6 @@ async function loadAll() {
   await Promise.all([loadGuardrails(), loadPipelines()])
 }
 
-onMounted(() => { planStore.fetchPlan(); loadAll(); loadKillSwitch() })
+onMounted(() => { void planStore.fetchPlan(); void loadAll(); void loadKillSwitch() })
 
 </script>

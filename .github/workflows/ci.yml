@@ -219,8 +219,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      # NOSONAR githubactions:S8541: --frozen pins exact revisions; ibm-cos-sdk (runtime) and pytest-bdd (dev) are sdist-only, so --no-build cannot install them.
-      - run: uv sync --frozen  # NOSONAR
+      - run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
       - run: uv run --no-build --no-sync ruff check .
       - name: Ruff format check
         run: uv run --no-build --no-sync ruff format --check .
@@ -541,8 +540,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      # NOSONAR githubactions:S8541: --frozen pins exact revisions; ibm-cos-sdk (runtime) and pytest-bdd (dev) are sdist-only, so --no-build cannot install them.
-      - run: uv sync --frozen  # NOSONAR
+      - run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
       - name: Run unit tests with coverage (shard ${{ matrix.shard }}/3)
         shell: bash
         run: ../.github/scripts/coverage-thresholds.sh 2 shard
@@ -592,8 +590,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      # NOSONAR githubactions:S8541: --frozen pins exact revisions; ibm-cos-sdk (runtime) and pytest-bdd (dev) are sdist-only, so --no-build cannot install them.
-      - run: uv sync --frozen  # NOSONAR
+      - run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
       - name: Download unit coverage shards
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -649,8 +646,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      # NOSONAR githubactions:S8541: --frozen pins exact revisions; ibm-cos-sdk (runtime) and pytest-bdd (dev) are sdist-only, so --no-build cannot install them.
-      - run: uv sync --frozen  # NOSONAR
+      - run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
         if: needs.changes.outputs.backend_heavy != 'false'
       - name: Run architecture tests
         if: needs.changes.outputs.backend_heavy != 'false'
@@ -731,8 +727,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      # NOSONAR githubactions:S8541: --frozen pins exact revisions; ibm-cos-sdk (runtime) and pytest-bdd (dev) are sdist-only, so --no-build cannot install them.
-      - run: uv sync --frozen  # NOSONAR
+      - run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
       - name: Detect changed integration test files
         id: changed
         shell: bash
@@ -1736,8 +1731,7 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install backend deps
         working-directory: backend
-        # NOSONAR githubactions:S8541: --frozen pins exact revisions; ibm-cos-sdk (runtime) and pytest-bdd (dev) are sdist-only, so --no-build cannot install them.
-        run: uv sync --frozen  # NOSONAR
+        run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
       - name: Dump OpenAPI schema from backend
         working-directory: backend
         shell: bash
@@ -1812,8 +1806,8 @@ jobs:
           enable-cache: true
       - name: Sync backend dependencies
         working-directory: backend
-        # NOSONAR githubactions:S8541: --frozen pins exact revisions; ibm-cos-sdk (runtime) and pytest-bdd (dev) are sdist-only, so --no-build cannot install them.
-        run: uv sync --frozen  # NOSONAR
+        shell: bash
+        run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
       - name: Verify single migration head
         working-directory: backend
         shell: bash
@@ -1978,8 +1972,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      # NOSONAR githubactions:S8541: --frozen pins exact revisions; ibm-cos-sdk (runtime) and pytest-bdd (dev) are sdist-only, so --no-build cannot install them.
-      - run: uv sync --frozen  # NOSONAR
+      - run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
         if: github.event_name != 'pull_request'
       - name: Break-glass boot allow-list + connectivity smoke
         if: github.event_name != 'pull_request'

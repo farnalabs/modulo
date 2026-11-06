@@ -282,7 +282,7 @@ async function save() {
 }
 
 function reset() {
-  load()
+  void load()
 }
 
 onMounted(load)

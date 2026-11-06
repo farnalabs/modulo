@@ -531,5 +531,5 @@ async function onBillingPeriodChange(value: unknown) {
 }
 
 planStore.fetchPlan()
-loadAll()
+void loadAll()
 </script>

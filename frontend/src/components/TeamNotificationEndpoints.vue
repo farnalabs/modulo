@@ -457,7 +457,7 @@ function startEdit(ep: NotificationEndpointResponse) {
   cancelAdd();
   // Self-heal the picker: re-fetch the registry each time the form opens so a
   // recovered backend becomes visible without a manual Retry click.
-  loadAvailableEvents();
+  void loadAvailableEvents();
   deleteConfirmId.value = null;
   editingId.value = ep.id;
   editForm.value = {
@@ -511,7 +511,7 @@ function openAddForm() {
   showAddForm.value = true;
   // Self-heal the picker: re-fetch the registry each time the form opens so a
   // recovered backend becomes visible without a manual Retry click.
-  loadAvailableEvents();
+  void loadAvailableEvents();
 }
 
 function cancelAdd() {
@@ -611,10 +611,10 @@ async function test(ep: NotificationEndpointResponse) {
 }
 
 onMounted(() => {
-  loadEndpoints();
+  void loadEndpoints();
   // The registry endpoint requires admin.notification.manage — only fetch it
   // for the principals who can actually reach the picker (avoids a 403 on
   // every viewer mount).
-  if (canManage.value) loadAvailableEvents();
+  if (canManage.value) void loadAvailableEvents();
 });
 </script>

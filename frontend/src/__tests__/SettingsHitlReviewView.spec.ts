@@ -2660,3 +2660,42 @@ describe('SettingsHitlReviewView — bulk claim empty envelope', () => {
     expect(wrapper.find('[data-testid="hitl-review-claim-failure-banner"]').exists()).toBe(false)
   })
 })
+
+// ---- Auto-refresh interval reloads the gate list ----
+describe('SettingsHitlReviewView — auto-refresh', () => {
+  let wrapper: VueWrapper | null = null
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    resetHitlReviewState()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  it('reloads gates when the 30s auto-refresh interval fires', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const gateLoads = () =>
+      (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
+    const before = gateLoads()
+
+    await vi.advanceTimersByTimeAsync(30000)
+    await flushPromises()
+    await nextTick()
+
+    expect(gateLoads()).toBeGreaterThan(before)
+  })
+})
