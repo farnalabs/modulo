@@ -17,6 +17,20 @@
           <span class="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full" />
         </div>
 
+        <!-- A non-system-admin can reach this page but the config endpoint
+             enforces `system.config.manage`. Surface the established
+             informational unavailable pattern instead of the raw permission
+             exception; authorization stays enforced by the backend (FAR-2394). -->
+        <div
+          v-else-if="permissionDenied"
+          class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm"
+          data-testid="settings-monitor-permission-denied"
+          aria-live="assertive"
+        >
+          <p class="font-semibold">{{ $t('views.SettingsMonitorConfigView.permission_denied_title') }}</p>
+          <p class="mt-1">{{ $t('views.SettingsMonitorConfigView.permission_denied_description') }}</p>
+        </div>
+
         <div v-else-if="error" class="flex flex-col items-center justify-center h-32 gap-3">
           <p class="text-destructive text-sm">{{ error || 'Failed to load monitoring configuration' }}</p>
           <Button size="small" severity="secondary" outlined @click="load()">{{ $t('views.SettingsMonitorConfigView.retry') }}</Button>
@@ -160,11 +174,28 @@ const backendForms = reactive<BackendForm[]>([
   },
 ])
 
+/**
+ * The monitor-config endpoint is guarded by the strict `system.config.manage`
+ * system-admin permission. A non-admin can still reach this route, so the
+ * 403 must render as an informational unavailable state rather than the raw
+ * `Permission 'system.config.manage' requires system admin role` exception.
+ * Authorization is unchanged: the backend refuses the request either way.
+ */
+function isSystemAdminPermissionError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const candidate = err as { status?: unknown; detail?: unknown }
+  return candidate.status === 403
+    || (typeof candidate.detail === 'string' && /requires system admin role/i.test(candidate.detail))
+}
+
+const permissionDenied = ref(false)
+
 const { loading, load, error } = useDataFetch(
   async () => {
     const res = await api.GET('/api/v1/admin/monitor-config')
-    if (res.error) {
-      if (error.value) console.warn("[SettingsMonitorConfigView] Failed to load monitor config:", error.value)
+    permissionDenied.value = isSystemAdminPermissionError(res.error)
+    if (res.error && !permissionDenied.value) {
+      console.warn("[SettingsMonitorConfigView] Failed to load monitor config:", res.error)
     }
     if (res.data) {
       fromApiPayload(res.data as Record<string, any>)
