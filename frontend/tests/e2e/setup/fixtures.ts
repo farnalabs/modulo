@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { resolve } from 'node:path'
 import { test as base, expect, type Page } from '@playwright/test'
 import { startCoverage, stopCoverage } from './coverage'
 import { getLocalE2eBaseUrl, getTestEnv, type TestEnv } from './env'
@@ -27,7 +28,7 @@ async function startLocalSsoBackend(): Promise<SsoBackendProcess> {
   const child = spawn('uv', [
     'run', '--project', '.', '--no-sync', 'python', 'tests/e2e/sso_fixture.py',
     '--port', String(port), '--frontend-url', getLocalE2eBaseUrl(),
-  ], { cwd: new URL('../../../../backend', import.meta.url), stdio: ['ignore', 'pipe', 'pipe'] })
+  ], { cwd: resolve(process.cwd(), '..', 'backend'), stdio: ['ignore', 'pipe', 'pipe'] })
   child.stdout?.on('data', (chunk) => process.stderr.write(`[sso-fixture] ${chunk}`))
   child.stderr?.on('data', (chunk) => process.stderr.write(`[sso-fixture] ${chunk}`))
   await waitForPort(port, child)
