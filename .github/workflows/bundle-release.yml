@@ -226,18 +226,16 @@ jobs:
           # PostgreSQL server + client were compiled directly into the bundle
           # prefix so pg_config --sharedir and runtime data remain relocatable.
           test -x "$BUNDLE/pg/bin/postgres"
-           test -x "$BUNDLE/pg/bin/initdb"
-           test -x "$BUNDLE/pg/bin/pg_dump"
-           test -f "$BUNDLE/pg/share/postgresql/postgres.bki"
-           test -d "$BUNDLE/pg/share/postgresql/timezonesets"
-           sharedir="$("$BUNDLE/pg/bin/pg_config" --sharedir)"
-           test "$sharedir" = "$BUNDLE/pg/share/postgresql"
-           case "$sharedir" in
-             "$BUNDLE"/*) : ;;
-             *) echo "::error::bundled PostgreSQL sharedir escaped the bundle: $sharedir" >&2; exit 1 ;;
-           esac
-
-
+          test -x "$BUNDLE/pg/bin/initdb"
+          test -x "$BUNDLE/pg/bin/pg_dump"
+          test -f "$BUNDLE/pg/share/postgresql/postgres.bki"
+          test -d "$BUNDLE/pg/share/postgresql/timezonesets"
+          sharedir="$("$BUNDLE/pg/bin/pg_config" --sharedir)"
+          test "$sharedir" = "$BUNDLE/pg/share/postgresql"
+          case "$sharedir" in
+            "$BUNDLE"/*) : ;;
+            *) echo "::error::bundled PostgreSQL sharedir escaped the bundle: $sharedir" >&2; exit 1 ;;
+          esac
 
           # Redis, compiled from source on this runner (see the build step above).
           cp -a build/redis-install/bin/. "$BUNDLE/redis/"
@@ -283,6 +281,27 @@ jobs:
           chmod 755 "$BUNDLE/launcher"
 
           echo "bundle-v${VERSION_NUM}" > "$BUNDLE/VERSION"
+
+      - name: Smoke relocated bundled PostgreSQL initdb as an unprivileged user
+        run: |
+          set -euo pipefail
+          BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
+          smoke_root="$(mktemp -d)"
+          trap 'rm -rf "$smoke_root"' EXIT
+          cp -a "$BUNDLE" "$smoke_root/bundle"
+          smoke_bundle="$smoke_root/bundle"
+          smoke_data="$smoke_root/data"
+          env -i \
+            HOME="$smoke_root/home" \
+            PATH="$smoke_bundle/pg/bin:/usr/bin:/bin" \
+            "$smoke_bundle/pg/bin/initdb" \
+            --pgdata "$smoke_data" \
+            --username modulo \
+            --auth=trust \
+            --locale C
+          test -f "$smoke_data/PG_VERSION"
+          test -f "$smoke_data/global/pg_control"
+          echo "relocated initdb smoke passed: $smoke_bundle/pg/bin/initdb -> $smoke_data"
 
       - name: Assert bundled service binaries stay within the glibc 2.35 floor
         run: |

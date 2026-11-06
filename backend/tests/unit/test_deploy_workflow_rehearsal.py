@@ -560,16 +560,23 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert "apt.postgresql.org" not in workflow_text
 
 
-def test_bundled_pg_major_matches_shared_bundle_versions() -> None:
-    from modulo.launcher.initdb import PG_MAJOR
+def test_bundle_release_proves_postgres_relocation_with_initdb_smoke() -> None:
+    workflow = yaml.safe_load(BUNDLE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["bundle"]["steps"]
+    names = _step_names(steps)
+    build_script = steps[names.index("Build and sha256-verify PostgreSQL from pinned upstream source")]["run"]
+    smoke_name = "Smoke relocated bundled PostgreSQL initdb as an unprivileged user"
+    smoke_script = steps[names.index(smoke_name)]["run"]
 
-    env_text = (REPO_ROOT / "scripts" / "bundle-versions.env").read_text(encoding="utf-8")
-    pins = dict(
-        line.split("=", 1) for line in env_text.splitlines() if "=" in line and not line.lstrip().startswith("#")
-    )
-    assert pins["PG_MAJOR"] == PG_MAJOR
-    assert pins["PG_SOURCE_URL"].endswith(f"/postgresql-{pins['PG_VERSION']}.tar.gz")
-    assert re.fullmatch(r"[0-9a-f]{64}", pins["PG_SOURCE_SHA256"])
+    assert 'sharedir="$("$BUNDLE_PG_PREFIX/bin/pg_config" --sharedir)' in build_script
+    assert 'test "$sharedir" = "$BUNDLE_PG_PREFIX/share/postgresql"' in build_script
+    assert 'test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"' in build_script
+    assert 'test -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets"' in build_script
+    assert '"$smoke_bundle/pg/bin/initdb"' in smoke_script
+    assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
+    assert 'test -f "$smoke_data/PG_VERSION"' in smoke_script
+    assert 'test -f "$smoke_data/global/pg_control"' in smoke_script
+    assert "sudo" not in smoke_script
 
 
 def test_bundle_release_verifies_generated_signature_before_upload() -> None:
