@@ -34,12 +34,12 @@
       </label>
       <label v-if="bindingKind === 'trigger'" class="grid gap-1 text-xs">
         <span>{{ $t('views.SystemMapDetailView.binding_trigger') }}</span>
-        <select v-model="triggerId" class="rounded border bg-background px-2 py-1.5" data-testid="system-map-binding-trigger">
-          <option value="">{{ $t('views.SystemMapDetailView.all_triggers') }}</option>
+        <select v-model="triggerId" class="rounded border bg-background px-2 py-1.5" data-testid="system-map-binding-trigger" required>
+          <option value="" disabled>{{ $t('views.SystemMapDetailView.select_trigger') }}</option>
           <option v-for="trigger in triggers" :key="trigger.id" :value="trigger.id">{{ trigger.name || trigger.trigger_type || trigger.id }}</option>
         </select>
       </label>
-      <button type="submit" class="rounded border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-50 md:col-start-4" :disabled="saving || !nodeKey || !pipelineId" data-testid="system-map-binding-create">{{ $t('views.SystemMapDetailView.add_binding') }}</button>
+      <button type="submit" class="rounded border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-50 md:col-start-4" :disabled="saving || !nodeKey || !pipelineId || (bindingKind === 'trigger' && !triggerId)" data-testid="system-map-binding-create">{{ $t('views.SystemMapDetailView.add_binding') }}</button>
     </form>
 
     <ul v-if="bindings.length" class="mt-4 divide-y rounded border text-xs" data-testid="system-map-binding-list">
@@ -54,6 +54,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { AttributionBinding, AttributionBindingCreate, SystemMapNode } from '../../stores/systemMaps'
 import { api } from '../../lib/api/client'
 import LoadingSpinner from '../shared/LoadingSpinner.vue'
@@ -61,8 +62,14 @@ import LoadingSpinner from '../shared/LoadingSpinner.vue'
 interface Pipeline { id: string; name: string }
 interface Trigger { id: string; name?: string | null; trigger_type?: string | null }
 
-const props = defineProps<{ nodes: SystemMapNode[]; bindings: AttributionBinding[]; readOnly?: boolean }>()
-const emit = defineEmits<{ (event: 'create', binding: AttributionBindingCreate): void; (event: 'delete', bindingId: string): void }>()
+const props = defineProps<{
+  nodes: SystemMapNode[]
+  bindings: AttributionBinding[]
+  readOnly?: boolean
+  createHandler: (binding: AttributionBindingCreate) => Promise<void>
+  deleteHandler: (bindingId: string) => Promise<void>
+}>()
+const { t } = useI18n()
 
 const bindingKind = ref<'trigger' | 'action_pipeline'>('trigger')
 const nodeKey = ref('')
@@ -80,9 +87,14 @@ watch(bindingKind, () => { nodeKey.value = ''; pipelineId.value = ''; triggerId.
 watch(pipelineId, async (value) => {
   triggerId.value = ''
   if (!value || bindingKind.value !== 'trigger') { triggers.value = []; return }
-  const response = await api.GET('/api/v1/triggers', { params: { query: { pipeline_id: value, page_size: 100 } } })
-  const data = response.data as { items?: Trigger[] } | undefined
-  triggers.value = data?.items ?? []
+  try {
+    const response = await api.GET('/api/v1/triggers', { params: { query: { pipeline_id: value, page_size: 100 } } })
+    const data = response.data as { items?: Trigger[] } | undefined
+    triggers.value = data?.items ?? []
+  } catch (err) {
+    triggers.value = []
+    error.value = err instanceof Error ? err.message : t('systemMaps.errors.load_triggers')
+  }
 })
 
 async function loadOptions(): Promise<void> {
@@ -92,19 +104,25 @@ async function loadOptions(): Promise<void> {
     const data = response.data as { items?: Pipeline[] } | undefined
     pipelines.value = data?.items ?? []
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Could not load pipelines'
+    error.value = err instanceof Error ? err.message : t('systemMaps.errors.load_pipelines')
   } finally {
     loading.value = false
   }
 }
 
 async function createBinding(): Promise<void> {
+  if (bindingKind.value === 'trigger' && !triggerId.value) return
   saving.value = true
   error.value = null
   try {
-    await emit('create', { node_key: nodeKey.value, pipeline_id: pipelineId.value, trigger_id: triggerId.value || null, binding_kind: bindingKind.value })
+    await props.createHandler({
+      node_key: nodeKey.value,
+      pipeline_id: pipelineId.value,
+      trigger_id: bindingKind.value === 'trigger' ? triggerId.value : null,
+      binding_kind: bindingKind.value,
+    })
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Could not create attribution binding'
+    error.value = err instanceof Error ? err.message : t('systemMaps.errors.create_attribution_binding')
   } finally {
     saving.value = false
   }
@@ -114,9 +132,9 @@ async function removeBinding(bindingId: string): Promise<void> {
   saving.value = true
   error.value = null
   try {
-    await emit('delete', bindingId)
+    await props.deleteHandler(bindingId)
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Could not delete attribution binding'
+    error.value = err instanceof Error ? err.message : t('systemMaps.errors.delete_attribution_binding')
   } finally {
     saving.value = false
   }

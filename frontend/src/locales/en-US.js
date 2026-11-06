@@ -2077,7 +2077,7 @@ export default {
       "binding_trigger": "Trigger",
       "select_node": "Select a node",
       "select_pipeline": "Select a pipeline",
-      "all_triggers": "All triggers",
+      "select_trigger": "Select a trigger",
       "add_binding": "Add binding",
       "no_attribution_bindings": "No attribution bindings configured yet."
     },
@@ -4682,6 +4682,8 @@ export default {
       "diff_revision": "Could not compare revisions",
       "save_draft": "Could not save draft",
       "discovery_failed": "Discovery failed",
+      "load_pipelines": "Could not load pipelines",
+      "load_triggers": "Could not load triggers",
       "load_attribution_bindings": "Could not load attribution bindings",
       "create_attribution_binding": "Could not create attribution binding",
       "delete_attribution_binding": "Could not delete attribution binding"

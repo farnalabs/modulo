@@ -498,7 +498,7 @@ describe('useSystemMapsStore derived access and non-Error failures', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/attribution-bindings', { params: { path: { map_id: 'map-1' } } })
 
     mockPost.mockResolvedValue({ data: { id: 'binding-2', node_key: 'pipeline-2', binding_kind: 'trigger' } })
-    await store.createAttributionBinding('map-1', { node_key: 'pipeline-2', pipeline_id: 'pipe-1', trigger_id: null, binding_kind: 'trigger' })
+    await store.createAttributionBinding('map-1', { node_key: 'pipeline-2', pipeline_id: 'pipe-1', trigger_id: 'trig-1', binding_kind: 'trigger' })
     expect(store.attributionBindings.map((binding) => binding.id)).toEqual(['binding-1', 'binding-2'])
 
     mockDelete.mockResolvedValue({ data: undefined })
@@ -511,7 +511,7 @@ describe('useSystemMapsStore derived access and non-Error failures', () => {
     mockGet.mockResolvedValue({ error: { detail: 'bindings unavailable' } })
     await expect(store.loadAttributionBindings('map-1')).rejects.toThrow('bindings unavailable')
     mockPost.mockResolvedValue({ error: { detail: 'invalid binding' } })
-    await expect(store.createAttributionBinding('map-1', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: null, binding_kind: 'trigger' })).rejects.toThrow('invalid binding')
+    await expect(store.createAttributionBinding('map-1', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: 'trig-1', binding_kind: 'trigger' })).rejects.toThrow('invalid binding')
     mockDelete.mockResolvedValue({ error: { detail: 'delete failed' } })
     await expect(store.deleteAttributionBinding('map-1', 'binding-1')).rejects.toThrow('delete failed')
   })

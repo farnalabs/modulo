@@ -529,7 +529,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     return response.data
   }
 
-  function clearActive(): void { activeMap.value = null; activeRevision.value = null; graph.value = null; discovery.value = null }
+  function clearActive(): void { activeMap.value = null; activeRevision.value = null; graph.value = null; discovery.value = null; attributionBindings.value = [] }
 
   // Kept for the dashboard's preview card; discovery is now a real operation.
   function fetchDiscovery(): void { loaded.value = true }

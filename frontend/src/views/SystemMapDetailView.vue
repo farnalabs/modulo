@@ -135,8 +135,8 @@
           :nodes="graph.nodes"
           :bindings="store.attributionBindings"
           :read-only="readOnly"
-          @create="createAttributionBinding"
-          @delete="deleteAttributionBinding"
+          :create-handler="createAttributionBinding"
+          :delete-handler="deleteAttributionBinding"
           data-testid="system-map-attribution-bindings-panel"
         />
       </main>
@@ -387,20 +387,12 @@ async function archiveRevision(): Promise<void> {
 
 async function createAttributionBinding(binding: AttributionBindingCreate): Promise<void> {
   if (!activeMap.value) return
-  try {
-    await store.createAttributionBinding(activeMap.value.id, binding)
-  } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.create_attribution_binding')
-  }
+  await store.createAttributionBinding(activeMap.value.id, binding)
 }
 
 async function deleteAttributionBinding(bindingId: string): Promise<void> {
   if (!activeMap.value) return
-  try {
-    await store.deleteAttributionBinding(activeMap.value.id, bindingId)
-  } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.delete_attribution_binding')
-  }
+  await store.deleteAttributionBinding(activeMap.value.id, bindingId)
 }
 
 async function loadAndOpenDiscovery(): Promise<void> {

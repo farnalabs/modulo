@@ -25,14 +25,20 @@ const bindings = [
   { id: 'binding-2', binding_kind: 'action_pipeline', node_key: 'loop-1', pipeline_id: 'pipe-2', trigger_id: null },
 ]
 
-function mountComponent(options: { bindings?: unknown[]; readOnly?: boolean; attrs?: Record<string, unknown> } = {}) {
+function mountComponent(options: {
+  bindings?: unknown[]
+  readOnly?: boolean
+  createHandler?: (binding: unknown) => Promise<void>
+  deleteHandler?: (bindingId: string) => Promise<void>
+} = {}) {
   return mount(SystemMapAttributionBindings, {
     props: {
       nodes: nodes as never,
       bindings: (options.bindings ?? []) as never,
       readOnly: options.readOnly,
+      createHandler: options.createHandler ?? (async () => {}),
+      deleteHandler: options.deleteHandler ?? (async () => {}),
     },
-    attrs: options.attrs,
     global: { plugins: [i18n] },
   })
 }
@@ -137,15 +143,15 @@ describe('SystemMapAttributionBindings', () => {
     expect(wrapper.get('[data-testid="system-map-binding-trigger"]').findAll('option')).toHaveLength(1)
   })
 
-  it('submits a trigger binding, including the optional trigger id', async () => {
+  it('submits a trigger binding with the selected trigger id', async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/pipelines') return Promise.resolve(pipelinesResponse())
       if (path === '/api/v1/triggers') return Promise.resolve({ data: { items: [{ id: 'trig-1', name: 'Nightly' }, { id: 'trig-2', name: null, trigger_type: 'schedule' }, { id: 'trig-3', name: '', trigger_type: null }] } })
       return Promise.resolve({ data: {} })
     })
-    const onCreate = vi.fn()
+    const onCreate = vi.fn(async () => {})
 
-    const wrapper = mountComponent({ attrs: { onCreate } })
+    const wrapper = mountComponent({ createHandler: onCreate })
     await flushPromises()
 
     await wrapper.get('[data-testid="system-map-binding-node"]').setValue('pipeline-1')
@@ -161,24 +167,36 @@ describe('SystemMapAttributionBindings', () => {
       trigger_id: 'trig-1',
       binding_kind: 'trigger',
     })
+  })
 
-    await wrapper.get('[data-testid="system-map-binding-trigger"]').setValue('')
+  it('requires a trigger before submitting a trigger binding', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/pipelines') return Promise.resolve(pipelinesResponse())
+      if (path === '/api/v1/triggers') return Promise.resolve({ data: { items: [{ id: 'trig-1', name: 'Nightly' }] } })
+      return Promise.resolve({ data: {} })
+    })
+    const onCreate = vi.fn(async () => {})
+
+    const wrapper = mountComponent({ createHandler: onCreate })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="system-map-binding-node"]').setValue('pipeline-1')
+    await wrapper.get('[data-testid="system-map-binding-pipeline"]').setValue('pipe-1')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="system-map-binding-create"]').attributes('disabled')).toBeDefined()
+
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(onCreate).toHaveBeenLastCalledWith({
-      node_key: 'pipeline-1',
-      pipeline_id: 'pipe-1',
-      trigger_id: null,
-      binding_kind: 'trigger',
-    })
+    expect(onCreate).not.toHaveBeenCalled()
   })
 
   it('submits an action-pipeline binding without loading triggers', async () => {
     mockGet.mockResolvedValue(pipelinesResponse())
-    const onCreate = vi.fn()
+    const onCreate = vi.fn(async () => {})
 
-    const wrapper = mountComponent({ attrs: { onCreate } })
+    const wrapper = mountComponent({ createHandler: onCreate })
     await flushPromises()
 
     await wrapper.get('[data-testid="system-map-binding-kind"]').setValue('action_pipeline')
@@ -196,11 +214,11 @@ describe('SystemMapAttributionBindings', () => {
     })
   })
 
-  it('renders existing bindings and emits a delete', async () => {
+  it('renders existing bindings and deletes through the handler', async () => {
     mockGet.mockResolvedValue(pipelinesResponse())
-    const onDelete = vi.fn()
+    const onDelete = vi.fn(async () => {})
 
-    const wrapper = mountComponent({ bindings, attrs: { onDelete } })
+    const wrapper = mountComponent({ bindings, deleteHandler: onDelete })
     await flushPromises()
 
     expect(wrapper.get('[data-testid="system-map-binding-list"]').text()).toContain('trigger · pipeline-1 · pipe-1 · trig-1')
@@ -235,24 +253,22 @@ describe('SystemMapAttributionBindings', () => {
     expect(second.text()).toContain('Could not load pipelines')
   })
 
-  it('surfaces create and delete emit failures, falling back for non-Error rejections', async () => {
-    mockGet.mockImplementation((path: string) => {
-      if (path === '/api/v1/pipelines') return Promise.resolve(pipelinesResponse())
-      return Promise.resolve({ data: {} })
-    })
-    const onCreate = vi.fn(() => {
-      throw new Error('create exploded')
-    })
-    const onDelete = vi.fn(() => {
-      throw new Error('delete exploded')
-    })
+  async function submitActionPipelineBinding(wrapper: Awaited<ReturnType<typeof mountComponent>>): Promise<void> {
+    await wrapper.get('[data-testid="system-map-binding-kind"]').setValue('action_pipeline')
+    await wrapper.get('[data-testid="system-map-binding-node"]').setValue('loop-1')
+    await wrapper.get('[data-testid="system-map-binding-pipeline"]').setValue('pipe-2')
+    await wrapper.get('form').trigger('submit')
+  }
 
-    const wrapper = mountComponent({ bindings, attrs: { onCreate, onDelete } })
+  it('surfaces async create and delete handler failures', async () => {
+    mockGet.mockResolvedValue(pipelinesResponse())
+    const onCreate = vi.fn().mockRejectedValue(new Error('create exploded'))
+    const onDelete = vi.fn().mockRejectedValue(new Error('delete exploded'))
+
+    const wrapper = mountComponent({ bindings, createHandler: onCreate, deleteHandler: onDelete })
     await flushPromises()
 
-    await wrapper.get('[data-testid="system-map-binding-node"]').setValue('pipeline-1')
-    await wrapper.get('[data-testid="system-map-binding-pipeline"]').setValue('pipe-1')
-    await wrapper.get('form').trigger('submit')
+    await submitActionPipelineBinding(wrapper)
     await flushPromises()
     expect(wrapper.text()).toContain('create exploded')
 
@@ -261,29 +277,44 @@ describe('SystemMapAttributionBindings', () => {
     expect(wrapper.text()).toContain('delete exploded')
   })
 
-  it('falls back to generic emit-failure messages for non-Error rejections', async () => {
-    mockGet.mockImplementation((path: string) => {
-      if (path === '/api/v1/pipelines') return Promise.resolve(pipelinesResponse())
-      return Promise.resolve({ data: {} })
-    })
-    const onCreate = vi.fn(() => {
-      throw 'offline'
-    })
-    const onDelete = vi.fn(() => {
-      throw 'offline'
-    })
+  it('falls back to generic handler-failure messages for non-Error rejections', async () => {
+    mockGet.mockResolvedValue(pipelinesResponse())
+    const onCreate = vi.fn().mockRejectedValue('offline')
+    const onDelete = vi.fn().mockRejectedValue('offline')
 
-    const wrapper = mountComponent({ bindings, attrs: { onCreate, onDelete } })
+    const wrapper = mountComponent({ bindings, createHandler: onCreate, deleteHandler: onDelete })
     await flushPromises()
 
-    await wrapper.get('[data-testid="system-map-binding-node"]').setValue('pipeline-1')
-    await wrapper.get('[data-testid="system-map-binding-pipeline"]').setValue('pipe-1')
-    await wrapper.get('form').trigger('submit')
+    await submitActionPipelineBinding(wrapper)
     await flushPromises()
     expect(wrapper.text()).toContain('Could not create attribution binding')
 
     await wrapper.get('[data-testid="system-map-binding-delete-binding-1"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('Could not delete attribution binding')
+  })
+
+  it('keeps saving while an async handler is pending and clears it after the rejection settles', async () => {
+    mockGet.mockResolvedValue(pipelinesResponse())
+    let rejectCreate: (reason: unknown) => void = () => {}
+    const onCreate = vi.fn(() => new Promise<void>((_resolve, reject) => { rejectCreate = reject }))
+
+    const wrapper = mountComponent({ createHandler: onCreate })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="system-map-binding-kind"]').setValue('action_pipeline')
+    await wrapper.get('[data-testid="system-map-binding-node"]').setValue('loop-1')
+    await wrapper.get('[data-testid="system-map-binding-pipeline"]').setValue('pipe-2')
+    await wrapper.get('form').trigger('submit')
+    await wrapper.vm.$nextTick()
+
+    expect(onCreate).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="system-map-binding-create"]').attributes('disabled')).toBeDefined()
+
+    rejectCreate(new Error('create failed after a tick'))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('create failed after a tick')
+    expect(wrapper.get('[data-testid="system-map-binding-create"]').attributes('disabled')).toBeUndefined()
   })
 })

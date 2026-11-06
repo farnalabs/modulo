@@ -163,8 +163,7 @@ describe('SystemMapDetailView authoring actions', () => {
   }
   const AttributionStub = {
     name: 'SystemMapAttributionBindings',
-    props: ['nodes', 'bindings', 'readOnly'],
-    emits: ['create', 'delete'],
+    props: ['nodes', 'bindings', 'readOnly', 'createHandler', 'deleteHandler'],
     template: '<div data-testid="attribution-stub" />',
   }
 
@@ -730,12 +729,15 @@ describe('SystemMapDetailView authoring actions', () => {
 
     const create = vi.spyOn(store, 'createAttributionBinding').mockResolvedValue({ id: 'binding-2' } as never)
     const remove = vi.spyOn(store, 'deleteAttributionBinding').mockResolvedValue(undefined)
+    const attribution = wrapper.findComponent(AttributionStub)
+    const createHandler = attribution.props('createHandler') as (binding: unknown) => Promise<void>
+    const deleteHandler = attribution.props('deleteHandler') as (bindingId: string) => Promise<void>
 
-    wrapper.findComponent(AttributionStub).vm.$emit('create', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: null, binding_kind: 'trigger' })
+    await createHandler({ node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: 'trig-1', binding_kind: 'trigger' })
     await flushPromises()
-    expect(create).toHaveBeenCalledWith('map-1', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: null, binding_kind: 'trigger' })
+    expect(create).toHaveBeenCalledWith('map-1', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: 'trig-1', binding_kind: 'trigger' })
 
-    wrapper.findComponent(AttributionStub).vm.$emit('delete', 'binding-2')
+    await deleteHandler('binding-2')
     await flushPromises()
     expect(remove).toHaveBeenCalledWith('map-1', 'binding-2')
   })
@@ -749,17 +751,19 @@ describe('SystemMapDetailView authoring actions', () => {
     const create = vi.spyOn(store, 'createAttributionBinding')
     const remove = vi.spyOn(store, 'deleteAttributionBinding')
     const attribution = wrapper.findComponent(AttributionStub)
+    const createHandler = attribution.props('createHandler') as (binding: unknown) => Promise<void>
+    const deleteHandler = attribution.props('deleteHandler') as (bindingId: string) => Promise<void>
     store.activeMap = null
 
-    attribution.vm.$emit('create', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: null, binding_kind: 'trigger' })
-    attribution.vm.$emit('delete', 'binding-2')
+    await createHandler({ node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: 'trig-1', binding_kind: 'trigger' })
+    await deleteHandler('binding-2')
     await flushPromises()
 
     expect(create).not.toHaveBeenCalled()
     expect(remove).not.toHaveBeenCalled()
   })
 
-  it('reports attribution binding action failures, falling back for non-Error rejections', async () => {
+  it('propagates attribution binding action failures to the panel handler', async () => {
     const wrapper = mountWithStubs()
     await flushPromises()
     const store = seed(mockPost)
@@ -767,29 +771,22 @@ describe('SystemMapDetailView authoring actions', () => {
 
     const create = vi.spyOn(store, 'createAttributionBinding')
     const remove = vi.spyOn(store, 'deleteAttributionBinding')
+    const attribution = wrapper.findComponent(AttributionStub)
+    const createHandler = attribution.props('createHandler') as (binding: unknown) => Promise<void>
+    const deleteHandler = attribution.props('deleteHandler') as (bindingId: string) => Promise<void>
+    const payload = { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: 'trig-1', binding_kind: 'trigger' }
 
-    create.mockRejectedValueOnce(new Error('Could not create attribution binding'))
-    wrapper.findComponent(AttributionStub).vm.$emit('create', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: null, binding_kind: 'trigger' })
-    await flushPromises()
-    expect(wrapper.text()).toContain('Could not create attribution binding')
+    create.mockRejectedValueOnce(new Error('create exploded'))
+    await expect(createHandler(payload)).rejects.toThrow('create exploded')
 
-    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
     create.mockRejectedValueOnce('offline')
-    wrapper.findComponent(AttributionStub).vm.$emit('create', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: null, binding_kind: 'trigger' })
-    await flushPromises()
-    expect(wrapper.text()).toContain('Could not create attribution binding')
+    await expect(createHandler(payload)).rejects.toBe('offline')
 
-    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
-    remove.mockRejectedValueOnce(new Error('Could not delete attribution binding'))
-    wrapper.findComponent(AttributionStub).vm.$emit('delete', 'binding-2')
-    await flushPromises()
-    expect(wrapper.text()).toContain('Could not delete attribution binding')
+    remove.mockRejectedValueOnce(new Error('delete exploded'))
+    await expect(deleteHandler('binding-2')).rejects.toThrow('delete exploded')
 
-    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
     remove.mockRejectedValueOnce('offline')
-    wrapper.findComponent(AttributionStub).vm.$emit('delete', 'binding-2')
-    await flushPromises()
-    expect(wrapper.text()).toContain('Could not delete attribution binding')
+    await expect(deleteHandler('binding-2')).rejects.toBe('offline')
   })
 })
 
