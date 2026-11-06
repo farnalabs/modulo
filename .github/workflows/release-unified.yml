@@ -2176,9 +2176,11 @@ jobs:
         # Cloudflare Pages deploy hook URL to enable it; unset means skip.
         # Rotate by creating a new hook in Cloudflare Pages, updating the secret,
         # then deleting the old hook. See docs/release-process.md.
-        # It must never fail a release: continue-on-error plus exit 0 below.
+        # It must never fail a release. `continue-on-error` is banned by
+        # .semgrep/continue-on-error-in-ci.yaml, so every command below is
+        # individually best-effort and the script reports a non-fatal outcome
+        # explicitly (::notice:: / ::warning::) before exiting 0 on every path.
         if: ${{ success() }}
-        continue-on-error: true
         env:
           WEBSITE_DEPLOY_HOOK_URL: ${{ secrets.WEBSITE_DEPLOY_HOOK_URL }}
         shell: bash
