@@ -1159,6 +1159,15 @@ class TestDashboardSummaryEdgeCases:
                 "failed",
                 "idle",
                 "completed",
+                "complete",
+                "cancelled",
+                "eval_failed",
+                "stalled",
+                "budget_exceeded",
+                "router_no_match",
+                "cost_ceiling_exceeded",
+                "compensation_failed",
+                "rejected",
             }
 
     def test_summary_forbidden_for_principal_without_org_role(self) -> None:
