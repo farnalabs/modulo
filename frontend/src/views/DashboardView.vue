@@ -85,7 +85,10 @@
                </span>
                <span class="text-xs text-muted-foreground">{{ summary.eval_pass_rate?.total_evals }} {{ $t('views.DashboardView.total_evals_all_time') }}</span>
              </div>
-              <Sparkline class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" unit="%" color="hsl(var(--primary-text))" :show-y-axis="true" />
+              <Sparkline v-if="hasEvalChartData" class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" unit="%" color="hsl(var(--primary-text))" :show-y-axis="true" />
+              <div v-else class="mt-2 flex h-12 items-center justify-center rounded-md border border-dashed border-border text-xs text-muted-foreground" aria-live="polite">
+                {{ $t('components.Sparkline.no_data') }}
+              </div>
            </div>
            <div v-else class="flex flex-col items-center justify-center gap-1 py-6 text-sm text-muted-foreground" aria-live="polite">
              <span class="font-semibold">{{ $t('common.na') }}</span>
@@ -193,8 +196,8 @@
             <Sparkline class="h-16 w-full" :data="trendRejectionRate" :labels="trendLabels" unit="%" color="hsl(var(--destructive-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
         </div>
-        <div v-else class="flex items-center justify-center min-h-[200px]">
-          <p class="text-sm italic text-muted-foreground">{{ $t('views.DashboardView.no_data_trends') }}</p>
+        <div v-else class="flex flex-col items-center justify-center gap-1 py-6 text-sm text-muted-foreground" aria-live="polite">
+          <p class="italic">{{ $t('views.DashboardView.no_data_trends') }}</p>
         </div>
       </div>
       <!-- Recent runs list -->
@@ -309,6 +312,11 @@ const evalSparklineData = computed((): Array<number | null> => {
 })
 
 const lastEvalRates = computed(() => evalSparklineData.value.filter((r): r is number => r !== null && Number.isFinite(r)))
+
+// Sparkline only draws once it has two real observations. Keep the meaningful
+// summary value visible above that threshold, but avoid mounting the primitive
+// (and its full-width empty plot) when there is nothing to chart.
+const hasEvalChartData = computed(() => lastEvalRates.value.length >= 2)
 
 const evalTrend = computed(() => {
   const rates = lastEvalRates.value
