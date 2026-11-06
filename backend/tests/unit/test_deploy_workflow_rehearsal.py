@@ -611,6 +611,43 @@ def test_bundle_release_scans_postgres_elf_paths_and_keeps_glibc_gate() -> None:
     assert "could not determine the glibc requirement" in workflow_text
 
 
+#: The exact sed program the ELF leakage scan uses to extract RUNPATH/RPATH
+#: entries. It has exactly ONE capture group (the bracketed path), so the
+#: replacement MUST be ``\1``. A ``\2`` makes GNU sed fail inside a ``<( )``
+#: process substitution, so the RUNPATH loop reads zero lines and the step
+#: still exits 0 - the guard silently never runs.
+_RUNPATH_PROBE = r"/\((RPATH|RUNPATH)\)/s/.*\[([^]]*)\].*/\1/p"
+
+
+def test_bundle_release_runpath_probe_is_live_and_extracts_runtime_paths() -> None:
+    workflow = yaml.safe_load(BUNDLE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["bundle"]["steps"]
+    names = _step_names(steps)
+    script = steps[names.index("Scan shipped PostgreSQL ELF files for runtime path leakage")]["run"]
+
+    assert _RUNPATH_PROBE in script
+    assert "/\\2/p" not in script
+
+    readelf_output = textwrap.dedent(
+        """\
+        0x000000000000001d (RUNPATH)            Library runpath: [$ORIGIN/../lib]
+        0x000000000000001d (RPATH)              Library rpath: [/opt/lib:/usr/lib]
+        0x0000000000000001 (NEEDED)             Shared library: [libpq.so.5]
+        """
+    )
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required to execute the ELF RUNPATH probe")
+    result = subprocess.run(  # noqa: S603 - resolved bash executable and test-owned pipeline
+        [bash, "-c", f"sed -nE '{_RUNPATH_PROBE}' | tr ':' '\\n'"],
+        input=readelf_output,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.splitlines() == ["$ORIGIN/../lib", "/opt/lib", "/usr/lib"]
+
+
 def test_bundle_release_verifies_generated_signature_before_upload() -> None:
     workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "bundle-release.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["bundle"]["steps"]

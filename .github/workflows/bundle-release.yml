@@ -183,7 +183,7 @@ jobs:
             -e 'CREATE[[:space:]]+EXTENSION' \
             -e 'required_extensions?' \
             -e 'extension_requirements?' \
-            backend/src/modulo/db/migrations backend/src/modulo > "$extension_hits" || true
+            backend/src/modulo > "$extension_hits" || true
           if [ -s "$extension_hits" ]; then
             while IFS= read -r hit; do
               extension_name="$(printf '%s\n' "$hit" | sed -nE 's/.*CREATE[[:space:]]+EXTENSION([[:space:]]+IF[[:space:]]+NOT[[:space:]]+EXISTS)?[[:space:]]+([a-zA-Z0-9_]+).*/\2/p' | head -n1)"
@@ -369,7 +369,7 @@ jobs:
               esac
             done < <(
               readelf -d "$binary" |
-                sed -nE '/\((RPATH|RUNPATH)\)/s/.*\[([^]]*)\].*/\2/p' |
+                sed -nE '/\((RPATH|RUNPATH)\)/s/.*\[([^]]*)\].*/\1/p' |
                 tr ':' '\n'
             )
 
