@@ -1,8 +1,9 @@
 ﻿import { test, expect, loginAsAdmin, isDevModeTarget } from './setup/fixtures'
 
 test.describe('Output Diff', { tag: "@regression" }, () => {
-  test('page loads with correct heading', { tag: "@regression" }, async ({ page, env }) => {
+  test('page controls fit a narrow viewport', { tag: "@regression" }, async ({ page, env }) => {
     test.skip(!isDevModeTarget(env), 'Route is dev-mode-gated (private_preview); only runs on a dev-mode target')
+    await page.setViewportSize({ width: 390, height: 844 })
     await loginAsAdmin(page, env)
     // Register after loginAsAdmin so this specific route wins over its generic API catch-all.
     await page.route('**/api/v1/dashboard/summary', (route) => {
@@ -11,5 +12,9 @@ test.describe('Output Diff', { tag: "@regression" }, () => {
     await page.goto('/runs/diff')
     await expect(page.locator('h1')).toContainText('Agent Output Diff')
     await expect(page.getByTestId('diff-recent-runs-a')).toBeVisible()
+    await expect(page.getByTestId('diff-run-id-a')).toBeVisible()
+    await expect(page.getByTestId('diff-run-id-b')).toBeVisible()
+    await expect(page.getByTestId('diff-compare-btn')).toBeVisible()
+    await expect(page.locator('body')).toHaveCSS('overflow-x', 'visible')
   })
 })
