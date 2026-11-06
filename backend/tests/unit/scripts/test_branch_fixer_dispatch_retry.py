@@ -557,13 +557,36 @@ def test_transient_exhaustion_applies_the_pending_label(tmp_path: Path) -> None:
     assert PENDING_LABEL in run.pr_comment_body
 
 
-def test_terminal_rejection_is_never_labelled(tmp_path: Path) -> None:
-    """A credential/payload rejection is a fix, not a pending dispatch."""
+def test_terminal_rejection_is_never_labelled_but_is_announced(tmp_path: Path) -> None:
+    """A credential/payload rejection is a fix, not a pending dispatch.
+
+    The label is deliberately withheld, but withholding it must NOT skip the
+    dispatch-failure comment: every undelivered dispatch is announced on the
+    PR (the hard requirement), so the operator learns the fix loop is inactive.
+    """
     run = _run_dispatch(tmp_path, [Response("401", '{"detail": "invalid signature"}')])
 
     assert run.exit_code == 1, run.output
     assert not _label_api_calls(run)
-    assert PENDING_LABEL not in run.pr_comment_body
+    assert run.pr_comment_body, "a terminal rejection must still post the dispatch-failure comment"
+    assert "non-retryable rejection" in run.pr_comment_body
+    assert PENDING_LABEL in run.pr_comment_body, "the comment must explain why no pending label was applied"
+    assert "not a pending dispatch" in run.pr_comment_body
+
+
+def test_config_failure_is_announced_without_a_pending_label(tmp_path: Path) -> None:
+    """A missing secret is a fix, not a pending dispatch, but must be announced."""
+    run = _run_dispatch(
+        tmp_path,
+        [],
+        {"DISPATCH_URL": ""},
+    )
+
+    assert run.exit_code == 1, run.output
+    assert not _label_api_calls(run)
+    assert run.pr_comment_body, "a config failure must still post the dispatch-failure comment"
+    assert "webhook secret unavailable" in run.pr_comment_body
+    assert "not a pending dispatch" in run.pr_comment_body
 
 
 def test_successful_dispatch_clears_the_pending_label(tmp_path: Path) -> None:
