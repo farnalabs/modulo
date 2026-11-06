@@ -319,6 +319,55 @@ describe('SsoProviderForm — callback URL', () => {
     expect(wrapper.find('[data-testid="sso-callback-url-copy-failed"]').exists()).toBe(true)
   })
 
+  it('surfaces failure feedback when execCommand throws', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+    })
+    vi.stubGlobal('ClipboardItem', undefined)
+    const execCommand = vi.fn().mockImplementation(() => {
+      throw new Error('execCommand unsupported')
+    })
+    Object.defineProperty(document, 'execCommand', {
+      value: execCommand,
+      configurable: true,
+    })
+    const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+    const wrapper = mountForm(makeData(), { callbackUrl })
+    await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
+    await flushPromises()
+    expect(execCommand).toHaveBeenCalledWith('copy')
+    expect(wrapper.find('[data-testid="sso-callback-url-copied"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sso-callback-url-copy-failed"]').exists()).toBe(true)
+  })
+
+  it('clears the copy-failure feedback when the reset timer fires', async () => {
+    vi.useFakeTimers()
+    try {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: undefined,
+        configurable: true,
+      })
+      vi.stubGlobal('ClipboardItem', undefined)
+      const execCommand = vi.fn().mockReturnValue(false)
+      Object.defineProperty(document, 'execCommand', {
+        value: execCommand,
+        configurable: true,
+      })
+      const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+      const wrapper = mountForm(makeData(), { callbackUrl })
+      await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="sso-callback-url-copy-failed"]').exists()).toBe(true)
+      vi.advanceTimersByTime(2000)
+      await nextTick()
+      expect(wrapper.find('[data-testid="sso-callback-url-copy-failed"]').exists()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('clears the copy-success timer when the form unmounts', async () => {
     vi.useFakeTimers()
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
