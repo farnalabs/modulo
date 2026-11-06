@@ -630,6 +630,25 @@ describe('AdminCostBreakdownView', () => {
     expect(alert.text()).toContain('Failed to dismiss anomaly')
   })
 
+  it('keeps ordinary Costs typography on the product font while technical values stay scoped', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    const page = wrapper.get('.page-wide')
+    expect(page.classes()).not.toContain('font-sans')
+    expect(page.get('h1[data-page-heading]').classes()).not.toContain('font-mono')
+    expect(page.find('.font-mono').exists()).toBe(false)
+  })
+
   it('uses the shared dashboard metric-label typography for the summary headings', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)

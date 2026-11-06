@@ -59,6 +59,10 @@ const SLICE = [
   // describe is "WCAG AA audit (local)" and it runs in full against the local
   // target, not staging.
   'tests/e2e/staging-wcag.spec.ts',
+  // Mobile overflow: a narrow (390px) viewport where the Diff page controls
+  // spill past the viewport is a layout regression invisible to unit/type
+  // checks. Single mock-API page load, deterministic against the local target.
+  'tests/e2e/runs-diff.spec.ts',
   // Overlay geometry: a dropdown that is clipped, mis-anchored or rendered at
   // the viewport edge is a layout regression invisible to unit/type checks.
   'tests/e2e/filter-bar-overlay.spec.ts',

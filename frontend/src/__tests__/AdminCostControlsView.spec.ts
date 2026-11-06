@@ -84,6 +84,15 @@ describe('AdminCostControlsView', () => {
     expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(4)
   })
 
+  it('keeps ordinary Costs typography scoped to the page content', async () => {
+    const wrapper = await mountView()
+
+    const page = wrapper.get('.page-wide')
+    expect(page.classes()).not.toContain('font-sans')
+    expect(page.get('h1[data-page-heading]').classes()).not.toContain('font-mono')
+    expect(page.get('[data-testid="cc-team-budget-team-1"]').classes()).not.toContain('font-mono')
+  })
+
   it('displays budget overview with spend and remaining', async () => {
     const wrapper = await mountView()
     expect(wrapper.find('[data-testid="cc-total-spend"]').exists()).toBe(true)

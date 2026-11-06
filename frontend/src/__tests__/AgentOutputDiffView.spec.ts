@@ -74,6 +74,29 @@ describe('AgentOutputDiffView', () => {
     expect(btn.attributes('disabled')).toBeDefined()
   })
 
+  it('stacks diff controls at narrow widths while preserving desktop widths', async () => {
+    router.push('/runs/diff')
+    await router.isReady()
+    const wrapper = mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const controls = wrapper.find('.rounded-lg.border.bg-card.p-6 > .flex')
+    expect(controls.classes()).toEqual(expect.arrayContaining(['flex-col', 'sm:flex-row']))
+
+    const selects = wrapper.findAllComponents({ name: 'Select' })
+    expect(selects).toHaveLength(2)
+    expect(selects[0].classes()).toEqual(expect.arrayContaining(['w-full', 'sm:w-52']))
+    expect(wrapper.find('[data-testid="diff-run-id-a"]').classes()).toEqual(
+      expect.arrayContaining(['w-full', 'sm:w-48']),
+    )
+    expect(wrapper.find('[data-testid="diff-compare-btn"]').classes()).toEqual(
+      expect.arrayContaining(['w-full', 'sm:w-auto']),
+    )
+  })
+
   it('enables compare button when all inputs are filled', async () => {
     router.push('/runs/diff')
     await router.isReady()
