@@ -838,7 +838,6 @@ async def _apply_org_candidates(
     """
     open_key = _open_key(org_id)
     open_subjects = {_decode(raw) for raw in await redis_client.smembers(open_key)}
-    current = set(candidates)
     await _prune_unhealthy_markers(redis_client, org_id=org_id, candidates=candidates)
 
     held_subjects = await _hold_unsustained_unhealthy_candidates(
@@ -1031,13 +1030,16 @@ def _org_from_unhealthy_marker_key(raw: str) -> uuid.UUID | None:
         return None
 
 
-async def _org_ids_with_unhealthy_markers(  # NOSONAR S7503 - async Redis scan seam
-    redis_client: AsyncRedis,
-) -> list[uuid.UUID]:
+async def _org_ids_with_unhealthy_markers(redis_client: AsyncRedis) -> list[uuid.UUID]:
     """Return every org represented by a pre-alert sustain marker in Redis."""
     found: list[uuid.UUID] = []
     seen: set[uuid.UUID] = set()
-    async for raw in redis_client.scan_iter(match=f"{_STATE_KEY_PREFIX}:*:{_QUEUE_UNHEALTHY_MARKER}:*"):
+    markers = redis_client.scan_iter(match=f"{_STATE_KEY_PREFIX}:*:{_QUEUE_UNHEALTHY_MARKER}:*")
+    while True:
+        try:
+            raw = await markers.__anext__()
+        except StopAsyncIteration:
+            break
         org_id = _org_from_unhealthy_marker_key(_decode(raw))
         if org_id is not None and org_id not in seen:
             seen.add(org_id)

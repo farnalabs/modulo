@@ -2376,6 +2376,10 @@ jobs:
                   LABEL_NOTE="The \`${FIXER_PENDING_LABEL}\` label could **not** be applied automatically, so the outstanding dispatch is recorded only in this comment and the job summary."
                 fi
                 ;;
+              *)
+                echo "::error::Unexpected dispatch failure class '${LAST_CLASS:-<empty>}' — refusing to apply a retry label."
+                exit 1
+                ;;
             esac
             # FAR-1997: the job now checks out ONLY scripts/dispatch_with_retry.sh
             # (the dispatch policy is shared code, not an inline loop), but the

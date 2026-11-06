@@ -4949,7 +4949,7 @@ class PipelineExecutor:
             graph_json=graph_json,
         )
 
-    async def _execute_handle_stream_exceptions(
+    def _execute_handle_stream_exceptions(
         self,
         exc: Exception,
         *,
@@ -6140,7 +6140,7 @@ class PipelineExecutor:
                 error_detail,
                 node_token_usage,
                 retry_policy_eligible,
-            ) = await self._execute_handle_stream_exceptions(
+            ) = self._execute_handle_stream_exceptions(
                 exc=exc,
                 run_id=run_id,
                 node_token_usage=node_token_usage,

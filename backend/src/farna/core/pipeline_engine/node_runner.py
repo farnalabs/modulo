@@ -2343,7 +2343,7 @@ class _BoundedFinalDrain:
         except Exception:
             # The drain itself failed. Logged HERE (the callback stays silent
             # while awaited) so the failure is never swallowed.
-            _log.error(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context, exc_info=True)
+            _log.exception(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context)
         finally:
             self._awaiting = False
 
