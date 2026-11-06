@@ -229,8 +229,8 @@ jobs:
           test -x "$BUNDLE/pg/bin/redis-server"
           test -x "$BUNDLE/pg/bin/redis-cli"
           # Copy system libpq.so.5 to pg/lib so postgres binaries can find it.
-          cp /usr/lib/x86_64-linux-gnu/libpq.so.5* "$BUNDLE/pg/lib/"
-          test -f "$BUNDLE/pg/lib/libpq.so.5"
+          cp /usr/lib/x86_64-linux-gnu/libpq.so.5* "${BUNDLE}/pg/lib/"
+          test -f "${BUNDLE}/pg/lib/libpq.so.5"
 
           # Native bundle entrypoint. Keep this as a small POSIX wrapper so the
           # shipped command uses the bundled CPython runtime and dependencies,
