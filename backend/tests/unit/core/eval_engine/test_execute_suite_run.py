@@ -24,6 +24,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from modulo.core.eval_engine.discovery_eval import DISCOVERY_EVAL_FUNCTION, normalise_discovery_output
 from modulo.core.eval_engine.execute_suite_run import (
     EVAL_WATCH_EVENT_FAMILIES,
     SuiteRunEmptyDatasetError,
@@ -40,6 +41,7 @@ from modulo.core.eval_engine.execute_suite_run import (
     suite_run_daily_spend_used_for_trigger,
 )
 from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
+from modulo.core.system_maps_discovery import DiscoverySource, discover_draft
 from modulo.db.models import Base
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.eval import Eval
@@ -139,6 +141,48 @@ async def seed_cases(
 # --------------------------------------------------------------------------- #
 # Runner end-to-end                                                           #
 # --------------------------------------------------------------------------- #
+async def test_execute_suite_run_executes_discovery_adapter_not_input_echo(session) -> None:
+    org = await _org()
+    suite, dataset, _, backend = await seed_suite(session, org)
+    sources = [
+        {"kind": "pipeline", "identifier": "p1", "name": "Build"},
+        {"kind": "trigger", "identifier": "t1", "name": "Push", "pipeline_id": "p1"},
+    ]
+    expected = normalise_discovery_output(discover_draft([DiscoverySource(**source) for source in sources]))
+    for existing_definition in (await session.execute(select(Eval).where(Eval.eval_suite_id == suite.id))).scalars():
+        await session.delete(existing_definition)
+    await session.flush()
+    discovery_def = Eval(
+        organisation_id=org,
+        pipeline_id=uuid.uuid4(),
+        name="system-map-discovery",
+        eval_type="custom_function",
+        config_json={"function": DISCOVERY_EVAL_FUNCTION},
+        eval_suite_id=suite.id,
+        account_id=org,
+    )
+    session.add(discovery_def)
+    await session.flush()
+    await seed_cases(session, org, dataset, [{"sources": sources}])
+
+    case = (await session.execute(select(EvalCase).where(EvalCase.dataset_id == dataset.id))).scalar_one()
+    case.expected_output = expected
+    run = await build_suite_run(
+        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
+    )
+
+    stats = await execute_suite_run(session, run)
+    await session.flush()
+
+    assert stats["state"] == SuiteRunState.COMPLETED.value
+    rows = list((await session.execute(select(EvalResult).where(EvalResult.suite_run_id == run.id))).scalars())
+    discovery_row = next(row for row in rows if row.eval_id == discovery_def.id)
+    assert discovery_row.passed is True
+    assert discovery_row.judge_result_json["actual"] == expected
+    assert discovery_row.judge_result_json["provenance"]["evaluator_version"]
+    assert discovery_row.judge_result_json["actual"] != {"sources": sources}
+
+
 async def test_execute_suite_run_completes_and_persists_results(session) -> None:
     org = await _org()
     suite, dataset, _, backend = await seed_suite(session, org)

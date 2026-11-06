@@ -49,6 +49,7 @@ Load-bearing guards:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import time
@@ -63,6 +64,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from modulo.core.eval_engine.discovery_eval import DISCOVERY_EVAL_FUNCTION, evaluate_discovery_case
 from modulo.core.eval_engine.suite_run import (
     SuiteRunError,
     build_baseline_tuple,
@@ -311,14 +313,49 @@ def _definition_dto(row: EvalRow, org_id: uuid.UUID) -> EvalDefinition:
 
 
 def _synthesise_output(case: EvalCase, scenario_inputs: dict[str, Any] | None) -> dict[str, Any]:
-    """Synthesise the eval output for a dataset case.
-
-    The case payload is exposed under ``output`` (the default ``field`` the eval
-    definitions reference) with optional ``scenario`` inputs merged alongside, so
-    ``field: "output"`` / ``field: "output.category"`` and scenario-sensitive
-    definitions all resolve deterministically.
-    """
+    """Synthesise the generic eval output for a dataset case."""
     return {"output": case.input_payload, "scenario": scenario_inputs or {}}
+
+
+def _evaluate_case_output(
+    case: EvalCase,
+    definition: EvalDefinition,
+    run: SuiteRun,
+    engine: EvalEngine,
+    model_judge_callable: Any,
+    scenario_inputs: dict[str, Any] | None,
+) -> Any:
+    """Run a deterministic discovery adapter or the existing generic engine."""
+    if definition.config.get("function") == DISCOVERY_EVAL_FUNCTION:
+        evaluation = evaluate_discovery_case(case.input_payload, case.expected_output)
+        from modulo.core.eval_engine import EvalResult as EngineEvalResult
+        from modulo.core.eval_engine.typed_judge import JudgeOutcome, error_verdict
+
+        if evaluation.error:
+            outcome = JudgeOutcome.ERROR
+            verdict = error_verdict(JudgeErrorCode.JUDGE_CONFIGURATION, evaluation.detail)
+        elif evaluation.passed:
+            outcome = JudgeOutcome.PASS
+            verdict = None
+        else:
+            outcome = JudgeOutcome.FAIL
+            verdict = None
+        return EngineEvalResult(
+            run_id=run.id,
+            node_id=definition.node_id or "",
+            eval_id=definition.id,
+            outcome=outcome,
+            passed=evaluation.passed,
+            score=None if evaluation.error else evaluation.score,
+            detail=json.dumps(evaluation.as_json(), sort_keys=True),
+            judge_verdict=verdict,
+        )
+    return engine.evaluate_result(
+        _synthesise_output(case, scenario_inputs),
+        definition,
+        run_id=run.id,
+        model_judge_callable=model_judge_callable,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -357,6 +394,16 @@ def build_suite_run_tuple(
 # --------------------------------------------------------------------------- #
 # Per-case evaluation                                                         #
 # --------------------------------------------------------------------------- #
+def _discovery_result_json(result: Any) -> dict[str, Any] | None:
+    if not isinstance(getattr(result, "detail", None), str):
+        return None
+    try:
+        payload = json.loads(result.detail)
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) and "provenance" in payload else None
+
+
 def _case_result_row(
     run: SuiteRun,
     definition: EvalDefinition,
@@ -374,7 +421,7 @@ def _case_result_row(
         outcome=result.outcome.value,
         passed=bool(result.passed),
         score=result.score,
-        judge_result_json=verdict.to_json() if verdict is not None else None,
+        judge_result_json=_discovery_result_json(result) or (verdict.to_json() if verdict is not None else None),
         judge_confidence_kind=(verdict.confidence_kind.value if verdict is not None and not is_error else None),
         error_code=(verdict.error_code.value if verdict is not None and verdict.error_code is not None else None),
         detail=(result.detail or "")[:2000],
@@ -444,16 +491,17 @@ def _case_results(
     Every result is stamped with ``suite_run_id`` and the definition version
     (FAR-382 stamp).
     """
-    output = _synthesise_output(case, scenario_inputs)
     results: list[EvalResult] = []
     errored = 0
     for definition in definitions:
         try:
-            result = engine.evaluate_result(
-                output,
+            result = _evaluate_case_output(
+                case,
                 definition,
-                run_id=run.id,
-                model_judge_callable=model_judge_callable,
+                run,
+                engine,
+                model_judge_callable,
+                scenario_inputs,
             )
         except Exception as exc:
             result = _error_case_result(definition, run, exc)
@@ -518,19 +566,28 @@ async def _case_results_async(
     A judge with ``ajudge`` is awaited on the job's own loop, so the suite path
     never enters the sync bridge (ADR 066 D10).
     """
-    output = _synthesise_output(case, scenario_inputs)
     results: list[EvalResult] = []
     errored = 0
     for definition in definitions:
         try:
-            result = await _evaluate_within_budget(
-                engine,
-                output,
-                definition,
-                run,
-                model_judge_callable,
-                judging_deadline,
-            )
+            if definition.config.get("function") == DISCOVERY_EVAL_FUNCTION:
+                result = _evaluate_case_output(
+                    case,
+                    definition,
+                    run,
+                    engine,
+                    model_judge_callable,
+                    scenario_inputs,
+                )
+            else:
+                result = await _evaluate_within_budget(
+                    engine,
+                    _synthesise_output(case, scenario_inputs),
+                    definition,
+                    run,
+                    model_judge_callable,
+                    judging_deadline,
+                )
         except SuiteJudgingBudgetExhaustedError:
             result = _budget_exhausted_result(definition, run)
         except Exception as exc:
