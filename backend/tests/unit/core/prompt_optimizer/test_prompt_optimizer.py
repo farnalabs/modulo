@@ -284,6 +284,10 @@ class TestPromptOptimizer:
         result = await optimizer.optimize("Hello {{name}}")
         assert result.suggested_prompt == _VALID_RESPONSE["suggested_prompt"]
         mock_llm.assert_awaited_once()
+        args = mock_llm.await_args[0][0]
+        assert isinstance(args[1], HumanMessage)
+        assert "<current_prompt>\nHello {{name}}\n</current_prompt>" in args[1].content
+        assert "<failing_evals>\n[]\n</failing_evals>" in args[1].content
 
     async def test_optimize_calls_llm_with_system_and_human_messages(
         self, optimizer: PromptOptimizer, mock_llm: AsyncMock
