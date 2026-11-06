@@ -12,10 +12,12 @@ from collections.abc import AsyncGenerator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from cryptography.fernet import Fernet
 
 from modulo.core.model_backend_hub import (
+    _NO_CREDENTIALS_REQUIRED_PROVIDERS,
     ModelBackendHub,
     _extract_fixture_map,
 )
@@ -153,19 +155,28 @@ async def test_initialise_missing_credentials_is_typed_and_actionable(
 
 
 @pytest.mark.anyio
-async def test_initialise_registers_ollama_without_credentials(hub: ModelBackendHub) -> None:
-    """Local Ollama rows are usable without an API key.
+@pytest.mark.parametrize("provider", sorted(_NO_CREDENTIALS_REQUIRED_PROVIDERS))
+async def test_initialise_registers_credential_free_local_backends_without_credentials(
+    hub: ModelBackendHub,
+    provider: str,
+) -> None:
+    """Every credential-free local adapter is built through the real hub path.
 
-    The runtime hub must not discard the row before node dispatch: Ollama's
-    OpenAI-compatible endpoint does not require credentials.
+    The SSRF-safe constructor is patched only at its network boundary: adapter
+    construction remains real, while no external or local service is contacted.
     """
-    row = _row(provider="ollama", model_id="llama3", credentials_ciphertext=b"")
-    backend = MagicMock()
-    with patch("modulo.core.model_backend_hub._build_backend", return_value=backend) as build:
+    row = _row(provider=provider, model_id="local-model", credentials_ciphertext=b"")
+    async_client = httpx.AsyncClient()
+    with patch("modulo.model_backends.module.pinned_async_client_sync", return_value=async_client) as pinned_client:
         await hub.initialise([row], secrets_backend=_secrets(error=KeyError(str(row.id))))
 
+    backend = hub._backends[row.id]
     assert row.id in hub.backend_ids
-    build.assert_called_once_with("ollama", "llama3", {}, {})
+    assert backend.backend_id == f"{provider}/local-model"
+    assert backend.base_url is not None
+    assert backend.base_url.startswith("http://localhost:")
+    pinned_client.assert_called_once()
+    await hub.__aexit__(None, None, None)
 
 
 @pytest.mark.anyio
