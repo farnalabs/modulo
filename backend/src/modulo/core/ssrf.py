@@ -1033,6 +1033,84 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
             )
 
 
+class PinnedHTTPTransport(httpx.HTTPTransport):
+    """A synchronous ``httpx.HTTPTransport`` pinned to validated addresses.
+
+    This is the sync counterpart to :class:`PinnedAsyncHTTPTransport`. It exists
+    for the config/apply CLI, whose synchronous HTTP client must not bypass the
+    same DNS-rebinding protection used by the server's async paths.
+    """
+
+    def __init__(
+        self,
+        pinned_hosts: Mapping[str, str | Sequence[str]],
+        verify: ssl.SSLContext | str | bool = True,
+        http2: bool = False,
+        trust_env: bool | None = None,
+        limits: httpx.Limits | None = None,
+        connector_type: str = egress_metrics.DEFAULT_CONNECTOR_TYPE,
+    ) -> None:
+        resolved_trust = _default_trust_env() if trust_env is None else trust_env
+        super().__init__(
+            verify=verify,
+            http2=http2,
+            trust_env=resolved_trust,
+            limits=limits if limits is not None else httpx.Limits(max_connections=100, max_keepalive_connections=20),
+        )
+        self._pin_backend = _PinnedSyncNetworkBackend(
+            pinned_hosts,
+            connector_type=connector_type,
+        )
+        self._pool._network_backend = self._pin_backend
+
+
+class _PinnedSyncNetworkBackend(httpcore.SyncBackend):
+    """httpcore sync backend that connects only to validated pinned addresses."""
+
+    def __init__(
+        self,
+        pinned_hosts: Mapping[str, str | Sequence[str]],
+        *,
+        connector_type: str,
+    ) -> None:
+        self._pinned_hosts = {_normalize_host(host): _coerce_pin_ips(ips) for host, ips in pinned_hosts.items()}
+        self._connector_type = connector_type or egress_metrics.DEFAULT_CONNECTOR_TYPE
+
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[SOCKET_OPTION] | None = None,
+    ) -> httpcore.NetworkStream:
+        key = _normalize_host(host)
+        ips = self._pinned_hosts.get(key)
+        if ips is None:
+            egress_metrics.record_rejected(self._connector_type, host, egress_metrics.REASON_UNPINNED)
+            raise UnpinnedHostError(
+                f"SSRF: refusing to connect to unpinned host {host!r}. The pinned transport only "
+                "connects to addresses it validated up front."
+            )
+        last_exc: Exception | None = None
+        for ip in ips:
+            try:
+                stream = super().connect_tcp(
+                    ip,
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except (httpcore.NetworkError, httpcore.TimeoutException) as exc:
+                last_exc = exc
+                continue
+            return stream
+        if last_exc is None:
+            raise RuntimeError("ssrf: no pinned addresses available")
+        raise last_exc
+
+
 class PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport):
     """An ``httpx.AsyncHTTPTransport`` pinned to validated addresses.
 
@@ -1307,6 +1385,69 @@ def require_url_host_in_allowlist(url: str, allowed_hosts: Iterable[str]) -> str
     if host not in allowed:
         raise ValueError(f"URL host '{host}' is not in the OIDC provider host allowlist (allowed: {sorted(allowed)})")
     return host
+
+
+def pinned_http_transport_sync(
+    url: str,
+    *,
+    allow_networks: Sequence[str] | None = None,
+    verify: ssl.SSLContext | str | bool = True,
+    http2: bool = False,
+    trust_env: bool | None = None,
+    limits: httpx.Limits | None = None,
+    connector_type: str = egress_metrics.DEFAULT_CONNECTOR_TYPE,
+) -> httpx.HTTPTransport:
+    """Build a synchronously usable pinned transport for sync HTTP callers."""
+    try:
+        target = _resolve_pinned_ip_sync(url, allow_networks=allow_networks)
+    except ValueError as exc:
+        egress_metrics.record_rejected(connector_type, _eh_label_host(url), _classify_reject_reason(exc, url))
+        raise
+    transport = PinnedHTTPTransport(
+        {target.host: target.ips},
+        verify=verify,
+        http2=http2,
+        trust_env=trust_env,
+        limits=limits,
+        connector_type=connector_type,
+    )
+    egress_metrics.record_pinned(connector_type, target.host)
+    return transport
+
+
+def pinned_http_client_sync(
+    url: str,
+    *,
+    allow_networks: Sequence[str] | None = None,
+    verify: ssl.SSLContext | str | bool = True,
+    http2: bool = False,
+    trust_env: bool | None = None,
+    follow_redirects: bool = False,
+    limits: httpx.Limits | None = None,
+    connector_type: str = egress_metrics.DEFAULT_CONNECTOR_TYPE,
+    **client_kwargs: Any,
+) -> httpx.Client:
+    """Build a sync ``httpx.Client`` whose pool is pinned to ``url``."""
+    if "transport" in client_kwargs:
+        raise ValueError("pinned_http_client_sync: 'transport' must not be passed via client_kwargs")
+    transport = pinned_http_transport_sync(
+        url,
+        allow_networks=allow_networks,
+        verify=verify,
+        http2=http2,
+        trust_env=trust_env,
+        limits=limits,
+        connector_type=connector_type,
+    )
+    resolved_trust = _default_trust_env() if trust_env is None else trust_env
+    return httpx.Client(
+        transport=transport,
+        verify=verify,
+        http2=http2,
+        trust_env=resolved_trust,
+        follow_redirects=follow_redirects,
+        **client_kwargs,
+    )
 
 
 def pinned_async_transport_sync(

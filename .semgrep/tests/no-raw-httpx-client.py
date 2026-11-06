@@ -37,3 +37,8 @@ def unsafe_imported_sync_constructor(base_url: str) -> httpx.Client:
 def safe_pinned_constructor(base_url: str) -> httpx.AsyncClient:
     # ok: no-raw-httpx-client
     return pinned_async_client_sync(base_url, base_url=base_url, timeout=30)
+
+
+def safe_pinned_sync_constructor(base_url: str) -> httpx.Client:
+    # ok: no-raw-httpx-client
+    return pinned_http_client_sync(base_url, base_url=base_url, timeout=30)

@@ -1137,6 +1137,18 @@ def test_loudness_guard_raises_when_pin_dropped() -> None:
         transport._enforce_pin_live()
 
 
+def test_sync_pinned_transport_rejects_unpinned_host() -> None:
+    transport = ssrf.PinnedHTTPTransport({"safe.example": "8.8.8.8"})
+    with pytest.raises(ssrf.UnpinnedHostError):
+        transport._pool._network_backend.connect_tcp("other.example", 443, timeout=1.0)
+
+
+def test_sync_pinned_client_rejects_private_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: ["127.0.0.1"])
+    with pytest.raises(ValueError, match="private/internal"):
+        ssrf.pinned_http_client_sync("https://unsafe.example")
+
+
 async def test_loudness_guard_passes_after_real_connect() -> None:
     """(e) After a real request the pin is proven live and the guard passes."""
     server, port = _start_http_server()
