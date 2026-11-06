@@ -1411,6 +1411,8 @@ async def _ensure_daily_fact(
     """
     # nosemgrep: raw-status-complete — seed script, not routing code.
     is_terminal = run.status in ("complete", "failed")
+    duration_ms = int((completed - started).total_seconds() * 1000) if is_terminal else None
+    completed_at = completed if is_terminal else None
     fact_result = await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == run.id).limit(1))
     fact = fact_result.scalars().first()
     if fact is not None:
@@ -1423,9 +1425,9 @@ async def _ensure_daily_fact(
             "status": run.status,
             "total_cost_usd": run.total_cost_usd,
             "total_tokens": run.total_tokens,
-            "duration_ms": int((completed - started).total_seconds() * 1000) if is_terminal else None,
+            "duration_ms": duration_ms,
             "started_at": started,
-            "completed_at": completed if is_terminal else None,
+            "completed_at": completed_at,
         }
         for attr, val in desired_fact_values.items():
             if not _values_match(getattr(fact, attr), val):
@@ -1447,10 +1449,10 @@ async def _ensure_daily_fact(
                     status=run.status,
                     total_cost_usd=run.total_cost_usd,
                     total_tokens=run.total_tokens,
-                    duration_ms=(int((completed - started).total_seconds() * 1000) if is_terminal else None),
+                    duration_ms=duration_ms,
                     run_number=run.run_number,
                     started_at=started,
-                    completed_at=completed if is_terminal else None,
+                    completed_at=completed_at,
                 )
             )
             await session.flush()

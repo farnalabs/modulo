@@ -507,9 +507,11 @@ Those five start the stack, but **none of them creates a login**: with no user
 in the database, `POST /api/v1/auth/login` answers **401** and a perfectly
 healthy deployment looks broken. Create the first account with one of:
 
-- **Seed it at boot (simplest).** Add `MODULO_USERS=admin@example.com:<password>`
+- **Seed it at boot (simplest).** Add `MODULO_USERS=admin:<password>`
   to the compose env file you created in step 1, **before** step 2. The boot
-  seeder creates the account, and an entry named `admin` gets the admin role.
+  seeder creates the account; only an email of exactly `admin` or
+  `admin@modulo.run` gets the admin role, so any other address (for example
+  `admin@example.com`) is seeded as a `runner` with no admin rights.
   Plaintext is bcrypt-hashed at seed time.
 - **Create it after the stack is up.** From the `modulo` container:
 
@@ -546,7 +548,7 @@ a user-less stack is ready and still answers `401`.
 curl -s -o /dev/null -w '%{http_code}\n' \
   -X POST http://localhost/api/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"admin@example.com","password":"<the password from step 1>"}'
+  -d '{"email":"admin","password":"<the password from step 1>"}'
 # 200 = the account exists and the credentials work
 # 401 = no such user (create one - step 1), or a wrong password
 ```

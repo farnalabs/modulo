@@ -94,6 +94,44 @@ describe('SettingsMonitorConfigView', () => {
     expect((toggles(wrapper)[0].element as HTMLInputElement).checked).toBe(true)
   })
 
+  it('renders an informational unavailable state for a system-admin permission denial (FAR-2394)', async () => {
+    getMock.mockResolvedValue({
+      data: null,
+      error: { status: 403, detail: "Permission 'system.config.manage' requires system admin role" },
+    })
+    const wrapper = mount(SettingsMonitorConfigView)
+    await flush()
+
+    const gated = wrapper.find('[data-testid="settings-monitor-permission-denied"]')
+    expect(gated.exists()).toBe(true)
+    expect(gated.text()).toContain('managed at the instance level')
+    expect(gated.attributes('aria-live')).toBe('assertive')
+    // The raw permission exception is never the page's user-facing state.
+    expect(wrapper.text()).not.toContain("Permission 'system.config.manage'")
+    expect(findButtonByText(wrapper, 'Retry')).toBeUndefined()
+  })
+
+  it('recognises the system-admin denial from the error detail when no status is present (FAR-2394)', async () => {
+    getMock.mockResolvedValue({
+      data: null,
+      error: { detail: "Permission 'system.config.manage' requires system admin role" },
+    })
+    const wrapper = mount(SettingsMonitorConfigView)
+    await flush()
+
+    expect(wrapper.find('[data-testid="settings-monitor-permission-denied"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain("Permission 'system.config.manage'")
+  })
+
+  it('treats a non-object error payload as a generic load failure', async () => {
+    getMock.mockResolvedValue({ data: null, error: 'config unreachable' })
+    const wrapper = mount(SettingsMonitorConfigView)
+    await flush()
+
+    expect(wrapper.find('[data-testid="settings-monitor-permission-denied"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('config unreachable')
+  })
+
   it('a load failure shows the error with a working Retry button', async () => {
     getMock.mockRejectedValue(new Error('config unreachable'))
     const wrapper = mount(SettingsMonitorConfigView)

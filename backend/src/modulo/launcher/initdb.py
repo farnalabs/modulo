@@ -38,6 +38,7 @@ from modulo.launcher.platform import binary_name, initdb_locale, is_windows
 
 BOOTSTRAP_USERNAME = "modulo"
 INITDB_LOCALE = "C.UTF-8"
+PG_MAJOR = "16"
 PG_VERSION_FILE = "PG_VERSION"
 
 # Registered pause gates (consumed via the MODULO_TEST_PAUSE_AT env var).
@@ -59,6 +60,7 @@ __all__ = [
     "BOOTSTRAP_USERNAME",
     "GATE_INITDB_PRE_RENAME",
     "INITDB_LOCALE",
+    "PG_MAJOR",
     "InitdbError",
     "assert_supported_platform",
     "bootstrap_pgdata",
@@ -139,9 +141,34 @@ def validate_target_dir(pgdata: Path) -> None:
     )
 
 
+def _bundled_share_dir(bin_dir: Path) -> Path | None:
+    """Return the bundled share dir when it actually holds initdb's runtime data.
+
+    The Linux bundle lays PostgreSQL out as ``pg/bin`` beside
+    ``pg/share/postgresql/<major>`` (the layout the deb extraction produces).
+    Only that layout may receive an explicit ``-L``: initdb aborts before it
+    creates the datadir when ``-L`` points at a directory without
+    ``postgres.bki``. Other bundle layouts (macOS ships ``bin`` as a symlink
+    beside ``pg``) must keep initdb's exec-path-relative relocation, so return
+    ``None`` unless the versioned path really contains ``postgres.bki``.
+    """
+    share_dir = bin_dir.parent / "share" / "postgresql" / PG_MAJOR
+    if (share_dir / "postgres.bki").is_file():
+        return share_dir
+    if bin_dir.name == "bin" and bin_dir.parent.name == "pg":
+        raise InitdbError(f"Bundled Linux PostgreSQL share data is missing: {share_dir / 'postgres.bki'}")
+    return None
+
+
 def initdb_argv(tmp_pgdata: Path, bin_dir: Path, username: str, pwfile: Path) -> list[str]:
-    """Build the pinned initdb invocation (every argument explicit)."""
-    return [
+    """Build the pinned initdb invocation (every argument explicit).
+
+    ``-L`` pins initdb's share-data path so Linux bundles never fall back to
+    the host's ``/usr/share/postgresql/<major>`` location. It is emitted only
+    when the bundled share dir holds ``postgres.bki`` — a wrong explicit path
+    is fatal, so other bundle layouts keep initdb's exec-path relocation.
+    """
+    argv = [
         _binary(bin_dir, "initdb"),
         "--pgdata",
         str(tmp_pgdata),
@@ -149,10 +176,16 @@ def initdb_argv(tmp_pgdata: Path, bin_dir: Path, username: str, pwfile: Path) ->
         username,
         "--locale",
         initdb_locale(),
+    ]
+    share_dir = _bundled_share_dir(bin_dir)
+    if share_dir is not None:
+        argv += ["-L", str(share_dir)]
+    argv += [
         "--auth=scram-sha-256",
         "--pwfile",
         str(pwfile),
     ]
+    return argv
 
 
 def postgres_server_argv(pgdata: Path, host: str, port: int, bin_dir: Path) -> list[str]:
