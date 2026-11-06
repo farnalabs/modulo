@@ -153,6 +153,22 @@ async def test_initialise_missing_credentials_is_typed_and_actionable(
 
 
 @pytest.mark.anyio
+async def test_initialise_registers_ollama_without_credentials(hub: ModelBackendHub) -> None:
+    """Local Ollama rows are usable without an API key.
+
+    The runtime hub must not discard the row before node dispatch: Ollama's
+    OpenAI-compatible endpoint does not require credentials.
+    """
+    row = _row(provider="ollama", model_id="llama3", credentials_ciphertext=b"")
+    backend = MagicMock()
+    with patch("modulo.core.model_backend_hub._build_backend", return_value=backend) as build:
+        await hub.initialise([row], secrets_backend=_secrets(error=KeyError(str(row.id))))
+
+    assert row.id in hub.backend_ids
+    build.assert_called_once_with("ollama", "llama3", {}, {})
+
+
+@pytest.mark.anyio
 async def test_initialise_missing_credentials_without_provider_omits_provider_detail(
     hub: ModelBackendHub,
     caplog: pytest.LogCaptureFixture,

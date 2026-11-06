@@ -411,7 +411,11 @@ async def _resolve_backend_credentials(row: Any, secrets_backend: SecretsBackend
             # error instead: the message names the backend, the provider
             # and the remedy, and the handler logs it once per
             # process rather than once per run.
-            raise BackendCredentialsMissingError(row.id, provider=getattr(row, "provider", "") or "") from None
+            provider = str(getattr(row, "provider", "") or "").lower()
+            if provider in _NO_CREDENTIALS_REQUIRED_PROVIDERS:
+                raw_str = "{}"
+            else:
+                raise BackendCredentialsMissingError(row.id, provider=provider) from None
     try:
         raw_creds: Any = json.loads(raw_str)
     except json.JSONDecodeError as exc:
@@ -548,6 +552,15 @@ _API_KEY_REQUIRED_PROVIDERS: frozenset[str] = frozenset(
         "mistral",
         "watsonx",
     }
+)
+
+# Local OpenAI-compatible servers do not need an API key.  Their rows can be
+# created with an empty credential payload, so hub initialisation must still
+# register them for the runtime path.  Keep this explicit rather than treating
+# every provider outside ``_API_KEY_REQUIRED_PROVIDERS`` as credential-free:
+# some adapters accept optional credentials today but may require them later.
+_NO_CREDENTIALS_REQUIRED_PROVIDERS: frozenset[str] = frozenset(
+    {"jan", "llamacpp", "lm_studio", "localai", "ollama", "tgi", "vllm"}
 )
 
 
