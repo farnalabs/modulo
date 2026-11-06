@@ -78,7 +78,8 @@ test.describe('Login Flow', () => {
     await expect(page.evaluate(() => localStorage.getItem('modulo_access_token'))).resolves.toBeNull()
 
     await ssoButton.click()
-    await page.waitForURL(/\/test-idp\/authorize/)
+    await expect(page.getByText('Continue with fixture IdP')).toBeVisible()
+    await page.getByText('Continue with fixture IdP').click()
     const authorizeUrl = new URL(page.url())
     expect(authorizeUrl.searchParams.get('client_id')).toBe('ci-idp')
     expect(authorizeUrl.searchParams.get('redirect_uri')).toContain('/api/v1/auth/oidc/ci-idp/callback')
@@ -170,7 +171,7 @@ test.describe('Login Flow', () => {
     await setupLocalMockApi(page)
     await page.goto('/login')
     await page.getByTestId('login-sso-oidc-ci-idp').click()
-    await page.waitForURL(/\/test-idp\/authorize/)
+    await expect(page.getByText('Continue with fixture IdP')).toBeVisible()
     const authorizeUrl = new URL(page.url())
     const state = authorizeUrl.searchParams.get('state')
     expect(state).toBeTruthy()

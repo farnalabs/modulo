@@ -162,7 +162,10 @@ async def _fixture_idp_authorize(request: Request) -> RedirectResponse | PlainTe
     code = "ci-invalid-code" if mode == "failure" else "ci-auth-code"
     separator = "&" if "?" in redirect_uri else "?"
     location = f"{redirect_uri}{separator}code={code}&state={state}"
-    return RedirectResponse(url=location, status_code=303)
+    return PlainTextResponse(
+        f'<a href="{location}">Continue with fixture IdP</a>',
+        media_type="text/html",
+    )
 
 
 def _fixture_access_token() -> str:
