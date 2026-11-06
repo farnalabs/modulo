@@ -417,8 +417,11 @@ async def _load_team_metrics(
     for team in teams:
         tid = str(team.id)
         run_data = team_run_data.get(tid, {})
-        team_total = sum(run_data.get(s, 0) for s in _TRACKED_STATUSES)
+        completed = run_data.get("complete", 0)
+        idle = sum(run_data.get(s, 0) for s in _IDLE_STATUSES)
+        team_total = completed + sum(run_data.get(s, 0) for s in ("running", "awaiting_human", "failed")) + idle
         team_statuses = {s: run_data.get(s, 0) for s in _TRACKED_STATUSES}
+        team_statuses["completed"] = completed
         team_statuses["idle"] = sum(run_data.get(s, 0) for s in _IDLE_STATUSES)
 
         team_metrics.append(
@@ -426,6 +429,7 @@ async def _load_team_metrics(
                 "id": tid,
                 "name": team.name,
                 "total_runs": team_total,
+                "completed_runs": completed,
                 "active_pipelines": team_pipeline_data.get(tid, 0),
                 "run_counts_by_status": team_statuses,
             }
