@@ -509,15 +509,14 @@ healthy deployment looks broken. Create the first account with one of:
 
 - **Seed it at boot (simplest).** Add `MODULO_USERS=admin:<password>`
   to the compose env file you created in step 1, **before** step 2. The boot
-  seeder creates the account; only an email of exactly `admin` or
-  `admin@modulo.run` gets the admin role, so any other address (for example
-  `admin@example.com`) is seeded as a `runner` with no admin rights.
+  seeder creates the admin account for the exact `admin` email form used here.
   Plaintext is bcrypt-hashed at seed time.
+
 - **Create it after the stack is up.** From the `modulo` container:
 
   ```bash
   docker compose -f deploy/compose/docker-compose.prod.yml exec modulo \
-    modulo users add admin@example.com --admin
+    modulo users add admin --admin
   # prompts for the password; pass --password '<pw>' for a non-interactive run
   ```
 
