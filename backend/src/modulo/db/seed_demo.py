@@ -619,6 +619,11 @@ _DEMO_EVAL_RESULT_RUN_LIMIT = 6
 _DEMO_EVAL_RESULT_WINDOW_DAYS = 3
 
 
+def _demo_fixture_now() -> datetime:
+    """Return the UTC anchor shared by demo fixture timestamps and eval windows."""
+    return datetime.now(UTC)
+
+
 def _demo_eval_result_cutoff(now: datetime | None = None) -> datetime:
     """Return the rolling cutoff used to select current demo eval runs.
 
@@ -627,7 +632,7 @@ def _demo_eval_result_cutoff(now: datetime | None = None) -> datetime:
     ``now`` is injectable for a deterministic boundary test; production callers
     leave it unset and read the current UTC time.
     """
-    return (now or datetime.now(UTC)) - timedelta(days=_DEMO_EVAL_RESULT_WINDOW_DAYS)
+    return (now or _demo_fixture_now()) - timedelta(days=_DEMO_EVAL_RESULT_WINDOW_DAYS)
 
 
 @dataclass(frozen=True)
@@ -928,7 +933,7 @@ def _build_run_trace(
 
 def _run_window(spec: _PipelineSpec, run_number: int, days_ago: int, hours_into_day: int) -> tuple[datetime, datetime]:
     """(started_at, completed_at) for a seeded run, relative to today (UTC)."""
-    started = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
+    started = _demo_fixture_now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
         days=days_ago, hours=-hours_into_day
     )
     minutes = spec.duration_minutes
@@ -1401,8 +1406,8 @@ async def _ensure_daily_fact(
     """Create (best-effort) or converge the run's RunDailyFact analytics row.
 
     Mirrors the Run row: non-terminal statuses have no completed_at /
-    duration_ms. An existing fact has its cost/tokens/status converged (the
-    analytics surfaces sum these); its timestamps are left alone.
+    duration_ms. Demo-owned fields and timestamps converge to the current
+    fixture values, while non-owned provenance fields remain untouched.
     """
     # nosemgrep: raw-status-complete — seed script, not routing code.
     is_terminal = run.status in ("complete", "failed")
@@ -1684,6 +1689,27 @@ async def _ensure_demo_eval_result(
         )
 
 
+async def _select_current_demo_eval_runs(
+    session: AsyncSession,
+    org: Organisation,
+    pipeline: Pipeline,
+) -> list[Run]:
+    """Select the runs that belong in the dashboard's current eval window."""
+    result = await session.execute(
+        select(Run)
+        .where(
+            Run.organisation_id == org.id,
+            Run.pipeline_id == pipeline.id,
+            # Match dashboard._eval_rate_window: evaluated_at is included from
+            # the rolling ``now - days`` boundary, not today's UTC midnight.
+            Run.started_at >= _demo_eval_result_cutoff(),
+        )
+        .order_by(Run.started_at.desc(), Run.run_number.desc())
+        .limit(_DEMO_EVAL_RESULT_RUN_LIMIT)
+    )
+    return list(result.scalars())
+
+
 async def _seed_demo_evals(
     session: AsyncSession,
     org: Organisation,
@@ -1704,25 +1730,7 @@ async def _seed_demo_evals(
     ):
         pipeline, _ = pipeline_lookup[pipeline_name]
         evaluation = await _get_or_create_demo_eval(session, org, account, pipeline, label)
-        runs = list(
-            (
-                await session.execute(
-                    select(Run)
-                    .where(
-                        Run.organisation_id == org.id,
-                        Run.pipeline_id == pipeline.id,
-                        # Match dashboard._eval_rate_window: evaluated_at is
-                        # included from the rolling ``now - days`` boundary,
-                        # not from today's UTC midnight.  A day-boundary cutoff
-                        # can seed a day-3 run whose eval has already aged out
-                        # of the dashboard's 72-hour window.
-                        Run.started_at >= _demo_eval_result_cutoff(),
-                    )
-                    .order_by(Run.started_at.desc(), Run.run_number.desc())
-                    .limit(_DEMO_EVAL_RESULT_RUN_LIMIT)
-                )
-            ).scalars()
-        )
+        runs = await _select_current_demo_eval_runs(session, org, pipeline)
         for run in runs:
             await _ensure_demo_eval_result(session, org, evaluation, run, index)
     await session.flush()

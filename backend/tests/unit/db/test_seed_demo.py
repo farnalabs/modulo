@@ -76,6 +76,7 @@ from modulo.settings import Settings
 _VALID_32 = "a" * 32
 _DEMO_EMAIL = "demo@modulo.run"
 _DEMO_PASSWORD = "demo-passphrase-123"
+_DEMO_FIXTURE_NOW = datetime(2026, 11, 6, 23, 59, tzinfo=UTC)
 
 # Tables required by the seed incl. FK dependencies. Scoped create_all because
 # unrelated models use Postgres-only column types SQLite cannot render.
@@ -150,6 +151,7 @@ async def session(engine) -> AsyncGenerator[AsyncSession, None]:
 
 async def _run_seed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> str | None:
     monkeypatch.setattr(seed_demo_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(seed_demo_module, "_demo_fixture_now", lambda: _DEMO_FIXTURE_NOW)
     # Reads between seeds autobegin an implicit transaction on the shared
     # session; end it so the explicit seed transaction can start cleanly.
     if session.in_transaction():
@@ -325,7 +327,7 @@ async def test_seed_converges_demo_eval_results_to_current_fixture_time(
     await _run_seed(session, monkeypatch, _demo_settings())
     result = (await session.execute(select(EvalResult).order_by(EvalResult.id))).scalars().first()
     assert result is not None
-    result.evaluated_at = datetime.now(UTC) - timedelta(days=30)
+    result.evaluated_at = _DEMO_FIXTURE_NOW - timedelta(days=30)
     await session.commit()
 
     await _run_seed(session, monkeypatch, _demo_settings())
@@ -335,6 +337,25 @@ async def test_seed_converges_demo_eval_results_to_current_fixture_time(
     expected = run.completed_at or run.started_at
     assert expected is not None
     assert refreshed.evaluated_at == expected
+
+
+async def test_seed_preserves_non_demo_eval_result_provenance(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refreshing a non-seed result must not rewrite its timestamp or provenance."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    result = (await session.execute(select(EvalResult).order_by(EvalResult.id))).scalars().first()
+    assert result is not None
+    original_time = _DEMO_FIXTURE_NOW - timedelta(days=30)
+    result.evaluated_at = original_time
+    result.judge_result_json = {"source": "provider", "sample": False}
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    preserved = (await session.execute(select(EvalResult).where(EvalResult.id == result.id))).scalar_one()
+    assert preserved.evaluated_at == original_time
+    assert preserved.judge_result_json == {"source": "provider", "sample": False}
 
 
 async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
