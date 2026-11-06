@@ -219,7 +219,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      - run: uv sync --frozen --no-build
       - run: uv run --no-build --no-sync ruff check .
       - name: Ruff format check
         run: uv run --no-build --no-sync ruff format --check .
@@ -540,7 +540,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      - run: uv sync --frozen --no-build
       - name: Run unit tests with coverage (shard ${{ matrix.shard }}/3)
         shell: bash
         run: ../.github/scripts/coverage-thresholds.sh 2 shard
@@ -590,7 +590,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      - run: uv sync --frozen --no-build
       - name: Download unit coverage shards
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -646,7 +646,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      - run: uv sync --frozen --no-build
         if: needs.changes.outputs.backend_heavy != 'false'
       - name: Run architecture tests
         if: needs.changes.outputs.backend_heavy != 'false'
@@ -727,7 +727,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      - run: uv sync --frozen --no-build
       - name: Detect changed integration test files
         id: changed
         shell: bash
@@ -1731,7 +1731,7 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install backend deps
         working-directory: backend
-        run: uv sync --frozen
+        run: uv sync --frozen --no-build
       - name: Dump OpenAPI schema from backend
         working-directory: backend
         shell: bash
@@ -1808,7 +1808,7 @@ jobs:
         working-directory: backend
         shell: bash
         run: |
-          uv sync --frozen
+          uv sync --frozen --no-build
           uv run --no-build --no-sync python -m alembic heads 2>&1 | tee /tmp/alembic_heads.txt
           HEAD_COUNT=$(grep -c "\(head\)\|\(effective head\)" /tmp/alembic_heads.txt || true)
           if [ "$HEAD_COUNT" -ne 1 ]; then
@@ -1969,7 +1969,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      - run: uv sync --frozen --no-build
         if: github.event_name != 'pull_request'
       - name: Break-glass boot allow-list + connectivity smoke
         if: github.event_name != 'pull_request'
