@@ -46,6 +46,11 @@ overrides:
   # Stryker toolchain) and capped to the ^3 major ajv declares; the fix floor
   # is 3.1.9. Remove once ajv ships a patched fast-uri.
   "ajv>fast-uri": ">=3.1.9 <4"
+  # GHSA-3g3m-2fjr-6pw4 (glob <14.0.2): affected versions vulnerable to ReDoS
+  # via specially crafted patterns. Affects js-beautify@2.0.3 (Stryker HTML
+  # reporter). Scoped to this dev-only chain; nothing in production bundle.
+  # Remove once js-beautify accepts glob >=14/15 natively.
+  "js-beautify>glob": ">=14.0.2"
 minimumReleaseAgeExclude:
   - '@rollup/rollup-android-arm-eabi@4.63.0'
   - '@rollup/rollup-android-arm64@4.63.0'
