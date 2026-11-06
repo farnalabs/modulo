@@ -28,6 +28,8 @@ describe('DataTable keyboard accessibility', () => {
     const wrapper = mountTable()
     const region = wrapper.find('[aria-describedby^="data-table-scroll-instructions-"]')
     expect(region.attributes('tabindex')).toBe('0')
+    expect(region.attributes('role')).toBe('region')
+    expect(region.attributes('aria-label')).toBe('Scrollable table')
     expect(region.attributes('aria-describedby')).toMatch(/^data-table-scroll-instructions-/)
     expect(wrapper.find(`#${region.attributes('aria-describedby')}`).text()).toContain('Swipe horizontally')
     expect(wrapper.find('table').classes()).toContain('min-w-max')
@@ -108,6 +110,7 @@ describe('DataTable horizontal scroll region', () => {
     expect(scrollRegion.classes()).toContain('focus-visible:ring-2')
     // The named region role identifies this keyboard-reachable scroll viewport.
     expect(scrollRegion.attributes('role')).toBe('region')
+    expect(scrollRegion.attributes('aria-label')).toBe('Scrollable table')
   })
 
   it('stays reachable when the table has nothing focusable inside it', () => {

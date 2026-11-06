@@ -4699,7 +4699,8 @@ export default {
   },
   "components": {
     "DataTable": {
-      "scroll_instructions": "Swipe horizontally to view all table columns."
+      "scroll_instructions": "Swipe horizontally to view all table columns.",
+      "scroll_region_label": "Scrollable table"
     },
     "LicenceRenewalNotice": {
       "renewal_due_auto_title": "Your Team license renews on {date}",
@@ -5151,6 +5152,7 @@ export default {
       "callback_url_label": "Callback URL — register this at your IdP",
       "copy_callback_url": "Copy callback URL",
       "copied": "Copied!",
+      "copy_failed": "Copy failed — select the URL and copy it manually.",
       "derived_discovery_url": "Discovery URL (derived)",
       "derived_scopes": "Scopes (derived)"
     },
