@@ -3789,6 +3789,8 @@ export default {
     },
     "SettingsMonitorConfigView": {
       "feature_locked": "Monitoring configuration is not available on your current plan.",
+      "permission_denied_title": "Browser Monitoring is managed at the instance level",
+      "permission_denied_description": "Your account does not have the system administrator permission required to view or change browser monitoring settings. Contact your system administrator if you need access.",
       "browser_monitoring": "Browser Monitoring",
       "description": "Configure which client-side monitoring SDKs to load. Changes take effect immediately — no rebuild or page reload required.",
       "retry": "Retry",
