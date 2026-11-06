@@ -84,6 +84,15 @@ The GA tag is the release identity, so it is created and pushed before anything 
 - A failed CHANGELOG commit/push turns the job **red** - it is a required deliverable.
 - Failed release-notes generation or a failed `gh release create` is a **warning only**, because the tag already exists and is intact.
 
+### Website rebuild hook (optional)
+
+The marketing website reads the latest GitHub Release at build time. As the last step of `Create GitHub Release` (modes `cut` and `recut`), the workflow POSTs to a Cloudflare Pages deploy hook so the website rebuilds with the new version and installer links. It is controlled by the repository secret `WEBSITE_DEPLOY_HOOK_URL`:
+
+- The secret is **optional**. If it is unset the step prints a notice and skips.
+- The step can never fail a release: it retries three times and then only warns. If it warns, trigger the website deploy by hand.
+- To rotate it, create a new deploy hook in Cloudflare Pages for the website project, update the `WEBSITE_DEPLOY_HOOK_URL` secret, then delete the old hook.
+- `dry-run` does not call it.
+
 ## `dry-run` - rehearse without publishing
 
 `dry-run` is the safe way to answer "what would this release actually do?" before committing to it. It:
