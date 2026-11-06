@@ -75,6 +75,9 @@ describe('SystemMapDetailView load failures', () => {
       if (path === '/api/v1/system-maps/{map_id}/revisions/history') {
         return Promise.resolve({ data: { system_map_id: 'map-1', revisions: [] } })
       }
+      if (path === '/api/v1/system-maps/{map_id}/attribution-bindings') {
+        return Promise.resolve({ data: [] })
+      }
       mapCalls += 1
       if (mapCalls === 1) return Promise.resolve({ error: { detail: 'map unavailable' } })
       return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
@@ -158,6 +161,12 @@ describe('SystemMapDetailView authoring actions', () => {
     emits: ['close', 'save'],
     template: '<div data-testid="discovery-stub" />',
   }
+  const AttributionStub = {
+    name: 'SystemMapAttributionBindings',
+    props: ['nodes', 'bindings', 'readOnly'],
+    emits: ['create', 'delete'],
+    template: '<div data-testid="attribution-stub" />',
+  }
 
   function mountWithStubs() {
     return mount(SystemMapDetailView, {
@@ -169,6 +178,7 @@ describe('SystemMapDetailView authoring actions', () => {
           GraphEditor: GraphStub,
           RevisionSidebar: RevisionStub,
           DiscoveryPanel: DiscoveryStub,
+          SystemMapAttributionBindings: AttributionStub,
         },
       },
     })
@@ -670,6 +680,116 @@ describe('SystemMapDetailView authoring actions', () => {
     expect(wrapper.findComponent(HeaderStub).props('readOnly')).toBe(false)
     expect(wrapper.findComponent(GraphStub).props('readOnly')).toBe(false)
     expect(wrapper.findComponent(RevisionStub).props('readOnly')).toBe(false)
+  })
+
+  it('loads attribution bindings for the active map and reports load failures', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/attribution-bindings') return Promise.resolve({ data: [{ id: 'binding-1' }] })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/history') return Promise.resolve({ data: { system_map_id: 'map-1', revisions: [] } })
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    })
+
+    mountWithStubs()
+    await flushPromises()
+
+    expect(useSystemMapsStore().attributionBindings).toHaveLength(1)
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/attribution-bindings') return Promise.resolve({ error: { detail: 'bindings down' } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/history') return Promise.resolve({ data: { system_map_id: 'map-1', revisions: [] } })
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    })
+
+    const failing = mountWithStubs()
+    await flushPromises()
+    expect(failing.text()).toContain('bindings down')
+  })
+
+  it('uses the localized fallback when attribution binding loading rejects with a non-Error', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/history') return Promise.resolve({ data: { system_map_id: 'map-1', revisions: [] } })
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    })
+    const store = useSystemMapsStore()
+    vi.spyOn(store, 'loadAttributionBindings').mockRejectedValue('offline')
+
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Could not load attribution bindings')
+  })
+
+  it('creates and deletes attribution bindings from the panel', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+
+    const create = vi.spyOn(store, 'createAttributionBinding').mockResolvedValue({ id: 'binding-2' } as never)
+    const remove = vi.spyOn(store, 'deleteAttributionBinding').mockResolvedValue(undefined)
+
+    wrapper.findComponent(AttributionStub).vm.$emit('create', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: null, binding_kind: 'trigger' })
+    await flushPromises()
+    expect(create).toHaveBeenCalledWith('map-1', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: null, binding_kind: 'trigger' })
+
+    wrapper.findComponent(AttributionStub).vm.$emit('delete', 'binding-2')
+    await flushPromises()
+    expect(remove).toHaveBeenCalledWith('map-1', 'binding-2')
+  })
+
+  it('ignores attribution binding actions when no map is loaded', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+
+    const create = vi.spyOn(store, 'createAttributionBinding')
+    const remove = vi.spyOn(store, 'deleteAttributionBinding')
+    const attribution = wrapper.findComponent(AttributionStub)
+    store.activeMap = null
+
+    attribution.vm.$emit('create', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: null, binding_kind: 'trigger' })
+    attribution.vm.$emit('delete', 'binding-2')
+    await flushPromises()
+
+    expect(create).not.toHaveBeenCalled()
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it('reports attribution binding action failures, falling back for non-Error rejections', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+
+    const create = vi.spyOn(store, 'createAttributionBinding')
+    const remove = vi.spyOn(store, 'deleteAttributionBinding')
+
+    create.mockRejectedValueOnce(new Error('Could not create attribution binding'))
+    wrapper.findComponent(AttributionStub).vm.$emit('create', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: null, binding_kind: 'trigger' })
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not create attribution binding')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    create.mockRejectedValueOnce('offline')
+    wrapper.findComponent(AttributionStub).vm.$emit('create', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: null, binding_kind: 'trigger' })
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not create attribution binding')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    remove.mockRejectedValueOnce(new Error('Could not delete attribution binding'))
+    wrapper.findComponent(AttributionStub).vm.$emit('delete', 'binding-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not delete attribution binding')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    remove.mockRejectedValueOnce('offline')
+    wrapper.findComponent(AttributionStub).vm.$emit('delete', 'binding-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not delete attribution binding')
   })
 })
 
