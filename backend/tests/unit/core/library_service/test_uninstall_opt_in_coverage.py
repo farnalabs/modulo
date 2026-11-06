@@ -19,6 +19,11 @@ from modulo.core.library_service.uninstall import (
 )
 
 
+def _assert_includes_soft_deleted(session: MagicMock) -> None:
+    statement = session.scalar.await_args.args[0]
+    assert statement.get_execution_options().get("include_deleted") is True
+
+
 async def test_check_unmodified_pipeline_true_when_stamped() -> None:
     install_id = uuid.uuid4()
     entity = MagicMock()
@@ -27,6 +32,7 @@ async def test_check_unmodified_pipeline_true_when_stamped() -> None:
     session.scalar = AsyncMock(return_value=entity)
 
     assert await _check_unmodified(session, "pipeline", uuid.uuid4(), install_id) is True
+    _assert_includes_soft_deleted(session)
 
 
 async def test_check_unmodified_pipeline_false_when_absent() -> None:
@@ -45,6 +51,7 @@ async def test_delete_entity_pipeline_deletes_row() -> None:
     await _delete_entity(session, "pipeline", uuid.uuid4())
 
     session.delete.assert_awaited_once_with(entity)
+    _assert_includes_soft_deleted(session)
 
 
 async def test_detach_entity_pipeline_clears_stamp() -> None:
@@ -56,6 +63,7 @@ async def test_detach_entity_pipeline_clears_stamp() -> None:
     await _detach_entity(session, "pipeline", uuid.uuid4())
 
     assert entity.collection_install_id is None
+    _assert_includes_soft_deleted(session)
 
 
 async def test_entity_exists_pipeline_true() -> None:
@@ -63,6 +71,7 @@ async def test_entity_exists_pipeline_true() -> None:
     session.scalar = AsyncMock(return_value=MagicMock())
 
     assert await _entity_exists(session, "pipeline", uuid.uuid4()) is True
+    _assert_includes_soft_deleted(session)
 
 
 async def test_entity_exists_pipeline_false() -> None:
