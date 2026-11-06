@@ -54,6 +54,7 @@ services:
       # The SAME key must be given to every process that touches a stored
       # credential - including a host-run backend using backend/.env.
       FERNET_KEY: '${FERNET_KEY:?FERNET_KEY is required - generate one (openssl rand -base64 32) and put FERNET_KEY=<value> in .env at the repo root; see docs/quickstart.md step 1}'
+      SSRF_ALLOW_PRIVATE_RANGES: ${SSRF_ALLOW_PRIVATE_RANGES:-}
       REDIS_URL: redis://redis-local:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
@@ -87,6 +88,8 @@ services:
       SECRET_KEY: local-dev-secret-key-not-for-production
       # FAR-2181: same required key as saq-runner above - see that comment.
       FERNET_KEY: '${FERNET_KEY:?FERNET_KEY is required - generate one (openssl rand -base64 32) and put FERNET_KEY=<value> in .env at the repo root; see docs/quickstart.md step 1}'
+      # Match saq-runner and the host-run backend's optional model endpoint allowlist.
+      SSRF_ALLOW_PRIVATE_RANGES: ${SSRF_ALLOW_PRIVATE_RANGES:-}
       REDIS_URL: redis://redis-local:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
