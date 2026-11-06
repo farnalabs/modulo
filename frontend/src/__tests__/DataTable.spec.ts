@@ -24,15 +24,15 @@ function headerCells(wrapper: ReturnType<typeof mountTable>) {
 }
 
 describe('DataTable keyboard accessibility', () => {
-  it('exposes native table semantics and horizontal scroll instructions', () => {
+  it('exposes a discoverable horizontal scroll region', () => {
     const wrapper = mountTable()
-    const table = wrapper.get('table')
-    const instructions = wrapper.find('[id^="data-table-scroll-instructions-"]')
-    expect(table.element.tagName).toBe('TABLE')
-    expect(instructions.text()).toContain('Swipe horizontally')
-    expect(wrapper.find('div.overflow-x-auto').attributes('role')).toBeUndefined()
-    expect(wrapper.find('div.overflow-x-auto').attributes('tabindex')).toBeUndefined()
-    expect(table.classes()).toContain('min-w-max')
+    const region = wrapper.find('[aria-describedby^="data-table-scroll-instructions-"]')
+    expect(region.attributes('tabindex')).toBe('0')
+    expect(region.attributes('role')).toBe('region')
+    expect(region.attributes('aria-label')).toBe('Scrollable table')
+    expect(region.attributes('aria-describedby')).toMatch(/^data-table-scroll-instructions-/)
+    expect(wrapper.find(`#${region.attributes('aria-describedby')}`).text()).toContain('Swipe horizontally')
+    expect(wrapper.find('table').classes()).toContain('min-w-max')
   })
 
   it('marks sortable headers as focusable with an aria-sort state', () => {
@@ -97,6 +97,36 @@ describe('DataTable keyboard accessibility', () => {
     for (const id of ids) {
       expect(wrapper.find(`#${id}`).exists()).toBe(true)
     }
+  })
+})
+
+describe('DataTable horizontal scroll region', () => {
+  it('is a keyboard focus stop with a visible ring and claims no interaction it does not have', () => {
+    const wrapper = mountTable()
+    const scrollRegion = wrapper.get('div.overflow-x-auto')
+
+    expect(scrollRegion.attributes('tabindex')).toBe('0')
+    // A11Y-3: a focus stop must be visible.
+    expect(scrollRegion.classes()).toContain('focus-visible:ring-2')
+    // The named region role identifies this keyboard-reachable scroll viewport.
+    expect(scrollRegion.attributes('role')).toBe('region')
+    expect(scrollRegion.attributes('aria-label')).toBe('Scrollable table')
+  })
+
+  it('stays reachable when the table has nothing focusable inside it', () => {
+    // No sortable header and non-clickable rows: the container is the only
+    // route a keyboard user has to the overflowed columns.
+    const wrapper = mount(DataTable, {
+      props: {
+        columns: [{ key: 'value', label: 'Value' }],
+        rows: [{ value: 1 }],
+        rowClickable: false,
+      },
+    })
+
+    expect(wrapper.findAll('thead th[tabindex="0"]')).toHaveLength(0)
+    expect(wrapper.findAll('tbody tr[tabindex="0"]')).toHaveLength(0)
+    expect(wrapper.get('div.overflow-x-auto').attributes('tabindex')).toBe('0')
   })
 })
 
