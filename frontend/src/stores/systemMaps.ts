@@ -508,7 +508,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   function clearActive(): void { activeMap.value = null; activeRevision.value = null; graph.value = null; discovery.value = null }
 
   // Kept for the dashboard's preview card; discovery is now a real operation.
-  async function fetchDiscovery(): Promise<void> { loaded.value = true }
+  function fetchDiscovery(): void { loaded.value = true }
 
   return { loaded, loading, error, unavailable, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewUnavailable, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, hasReadAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadRevisionHistory, loadCurrentRevision, loadRevisionByTime, saveDraft, publish, archive, restoreRevisionAsNew, diffRevision, discover, clearActive, fetchDiscovery }
 })
