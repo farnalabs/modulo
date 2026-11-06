@@ -1256,6 +1256,15 @@ elements:
       - testid: system-map-revision-restore
         type: button
         dynamic_testid: false
+      - testid: system-map-revision-diff
+        type: button
+        dynamic_testid: false
+      - testid: system-map-revision-diff-result
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-diff-dismiss
+        type: button
+        dynamic_testid: false
       - testid: system-map-discovery-panel
         type: dialog
         dynamic_testid: false
@@ -7774,6 +7783,7 @@ features:
             - "[x] Discover My System integration (POST /api/v1/system-maps/discover) with accept/reject review panel that applies accepted nodes/relationships to the draft (FAR-2288): the System Maps list runs discovery and opens the resulting draft, the detail view runs discovery and opens the review panel, and the dashboard System Overview card runs the same discovery before deep-linking to the draft with ?discovery=1 so the review panel opens on arrival (frontend/src/views/SystemMapsView.vue, SystemMapDetailView.vue, components/dashboard/DashboardSystemOverview.vue, components/system-maps/SystemMapDiscoveryPanel.vue, stores/systemMaps.ts)"
             - "[x] MCP exposes System Maps discovery (FAR-2288): discover_system_map is gated by the same internal System Maps access predicate, reuses the REST discovery handler in a fresh session, and returns the discovery report or a branchable error code (backend/src/modulo/api/mcp_server.py, backend/src/modulo/core/mcp/scope_validator.py, backend/tests/unit/mcp/test_mcp_system_map_discovery.py)"
             - "[ ] MCP authoring, publish, diff, restore and overview tools are not exposed: discovery is the only System Maps capability available to MCP callers (backend/src/modulo/api/mcp_server.py)"
+            - "[x] Operators can compare a historical revision with the published revision from the revision sidebar; the view calls POST /api/v1/system-maps/{map_id}/revisions/{rev_id}/diff and renders changed node, relationship, loop-config, and content counts (frontend/src/components/system-maps/SystemMapRevisionSidebar.vue, frontend/src/views/SystemMapDetailView.vue, frontend/src/stores/systemMaps.ts)"
             - "[ ] Re-scan existing organisation resources into existing draft with added/removed/ambiguous diff and operator edit preservation (deferred: discovery can be re-run and an unchanged inventory resolves to the same revision identity, but there is no re-scan-into-existing-draft endpoint reporting an added/removed/ambiguous diff while preserving operator edits)"
             - "[x] No auto-publish — operator must explicitly publish"
             - "[x] Published reads are gated by system_maps_read + system_maps.read; authoring, discovery, publish, archive, restore, apply, loop dispatch and MCP discovery remain gated by system_maps + developer mode + operator/admin + system_maps_access"

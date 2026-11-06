@@ -2005,6 +2005,19 @@ export default {
       "current_revision": "Current",
       "new_draft": "New draft",
       "restore_as_new": "Restore as new draft",
+      "diff": "Compare revisions",
+      "diff_fields": {
+        "nodes_added": "Nodes added",
+        "nodes_removed": "Nodes removed",
+        "nodes_modified": "Nodes modified",
+        "relationships_added": "Relationships added",
+        "relationships_removed": "Relationships removed",
+        "relationships_modified": "Relationships modified",
+        "loop_configs_added": "Loop configurations added",
+        "loop_configs_removed": "Loop configurations removed",
+        "loop_configs_modified": "Loop configurations modified"
+      },
+      "diff_content_changed": "Content changed",
       "effective_from": "Effective from",
       "no_revisions": "No revisions have been created yet.",
       "unavailable": "This system map is not available on your plan. System Maps is switched off for this organisation, so retrying will not help.",
@@ -4650,6 +4663,7 @@ export default {
       "load_revision": "Could not load revision",
       "create_draft": "Could not create draft",
       "restore_revision": "Could not restore revision",
+      "diff_revision": "Could not compare revisions",
       "save_draft": "Could not save draft",
       "discovery_failed": "Discovery failed"
     }

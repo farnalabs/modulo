@@ -21,6 +21,7 @@
           :read-only="readOnly"
            @new-draft="createNewDraft"
            @restore-revision="restoreRevision"
+           @diff-revision="diffRevision"
            @discover="runDiscovery"
 
         />
@@ -50,6 +51,20 @@
           :dismiss-label="$t('common.dismiss')"
           class="m-3"
         />
+        <div v-if="diffResult" class="m-3 rounded-lg border bg-card p-3 text-sm" data-testid="system-map-revision-diff-result">
+          <div class="flex items-center justify-between gap-2">
+            <h2 class="font-semibold">{{ $t('views.SystemMapDetailView.diff') }}</h2>
+            <button type="button" class="rounded border px-2 py-1 text-xs" data-testid="system-map-revision-diff-dismiss" @click="diffResult = null">{{ $t('common.dismiss') }}</button>
+          </div>
+          <p class="mt-1 text-xs text-muted-foreground">
+            {{ $t('views.SystemMapDetailView.revision', { number: diffResult.base_revision_number }) }} →
+            {{ $t('views.SystemMapDetailView.revision', { number: diffResult.target_revision_number }) }}
+          </p>
+          <ul class="mt-2 grid gap-1 text-xs sm:grid-cols-2">
+            <li v-for="item in diffSummaryItems" :key="item[0]">{{ $t(`views.SystemMapDetailView.diff_fields.${item[0]}`) }}: {{ item[1] }}</li>
+            <li v-if="diffResult.content_json_changed">{{ $t('views.SystemMapDetailView.diff_content_changed') }}</li>
+          </ul>
+        </div>
 
         <HeaderBar
           :map="activeMap"
@@ -124,7 +139,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSystemMapsStore, NODE_TYPES, RELATIONSHIP_TYPES } from '../stores/systemMaps'
-import type { DiscoverySelection, SystemMapNode, SystemMapRelationship } from '../stores/systemMaps'
+import type { DiscoverySelection, SystemMapNode, SystemMapRelationship, SystemMapRevisionDiff } from '../stores/systemMaps'
 import BackLink from '../components/BackLink.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import HeaderBar from '../components/system-maps/SystemMapHeaderBar.vue'
@@ -152,11 +167,19 @@ const showSidebar = ref(true)
 const discoveryOpen = ref(false)
 const saving = ref(false)
 const actionError = ref<string | null>(null)
+const diffResult = ref<SystemMapRevisionDiff | null>(null)
 const editedNodes = ref<SystemMapNode[]>([])
 const editedRelationships = ref<SystemMapRelationship[]>([])
 
 const nodeTypes = NODE_TYPES
 const relationshipTypes = RELATIONSHIP_TYPES
+
+const DIFF_FIELDS = ['nodes_added', 'nodes_removed', 'nodes_modified', 'relationships_added', 'relationships_removed', 'relationships_modified', 'loop_configs_added', 'loop_configs_removed', 'loop_configs_modified'] as const
+
+const diffSummaryItems = computed<Array<[string, number]>>(() => {
+  const diff = diffResult.value as SystemMapRevisionDiff
+  return DIFF_FIELDS.map((field) => [field, diff[field]?.length ?? 0] as [string, number]).filter(([, count]) => count !== 0)
+})
 
 const isPublished = computed(() => activeRevision.value?.status === 'published')
 const isArchived = computed(() => activeRevision.value?.status === 'archived')
@@ -195,6 +218,7 @@ function relationshipPayload(relationships: SystemMapRelationship[]) {
 
 async function loadData(): Promise<void> {
   actionError.value = null
+  diffResult.value = null
   await store.fetchAccess()
   await store.loadMap(mapId.value)
   if (!activeMap.value) return
@@ -205,9 +229,20 @@ async function loadData(): Promise<void> {
   }
 }
 
+async function diffRevision(revisionId: string): Promise<void> {
+  if (!activeMap.value || !activeMap.value.published_revision_id) return
+  actionError.value = null
+  try {
+    diffResult.value = await store.diffRevision(activeMap.value.id, revisionId, activeMap.value.published_revision_id)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.diff_revision')
+  }
+}
+
 async function selectRevision(revisionId: string): Promise<void> {
   if (!activeMap.value) return
   actionError.value = null
+  diffResult.value = null
   try {
     await store.loadRevision(activeMap.value.id, revisionId)
   } catch (err) {
@@ -218,6 +253,7 @@ async function selectRevision(revisionId: string): Promise<void> {
 async function selectCurrentRevision(): Promise<void> {
   if (!activeMap.value) return
   actionError.value = null
+  diffResult.value = null
   try {
     await store.loadCurrentRevision(activeMap.value.id)
   } catch (err) {
@@ -228,6 +264,7 @@ async function selectCurrentRevision(): Promise<void> {
 async function selectRevisionByTime(at: string): Promise<void> {
   if (!activeMap.value) return
   actionError.value = null
+  diffResult.value = null
   try {
     await store.loadRevisionByTime(activeMap.value.id, at)
   } catch (err) {
