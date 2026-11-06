@@ -5329,6 +5329,7 @@ class PipelineExecutor:
         eval_defs_by_node: dict[str, list[EvalDefDTO]],
         pipeline_retry_policy: dict[str, Any] | None,
         scalars: dict[str, Any],
+        org_id: uuid.UUID,
     ) -> tuple[Any, Callable[[str, dict[str, Any]], str | None]]:
         """Compile or retrieve the cached graph for resume."""
         run_ref = rc.build_run_ref(str(pipeline_id), scalars["run_number"])
@@ -5343,7 +5344,7 @@ class PipelineExecutor:
                 graph_json,
                 eval_definitions_by_node=eval_defs_by_node,
                 session_factory=self._session_factory,
-                org_id=scalars.get("org_id"),
+                org_id=org_id,
                 pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
                 pipeline_retry_policy=pipeline_retry_policy,
                 node_idempotency_key=_node_idempotency_key,
@@ -5363,7 +5364,6 @@ class PipelineExecutor:
         org_id: uuid.UUID,
         pipeline_id: uuid.UUID,
         snapshot: PipelineSnapshot,
-        graph_json: dict[str, Any],
         run_id: uuid.UUID,
     ) -> tuple[RunEventBroker, ModelBackendHub | None]:
         """Set up runtime environment: conformance context, broker, hooks, model hub."""
@@ -5393,6 +5393,7 @@ class PipelineExecutor:
         run_id: uuid.UUID,
         pipeline_id: uuid.UUID,
         org_id: uuid.UUID,
+        resume_data: dict[str, Any],
         completed_node_outputs: dict[str, Any],
         guard: Any,
         node_token_budgets: dict[str, int],
@@ -5416,11 +5417,15 @@ class PipelineExecutor:
             fernet_key=_settings.fernet_key,
         ) as saver:
             compiled.checkpointer = saver
-            await compiled.aupdate_state(
-                config,
-                {"_hitl_decision": None, "_claim_lease": self._claim_token},
-            )
             try:
+                # Inject the human's HITL decision into the graph state. A
+                # ``None`` here fails closed in ``_hitl_review_resume_result``
+                # and re-interrupts the gate, so the decision MUST be threaded
+                # through from ``resume()`` (it is not optional).
+                await compiled.aupdate_state(
+                    config,
+                    {"_hitl_decision": resume_data, "_claim_lease": self._claim_token},
+                )
                 final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                     compiled,
                     None,
@@ -5470,7 +5475,6 @@ class PipelineExecutor:
     async def _resume_cleanup_and_finalize(
         self,
         *,
-        model_backend_hub: ModelBackendHub | None,
         final_status: str,
         run_id: uuid.UUID,
         org_id: uuid.UUID,
@@ -5482,14 +5486,7 @@ class PipelineExecutor:
         completed_node_outputs: dict[str, Any],
         node_ids: set[str],
     ) -> Run:
-        """Clean up resources and finalize the run."""
-        set_cancellation_check(None)
-        set_audit_hook(None)
-        set_model_backend_hub(None)
-        if model_backend_hub is not None:
-            await _teardown_hub(model_backend_hub)
-        if final_status not in ("awaiting_human", "complete"):
-            get_registry().close(run_id)
+        """Finalize the run after the stream phase (teardown has already run)."""
         return await self._finalize_then_publish_completed(
             defer_close=final_status == "complete",
             run_id=run_id,
@@ -5881,6 +5878,7 @@ class PipelineExecutor:
             eval_defs_by_node=eval_defs_by_node,
             pipeline_retry_policy=scalars["pipeline_retry_policy"],
             scalars=scalars,
+            org_id=org_id,
         )
 
         # Phase 4: Setup runtime
@@ -5888,35 +5886,55 @@ class PipelineExecutor:
             org_id=org_id,
             pipeline_id=pipeline_id,
             snapshot=snapshot,
-            graph_json=graph_json,
             run_id=run_id,
         )
 
         # Phase 5: Stream and handle errors
         config = {"configurable": {"thread_id": thread_id}}
-        final_status, error_code, error_detail, node_token_usage = await self._resume_stream_and_handle_errors(
-            compiled=compiled,
-            config=config,
-            node_ids={str(n["id"]) for n in graph_json.get("nodes", [])},
-            broker=broker,
-            run_id=run_id,
-            pipeline_id=pipeline_id,
-            org_id=org_id,
-            completed_node_outputs={},
-            guard=guard,
-            node_token_budgets={
-                str(n["id"]): n["token_budget"]
-                for n in graph_json.get("nodes", [])
-                if n.get("token_budget") is not None
-            },
-            eval_definitions_by_node=eval_defs_by_node,
-            node_type_map=node_type_map,
-            model_backend_hub=model_backend_hub,
-        )
+        node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
+        node_token_budgets = {
+            str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
+        }
+        # One shared instance threaded into BOTH the stream phase and finalize:
+        # ``_stream_graph`` mutates it IN PLACE, so a fresh dict at finalize
+        # would lose the resumed segment's outputs (FAR-505 regression).
+        completed_node_outputs: dict[str, Any] = {}
+        final_status: str = "failed"
+        error_code: str | None = None
+        error_detail: str | None = None
+        node_token_usage: dict[str, Any] | None = None
+        try:
+            final_status, error_code, error_detail, node_token_usage = await self._resume_stream_and_handle_errors(
+                compiled=compiled,
+                config=config,
+                node_ids=node_ids,
+                broker=broker,
+                run_id=run_id,
+                pipeline_id=pipeline_id,
+                org_id=org_id,
+                resume_data=resume_data,
+                completed_node_outputs=completed_node_outputs,
+                guard=guard,
+                node_token_budgets=node_token_budgets,
+                eval_definitions_by_node=eval_defs_by_node,
+                node_type_map=node_type_map,
+                model_backend_hub=model_backend_hub,
+            )
+        finally:
+            # Teardown MUST stay exception-safe: a CancelledError or a
+            # re-raised non-checkpointer RuntimeError from the stream phase
+            # would otherwise leak process-global contextvars and the model
+            # hub (FAR-1534).
+            set_cancellation_check(None)
+            set_audit_hook(None)
+            set_model_backend_hub(None)
+            if model_backend_hub is not None:
+                await _teardown_hub(model_backend_hub)
+            if final_status not in ("awaiting_human", "complete"):
+                get_registry().close(run_id)
 
-        # Phase 6: Cleanup and finalize
+        # Phase 6: Finalize
         return await self._resume_cleanup_and_finalize(
-            model_backend_hub=model_backend_hub,
             final_status=final_status,
             run_id=run_id,
             org_id=org_id,
@@ -5925,8 +5943,8 @@ class PipelineExecutor:
             error_code=error_code,
             error_detail=error_detail,
             node_token_usage=node_token_usage,
-            completed_node_outputs={},
-            node_ids={str(n["id"]) for n in graph_json.get("nodes", [])},
+            completed_node_outputs=completed_node_outputs,
+            node_ids=node_ids,
         )
 
     async def _record_eval_blocked_audit(
@@ -6692,6 +6710,10 @@ class PipelineExecutor:
             return rc.node_idempotency_key(run_ref=run_ref, node_ref=node_id)
 
         node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
+        # ONE shared instance for the whole run: ``_stream_graph`` mutates it
+        # IN PLACE, so the stream config and the finalize call MUST receive the
+        # same dict or the accumulated outputs never reach finalize_cost.
+        completed_node_outputs: dict[str, Any] = {}
         scope = _RunScope(
             run_id=run_id,
             org_id=org_id,
@@ -6706,7 +6728,7 @@ class PipelineExecutor:
             graph_json=graph_json,
             eval_defs_by_node=eval_defs_by_node,
             node_ids=node_ids,
-            completed_node_outputs={},
+            completed_node_outputs=completed_node_outputs,
             guard=guard,
             node_type_map=node_type_map,
             pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
@@ -6721,7 +6743,6 @@ class PipelineExecutor:
         error_detail: str | None = None
         node_token_usage: dict[str, Any] | None = None
         retry_policy_eligible = True
-        completed_node_outputs: dict[str, Any] = {}
 
         try:
             final_status, error_code, error_detail, node_token_usage = await self._prepare_and_stream(

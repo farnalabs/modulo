@@ -253,6 +253,57 @@ async def test_resume_routes_completed_outputs_to_finalize_cost():
     assert "node-a" in call.kwargs["segment_completed_node_outputs"]
 
 
+async def test_resume_injects_hitl_decision_into_graph_state():
+    """resume() must thread ``resume_data`` into the checkpoint as ``_hitl_decision``.
+
+    A ``None`` decision fails closed in ``_hitl_review_resume_result`` and the
+    gate re-interrupts, so the human's approve/reject would never be applied.
+    """
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_resume_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    compiled = _mock_compiled([{"event": "on_chain_end", "name": "node-a", "data": {"output": {}}}])
+    compiled.aupdate_state = AsyncMock()
+
+    checkpointer_mock = MagicMock()
+    checkpointer_mock.__aenter__ = AsyncMock(return_value=checkpointer_mock)
+    checkpointer_mock.__aexit__ = AsyncMock(return_value=False)
+
+    settings_mock = MagicMock()
+    settings_mock.fernet_key = "test-fernet-key-not-for-production="
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
+        patch("modulo.settings.get_settings", return_value=settings_mock),
+        patch("modulo.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor._checkpointer_conn_string = "sqlite:///test.db"
+        await executor.resume(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            resume_data={"action": "approved", "review_id": "r-1"},
+            claim_token="lease-1",
+        )
+
+    compiled.aupdate_state.assert_awaited_once()
+    state_payload = compiled.aupdate_state.await_args.args[1]
+    assert state_payload["_hitl_decision"] == {"action": "approved", "review_id": "r-1"}
+    assert state_payload["_claim_lease"] == "lease-1"
+
+
 # ---------------------------------------------------------------------------
 # FAR-131 (MAJOR 2) — the executor → fire_agent_signal wiring threads the
 # node-type map, so a splittable node's child run receives its PURE RETURN.
