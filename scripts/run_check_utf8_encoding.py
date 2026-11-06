@@ -3,9 +3,9 @@
 
 Replaces `powershell -NoProfile -File tools/check-utf8-encoding.ps1`. Scans
 only git-tracked files (git ls-files) with relevant extensions for UTF-8 BOM
-(blocking in .github/workflows/, non-blocking elsewhere) and UTF-16 LE/BE BOMs
-(blocking). With ``--fix``, removes BOMs by rewriting the file as UTF-8 without
-BOM. Exit 0 clean, 1 blocking issue.
+(blocking in .github/workflows/ and backend/pyproject.toml, non-blocking
+elsewhere) and UTF-16 LE/BE BOMs (blocking). With ``--fix``, removes BOMs by
+rewriting the file as UTF-8 without BOM. Exit 0 clean, 1 blocking issue.
 """
 
 from __future__ import annotations
@@ -73,16 +73,17 @@ def _check_file(rel: str, fix: bool) -> bool:
         return False
 
     is_workflow = "/.github/workflows/" in "/" + rel
+    is_backend_pyproject = rel == "backend/pyproject.toml"
 
     if data.startswith(_UTF8_BOM):
-        if is_workflow:
-            print(f"BLOCKING: UTF-8 BOM in workflow file: {rel}", file=sys.stderr)
+        if is_workflow or is_backend_pyproject:
+            print(f"BLOCKING: UTF-8 BOM in required build file: {rel}", file=sys.stderr)
         else:
             print(f"Non-blocking BOM: {rel}", file=sys.stderr)
         if fix:
             _write_utf8_no_bom(full)
             print("  Fixed: removed UTF-8 BOM", file=sys.stderr)
-        return is_workflow
+        return is_workflow or is_backend_pyproject
 
     if data.startswith((_UTF16_LE_BOM, _UTF16_BE_BOM)):
         print(f"UTF-16 BOM found: {rel}", file=sys.stderr)

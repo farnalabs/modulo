@@ -55,6 +55,14 @@ def test_check_file_utf8_bom_non_workflow_non_blocking(tmp_path, monkeypatch):
     assert mod._check_file("mod.py", fix=False) is False
 
 
+def test_check_file_utf8_bom_backend_pyproject_blocks(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "REPO_ROOT", str(tmp_path))
+    pyproject = tmp_path / "backend" / "pyproject.toml"
+    pyproject.parent.mkdir(parents=True)
+    pyproject.write_bytes(mod._UTF8_BOM + b"[project]\nname = 'modulo'\n")
+    assert mod._check_file("backend/pyproject.toml", fix=False) is True
+
+
 def test_check_file_utf8_bom_non_workflow_fixed(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "REPO_ROOT", str(tmp_path))
     f = tmp_path / "mod.py"
