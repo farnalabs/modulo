@@ -41,6 +41,7 @@ async function startLocalSsoBackend(): Promise<SsoBackendProcess> {
       MODULO_MULTI_ORG_ENABLED: 'false',
       MODULO_AUTH_RATE_LIMIT_ENABLED: 'false',
       MODULO_REDIS_URL: 'redis://127.0.0.1:0/0',
+      MODULO_DB: 'sqlite',
     },
   })
   child.stdout?.on('data', (chunk) => process.stderr.write(`[sso-fixture] ${chunk}`))
