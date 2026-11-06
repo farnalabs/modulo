@@ -2904,6 +2904,9 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
+      - testid: settings-monitor-permission-denied
+        type: element
+        dynamic_testid: false
     /admin/users:
       - testid: page-header-right
         type: element

@@ -37,6 +37,10 @@ not import them by hand:
 docker compose -f docker-compose.local.yml --profile observability up -d
 ```
 
+This stack needs a valid `FERNET_KEY` in `.env` at the repo root; compose
+refuses to start without one. See `docs/deployment.md` §Observability Stack for
+the one-line generation command.
+
 `docker-compose.local.yml` mounts `configs/grafana/dashboards/` (provider `Modulo`,
 folder `Modulo`, `editable: false`) into Grafana and `configs/grafana/datasources/` as the
 default Prometheus datasource. The JSON files in `configs/grafana/dashboards/` are

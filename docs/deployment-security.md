@@ -246,7 +246,7 @@ Then use `modulo_migrate` in migration contexts and `modulo_app` for runtime.
 Migrations use PostgreSQL advisory locks to prevent concurrent execution:
 
 ```python
-# alembic/env.py (polling loop; key is (72001, 1))
+# backend/src/modulo/db/migrations/env.py (polling loop; key is (72001, 1))
 for _ in range(240):
     result = await conn.execute(
         text("SELECT pg_try_advisory_lock(:k1, :k2)"),
@@ -332,7 +332,7 @@ coordinate across replicas. See `docs/deployment.md` §Scaling for details.
 
 Modulo uses the **double-submit cookie** pattern:
 1. Server sets a cryptographically random CSRF token as a non-HttpOnly cookie
-   (JavaScript needs to read it) with `Secure` and `SameSite=Lax` attributes.
+   (JavaScript needs to read it) with `Secure` and `SameSite=Strict` attributes.
 2. Client includes the same token in a custom header (`X-CSRF-Token`).
 3. Server validates the header value matches the cookie value.
 
@@ -364,16 +364,21 @@ CORS_MAX_AGE=3600
 Verify the backend response includes all headers below:
 
 ```
-Content-Security-Policy: default-src 'self'; connect-src 'self' *.ingest.sentry.io *.datadoghq.com *.dd.dg *.rum.browserevents.com; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; frame-ancestors 'none'
+Content-Security-Policy: default-src 'self'; connect-src 'self' *.ingest.sentry.io *.datadoghq.com *.dd.dg *.rum.browserevents.com; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; frame-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests
 Strict-Transport-Security: max-age=31536000; includeSubDomains
 X-Frame-Options: DENY
 X-Content-Type-Options: nosniff
 Referrer-Policy: strict-origin-when-cross-origin
+Permissions-Policy: camera=(), microphone=(), geolocation=()
 ```
+
+`Strict-Transport-Security` is omitted when `debug=True`; the rest are sent on
+every response. In debug mode the CSP `connect-src` also adds `ws: wss:`, and
+`MODULO_MONITOR_DOMAINS` appends any extra monitoring origins.
 
 **Verify:**
 ```bash
-curl -si https://modulo.example.com/healthz | grep -iE "^(content-security-policy|strict-transport-security|x-frame-options|x-content-type-options|referrer-policy):"
+curl -si https://modulo.example.com/healthz | grep -iE "^(content-security-policy|strict-transport-security|x-frame-options|x-content-type-options|referrer-policy|permissions-policy):"
 ```
 
 ### 4.5 API Key Management
@@ -568,7 +573,7 @@ MODULO_TELEMETRY_ENABLED=true
 | Application logs (stdout) | 30 days | Container stdout / log aggregator |
 | Audit log | Append-only; no automated purge | Database (`audit_events` table) |
 | Alembic migration log | Permanent | `alembic_version` table |
-| OTel traces | 7 days (configurable in collector) | OTel collector / Prometheus |
+| OTel metrics | 7 days (Prometheus retention in the bundled stack) | Prometheus / OTel collector file exporter (`/var/log/otel/metrics.jsonl`) |
 | Nginx access logs | 30 days | Log aggregator or persistent volume |
 
 ### 6.4 Alerting on Security Events
@@ -662,8 +667,10 @@ See `docs/upgrade-process.md` for the full rollback guide.
 - **Fly.io:** The managed path performs rolling/bluegreen deployments between
   machine groups with health-checked cutover – keep at least 2 backend
   machines so traffic keeps flowing during an upgrade.
-- **Readiness probe:** Backend `/healthz` must return 200 before a new
-  deployment receives traffic. It checks DB connectivity and migration status.
+- **Readiness probe:** Backend `/healthz/ready` must return 200 before a new
+  deployment receives traffic. It checks DB connectivity, migration status and
+  the SAQ worker fleet; `/healthz` is a bare liveness endpoint that only
+  returns `{"status": "ok"}`.
 - **Docker Compose:** Stop + start is the only update mode – schedule upgrades
   in a maintenance window.
 - **WebSocket connections:** In-flight agent runs are lost on machine/container
