@@ -218,6 +218,58 @@ describe('CopyPipelineWizard', () => {
     vi.useRealTimers()
   })
 
+  it('retries the pipeline load from the error surface', async () => {
+    mockGet.mockRejectedValueOnce(new Error('pipeline load failed'))
+    router.push('/pipelines/copy')
+    await router.isReady()
+    const wrapper = mount(CopyPipelineWizard, {
+      global: { plugins: [router], stubs: { OwnershipPicker: true } },
+    })
+    await nextTick()
+    await nextTick()
+
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+    const before = mockGet.mock.calls.length
+    await retry.trigger('click')
+    await nextTick()
+    await nextTick()
+    expect(mockGet.mock.calls.length).toBeGreaterThan(before)
+    wrapper.unmount()
+  })
+
+  it('resets the wizard and reloads pipelines via copy another', async () => {
+    vi.useFakeTimers()
+    try {
+      router.push('/pipelines/copy')
+      await router.isReady()
+      const wrapper = mount(CopyPipelineWizard, {
+        global: { plugins: [router], stubs: { OwnershipPicker: true } },
+      })
+      await nextTick()
+      await nextTick()
+
+      const options = wrapper.findAll('[data-testid="copy-wizard-pipeline-option"]')
+      await options[0].trigger('click')
+      await wrapper.find('[data-testid="copy-wizard-next-step1"]').trigger('click')
+      await wrapper.find('[data-testid="copy-wizard-next-step2"]').trigger('click')
+      await wrapper.find('[data-testid="copy-wizard-execute"]').trigger('click')
+      await vi.advanceTimersByTimeAsync(300)
+      await nextTick()
+      await vi.advanceTimersByTimeAsync(400)
+      await nextTick()
+
+      const before = mockGet.mock.calls.length
+      await wrapper.find('[data-testid="copy-wizard-copy-another"]').trigger('click')
+      await nextTick()
+      await nextTick()
+      expect(mockGet.mock.calls.length).toBeGreaterThan(before)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('shows excluded copy options and team ownership in the review step', async () => {
     router.push('/pipelines/copy')
     await router.isReady()

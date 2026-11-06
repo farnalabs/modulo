@@ -423,7 +423,7 @@ function resetFilters() {
   dateTo.value = ''
   selectedPipelineId.value = null
   selectedStatus.value = null
-  loadCandidates()
+  void loadCandidates()
 }
 
 async function loadPipelines() {
@@ -586,6 +586,6 @@ watch(dateTo, () => {
   dateToDebounce = setTimeout(loadCandidates, 300)
 })
 
-loadPipelines()
-loadCandidates()
+void loadPipelines()
+void loadCandidates()
 </script>

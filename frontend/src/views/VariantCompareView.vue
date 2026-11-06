@@ -368,7 +368,7 @@ const nodeNames = computed(() => {
       Object.keys(entry.nodeOutputs).forEach(k => names.add(k))
     }
   }
-  return Array.from(names).sort()
+  return Array.from(names).sort((a, b) => a.localeCompare(b))
 })
 
 const variantRunData = computed(() => {
@@ -701,5 +701,5 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-loadCurrency()
+void loadCurrency()
 </script>

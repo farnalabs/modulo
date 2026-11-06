@@ -783,7 +783,7 @@ function buildQuery() {
 
 function applyAutoFilters() {
   resetPager()
-  loadEvents()
+  void loadEvents()
 }
 
 // Auto-apply on dropdown/select filter changes (immediate)
@@ -816,7 +816,7 @@ function resetFilters() {
   filterDateTo.value = ''
   filterTargetType.value = '__all__'
   resetPager()
-  loadEvents()
+  void loadEvents()
 }
 
 function buildSystemQuery() {
@@ -851,7 +851,7 @@ async function loadSystemEvents() {
 
 function applySystemFilters() {
   systemPage.value = 1
-  loadSystemEvents()
+  void loadSystemEvents()
 }
 
 function resetSystemFilters() {
@@ -860,13 +860,13 @@ function resetSystemFilters() {
   systemFilterDateFrom.value = ''
   systemFilterDateTo.value = ''
   systemPage.value = 1
-  loadSystemEvents()
+  void loadSystemEvents()
 }
 
 function goSystemPage(page: number) {
   if (page < 1) return
   systemPage.value = page
-  loadSystemEvents()
+  void loadSystemEvents()
 }
 
 function toggleSystemExpand(id: string) {
@@ -883,7 +883,7 @@ function toggleSystemExpand(id: string) {
 // filters apply immediately on the dropdown/date controls and debounced on the
 // free-text fields, mirroring the organisation trail above.
 watch(auditSource, (source) => {
-  if (source === 'system') loadSystemEvents()
+  if (source === 'system') void loadSystemEvents()
 })
 
 let systemDebounce: ReturnType<typeof setTimeout> | null = null
@@ -911,8 +911,8 @@ function setExportError(message: string, format: 'csv' | 'jsonl') {
     message,
     retry: () => {
       exportFailure.value = null
-      if (format === 'csv') exportCsv()
-      else exportJsonl()
+      if (format === 'csv') void exportCsv()
+      else void exportJsonl()
     },
   }
 }

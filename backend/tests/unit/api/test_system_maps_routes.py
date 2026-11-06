@@ -502,6 +502,35 @@ def test_internal_caller_with_grant_can_access() -> None:
     assert result is principal
 
 
+def test_internal_jwt_without_grants_can_access() -> None:
+    """Legacy JWT callers retain role-based System Maps access."""
+    from modulo.api.dependencies import _require_internal_system_maps_access
+    from modulo.auth.jwt import TenantPrincipal
+    from modulo.settings import Settings
+
+    settings = Settings(
+        modulo_dev_mode=True,
+        modulo_public_url="http://test",
+        fernet_key="test" * 8,
+        secret_key="test" * 8,
+        redis_url="redis://localhost:6379/0",
+        database_url="postgresql+asyncpg://test:test@localhost/test",
+    )
+    principal = TenantPrincipal(
+        username="operator",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="operator",
+        is_system_admin=False,
+        via_api_key=False,
+        client_kind="test",
+        key_grants=None,
+    )
+
+    result = _require_internal_system_maps_access(principal, settings=settings)
+    assert result is principal
+
+
 def test_dev_mode_required() -> None:
     """Dev mode is required - without it, even operator gets 403."""
     from modulo.api.dependencies import _require_internal_system_maps_access

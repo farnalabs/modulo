@@ -447,7 +447,7 @@ function formatDate(dateStr: string): string {
 }
 
 function retry() {
-  fetchPipelines()
+  void fetchPipelines()
 }
 
 async function executeCopy() {
@@ -500,7 +500,7 @@ function reset() {
   result.value = null
   searchQuery.value = ''
   visibilityFilter.value = 'all'
-  fetchPipelines()
+  void fetchPipelines()
 }
 
 </script>

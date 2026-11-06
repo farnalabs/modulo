@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.node_output_split import split_node_output
 from modulo.core.pipeline_engine.executor import (
+    GraphValidationError,
     PipelineExecutor,
     RunNotFoundError,
     _accumulate_chat_model_tokens,
@@ -251,6 +252,57 @@ async def test_resume_routes_completed_outputs_to_finalize_cost():
     assert call.kwargs["is_terminal"] is True
     assert call.kwargs["node_type_map"] == {"node-a": ""}
     assert "node-a" in call.kwargs["segment_completed_node_outputs"]
+
+
+async def test_resume_injects_hitl_decision_into_graph_state():
+    """resume() must thread ``resume_data`` into the checkpoint as ``_hitl_decision``.
+
+    A ``None`` decision fails closed in ``_hitl_review_resume_result`` and the
+    gate re-interrupts, so the human's approve/reject would never be applied.
+    """
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_resume_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    compiled = _mock_compiled([{"event": "on_chain_end", "name": "node-a", "data": {"output": {}}}])
+    compiled.aupdate_state = AsyncMock()
+
+    checkpointer_mock = MagicMock()
+    checkpointer_mock.__aenter__ = AsyncMock(return_value=checkpointer_mock)
+    checkpointer_mock.__aexit__ = AsyncMock(return_value=False)
+
+    settings_mock = MagicMock()
+    settings_mock.fernet_key = "test-fernet-key-not-for-production="
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
+        patch("modulo.settings.get_settings", return_value=settings_mock),
+        patch("modulo.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor._checkpointer_conn_string = "sqlite:///test.db"
+        await executor.resume(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            resume_data={"action": "approved", "review_id": "r-1"},
+            claim_token="lease-1",
+        )
+
+    compiled.aupdate_state.assert_awaited_once()
+    state_payload = compiled.aupdate_state.await_args.args[1]
+    assert state_payload["_hitl_decision"] == {"action": "approved", "review_id": "r-1"}
+    assert state_payload["_claim_lease"] == "lease-1"
 
 
 # ---------------------------------------------------------------------------
@@ -6200,3 +6252,403 @@ async def test_stream_graph_agent_failure_elevation_disabled():
     # (stall_reason would take precedence if present, otherwise complete)
     assert status == "complete"
     assert error_code is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-366 (SonarCloud code-smell cleanup): the resume/execute flow was split
+# into small helpers to reduce cognitive complexity. Their failure-isolated and
+# early-exit arms are the behaviour that keeps a resume safe, so cover each of
+# them explicitly rather than relying on the happy-path resume tests.
+# ---------------------------------------------------------------------------
+
+
+class _RaisingContextManager:
+    """Async context manager whose ``__aenter__`` raises the given exception."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    async def __aenter__(self) -> Any:
+        raise self._exc
+
+    async def __aexit__(self, *_args: object) -> bool:
+        return False
+
+
+def _session_raising_on_begin_nested(exc: BaseException) -> MagicMock:
+    session = MagicMock()
+    session.begin_nested = MagicMock(return_value=_RaisingContextManager(exc))
+    return session
+
+
+def _checkpointer_scope_mock() -> MagicMock:
+    scope = MagicMock()
+    scope.__aenter__ = AsyncMock(return_value=scope)
+    scope.__aexit__ = AsyncMock(return_value=False)
+    return scope
+
+
+async def test_resume_load_and_validate_raises_on_invalid_graph() -> None:
+    """An invalid snapshot graph on resume raises GraphValidationError."""
+    run = _make_run()
+    snapshot = _make_snapshot()
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one.return_value = snapshot
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = AsyncMock(return_value=snapshot_result)
+
+    validation = MagicMock()
+    validation.is_valid = False
+    issue = MagicMock()
+    issue.code = "missing_role"
+    issue.message = "node-a has no role"
+    validation.issues = [issue]
+    validator_cls = MagicMock()
+    validator_cls.return_value.validate_for_run = AsyncMock(return_value=validation)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", validator_cls),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(GraphValidationError):
+            await executor._resume_load_and_validate(
+                session=session,
+                run_id=run.id,
+                org_id=uuid.uuid4(),
+                claim_token=None,
+                expected_claim_status=None,
+                check_sandbox_capacity=False,
+            )
+
+
+async def test_resume_prepare_second_transaction_raises_when_pipeline_missing() -> None:
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = None
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = AsyncMock(return_value=pipeline_result)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(RunNotFoundError):
+            await executor._resume_prepare_second_transaction(
+                session=session,
+                org_id=uuid.uuid4(),
+                pipeline_id=uuid.uuid4(),
+                run_id=uuid.uuid4(),
+            )
+
+
+async def test_resume_prepare_second_transaction_raises_when_run_missing() -> None:
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = _make_pipeline()
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = AsyncMock(return_value=pipeline_result)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=None)),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(RunNotFoundError):
+            await executor._resume_prepare_second_transaction(
+                session=session,
+                org_id=uuid.uuid4(),
+                pipeline_id=uuid.uuid4(),
+                run_id=uuid.uuid4(),
+            )
+
+
+async def _run_resume_stream_raising(exc: BaseException) -> tuple[str, str | None, str | None, Any]:
+    compiled = MagicMock()
+    compiled.aupdate_state = AsyncMock()
+    executor = PipelineExecutor(MagicMock())
+    executor._checkpointer_conn_string = "sqlite:///test.db"
+    executor._stream_graph = AsyncMock(side_effect=exc)
+    settings_mock = MagicMock()
+    settings_mock.fernet_key = "test-fernet-key-not-for-production="
+    with (
+        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=_checkpointer_scope_mock()),
+        patch("modulo.settings.get_settings", return_value=settings_mock),
+    ):
+        return await executor._resume_stream_and_handle_errors(
+            compiled=compiled,
+            config={},
+            node_ids=set(),
+            broker=MagicMock(),
+            run_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            resume_data={},
+            completed_node_outputs={},
+            guard=MagicMock(),
+            node_token_budgets={},
+            eval_definitions_by_node={},
+            node_type_map={},
+        )
+
+
+async def test_resume_stream_maps_checkpointer_runtime_error_to_configuration_error() -> None:
+    status, code, detail, _ntu = await _run_resume_stream_raising(RuntimeError("checkpointer unavailable"))
+
+    assert status == "failed"
+    assert code == "configuration_error"
+    assert "checkpointer" in (detail or "")
+
+
+async def test_resume_stream_reraises_non_checkpointer_runtime_error() -> None:
+    with pytest.raises(RuntimeError, match="different failure"):
+        await _run_resume_stream_raising(RuntimeError("different failure"))
+
+
+async def test_resume_stream_propagates_cancellation() -> None:
+    with pytest.raises(asyncio.CancelledError):
+        await _run_resume_stream_raising(asyncio.CancelledError())
+
+
+async def _run_resume_stream_scope_entry_raising(
+    exc: BaseException,
+) -> tuple[str, str | None, str | None, Any]:
+    compiled = MagicMock()
+    compiled.aupdate_state = AsyncMock()
+    executor = PipelineExecutor(MagicMock())
+    executor._checkpointer_conn_string = "sqlite:///test.db"
+    settings_mock = MagicMock()
+    settings_mock.fernet_key = "test-fernet-key-not-for-production="
+    with (
+        patch(
+            "modulo.core.pipeline_engine.executor._checkpointer_scope",
+            return_value=_RaisingContextManager(exc),
+        ),
+        patch("modulo.settings.get_settings", return_value=settings_mock),
+    ):
+        return await executor._resume_stream_and_handle_errors(
+            compiled=compiled,
+            config={},
+            node_ids=set(),
+            broker=MagicMock(),
+            run_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            resume_data={},
+            completed_node_outputs={},
+            guard=MagicMock(),
+            node_token_budgets={},
+            eval_definitions_by_node={},
+            node_type_map={},
+        )
+
+
+async def test_resume_stream_terminalizes_when_checkpointer_scope_entry_fails() -> None:
+    """A checkpointer-connection failure on scope entry must be terminalized.
+
+    It must NOT escape ``resume()`` uncaught: that leaves the run row resting
+    in ``running``/claimed with no terminal write or finalization.
+    """
+    status, code, detail, _ntu = await _run_resume_stream_scope_entry_raising(ConnectionError("connection refused"))
+
+    assert status == "failed"
+    assert code == "ConnectionError"
+    assert "connection refused" in (detail or "")
+
+
+async def test_resume_stream_maps_checkpointer_scope_entry_runtime_error() -> None:
+    status, code, detail, _ntu = await _run_resume_stream_scope_entry_raising(
+        RuntimeError("checkpointer pool exhausted")
+    )
+
+    assert status == "failed"
+    assert code == "configuration_error"
+    assert "checkpointer" in (detail or "")
+
+
+async def test_execute_pre_stream_checks_tracks_phases_and_returns_ceiling_run() -> None:
+    executor = PipelineExecutor(MagicMock())
+    tracker = MagicMock()
+    executor._dispatch_phase_tracker = tracker
+    capacity_run = MagicMock()
+    capacity_run.status = "running"
+    ceiling_run = MagicMock()
+    executor._check_capacity = AsyncMock(return_value=capacity_run)
+    executor._check_spend_ceiling_gate = AsyncMock(return_value=ceiling_run)
+
+    result = await executor._execute_pre_stream_checks(
+        run_id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        pipeline_id=uuid.uuid4(),
+        max_concurrent=1,
+        graph_json={},
+        snapshot_id=uuid.uuid4(),
+        claim_token=None,
+    )
+
+    assert result is ceiling_run
+    tracker.enter_phase.assert_has_calls([call("capacity_check"), call("spend_check")])
+
+
+async def test_execute_retry_policy_flags_side_effect_unknown() -> None:
+    executor = PipelineExecutor(MagicMock())
+    executor._maybe_retry_after_policy = AsyncMock(return_value="side_effect_unknown")
+
+    decision, status, code, detail = await executor._execute_retry_policy(
+        run_id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        pipeline_retry_policy={"max_retries": 1},
+        final_status="failed",
+        error_code="script.failed",
+        error_detail="boom",
+        is_correction_run=False,
+        graph_idempotent=True,
+        graph_json={},
+        model_backend_hub=None,
+        connector_hub=None,
+        broker=MagicMock(),
+        retry_policy_eligible=True,
+    )
+
+    assert decision == "side_effect_unknown"
+    assert status == "failed"
+    assert code == "script.side_effect_unknown"
+    assert detail is not None
+
+
+async def test_interrupt_gate_pipeline_name_lookup_propagates_cancellation() -> None:
+    executor = PipelineExecutor(MagicMock())
+    session = _session_raising_on_begin_nested(asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await executor._create_interrupt_gate_resolve_pipeline_name(session, uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
+
+
+async def test_interrupt_gate_pipeline_name_lookup_swallows_failure() -> None:
+    executor = PipelineExecutor(MagicMock())
+    session = _session_raising_on_begin_nested(RuntimeError("db down"))
+
+    with patch("modulo.core.pipeline_engine.executor._log") as mock_log:
+        result = await executor._create_interrupt_gate_resolve_pipeline_name(
+            session, uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        )
+
+    assert result is None
+    mock_log.warning.assert_called_once()
+
+
+async def test_interrupt_gate_context_capture_propagates_cancellation() -> None:
+    executor = PipelineExecutor(MagicMock())
+    session = _session_raising_on_begin_nested(asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await executor._create_interrupt_gate_capture_context(
+            session=session,
+            run_id=uuid.uuid4(),
+            review_id="r-1",
+            org_id=uuid.uuid4(),
+            pipeline_name=None,
+            completed_node_outputs=None,
+            condition_result=None,
+            subject=None,
+            subject_parent=None,
+            subject_leaf_key=None,
+        )
+
+
+async def test_interrupt_gate_context_capture_swallows_failure() -> None:
+    executor = PipelineExecutor(MagicMock())
+    session = _session_raising_on_begin_nested(RuntimeError("db down"))
+
+    with patch("modulo.core.pipeline_engine.executor._log") as mock_log:
+        result = await executor._create_interrupt_gate_capture_context(
+            session=session,
+            run_id=uuid.uuid4(),
+            review_id="r-1",
+            org_id=uuid.uuid4(),
+            pipeline_name=None,
+            completed_node_outputs=None,
+            condition_result=None,
+            subject=None,
+            subject_parent=None,
+            subject_leaf_key=None,
+        )
+
+    assert result is None
+    mock_log.warning.assert_called_once()
+
+
+async def test_interrupt_gate_config_resolution_propagates_cancellation() -> None:
+    executor = PipelineExecutor(MagicMock())
+    session = _session_raising_on_begin_nested(asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await executor._create_interrupt_gate_resolve_config(
+            session=session,
+            run_id=uuid.uuid4(),
+            review_id="r-1",
+            org_id=uuid.uuid4(),
+        )
+
+
+async def test_interrupt_gate_window_resolution_swallows_failure() -> None:
+    executor = PipelineExecutor(MagicMock())
+    session = _session_raising_on_begin_nested(RuntimeError("db down"))
+
+    with patch("modulo.core.pipeline_engine.executor._log") as mock_log:
+        result = await executor._create_interrupt_gate_resolve_window(
+            session=session,
+            pipeline_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            review_id="r-1",
+        )
+
+    assert result is None
+    mock_log.warning.assert_called_once()
+
+
+async def test_resume_raises_without_configured_checkpointer() -> None:
+    run = _make_run()
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = _make_session_factory(session)
+    executor._checkpointer_conn_string = None
+    executor._resume_load_and_validate = AsyncMock(return_value=(run, snapshot, snapshot.graph_json, {"node-a": ""}))
+    executor._resume_load_eval_defs = AsyncMock(return_value={})
+    executor._resume_prepare_second_transaction = AsyncMock(return_value=(_make_pipeline(), {"guard": MagicMock()}))
+
+    with pytest.raises(RuntimeError, match="Cannot resume without a checkpointer"):
+        await executor.resume(run_id=run.id, org_id=uuid.uuid4(), resume_data={})
+
+
+async def test_execute_retry_policy_none_when_eligible_but_no_policy() -> None:
+    """An eligible run with no pipeline retry policy is not retried (skip arm)."""
+    executor = PipelineExecutor(MagicMock())
+    executor._maybe_retry_after_policy = AsyncMock()
+
+    decision, status, code, _detail = await executor._execute_retry_policy(
+        run_id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        pipeline_retry_policy=None,
+        final_status="failed",
+        error_code="script.failed",
+        error_detail="boom",
+        is_correction_run=False,
+        graph_idempotent=True,
+        graph_json={},
+        model_backend_hub=None,
+        connector_hub=None,
+        broker=MagicMock(),
+        retry_policy_eligible=True,
+    )
+
+    assert decision == "none"
+    assert status == "failed"
+    assert code == "script.failed"
+    executor._maybe_retry_after_policy.assert_not_awaited()

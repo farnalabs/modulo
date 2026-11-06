@@ -173,12 +173,12 @@ function closeEditor() {
 
 function onCategoryCreated() {
   closeEditor()
-  loadCategories()
+  void loadCategories()
 }
 
 function onCategoryUpdated() {
   closeEditor()
-  loadCategories()
+  void loadCategories()
 }
 
 function confirmDelete(cat: NodeCategory) {

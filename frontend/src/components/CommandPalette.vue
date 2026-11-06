@@ -201,7 +201,7 @@ function handleKeydown(e: KeyboardEvent) {
     if (isOpen.value) {
       close()
     } else {
-      open()
+      void open()
     }
   }
 }

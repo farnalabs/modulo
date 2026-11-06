@@ -271,7 +271,7 @@ async function deleteSkill(id: string) {
 }
 
 onMounted(() => {
-  fetchSkills();
+  void fetchSkills();
 });
 </script>
 

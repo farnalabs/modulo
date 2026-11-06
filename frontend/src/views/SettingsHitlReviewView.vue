@@ -499,7 +499,7 @@ const { load: loadPipelines, data: pipelines } = useDataFetch<PipelineItem[]>(
 function goToPage(target: number) {
   if (target < 1 || target > totalPages.value || target === page.value) return
   page.value = target
-  loadGates()
+  void loadGates()
 }
 
 const expandedKey = ref<string | null>(null)
@@ -908,7 +908,7 @@ function startAutoRefresh() {
   refreshTimer = setInterval(() => {
     if (disposed || refreshInFlight) return
     refreshInFlight = true
-    loadGates().finally(() => {
+    void loadGates().finally(() => {
       if (disposed) return
       refreshInFlight = false
       refreshCountdown.value = Math.floor(refreshInterval.value / 1000)

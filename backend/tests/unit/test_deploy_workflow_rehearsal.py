@@ -2305,7 +2305,7 @@ def test_release_promote_successfully_publishes_exact_tag_target_and_lifts_freez
     promote_sha = _git(root, "rev-parse", "refs/remotes/origin/merge-result")
     commands = (Path(env["HARNESS_DIR"]) / "release-metadata").read_text(encoding="utf-8")
     assert "tag=v1.2.3" in commands
-    assert "title=v1.2.3" in commands
+    assert "title=Modulo v1.2.3" in commands
     assert f"target={promote_sha}" in commands
     assert "## [1.2.3]" in (root.parent / "release-notes").read_text(encoding="utf-8")
     assert "Release change" in (root.parent / "release-notes").read_text(encoding="utf-8")

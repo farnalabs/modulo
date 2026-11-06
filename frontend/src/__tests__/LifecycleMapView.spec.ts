@@ -500,6 +500,33 @@ describe('LifecycleMapView journey flag gating (FAR-654)', () => {
 
     expect(journeysEndpointCalled()).toBe(true)
   })
+
+  it('loads journeys at mount when the flag and work-items toggle are both already on', async () => {
+    seedPlan({}, true)
+    const wrapper = mountView()
+    // The mount-time decision runs after the async map/plan fetch, so the
+    // checkbox can still be on by the time it is evaluated.
+    ;(wrapper.vm as unknown as { showWorkItems: boolean }).showWorkItems = true
+    await flushPromises()
+
+    expect(journeysEndpointCalled()).toBe(true)
+  })
+
+  it('loads journeys when the flag flips on after work items are already checked', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    expect(journeysEndpointCalled()).toBe(false)
+
+    // Check the work-items box while the flag is still off: no fetch yet.
+    ;(wrapper.vm as unknown as { showWorkItems: boolean }).showWorkItems = true
+    await flushPromises()
+    expect(journeysEndpointCalled()).toBe(false)
+
+    // A later flag flip must now load the journeys the mount-time gate skipped.
+    seedPlan({}, true)
+    await flushPromises()
+    expect(journeysEndpointCalled()).toBe(true)
+  })
 })
 
 describe('LifecycleMapView work-items toggle and filters (FAR-742)', () => {

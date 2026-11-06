@@ -350,7 +350,7 @@ function toggleExpand(recordId: string) {
   } else {
     expandedId.value = recordId
     if (!detailMap.value[recordId]) {
-      loadDetail(recordId)
+      void loadDetail(recordId)
     }
   }
 }

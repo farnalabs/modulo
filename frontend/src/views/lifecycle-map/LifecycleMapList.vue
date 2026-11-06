@@ -239,7 +239,7 @@ const allMaps = computed(() => store.maps)
 
 const uniqueOwners = computed(() => {
   const owners = new Set(store.maps.map((m) => m.owner).filter((o): o is string => !!o))
-  return Array.from(owners).sort()
+  return Array.from(owners).sort((a, b) => a.localeCompare(b))
 })
 
 const filteredMaps = computed(() => {
