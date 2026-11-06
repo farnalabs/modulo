@@ -317,6 +317,14 @@ def _synthesise_output(case: EvalCase, scenario_inputs: dict[str, Any] | None) -
     return {"output": case.input_payload, "scenario": scenario_inputs or {}}
 
 
+def _is_discovery_definition(definition: EvalDefinition) -> bool:
+    """Return whether *definition* opts into the reserved discovery adapter."""
+    return (
+        definition.eval_type == EvalType.CUSTOM_FUNCTION
+        and definition.config.get("function") == DISCOVERY_EVAL_FUNCTION
+    )
+
+
 def _evaluate_case_output(
     case: EvalCase,
     definition: EvalDefinition,
@@ -326,7 +334,7 @@ def _evaluate_case_output(
     scenario_inputs: dict[str, Any] | None,
 ) -> Any:
     """Run a deterministic discovery adapter or the existing generic engine."""
-    if definition.config.get("function") == DISCOVERY_EVAL_FUNCTION:
+    if _is_discovery_definition(definition):
         evaluation = evaluate_discovery_case(case.input_payload, case.expected_output)
         from modulo.core.eval_engine import EvalResult as EngineEvalResult
         from modulo.core.eval_engine.typed_judge import JudgeOutcome, error_verdict
@@ -570,7 +578,7 @@ async def _case_results_async(
     errored = 0
     for definition in definitions:
         try:
-            if definition.config.get("function") == DISCOVERY_EVAL_FUNCTION:
+            if _is_discovery_definition(definition):
                 result = _evaluate_case_output(
                     case,
                     definition,

@@ -16,6 +16,60 @@ from modulo.core.eval_engine.discovery_eval import (
 )
 from modulo.core.system_maps_discovery import discover_draft
 
+_HAND_AUTHORED_EXPECTED_GRAPH = {
+    "nodes": [
+        {
+            "node_key": "folder:f1",
+            "node_type": "external_system",
+            "display_name": "Delivery",
+            "config_json": {"source_kind": "folder", "source_id": "f1", "folder_id": "f1"},
+            "pipeline_id": None,
+            "connector_instance_id": None,
+            "owner_team_id": None,
+            "position_x": 0,
+            "position_y": 0,
+        },
+        {
+            "node_key": "pipeline:p1",
+            "node_type": "pipeline",
+            "display_name": "Build",
+            "config_json": {"source_kind": "pipeline", "source_id": "p1"},
+            "pipeline_id": None,
+            "connector_instance_id": None,
+            "owner_team_id": None,
+            "position_x": 0,
+            "position_y": 0,
+        },
+        {
+            "node_key": "trigger:t1",
+            "node_type": "pipeline",
+            "display_name": "Push",
+            "config_json": {"source_kind": "trigger", "source_id": "t1", "trigger_type": "webhook"},
+            "pipeline_id": None,
+            "connector_instance_id": None,
+            "owner_team_id": None,
+            "position_x": 0,
+            "position_y": 0,
+        },
+    ],
+    "relationships": [
+        {
+            "source_node_key": "folder:f1",
+            "target_node_key": "pipeline:p1",
+            "relationship_type": "flow",
+            "config_json": {"suggested": True, "reason": "pipeline explicitly belongs to folder"},
+        },
+        {
+            "source_node_key": "trigger:t1",
+            "target_node_key": "pipeline:p1",
+            "relationship_type": "trigger",
+            "config_json": {"suggested": True, "reason": "trigger explicitly targets pipeline"},
+        },
+    ],
+    "warnings": [],
+    "skipped": [],
+}
+
 
 def _case(sources: list[dict[str, object]]) -> tuple[dict[str, object], dict[str, object]]:
     payload = {"sources": sources}
@@ -27,19 +81,19 @@ def _source(kind: str, identifier: str, name: str, **extra: object) -> dict[str,
     return {"kind": kind, "identifier": identifier, "name": name, **extra}
 
 
-def test_contract_is_versioned_and_matches_discovery() -> None:
-    payload, expected = _case(
-        [
+def test_contract_is_versioned_and_matches_hand_authored_graph() -> None:
+    payload = {
+        "sources": [
             _source("pipeline", "p1", "Build", folder_id="f1"),
             _source("folder", "f1", "Delivery"),
             _source("trigger", "t1", "Push", pipeline_id="p1", trigger_type="webhook"),
         ]
-    )
+    }
 
-    result = evaluate_discovery_case(payload, expected)
+    result = evaluate_discovery_case(payload, _HAND_AUTHORED_EXPECTED_GRAPH)
 
     assert result.passed is True
-    assert result.diff == []
+    assert not result.diff
     assert result.provenance["evaluator_version"] == DISCOVERY_EVALUATOR_VERSION
     assert result.provenance["case_contract_version"] == DISCOVERY_CONTRACT_VERSION
 

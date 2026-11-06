@@ -183,6 +183,36 @@ async def test_execute_suite_run_executes_discovery_adapter_not_input_echo(sessi
     assert discovery_row.judge_result_json["actual"] != {"sources": sources}
 
 
+async def test_non_custom_definition_with_discovery_function_uses_declared_evaluator(session, monkeypatch) -> None:
+    org = await _org()
+    suite, dataset, definitions, backend = await seed_suite(session, org)
+    definitions[0].config_json = {
+        "pattern": "^billing$",
+        "field": "output.category",
+        "function": DISCOVERY_EVAL_FUNCTION,
+    }
+    await seed_cases(session, org, dataset, [{"category": "billing"}])
+
+    def _unexpected_discovery(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("discovery adapter must not handle non-custom definitions")
+
+    monkeypatch.setattr(
+        "modulo.core.eval_engine.execute_suite_run.evaluate_discovery_case",
+        _unexpected_discovery,
+    )
+
+    run = await build_suite_run(
+        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
+    )
+    stats = await execute_suite_run(session, run)
+
+    assert stats["state"] == SuiteRunState.COMPLETED.value
+    result = (await session.execute(select(EvalResult).where(EvalResult.suite_run_id == run.id))).scalar_one()
+    assert result.eval_id == definitions[0].id
+    assert result.passed is True
+    assert result.judge_result_json is None
+
+
 async def test_execute_suite_run_completes_and_persists_results(session) -> None:
     org = await _org()
     suite, dataset, _, backend = await seed_suite(session, org)
