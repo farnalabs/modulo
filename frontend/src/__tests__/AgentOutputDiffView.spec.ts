@@ -499,16 +499,26 @@ describe('AgentOutputDiffView', () => {
 
     for (const suffix of ['a', 'b']) {
       const select = wrapper.find(`[data-testid="diff-recent-runs-${suffix}"]`)
-      expect(select.classes()).toContain('w-52')
-      expect(select.classes()).toContain('max-w-full')
-      expect(select.classes()).toContain('min-w-0')
+      expect(select.classes()).toContain('w-full')
+
+      // AppSelect's wrapper <label> is the flex item that must shrink below
+      // the desktop minimum width.
+      const selectWrapper = select.element.parentElement as HTMLElement
+      expect(selectWrapper.classList.contains('block')).toBe(true)
+      expect(selectWrapper.classList.contains('w-full')).toBe(true)
+      expect(selectWrapper.classList.contains('min-w-0')).toBe(true)
+      expect(selectWrapper.classList.contains('sm:w-52')).toBe(true)
 
       const input = wrapper.find(`[data-testid="diff-run-id-${suffix}"]`)
-      expect(input.classes()).toContain('max-w-full')
+      expect(input.classes()).toContain('w-full')
       expect(input.classes()).toContain('min-w-0')
+      expect(input.classes()).toContain('sm:w-48')
 
       const row = input.element.parentElement as HTMLElement
       expect(row.classList.contains('flex-wrap')).toBe(true)
+
+      const field = row.parentElement as HTMLElement
+      expect(field.classList.contains('min-w-0')).toBe(true)
     }
   })
 })

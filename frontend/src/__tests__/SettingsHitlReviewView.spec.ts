@@ -929,17 +929,27 @@ describe('SettingsHitlReviewView', () => {
     await flushPromises()
     await nextTick()
 
-    // The fixed-width desktop column header is not a usable phone layout.
+    // The header keeps the bulk select-all control reachable on phones while
+    // the fixed-width column labels are desktop-only.
     const headers = wrapper!.find('[data-testid="hitl-review-column-headers"]')
-    expect(headers.classes()).toContain('hidden')
-    expect(headers.classes()).toContain('md:flex')
+    expect(headers.classes()).toContain('flex')
+    expect(headers.classes()).not.toContain('hidden')
+    const selectAll = headers.find('[data-testid="hitl-review-select-all"]')
+    expect(selectAll.exists()).toBe(true)
+    expect(selectAll.element.closest('.hidden')).toBeNull()
 
-    // The row content wraps into full-width lines at narrow widths and returns
-    // to the single desktop line at md and above.
+    // The row content wraps into full-width lines at narrow widths, wraps its
+    // text instead of clipping it, and returns to the single desktop line at
+    // md and above.
     const rowButton = wrapper!.find('[data-testid="hitl-review-toggle-expand"]')
     expect(rowButton.classes()).toContain('min-w-0')
     expect(rowButton.classes()).toContain('flex-wrap')
     expect(rowButton.classes()).toContain('md:flex-nowrap')
+
+    const pipeline = wrapper!.find('[data-testid="hitl-review-pipeline-name"]')
+    expect(pipeline.classes()).toContain('break-words')
+    expect(pipeline.classes()).toContain('md:truncate')
+    expect(pipeline.classes()).not.toContain('truncate')
 
     const created = wrapper!.find('[data-testid="hitl-review-created"]')
     expect(created.classes()).toContain('w-full')

@@ -221,7 +221,7 @@
            to match the shared DataTable thead. -->
       <div
         data-testid="hitl-review-column-headers"
-        class="hidden items-center gap-4 px-4 pb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground md:flex"
+        class="flex items-center gap-4 px-4 pb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground"
       >
         <label class="h-4 w-4 flex-shrink-0">
           <input
@@ -237,12 +237,13 @@
              header label aligns with the value column beneath it. The body
              chevron lives inside the row button, after the checkbox; this
              spacer reserves the same track in the header. -->
-        <span class="h-4 w-4 flex-shrink-0" aria-hidden="true" data-testid="hitl-review-header-expand-spacer" />
-        <div class="w-24 flex-shrink-0">{{ $t('views.SettingsHitlReviewView.status_label') }}</div>
-        <div class="min-w-0 flex-[2]">{{ $t('views.SettingsHitlReviewView.pipeline_label') }}</div>
-        <div class="min-w-0 flex-[2]">{{ $t('views.SettingsHitlReviewView.node_label') }}</div>
-        <div class="min-w-0 flex-1">{{ $t('views.SettingsHitlReviewView.assignee_label') }}</div>
-        <span class="w-40 flex-shrink-0 text-right">{{ $t('views.SettingsHitlReviewView.created_label') }}</span>
+        <span class="md:hidden">{{ $t('views.SettingsHitlReviewView.bulk_select_all') }}</span>
+        <span class="hidden h-4 w-4 flex-shrink-0 md:block" aria-hidden="true" data-testid="hitl-review-header-expand-spacer" />
+        <div class="hidden w-24 flex-shrink-0 md:block">{{ $t('views.SettingsHitlReviewView.status_label') }}</div>
+        <div class="hidden min-w-0 flex-[2] md:block">{{ $t('views.SettingsHitlReviewView.pipeline_label') }}</div>
+        <div class="hidden min-w-0 flex-[2] md:block">{{ $t('views.SettingsHitlReviewView.node_label') }}</div>
+        <div class="hidden min-w-0 flex-1 md:block">{{ $t('views.SettingsHitlReviewView.assignee_label') }}</div>
+        <span class="hidden w-40 flex-shrink-0 text-right md:block">{{ $t('views.SettingsHitlReviewView.created_label') }}</span>
       </div>
       <!-- FAR-858: visually-hidden h2 so the h3 gate labels in HitlReviewCard
            don't skip a heading level (page h1 → h2 → h3). -->
@@ -297,18 +298,18 @@
               </span>
             </div>
             <div class="min-w-0 w-full md:w-auto md:flex-[2]">
-              <p class="truncate text-sm font-medium" data-testid="hitl-review-pipeline-name">{{ pipelineDisplayName(gate) }}</p>
+              <p class="break-words text-sm font-medium md:truncate" data-testid="hitl-review-pipeline-name">{{ pipelineDisplayName(gate) }}</p>
             </div>
             <div class="min-w-0 w-full md:w-auto md:flex-[2]">
-              <p class="truncate text-sm font-medium text-foreground" data-testid="hitl-review-node-name">
+              <p class="break-words text-sm font-medium text-foreground md:truncate" data-testid="hitl-review-node-name">
                 {{ gate.label || shortId(gate.review_id) }}
               </p>
-              <p v-if="gateDescriptionSnippet(gate)" class="mt-0.5 truncate text-xs text-muted-foreground" data-testid="hitl-review-snippet">
+              <p v-if="gateDescriptionSnippet(gate)" class="mt-0.5 break-words text-xs text-muted-foreground md:truncate" data-testid="hitl-review-snippet">
                 {{ gateDescriptionSnippet(gate) }}
               </p>
             </div>
             <div class="min-w-0 w-full md:w-auto md:flex-1">
-              <p class="truncate text-xs text-muted-foreground">
+              <p class="break-words text-xs text-muted-foreground md:truncate">
                 {{ gate.claimed_by ? (gate.claimed_by_name || gate.claimed_by) : $t('views.SettingsHitlReviewView.unassigned') }}
               </p>
             </div>

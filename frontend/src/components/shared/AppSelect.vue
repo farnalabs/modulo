@@ -14,7 +14,7 @@
     Consumer layout is unchanged - the wrapper renders no visible text.  See
     AgentRunnerBindings.vue for the same pattern.
   -->
-  <label ref="rootEl">
+  <label ref="rootEl" :class="rootClass">
     <Select
       v-bind="forwardedAttrs"
       :input-id="resolvedInputId"
@@ -214,6 +214,13 @@ const props = withDefaults(
      */
     label?: string
     /**
+     * Class applied to the wrapper `<label>` (the flex/block item a consumer's
+     * layout actually sizes). Attribute classes still target the inner
+     * PrimeVue control; use this when the wrapper itself must shrink or be
+     * width-constrained, e.g. `root-class="w-full min-w-0 sm:w-52"`.
+     */
+    rootClass?: string
+    /**
      * Id for the focusable combobox element. Equivalent to PrimeVue's
      * `inputId`; a consumer `id` attribute is also honoured (see the mapping
      * below) because every existing call site pairs `label for="x"` with
@@ -223,6 +230,7 @@ const props = withDefaults(
   }>(),
   {
     label: '',
+    rootClass: '',
   },
 )
 
