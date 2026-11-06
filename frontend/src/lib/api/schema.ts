@@ -7379,7 +7379,7 @@ export interface paths {
          *
          *     Can optionally specify a revision_id or 'at' timestamp to get the overview
          *     for a specific historical revision (FAR-2288 version-aware read model).
-         *     Metrics cover the trailing seven UTC days.
+         *     Metrics cover the trailing `window_days` UTC days.
          */
         get: operations["get_system_map_overview_endpoint_api_v1_system_maps__map_id__overview_get"];
         put?: never;
@@ -39496,6 +39496,8 @@ export interface operations {
                 revision_id?: string | null;
                 /** @description ISO8601 timestamp to get overview for the revision active at that time */
                 at?: string | null;
+                /** @description Trailing UTC days included in the overview metrics */
+                window_days?: number;
                 _fresh?: boolean;
             };
             header?: never;

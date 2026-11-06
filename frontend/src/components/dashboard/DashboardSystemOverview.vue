@@ -94,7 +94,7 @@ const healthLabel = (health: string): string => t(`views.DashboardView.system_ma
  */
 async function loadOverview(): Promise<void> {
   await store.fetchDiscovery()
-  await store.fetchDefaultOverview()
+  await store.fetchDefaultOverview(props.windowDays)
 }
 
 onMounted(loadOverview)
