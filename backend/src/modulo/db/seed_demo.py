@@ -78,7 +78,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -2178,76 +2178,118 @@ async def _seed_demo_readonly_surfaces(
         return
 
     variant_name = "Demo review strategies"
-    variant = (
-        await session.execute(
-            select(VariantGroup)
-            .where(VariantGroup.organisation_id == org.id, VariantGroup.name == variant_name)
-            .limit(1)
+    variant_values = {
+        "pipeline_id": pipeline.id,
+        "description": "Read-only comparison fixture using two safe review strategies.",
+        "variants": [
+            {"name": "Balanced", "weight": 0.5, "config": {"temperature": 0.2}},
+            {"name": "Strict", "weight": 0.5, "config": {"temperature": 0.0}},
+        ],
+        "selection_strategy": "weighted",
+        "max_concurrent_runs": 5,
+    }
+    variant_recover_stmt = (
+        select(VariantGroup)
+        .where(
+            VariantGroup.organisation_id == org.id,
+            or_(
+                VariantGroup.id == demo_fixture_id(org.id, "variant-group:demo-review-strategies"),
+                VariantGroup.name == variant_name,
+            ),
         )
-    ).scalar_one_or_none()
+        .order_by(VariantGroup.id)
+        .limit(1)
+    )
+    variant = (await session.execute(variant_recover_stmt)).scalar_one_or_none()
     if variant is None:
-        variant = VariantGroup(
-            organisation_id=org.id,
-            pipeline_id=pipeline.id,
-            name=variant_name,
-            description="Read-only comparison fixture using two safe review strategies.",
-            variants=[
-                {"name": "Balanced", "weight": 0.5, "config": {"temperature": 0.2}},
-                {"name": "Strict", "weight": 0.5, "config": {"temperature": 0.0}},
-            ],
-            selection_strategy="weighted",
-            max_concurrent_runs=5,
-        )
-        session.add(variant)
-
-    feedback_exists = (
-        await session.execute(
-            select(FeedbackRecord.id)
-            .where(FeedbackRecord.organisation_id == org.id, FeedbackRecord.review_id == "demo-review-1")
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if feedback_exists is None:
-        session.add(
-            FeedbackRecord(
+        variant = await _insert_fixture_or_adopt(
+            session,
+            VariantGroup(
+                id=demo_fixture_id(org.id, "variant-group:demo-review-strategies"),
                 organisation_id=org.id,
-                run_id=runs[0].id,
-                review_id="demo-review-1",
-                account_id=account.id,
-                rejection_reason="The review should explicitly mention the deployment risk.",
-                rejected_output={"summary": "Demo review output requiring a clearer risk note."},
-                producing_node_id=uuid.UUID(demo_node_id(DEMO_PIPELINE_NAME, "review")),
-                feedback_status="pending",
-                feedback_handler_type="human",
-                eval_gap=True,
-                needs_human_review=True,
-            )
+                name=variant_name,
+                **variant_values,
+            ),
+            variant_recover_stmt,
+            conflict_event="demo_seed.variant_group_recovered_after_conflict",
+            created_event="demo_seed.variant_group_created",
+            log_extra={"variant_group_name": variant_name},
         )
+    else:
+        _converge_fixture_attributes(variant, variant_values, tuple(variant_values))
+
+    feedback_values = {
+        "run_id": runs[0].id,
+        "account_id": account.id,
+        "rejection_reason": "The review should explicitly mention the deployment risk.",
+        "rejected_output": {"summary": "Demo review output requiring a clearer risk note."},
+        "producing_node_id": uuid.UUID(demo_node_id(DEMO_PIPELINE_NAME, "review")),
+        "feedback_status": "pending",
+        "feedback_handler_type": "human",
+        "eval_gap": True,
+        "needs_human_review": True,
+    }
+    feedback_recover_stmt = select(FeedbackRecord).where(
+        FeedbackRecord.organisation_id == org.id,
+        or_(
+            FeedbackRecord.id == demo_fixture_id(org.id, "feedback:demo-review-1"),
+            FeedbackRecord.review_id == "demo-review-1",
+        ),
+    )
+    feedback = (await session.execute(feedback_recover_stmt)).scalar_one_or_none()
+    if feedback is None:
+        feedback = await _insert_fixture_or_adopt(
+            session,
+            FeedbackRecord(
+                id=demo_fixture_id(org.id, "feedback:demo-review-1"),
+                organisation_id=org.id,
+                review_id="demo-review-1",
+                **feedback_values,
+            ),
+            feedback_recover_stmt,
+            conflict_event="demo_seed.feedback_recovered_after_conflict",
+            created_event="demo_seed.feedback_created",
+            log_extra={"review_id": "demo-review-1"},
+        )
+    else:
+        # Feedback is durable review provenance.  Once a human or evaluator has
+        # edited it, a refresh must adopt the row without rewriting that history.
+        _log.debug("demo_seed.feedback_preserved", extra={"review_id": "demo-review-1"})
 
     evidence_key = "risk.demo_review_score"
-    evidence_exists = (
-        await session.execute(
-            select(Evidence.id)
-            .where(
-                Evidence.organisation_id == org.id,
-                Evidence.key == evidence_key,
-                Evidence.subject_id == str(runs[0].id),
-            )
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if evidence_exists is None:
-        session.add(
+    evidence_values = {
+        "key": evidence_key,
+        "subject_type": "run",
+        "subject_id": str(runs[0].id),
+        "value": {"score": 0.84, "severity": "medium", "source": "demo_seed"},
+        "observed_at": runs[0].completed_at or runs[0].started_at or datetime.now(UTC),
+        "producer_type": "derived",
+        "producer_id": None,
+    }
+    evidence_recover_stmt = select(Evidence).where(
+        Evidence.organisation_id == org.id,
+        or_(
+            Evidence.id == demo_fixture_id(org.id, "evidence:risk.demo_review_score"),
+            (
+                (Evidence.key == evidence_key)
+                & (Evidence.subject_type == "run")
+                & (Evidence.subject_id == str(runs[0].id))
+            ),
+        ),
+    )
+    evidence = (await session.execute(evidence_recover_stmt)).scalar_one_or_none()
+    if evidence is None:
+        await _insert_fixture_or_adopt(
+            session,
             Evidence(
+                id=demo_fixture_id(org.id, "evidence:risk.demo_review_score"),
                 organisation_id=org.id,
-                key=evidence_key,
-                subject_type="run",
-                subject_id=str(runs[0].id),
-                value={"score": 0.84, "severity": "medium", "source": "demo_seed"},
-                observed_at=runs[0].completed_at or runs[0].started_at or datetime.now(UTC),
-                producer_type="derived",
-                producer_id=None,
-            )
+                **evidence_values,
+            ),
+            evidence_recover_stmt,
+            conflict_event="demo_seed.evidence_recovered_after_conflict",
+            created_event="demo_seed.evidence_created",
+            log_extra={"evidence_key": evidence_key},
         )
     await session.flush()
 

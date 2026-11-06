@@ -44,6 +44,8 @@ from modulo.db.models.base import Base
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.evidence import Evidence
+from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
@@ -68,6 +70,7 @@ from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
+from modulo.db.models.variant_group import VariantGroup
 from modulo.db.rls import set_rls_org
 from modulo.db.seed_demo import seed_demo, seed_demo_runtime
 from modulo.db.soft_delete import include_soft_deleted
@@ -116,6 +119,10 @@ _SEED_TABLES = {
     # needs the audit chain tables too.
     "audit_events",
     "audit_chain_heads",
+    # FAR-2059: read-only demo surfaces.
+    "variant_groups",
+    "feedback_records",
+    "evidence",
 }
 
 
@@ -214,6 +221,9 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert await _count(session, ModelBackend) == 2
     assert await _count(session, ConnectorInstance) == 2
     assert await _count(session, TriggerEvent) == 3
+    assert await _count(session, VariantGroup) == 1
+    assert await _count(session, FeedbackRecord) == 1
+    assert await _count(session, Evidence) == 1
 
     claims = list((await session.execute(select(HitlClaim))).scalars())
     assert {claim.decision for claim in claims} == {None, "approved", "rejected"}
@@ -330,6 +340,9 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "model_backends": await _count(session, ModelBackend),
         "connectors": await _count(session, ConnectorInstance),
         "trigger_events": await _count(session, TriggerEvent),
+        "variant_groups": await _count(session, VariantGroup),
+        "feedback_records": await _count(session, FeedbackRecord),
+        "evidence": await _count(session, Evidence),
         "run_daily_facts": await _count(session, RunDailyFact),
     }
 
@@ -353,6 +366,9 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "model_backends": await _count(session, ModelBackend),
         "connectors": await _count(session, ConnectorInstance),
         "trigger_events": await _count(session, TriggerEvent),
+        "variant_groups": await _count(session, VariantGroup),
+        "feedback_records": await _count(session, FeedbackRecord),
+        "evidence": await _count(session, Evidence),
         "run_daily_facts": await _count(session, RunDailyFact),
     }
     assert counts_second == counts_first
@@ -370,6 +386,9 @@ async def test_seed_fixture_ids_are_deterministic_and_org_scoped(
     backends = list((await session.execute(select(ModelBackend).order_by(ModelBackend.name))).scalars())
     connectors = list((await session.execute(select(ConnectorInstance).order_by(ConnectorInstance.name))).scalars())
     notifications = list((await session.execute(select(Notification).order_by(Notification.category))).scalars())
+    variants = list((await session.execute(select(VariantGroup))).scalars())
+    feedback = list((await session.execute(select(FeedbackRecord))).scalars())
+    evidence = list((await session.execute(select(Evidence))).scalars())
 
     assert [row.id for row in backends] == [
         seed_demo_module.demo_fixture_id(org.id, f"model-backend:{row.name}") for row in backends
@@ -380,6 +399,11 @@ async def test_seed_fixture_ids_are_deterministic_and_org_scoped(
     assert [row.id for row in notifications] == [
         seed_demo_module.demo_fixture_id(org.id, f"notification:{row.category}") for row in notifications
     ]
+    assert [row.id for row in variants] == [
+        seed_demo_module.demo_fixture_id(org.id, "variant-group:demo-review-strategies")
+    ]
+    assert [row.id for row in feedback] == [seed_demo_module.demo_fixture_id(org.id, "feedback:demo-review-1")]
+    assert [row.id for row in evidence] == [seed_demo_module.demo_fixture_id(org.id, "evidence:risk.demo_review_score")]
     assert seed_demo_module.demo_fixture_id(org.id, "model-backend:Demo Stub Fast") != seed_demo_module.demo_fixture_id(
         uuid.uuid4(), "model-backend:Demo Stub Fast"
     )
@@ -932,6 +956,9 @@ async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(
         pytest.param(ModelBackend, ModelBackend, id="model-backend"),
         pytest.param(ConnectorInstance, ConnectorInstance, id="connector-instance"),
         pytest.param(Notification, Notification, id="notification"),
+        pytest.param(VariantGroup, VariantGroup, id="variant-group"),
+        pytest.param(FeedbackRecord, FeedbackRecord, id="feedback-record"),
+        pytest.param(Evidence, Evidence, id="evidence"),
     ],
 )
 async def test_seed_sample_data_inserts_recover_after_conflict(
@@ -980,6 +1007,9 @@ async def test_seed_sample_data_inserts_recover_after_conflict(
         pytest.param(ModelBackend, id="model-backend"),
         pytest.param(ConnectorInstance, id="connector-instance"),
         pytest.param(Notification, id="notification"),
+        pytest.param(VariantGroup, id="variant-group"),
+        pytest.param(FeedbackRecord, id="feedback-record"),
+        pytest.param(Evidence, id="evidence"),
     ],
 )
 async def test_seed_reraises_when_recovery_finds_no_winner(
