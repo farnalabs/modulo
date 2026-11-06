@@ -616,6 +616,7 @@ _DEMO_FAILURE_DETAIL = "Demo sample failure — no real work was performed."
 # result.  Named so the seed and the test arithmetic move together when
 # ``_DEMO_RUN_SPECS`` changes.
 _DEMO_EVAL_RESULT_RUN_LIMIT = 6
+_DEMO_EVAL_RESULT_WINDOW_DAYS = 3
 
 
 @dataclass(frozen=True)
@@ -1398,13 +1399,20 @@ async def _ensure_daily_fact(
     fact = fact_result.scalars().first()
     if fact is not None:
         changed = False
-        for attr, val in (
-            ("status", run.status),
-            ("trigger_type", run.trigger_type),
-            ("total_cost_usd", run.total_cost_usd),
-            ("total_tokens", run.total_tokens),
-        ):
-            if getattr(fact, attr) != val:
+        desired_fact_values = {
+            "run_date": started.date(),
+            "pipeline_id": pipeline.id,
+            "pipeline_name": pipeline_name,
+            "trigger_type": run.trigger_type,
+            "status": run.status,
+            "total_cost_usd": run.total_cost_usd,
+            "total_tokens": run.total_tokens,
+            "duration_ms": int((completed - started).total_seconds() * 1000) if is_terminal else None,
+            "started_at": started,
+            "completed_at": completed if is_terminal else None,
+        }
+        for attr, val in desired_fact_values.items():
+            if not _values_match(getattr(fact, attr), val):
                 setattr(fact, attr, val)
                 changed = True
         if changed:
@@ -1622,7 +1630,19 @@ async def _ensure_demo_eval_result(
     Race-safe: savepoint + ``IntegrityError`` recovery, matching every other
     seed write in this file.
     """
-    if await _find_demo_eval_result(session, org, evaluation, run) is not None:
+    existing = await _find_demo_eval_result(session, org, evaluation, run)
+    if existing is not None:
+        desired_evaluated_at = run.completed_at or run.started_at or datetime.now(UTC)
+        if (
+            existing.judge_result_json
+            and existing.judge_result_json.get("source") == "demo_seed"
+            and not _values_match(existing.evaluated_at, desired_evaluated_at)
+        ):
+            existing.evaluated_at = desired_evaluated_at
+            _log.info(
+                "demo_seed.eval_result_converged",
+                extra={"eval_name": evaluation.name, "run_number": run.run_number},
+            )
         return
     passed = _demo_eval_passed(run)
     eval_result = EvalResult(
@@ -1661,10 +1681,11 @@ async def _seed_demo_evals(
 ) -> None:
     """Seed durable eval definitions and recent results for dashboard consumers.
 
-    The most-recent ``_DEMO_EVAL_RESULT_RUN_LIMIT`` runs of each pipeline get a
-    synthetic result: the dashboard eval rate is a rolling window on
-    ``evaluated_at``, so anchoring results to the oldest runs would age them
-    out of the cards immediately.
+    The most-recent ``_DEMO_EVAL_RESULT_RUN_LIMIT`` runs by their relative
+    fixture timestamp get a synthetic result. Run numbers are historical
+    identifiers and do not necessarily increase with recency, so ordering by
+    ``started_at`` keeps the result set inside the current rolling window after
+    each refresh.
     """
     for index, (pipeline_name, label) in enumerate(
         ((DEMO_PIPELINE_NAME, "PR risk quality"), (PR_REVIEW_PIPELINE_NAME, "Review completeness")),
@@ -1676,8 +1697,14 @@ async def _seed_demo_evals(
             (
                 await session.execute(
                     select(Run)
-                    .where(Run.organisation_id == org.id, Run.pipeline_id == pipeline.id)
-                    .order_by(Run.run_number.desc())
+                    .where(
+                        Run.organisation_id == org.id,
+                        Run.pipeline_id == pipeline.id,
+                        Run.started_at
+                        >= datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+                        - timedelta(days=_DEMO_EVAL_RESULT_WINDOW_DAYS),
+                    )
+                    .order_by(Run.started_at.desc(), Run.run_number.desc())
                     .limit(_DEMO_EVAL_RESULT_RUN_LIMIT)
                 )
             ).scalars()
