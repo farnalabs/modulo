@@ -257,6 +257,47 @@ describe('DashboardSystemOverview', () => {
     expect(wrapper.find('[data-testid="system-map-draft-review"]').exists()).toBe(false)
   })
 
+  it('renders n/a for an observed node whose individual metrics are absent', async () => {
+    const { wrapper, store } = mountOverview()
+    store.overview = {
+      ...overview,
+      nodes: [
+        {
+          ...overview.nodes[0],
+          node_key: 'node-unmeasured',
+          display_name: 'Healthy but unmeasured',
+          health: 'healthy',
+          queue_depth: null,
+          throughput_per_min: null,
+          failure_rate: null,
+          telemetry_coverage: null,
+        },
+      ],
+    } as never
+    store.overviewLoading = false
+    store.overviewError = null
+    store.overviewEmpty = false
+    await wrapper.vm.$nextTick()
+
+    const node = wrapper.get('[data-testid="system-map-node"]')
+    expect(node.text()).toContain('Healthy but unmeasured')
+    // Each absent metric renders the shared n/a fallback rather than a blank grid.
+    expect(node.text().match(/n\/a/g)).toHaveLength(4)
+  })
+
+  it('shows the no-observed empty state when every node has no measured activity', async () => {
+    const { wrapper, store } = mountOverview()
+    store.overview = { ...overview, nodes: [overview.nodes[1]] } as never
+    store.overviewLoading = false
+    store.overviewError = null
+    store.overviewEmpty = false
+    await wrapper.vm.$nextTick()
+
+    const empty = wrapper.get('[data-testid="system-map-overview-empty"]')
+    expect(empty.text()).toContain('No observed activity yet')
+    expect(wrapper.find('[data-testid="system-map-overview-metrics"]').exists()).toBe(false)
+  })
+
   it('renders the loading state first', async () => {
     const { wrapper, store } = mountOverview()
     store.overviewLoading = true

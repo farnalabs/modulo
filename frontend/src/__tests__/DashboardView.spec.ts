@@ -78,6 +78,7 @@ vi.mock('../lib/api/client', () => ({
 
 import DashboardView from '../views/DashboardView.vue'
 import StatCard from '../components/StatCard.vue'
+import DashboardSystemOverview from '../components/dashboard/DashboardSystemOverview.vue'
 
 function setupDefaultMocks() {
   mockGet.mockImplementation((url: string) => {
@@ -207,6 +208,26 @@ describe('DashboardView', () => {
 
     expect(wrapper.find('[data-testid="dashboard-system-overview"]').exists()).toBe(true)
     expect(mockGet).toHaveBeenCalledWith('/api/v1/admin/feature-flags')
+  })
+
+  it('falls back to a 7-day System Overview window when All time is selected', async () => {
+    localStorage.setItem('modulo.dashboard.trendWindow', 'all')
+    vi.mocked(getAccessToken).mockReturnValue(jwtForUser('operator'))
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: { ...mockPlanData, dev_mode: true }, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: ['system_maps_access', 'system.config.manage'] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] }, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+
+    const overview = wrapper.findComponent(DashboardSystemOverview)
+    expect(overview.exists()).toBe(true)
+    // All time has no finite window, so the overview keeps its default window.
+    expect(overview.props('windowDays')).toBe(7)
   })
 
   it('does not probe internal feature flags for an ordinary user', async () => {

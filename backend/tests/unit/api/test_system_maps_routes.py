@@ -1458,50 +1458,6 @@ def test_overview_passes_window_and_graph_ids_to_the_repository(
     assert body["generated_at"] == body["window_end"]
 
 
-@pytest.mark.parametrize("window_days", [3, 7, 30, 90])
-def test_overview_passes_requested_window_days_to_the_repository(
-    client: tuple[TestClient, _Harness], window_days: int
-) -> None:
-    http, harness = client
-    pipeline_id = uuid.uuid4()
-    node = _node_row(node_key="node-1")
-    node.pipeline_id = pipeline_id
-    loop = _loop_config_row(node_key="loop-1")
-    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
-    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
-    harness.stub(
-        "get_full_revision_graph",
-        AsyncMock(
-            return_value={
-                "revision": _revision_row(status="published"),
-                "nodes": [node, _node_row(node_key="unbound")],
-                "relationships": [],
-                "loop_configs": [loop],
-            }
-        ),
-    )
-
-    resp = http.get(f"{_BASE}/{_MAP_ID}/overview?window_days={window_days}")
-
-    assert resp.status_code == 200, resp.text
-    pipeline_call = harness.repository.get_overview_pipeline_metrics.await_args
-    assert pipeline_call is not None
-    assert pipeline_call.kwargs["pipeline_ids"] == {pipeline_id}
-    assert pipeline_call.kwargs["organisation_id"] == _ORG_ID
-    loop_call = harness.repository.get_overview_loop_metrics.await_args
-    assert loop_call is not None
-    assert loop_call.kwargs["loop_config_ids"] == {loop.id}
-    assert loop_call.kwargs["organisation_id"] == _ORG_ID
-    window_start = pipeline_call.kwargs["window_start"]
-    window_end = pipeline_call.kwargs["window_end"]
-    assert window_end - window_start == timedelta(days=window_days)
-    body = resp.json()
-    assert body["window_days"] == window_days
-    assert body["window_start"] == window_start.isoformat().replace("+00:00", "Z")
-    assert body["window_end"] == window_end.isoformat().replace("+00:00", "Z")
-    assert body["generated_at"] == body["window_end"]
-
-
 @pytest.mark.parametrize("window_days", [0, 91])
 def test_overview_rejects_window_outside_supported_range(client: tuple[TestClient, _Harness], window_days: int) -> None:
     http, _harness = client

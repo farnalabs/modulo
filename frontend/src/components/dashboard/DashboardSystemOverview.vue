@@ -64,7 +64,7 @@
         :description="$t(store.overviewEmpty ? 'views.DashboardView.system_maps_empty_description' : 'views.DashboardView.system_maps_no_observed_description')"
         data-testid="system-map-overview-empty"
       />
-      <div v-else-if="store.overview" class="space-y-3" data-testid="system-map-overview-metrics">
+      <div v-else class="space-y-3" data-testid="system-map-overview-metrics">
         <p class="text-xs text-muted-foreground">
           {{ $t('views.DashboardView.system_maps_window', { days: props.windowDays }) }}
         </p>
@@ -81,7 +81,6 @@
           </div>
         </div>
       </div>
-      <SystemMapDraftReview v-else />
     </div>
   </SectionCard>
 </template>
@@ -90,7 +89,6 @@
 import SectionCard from '../shared/SectionCard.vue'
 import EmptyState from '../shared/EmptyState.vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
-import SystemMapDraftReview from '../system-maps/SystemMapDraftReview.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useStorage } from '@vueuse/core'
