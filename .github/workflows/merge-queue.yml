@@ -677,23 +677,26 @@ jobs:
           # so it can never reason about a different commit than the one that
           # produced the no-op. Exit statuses are captured explicitly because this
           # step runs under `bash -e` (`git diff --quiet` exits 1 for "differs").
-           classify_duplicate() {
+          emit_status() {
+            printf '%s\t%s\n' "$1" "$2"
+          }
+          classify_duplicate() {
              local num="${1}"
              local ref="pr-${num}" base diff_rc plus cherry_out
              local keep_status=keep
              local -a paths=()
 
             if ! git rev-parse --verify --quiet "refs/heads/${ref}" >/dev/null; then
-              printf '%s\t%s\n' "$keep_status" "the PR head ref ${ref} is not available locally, so its content could not be compared with main"
+              emit_status "$keep_status" "the PR head ref ${ref} is not available locally, so its content could not be compared with main"
               return 0
             fi
             base=$(git rev-parse --verify --quiet origin/main || git rev-parse --verify --quiet main || true)
             if [ -z "${base}" ]; then
-              printf '%s\t%s\n' "$keep_status" "neither origin/main nor main is available to compare the PR against"
+              emit_status "$keep_status" "neither origin/main nor main is available to compare the PR against"
               return 0
             fi
             if ! git merge-base "${base}" "${ref}" >/dev/null 2>&1; then
-              printf '%s\t%s\n' "$keep_status" "the PR head shares no merge base with main, so its content could not be compared"
+              emit_status "$keep_status" "the PR head shares no merge base with main, so its content could not be compared"
               return 0
             fi
             # (1) Empty diff at the merge base: the PR contributes nothing at all.
@@ -705,7 +708,7 @@ jobs:
               return 0
             fi
             if [ "${diff_rc}" -ne 1 ]; then
-              printf '%s\t%s\n' "$keep_status" "comparing the PR against main failed (git diff exited ${diff_rc})"
+              emit_status "$keep_status" "comparing the PR against main failed (git diff exited ${diff_rc})"
               return 0
             fi
             # (2) Every path the PR touches already matches main byte for byte.
@@ -723,7 +726,7 @@ jobs:
             # (3) Commits not in main by id, but each with a patch-equivalent
             # commit upstream. Any '+' means real content main does not have.
             if ! cherry_out=$(git cherry "${base}" "${ref}" 2>/dev/null); then
-              printf '%s\t%s\n' "$keep_status" "git cherry could not be computed against main"
+              emit_status "$keep_status" "git cherry could not be computed against main"
               return 0
             fi
             if [ -z "${cherry_out}" ]; then
@@ -731,7 +734,7 @@ jobs:
                 printf 'close\t%s\n' "the PR head is already an ancestor of main"
                 return 0
               fi
-              printf '%s\t%s\n' "$keep_status" "git cherry lists no commits ahead of main, which is ambiguous rather than proof"
+              emit_status "$keep_status" "git cherry lists no commits ahead of main, which is ambiguous rather than proof"
               return 0
             fi
             plus=$(printf '%s\n' "${cherry_out}" | grep -c '^+' || true)
@@ -739,7 +742,7 @@ jobs:
               printf 'close\t%s\n' "every commit on the PR is already upstream by patch-id"
               return 0
             fi
-            printf '%s\t%s\n' "$keep_status" "${plus} commit(s) on the PR are not upstream (git cherry marks them '+'), so the no-op does not prove the changes are on main"
+            emit_status "$keep_status" "${plus} commit(s) on the PR are not upstream (git cherry marks them '+'), so the no-op does not prove the changes are on main"
             return 0
           }
 
@@ -2848,7 +2851,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          case "$CHAIN_DEPTH" in ''|*[!0-9]*) CHAIN_DEPTH=0 ;; esac
+          case "$CHAIN_DEPTH" in
+            ''|*[!0-9]*) CHAIN_DEPTH=0 ;;
+            *) ;;
+          esac
 
           # --- CI-stall detection (FAR-1099) ---
           # For each pending PR, check whether its CI workflow run has concluded.
@@ -2902,6 +2908,8 @@ jobs:
               if [ -z "$CI_SINCE" ]; then
                 echo "  PR #$PR_NUM: no CI run found — skipping stall check"
                 continue
+              else
+                :
               fi
               CI_EPOCH=$(date -u -d "$CI_SINCE" +%s 2>/dev/null || echo "$NOW")
               AGE_S=$((NOW - CI_EPOCH))
