@@ -580,13 +580,13 @@ async def test_sweep_does_not_alert_for_a_transient_unhealthy_bounce(
 
 
 async def test_sweep_warning_notice_warning_restarts_the_sustain_window() -> None:
-    """A NOTICE candidate clears the marker before warning returns."""
+    """A real NOTICE alert does not satisfy the warning sustain window."""
     redis = FakeRedis()
     notifier = FakeNotifier()
     org_id = uuid.uuid4()
     subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
-    warning = ca.Candidate(subject=subject, rung=ca.WARNING_RUNG, event_type="queue_pressure_warning")
-    notice = ca.Candidate(subject=subject, rung=ca.NOTICE_RUNG, event_type=None)
+    warning = ca.Candidate(subject=subject, rung=ca.WARNING_RUNG, event_type=ca.EVENT_QUEUE_PRESSURE_WARNING)
+    notice = ca.Candidate(subject=subject, rung=ca.NOTICE_RUNG, event_type=ca.EVENT_QUEUE_PRESSURE_NOTICE)
     summary = _empty_summary()
 
     await ca._apply_org_candidates(
@@ -608,6 +608,7 @@ async def test_sweep_warning_notice_warning_restarts_the_sustain_window() -> Non
         summary=summary,
         now=_NOW + timedelta(minutes=1),
     )
+    assert [event[1] for event in notifier.events] == [ca.EVENT_QUEUE_PRESSURE_NOTICE]
     assert await ca._read_state(redis, marker_key) is None
 
     await ca._apply_org_candidates(
@@ -616,10 +617,23 @@ async def test_sweep_warning_notice_warning_restarts_the_sustain_window() -> Non
         org_id=org_id,
         candidates={subject: warning},
         summary=summary,
-        now=_NOW + timedelta(minutes=ca.UNHEALTHY_SUSTAIN_SECONDS + 1),
+        now=_NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS + 1),
     )
     assert await ca._read_state(redis, marker_key) is not None
-    assert not notifier.events
+    assert [event[1] for event in notifier.events] == [ca.EVENT_QUEUE_PRESSURE_NOTICE]
+
+    await ca._apply_org_candidates(
+        redis,
+        notifier,
+        org_id=org_id,
+        candidates={subject: warning},
+        summary=summary,
+        now=_NOW + timedelta(seconds=2 * ca.UNHEALTHY_SUSTAIN_SECONDS + 2),
+    )
+    assert [event[1] for event in notifier.events] == [
+        ca.EVENT_QUEUE_PRESSURE_NOTICE,
+        ca.EVENT_QUEUE_PRESSURE_WARNING,
+    ]
 
 
 async def test_sweep_alerts_after_a_sustained_unhealthy_episode(
@@ -718,7 +732,14 @@ async def test_sweep_escalates_to_critical(
         drain_ratio=0.0,
     )
     await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
+    assert [e[1] for e in notifier.events] == ["queue_pressure_notice"]
 
+    await _run(
+        redis,
+        notifier,
+        org_id,
+        _NOW + timedelta(minutes=1, seconds=ca.UNHEALTHY_SUSTAIN_SECONDS + 1),
+    )
     assert [e[1] for e in notifier.events] == ["queue_pressure_notice", "queue_pressure_critical"]
 
 

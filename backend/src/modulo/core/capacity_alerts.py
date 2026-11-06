@@ -694,7 +694,7 @@ async def _hold_unsustained_unhealthy_candidates(
         if not _needs_unhealthy_sustain(candidate):
             continue
         alert_state = await _read_state(redis_client, _state_key(org_id, subject))
-        if (_state_rung(alert_state) or CLEAR_RUNG) >= NOTICE_RUNG:
+        if (_state_rung(alert_state) or CLEAR_RUNG) >= WARNING_RUNG:
             await _delete_state(redis_client, _state_key(org_id, f"{_QUEUE_UNHEALTHY_MARKER}:{subject}"))
             continue
         marker_key = _state_key(org_id, f"{_QUEUE_UNHEALTHY_MARKER}:{subject}")
