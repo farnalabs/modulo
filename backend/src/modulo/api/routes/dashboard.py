@@ -44,7 +44,7 @@ from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import Run
+from modulo.db.models.run import SUCCESS_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -417,12 +417,14 @@ async def _load_team_metrics(
     for team in teams:
         tid = str(team.id)
         run_data = team_run_data.get(tid, {})
-        completed = run_data.get("complete", 0)
+        completed = sum(run_data.get(s, 0) for s in SUCCESS_STATUSES)
         idle = sum(run_data.get(s, 0) for s in _IDLE_STATUSES)
-        team_total = completed + sum(run_data.get(s, 0) for s in ("running", "awaiting_human", "failed")) + idle
+        team_total = sum(run_data.values())
         team_statuses = {s: run_data.get(s, 0) for s in _TRACKED_STATUSES}
         team_statuses["completed"] = completed
-        team_statuses["idle"] = sum(run_data.get(s, 0) for s in _IDLE_STATUSES)
+        team_statuses["idle"] = idle
+        for terminal_status in TERMINAL_STATUSES:
+            team_statuses.setdefault(terminal_status, run_data.get(terminal_status, 0))
 
         team_metrics.append(
             {

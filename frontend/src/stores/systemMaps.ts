@@ -234,7 +234,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
    * selected: a published default wins, then any published map. No published
    * map settles to the empty state; a failed request is an error.
    */
-  async function fetchDefaultOverview(): Promise<void> {
+  async function fetchDefaultOverview(windowDays = 7): Promise<void> {
     const request = beginOverviewRequest()
     try {
       const outcome = await collectPublishedMapItems(request)
@@ -252,7 +252,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
         overviewEmpty.value = true
         return
       }
-      await fetchOverview(map.id)
+      await fetchOverview(map.id, windowDays)
     } catch (err: unknown) {
       if (!isCurrentOverviewRequest(request.generation, request.token)) return
       overview.value = null
@@ -264,13 +264,13 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   }
 
   /** Load the overview aggregate for one published map. */
-  async function fetchOverview(mapId: string): Promise<void> {
+  async function fetchOverview(mapId: string, windowDays = 7): Promise<void> {
     const request = beginOverviewRequest()
     try {
       const response = await withRequestDeadline(
         (signal) =>
           api.GET('/api/v1/system-maps/{map_id}/overview', {
-            params: { path: { map_id: mapId } },
+            params: { path: { map_id: mapId }, query: { window_days: windowDays } },
             signal,
           }),
         OVERVIEW_REQUEST_TIMEOUT_MS,

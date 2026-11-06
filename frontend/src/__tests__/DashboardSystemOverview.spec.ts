@@ -100,14 +100,27 @@ describe('DashboardSystemOverview', () => {
     mockIsSystemAdmin.value = false
   })
 
-  it('loads discovery and then the default overview on mount', async () => {
+  it('loads discovery and the selected default overview window on mount', async () => {
     const { fetchDiscovery, fetchDefaultOverview } = mountOverview()
     await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(1))
 
     expect(fetchDiscovery).toHaveBeenCalledTimes(1)
+    expect(fetchDefaultOverview).toHaveBeenCalledWith(7)
     expect(fetchDiscovery.mock.invocationCallOrder[0]).toBeLessThan(
       fetchDefaultOverview.mock.invocationCallOrder[0],
     )
+  })
+
+  it('passes a non-default selected window to the overview store', async () => {
+    setActivePinia(createPinia())
+    const store = useSystemMapsStore()
+    vi.spyOn(store, 'fetchDiscovery').mockResolvedValue()
+    const fetchDefaultOverview = vi.spyOn(store, 'fetchDefaultOverview').mockResolvedValue()
+
+    mount(DashboardSystemOverview, { props: { windowDays: 30 }, global: { plugins: [i18n] } })
+    await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(1))
+
+    expect(fetchDefaultOverview).toHaveBeenCalledWith(30)
   })
 
   it('shows discovery only after confirmed internal authoring access loads', async () => {

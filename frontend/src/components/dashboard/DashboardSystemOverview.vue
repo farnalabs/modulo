@@ -91,7 +91,6 @@ import SectionCard from '../shared/SectionCard.vue'
 import EmptyState from '../shared/EmptyState.vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
 import SystemMapDraftReview from '../system-maps/SystemMapDraftReview.vue'
-<<<<<<< HEAD
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useStorage } from '@vueuse/core'
@@ -143,7 +142,7 @@ async function discoverSystem(): Promise<void> {
  */
 async function loadOverview(): Promise<void> {
   await store.fetchDiscovery()
-  await store.fetchDefaultOverview()
+  await store.fetchDefaultOverview(props.windowDays)
 }
 
 onMounted(loadOverview)
