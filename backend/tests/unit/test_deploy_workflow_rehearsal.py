@@ -541,16 +541,23 @@ def test_release_signing_derives_key_id_from_current_slot() -> None:
     assert "Merely changing the secret while CURRENT remains the old key" in manifest_source
 
 
-def test_bundle_release_includes_postgres_runtime_data_for_initdb() -> None:
+def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     workflow_text = BUNDLE_WORKFLOW.read_text(encoding="utf-8")
 
-    assert 'mkdir -p "$BUNDLE/pg/share/postgresql/${PG_MAJOR}"' in workflow_text
-    assert (
-        'cp -a debx/pg-server/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/"'
-        in workflow_text
-    )
-    assert 'test -f "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/postgres.bki"' in workflow_text
+    assert "Download and sha256-verify PostgreSQL source" in workflow_text
+    assert 'echo "${PG_SOURCE_SHA256}  postgresql-${PG_VERSION}.tar.gz"' in workflow_text
+    assert "Build and sha256-verify PostgreSQL from pinned upstream source" in workflow_text
+    assert "../pg-src/configure" in workflow_text
+    assert 'BUNDLE_PG_PREFIX="$PWD/build/${BUNDLE_ROOT}/pg"' in workflow_text
+    assert '--prefix="$BUNDLE_PG_PREFIX"' in workflow_text
+    assert 'test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"' in workflow_text
+    assert 'test -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets"' in workflow_text
+    assert "pg_config --sharedir" in workflow_text
+    assert 'test -f "$BUNDLE/pg/share/postgresql/postgres.bki"' in workflow_text
+    assert 'test -d "$BUNDLE/pg/share/postgresql/timezonesets"' in workflow_text
     assert 'export PATH="$BUNDLE_ROOT/runtime/bin:$BUNDLE_ROOT/pg/bin:$BUNDLE_ROOT/redis' in workflow_text
+    assert "postgresql-16.deb" not in workflow_text
+    assert "apt.postgresql.org" not in workflow_text
 
 
 def test_bundled_pg_major_matches_shared_bundle_versions() -> None:
@@ -561,6 +568,8 @@ def test_bundled_pg_major_matches_shared_bundle_versions() -> None:
         line.split("=", 1) for line in env_text.splitlines() if "=" in line and not line.lstrip().startswith("#")
     )
     assert pins["PG_MAJOR"] == PG_MAJOR
+    assert pins["PG_SOURCE_URL"].endswith(f"/postgresql-{pins['PG_VERSION']}.tar.gz")
+    assert re.fullmatch(r"[0-9a-f]{64}", pins["PG_SOURCE_SHA256"])
 
 
 def test_bundle_release_verifies_generated_signature_before_upload() -> None:

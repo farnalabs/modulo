@@ -127,7 +127,8 @@ jobs:
             echo "PBS_TARBALL=${PBS_TARBALL}"
             echo "PBS_SHA256=${PBS_SHA256}"
             echo "PG_VERSION=${PG_VERSION}"
-            echo "PG_DEB_VERSION=${PG_DEB_VERSION}"
+            echo "PG_SOURCE_URL=${PG_SOURCE_URL}"
+            echo "PG_SOURCE_SHA256=${PG_SOURCE_SHA256}"
             echo "REDIS_VERSION=${REDIS_VERSION}"
             echo "BUNDLE_ROOT=modulo-${VERSION_NUM}-linux-${{ matrix.arch }}"
             echo "TARBALL_NAME=modulo-${VERSION_NUM}-linux-${{ matrix.arch }}.tar.gz"
@@ -141,39 +142,44 @@ jobs:
             "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/${PBS_TARBALL}"
           echo "${PBS_SHA256}  ${PBS_TARBALL}" | (cd downloads && sha256sum --check --strict -)
 
-      - name: Download and sha256-verify pinned PostgreSQL debs
+      - name: Download and sha256-verify pinned PostgreSQL source
         run: |
           set -euo pipefail
-          source scripts/bundle-versions.env
-          case "$ARCH" in
-            amd64) PG_SRV_SHA="$PG_SERVER_AMD64_SHA256"; PG_CLI_SHA="$PG_CLIENT_AMD64_SHA256"; PG_LIBPQ_SHA="$PG_LIBPQ_AMD64_SHA256" ;;
-            arm64) PG_SRV_SHA="$PG_SERVER_ARM64_SHA256"; PG_CLI_SHA="$PG_CLIENT_ARM64_SHA256"; PG_LIBPQ_SHA="$PG_LIBPQ_ARM64_SHA256" ;;
-            *) echo "::error::unsupported arch: $ARCH"; exit 1 ;;
-          esac
-
           mkdir -p downloads
+          curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/postgresql-${PG_VERSION}.tar.gz" "${PG_SOURCE_URL}"
+          echo "${PG_SOURCE_SHA256}  postgresql-${PG_VERSION}.tar.gz" | (cd downloads && sha256sum --check --strict -)
+          test -s "downloads/postgresql-${PG_VERSION}.tar.gz"
 
-          download_and_verify() {
-            local url="$1" name="$2" sha="$3"
-            curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/${name}" "$url"
-            echo "${sha}  ${name}" | (cd downloads && sha256sum --check --strict -)
-          }
-
-          download_and_verify "${PG_POOL_BASE_URL}/postgresql-16_${PG_DEB_VERSION}_${ARCH}.deb" "postgresql-16.deb" "$PG_SRV_SHA"
-          download_and_verify "${PG_POOL_BASE_URL}/postgresql-client-16_${PG_DEB_VERSION}_${ARCH}.deb" "postgresql-client-16.deb" "$PG_CLI_SHA"
-          download_and_verify "${PG_LIBPQ_POOL_BASE_URL}/libpq5_${PG_DEB_VERSION}_${ARCH}.deb" "libpq5.deb" "$PG_LIBPQ_SHA"
-
-          # Chain-of-custody assert: the deb's own Version field must equal the pin.
-          for spec in "postgresql-16.deb:${PG_DEB_VERSION}" "postgresql-client-16.deb:${PG_DEB_VERSION}" "libpq5.deb:${PG_DEB_VERSION}"; do
-            deb="${spec%%:*}"
-            want="${spec#*:}"
-            got="$(dpkg-deb -f "downloads/${deb}" Version)"
-            got="${got#*:}"
-            if [ "$got" != "$want" ]; then
-              echo "::error::${deb} Version field is '${got}' but the pin is '${want}' -- refusing to ship a mismatched package"
-              exit 1
-            fi
-          done
+      - name: Build and sha256-verify PostgreSQL from pinned upstream source
+        run: |
+          set -euo pipefail
+          rm -rf pg-src pg-build "build/${BUNDLE_ROOT}/pg"
+          mkdir -p pg-src pg-build "build/${BUNDLE_ROOT}/pg"
+          tar -xzf "downloads/postgresql-${PG_VERSION}.tar.gz" -C pg-src --strip-components=1
+          test -x pg-src/configure
+          BUNDLE_PG_PREFIX="$PWD/build/${BUNDLE_ROOT}/pg"
+          (
+            cd pg-build
+            ../pg-src/configure \
+              --prefix="$BUNDLE_PG_PREFIX" \
+              --without-readline \
+              --without-zlib \
+              --without-icu
+            make -j"$(nproc)"
+            make install
+          )
+          test -x "$BUNDLE_PG_PREFIX/bin/postgres"
+          test -x "$BUNDLE_PG_PREFIX/bin/initdb"
+          test -x "$BUNDLE_PG_PREFIX/bin/pg_dump"
+          test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"
+          test -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets"
+          test "$("$BUNDLE_PG_PREFIX/bin/pg_config" --version)" = "PostgreSQL ${PG_VERSION}"
+          sharedir="$("$BUNDLE_PG_PREFIX/bin/pg_config" --sharedir)"
+          test "$sharedir" = "$BUNDLE_PG_PREFIX/share/postgresql"
+          case "$sharedir" in
+            "$BUNDLE_PG_PREFIX"/*) : ;;
+            *) echo "::error::PostgreSQL sharedir escaped the bundle prefix: $sharedir" >&2; exit 1 ;;
+          esac
 
       - name: Build and sha256-verify Redis from pinned upstream source
         run: |
@@ -217,20 +223,20 @@ jobs:
           # tree: runtime/bin/python3.12, runtime/lib/...
           tar -xzf "downloads/${PBS_TARBALL}" -C "$BUNDLE/runtime" --strip-components=1
 
-          # PostgreSQL server + client (pg_dump/pg_isready/psql live in the
-          # client deb) into pg/bin + pg/share.
-          mkdir -p debx/pg-server debx/pg-client debx/redis-server debx/redis-tools
-          dpkg-deb -x downloads/postgresql-16.deb debx/pg-server
-          dpkg-deb -x downloads/postgresql-client-16.deb debx/pg-client
-          mkdir -p "$BUNDLE/pg/share/postgresql"
-          cp -a debx/pg-server/usr/lib/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/"
-          cp -a debx/pg-client/usr/lib/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/"
-          # Keep PostgreSQL's versioned share layout: initdb resolves its
-          # runtime files relative to pg/bin as ../share/postgresql/<major>.
-          mkdir -p "$BUNDLE/pg/share/postgresql/${PG_MAJOR}"
-          cp -a debx/pg-server/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/"
-          cp -a debx/pg-client/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/"
-           test -f "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/postgres.bki"
+          # PostgreSQL server + client were compiled directly into the bundle
+          # prefix so pg_config --sharedir and runtime data remain relocatable.
+          test -x "$BUNDLE/pg/bin/postgres"
+           test -x "$BUNDLE/pg/bin/initdb"
+           test -x "$BUNDLE/pg/bin/pg_dump"
+           test -f "$BUNDLE/pg/share/postgresql/postgres.bki"
+           test -d "$BUNDLE/pg/share/postgresql/timezonesets"
+           sharedir="$("$BUNDLE/pg/bin/pg_config" --sharedir)"
+           test "$sharedir" = "$BUNDLE/pg/share/postgresql"
+           case "$sharedir" in
+             "$BUNDLE"/*) : ;;
+             *) echo "::error::bundled PostgreSQL sharedir escaped the bundle: $sharedir" >&2; exit 1 ;;
+           esac
+
 
 
           # Redis, compiled from source on this runner (see the build step above).
@@ -241,22 +247,12 @@ jobs:
           cp -a build/redis-install/bin/. "$BUNDLE/pg/bin/"
           test -x "$BUNDLE/pg/bin/redis-server"
           test -x "$BUNDLE/pg/bin/redis-cli"
-          # The PG16 client tools (pg_dump, psql, pg_isready, ...) NEED
-          # libpq.so.5 but ship no RPATH of their own, and the launcher scrubs
-          # every LD_* variable at boot (ADR 031 Decision 2). Take libpq from
-          # the pinned, ABI-matched PGDG build of the SAME version as the
-          # server/client debs, then bake an $ORIGIN-relative RUNPATH into
-          # every bundled pg ELF so the loader finds pg/lib with no inherited
-          # environment at all.
-          case "$ARCH" in
-            amd64) ARCH_TRIPLE="x86_64-linux-gnu" ;;
-            arm64) ARCH_TRIPLE="aarch64-linux-gnu" ;;
-            *) echo "::error::unsupported arch: $ARCH" >&2; exit 1 ;;
-          esac
-          mkdir -p debx/libpq
-          dpkg-deb -x downloads/libpq5.deb debx/libpq
-          cp -a debx/libpq/usr/lib/"${ARCH_TRIPLE}"/libpq.so.5* "${BUNDLE}/pg/lib/"
+          # PostgreSQL's source build installs libpq beside the server. Bake
+          # an $ORIGIN-relative RUNPATH into every bundled ELF so the loader
+          # finds pg/lib with no inherited environment at all; the launcher
+          # deliberately scrubs every LD_* variable at boot (ADR 031 Decision 2).
           test -f "${BUNDLE}/pg/lib/libpq.so.5"
+
           for binary in "${BUNDLE}"/pg/bin/*; do
             [ -f "$binary" ] || continue
             if readelf -h "$binary" >/dev/null 2>&1; then
