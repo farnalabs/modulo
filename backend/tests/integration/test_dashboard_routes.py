@@ -371,6 +371,7 @@ class TestSummary:
             "stalled",
             "rejected",
             "budget_exceeded",
+            "unknown",
         )
         run_ids: list[uuid.UUID] = []
         for i, status in enumerate(statuses, start=1):
@@ -419,6 +420,7 @@ class TestSummary:
         assert team["run_counts_by_status"]["stalled"] == 1, f"team breakdown lost stalled: {team}"
         assert team["run_counts_by_status"]["rejected"] == 1, f"team breakdown lost rejected: {team}"
         assert team["run_counts_by_status"]["budget_exceeded"] == 1, f"team breakdown lost budget_exceeded: {team}"
+        assert team["run_counts_by_status"]["unknown"] == 1, f"team breakdown lost the live unknown run: {team}"
 
         eval_rate = payload["eval_pass_rate"]
         assert eval_rate is not None, "seeded eval results must produce a pass-rate block"

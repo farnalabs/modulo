@@ -44,7 +44,7 @@ from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import SUCCESS_STATUSES, TERMINAL_STATUSES, Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, SUCCESS_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -425,6 +425,12 @@ async def _load_team_metrics(
         team_statuses["idle"] = idle
         for terminal_status in TERMINAL_STATUSES:
             team_statuses.setdefault(terminal_status, run_data.get(terminal_status, 0))
+        # Live non-terminal statuses that are neither a tracked bucket nor part
+        # of the idle fold (currently ``unknown``) still count towards
+        # ``total_runs``, so zero-fill them here or their runs vanish from the
+        # per-status breakdown.
+        for active_status in ACTIVE_RUN_STATUSES - set(_TRACKED_STATUSES) - set(_IDLE_STATUSES):
+            team_statuses.setdefault(active_status, run_data.get(active_status, 0))
 
         team_metrics.append(
             {

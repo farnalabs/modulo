@@ -1168,6 +1168,7 @@ class TestDashboardSummaryEdgeCases:
                 "cost_ceiling_exceeded",
                 "compensation_failed",
                 "rejected",
+                "unknown",
             }
 
     def test_summary_forbidden_for_principal_without_org_role(self) -> None:
