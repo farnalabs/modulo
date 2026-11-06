@@ -130,7 +130,7 @@ watch(() => props.nodes, (nodes) => {
   localNodes.value = nodes.map((node) => ({ ...node, config_json: { ...node.config_json } }))
   for (const node of nodes) {
     const nodeType = node.node_type as NodeType
-    const match = node.node_key.match(new RegExp(`^${nodeType}-(\\d+)$`))
+    const match = node.node_key.match(new RegExp(String.raw`^${nodeType}-(\d+)$`))
     const index = match ? Number(match[1]) : 0
     nodeCounters.set(nodeType, Math.max(nodeCounters.get(nodeType) ?? 0, index))
   }

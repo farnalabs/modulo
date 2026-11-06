@@ -82,6 +82,10 @@ readonly SIZE_CAP_BYTES=$((5 * 1024 * 1024))
 #: Per-service log ceilings applied after repeat-collapsing.
 readonly MAX_LOG_LINES=2000
 readonly MAX_LOG_BYTES=$((256 * 1024))
+readonly SOURCE_DOCKER="docker"
+readonly SOURCE_APP="app"
+readonly REDACTION_DOCKER_OUTPUT="verbatim (docker CLI output)"
+readonly REDACTION_APP_MODULE="module (modulo.support.bundle)"
 
 OUT=""
 COMPOSE_FILE=""
@@ -189,9 +193,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
 abspath() {
-  case "$1" in
-    /*) printf '%s' "$1" ;;
-    *) printf '%s/%s' "$(pwd -P)" "$1" ;;
+  local path="$1"
+  case "$path" in
+    /*) printf '%s' "$path" ;;
+    *) printf '%s/%s' "$(pwd -P)" "$path" ;;
   esac
 }
 
@@ -246,10 +251,11 @@ register_member() {
 }
 
 file_size() {
-  if stat -c %s "$1" >/dev/null 2>&1; then
-    stat -c %s "$1"
+  local path="$1"
+  if stat -c %s "$path" >/dev/null 2>&1; then
+    stat -c %s "$path"
   else
-    stat -f %z "$1"
+    stat -f %z "$path"
   fi
 }
 
@@ -265,18 +271,20 @@ human_size() {
 }
 
 sha256_of() {
+  local path="$1"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | cut -d' ' -f1
+    sha256sum "$path" | cut -d' ' -f1
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | cut -d' ' -f1
+    shasum -a 256 "$path" | cut -d' ' -f1
   else
     printf 'unavailable'
   fi
 }
 
 json_escape() {
+  local value="$1"
   # Single-line, quote-safe value for the hand-written report.json.
-  printf '%s' "$1" | tr '\n\t' '  ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+  printf '%s' "$value" | tr '\n\t' '  ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
@@ -397,17 +405,17 @@ progress "collecting docker-level facts"
 
 collect_member "docker/compose-ps.txt" \
   "docker compose ps -a: state, health, restart counts, exit codes" \
-  "docker" "verbatim (docker CLI output)" \
+  "$SOURCE_DOCKER" "$REDACTION_DOCKER_OUTPUT" \
   -- compose ps -a
 
 collect_member "docker/daemon.txt" \
   "docker client/server versions and selected daemon facts" \
-  "docker" "verbatim (docker CLI output)" \
+  "$SOURCE_DOCKER" "$REDACTION_DOCKER_OUTPUT" \
   -- docker version
 
 collect_member "docker/daemon-info.txt" \
   "selected docker daemon facts (OS, arch, driver, CPU/memory)" \
-  "docker" "verbatim (docker CLI output)" \
+  "$SOURCE_DOCKER" "$REDACTION_DOCKER_OUTPUT" \
   -- docker info --format 'OperatingSystem={{.OperatingSystem}}{{"\n"}}OSType={{.OSType}}{{"\n"}}Architecture={{.Architecture}}{{"\n"}}ServerVersion={{.ServerVersion}}{{"\n"}}Driver={{.Driver}}{{"\n"}}NCPU={{.NCPU}}{{"\n"}}MemTotal={{.MemTotal}}'
 
 # Compose version + compose file identity + project + resolved service list.
@@ -512,7 +520,7 @@ collect_containers() {
   if [[ -z "$ids" ]]; then
     printf '(no containers: the compose project has nothing created or running)\n' >>"$dest"
   fi
-  register_member "$rel" "per-container state, health, restart count, exit code, image" "docker" "verbatim (docker CLI output)"
+  register_member "$rel" "per-container state, health, restart count, exit code, image" "$SOURCE_DOCKER" "$REDACTION_DOCKER_OUTPUT"
 }
 
 collect_containers
@@ -540,7 +548,7 @@ collect_images() {
     printf '\ncompose images view:\n'
     compose images 2>&1 || true
   } >"$dest"
-  register_member "$rel" "image tags and digests per service" "docker" "verbatim (docker CLI output)"
+  register_member "$rel" "image tags and digests per service" "$SOURCE_DOCKER" "$REDACTION_DOCKER_OUTPUT"
 }
 
 collect_images
@@ -576,7 +584,7 @@ collect_volumes() {
   if (( rc != 0 )); then
     note "$rel" "docker compose config --volumes failed (exit $rc); its error text is in the member"
   fi
-  register_member "$rel" "volume names only (declared + created); no contents" "docker" "verbatim (names only)"
+  register_member "$rel" "volume names only (declared + created); no contents" "$SOURCE_DOCKER" "verbatim (names only)"
 }
 
 collect_volumes
@@ -752,11 +760,11 @@ collect_app() {
   # record of what the app produced.
   mkdir -p "$MEMBERS/app"
   printf '%s\n' "$json_out" >"$MEMBERS/app/bundle-cli.json"
-  register_member "app/bundle-cli.json" "the in-container CLI's --json answer (ref + path + format version)" "app" "module (modulo.support.bundle)"
+  register_member "app/bundle-cli.json" "the in-container CLI's --json answer (ref + path + format version)" "$SOURCE_APP" "$REDACTION_APP_MODULE"
 
   if ! command -v unzip >/dev/null 2>&1; then
     cp "$app_zip" "$MEMBERS/app/modulo-support.zip"
-    register_member "app/modulo-support.zip" "app bundle produced by modulo.support.bundle, nested because unzip is not installed" "app" "module (modulo.support.bundle)"
+    register_member "app/modulo-support.zip" "app bundle produced by modulo.support.bundle, nested because unzip is not installed" "$SOURCE_APP" "$REDACTION_APP_MODULE"
     note "app/modulo-support.zip" "unzip is not installed; the app bundle is nested instead of merged flat"
     APP_COLLECTED=1
     return 0
@@ -787,16 +795,16 @@ collect_app() {
     case "$rel" in
       MANIFEST.txt)
         mv "$extract/$rel" "$MEMBERS/app/MANIFEST.txt"
-        register_member "app/MANIFEST.txt" "the app bundle's own manifest (superseded by the composite root MANIFEST.txt)" "app" "module (modulo.support.bundle)"
+        register_member "app/MANIFEST.txt" "the app bundle's own manifest (superseded by the composite root MANIFEST.txt)" "$SOURCE_APP" "$REDACTION_APP_MODULE"
         ;;
       report.json)
         mv "$extract/$rel" "$MEMBERS/app/report.json"
-        register_member "app/report.json" "the app bundle's own inventory + per-layer redaction counts" "app" "module (modulo.support.bundle)"
+        register_member "app/report.json" "the app bundle's own inventory + per-layer redaction counts" "$SOURCE_APP" "$REDACTION_APP_MODULE"
         ;;
       *)
         mkdir -p "$(dirname "$MEMBERS/$rel")"
         mv "$extract/$rel" "$MEMBERS/$rel"
-        register_member "$rel" "app-level member produced by modulo.support.bundle" "app" "module (modulo.support.bundle)"
+        register_member "$rel" "app-level member produced by modulo.support.bundle" "$SOURCE_APP" "$REDACTION_APP_MODULE"
         ;;
     esac
   done < <(cd "$extract" && find . -type f -print | sed 's|^\./||')

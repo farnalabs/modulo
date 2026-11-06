@@ -161,7 +161,7 @@ def _item(flag: FeatureFlag, *, enabled: bool, overridden: bool) -> OrgFeatureFl
     )
 
 
-@router.get("", response_model=OrgFeatureFlagListResponse)
+@router.get("")
 @handle_db_errors(_CODE_LIST_FAILED)
 async def list_org_feature_flags(
     current_user: Annotated[TenantPrincipal, require_permission(_PERMISSION_MANAGE)],
@@ -187,7 +187,6 @@ async def list_org_feature_flags(
 @router.put(
     "/{flag_name}",
     dependencies=[Depends(audited("api_access_put", "org", principal_dep=resolve_audit_principal))],
-    response_model=OrgFeatureFlagItem,
 )
 @handle_db_errors(_CODE_SET_FAILED)
 async def set_org_feature_flag(
@@ -228,7 +227,6 @@ async def set_org_feature_flag(
             )
         )
     ],
-    response_model=OrgFeatureFlagItem,
 )
 @handle_db_errors(_CODE_CLEAR_FAILED)
 async def clear_org_feature_flag(

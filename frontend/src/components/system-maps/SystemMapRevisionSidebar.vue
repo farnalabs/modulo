@@ -33,17 +33,16 @@
              v-if="!props.readOnly && revision.status !== 'draft'"
              type="button"
              class="mt-1 w-full rounded border px-2 py-1 text-xs"
-              @click="$emit('restore-revision', revision.id)"
-              data-testid="system-map-revision-restore"
-            >{{ $t('views.SystemMapDetailView.restore_as_new') }}</button>
-            <button
-              v-if="!props.readOnly && revision.status !== 'draft'"
-              type="button"
-              class="mt-1 w-full rounded border px-2 py-1 text-xs"
-              @click="$emit('diff-revision', revision.id)"
-              data-testid="system-map-revision-diff"
-            >{{ $t('views.SystemMapDetailView.view_diff') }}</button>
-
+             @click="$emit('restore-revision', revision.id)"
+             data-testid="system-map-revision-restore"
+           >{{ $t('views.SystemMapDetailView.restore_as_new') }}</button>
+           <button
+             v-if="activeMap?.published_revision_id && revision.id !== activeMap.published_revision_id"
+             type="button"
+             class="mt-1 w-full rounded border px-2 py-1 text-xs"
+             @click="$emit('diff-revision', revision.id)"
+             data-testid="system-map-revision-diff"
+           >{{ $t('views.SystemMapDetailView.diff') }}</button>
 
         </li>
       </ol>
@@ -68,5 +67,9 @@ const atIso = computed(() => {
 function emitByTime(): void { if (atIso.value) emit('select-by-time', atIso.value) }
 function formatDate(value: string): string { return new Date(value).toLocaleString() }
 function isCurrentRevision(revision: SystemMapRevision): boolean { return props.activeMap?.published_revision_id === revision.id }
-function statusClass(status: string): string { return status === 'published' ? 'bg-success/10 text-success-text' : status === 'archived' ? 'bg-muted text-muted-foreground' : 'bg-warning/10 text-warning-text' }
+function statusClass(status: string): string {
+  if (status === 'published') return 'bg-success/10 text-success-text'
+  if (status === 'archived') return 'bg-muted text-muted-foreground'
+  return 'bg-warning/10 text-warning-text'
+}
 </script>

@@ -103,7 +103,6 @@ def _apply_one_system_map(
     entity: SystemMapEntity,
     status: str,
     *,
-    report: dict[str, list[dict[str, Any]]],
     current_system_maps: dict[str, dict[str, Any]],
     map_ids: dict[str, str],
 ) -> str:
@@ -191,7 +190,6 @@ def apply_system_maps(
                     executor,
                     entity,
                     status,
-                    report=report,
                     current_system_maps=current_system_maps,
                     map_ids=map_ids,
                 )

@@ -16,7 +16,7 @@ type SystemMapCurrentRevision = components['schemas']['SystemMapCurrentRevisionR
 type SystemMapRevisionByTime = components['schemas']['SystemMapRevisionByTimeResponse']
 type SystemMapRevisionHistory = components['schemas']['SystemMapRevisionHistoryResponse']
 type SystemMapRevisionRestoreAsNewResponse = components['schemas']['SystemMapRevisionRestoreAsNewResponse']
-type SystemMapRevisionDiff = components['schemas']['SystemMapRevisionDiffResponse']
+export type SystemMapRevisionDiff = components['schemas']['SystemMapRevisionDiffResponse']
 
 export type SystemMap = components['schemas']['SystemMapResponse']
 export type SystemMapRevision = components['schemas']['SystemMapRevisionResponse']
@@ -465,15 +465,6 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     await loadMap(mapId)
   }
 
-  async function diffRevision(mapId: string, revisionId: string, againstRevisionId?: string): Promise<SystemMapRevisionDiff> {
-    const response = await api.POST('/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff', {
-      params: { path: { map_id: mapId, rev_id: revisionId } },
-      body: againstRevisionId ? { against_revision_id: againstRevisionId } : {},
-    })
-    if (response.error || !response.data) throw new Error(tr('systemMaps.errors.diff_revision'))
-    return response.data
-  }
-
   async function restoreRevisionAsNew(mapId: string, revisionId: string): Promise<SystemMapRevision> {
     const response = await api.POST('/api/v1/system-maps/{map_id}/revisions/{rev_id}/restore-as-new', {
       params: { path: { map_id: mapId, rev_id: revisionId } },
@@ -484,6 +475,15 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     await loadRevisionHistory(mapId)
     await loadRevision(mapId, payload.new_revision.id)
     return payload.new_revision
+  }
+
+  async function diffRevision(mapId: string, revisionId: string, againstRevisionId?: string): Promise<SystemMapRevisionDiff> {
+    const response = await api.POST('/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff', {
+      params: { path: { map_id: mapId, rev_id: revisionId } },
+      body: againstRevisionId ? { against_revision_id: againstRevisionId } : {},
+    })
+    if (response.error || !response.data) throw new Error(tr('systemMaps.errors.diff_revision'))
+    return response.data as SystemMapRevisionDiff
   }
 
   async function discover(name = 'Discovered System Map', description?: string): Promise<DiscoveryReport> {
@@ -510,5 +510,5 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   // Kept for the dashboard's preview card; discovery is now a real operation.
   async function fetchDiscovery(): Promise<void> { loaded.value = true }
 
-  return { loaded, loading, error, unavailable, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewUnavailable, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, hasReadAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadRevisionHistory, loadCurrentRevision, loadRevisionByTime, saveDraft, publish, archive, diffRevision, restoreRevisionAsNew, discover, clearActive, fetchDiscovery }
+  return { loaded, loading, error, unavailable, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewUnavailable, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, hasReadAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadRevisionHistory, loadCurrentRevision, loadRevisionByTime, saveDraft, publish, archive, restoreRevisionAsNew, diffRevision, discover, clearActive, fetchDiscovery }
 })

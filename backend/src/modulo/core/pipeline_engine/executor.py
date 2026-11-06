@@ -2528,6 +2528,25 @@ class _RunScope:
     thread_id: str
 
 
+@dataclass(frozen=True)
+class _StreamConfig:
+    """Immutable inputs shared by the graph stream preparation path."""
+
+    snapshot: PipelineSnapshot
+    input_payload: dict[str, Any]
+    variant_config_snapshot: dict[str, Any] | None
+    graph_json: dict[str, Any]
+    eval_defs_by_node: dict[str, list[EvalDefDTO]]
+    node_ids: set[str]
+    completed_node_outputs: dict[str, Any]
+    guard: RunawayGuard
+    node_type_map: dict[str, str]
+    pipeline_node_timeout_seconds: int
+    broker: RunEventBroker
+    pipeline_retry_policy: dict[str, Any] | None = None
+    idempotency_key: Callable[[str, dict[str, Any]], str | None] | None = None
+
+
 def _interrupt_gate_payload(interrupts: Any) -> dict[str, Any]:
     """The gate payload carried by the first LangGraph interrupt (or ``{}``)."""
     first_interrupt = interrupts[0] if interrupts else None
@@ -4379,6 +4398,53 @@ class PipelineExecutor:
             hub = None
         return hub
 
+    async def _load_connector_scope_grants(
+        self,
+        session: Any,
+        org_id: uuid.UUID,
+        agent_ids: list[uuid.UUID],
+        community_objects_on: bool,
+    ) -> tuple[dict[str, set[str]], set[str]]:
+        """Load connector grants and apply the community execution gate."""
+        from sqlalchemy import select
+
+        from modulo.core.capability_scope import agent_granted_connector_types
+        from modulo.db.models.agent import Agent
+        from modulo.db.models.collection_install import CollectionInstall
+
+        grants: dict[str, set[str]] = {}
+        community_gated: set[str] = set()
+        if not agent_ids:
+            return grants, community_gated
+        agent_rows = (
+            (await session.execute(select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == org_id)))
+            .scalars()
+            .all()
+        )
+        install_ids = {
+            cid for agent in agent_rows if (cid := getattr(agent, "collection_install_id", None)) is not None
+        }
+        install_rows = []
+        if install_ids:
+            install_rows = (
+                (await session.execute(select(CollectionInstall).where(CollectionInstall.install_id.in_(install_ids))))
+                .scalars()
+                .all()
+            )
+        gated_installs = {
+            str(ci.install_id)
+            for ci in install_rows
+            if ci.community_sourced and (not ci.agents_granted or not community_objects_on)
+        }
+        for agent in agent_rows:
+            agent_key = str(agent.id)
+            grants[agent_key] = agent_granted_connector_types(agent.connector_type_refs)
+            collection_install_id = getattr(agent, "collection_install_id", None)
+            if collection_install_id is not None and str(collection_install_id) in gated_installs:
+                community_gated.add(agent_key)
+                grants.pop(agent_key, None)
+        return grants, community_gated
+
     async def _resolve_run_connector_scope(
         self,
         session: Any,
@@ -4403,15 +4469,8 @@ class PipelineExecutor:
         if graph_json is None:
             return self._run_connector_scope
 
-        from sqlalchemy import select
-
-        from modulo.core.capability_scope import (
-            agent_granted_connector_types,
-            compute_run_fetch_scope,
-        )
+        from modulo.core.capability_scope import compute_run_fetch_scope
         from modulo.core.runtime_config import FLAG_COMMUNITY_OBJECTS_ENABLED, read_org_flag
-        from modulo.db.models.agent import Agent
-        from modulo.db.models.collection_install import CollectionInstall
 
         # FAR-959: check the org-level community objects kill switch. This flag
         # defaults ON, so read it fail-open: an absent flag or a DB read error
@@ -4424,52 +4483,12 @@ class PipelineExecutor:
             community_objects_on = True
 
         agent_ids = _connector_scope_agent_ids(graph_json)
-        grants: dict[str, set[str]] = {}
-        community_gated: set[str] = set()
-        if agent_ids:
-            agent_rows = (
-                (
-                    await session.execute(
-                        select(Agent).where(
-                            Agent.id.in_(agent_ids),
-                            Agent.organisation_id == org_id,
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            # Collect collection_install_ids for community gate check.
-            install_ids: set[uuid.UUID] = set()
-            for agent in agent_rows:
-                grants[str(agent.id)] = agent_granted_connector_types(agent.connector_type_refs)
-                cid = getattr(agent, "collection_install_id", None)
-                if cid is not None:
-                    install_ids.add(cid)
-            # Batch-query CollectionInstall records for community gate status.
-            if install_ids:
-                install_rows = (
-                    (
-                        await session.execute(
-                            select(CollectionInstall).where(
-                                CollectionInstall.install_id.in_(install_ids),
-                            )
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-                gated_installs = {
-                    str(ci.install_id)
-                    for ci in install_rows
-                    if ci.community_sourced and (not ci.agents_granted or not community_objects_on)
-                }
-                for agent in agent_rows:
-                    cid = getattr(agent, "collection_install_id", None)
-                    if cid is not None and str(cid) in gated_installs:
-                        community_gated.add(str(agent.id))
-                        # Zero out grants for community-gated agents.
-                        grants.pop(str(agent.id), None)
+        grants, community_gated = await self._load_connector_scope_grants(
+            session,
+            org_id,
+            agent_ids,
+            community_objects_on,
+        )
         self._community_gated_agents = community_gated
         allowed_connectors = compute_run_fetch_scope(graph_json, grants)
         self._run_connector_scope = allowed_connectors
@@ -6349,8 +6368,7 @@ class PipelineExecutor:
                 snapshot_id=snapshot_id,
                 thread_id=thread_id,
             )
-            final_status, error_code, error_detail, node_token_usage = await self._prepare_and_stream(
-                scope=scope,
+            stream_config = _StreamConfig(
                 snapshot=snapshot,
                 input_payload=input_payload,
                 variant_config_snapshot=variant_config_snapshot,
@@ -6364,6 +6382,10 @@ class PipelineExecutor:
                 broker=broker,
                 pipeline_retry_policy=pipeline_retry_policy,
                 idempotency_key=_node_idempotency_key,
+            )
+            final_status, error_code, error_detail, node_token_usage = await self._prepare_and_stream(
+                scope=scope,
+                config=stream_config,
             )
         except asyncio.CancelledError:
             raise
@@ -7014,25 +7036,13 @@ class PipelineExecutor:
         self,
         *,
         scope: _RunScope,
-        snapshot: PipelineSnapshot,
-        input_payload: dict[str, Any],
-        variant_config_snapshot: dict[str, Any] | None,
-        graph_json: dict[str, Any],
-        eval_defs_by_node: dict[str, list[EvalDefDTO]],
-        node_ids: set[str],
-        completed_node_outputs: dict[str, Any],
-        guard: RunawayGuard,
-        node_type_map: dict[str, str],
-        pipeline_node_timeout_seconds: int,
-        broker: RunEventBroker,
-        pipeline_retry_policy: dict[str, Any] | None = None,
-        idempotency_key: Callable[[str, dict[str, Any]], str | None] | None = None,
+        config: _StreamConfig,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
         """Compile (or retrieve) the StateGraph and stream it to completion.
 
         Returns ``(final_status, error_code, error_detail, node_token_usage)``.
-        ``node_ids`` is mutated in place (the caller owns the empty set) so the
-        finalization path sees the same ids the original inline rebinding
+        ``config.node_ids`` is mutated in place (the caller owns the empty set)
+        so the finalization path sees the same ids the original inline rebinding
         produced.
         """
         # FAR-893: enter graph_compile phase.
@@ -7053,24 +7063,24 @@ class PipelineExecutor:
             scope.pipeline_id,
             scope.snapshot_id,
             lambda: build_graph_from_json(
-                graph_json,
-                eval_definitions_by_node=eval_defs_by_node,
+                config.graph_json,
+                eval_definitions_by_node=config.eval_defs_by_node,
                 session_factory=self._session_factory,
                 org_id=scope.org_id,
-                pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
-                pipeline_retry_policy=pipeline_retry_policy,
-                node_idempotency_key=idempotency_key,
-                pipeline_stdout_retention_config=snapshot.stdout_retention_config,
+                pipeline_node_timeout_seconds=config.pipeline_node_timeout_seconds,
+                pipeline_retry_policy=config.pipeline_retry_policy,
+                node_idempotency_key=config.idempotency_key,
+                pipeline_stdout_retention_config=config.snapshot.stdout_retention_config,
             ),
-            pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
+            pipeline_node_timeout_seconds=config.pipeline_node_timeout_seconds,
             graph_struct_hash=struct_hash_with_eval_defs(
-                compute_retry_aware_topology_hash(graph_json, pipeline_retry_policy),
-                eval_defs_by_node,
+                compute_retry_aware_topology_hash(config.graph_json, config.pipeline_retry_policy),
+                config.eval_defs_by_node,
             ),
         )
 
-        initial_state = _seed_state(snapshot, input_payload, variant_config_snapshot)
-        earned_pin = await self._resolve_earned_at_start(scope.pipeline_id, scope.org_id, snapshot)
+        initial_state = _seed_state(config.snapshot, config.input_payload, config.variant_config_snapshot)
+        earned_pin = await self._resolve_earned_at_start(scope.pipeline_id, scope.org_id, config.snapshot)
         if earned_pin is not None:
             initial_state["run_context"][PIPELINE_EARNED_AT_START_KEY] = earned_pin
         initial_state.update(
@@ -7096,9 +7106,9 @@ class PipelineExecutor:
                 "_community_gated_agents": self._community_gated_agents,
             }
         )
-        config: dict[str, Any] = {"configurable": {"thread_id": scope.thread_id}}
-        node_ids.clear()
-        node_ids.update({str(n["id"]) for n in graph_json.get("nodes", [])})
+        runtime_config: dict[str, Any] = {"configurable": {"thread_id": scope.thread_id}}
+        config.node_ids.clear()
+        config.node_ids.update({str(n["id"]) for n in config.graph_json.get("nodes", [])})
         # FAR-369: expose each node's configured ``timeout_seconds`` so the
         # absolute node-deadline watchdog (run_executor_with_watchdog) can hold
         # every node to its own hard deadline. Defaults to the pipeline-level
@@ -7110,9 +7120,11 @@ class PipelineExecutor:
         # ``"timeout_seconds": null`` are the same state: both fall back to the
         # pipeline-level default (see ``_resolved_node_timeouts``).
         self._node_timeouts.clear()
-        self._node_timeouts.update(_resolved_node_timeouts(graph_json, pipeline_node_timeout_seconds))
+        self._node_timeouts.update(_resolved_node_timeouts(config.graph_json, config.pipeline_node_timeout_seconds))
         node_token_budgets: dict[str, int] = {
-            str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
+            str(n["id"]): n["token_budget"]
+            for n in config.graph_json.get("nodes", [])
+            if n.get("token_budget") is not None
         }
 
         # FAR-215: seed the run-scoped conformance context so every node
@@ -7123,7 +7135,7 @@ class PipelineExecutor:
         set_conformance_ctx(
             self._session_factory,
             scope.org_id,
-            snapshot.environment_profile_id,
+            config.snapshot.environment_profile_id,
             scope.pipeline_id,
             claimed,
             claims_load_failed,
@@ -7156,7 +7168,7 @@ class PipelineExecutor:
         # ``compiled`` is shared via the graph cache, so the checkpointer is
         # explicitly cleared in the non-interactive branch to avoid leaking a
         # previously-attached saver into a batch run of the same snapshot.
-        if self._checkpointer_conn_string and _graph_is_interactive(graph_json):
+        if self._checkpointer_conn_string and _graph_is_interactive(config.graph_json):
             from modulo.settings import get_settings
 
             _settings = get_settings()
@@ -7172,17 +7184,17 @@ class PipelineExecutor:
                 final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                     compiled,
                     initial_state,
-                    config,
-                    node_ids,
-                    broker,
+                    runtime_config,
+                    config.node_ids,
+                    config.broker,
                     scope.run_id,
                     pipeline_id=scope.pipeline_id,
                     org_id=scope.org_id,
-                    completed_node_outputs=completed_node_outputs,
-                    guard=guard,
+                    completed_node_outputs=config.completed_node_outputs,
+                    guard=config.guard,
                     node_token_budgets=node_token_budgets,
-                    eval_definitions_by_node=eval_defs_by_node,
-                    node_type_map=node_type_map,
+                    eval_definitions_by_node=config.eval_defs_by_node,
+                    node_type_map=config.node_type_map,
                 )
         else:
             compiled.checkpointer = None
@@ -7192,17 +7204,17 @@ class PipelineExecutor:
             final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                 compiled,
                 initial_state,
-                config,
-                node_ids,
-                broker,
+                runtime_config,
+                config.node_ids,
+                config.broker,
                 scope.run_id,
                 pipeline_id=scope.pipeline_id,
                 org_id=scope.org_id,
-                completed_node_outputs=completed_node_outputs,
-                guard=guard,
+                completed_node_outputs=config.completed_node_outputs,
+                guard=config.guard,
                 node_token_budgets=node_token_budgets,
-                eval_definitions_by_node=eval_defs_by_node,
-                node_type_map=node_type_map,
+                eval_definitions_by_node=config.eval_defs_by_node,
+                node_type_map=config.node_type_map,
             )
         return final_status, error_code, error_detail, node_token_usage
 
@@ -7721,7 +7733,12 @@ class PipelineExecutor:
                     ),
                 },
             )
-        schedule_state = "absent" if not schedule_present else ("failopen" if schedule_reason else "valid")
+        if not schedule_present:
+            schedule_state = "absent"
+        elif schedule_reason:
+            schedule_state = "failopen"
+        else:
+            schedule_state = "valid"
         # ONE jitter draw: the delay is computed ONCE here and threaded to
         # BOTH the log line and the asyncio.sleep below (no re-resolution).
         effective_sleep = _retry_backoff_seconds(

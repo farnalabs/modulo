@@ -77,6 +77,11 @@ def test_resolve_migration_script_location_fails_when_tree_missing(tmp_path: Pat
         resolve_migration_script_location(ini_path)
 
 
+def test_resolve_alembic_ini_falls_back_when_config_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("modulo.db.health_checks.Path.exists", lambda _path: False)
+    assert resolve_alembic_ini() == Path("alembic.ini")
+
+
 @pytest.mark.anyio
 async def test_db_is_at_migration_head_true(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_head(monkeypatch, "head123")
