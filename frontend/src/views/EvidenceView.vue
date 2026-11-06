@@ -220,7 +220,7 @@ async function loadRecentRuns(): Promise<void> {
     const response = await fetchRuns({ page: 1, page_size: 50 })
     recentRuns.value = response.items
   } catch (err) {
-    recentRunsError.value = err instanceof Error ? err.message : String(err)
+    recentRunsError.value = formatApiError(err)
   } finally {
     recentRunsLoading.value = false
   }
@@ -265,7 +265,7 @@ async function load(): Promise<void> {
     rows.value = data ?? []
     hasLoaded.value = true
   } catch (err) {
-    loadError.value = err instanceof Error ? err.message : String(err)
+    loadError.value = formatApiError(err)
   } finally {
     loading.value = false
   }

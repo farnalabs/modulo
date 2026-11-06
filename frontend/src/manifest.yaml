@@ -441,12 +441,16 @@ routes:
         type: form_page
         <<: *community
         deprecated: false
+        elements:
+          - settings-triggers-details-dialog
 
     /settings/guardrails:
         name: settings-guardrails
         breadcrumb: Guardrails
         parent: /
         product_map: [feat-guardrails]
+
+
         sidebar_group: configure
         sidebar_order: 5
         type: form_page
@@ -6717,6 +6721,9 @@ elements:
         type: button
         dynamic_testid: false
     /settings/triggers:
+      - testid: settings-triggers-details-dialog
+        type: element
+        dynamic_testid: false
       - testid: page-header-right
         type: element
         dynamic_testid: false

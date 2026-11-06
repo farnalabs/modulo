@@ -55,6 +55,43 @@ async function flush() {
 
 const baseListData = { items: [], total: 0, page: 1, page_size: 100 }
 
+describe('SettingsTriggersView — viewer read-only actions', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('hides mutation actions and exposes trigger details for viewers', async () => {
+    const wrapper = mountView(fakeJwt('viewer'), {
+      items: [{
+        id: 'trigger-1',
+        pipeline_id: 'pipeline-1',
+        name: 'PR opened',
+        trigger_type: 'webhook',
+        active: true,
+        config_json: { events: ['pull_request'] },
+      }],
+      total: 1,
+      page: 1,
+      page_size: 100,
+    })
+    await flush()
+
+    expect(wrapper.find('[data-testid="settings-triggers-create"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-triggers-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="table-action-edit"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="table-action-delete"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="table-action-details"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="table-action-details"]').trigger('click')
+    await flush()
+    expect(wrapper.find('[data-testid="settings-triggers-details-dialog"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('PR opened')
+    expect(api.PUT).not.toHaveBeenCalled()
+    expect(api.DELETE).not.toHaveBeenCalled()
+  })
+})
+
 describe('SettingsTriggersView — org-wide trigger pause', () => {
   beforeEach(() => {
     setActivePinia(createPinia())

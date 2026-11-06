@@ -217,7 +217,10 @@ PERMISSIONS: dict[str, str] = {
     "library.search": "viewer",
     "library.write": "operator",
     # evals
-    "eval.list": "runner",
+    # Eval definitions and results are read-only governance records. Viewer access
+    # is intentionally narrower than the runner's execution permissions; the
+    # write operations below remain operator-scoped.
+    "eval.list": "viewer",
     "eval.run": "operator",
     "eval.definition.create": "operator",
     "eval.definition.update": "operator",

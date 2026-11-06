@@ -88,6 +88,8 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.evidence import Evidence
+from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
@@ -112,6 +114,7 @@ from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
+from modulo.db.models.variant_group import VariantGroup
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import get_settings
@@ -2153,6 +2156,102 @@ async def _seed_demo_trigger_events(
         await _insert_demo_trigger_event(session, org, trigger, index, now)
 
 
+async def _seed_demo_readonly_surfaces(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
+) -> None:
+    """Seed non-sensitive records used by the viewer-facing demo read surfaces."""
+    pipeline, _ = pipeline_lookup[DEMO_PIPELINE_NAME]
+    runs = list(
+        (
+            await session.execute(
+                select(Run)
+                .where(Run.organisation_id == org.id, Run.pipeline_id == pipeline.id)
+                .order_by(Run.run_number.desc())
+                .limit(3)
+            )
+        ).scalars()
+    )
+    if not runs:
+        return
+
+    variant_name = "Demo review strategies"
+    variant = (
+        await session.execute(
+            select(VariantGroup)
+            .where(VariantGroup.organisation_id == org.id, VariantGroup.name == variant_name)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if variant is None:
+        variant = VariantGroup(
+            organisation_id=org.id,
+            pipeline_id=pipeline.id,
+            name=variant_name,
+            description="Read-only comparison fixture using two safe review strategies.",
+            variants=[
+                {"name": "Balanced", "weight": 0.5, "config": {"temperature": 0.2}},
+                {"name": "Strict", "weight": 0.5, "config": {"temperature": 0.0}},
+            ],
+            selection_strategy="weighted",
+            max_concurrent_runs=5,
+        )
+        session.add(variant)
+
+    feedback_exists = (
+        await session.execute(
+            select(FeedbackRecord.id)
+            .where(FeedbackRecord.organisation_id == org.id, FeedbackRecord.review_id == "demo-review-1")
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if feedback_exists is None:
+        session.add(
+            FeedbackRecord(
+                organisation_id=org.id,
+                run_id=runs[0].id,
+                review_id="demo-review-1",
+                account_id=account.id,
+                rejection_reason="The review should explicitly mention the deployment risk.",
+                rejected_output={"summary": "Demo review output requiring a clearer risk note."},
+                producing_node_id=uuid.UUID(demo_node_id(DEMO_PIPELINE_NAME, "review")),
+                feedback_status="pending",
+                feedback_handler_type="human",
+                eval_gap=True,
+                needs_human_review=True,
+            )
+        )
+
+    evidence_key = "risk.demo_review_score"
+    evidence_exists = (
+        await session.execute(
+            select(Evidence.id)
+            .where(
+                Evidence.organisation_id == org.id,
+                Evidence.key == evidence_key,
+                Evidence.subject_id == str(runs[0].id),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if evidence_exists is None:
+        session.add(
+            Evidence(
+                organisation_id=org.id,
+                key=evidence_key,
+                subject_type="run",
+                subject_id=str(runs[0].id),
+                value={"score": 0.84, "severity": "medium", "source": "demo_seed"},
+                observed_at=runs[0].completed_at or runs[0].started_at or datetime.now(UTC),
+                producer_type="derived",
+                producer_id=None,
+            )
+        )
+    await session.flush()
+
+
 async def _seed_demo_governance_surfaces(
     session: AsyncSession,
     org: Organisation,
@@ -2166,6 +2265,7 @@ async def _seed_demo_governance_surfaces(
     await _seed_demo_connectors(session, org, account)
     await _seed_demo_notifications(session, org, now)
     await _seed_demo_trigger_events(session, org, now)
+    await _seed_demo_readonly_surfaces(session, org, account, pipeline_lookup)
 
 
 async def _seed_ticket_ready_trigger(
