@@ -619,6 +619,17 @@ _DEMO_EVAL_RESULT_RUN_LIMIT = 6
 _DEMO_EVAL_RESULT_WINDOW_DAYS = 3
 
 
+def _demo_eval_result_cutoff(now: datetime | None = None) -> datetime:
+    """Return the rolling cutoff used to select current demo eval runs.
+
+    The dashboard evaluates results in ``[now - days, now)`` windows, so the
+    seed must use the same rolling boundary rather than today's midnight.
+    ``now`` is injectable for a deterministic boundary test; production callers
+    leave it unset and read the current UTC time.
+    """
+    return (now or datetime.now(UTC)) - timedelta(days=_DEMO_EVAL_RESULT_WINDOW_DAYS)
+
+
 @dataclass(frozen=True)
 class _GovernanceRunPath:
     """Which branch a seeded governance run took through the video flow."""
@@ -1700,9 +1711,12 @@ async def _seed_demo_evals(
                     .where(
                         Run.organisation_id == org.id,
                         Run.pipeline_id == pipeline.id,
-                        Run.started_at
-                        >= datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-                        - timedelta(days=_DEMO_EVAL_RESULT_WINDOW_DAYS),
+                        # Match dashboard._eval_rate_window: evaluated_at is
+                        # included from the rolling ``now - days`` boundary,
+                        # not from today's UTC midnight.  A day-boundary cutoff
+                        # can seed a day-3 run whose eval has already aged out
+                        # of the dashboard's 72-hour window.
+                        Run.started_at >= _demo_eval_result_cutoff(),
                     )
                     .order_by(Run.started_at.desc(), Run.run_number.desc())
                     .limit(_DEMO_EVAL_RESULT_RUN_LIMIT)

@@ -69,7 +69,7 @@ from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
-from modulo.db.seed_demo import seed_demo, seed_demo_runtime
+from modulo.db.seed_demo import _demo_eval_result_cutoff, seed_demo, seed_demo_runtime
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import Settings
 
@@ -203,7 +203,7 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert await _count(session, Team) == 3
     assert await _count(session, TeamMembership) == 3
     assert await _count(session, Eval) == 2
-    assert await _count(session, EvalResult) == 6
+    assert await _count(session, EvalResult) == 5
     # FAR-977: 2 agents; FAR-1248: + Implementer, PR Risk Scorer, PR Opener,
     # Docs Maintainer (every seeded agent node binds an agent).
     assert await _count(session, Agent) == 6
@@ -280,6 +280,14 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     )
 
 
+def test_demo_eval_result_cutoff_matches_dashboard_rolling_window() -> None:
+    now = datetime(2026, 11, 6, 15, 30, tzinfo=UTC)
+
+    assert _demo_eval_result_cutoff(now) == now - timedelta(days=3)
+    midnight_cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=3)
+    assert _demo_eval_result_cutoff(now) > midnight_cutoff
+
+
 async def test_seed_demo_eval_results_anchor_to_most_recent_runs(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -306,7 +314,7 @@ async def test_seed_demo_eval_results_anchor_to_most_recent_runs(
     # number: PR Review has the day-1/day-2 samples, while governance has today's
     # two samples. Older historical runs stay available as run history but do not
     # make the dashboard's rolling eval card appear current.
-    assert await eval_run_numbers("Review completeness") == {3, 4, 6, 7}
+    assert await eval_run_numbers("Review completeness") == {3, 4, 6}
     assert await eval_run_numbers("PR risk quality") == {1, 2}
 
 
