@@ -1738,6 +1738,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/costs/controls:
+      - testid: admin-cost-controls-breadcrumb
+        type: element
+        dynamic_testid: false
       - testid: cc-total-spend
         type: element
         dynamic_testid: false
