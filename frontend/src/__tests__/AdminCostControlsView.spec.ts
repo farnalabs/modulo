@@ -80,8 +80,9 @@ describe('AdminCostControlsView', () => {
     const wrapper = await mountView()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Cost Controls')
-    expect(wrapper.find('header.page-header + .page-tabs-wrapper').exists()).toBe(true)
-    expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(4)
+    expect(wrapper.find('.page-tabs-wrapper').exists()).toBe(true)
+    expect(wrapper.findAll('.page-tabs-wrapper .page-tab')).toHaveLength(4)
+    expect(wrapper.find('[data-testid="admin-cost-controls-breadcrumb"]').exists()).toBe(true)
   })
 
   it('displays budget overview with spend and remaining', async () => {
