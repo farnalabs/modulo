@@ -280,4 +280,9 @@ describe('AdminSpendLimitsView', () => {
     await input.vm.$emit('update:modelValue', 'not-a-number')
     expect(vm.orgLimit).toBe(null)
   })
+
+  it('opts the Costs surface into the normal UI font stack (FAR-2396)', async () => {
+    const wrapper = await mountWithFeatures()
+    expect(wrapper.find('.costs-surface').exists()).toBe(true)
+  })
 })

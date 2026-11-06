@@ -1,5 +1,5 @@
 <template>
-  <div data-theme="agent" class="page-wide">
+  <div data-theme="agent" class="page-wide costs-surface">
     <PageHeader
       :title="$t('views.AdminCostBreakdownView.cost_breakdown')"
       :subtitle="$t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams')"

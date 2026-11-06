@@ -1,5 +1,5 @@
 <template>
-  <div data-theme="agent" class="page-wide">
+  <div data-theme="agent" class="page-wide costs-surface">
     <PageHeader
       :title="$t('views.CostComponentsView.cost_components')"
       :subtitle="$t('views.CostComponentsView.configure_the_named_cost_components_that_make_up_a_runs_cost')"

@@ -126,6 +126,34 @@ describe('SettingsTeamsView', () => {
     wrapper.unmount()
   })
 
+  it('stacks the team row metadata below the name on narrow screens (FAR-2396)', async () => {
+    mockTeams = [team()]
+    const wrapper = await mountView()
+
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="settings-teams-row"]').exists()).toBe(true))
+    const row = wrapper.find('[data-testid="settings-teams-row"]')
+    const rowInner = row.element.firstElementChild as HTMLElement
+    expect(rowInner.classList.contains('flex-col')).toBe(true)
+    expect(rowInner.classList.contains('sm:flex-row')).toBe(true)
+
+    const toggle = wrapper.find('[data-testid="settings-teams-toggle-t1"]')
+    expect(toggle.classes()).toContain('min-w-0')
+    expect(toggle.classes()).toContain('flex-1')
+
+    // The name must be able to wrap rather than being truncated away by the
+    // metadata block.
+    const name = wrapper.find('[data-testid="settings-teams-team-name"]')
+    expect(name.classes()).toContain('break-words')
+    expect(name.classes()).not.toContain('truncate')
+
+    const owned = wrapper.find('[data-testid="settings-teams-owned-resource-count"]')
+    const meta = owned.element.parentElement as HTMLElement
+    expect(meta.classList.contains('min-w-0')).toBe(true)
+    expect(meta.classList.contains('flex-wrap')).toBe(true)
+    expect(meta.classList.contains('shrink-0')).toBe(false)
+    wrapper.unmount()
+  })
+
   it('renders the team disclosure toggle as a native button with full disclosure semantics', async () => {
     mockTeams = [team()]
     const wrapper = await mountView()

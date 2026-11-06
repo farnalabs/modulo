@@ -13,14 +13,14 @@
         <div class="flex flex-wrap items-end gap-4">
           <div class="flex flex-col gap-1.5">
           <label for="agentoutputdiffview-field-run-a" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a') }}</label>
-          <div class="flex gap-2">
+          <div class="flex flex-wrap gap-2">
             <Select
               :aria-label="$t('views.AgentOutputDiffView.select_run_a')"
               v-model="runIdA"
               :placeholder="$t('views.AgentOutputDiffView.select_recent_run')"
               :disabled="recentRuns.length === 0"
               data-testid="diff-recent-runs-a"
-              class="w-72"
+              class="w-52 max-w-full min-w-0"
   :options="recentRunOptions"
   option-label="label"
   option-value="value"
@@ -35,7 +35,7 @@
               data-testid="diff-run-id-a"
               type="text"
               :placeholder="$t('views.AgentOutputDiffView.paste_run_id')"
-              class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              class="w-48 max-w-full min-w-0 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
         </div>
@@ -46,19 +46,19 @@
             data-testid="diff-node-id"
             type="text"
             :placeholder="$t('views.AgentOutputDiffView.node_id_placeholder')"
-            class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            class="w-48 max-w-full min-w-0 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
         </label>
         <div class="flex flex-col gap-1.5">
           <label for="agentoutputdiffview-field-run-b" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b') }}</label>
-          <div class="flex gap-2">
+          <div class="flex flex-wrap gap-2">
             <Select
               :aria-label="$t('views.AgentOutputDiffView.select_run_b')"
               v-model="runIdB"
               :placeholder="$t('views.AgentOutputDiffView.select_recent_run')"
               :disabled="recentRuns.length === 0"
               data-testid="diff-recent-runs-b"
-              class="w-72"
+              class="w-52 max-w-full min-w-0"
   :options="recentRunOptions"
   option-label="label"
   option-value="value"
@@ -73,7 +73,7 @@
               data-testid="diff-run-id-b"
               type="text"
               :placeholder="$t('views.AgentOutputDiffView.paste_run_id')"
-              class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              class="w-48 max-w-full min-w-0 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
         </div>

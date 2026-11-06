@@ -571,4 +571,10 @@ describe('AdminCostControlsView', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/v1/plan')
     expect(mockGet).toHaveBeenCalledWith('/api/v1/admin/tiers')
   })
+
+  it('opts the Costs surface into the normal UI font stack (FAR-2396)', async () => {
+    const wrapper = await mountView()
+    expect(wrapper.find('.costs-surface').exists()).toBe(true)
+    wrapper.unmount()
+  })
 })

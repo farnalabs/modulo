@@ -1,5 +1,5 @@
 <template>
-  <div data-theme="agent" class="page-wide">
+  <div data-theme="agent" class="page-wide costs-surface">
     <PageHeader
       :title="$t('views.AdminCostBreakdownView.spend_limits')"
       :subtitle="$t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level')"

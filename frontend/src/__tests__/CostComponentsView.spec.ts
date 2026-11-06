@@ -485,4 +485,27 @@ describe('CostComponentsView', () => {
     expect(vm.editing).toBe(true)
     expect(vm.editingId).toBe('comp-1')
   })
+
+  it('uses the normal UI font for ordinary labels while keeping technical values monospace (FAR-2396)', async () => {
+    const wrapper = await mountView()
+
+    expect(wrapper.find('.costs-surface').exists()).toBe(true)
+
+    const displayName = wrapper.findAll('span').find((node) => node.text() === 'LLM Tokens')
+    expect(displayName).toBeDefined()
+    expect(displayName!.classes()).not.toContain('font-mono')
+
+    // Formulas and report keys are genuinely technical, so they stay mono.
+    const monospaceCode = wrapper.findAll('code').filter((node) => node.classes().includes('font-mono'))
+    expect(monospaceCode.length).toBeGreaterThan(0)
+  })
+
+  it('scopes the sans override to Costs surfaces and preserves explicit monospace (FAR-2396)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const css = readFileSync(resolve(__dirname, '../style.css'), 'utf8')
+
+    expect(css).toContain('[data-theme="agent"].costs-surface {')
+    expect(css).toContain('[data-theme="agent"].costs-surface :is(.font-mono, code, pre, kbd, samp)')
+  })
 })

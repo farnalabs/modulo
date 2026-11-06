@@ -487,4 +487,28 @@ describe('AgentOutputDiffView', () => {
       { value: 'run-1', label: 'Alpha — failed (2026-01-02T03:04:05Z)' },
     ])
   })
+
+  it('keeps the run selectors and id inputs inside their flex parent at phone widths (FAR-2396)', async () => {
+    router.push('/runs/diff')
+    await router.isReady()
+    const wrapper = mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    for (const suffix of ['a', 'b']) {
+      const select = wrapper.find(`[data-testid="diff-recent-runs-${suffix}"]`)
+      expect(select.classes()).toContain('w-52')
+      expect(select.classes()).toContain('max-w-full')
+      expect(select.classes()).toContain('min-w-0')
+
+      const input = wrapper.find(`[data-testid="diff-run-id-${suffix}"]`)
+      expect(input.classes()).toContain('max-w-full')
+      expect(input.classes()).toContain('min-w-0')
+
+      const row = input.element.parentElement as HTMLElement
+      expect(row.classList.contains('flex-wrap')).toBe(true)
+    }
+  })
 })

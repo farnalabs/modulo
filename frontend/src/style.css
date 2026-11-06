@@ -688,6 +688,21 @@ html.light .p-badge-secondary {
   font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
 }
 
+/* FAR-2396: the agent theme deliberately sets a page-wide monospace stack, but
+   on the Costs surfaces that made every ordinary label, heading and piece of
+   metadata read as technical content. Restore the product's normal UI stack on
+   those pages only, and explicitly re-assert monospace for the values that ARE
+   technical: code, identifiers, formulas and report keys. The later, more
+   specific selector wins over the unlayered agent block, and the preserve rule
+   is unlayered so it also beats Tailwind's layered `.font-mono` utility. */
+[data-theme="agent"].costs-surface {
+  font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+[data-theme="agent"].costs-surface :is(.font-mono, code, pre, kbd, samp) {
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+}
+
 [data-theme="agent"] :where(:not(html)):focus-visible {
   outline: 2px solid hsl(var(--focus-ring));
   outline-offset: 2px;

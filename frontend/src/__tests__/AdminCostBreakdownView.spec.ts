@@ -842,4 +842,12 @@ describe('AdminCostBreakdownView', () => {
     expect(unattributed.exists()).toBe(true)
     expect(unattributed.text()).toContain('$12.00')
   })
+
+  it('opts the Costs surface into the normal UI font stack (FAR-2396)', async () => {
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+    const wrapper = mount(AdminCostBreakdownView, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+    expect(wrapper.find('.costs-surface').exists()).toBe(true)
+  })
 })

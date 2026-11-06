@@ -919,6 +919,33 @@ describe('SettingsHitlReviewView', () => {
     expect(bodyChevron.classes()).toContain('w-4')
   })
 
+  it('stacks the gate row on narrow screens instead of overlapping fixed columns (FAR-2396)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // The fixed-width desktop column header is not a usable phone layout.
+    const headers = wrapper!.find('[data-testid="hitl-review-column-headers"]')
+    expect(headers.classes()).toContain('hidden')
+    expect(headers.classes()).toContain('md:flex')
+
+    // The row content wraps into full-width lines at narrow widths and returns
+    // to the single desktop line at md and above.
+    const rowButton = wrapper!.find('[data-testid="hitl-review-toggle-expand"]')
+    expect(rowButton.classes()).toContain('min-w-0')
+    expect(rowButton.classes()).toContain('flex-wrap')
+    expect(rowButton.classes()).toContain('md:flex-nowrap')
+
+    const created = wrapper!.find('[data-testid="hitl-review-created"]')
+    expect(created.classes()).toContain('w-full')
+    expect(created.classes()).toContain('md:w-40')
+  })
+
   it('renders the server-resolved pipeline name even when the cached pipelines list is empty (FAR-727)', async () => {
     // THE reported bug: rows rendered `#d6b2c25b` because the name was
     // resolved client-side from the (paginated) /pipelines list. The
