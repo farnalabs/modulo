@@ -643,6 +643,7 @@ def test_bundle_release_runpath_probe_is_live_and_extracts_runtime_paths() -> No
         input=readelf_output,
         capture_output=True,
         text=True,
+        timeout=30,
         check=True,
     )
     assert result.stdout.splitlines() == ["$ORIGIN/../lib", "/opt/lib", "/usr/lib"]
