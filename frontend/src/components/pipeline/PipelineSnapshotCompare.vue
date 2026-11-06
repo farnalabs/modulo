@@ -678,11 +678,11 @@ function edgePortEntries(changes?: Record<string, unknown>): Array<{ key: string
 function formatValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return t('components.PipelineSnapshotCompare.no_value')
   if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (typeof value === 'number' || typeof value === 'boolean') return value.toString()
   try {
     return JSON.stringify(value)
   } catch {
-    return String(value)
+    return Object.prototype.toString.call(value)
   }
 }
 
