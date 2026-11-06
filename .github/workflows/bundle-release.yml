@@ -129,6 +129,7 @@ jobs:
             echo "PG_VERSION=${PG_VERSION}"
             echo "PG_SOURCE_URL=${PG_SOURCE_URL}"
             echo "PG_SOURCE_SHA256=${PG_SOURCE_SHA256}"
+            echo "PG_REQUIRED_EXTENSIONS=${PG_REQUIRED_EXTENSIONS}"
             echo "REDIS_VERSION=${REDIS_VERSION}"
             echo "BUNDLE_ROOT=modulo-${VERSION_NUM}-linux-${{ matrix.arch }}"
             echo "TARBALL_NAME=modulo-${VERSION_NUM}-linux-${{ matrix.arch }}.tar.gz"
@@ -141,6 +142,25 @@ jobs:
           curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/${PBS_TARBALL}" \
             "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/${PBS_TARBALL}"
           echo "${PBS_SHA256}  ${PBS_TARBALL}" | (cd downloads && sha256sum --check --strict -)
+
+      - name: Install pinned PostgreSQL source-build dependencies
+        run: |
+          set -euo pipefail
+          # PostgreSQL is compiled only in this release workflow, never in the
+          # product runtime or customer installer. The explicit Jammy package
+          # list keeps the source build reproducible and documents why the
+          # configure flags below need no distro PostgreSQL package:
+          # build-essential = compiler/linker/make; flex+bison = parser tools;
+          # ca-certificates/curl/tar/gzip = verified source retrieval/extraction.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential \
+            bison \
+            ca-certificates \
+            curl \
+            flex \
+            gzip \
+            tar
 
       - name: Download and sha256-verify pinned PostgreSQL source
         run: |
@@ -161,10 +181,14 @@ jobs:
           (
             cd pg-build
             ../pg-src/configure \
-              --prefix="$BUNDLE_PG_PREFIX" \
+                --prefix="$BUNDLE_PG_PREFIX" \
               --without-readline \
               --without-zlib \
-              --without-icu
+              --without-icu \
+              --without-llvm
+            # Modulo uses core PostgreSQL only: no CREATE EXTENSION call sites
+            # exist in product/runtime code, so contrib is intentionally empty.
+            # Keep the source build's dependency/configuration choices explicit.
             make -j"$(nproc)"
             make install
           )
@@ -173,6 +197,7 @@ jobs:
           test -x "$BUNDLE_PG_PREFIX/bin/pg_dump"
           test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"
           test -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets"
+          test -z "${PG_REQUIRED_EXTENSIONS}"
           test "$("$BUNDLE_PG_PREFIX/bin/pg_config" --version)" = "PostgreSQL ${PG_VERSION}"
           sharedir="$("$BUNDLE_PG_PREFIX/bin/pg_config" --sharedir)"
           test "$sharedir" = "$BUNDLE_PG_PREFIX/share/postgresql"
@@ -282,26 +307,26 @@ jobs:
 
           echo "bundle-v${VERSION_NUM}" > "$BUNDLE/VERSION"
 
-      - name: Smoke relocated bundled PostgreSQL initdb as an unprivileged user
+      - name: Scan shipped PostgreSQL ELF files for build and host paths
         run: |
           set -euo pipefail
           BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
-          smoke_root="$(mktemp -d)"
-          trap 'rm -rf "$smoke_root"' EXIT
-          cp -a "$BUNDLE" "$smoke_root/bundle"
-          smoke_bundle="$smoke_root/bundle"
-          smoke_data="$smoke_root/data"
-          env -i \
-            HOME="$smoke_root/home" \
-            PATH="$smoke_bundle/pg/bin:/usr/bin:/bin" \
-            "$smoke_bundle/pg/bin/initdb" \
-            --pgdata "$smoke_data" \
-            --username modulo \
-            --auth=trust \
-            --locale C
-          test -f "$smoke_data/PG_VERSION"
-          test -f "$smoke_data/global/pg_control"
-          echo "relocated initdb smoke passed: $smoke_bundle/pg/bin/initdb -> $smoke_data"
+          build_prefix="$PWD/build/${BUNDLE_ROOT}/pg"
+          fail=0
+          while IFS= read -r -d '' binary; do
+            if ! readelf -h "$binary" >/dev/null 2>&1; then
+              continue
+            fi
+            if strings -a "$binary" | grep -Fq "$build_prefix"; then
+              echo "::error::PostgreSQL ELF embeds the original build prefix: $binary" >&2
+              fail=1
+            fi
+            while IFS= read -r forbidden; do
+              echo "::error::PostgreSQL ELF embeds an unexpected absolute PostgreSQL path ($forbidden): $binary" >&2
+              fail=1
+            done < <(strings -a "$binary" | grep -E '/(usr|opt|home)/[^ ]*(postgresql|pgsql)' | sort -u || true)
+          done < <(find "$BUNDLE/pg" -type f -print0)
+          exit "$fail"
 
       - name: Assert bundled service binaries stay within the glibc 2.35 floor
         run: |
@@ -466,7 +491,66 @@ jobs:
       # artifact (the tarball + the major bundled binaries' sha256+version) and
       # is signed with the ed25519 private key in the CI secret
       # BUNDLE_MANIFEST_SIGNING_KEY (hex).
+      - name: Smoke the final PostgreSQL tarball after relocation as an unprivileged user
+        run: |
+          set -euo pipefail
+          tarball="build/${TARBALL_NAME}"
+          original_bundle="$(cd "build/${BUNDLE_ROOT}" && pwd)"
+          smoke_root="$(mktemp -d)"
+          smoke_user="modulo-pg-smoke"
+          cleanup() {
+            if id "$smoke_user" >/dev/null 2>&1; then sudo userdel "$smoke_user" >/dev/null 2>&1 || true; fi
+            if [ -d "$smoke_root/original" ] && [ ! -e "$original_bundle" ]; then mv "$smoke_root/original" "$original_bundle"; fi
+            rm -rf "$smoke_root"
+          }
+          trap cleanup EXIT
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin "$smoke_user"
+          mv "$original_bundle" "$smoke_root/original"
+          test ! -e "$original_bundle"
+          extract_root="$smoke_root/extracted"
+          mkdir -p "$extract_root"
+          tar -xzf "$tarball" -C "$extract_root"
+          smoke_bundle="$extract_root/$BUNDLE_ROOT"
+          smoke_data="$smoke_root/data"
+          smoke_socket="$smoke_root/socket"
+          smoke_dump="$smoke_root/roundtrip.sql"
+          mkdir -p "$smoke_data" "$smoke_socket"
+          chown -R "$smoke_user:$smoke_user" "$smoke_root"
+          sudo -u "$smoke_user" env -i \
+            HOME="$smoke_root/home" \
+            PATH="$smoke_bundle/pg/bin:/usr/bin:/bin" \
+            PGDATA="$smoke_data" \
+            SMOKE_BUNDLE="$smoke_bundle" \
+            SMOKE_SOCKET="$smoke_socket" \
+            SMOKE_DUMP="$smoke_dump" \
+            bash -eu -c '
+              test "$(pg_config --sharedir)" = "$SMOKE_BUNDLE/pg/share/postgresql"
+              case "$(pg_config --sharedir)" in "$SMOKE_BUNDLE"/*) : ;; *) exit 1 ;; esac
+              initdb --pgdata "$PGDATA" --username modulo --auth=trust --locale C
+              pg_ctl --pgdata "$PGDATA" --log "$PGDATA/postgres.log" \
+                --options="-k $SMOKE_SOCKET -p 55432" start -w
+              trap "pg_ctl --pgdata \"$PGDATA\" stop -m fast -w" EXIT
+              psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname postgres \
+                --command "SELECT 1;"
+              psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname postgres \
+                --command "SET TIME ZONE 'America/New_York'; SELECT now() AT TIME ZONE 'UTC';"
+              createdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
+              psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip \
+                --command "CREATE TABLE proof(value integer); INSERT INTO proof VALUES (2192);"
+              pg_dump --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip > "$SMOKE_DUMP"
+              dropdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
+              createdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
+              psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip < "$SMOKE_DUMP"
+              test "$(psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip --tuples-only --no-align --command "SELECT value FROM proof")" = "2192"
+            '
+          if grep -R -E '/(usr|opt|home)/[^ ]*(postgresql|pgsql)' "$smoke_data/postgres.log"; then
+            echo "::error::final PostgreSQL tarball smoke used a host PostgreSQL path" >&2
+            exit 1
+          fi
+          echo "final tarball PostgreSQL relocation smoke passed: initdb, postgres, psql, timezone, pg_dump/restore"
+
       - name: Generate and sign the SIGNED release manifest
+
         env:
           MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
         run: |

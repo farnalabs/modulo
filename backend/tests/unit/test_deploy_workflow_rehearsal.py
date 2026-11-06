@@ -543,13 +543,21 @@ def test_release_signing_derives_key_id_from_current_slot() -> None:
 
 def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     workflow_text = BUNDLE_WORKFLOW.read_text(encoding="utf-8")
+    versions = (REPO_ROOT / "scripts" / "bundle-versions.env").read_text(encoding="utf-8")
 
+    assert "Install pinned PostgreSQL source-build dependencies" in workflow_text
+    assert "build-essential" in workflow_text
+    assert "bison" in workflow_text
+    assert "flex" in workflow_text
     assert "Download and sha256-verify PostgreSQL source" in workflow_text
     assert 'echo "${PG_SOURCE_SHA256}  postgresql-${PG_VERSION}.tar.gz"' in workflow_text
     assert "Build and sha256-verify PostgreSQL from pinned upstream source" in workflow_text
     assert "../pg-src/configure" in workflow_text
     assert 'BUNDLE_PG_PREFIX="$PWD/build/${BUNDLE_ROOT}/pg"' in workflow_text
     assert '--prefix="$BUNDLE_PG_PREFIX"' in workflow_text
+    assert "--without-llvm" in workflow_text
+    assert "PG_REQUIRED_EXTENSIONS=" in versions
+    assert 'test -z "${PG_REQUIRED_EXTENSIONS}"' in workflow_text
     assert 'test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"' in workflow_text
     assert 'test -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets"' in workflow_text
     assert "pg_config --sharedir" in workflow_text
@@ -560,23 +568,37 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert "apt.postgresql.org" not in workflow_text
 
 
-def test_bundle_release_proves_postgres_relocation_with_initdb_smoke() -> None:
+def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     workflow = yaml.safe_load(BUNDLE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["bundle"]["steps"]
     names = _step_names(steps)
-    build_script = steps[names.index("Build and sha256-verify PostgreSQL from pinned upstream source")]["run"]
-    smoke_name = "Smoke relocated bundled PostgreSQL initdb as an unprivileged user"
+    smoke_name = "Smoke the final PostgreSQL tarball after relocation as an unprivileged user"
     smoke_script = steps[names.index(smoke_name)]["run"]
 
-    assert 'sharedir="$("$BUNDLE_PG_PREFIX/bin/pg_config" --sharedir)' in build_script
-    assert 'test "$sharedir" = "$BUNDLE_PG_PREFIX/share/postgresql"' in build_script
-    assert 'test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"' in build_script
-    assert 'test -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets"' in build_script
-    assert '"$smoke_bundle/pg/bin/initdb"' in smoke_script
+    assert 'tarball="build/${TARBALL_NAME}"' in smoke_script
+    assert 'test ! -e "$original_bundle"' in smoke_script
+    assert 'tar -xzf "$tarball"' in smoke_script
+    assert "useradd --system" in smoke_script
+    assert "env -i" in smoke_script
     assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
-    assert 'test -f "$smoke_data/PG_VERSION"' in smoke_script
-    assert 'test -f "$smoke_data/global/pg_control"' in smoke_script
-    assert "sudo" not in smoke_script
+    assert "pg_config --sharedir" in smoke_script
+    assert "initdb --pgdata" in smoke_script
+    assert "pg_ctl --pgdata" in smoke_script
+    assert "SELECT 1;" in smoke_script
+    assert "America/New_York" in smoke_script
+    assert "pg_dump" in smoke_script
+    assert "dropdb" in smoke_script
+    assert "stop -m fast -w" in smoke_script
+    assert "host PostgreSQL path" in smoke_script
+
+
+def test_bundle_release_scans_postgres_elf_paths_and_keeps_glibc_gate() -> None:
+    workflow_text = BUNDLE_WORKFLOW.read_text(encoding="utf-8")
+    assert "Scan shipped PostgreSQL ELF files for build and host paths" in workflow_text
+    assert 'strings -a "$binary" | grep -Fq "$build_prefix"' in workflow_text
+    assert "unexpected absolute PostgreSQL path" in workflow_text
+    assert 'check_binary "$BUNDLE/pg/bin/postgres"' in workflow_text
+    assert 'check_binary "$BUNDLE/pg/bin/pg_dump"' in workflow_text
 
 
 def test_bundle_release_verifies_generated_signature_before_upload() -> None:
