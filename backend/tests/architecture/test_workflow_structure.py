@@ -2006,6 +2006,37 @@ def test_production_drain_bootstrap_does_not_deadlock_the_deploy() -> None:
     assert not violations, "production drain bootstrap can deadlock the deploy again:\n" + "\n".join(violations)
 
 
+def test_production_active_run_wait_requires_an_active_admission_freeze() -> None:
+    """The active-run wait only converges while the admission freeze is active.
+
+    Waiting for ``active_sandbox_runs`` to reach zero is only meaningful when
+    new sandbox runs are blocked: with admission still open the count can rise
+    at any moment and a zero window may never appear. Observed on 33306b9: the
+    drain freeze was skipped because ``MODULO_DEPLOY_DRAIN_TOKEN`` was
+    unconfigured, yet the wait gate still ran for the full 60 minutes and
+    failed the production deploy while continuous sandbox activity kept the
+    count above zero. The gate must read the live ``deployment_drain`` flag and
+    degrade to the legacy deploy path with a loud warning when it is not
+    active, while still failing closed when a real freeze is active.
+    """
+    production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
+    wait = next(
+        str(step.get("run") or "")
+        for step in production_steps
+        if isinstance(step, dict) and step.get("name") == "Wait for active sandbox runs to finish (production)"
+    )
+    violations: list[str] = []
+    if "deployment_drain" not in wait:
+        violations.append("  the wait step no longer reads the live deployment_drain flag")
+    if "INACTIVE" not in wait:
+        violations.append("  the wait step does not distinguish the not-frozen case")
+    if "::warning::" not in wait:
+        violations.append("  the wait step degrades without a loud ::warning::")
+    if "exit 1" not in wait:
+        violations.append("  the wait step no longer fails closed when an active freeze never drains")
+    assert not violations, "the active-run wait can deadlock the production deploy again:\n" + "\n".join(violations)
+
+
 def test_deploy_consumers_classify_a_throttled_noop_by_the_deploy_job() -> None:
     """Both escalation consumers read the deploy JOB, not the run's colour.
 
