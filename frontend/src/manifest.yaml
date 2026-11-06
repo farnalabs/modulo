@@ -2889,6 +2889,9 @@ elements:
         type: element
         dynamic_testid: false
     /settings/monitoring:
+      - testid: settings-monitor-config-permission-denied
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false

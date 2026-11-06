@@ -17,7 +17,7 @@
           <span class="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full" />
         </div>
 
-        <div v-else-if="!canManage" class="rounded-lg border border-primary/30 bg-primary/5 p-4 text-sm" aria-live="polite">
+        <div v-else-if="!canManage" data-testid="settings-monitor-config-permission-denied" class="rounded-lg border border-primary/30 bg-primary/5 p-4 text-sm" aria-live="polite">
           <p class="font-medium text-foreground">{{ $t('views.SettingsMonitorConfigView.permission_denied_title') }}</p>
           <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsMonitorConfigView.permission_denied_description') }}</p>
         </div>
