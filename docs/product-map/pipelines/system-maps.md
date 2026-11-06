@@ -396,9 +396,12 @@ The map is stored in dedicated System Maps tables (migration
       `frontend/src/views/SystemMapDetailView.vue`,
       `frontend/src/components/system-maps/SystemMapRevisionSidebar.vue`;
       `frontend/src/__tests__/systemMapsStoreCrud.spec.ts`)
-- [ ] Diff and restore-as-new have no UI affordance: the sidebar does not yet
-      expose the existing revision diff or restore actions
-      (`frontend/src/components/system-maps/SystemMapRevisionSidebar.vue`)
+- [x] The revision sidebar exposes the existing revision diff and restore-as-new
+      actions: authors can compare a historical revision with the published revision
+      and see counts for changed nodes, relationships, and loop configurations,
+      while restore creates a new draft from the selected revision
+      (`frontend/src/components/system-maps/SystemMapRevisionSidebar.vue`,
+      `frontend/src/stores/systemMaps.ts`, `frontend/src/views/SystemMapDetailView.vue`)
 - [ ] Discovery cannot re-scan into an existing map: there is no re-scan
       endpoint and each successful discovery creates a map (a repeat with a
       colliding name is 409), so the added / removed / ambiguous
