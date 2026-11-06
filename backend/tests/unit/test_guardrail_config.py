@@ -794,4 +794,4 @@ def test_mask_engine_config_tolerates_malformed_sections():
 
 
 def test_mask_engine_config_empty_is_a_noop():
-    assert mask_engine_config({}) == {}
+    assert not mask_engine_config({})

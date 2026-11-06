@@ -409,6 +409,43 @@ async def test_seed_fixture_ids_are_deterministic_and_org_scoped(
     )
 
 
+async def test_seed_readonly_surfaces_variant_group_exists_without_runs(session: AsyncSession) -> None:
+    """The variant group is runs-independent: the no-runs early return still
+    persists it, while the run-anchored feedback/evidence fixtures are skipped."""
+    account = Account(
+        email="empty@example.com",
+        display_name="Empty",
+        password_hash=hash_password("empty-passphrase-123"),
+        auth_provider="local",
+        active=True,
+    )
+    org = Organisation(name="Empty", slug="empty", settings_json={})
+    session.add_all([account, org])
+    await session.flush()
+    pipeline = Pipeline(
+        organisation_id=org.id,
+        name=seed_demo_module.DEMO_PIPELINE_NAME,
+        account_id=account.id,
+        visibility="org",
+    )
+    session.add(pipeline)
+    await session.commit()
+
+    async with session.begin():
+        await seed_demo_module._seed_demo_readonly_surfaces(
+            session,
+            org,
+            account,
+            {seed_demo_module.DEMO_PIPELINE_NAME: (pipeline, None)},
+        )
+
+    variant = (await session.execute(select(VariantGroup))).scalar_one()
+    assert variant.name == "Demo review strategies"
+    assert variant.pipeline_id == pipeline.id
+    assert await _count(session, FeedbackRecord) == 0
+    assert await _count(session, Evidence) == 0
+
+
 @pytest.mark.parametrize(
     ("entity", "recovery_message"),
     [

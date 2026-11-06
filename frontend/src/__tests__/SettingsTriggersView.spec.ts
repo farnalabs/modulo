@@ -90,6 +90,53 @@ describe('SettingsTriggersView — viewer read-only actions', () => {
     expect(api.PUT).not.toHaveBeenCalled()
     expect(api.DELETE).not.toHaveBeenCalled()
   })
+
+  it('renders the details body and config for both present and absent config_json', async () => {
+    ;(api.GET as any).mockResolvedValue({
+      data: {
+        items: [
+          {
+            id: 'trigger-1',
+            pipeline_id: 'pipeline-1',
+            name: 'PR opened',
+            trigger_type: 'webhook',
+            active: true,
+            config_json: { events: ['pull_request'] },
+          },
+          {
+            id: 'trigger-2',
+            pipeline_id: 'pipeline-1',
+            name: 'Cron trigger',
+            trigger_type: 'cron',
+            active: false,
+          },
+        ],
+        total: 2,
+        page: 1,
+        page_size: 100,
+      },
+      error: undefined,
+    })
+    ;(getAccessToken as any).mockReturnValue(fakeJwt('viewer'))
+    const wrapper = mount(SettingsTriggersView, {
+      global: {
+        renderStubDefaultSlot: true,
+        stubs: { ...dialogStubs.reduce((a, k) => ({ ...a, [k]: true }), {}), FeatureGate: featureGateStub },
+      },
+    })
+    await flush()
+
+    const detailsButtons = wrapper.findAll('[data-testid="table-action-details"]')
+    expect(detailsButtons).toHaveLength(2)
+
+    await detailsButtons[0].trigger('click')
+    await flush()
+    expect(wrapper.text()).toContain('"events"')
+
+    await detailsButtons[1].trigger('click')
+    await flush()
+    expect(wrapper.text()).toContain('Cron trigger')
+  })
 })
 
 describe('SettingsTriggersView — org-wide trigger pause', () => {
