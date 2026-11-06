@@ -175,7 +175,12 @@ def _install_fixture() -> None:
     sso_routes.oidc_process_callback = _process_callback
 
     fixture_router = APIRouter()
-    fixture_router.add_api_route("/test-idp/authorize", _fixture_idp_authorize, methods=["GET"])
+    fixture_router.add_api_route(
+        "/test-idp/authorize",
+        _fixture_idp_authorize,
+        methods=["GET"],
+        response_model=None,
+    )
     app.include_router(fixture_router)
     _LOG.info("SSO fixture installed: production routes + deterministic IdP seam")
 
