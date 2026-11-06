@@ -87,6 +87,10 @@ export async function setupLocalMockApi(page: Page) {
         body: JSON.stringify({ access_token: MOCK_ACCESS_TOKEN, refresh_token: MOCK_REFRESH_TOKEN, token_type: 'bearer' }),
       })
     }
+    // Leave the real SSO login/callback legs to the test's deterministic IdP
+    // seam. Route handlers registered later in the spec assert the unauthenticated
+    // backend contract instead of this general local mock swallowing those GETs.
+    if (url.includes('/api/v1/auth/oidc/')) return route.fallback()
     if (url.includes('/api/v1/me/settings')) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ locale: 'en-US' }) })
     }
