@@ -489,6 +489,33 @@ describe('useSystemMapsStore derived access and non-Error failures', () => {
     expect(store.hasAccess).toBe(false)
   })
 
+  it('loads, creates, and deletes attribution bindings', async () => {
+    mockGet.mockResolvedValue({ data: [{ id: 'binding-1', node_key: 'pipeline-1', binding_kind: 'trigger' }] })
+    const store = useSystemMapsStore()
+
+    await store.loadAttributionBindings('map-1')
+    expect(store.attributionBindings).toHaveLength(1)
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/attribution-bindings', { params: { path: { map_id: 'map-1' } } })
+
+    mockPost.mockResolvedValue({ data: { id: 'binding-2', node_key: 'pipeline-2', binding_kind: 'trigger' } })
+    await store.createAttributionBinding('map-1', { node_key: 'pipeline-2', pipeline_id: 'pipe-1', trigger_id: 'trig-1', binding_kind: 'trigger' })
+    expect(store.attributionBindings.map((binding) => binding.id)).toEqual(['binding-1', 'binding-2'])
+
+    mockDelete.mockResolvedValue({ data: undefined })
+    await store.deleteAttributionBinding('map-1', 'binding-1')
+    expect(store.attributionBindings.map((binding) => binding.id)).toEqual(['binding-2'])
+  })
+
+  it('surfaces attribution binding API errors', async () => {
+    const store = useSystemMapsStore()
+    mockGet.mockResolvedValue({ error: { detail: 'bindings unavailable' } })
+    await expect(store.loadAttributionBindings('map-1')).rejects.toThrow('bindings unavailable')
+    mockPost.mockResolvedValue({ error: { detail: 'invalid binding' } })
+    await expect(store.createAttributionBinding('map-1', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: 'trig-1', binding_kind: 'trigger' })).rejects.toThrow('invalid binding')
+    mockDelete.mockResolvedValue({ error: { detail: 'delete failed' } })
+    await expect(store.deleteAttributionBinding('map-1', 'binding-1')).rejects.toThrow('delete failed')
+  })
+
   it('uses a localized message when loading a discovered draft fails with a non-Error', async () => {
     mockPost.mockResolvedValue({ data: { draft_map_id: 'map-9', draft_revision_id: 'rev-9' } })
     mockGet.mockImplementation((path: string) => {

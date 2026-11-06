@@ -1304,6 +1304,33 @@ elements:
       - testid: system-map-relationships
         type: element
         dynamic_testid: false
+      - testid: system-map-attribution-bindings-panel
+        type: element
+        dynamic_testid: false
+      - testid: system-map-attribution-bindings
+        type: element
+        dynamic_testid: false
+      - testid: system-map-binding-kind
+        type: select
+        dynamic_testid: false
+      - testid: system-map-binding-node
+        type: select
+        dynamic_testid: false
+      - testid: system-map-binding-pipeline
+        type: select
+        dynamic_testid: false
+      - testid: system-map-binding-trigger
+        type: select
+        dynamic_testid: false
+      - testid: system-map-binding-create
+        type: button
+        dynamic_testid: false
+      - testid: system-map-binding-list
+        type: element
+        dynamic_testid: false
+      - testid: system-map-binding-empty
+        type: element
+        dynamic_testid: false
       - testid: error-alert-retry
         type: button
         dynamic_testid: false
