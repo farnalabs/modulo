@@ -2022,6 +2022,7 @@ jobs:
           RELEASE_TITLE="Modulo ${RC_TAG}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "::warning::release ${TAG} already exists - uploading assets without clobbering"
+            gh release edit "$TAG" --title "$RELEASE_TITLE"
             gh release upload "$TAG" "${ASSETS[@]}"
           else
             gh release create "$TAG" \

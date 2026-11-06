@@ -13,11 +13,14 @@ def _release_workflow_text() -> str:
 def test_bundle_release_uses_product_title_without_changing_bundle_identity() -> None:
     workflow = _release_workflow_text()
     publication = workflow[workflow.index('RELEASE_TITLE="Modulo ${RC_TAG}"') :]
+    existing_release, new_release = publication.split("          else\n", maxsplit=1)
 
     assert "TAG: bundle-v${{ inputs.version }}" in workflow
     assert 'RELEASE_TITLE="Modulo ${RC_TAG}"' in publication
-    assert 'gh release create "$TAG"' in publication
-    assert '--title "$RELEASE_TITLE"' in publication
+    assert 'gh release edit "$TAG" --title "$RELEASE_TITLE"' in existing_release
+    assert 'gh release upload "$TAG" "${ASSETS[@]}"' in existing_release
+    assert 'gh release create "$TAG"' in new_release
+    assert '--title "$RELEASE_TITLE"' in new_release
     assert '--title "$TAG"' not in publication
     assert 'release=f"bundle-v{version}"' in workflow
 
