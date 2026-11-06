@@ -975,6 +975,8 @@ def _countable_result(
     :func:`_any_marker_delivery_done` reads the same field the complete bucket
     trusts.
     """
+    pr_url_provenance: dict[str, str] = {}
+    pr_urls = collect_pr_urls(outputs_json, telemetry_json, raw_output_markers, pr_url_provenance)
     if matches_benign_signature(
         benign_signatures,
         error_code=error_code,
@@ -983,12 +985,12 @@ def _countable_result(
         return _classification(
             RunClassificationValue.benign,
             REASON_BENIGN,
+            delivered_pr_urls=tuple(pr_urls),
+            pr_url_provenance=tuple(sorted(pr_url_provenance.items())),
             computed_at=computed_at,
             work_intact=work_intact,
             declared_success_nodes=declared_success_nodes,
         )
-    pr_url_provenance: dict[str, str] = {}
-    pr_urls = collect_pr_urls(outputs_json, telemetry_json, raw_output_markers, pr_url_provenance)
     if _any_marker_delivery_done(raw_output_markers):
         return _classification(
             RunClassificationValue.delivered,

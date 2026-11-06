@@ -2303,6 +2303,22 @@ class TestBenignClassification:
         assert result.value == RunClassificationValue.benign
         assert result.reason == REASON_BENIGN
 
+    def test_benign_signature_retains_pr_evidence_without_changing_verdict(self) -> None:
+        """Benign is still the terminal verdict, but evidence remains durable."""
+        sigs = normalize_benign_signatures(_MERGE_QUEUE_SIGNATURES)
+        result = classify_run(
+            "failed",
+            "agent.failed",
+            error_detail="Rebase conflict",
+            outputs_json={"builder": _node_return_with_pr(_PR)},
+            telemetry_json={"builder": {"agent_status": "completed"}},
+            benign_signatures=sigs,
+        )
+        assert result.value == RunClassificationValue.benign
+        assert result.reason == REASON_BENIGN
+        assert result.delivered_pr_urls == (_PR,)
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_DECLARED}
+
     def test_without_signatures_a_failed_run_still_counts(self) -> None:
         """The DEFAULT is byte-identical to the pre-FAR-707 decision table."""
         result = classify_run(
@@ -2426,6 +2442,40 @@ class TestBenignConfigWiring:
         assert record is not None
         assert record["value"] == "benign"
         assert record["reason"] == "benign_outcome"
+
+    async def test_terminalization_persists_benign_pr_evidence_without_delivering(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """The real classification persistence boundary keeps evidence on benign failures.
+
+        This exercises ``classify_and_persist_run`` with the stored pipeline
+        configuration and the run-node-output store, rather than calling the
+        pure classifier alone. The benign verdict must remain fail-closed as a
+        business outcome while the PR evidence survives in the persisted record.
+        """
+        run_id = uuid.uuid4()
+        async with session.begin():
+            await self._seed_pipeline(session, signatures=_MERGE_QUEUE_SIGNATURES)
+            run = await _seed_run(
+                session,
+                run_id,
+                status="failed",
+                outputs={"builder": _node_return_with_pr(_PR)},
+                telemetry={"builder": {"agent_status": "completed"}},
+                error_code="agent.failed",
+            )
+            run.error_detail = "Rebase conflict"
+            await session.flush()
+            assert await classify_and_persist_run(session, run) is True
+
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["value"] == "benign"
+        assert record["reason"] == REASON_BENIGN
+        assert record["delivered_pr_urls"] == [_PR]
+        assert record["pr_url_provenance"] == {_PR: PR_URL_PROVENANCE_DECLARED}
 
     async def test_an_unconfigured_pipeline_keeps_the_historical_verdict(
         self,
