@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
+import { usePlanStore } from '../stores/planStore'
 
 const { getMock, putMock, loadBackendsMock, getErrorTrackerMock } = vi.hoisted(() => ({
   getMock: vi.fn(),
@@ -130,6 +131,32 @@ describe('SettingsMonitorConfigView', () => {
 
     expect(wrapper.find('[data-testid="settings-monitor-permission-denied"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('config unreachable')
+  })
+
+  it('shows the informational state without calling the API when the config permission is known absent (FAR-2394)', async () => {
+    const planStore = usePlanStore()
+    planStore.userPermissions = []
+    planStore.permissionsSource = 'server'
+    const wrapper = mount(SettingsMonitorConfigView)
+    await flush()
+
+    const gated = wrapper.find('[data-testid="settings-monitor-permission-denied"]')
+    expect(gated.exists()).toBe(true)
+    expect(gated.text()).toContain('managed at the instance level')
+    expect(wrapper.text()).not.toContain('system.config.manage')
+    expect(getMock).not.toHaveBeenCalled()
+  })
+
+  it('still loads when the config permission is known to be present', async () => {
+    const planStore = usePlanStore()
+    planStore.userPermissions = ['system.config.manage']
+    planStore.permissionsSource = 'server'
+    const wrapper = mount(SettingsMonitorConfigView)
+    await flush()
+
+    expect(getMock).toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="settings-monitor-permission-denied"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Built-in (DB)')
   })
 
   it('a load failure shows the error with a working Retry button', async () => {

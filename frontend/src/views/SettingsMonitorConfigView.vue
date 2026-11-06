@@ -22,7 +22,7 @@
              informational unavailable pattern instead of the raw permission
              exception; authorization stays enforced by the backend (FAR-2394). -->
         <div
-          v-else-if="permissionDenied"
+          v-else-if="permissionDenied || (permissionsKnown && !canManage)"
           class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm"
           data-testid="settings-monitor-permission-denied"
           aria-live="assertive"
@@ -98,7 +98,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
@@ -110,8 +110,17 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import DataCard from '../components/ui/DataCard.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import Button from 'primevue/button'
+import { usePlanStore } from '../stores/planStore'
 
 const { t } = useI18n()
+const planStore = usePlanStore()
+// When the plan bootstrap has already resolved the caller's permissions, the
+// absence of `system.config.manage` is known up front: render the informational
+// state instead of firing a request the backend is guaranteed to refuse. When
+// permissions are not yet known the request still runs and the 403 handler
+// below covers the denial (FAR-2394).
+const permissionsKnown = computed(() => planStore.permissionsSource === 'server')
+const canManage = computed(() => planStore.userPermissions.includes('system.config.manage'))
 
 interface BackendField {
   key: string
@@ -316,7 +325,10 @@ function reset() {
   void load()
 }
 
-onMounted(load)
+onMounted(() => {
+  if (permissionsKnown.value && !canManage.value) return
+  void load()
+})
 
 onBeforeUnmount(() => {
   if (flashTimer) clearTimeout(flashTimer)
