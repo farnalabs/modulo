@@ -40,6 +40,7 @@ async function startLocalSsoBackend(): Promise<SsoBackendProcess> {
       MODULO_FRONTEND_URL: getLocalE2eBaseUrl(),
       MODULO_MULTI_ORG_ENABLED: 'false',
       MODULO_AUTH_RATE_LIMIT_ENABLED: 'false',
+      MODULO_REDIS_URL: 'redis://127.0.0.1:0/0',
     },
   })
   child.stdout?.on('data', (chunk) => process.stderr.write(`[sso-fixture] ${chunk}`))
