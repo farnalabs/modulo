@@ -181,6 +181,47 @@ describe('DashboardSystemOverview', () => {
     expect(mockPush).not.toHaveBeenCalled()
   })
 
+  it('dismisses the inline discovery error on request', async () => {
+    const { wrapper, store } = mountOverview()
+    store.accessLoaded = true
+    store.systemMapsEnabled = true
+    vi.spyOn(store, 'discover').mockRejectedValue(new Error('discovery failed'))
+    await wrapper.vm.$nextTick()
+
+    await wrapper.get('[data-testid="dashboard-system-discover"]').trigger('click')
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="dashboard-system-discover-error"]').exists()).toBe(true),
+    )
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+
+    expect(wrapper.find('[data-testid="dashboard-system-discover-error"]').exists()).toBe(false)
+  })
+
+  it('ignores a second discovery click while the first is still in flight', async () => {
+    const { wrapper, store } = mountOverview()
+    store.accessLoaded = true
+    store.systemMapsEnabled = true
+    let resolveDiscover: (value: unknown) => void = () => {}
+    const discover = vi.spyOn(store, 'discover').mockReturnValue(
+      new Promise((resolve) => {
+        resolveDiscover = resolve
+      }) as never,
+    )
+    mockPush.mockResolvedValue(undefined)
+    await wrapper.vm.$nextTick()
+
+    const button = wrapper.get('[data-testid="dashboard-system-discover"]')
+    // Both clicks dispatch synchronously, before the first click's load state
+    // has re-rendered — the guard must reject the duplicate.
+    await Promise.all([button.trigger('click'), button.trigger('click')])
+
+    expect(discover).toHaveBeenCalledTimes(1)
+
+    resolveDiscover({ draft_map_id: 'map-1' })
+    await vi.waitFor(() => expect(mockPush).toHaveBeenCalledWith('/system-maps/map-1?discovery=1'))
+  })
+
   it('renders observed metrics with interpolated window, rates and localized health', async () => {
     const { wrapper, store } = mountOverview()
     store.overview = overview as never
