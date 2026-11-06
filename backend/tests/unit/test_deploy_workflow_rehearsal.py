@@ -553,6 +553,16 @@ def test_bundle_release_includes_postgres_runtime_data_for_initdb() -> None:
     assert 'export PATH="$BUNDLE_ROOT/runtime/bin:$BUNDLE_ROOT/pg/bin:$BUNDLE_ROOT/redis' in workflow_text
 
 
+def test_bundled_pg_major_matches_shared_bundle_versions() -> None:
+    from modulo.launcher.initdb import PG_MAJOR
+
+    env_text = (REPO_ROOT / "scripts" / "bundle-versions.env").read_text(encoding="utf-8")
+    pins = dict(
+        line.split("=", 1) for line in env_text.splitlines() if "=" in line and not line.lstrip().startswith("#")
+    )
+    assert pins["PG_MAJOR"] == PG_MAJOR
+
+
 def test_bundle_release_verifies_generated_signature_before_upload() -> None:
     workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "bundle-release.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["bundle"]["steps"]
