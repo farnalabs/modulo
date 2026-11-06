@@ -63,6 +63,7 @@ from modulo.core.pipeline_engine.error_codes import class_for
 from modulo.db.crud.run import update_run_status
 from modulo.db.models.base import Base
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
 from tests.unit._store_seed import seed_run_blobs
@@ -1126,6 +1127,9 @@ _TABLES: list[Table] = cast(
         # ``benign_signatures`` config inside the same transaction, so the
         # pipeline table must exist for the end-to-end config-wiring test.
         Pipeline.__table__,
+        # FAR-1274: the terminal hook's delivery-contract enforcement reads the
+        # run's frozen snapshot before scanning persisted PR evidence.
+        PipelineSnapshot.__table__,
     ],
 )
 
@@ -2448,28 +2452,49 @@ class TestBenignConfigWiring:
         engine: AsyncEngine,
         session: AsyncSession,
     ) -> None:
-        """The real classification persistence boundary keeps evidence on benign failures.
+        """The production terminalization hook keeps evidence on benign failures.
 
-        This exercises ``classify_and_persist_run`` with the stored pipeline
-        configuration and the run-node-output store, rather than calling the
-        pure classifier alone. The benign verdict must remain fail-closed as a
-        business outcome while the PR evidence survives in the persisted record.
+        This routes a running run through ``update_run_status`` so the test proves
+        the shared CRUD terminalizer invokes the classification hook, rather than
+        calling ``classify_and_persist_run`` directly. The benign verdict must
+        remain fail-closed as a business outcome while the PR evidence survives
+        in the persisted record.
         """
+        from modulo.db.rls import set_rls_org
+
         run_id = uuid.uuid4()
         async with session.begin():
             await self._seed_pipeline(session, signatures=_MERGE_QUEUE_SIGNATURES)
-            run = await _seed_run(
+            session.add(
+                PipelineSnapshot(
+                    id=_SNAPSHOT,
+                    organisation_id=_ORG,
+                    pipeline_id=_PIPELINE,
+                    snapshot_version=1,
+                    graph_json={"nodes": []},
+                    connector_bindings_json=[],
+                    schema_pins_json=[],
+                    prompt_pins_json=[],
+                    model_backend_pins_json=[],
+                    config_json={},
+                    run_context_defaults={},
+                )
+            )
+            await _seed_run(session, run_id, outputs=None, telemetry=None, error_code=None)
+            await set_rls_org(session, _ORG)
+            updated = await update_run_status(
                 session,
                 run_id,
-                status="failed",
-                outputs={"builder": _node_return_with_pr(_PR)},
-                telemetry={"builder": {"agent_status": "completed"}},
+                "failed",
                 error_code="agent.failed",
+                error_detail="Rebase conflict",
+                outputs_json={"builder": _node_return_with_pr(_PR)},
+                node_telemetry_json={"builder": {"agent_status": "completed"}},
             )
-            run.error_detail = "Rebase conflict"
-            await session.flush()
-            assert await classify_and_persist_run(session, run) is True
 
+        assert updated is not None
+        assert updated.status == "failed"
+        assert updated.error_detail == "Rebase conflict"
         record = await _read_classification(engine, run_id)
         assert record is not None
         assert record["value"] == "benign"
