@@ -713,6 +713,7 @@ def test_evict_waits_for_inflight_compile_and_discards_result():
     assert get_or_compile(pid, sid, lambda: "fresh") == "fresh"
 
 
+<<<<<<< HEAD
 def test_queued_waiter_cannot_repopulate_after_eviction():
     """A queued waiter must compile after eviction, not publish stale state."""
     pid, sid = uuid.uuid4(), uuid.uuid4()
@@ -773,6 +774,8 @@ def test_queued_waiter_cannot_repopulate_after_eviction():
     assert get_or_compile(pid, sid, lambda: "fresh") == "fresh"
 
 
+=======
+>>>>>>> c47fbae29 (fix: synchronize graph cache concurrency)
 def test_inner_cache_check_returns_prepopulated_value():
     """The lock-guarded double-check serves a value another writer cached
     between the outer fast-path check and lock acquisition."""
