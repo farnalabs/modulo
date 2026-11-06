@@ -474,7 +474,11 @@ _UNGUARDED_SITES: set[tuple[str, str]] = {
     ("core/pipeline_engine/executor.py", "_check_policy_gate_pin"),
     ("core/pipeline_engine/executor.py", "_check_spend_ceiling_gate"),
     ("core/pipeline_engine/executor.py", "_claim_run_and_audit"),
-    ("core/pipeline_engine/executor.py", "resume"),
+    # FAR-366 refactor moved the resume first-transaction body (including the
+    # "running" status write) out of ``resume`` into ``_resume_load_and_validate``;
+    # the write still sends status + claimed_by only — no outputs/telemetry — so
+    # it remains a no-blobs site needing no guard.
+    ("core/pipeline_engine/executor.py", "_resume_load_and_validate"),
     ("core/dispatch.py", "_org_capacity_deferred"),
     # FAR-1831: the capacity-defer reset writes only status + the claim refund
     # (no outputs_json/node_telemetry_json kwargs) — a no-blobs site, so no
