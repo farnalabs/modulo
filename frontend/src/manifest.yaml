@@ -1078,6 +1078,12 @@ elements:
       - testid: system-map-overview-content
         type: element
         dynamic_testid: false
+      - testid: dashboard-system-discover
+        type: button
+        dynamic_testid: false
+      - testid: dashboard-system-discover-error
+        type: element
+        dynamic_testid: false
       - testid: system-map-overview-loading
         type: element
         dynamic_testid: false
@@ -2902,6 +2908,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: lock-icon
+        type: element
+        dynamic_testid: false
+      - testid: settings-monitor-permission-denied
         type: element
         dynamic_testid: false
     /admin/users:

@@ -61,10 +61,11 @@ grep -rn 'with_for_update='  backend/src/modulo --include='*.py' | wc -l   #  5 
 #     hit count as the locking-site count (see the note below the command):
 grep -rn 'FOR UPDATE' backend/src/modulo --include='*.py' \
   | grep -E '"[^"]*FOR UPDATE|sql_text\(' | grep -v '^\s*#'
-# 6 hits (re-measured at this branch tip): 2 LOCKING DML sites (core/runner_capacity.py:555,
-# core/pipeline_engine/node_runner.py:3046), 1 non-locking DDL clause (§4), and
-# 3 docstring/prose mentions (db/crud/account.py, core/trigger_engine/__init__.py,
-# and the FAR-1914 premise docstring in core/cron_helpers.py)
+# 7 hits (re-measured at this branch tip): 2 LOCKING DML sites (core/runner_capacity.py:497,
+# core/pipeline_engine/node_runner.py:3090), 1 non-locking DDL clause (§4), and
+# 4 docstring/prose mentions (db/crud/account.py, core/trigger_engine/__init__.py,
+# the FAR-1914 premise docstring in core/cron_helpers.py, and the
+# core/runner_capacity.py:490 docstring above the locking site)
 ```
 
 Cross-check: a full `grep -rn 'with_for_update' backend/src/modulo --include='*.py'`

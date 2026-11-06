@@ -541,6 +541,28 @@ def test_release_signing_derives_key_id_from_current_slot() -> None:
     assert "Merely changing the secret while CURRENT remains the old key" in manifest_source
 
 
+def test_bundle_release_includes_postgres_runtime_data_for_initdb() -> None:
+    workflow_text = BUNDLE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'mkdir -p "$BUNDLE/pg/share/postgresql/${PG_MAJOR}"' in workflow_text
+    assert (
+        'cp -a debx/pg-server/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/"'
+        in workflow_text
+    )
+    assert 'test -f "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/postgres.bki"' in workflow_text
+    assert 'export PATH="$BUNDLE_ROOT/runtime/bin:$BUNDLE_ROOT/pg/bin:$BUNDLE_ROOT/redis' in workflow_text
+
+
+def test_bundled_pg_major_matches_shared_bundle_versions() -> None:
+    from modulo.launcher.initdb import PG_MAJOR
+
+    env_text = (REPO_ROOT / "scripts" / "bundle-versions.env").read_text(encoding="utf-8")
+    pins = dict(
+        line.split("=", 1) for line in env_text.splitlines() if "=" in line and not line.lstrip().startswith("#")
+    )
+    assert pins["PG_MAJOR"] == PG_MAJOR
+
+
 def test_bundle_release_verifies_generated_signature_before_upload() -> None:
     workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "bundle-release.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["bundle"]["steps"]

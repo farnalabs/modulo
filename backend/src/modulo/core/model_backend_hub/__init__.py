@@ -411,7 +411,9 @@ async def _resolve_backend_credentials(row: Any, secrets_backend: SecretsBackend
             # error instead: the message names the backend, the provider
             # and the remedy, and the handler logs it once per
             # process rather than once per run.
-            raise BackendCredentialsMissingError(row.id, provider=getattr(row, "provider", "") or "") from None
+            provider = _row_provider(row)
+            _require_stored_credentials_unless_local(row, provider)
+            raw_str = "{}"
     try:
         raw_creds: Any = json.loads(raw_str)
     except json.JSONDecodeError as exc:
@@ -422,6 +424,21 @@ async def _resolve_backend_credentials(row: Any, secrets_backend: SecretsBackend
         return None
     creds: dict[str, Any] = raw_creds
     return creds
+
+
+def _row_provider(row: Any) -> str:
+    """Return the row's provider name, normalised for comparison and logging."""
+    return str(getattr(row, "provider", "") or "").lower()
+
+
+def _require_stored_credentials_unless_local(row: Any, provider: str) -> None:
+    """Raise when a provider needs credentials that are not stored.
+
+    Credential-free local adapters (``_NO_CREDENTIALS_REQUIRED_PROVIDERS``)
+    are allowed to register with an empty credential payload instead.
+    """
+    if provider not in _NO_CREDENTIALS_REQUIRED_PROVIDERS:
+        raise BackendCredentialsMissingError(row.id, provider=provider) from None
 
 
 def _instantiate_backend(row: Any, creds: dict[str, Any]) -> ModelBackendBase:
@@ -548,6 +565,15 @@ _API_KEY_REQUIRED_PROVIDERS: frozenset[str] = frozenset(
         "mistral",
         "watsonx",
     }
+)
+
+# Local OpenAI-compatible servers do not need an API key.  Their rows can be
+# created with an empty credential payload, so hub initialisation must still
+# register them for the runtime path.  Keep this explicit rather than treating
+# every provider outside ``_API_KEY_REQUIRED_PROVIDERS`` as credential-free:
+# some adapters accept optional credentials today but may require them later.
+_NO_CREDENTIALS_REQUIRED_PROVIDERS: frozenset[str] = frozenset(
+    {"jan", "llamacpp", "lm_studio", "localai", "ollama", "tgi", "vllm"}
 )
 
 
