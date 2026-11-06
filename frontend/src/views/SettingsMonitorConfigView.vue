@@ -13,8 +13,13 @@
           {{ $t('views.SettingsMonitorConfigView.explainer') }}
         </DataCard>
 
-        <div v-if="loading" class="flex items-center justify-center h-32">
+        <div v-if="!permissionsLoaded || loading" class="flex items-center justify-center h-32" aria-live="polite">
           <span class="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full" />
+        </div>
+
+        <div v-else-if="!canManage" class="rounded-lg border border-primary/30 bg-primary/5 p-4 text-sm" aria-live="polite">
+          <p class="font-medium text-foreground">{{ $t('views.SettingsMonitorConfigView.permission_denied_title') }}</p>
+          <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsMonitorConfigView.permission_denied_description') }}</p>
         </div>
 
         <div v-else-if="error" class="flex flex-col items-center justify-center h-32 gap-3">
@@ -84,7 +89,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
@@ -96,8 +101,12 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import DataCard from '../components/ui/DataCard.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import Button from 'primevue/button'
+import { usePlanStore } from '../stores/planStore'
 
 const { t } = useI18n()
+const planStore = usePlanStore()
+const permissionsLoaded = computed(() => planStore.permissionsSource !== 'none')
+const canManage = computed(() => planStore.userPermissions.includes('system.config.manage'))
 
 interface BackendField {
   key: string
@@ -285,7 +294,10 @@ function reset() {
   void load()
 }
 
-onMounted(load)
+onMounted(async () => {
+  await planStore.fetchPermissions()
+  if (canManage.value) await load()
+})
 
 onBeforeUnmount(() => {
   if (flashTimer) clearTimeout(flashTimer)

@@ -54,7 +54,7 @@
               :title="$t('views.AdminCostBreakdownView.no_team_cost_data_available')"
               data-testid="cost-team-empty"
             />
-            <div v-else class="overflow-x-auto" data-testid="cost-team-table">
+            <div v-else class="overflow-x-auto p-6" data-testid="cost-team-table">
               <DataTable
                 :columns="[
                   { key: 'entity_name', label: $t('views.AdminCostBreakdownView.team') },

@@ -707,6 +707,7 @@ describe('AdminCostBreakdownView', () => {
     const table = wrapper.find('[data-testid="cost-team-table"]')
     expect(table.text()).toContain('Alpha')
     expect(table.text()).toContain('250.00')
+    expect(table.classes()).toContain('p-6')
 
     const unattributed = wrapper.find('[data-testid="cost-team-unattributed"]')
     expect(unattributed.exists()).toBe(true)

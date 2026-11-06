@@ -69,6 +69,7 @@ vi.mock('vue-router', async () => {
 })
 
 import AdminErrorsView from '../views/AdminErrorsView.vue'
+import PageTabs from '../components/PageTabs.vue'
 import { api } from '../lib/api/client'
 
 function mountView() {
@@ -128,6 +129,15 @@ describe('AdminErrorsView', () => {
     await nextTick()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('No error groups found')
+    wrapper.unmount()
+  })
+
+  it('does not render a redundant one-tab page navigation strip (FAR-2394)', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.findComponent(PageTabs).exists()).toBe(false)
     wrapper.unmount()
   })
 

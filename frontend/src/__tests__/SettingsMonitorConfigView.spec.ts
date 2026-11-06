@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
+import { usePlanStore } from '../stores/planStore'
 
 const { getMock, putMock, loadBackendsMock, getErrorTrackerMock } = vi.hoisted(() => ({
   getMock: vi.fn(),
@@ -48,6 +49,9 @@ describe('SettingsMonitorConfigView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    const planStore = usePlanStore()
+    planStore.userPermissions = ['system.config.manage']
+    planStore.permissionsSource = 'server'
     getMock.mockResolvedValue({ data: { backends: ['builtin'] }, error: undefined })
     putMock.mockResolvedValue({ data: { backends: ['builtin'] }, error: undefined })
     loadBackendsMock.mockResolvedValue([])
@@ -92,6 +96,18 @@ describe('SettingsMonitorConfigView', () => {
     await flush()
 
     expect((toggles(wrapper)[0].element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('shows the established informational state when the system config permission is absent', async () => {
+    const planStore = usePlanStore()
+    planStore.userPermissions = []
+    const wrapper = mount(SettingsMonitorConfigView)
+    await flush()
+
+    expect(wrapper.find('[data-testid="settings-monitor-config-permission-denied"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Monitoring configuration access is restricted')
+    expect(wrapper.text()).not.toContain('system.config.manage')
+    expect(getMock).not.toHaveBeenCalled()
   })
 
   it('a load failure shows the error with a working Retry button', async () => {

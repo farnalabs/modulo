@@ -4,9 +4,6 @@
     <PageHeader
       :title="$t('views.AdminErrorsView.error_dashboard')"
       :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')"
-      :tabs="[
-        { label: $t('views.AdminErrorsView.dashboard'), to: '/admin/errors' },
-      ]"
     />
 
     <!-- Instance scope (FAR-1547): system admins can switch the dashboard to
