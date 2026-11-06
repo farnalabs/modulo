@@ -8,6 +8,8 @@ handlers remain the production implementations used by the browser journey.
 from __future__ import annotations
 
 import argparse
+import base64
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -148,7 +150,7 @@ async def _process_callback(
         raise ValueError("fixture IdP rejected authorization code")
     if code != "ci-auth-code":
         raise ValueError("fixture IdP rejected authorization code")
-    return {"access_token": _FIXTURE_ACCESS_TOKEN, "refresh_token": _FIXTURE_REFRESH_TOKEN}
+    return {"access_token": _fixture_access_token(), "refresh_token": _FIXTURE_REFRESH_TOKEN}
 
 
 async def _fixture_idp_authorize(request: Request) -> RedirectResponse | PlainTextResponse:
@@ -160,7 +162,27 @@ async def _fixture_idp_authorize(request: Request) -> RedirectResponse | PlainTe
     code = "ci-invalid-code" if mode == "failure" else "ci-auth-code"
     separator = "&" if "?" in redirect_uri else "?"
     location = f"{redirect_uri}{separator}code={code}&state={state}"
-    return RedirectResponse(location=location, status_code=303)
+    return RedirectResponse(url=location, status_code=303)
+
+
+def _fixture_access_token() -> str:
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode()).decode().rstrip("=")
+    payload = (
+        base64.urlsafe_b64encode(
+            json.dumps(
+                {
+                    "sub": _FIXTURE_EMAIL,
+                    "org_id": "00000000-0000-0000-0000-000000000001",
+                    "account_id": "00000000-0000-0000-0000-000000000002",
+                    "org_role": "admin",
+                    "is_system_admin": False,
+                }
+            ).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+    return f"{header}.{payload}.fixture-signature"
 
 
 def _install_fixture() -> None:
