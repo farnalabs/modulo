@@ -48,6 +48,15 @@ _LOCAL_COMPOSE = _REPO_ROOT / "docker-compose.local.yml"
 #: Both documented bring-up paths: the root demo stack and the local-dev stack.
 _COMPOSE_FILES = (_ROOT_COMPOSE, _LOCAL_COMPOSE)
 
+#: Every service that can initialise or execute a model backend must receive the
+#: same optional SSRF policy. The root compose includes the API; the local
+#: compose runs the API on the host and only containers need the worker setting.
+_MODEL_BACKEND_SERVICES = {
+    _ROOT_COMPOSE: ("backend", "saq-runner", "saq-system"),
+    _LOCAL_COMPOSE: ("saq-runner", "saq-system"),
+}
+_SSRF_ALLOWLIST_REF = "${SSRF_ALLOW_PRIVATE_RANGES:-}"
+
 #: The two values that shipped and broke each path (FAR-2181). Kept as data so
 #: the "a fixed literal cannot work" proof cannot silently rot into asserting
 #: nothing.
@@ -91,6 +100,36 @@ def test_every_service_passes_a_required_fernet_key(path: Path):
         "Settings only checks the length - so the stack boots and then fails on the first "
         "credential write (FAR-2181). Use ${FERNET_KEY:?<how to generate it>}."
     )
+
+
+@pytest.mark.parametrize("path", _COMPOSE_FILES, ids=lambda p: p.name)
+def test_model_backend_services_share_the_optional_ssrf_allowlist(path: Path) -> None:
+    """Host-local model opt-in reaches every container that can use a backend."""
+    services = _load(path).get("services", {})
+    expected = _MODEL_BACKEND_SERVICES[path]
+    missing = [
+        service
+        for service in expected
+        if services.get(service, {}).get("environment", {}).get("SSRF_ALLOW_PRIVATE_RANGES") != _SSRF_ALLOWLIST_REF
+    ]
+
+    assert not missing, (
+        f"{path.name} must pass {_SSRF_ALLOWLIST_REF!r} to model-backend services "
+        f"{expected}; missing or mismatched services: {missing}"
+    )
+
+
+@pytest.mark.parametrize("path", _COMPOSE_FILES, ids=lambda p: p.name)
+def test_compose_ssrf_allowlist_does_not_disable_protection(path: Path) -> None:
+    """Compose must not ship a wildcard or a broad SSRF bypass."""
+    services = _load(path).get("services", {})
+    values = [
+        services[service].get("environment", {}).get("SSRF_ALLOW_PRIVATE_RANGES")
+        for service in _MODEL_BACKEND_SERVICES[path]
+    ]
+
+    assert all(value == _SSRF_ALLOWLIST_REF for value in values)
+    assert "0.0.0.0/0" not in values
 
 
 @pytest.mark.parametrize("path", _COMPOSE_FILES, ids=lambda p: p.name)
