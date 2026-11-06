@@ -83,6 +83,15 @@ describe('CostComponentsView', () => {
     expect(wrapper.find('header.page-header [data-testid="cost-components-add"]').exists()).toBe(true)
   })
 
+  it('keeps ordinary Costs typography on the product font while retaining technical value scopes', async () => {
+    const wrapper = await mountView()
+
+    const page = wrapper.get('.page-wide')
+    expect(page.classes()).not.toContain('font-sans')
+    expect(page.get('h1[data-page-heading]').classes()).not.toContain('font-mono')
+    expect(page.find('.font-mono').exists()).toBe(true)
+  })
+
   it('displays component rows with kind, rate and formula', async () => {
     const wrapper = await mountView()
     expect(wrapper.text()).toContain('LLM Tokens')
