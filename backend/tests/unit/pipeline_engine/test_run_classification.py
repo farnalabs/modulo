@@ -323,7 +323,7 @@ class TestPrUrlSources:
 
     def test_failed_with_pr_url_from_markers_is_still_no_delivery(self) -> None:
         # A failed run is COUNTABLE no_delivery regardless of any pr_url
-        # evidence (the pr_url matters only for the complete verdict).
+        # evidence, but the observed URL must remain durable evidence.
         result = classify_run(
             "failed",
             "node.cancelled",
@@ -332,6 +332,20 @@ class TestPrUrlSources:
             raw_output_markers=_markers(_PR),
         )
         assert result.value == RunClassificationValue.no_delivery
+        assert result.delivered_pr_urls == (_PR,)
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_MATCHED}
+
+    def test_failed_with_pr_url_in_node_return_retains_declared_evidence(self) -> None:
+        """A missing terminal envelope must not erase a valid observed return."""
+        result = classify_run(
+            "failed",
+            "node_deadline_exceeded",
+            outputs_json={"builder": _node_return_with_pr(_PR)},
+            telemetry_json={"builder": {"agent_status": "completed"}},
+        )
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.delivered_pr_urls == (_PR,)
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_DECLARED}
 
 
 class TestDeliveryProvenance:

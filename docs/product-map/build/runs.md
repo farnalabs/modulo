@@ -241,8 +241,13 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       carry the deprecated `self_reported` alias, are never backfilled, and
       readers tolerate either spelling (that old spelling must not be confused
       with the unrelated cost-provenance `self_reported` component kind).
-      Both keys are ADDITIVE metadata – they
-      never change the verdict – and the eight-key shape is forward-only:
+       Both keys are ADDITIVE metadata – they
+       never change the verdict. This retention also applies when a run fails
+       before a final node envelope is written: URLs observed in the stored
+       return/telemetry/marker evidence remain attached to the countable
+       `no_delivery` record, with their provenance unchanged. The eight-key
+       shape is forward-only:
+
       pre-FAR-1336 six-key rows are never backfilled and readers treat an absent
       key as legacy/unknown, never an error (`classify.py`, `test_run_classification.py`)
 - [x] Run detail serializes the stored classification record and the derived
