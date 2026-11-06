@@ -96,6 +96,7 @@ __all__ = [
     "CRITICAL_RUNG",
     "NOTICE_RUNG",
     "SATURATION_RUNG",
+    "UNHEALTHY_SUSTAIN_SECONDS",
     "WARNING_RUNG",
     "build_candidates",
     "evaluate_capacity_alerts",
@@ -142,6 +143,12 @@ SATURATION_RUNG = WARNING_RUNG
 CRITICAL_MIN_DEPTH = 3
 # Warning fires once the oldest pending run has waited this long.
 WARNING_OLDEST_PENDING_SECONDS = 600
+# Queue/backpressure warnings are unhealthy signals, not instantaneous failures.
+# Require one sustained window (five 60-second reconcile ticks) before the first
+# warning-class notification, so a transient health bounce does not produce a
+# warning followed by a recovery notification. Escalations after an alert opens
+# remain immediate, and the existing saturation sustain clock is unchanged.
+UNHEALTHY_SUSTAIN_SECONDS = 300
 # A notice requires at least this much depth (the low watermark).
 NOTICE_MIN_DEPTH = 1
 # Saturation must be continuously held this long before it alerts — a momentary
@@ -176,6 +183,8 @@ _STATE_TTL_SECONDS = 7 * 24 * 60 * 60
 # condition is merely "held but not yet sustained", whereas the alert state
 # itself must not exist until the alert fires.
 _SATURATION_MARKER = "saturation_marker"
+# Queue-pressure warnings need a sustained unhealthy episode before opening.
+_QUEUE_UNHEALTHY_MARKER = "queue_unhealthy_marker"
 
 
 @dataclass(frozen=True)
@@ -637,6 +646,46 @@ def _candidate_label(candidate: Candidate, subject: str) -> str:
     return subject
 
 
+def _needs_unhealthy_sustain(candidate: Candidate) -> bool:
+    """Whether a candidate is a queue/backpressure unhealthy episode."""
+    return candidate.rung >= WARNING_RUNG and candidate.subject.startswith(
+        (f"{_SUBJECT_QUEUE}:", f"{_SUBJECT_BACKPRESSURE}:")
+    )
+
+
+async def _hold_unsustained_unhealthy_candidates(
+    redis_client: AsyncRedis,
+    *,
+    org_id: uuid.UUID,
+    candidates: dict[str, Candidate],
+    now: datetime,
+) -> None:
+    """Suppress first unhealthy notifications until the episode is sustained.
+
+    Existing warning/critical alerts remain actionable immediately: only a
+    subject without an already-open warning-or-worse state starts a sustain
+    clock. This leaves notice events and recovery/escalation semantics intact.
+    """
+    for subject, candidate in list(candidates.items()):
+        if not _needs_unhealthy_sustain(candidate):
+            continue
+        alert_state = await _read_state(redis_client, _state_key(org_id, subject))
+        if (_state_rung(alert_state) or CLEAR_RUNG) >= NOTICE_RUNG:
+            await _delete_state(redis_client, _state_key(org_id, f"{_QUEUE_UNHEALTHY_MARKER}:{subject}"))
+            continue
+        marker_key = _state_key(org_id, f"{_QUEUE_UNHEALTHY_MARKER}:{subject}")
+        marker = await _read_state(redis_client, marker_key)
+        started = _state_at(marker)
+        if started is None:
+            await _write_state(redis_client, marker_key, rung=CLEAR_RUNG, label=subject, now=now)
+            candidates.pop(subject)
+            continue
+        if (now - started).total_seconds() < UNHEALTHY_SUSTAIN_SECONDS:
+            candidates.pop(subject)
+            continue
+        await _delete_state(redis_client, marker_key)
+
+
 async def _apply_subject(
     redis_client: AsyncRedis,
     notifier: Any,
@@ -719,6 +768,15 @@ async def _apply_org_candidates(
     """
     open_key = _open_key(org_id)
     open_subjects = {_decode(raw) for raw in await redis_client.smembers(open_key)}
+    current = set(candidates)
+    marker_prefix = f"{_state_key(org_id, _QUEUE_UNHEALTHY_MARKER)}:"
+    async for raw_marker_key in redis_client.scan_iter(match=f"{marker_prefix}*"):
+        marker_key = _decode(raw_marker_key)
+        marked_subject = marker_key[len(marker_prefix) :]
+        if marked_subject not in current:
+            await _delete_state(redis_client, marker_key)
+
+    await _hold_unsustained_unhealthy_candidates(redis_client, org_id=org_id, candidates=candidates, now=now)
     current = set(candidates)
 
     for subject in sorted(open_subjects - current):

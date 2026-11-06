@@ -554,6 +554,50 @@ async def test_sweep_skips_without_redis() -> None:
     assert summary["dispatched"] == 0
 
 
+async def test_sweep_does_not_alert_for_a_transient_unhealthy_bounce(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+) -> None:
+    """A warning must stay unhealthy for the sustain window before opening."""
+    redis, notifier, state = sweep_env
+    pid = uuid.uuid4()
+    org_id = uuid.uuid4()
+    unhealthy = _report(
+        pending_by_pipeline=[_pipeline(pid, count=4, oldest=900.0)],
+        pending_total=4,
+    )
+    state["report"] = unhealthy
+
+    await _run(redis, notifier, org_id, _NOW)
+    assert not notifier.events
+
+    # A healthy tick clears the pending sustain marker, but has no open alert to
+    # recover. The next unhealthy episode starts a new clock.
+    state["report"] = _report(pending_total=0)
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
+    state["report"] = unhealthy
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=2))
+    assert not notifier.events
+
+
+async def test_sweep_alerts_after_a_sustained_unhealthy_episode(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+) -> None:
+    redis, notifier, state = sweep_env
+    pid = uuid.uuid4()
+    org_id = uuid.uuid4()
+    state["report"] = _report(
+        pending_by_pipeline=[_pipeline(pid, count=4, oldest=900.0)],
+        pending_total=4,
+    )
+
+    await _run(redis, notifier, org_id, _NOW)
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS - 1))
+    assert not notifier.events
+
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS))
+    assert [event[1] for event in notifier.events] == ["queue_pressure_warning"]
+
+
 async def test_sweep_fires_once_then_suppresses_identical_tick(
     sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
 ) -> None:
@@ -566,11 +610,14 @@ async def test_sweep_fires_once_then_suppresses_identical_tick(
     )
 
     await _run(redis, notifier, org_id, _NOW)
+    assert not notifier.events
+
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS))
     first = [e[1] for e in notifier.events]
     assert first == ["queue_pressure_warning"]
 
     # The same observation one tick later must NOT re-notify.
-    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=6))
     assert [e[1] for e in notifier.events] == first
 
 
@@ -614,10 +661,11 @@ async def test_sweep_auto_clears_on_drain(
         pending_total=4,
     )
     await _run(redis, notifier, org_id, _NOW)
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS))
 
     # The queue drains: the pipeline disappears from the report entirely.
     state["report"] = _report(pending_total=0)
-    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=6))
 
     assert [e[1] for e in notifier.events] == ["queue_pressure_warning", "capacity_recovered"]
 
@@ -697,6 +745,7 @@ async def test_sweep_backpressure_candidate_notifies(
     ca._add_backpressure_candidates.side_effect = _hit  # type: ignore[attr-defined]
     state["report"] = _report(pending_by_pipeline=[_pipeline(pid, count=9)], pending_total=9)
     await _run(redis, notifier, org_id, _NOW)
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS))
 
     assert [e[1] for e in notifier.events] == ["capacity_backpressure"]
     payload = notifier.events[0][2]
@@ -816,6 +865,12 @@ async def test_sweep_recovers_and_re_alerts_after_a_full_drain_without_injected_
         notifier=notifier,
         now=_NOW,  # type: ignore[arg-type]
     )
+    await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,
+        notifier=notifier,
+        now=_NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS),
+    )
     assert [e[1] for e in notifier.events] == ["queue_pressure_critical"]
 
     # The org's last pending run starts: the pending-run scan no longer sees it.
@@ -842,7 +897,13 @@ async def test_sweep_recovers_and_re_alerts_after_a_full_drain_without_injected_
         factory=AsyncMock(),
         redis_client=redis,  # type: ignore[arg-type]
         notifier=notifier,
-        now=_NOW + timedelta(minutes=2),
+        now=_NOW + timedelta(minutes=6),
+    )
+    await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,  # type: ignore[arg-type]
+        notifier=notifier,
+        now=_NOW + timedelta(minutes=11),
     )
     assert [e[1] for e in notifier.events] == [
         "queue_pressure_critical",
@@ -873,6 +934,7 @@ async def test_sweep_backpressure_evaluation_failure_does_not_recover(
     ca._add_backpressure_candidates.side_effect = _hit
     state["report"] = _report(pending_by_pipeline=[_pipeline(pid, count=9)], pending_total=9)
     await _run(redis, notifier, org_id, _NOW)
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS))
     assert [e[1] for e in notifier.events] == ["capacity_backpressure"]
 
     # The evaluation itself fails while the queue is unchanged.
@@ -915,6 +977,7 @@ async def test_sweep_backpressure_truncation_does_not_recover(
 
     ca._add_backpressure_candidates.side_effect = _hit
     await _run(redis, notifier, org_id, _NOW)
+    await _run(redis, notifier, org_id, _NOW + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS))
     assert [e[1] for e in notifier.events] == ["capacity_backpressure"]
 
     # Truncated read: the alerted subject is beyond the checked window.
