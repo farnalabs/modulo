@@ -711,13 +711,11 @@ async function copyCallbackUrl() {
     copySuccess.value = true
     scheduleCopyReset()
   } catch {
-    // Fallback for non-secure contexts
-    const textarea = document.createElement('textarea')
-    textarea.value = props.callbackUrl
-    document.body.appendChild(textarea)
-    textarea.select()
-    document.execCommand('copy')
-    textarea.remove()
+    // Fallback for browsers that reject writeText but still expose the
+    // supported ClipboardItem API.
+    if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) return
+    const blob = new Blob([props.callbackUrl], { type: 'text/plain' })
+    await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })])
     copySuccess.value = true
     scheduleCopyReset()
   }
