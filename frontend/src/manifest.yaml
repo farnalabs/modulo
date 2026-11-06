@@ -6544,6 +6544,9 @@ elements:
       - testid: sso-callback-url-copied
         type: element
         dynamic_testid: false
+      - testid: sso-callback-url-copy-failed
+        type: element
+        dynamic_testid: false
       - testid: sso-tenant-domain
         type: input
         dynamic_testid: false
