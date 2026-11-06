@@ -66,6 +66,7 @@ test.describe('Login Flow', () => {
     await expect(page.getByTestId('login-submit')).toBeVisible()
   })
 
+<<<<<<< HEAD
   test('completes unauthenticated SSO login through the production callback route', { tag: '@regression' }, async ({ page, env, localSsoBackend }) => {
     test.skip(env.name !== 'local', 'Uses a deterministic local IdP seam; staging uses its real provider configuration')
     void localSsoBackend
@@ -85,11 +86,55 @@ test.describe('Login Flow', () => {
     await expect(page.context().cookies()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ name: '__Host-modulo_oidc_flow' })]))
 
     await page.waitForURL(/\/auth\/callback$/)
+=======
+  test('completes unauthenticated SSO login through a deterministic IdP callback seam', { tag: '@regression' }, async ({ page, env }) => {
+    test.skip(env.name !== 'local', 'Uses a deterministic local IdP seam; staging uses its real provider configuration')
+
+    await setupLocalMockApi(page)
+    await page.route('**/api/v1/auth/login-context', (route) =>
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ multi_org: false, org: { name: 'Acme', slug: 'default' } }),
+      }),
+    )
+    await page.route('**/api/v1/auth/sso/providers', (route) =>
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ oidc: [{ provider_id: 'ci-idp', display_name: 'CI Identity Provider', preset: 'custom' }], saml: false }),
+      }),
+    )
+    await page.goto('/login')
+    const ssoButton = page.getByTestId('login-sso-oidc-ci-idp')
+    await expect(ssoButton).toBeVisible()
+
+    await page.route('**/api/v1/auth/oidc/ci-idp/login', async (route) => {
+      expect(route.request().headers().authorization).toBeUndefined()
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<script>window.location.href = "/test-idp/authorize?client_id=ci-idp&redirect_uri=%2Fapi%2Fv1%2Fauth%2Foidc%2Fci-idp%2Fcallback&state=ci-state"</script>',
+      })
+    })
+    await page.route('**/test-idp/authorize**', async (route) => {
+      const requestUrl = new URL(route.request().url())
+      expect(requestUrl.searchParams.get('client_id')).toBe('ci-idp')
+      await route.fulfill({ status: 200, contentType: 'text/html', body: 'CI IdP ready' })
+    })
+
+    await ssoButton.click()
+    await page.waitForURL(/\/test-idp\/authorize/)
+    await expect(page.getByText('CI IdP ready')).toBeVisible()
+    await page.goto('/auth/callback#access_token=ci-sso-access-token')
+    await expect(page).toHaveURL(/\/auth\/callback$/)
+>>>>>>> 825d19d61 (test: cover unauthenticated SSO login journey)
     await expect(page.getByText('Signing in')).toBeVisible()
     await page.waitForURL((url) => !url.pathname.includes('/login') && url.pathname !== '/auth/callback')
     await expect(page.getByTestId('dashboard-title')).toContainText('Dashboard')
   })
 
+<<<<<<< HEAD
   test('returns an actionable SSO failure to the unauthenticated login surface', { tag: '@regression' }, async ({ page, env, localSsoBackend }) => {
     test.skip(env.name !== 'local', 'Uses a deterministic local IdP seam; staging uses its real provider configuration')
     void localSsoBackend
@@ -103,6 +148,42 @@ test.describe('Login Flow', () => {
     expect(state).toBeTruthy()
     await page.goto(`/api/v1/auth/oidc/ci-idp/callback?code=ci-invalid-code&state=${encodeURIComponent(state ?? '')}`)
     await page.waitForURL(/\/login\?sso_error=auth_failed$/)
+=======
+  test('returns an actionable SSO failure to the unauthenticated login surface', { tag: '@regression' }, async ({ page, env }) => {
+    test.skip(env.name !== 'local', 'Uses a deterministic local IdP seam; staging uses its real provider configuration')
+
+    await setupLocalMockApi(page)
+    await page.route('**/api/v1/auth/login-context', (route) =>
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ multi_org: false, org: { name: 'Acme', slug: 'default' } }),
+      }),
+    )
+    await page.route('**/api/v1/auth/sso/providers', (route) =>
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ oidc: [{ provider_id: 'ci-idp', display_name: 'CI Identity Provider', preset: 'custom' }], saml: false }),
+      }),
+    )
+    await page.route('**/api/v1/auth/oidc/ci-idp/login', (route) =>
+      void route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<script>window.location.href = "/test-idp/authorize?client_id=ci-idp"</script>',
+      }),
+    )
+    await page.route('**/test-idp/authorize**', (route) =>
+      void route.fulfill({ status: 200, contentType: 'text/html', body: 'CI IdP denied' }),
+    )
+
+    await page.goto('/login')
+    await page.getByTestId('login-sso-oidc-ci-idp').click()
+    await page.waitForURL(/\/test-idp\/authorize/)
+    await expect(page.getByText('CI IdP denied')).toBeVisible()
+    await page.goto('/login?sso_error=auth_failed')
+>>>>>>> 825d19d61 (test: cover unauthenticated SSO login journey)
     await expect(page.getByTestId('login-sso-error')).toBeVisible()
     await expect(page.getByTestId('login-submit')).toBeVisible()
   })
