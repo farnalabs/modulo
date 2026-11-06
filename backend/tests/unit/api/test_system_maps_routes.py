@@ -1415,7 +1415,7 @@ def test_overview_detects_missing_loop_config_bottleneck(client: tuple[TestClien
 
 
 @pytest.mark.parametrize("window_days", [3, 7, 30, 90])
-def test_overview_passes_requested_window_and_graph_ids_to_the_repository(
+def test_overview_passes_window_and_graph_ids_to_the_repository(
     client: tuple[TestClient, _Harness], window_days: int
 ) -> None:
     http, harness = client
