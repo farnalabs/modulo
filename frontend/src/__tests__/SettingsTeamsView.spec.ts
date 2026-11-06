@@ -109,6 +109,27 @@ describe('SettingsTeamsView', () => {
     wrapper.unmount()
   })
 
+  it('wraps team metadata below the name on narrow rows', async () => {
+    mockTeams = [team({ name: 'A very long team name that should remain readable on a phone' })]
+    const wrapper = await mountView()
+
+    const toggle = wrapper.find('[data-testid="settings-teams-toggle-t1"]')
+    expect(toggle.classes()).toContain('min-w-0')
+    const metadata = toggle.element.parentElement?.querySelector('.max-sm\\:ml-7')
+    expect(metadata).not.toBeNull()
+    wrapper.unmount()
+  })
+
+  it('falls back to an em dash when a team has no description', async () => {
+    mockTeams = [team({ description: '' })]
+    const wrapper = await mountView()
+
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="settings-teams-toggle-t1"]').exists()).toBe(true))
+    const toggle = wrapper.find('[data-testid="settings-teams-toggle-t1"]')
+    expect(toggle.text()).toContain('—')
+    wrapper.unmount()
+  })
+
   it('shows owned resource count for each team', async () => {
     mockTeams = [
       team(),
