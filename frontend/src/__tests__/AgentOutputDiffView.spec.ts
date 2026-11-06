@@ -74,6 +74,21 @@ describe('AgentOutputDiffView', () => {
     expect(btn.attributes('disabled')).toBeDefined()
   })
 
+  it('uses a compact selector width while keeping pasted run IDs usable', async () => {
+    router.push('/runs/diff')
+    await router.isReady()
+    const wrapper = mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const selects = wrapper.findAllComponents({ name: 'Select' })
+    expect(selects).toHaveLength(2)
+    expect(selects[0].classes()).toContain('w-52')
+    expect(wrapper.find('[data-testid="diff-run-id-a"]').classes()).toContain('w-48')
+  })
+
   it('enables compare button when all inputs are filled', async () => {
     router.push('/runs/diff')
     await router.isReady()
