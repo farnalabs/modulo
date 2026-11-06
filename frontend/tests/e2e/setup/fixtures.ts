@@ -1,12 +1,56 @@
+import { spawn, type ChildProcess } from 'node:child_process'
 import { test as base, expect, type Page } from '@playwright/test'
 import { startCoverage, stopCoverage } from './coverage'
-import { getTestEnv, type TestEnv } from './env'
+import { getLocalE2eBaseUrl, getTestEnv, type TestEnv } from './env'
 import { loginThroughUi } from './login'
 import { installTeamTierNavigationGuard } from './target-tier'
 
-export const test = base.extend<{ env: TestEnv }>({
+type SsoBackendProcess = { stop: () => Promise<void> }
+
+async function waitForPort(port: number, child: ChildProcess): Promise<void> {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`[sso-fixture] backend exited before readiness (code ${child.exitCode})`)
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(500) })
+      if (response.status < 500) return
+    } catch {
+      // The backend is still booting; the deadline bounds this polling loop.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error(`[sso-fixture] backend did not become ready on port ${port} within 15000ms`)
+}
+
+async function startLocalSsoBackend(): Promise<SsoBackendProcess> {
+  const port = Number.parseInt(process.env.E2E_SSO_BACKEND_PORT ?? '8000', 10)
+  const child = spawn('uv', [
+    'run', '--project', '.', '--no-sync', 'python', 'tests/e2e/sso_fixture.py',
+    '--port', String(port), '--frontend-url', getLocalE2eBaseUrl(),
+  ], { cwd: new URL('../../../../backend', import.meta.url), stdio: ['ignore', 'pipe', 'pipe'] })
+  child.stdout?.on('data', (chunk) => process.stderr.write(`[sso-fixture] ${chunk}`))
+  child.stderr?.on('data', (chunk) => process.stderr.write(`[sso-fixture] ${chunk}`))
+  await waitForPort(port, child)
+  return {
+    stop: async () => {
+      if (child.exitCode !== null) return
+      child.kill('SIGTERM')
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => { child.kill('SIGKILL'); resolve() }, 3000)
+        child.once('exit', () => { clearTimeout(timer); resolve() })
+      })
+    },
+  }
+}
+
+export const test = base.extend<{ env: TestEnv; localSsoBackend: SsoBackendProcess }>({
   env: async ({}, use) => {
     await use(getTestEnv())
+  },
+  localSsoBackend: async ({ env }, use) => {
+    if (env.name !== 'local') return await use({ stop: async () => {} })
+    const backend = await startLocalSsoBackend()
+    try { await use(backend) } finally { await backend.stop() }
   },
   page: async ({ page, env }, use, testInfo) => {
     // Staging is the CI-only Community-tier E2E environment; a team-tier page
@@ -90,7 +134,11 @@ export async function setupLocalMockApi(page: Page) {
     // Leave the real SSO login/callback legs to the test's deterministic IdP
     // seam. Route handlers registered later in the spec assert the unauthenticated
     // backend contract instead of this general local mock swallowing those GETs.
-    if (url.includes('/api/v1/auth/oidc/')) return route.fallback()
+    if (
+      url.includes('/api/v1/auth/oidc/') ||
+      url.includes('/api/v1/auth/login-context') ||
+      url.includes('/api/v1/auth/sso/providers')
+    ) return route.fallback()
     if (url.includes('/api/v1/me/settings')) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ locale: 'en-US' }) })
     }
