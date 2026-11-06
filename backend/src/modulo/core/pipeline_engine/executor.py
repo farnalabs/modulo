@@ -5399,25 +5399,30 @@ class PipelineExecutor:
         node_token_budgets: dict[str, int],
         eval_definitions_by_node: dict[str, list[EvalDefDTO]],
         node_type_map: dict[str, str],
-        model_backend_hub: ModelBackendHub | None,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
         """Stream the graph and handle errors."""
         from modulo.settings import get_settings
 
-        _settings = get_settings()
         final_status = "failed"
         error_code = None
         error_detail = None
         node_token_usage = None
         conn_string = self._checkpointer_conn_string
         assert conn_string is not None, "Checkpointer connection string must be set"
-        async with _checkpointer_scope(
-            conn_string,
-            organisation_id=org_id,
-            fernet_key=_settings.fernet_key,
-        ) as saver:
-            compiled.checkpointer = saver
-            try:
+        try:
+            # The scope open MUST sit inside this try: a checkpointer-connection
+            # failure (a transient Postgres blip in ``__aenter__``, an invalid
+            # conn string) must be terminalized through the same failure path as
+            # a stream error instead of escaping ``resume()`` uncaught and
+            # leaving the run row resting in ``running``/claimed. Main caught
+            # this region inside ``except Exception`` (FAR-366 review).
+            _settings = get_settings()
+            async with _checkpointer_scope(
+                conn_string,
+                organisation_id=org_id,
+                fernet_key=_settings.fernet_key,
+            ) as saver:
+                compiled.checkpointer = saver
                 # Inject the human's HITL decision into the graph state. A
                 # ``None`` here fails closed in ``_hitl_review_resume_result``
                 # and re-interrupts the gate, so the decision MUST be threaded
@@ -5441,35 +5446,35 @@ class PipelineExecutor:
                     eval_definitions_by_node=eval_definitions_by_node,
                     node_type_map=node_type_map,
                 )
-            except RuntimeError as exc:
-                if "checkpointer" in str(exc):
-                    _log.warning("pipeline.resume_no_checkpointer", extra={"run_id": str(run_id)})
-                    final_status = "failed"
-                    error_code = "configuration_error"
-                    error_detail = "Pipeline configuration is invalid (checkpointer unavailable)."
-                else:
-                    raise
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                _raw_tb = _traceback_detail(exc, limit=2000)
-                error_detail = _enrich_failure_detail(_raw_tb, exc)
-                _log.exception(
-                    "pipeline.resume_error",
-                    extra={
-                        "run_id": str(run_id),
-                        **(
-                            {
-                                "failure_build_sha": _failure_build_sha(),
-                                "failing_column": _failure_column(exc),
-                            }
-                            if _ATTRIBUTION_AVAILABLE
-                            else {}
-                        ),
-                    },
-                )
+        except RuntimeError as exc:
+            if "checkpointer" in str(exc):
+                _log.warning("pipeline.resume_no_checkpointer", extra={"run_id": str(run_id)})
                 final_status = "failed"
-                error_code = type(exc).__name__
+                error_code = "configuration_error"
+                error_detail = "Pipeline configuration is invalid (checkpointer unavailable)."
+            else:
+                raise
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _raw_tb = _traceback_detail(exc, limit=2000)
+            error_detail = _enrich_failure_detail(_raw_tb, exc)
+            _log.exception(
+                "pipeline.resume_error",
+                extra={
+                    "run_id": str(run_id),
+                    **(
+                        {
+                            "failure_build_sha": _failure_build_sha(),
+                            "failing_column": _failure_column(exc),
+                        }
+                        if _ATTRIBUTION_AVAILABLE
+                        else {}
+                    ),
+                },
+            )
+            final_status = "failed"
+            error_code = type(exc).__name__
         return final_status, error_code, error_detail, node_token_usage
 
     async def _resume_cleanup_and_finalize(
@@ -5918,7 +5923,6 @@ class PipelineExecutor:
                 node_token_budgets=node_token_budgets,
                 eval_definitions_by_node=eval_defs_by_node,
                 node_type_map=node_type_map,
-                model_backend_hub=model_backend_hub,
             )
         finally:
             # Teardown MUST stay exception-safe: a CancelledError or a

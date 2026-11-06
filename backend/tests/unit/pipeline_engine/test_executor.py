@@ -6393,7 +6393,6 @@ async def _run_resume_stream_raising(exc: BaseException) -> tuple[str, str | Non
             node_token_budgets={},
             eval_definitions_by_node={},
             node_type_map={},
-            model_backend_hub=None,
         )
 
 
@@ -6413,6 +6412,62 @@ async def test_resume_stream_reraises_non_checkpointer_runtime_error() -> None:
 async def test_resume_stream_propagates_cancellation() -> None:
     with pytest.raises(asyncio.CancelledError):
         await _run_resume_stream_raising(asyncio.CancelledError())
+
+
+async def _run_resume_stream_scope_entry_raising(
+    exc: BaseException,
+) -> tuple[str, str | None, str | None, Any]:
+    compiled = MagicMock()
+    compiled.aupdate_state = AsyncMock()
+    executor = PipelineExecutor(MagicMock())
+    executor._checkpointer_conn_string = "sqlite:///test.db"
+    settings_mock = MagicMock()
+    settings_mock.fernet_key = "test-fernet-key-not-for-production="
+    with (
+        patch(
+            "modulo.core.pipeline_engine.executor._checkpointer_scope",
+            return_value=_RaisingContextManager(exc),
+        ),
+        patch("modulo.settings.get_settings", return_value=settings_mock),
+    ):
+        return await executor._resume_stream_and_handle_errors(
+            compiled=compiled,
+            config={},
+            node_ids=set(),
+            broker=MagicMock(),
+            run_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            resume_data={},
+            completed_node_outputs={},
+            guard=MagicMock(),
+            node_token_budgets={},
+            eval_definitions_by_node={},
+            node_type_map={},
+        )
+
+
+async def test_resume_stream_terminalizes_when_checkpointer_scope_entry_fails() -> None:
+    """A checkpointer-connection failure on scope entry must be terminalized.
+
+    It must NOT escape ``resume()`` uncaught: that leaves the run row resting
+    in ``running``/claimed with no terminal write or finalization.
+    """
+    status, code, detail, _ntu = await _run_resume_stream_scope_entry_raising(ConnectionError("connection refused"))
+
+    assert status == "failed"
+    assert code == "ConnectionError"
+    assert "connection refused" in (detail or "")
+
+
+async def test_resume_stream_maps_checkpointer_scope_entry_runtime_error() -> None:
+    status, code, detail, _ntu = await _run_resume_stream_scope_entry_raising(
+        RuntimeError("checkpointer pool exhausted")
+    )
+
+    assert status == "failed"
+    assert code == "configuration_error"
+    assert "checkpointer" in (detail or "")
 
 
 async def test_execute_pre_stream_checks_tracks_phases_and_returns_ceiling_run() -> None:
