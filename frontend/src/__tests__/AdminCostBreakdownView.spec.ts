@@ -94,7 +94,7 @@ describe('AdminCostBreakdownView', () => {
     expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(4)
   })
 
-  it('uses the shared page rhythm and a spaced FeatureGate as the content stack (FAR-2364)', async () => {
+  it('uses the shared page rhythm and keeps Costs headings readable and spaced', async () => {
     const store = usePlanStore()
     store.$patch({ features: { admin_cost_breakdown: true } })
 
@@ -113,6 +113,21 @@ describe('AdminCostBreakdownView', () => {
     const gate = page.get('.page-wide > [data-testid="feature-gate"]')
     expect(gate.classes()).toContain('space-y-6')
     expect(gate.find('.space-y-6').exists()).toBe(false)
+
+    expect(page.get('h1[data-page-heading]').text()).toBe('Cost Breakdown')
+
+    const teamHeading = page.get('h2')
+    expect(teamHeading.text()).toContain('Per-Team Cost Breakdown')
+    const teamHeader = teamHeading.element.closest('.card-header')
+    expect(teamHeader).not.toBeNull()
+    expect(Array.from(teamHeader!.classList)).toEqual(expect.arrayContaining(['px-6', 'pt-6']))
+    const teamDescription = teamHeader!.querySelector('p')
+    expect(teamDescription?.textContent).toContain('Monthly spend, run count, and average cost per run')
+    expect(teamDescription?.classList.contains('px-6')).toBe(false)
+    expect(teamDescription?.parentElement).toBe(teamHeading.element.parentElement)
+    const anomalyHeader = page.findAll('.card-header')[1]
+    expect(anomalyHeader.classes()).not.toEqual(expect.arrayContaining(['px-6', 'pt-6']))
+    expect(page.get('[data-testid="cost-team-table"]').element.closest('.card-base')?.classList.contains('p-0')).toBe(true)
   })
 
   it('dismisses an anomaly via POST', async () => {
