@@ -695,6 +695,7 @@ async def test_resume_bounds_before_the_claim_write() -> None:
     order: list[str] = []
     fake_self = MagicMock()
     fake_self._session_factory = MagicMock(side_effect=lambda: _acm(_begin_session()))
+    fake_self._resume_load_and_validate = PipelineExecutor._resume_load_and_validate.__get__(fake_self)
 
     async def _bound(_session: Any) -> None:
         order.append("bound")
@@ -739,6 +740,8 @@ async def test_execute_bounds_the_policy_gate_pin_transaction() -> None:
         return_value=(MagicMock(), MagicMock(), MagicMock(), {}, {}),
     )
     fake_self._check_policy_gate_pin = AsyncMock(side_effect=_pin)
+    fake_self._execute_load_and_validate = PipelineExecutor._execute_load_and_validate.__get__(fake_self)
+    fake_self._execute_policy_gate_pin = PipelineExecutor._execute_policy_gate_pin.__get__(fake_self)
 
     with (
         patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),

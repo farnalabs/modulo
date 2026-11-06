@@ -5203,177 +5203,135 @@ class PipelineExecutor:
             return None
         return _clamp_to_ceiling(base_level, ceiling)
 
-    async def resume(
+    # ---- Helpers for resume() -------------------------------------------------
+    # Extracted to reduce cognitive complexity (S3776).
+
+    async def _resume_load_and_validate(
         self,
         *,
+        session: AsyncSession,
         run_id: uuid.UUID,
         org_id: uuid.UUID,
-        resume_data: dict[str, Any],
-        claim_token: str | None = None,
-        expected_claim_status: str | None = None,
-        check_sandbox_capacity: bool = True,
-    ) -> Run:
-        """Resume a run that was interrupted for HITL review.
-
-        Loads the checkpointed graph state, injects *resume_data* as
-        ``_hitl_decision``, and streams the graph until completion or the
-        next interrupt. *claim_token* is the fenced-lease authority captured at
-        resume start (see :meth:`execute`).
-        """
-        self._claim_token = claim_token
-        async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-            # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE this
-            # transaction's first lock. The inline MCP resume uses a
-            # compare-and-swap on the expected source status and claim token;
-            # other resume/reconcile paths retain the existing guarded claim.
-            await set_mutation_row_lock_timeout(session)
-            run = await get_run(session, run_id)
-            if run is None:
-                raise RunNotFoundError(run_id)
-            if expected_claim_status is not None:
-                if claim_token is None:
-                    raise ValueError("expected_claim_status requires claim_token")
-                run = await _claim_resume_for_executor(
-                    session,
-                    run_id=run_id,
-                    org_id=org_id,
-                    expected_claim_token=claim_token,
-                    source_status=expected_claim_status,
-                )
-            else:
-                await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
-
-            # Atomic sandbox-capacity enforcement (FAR-1306 TOCTOU fix).
-            # Skipped for reject resumes (check_sandbox_capacity=False) as a
-            # POLICY choice — a human rejection already committed is never
-            # bounced off the gate by a transient capacity limit — NOT because
-            # a rejection avoids sandbox work: it does not, a reject resume
-            # continues downstream execution along the reject route (or, with
-            # no reject route, the normal path). See hitl.reject_review.
-            if check_sandbox_capacity:
-                await self._enforce_resume_sandbox_capacity(
-                    session,
-                    org_id=org_id,
-                    run_id=run_id,
-                    snapshot_id=run.snapshot_id,
-                )
-
-            snapshot_result = await session.execute(
-                select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
-            )
-            snapshot = snapshot_result.scalar_one()
-            graph_json: dict[str, Any] = snapshot.graph_json
-
-            # FROZEN node-type map — captured ONCE per run at run start from the
-            # snapshot's graph_json (the graph is immutable per snapshot) and
-            # passed into finalize_cost at every pause and resume. A mid-run
-            # graph edit cannot change sandbox_by_map mid-run (§1.6).
-            node_type_map = derive_node_type_map(graph_json)
-
-            # Re-validate the snapshot before resuming — the pipeline
-            # config may have changed since the original run started.
-            validation = await GraphValidator().validate_for_run(snapshot, {}, session)
-            if not validation.is_valid:
-                raise GraphValidationError(validation.issues, run_id)
-
-            # FAR-967 F1 — snapshot policy-gate pin integrity re-verify on the
-            # resume path (same fail-CLOSED backstop as execute(), using THIS
-            # transaction's session so the row lock already taken above is
-            # reused instead of deadlocking against a second session).
-            pin_run = await self._check_policy_gate_pin(
+        claim_token: str | None,
+        expected_claim_status: str | None,
+        check_sandbox_capacity: bool,
+    ) -> tuple[Run, PipelineSnapshot, dict[str, Any], dict[str, str]]:
+        """First transaction: load run, validate claim, enforce capacity, validate snapshot."""
+        await set_rls_org(session, org_id)
+        await set_rls_execution_context(session)
+        await set_mutation_row_lock_timeout(session)
+        run = await get_run(session, run_id)
+        if run is None:
+            raise RunNotFoundError(run_id)
+        if expected_claim_status is not None:
+            if claim_token is None:
+                raise ValueError("expected_claim_status requires claim_token")
+            run = await _claim_resume_for_executor(
                 session,
                 run_id=run_id,
                 org_id=org_id,
-                snapshot=snapshot,
-                claim_token=claim_token,
+                expected_claim_token=claim_token,
+                source_status=expected_claim_status,
             )
-            if pin_run is not None:
-                return pin_run
+        else:
+            await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
+        if check_sandbox_capacity:
+            await self._enforce_resume_sandbox_capacity(
+                session,
+                org_id=org_id,
+                run_id=run_id,
+                snapshot_id=run.snapshot_id,
+            )
+        snapshot_result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id))
+        snapshot = snapshot_result.scalar_one()
+        graph_json: dict[str, Any] = snapshot.graph_json
+        node_type_map = derive_node_type_map(graph_json)
+        validation = await GraphValidator().validate_for_run(snapshot, {}, session)
+        if not validation.is_valid:
+            raise GraphValidationError(validation.issues, run_id)
+        pin_run = await self._check_policy_gate_pin(
+            session,
+            run_id=run_id,
+            org_id=org_id,
+            snapshot=snapshot,
+            claim_token=claim_token,
+        )
+        if pin_run is not None:
+            return pin_run, None, None, None  # type: ignore[return-value]
+        return run, snapshot, graph_json, node_type_map
 
-            # Load eval definitions while session is active.
-            # FAR-967 chunk 10: the snapshot's policy-gate pins are the run's
-            # evaluation universe (criterion 10 / §5.2 operator re-check).
-            eval_rows = await self._load_eval_defs_for_pipeline(session, run.pipeline_id)
-            eval_defs_by_node = self._build_eval_defs_by_node(
-                eval_rows,
-                org_id,
-                run.pipeline_id,
-                snapshot.policy_gate_pins_json,
-            )
-            # FAR-939 chunk 12 (M4, §3.3): RUN-FROZEN evaluation modes. The
-            # build above reads the LIVE gate rows; every gate this run has
-            # already FIRED carries its fire-time modes on the claim row, so
-            # re-apply them before the graph compile — otherwise a mid-run
-            # flip of policy_gates.evaluation_mode would silently change the
-            # resumed run (the skip would stop matching, and the human
-            # decision's Evidence grounding would be keyed on a mode the run
-            # never started with). No fired gate ⇒ no stamp ⇒ no-op.
-            fired_gate_configs = list(
-                (
-                    await session.execute(
-                        select(HitlClaim.gate_config_json).where(
-                            HitlClaim.run_id == run_id,
-                            HitlClaim.organisation_id == org_id,
-                        )
+    async def _resume_load_eval_defs(
+        self,
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        policy_gate_pins_json: list[dict[str, Any]] | None,
+    ) -> dict[str, list[EvalDefDTO]]:
+        """Load eval definitions and apply frozen gated eval modes from fired gates."""
+        eval_rows = await self._load_eval_defs_for_pipeline(session, pipeline_id)
+        eval_defs_by_node = self._build_eval_defs_by_node(
+            eval_rows,
+            org_id,
+            pipeline_id,
+            policy_gate_pins_json,
+        )
+        fired_gate_configs = list(
+            (
+                await session.execute(
+                    select(HitlClaim.gate_config_json).where(
+                        HitlClaim.run_id == run_id,
+                        HitlClaim.organisation_id == org_id,
                     )
-                ).scalars()
-            )
-            frozen_applied = self._overlay_frozen_gated_eval_modes(eval_defs_by_node, fired_gate_configs)
-            if frozen_applied:
-                _log.info(
-                    "eval_defs.frozen_modes_reapplied",
-                    extra={"run_id": str(run_id), "entries": frozen_applied},
                 )
-
-        pipeline_id = run.pipeline_id
-        snapshot_id = run.snapshot_id
-        thread_id = run.langgraph_thread_id
-
-        async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-
-            # Load pipeline for runaway protection limits.
-            # FAR-1025: opt out of the global soft-delete filter -- an in-flight
-            # run's pipeline may have been soft-deleted; runaway protection must
-            # still apply.
-            from modulo.db.soft_delete import include_soft_deleted
-
-            pipeline_result = await session.execute(
-                include_soft_deleted(select(Pipeline).where(Pipeline.id == pipeline_id))
+            ).scalars()
+        )
+        frozen_applied = self._overlay_frozen_gated_eval_modes(eval_defs_by_node, fired_gate_configs)
+        if frozen_applied:
+            _log.info(
+                "eval_defs.frozen_modes_reapplied",
+                extra={"run_id": str(run_id), "entries": frozen_applied},
             )
-            pipeline = pipeline_result.scalar_one_or_none()
-            if pipeline is None:
-                raise RunNotFoundError(run_id)
+        return eval_defs_by_node
 
-            # FAR-505: capture the run/pipeline scalars through the SAME helper
-            # the execute path uses (_capture_execution_scalars) so the resume
-            # compile wiring (retry policy, idempotency identity, guard) is
-            # derived from one place and cannot drift from execute() again.
-            scalars = self._capture_execution_scalars(pipeline, run)
-            guard = scalars["guard"]
+    async def _resume_prepare_second_transaction(
+        self,
+        *,
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> tuple[Pipeline, dict[str, Any]]:
+        """Second transaction: load pipeline (including soft-deleted) and capture scalars."""
+        await set_rls_org(session, org_id)
+        await set_rls_execution_context(session)
+        from modulo.db.soft_delete import include_soft_deleted
 
-        if not self._checkpointer_conn_string:
-            raise RuntimeError("Cannot resume without a checkpointer configured")
+        pipeline_result = await session.execute(
+            include_soft_deleted(select(Pipeline).where(Pipeline.id == pipeline_id))
+        )
+        pipeline = pipeline_result.scalar_one_or_none()
+        if pipeline is None:
+            raise RunNotFoundError(run_id)
+        run = await get_run(session, run_id)
+        if run is None:
+            raise RunNotFoundError(run_id)
+        scalars = self._capture_execution_scalars(pipeline, run)
+        return pipeline, scalars
 
-        # FAR-505: thread the SAME retry/idempotency wiring into the resume
-        # compile as the execute path (_prepare_and_stream). The graph cache is
-        # keyed by (pipeline_id, snapshot_id, node_timeout, struct_hash); folding
-        # the pipeline retry policy into the struct hash
-        # (compute_retry_aware_topology_hash) means an execute-then-resume on the
-        # same snapshot reuses the SAME compiled graph instead of cold-compiling
-        # a second, unwired entry. The idempotency key is deliberately
-        # runtime-derived from the run's stable logical identity
-        # (``<pipeline_id>:<run_number>``) — identical on resume because a resume
-        # is the SAME run, so a side-effecting node re-executed after the HITL
-        # pause dedupes exactly as it would on a same-run retry (FAR-402 P5).
-        # The retry policy + run_number are sourced from the SAME
-        # _capture_execution_scalars helper the execute path uses, so the resume
-        # wiring cannot drift from execute() again (FAR-505). The helper already
-        # fails open on a malformed/legacy retry_policy.
-        pipeline_retry_policy = scalars["pipeline_retry_policy"]
+    async def _resume_compile_graph(
+        self,
+        *,
+        pipeline: Pipeline,
+        pipeline_id: uuid.UUID,
+        snapshot_id: uuid.UUID,
+        graph_json: dict[str, Any],
+        eval_defs_by_node: dict[str, list[EvalDefDTO]],
+        pipeline_retry_policy: dict[str, Any] | None,
+        scalars: dict[str, Any],
+        org_id: uuid.UUID,
+    ) -> tuple[Any, Callable[[str, dict[str, Any]], str | None]]:
+        """Compile or retrieve the cached graph for resume."""
         run_ref = rc.build_run_ref(str(pipeline_id), scalars["run_number"])
 
         def _node_idempotency_key(node_id: str, _state: dict[str, Any]) -> str | None:
@@ -5393,27 +5351,22 @@ class PipelineExecutor:
                 pipeline_stdout_retention_config=pipeline.stdout_retention_config,
             ),
             pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
-            # Both the retry-aware topology hash (FAR-505) and the eval-def
-            # content hash (FAR-502) must be part of the cache key so an
-            # execute-then-resume on the same snapshot reuses the SAME compiled
-            # graph as the execute path — matching _prepare_and_stream below.
             graph_struct_hash=struct_hash_with_eval_defs(
                 compute_retry_aware_topology_hash(graph_json, pipeline_retry_policy),
                 eval_defs_by_node,
             ),
         )
+        return compiled, _node_idempotency_key
 
-        config = {"configurable": {"thread_id": thread_id}}
-        node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
-        node_token_budgets: dict[str, int] = {
-            str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
-        }
-
-        # FAR-215: seed the run-scoped conformance context on resume too, so a
-        # node re-check fires after the run pauses/reviews (the manifest may
-        # have changed between the original run and the resume). The claimed
-        # guardrail list is hoisted ONCE per run; the live capability manifest
-        # is still read per node at node start.
+    async def _resume_setup_runtime(
+        self,
+        *,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        snapshot: PipelineSnapshot,
+        run_id: uuid.UUID,
+    ) -> tuple[RunEventBroker, ModelBackendHub | None]:
+        """Set up runtime environment: conformance context, broker, hooks, model hub."""
         claimed, claims_load_failed = await self._load_claimed_conformance_guardrails(org_id, pipeline_id)
         set_conformance_ctx(
             self._session_factory,
@@ -5423,30 +5376,57 @@ class PipelineExecutor:
             claimed,
             claims_load_failed,
         )
-
-        final_status: str = "failed"
-        error_code: str | None = None
-        error_detail: str | None = None
-        node_token_usage: dict[str, Any] | None = None
-        completed_node_outputs: dict[str, Any] = {}
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
         set_audit_hook(self._dispatch_context_write_audit(org_id, run_id))
         self._otel_bridge.set_run_context(str(org_id), str(pipeline_id))
-
-        # Load model backends for this run's org.
         model_backend_hub = await self._init_model_backend_hub(org_id)
+        return broker, model_backend_hub
 
+    async def _resume_stream_and_handle_errors(
+        self,
+        *,
+        compiled: Any,
+        config: dict[str, Any],
+        node_ids: set[str],
+        broker: RunEventBroker,
+        run_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        org_id: uuid.UUID,
+        resume_data: dict[str, Any],
+        completed_node_outputs: dict[str, Any],
+        guard: Any,
+        node_token_budgets: dict[str, int],
+        eval_definitions_by_node: dict[str, list[EvalDefDTO]],
+        node_type_map: dict[str, str],
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
+        """Stream the graph and handle errors."""
+        from modulo.settings import get_settings
+
+        final_status = "failed"
+        error_code = None
+        error_detail = None
+        node_token_usage = None
+        conn_string = self._checkpointer_conn_string
+        assert conn_string is not None, "Checkpointer connection string must be set"
         try:
-            from modulo.settings import get_settings
-
+            # The scope open MUST sit inside this try: a checkpointer-connection
+            # failure (a transient Postgres blip in ``__aenter__``, an invalid
+            # conn string) must be terminalized through the same failure path as
+            # a stream error instead of escaping ``resume()`` uncaught and
+            # leaving the run row resting in ``running``/claimed. Main caught
+            # this region inside ``except Exception`` (FAR-366 review).
             _settings = get_settings()
             async with _checkpointer_scope(
-                self._checkpointer_conn_string,
+                conn_string,
                 organisation_id=org_id,
                 fernet_key=_settings.fernet_key,
             ) as saver:
                 compiled.checkpointer = saver
+                # Inject the human's HITL decision into the graph state. A
+                # ``None`` here fails closed in ``_hitl_review_resume_result``
+                # and re-interrupts the gate, so the decision MUST be threaded
+                # through from ``resume()`` (it is not optional).
                 await compiled.aupdate_state(
                     config,
                     {"_hitl_decision": resume_data, "_claim_lease": self._claim_token},
@@ -5463,7 +5443,7 @@ class PipelineExecutor:
                     completed_node_outputs=completed_node_outputs,
                     guard=guard,
                     node_token_budgets=node_token_budgets,
-                    eval_definitions_by_node=eval_defs_by_node,
+                    eval_definitions_by_node=eval_definitions_by_node,
                     node_type_map=node_type_map,
                 )
         except RuntimeError as exc:
@@ -5478,8 +5458,6 @@ class PipelineExecutor:
             raise
         except Exception as exc:
             _raw_tb = _traceback_detail(exc, limit=2000)
-            # FAR-872: enrich the error detail with attribution (build SHA,
-            # failing column, table set) so executor failures are self-identifying.
             error_detail = _enrich_failure_detail(_raw_tb, exc)
             _log.exception(
                 "pipeline.resume_error",
@@ -5497,20 +5475,23 @@ class PipelineExecutor:
             )
             final_status = "failed"
             error_code = type(exc).__name__
-        finally:
-            set_cancellation_check(None)
-            set_audit_hook(None)
-            set_model_backend_hub(None)
-            if model_backend_hub is not None:
-                await _teardown_hub(model_backend_hub)
-            # FAR-1534: a ``complete`` keeps the broker open until finalize
-            # has committed the (possibly downgraded) status.
-            if final_status not in ("awaiting_human", "complete"):
-                get_registry().close(run_id)
+        return final_status, error_code, error_detail, node_token_usage
 
-        # Mark terminal/awaiting_human — the SINGLE finalization path (PR A2).
-        # (The eval_blocked audit + work_intact + finalize_cost tail live in
-        # ``_finalize_run_after_stream``.)
+    async def _resume_cleanup_and_finalize(
+        self,
+        *,
+        final_status: str,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        node_type_map: dict[str, str],
+        error_code: str | None,
+        error_detail: str | None,
+        node_token_usage: dict[str, Any] | None,
+        completed_node_outputs: dict[str, Any],
+        node_ids: set[str],
+    ) -> Run:
+        """Finalize the run after the stream phase (teardown has already run)."""
         return await self._finalize_then_publish_completed(
             defer_close=final_status == "complete",
             run_id=run_id,
@@ -5518,6 +5499,448 @@ class PipelineExecutor:
             pipeline_id=pipeline_id,
             node_type_map=node_type_map,
             final_status=final_status,
+            error_code=error_code,
+            error_detail=error_detail,
+            node_token_usage=node_token_usage,
+            completed_node_outputs=completed_node_outputs,
+            node_ids=node_ids,
+        )
+
+    # ---- Helpers for execute() -----------------------------------------------
+    # Extracted to reduce cognitive complexity (S3776).
+
+    async def _execute_load_and_validate(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        input_payload: dict[str, Any],
+    ) -> tuple[Run, Pipeline, PipelineSnapshot, dict[str, Any], dict[str, str]]:
+        """Load run, pipeline, snapshot, graph_json, and node_type_map."""
+        _tracker = self._dispatch_phase_tracker
+        if _tracker is not None:
+            _tracker.enter_phase("executor_running")
+        if _tracker is not None:
+            _tracker.enter_phase("loading_context")
+        return await self._load_execution_context(
+            run_id=run_id,
+            org_id=org_id,
+            input_payload=input_payload,
+        )
+
+    async def _execute_policy_gate_pin(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        snapshot: PipelineSnapshot,
+        claim_token: str | None,
+    ) -> Run | None:
+        """Check policy gate pin integrity; return terminal run if pin mismatch."""
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            await set_mutation_row_lock_timeout(session)
+            return await self._check_policy_gate_pin(
+                session,
+                run_id=run_id,
+                org_id=org_id,
+                snapshot=snapshot,
+                claim_token=claim_token,
+            )
+
+    async def _execute_load_eval_defs(
+        self,
+        *,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        policy_gate_pins_json: list[dict[str, Any]] | None,
+    ) -> dict[str, list[EvalDefDTO]]:
+        """Load eval definitions for conditional HITL gating."""
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            eval_rows = await self._load_eval_defs_for_pipeline(session, pipeline_id)
+        return self._build_eval_defs_by_node(
+            eval_rows,
+            org_id,
+            pipeline_id,
+            policy_gate_pins_json,
+        )
+
+    async def _execute_pre_stream_checks(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        max_concurrent: int,
+        graph_json: dict[str, Any],
+        snapshot_id: uuid.UUID,
+        claim_token: str | None,
+    ) -> Run | None:
+        """Run capacity and spend ceiling checks; return terminal run if blocked."""
+        _tracker = self._dispatch_phase_tracker
+        if _tracker is not None:
+            _tracker.enter_phase("capacity_check")
+        capacity_run = await self._check_capacity(
+            run_id=run_id,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            max_concurrent=max_concurrent,
+            graph_json=graph_json,
+            snapshot_id=snapshot_id,
+        )
+        if capacity_run.status != "running":
+            return capacity_run
+        if _tracker is not None:
+            _tracker.enter_phase("spend_check")
+        ceiling_run = await self._check_spend_ceiling_gate(run_id=run_id, org_id=org_id, claim_token=claim_token)
+        if ceiling_run is not None:
+            return ceiling_run
+        return None
+
+    async def _execute_init_environment(
+        self,
+        *,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        graph_json: dict[str, Any],
+    ) -> tuple[ModelBackendHub | None, Any, RunEventBroker, bool]:
+        """Initialize run environment: model hub, connector hub, broker, sandbox flag."""
+        return await self._init_run_environment(
+            org_id=org_id,
+            run_id=run_id,
+            pipeline_id=pipeline_id,
+            graph_json=graph_json,
+        )
+
+    async def _execute_handle_stream_exceptions(
+        self,
+        exc: Exception,
+        *,
+        run_id: uuid.UUID,
+        node_token_usage: dict[str, Any] | None,
+        pipeline_retry_policy: dict[str, Any] | None,
+        retry_policy_eligible: bool,
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None, bool]:
+        """Handle exceptions from _prepare_and_stream; return updated status tuple."""
+        _tb = _traceback_detail(exc, limit=2000)
+        error_detail = _enrich_failure_detail(_tb, exc)
+        _log.exception(
+            "pipeline.execution_error",
+            extra={
+                "run_id": str(run_id),
+                **(
+                    {
+                        "failure_build_sha": _failure_build_sha(),
+                        "failing_column": _failure_column(exc),
+                    }
+                    if _ATTRIBUTION_AVAILABLE
+                    else {}
+                ),
+            },
+        )
+        final_status = "failed"
+        error_code = type(exc).__name__
+        _provider_refusal = non_retryable_provider_code(str(exc)) or non_retryable_provider_code(error_detail)
+        if _provider_refusal is not None:
+            error_code = _provider_refusal
+        return final_status, error_code, error_detail, node_token_usage, retry_policy_eligible
+
+    async def _execute_retry_policy(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_retry_policy: dict[str, Any] | None,
+        final_status: str,
+        error_code: str | None,
+        error_detail: str | None,
+        is_correction_run: bool,
+        graph_idempotent: bool,
+        graph_json: dict[str, Any],
+        model_backend_hub: ModelBackendHub | None,
+        connector_hub: Any | None,
+        broker: RunEventBroker,
+        retry_policy_eligible: bool,
+    ) -> tuple[str, str, str | None, str | None]:
+        """Apply retry policy; return potentially updated status tuple."""
+        retry_decision = "none"
+        if not retry_policy_eligible:
+            _log.info(
+                "pipeline.retry_policy_skipped_tier_refused",
+                extra={"run_id": str(run_id)},
+            )
+        elif pipeline_retry_policy is not None:
+            retry_decision = await self._maybe_retry_after_policy(
+                run_id=run_id,
+                org_id=org_id,
+                pipeline_retry_policy=pipeline_retry_policy,
+                final_status=final_status,
+                error_code=error_code,
+                error_detail=error_detail,
+                is_correction_run=is_correction_run,
+                graph_idempotent=graph_idempotent,
+                graph_json=graph_json,
+                model_backend_hub=model_backend_hub,
+                connector_hub=connector_hub,
+                broker=broker,
+            )
+        if retry_decision == "side_effect_unknown":
+            final_status = "failed"
+            error_code = _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN
+            error_detail = _sanitize_detail(
+                "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
+                "not retried — needs human review.",
+                limit=5000,
+            )
+        return retry_decision, final_status, error_code, error_detail
+
+    # ---- Helpers for _create_interrupt_gate() --------------------------------
+    # Extracted to reduce cognitive complexity (S3776).
+
+    async def _create_interrupt_gate_resolve_pipeline_name(
+        self,
+        session: AsyncSession,
+        pipeline_id: uuid.UUID,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> str | None:
+        """Resolve pipeline name in a nested savepoint (failure-isolated)."""
+        try:
+            async with session.begin_nested():
+                pipeline = await get_pipeline(session, pipeline_id, organisation_id=org_id)
+                return pipeline.name if pipeline is not None else None
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "hitl_review.pipeline_name_lookup_failed",
+                extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                exc_info=True,
+            )
+            return None
+
+    async def _create_interrupt_gate_capture_context(
+        self,
+        session: AsyncSession,
+        run_id: uuid.UUID,
+        review_id: str,
+        org_id: uuid.UUID,
+        pipeline_name: str | None,
+        completed_node_outputs: dict[str, Any] | None,
+        condition_result: dict[str, Any] | None,
+        subject: str | None,
+        subject_parent: dict[str, Any] | None,
+        subject_leaf_key: str | None,
+    ) -> HitlReviewContext | None:
+        """Capture HITL review context in a nested savepoint (failure-isolated)."""
+        try:
+            async with session.begin_nested():
+                return await build_hitl_review_context(
+                    session,
+                    run_id=run_id,
+                    review_id=review_id,
+                    org_id=org_id,
+                    pipeline_name=pipeline_name,
+                    completed_node_outputs=completed_node_outputs,
+                    condition_result=condition_result,
+                    subject=subject,
+                    subject_parent=subject_parent,
+                    subject_leaf_key=subject_leaf_key,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "hitl_review.context_capture_failed",
+                extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
+                exc_info=True,
+            )
+            return None
+
+    async def _create_interrupt_gate_resolve_config(
+        self,
+        session: AsyncSession,
+        run_id: uuid.UUID,
+        review_id: str,
+        org_id: uuid.UUID,
+    ) -> dict[str, Any] | None:
+        """Resolve HITL review config in a nested savepoint (failure-isolated)."""
+        try:
+            async with session.begin_nested():
+                return await resolve_hitl_review_config(
+                    session,
+                    run_id=run_id,
+                    review_id=review_id,
+                    org_id=org_id,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "hitl_review.config_stamp_failed",
+                extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
+                exc_info=True,
+            )
+            return None
+
+    async def _create_interrupt_gate_resolve_window(
+        self,
+        session: AsyncSession,
+        pipeline_id: uuid.UUID,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        review_id: str,
+    ) -> datetime | None:
+        """Resolve review window deadline in a nested savepoint (failure-isolated)."""
+        try:
+            async with session.begin_nested():
+                window_seconds = await resolve_review_window_for_gate(
+                    session,
+                    pipeline_id=pipeline_id,
+                    org_id=org_id,
+                )
+                return datetime.now(UTC) + timedelta(seconds=window_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "hitl_review.window_resolution_failed",
+                extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
+                exc_info=True,
+            )
+            return None
+
+    async def resume(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        resume_data: dict[str, Any],
+        claim_token: str | None = None,
+        expected_claim_status: str | None = None,
+        check_sandbox_capacity: bool = True,
+    ) -> Run:
+        """Resume a run that was interrupted for HITL review.
+
+        Loads the checkpointed graph state, injects *resume_data* as
+        ``_hitl_decision``, and streams the graph until completion or the
+        next interrupt. *claim_token* is the fenced-lease authority captured at
+        resume start (see :meth:`execute`).
+        """
+        self._claim_token = claim_token
+
+        # Phase 1: Load run, validate claim, enforce capacity, validate snapshot, check pin, load eval defs
+        async with self._session_factory() as session, session.begin():
+            result = await self._resume_load_and_validate(
+                session=session,
+                run_id=run_id,
+                org_id=org_id,
+                claim_token=claim_token,
+                expected_claim_status=expected_claim_status,
+                check_sandbox_capacity=check_sandbox_capacity,
+            )
+            if result[1] is None:  # pin_run was returned
+                return result[0]
+            run, snapshot, graph_json, node_type_map = result
+            eval_defs_by_node = await self._resume_load_eval_defs(
+                session=session,
+                org_id=org_id,
+                run_id=run_id,
+                pipeline_id=run.pipeline_id,
+                policy_gate_pins_json=snapshot.policy_gate_pins_json,
+            )
+
+        pipeline_id = run.pipeline_id
+        snapshot_id = run.snapshot_id
+        thread_id = run.langgraph_thread_id
+
+        # Phase 2: Load pipeline and capture scalars
+        async with self._session_factory() as session, session.begin():
+            pipeline, scalars = await self._resume_prepare_second_transaction(
+                session=session,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                run_id=run_id,
+            )
+        guard = scalars["guard"]
+
+        if not self._checkpointer_conn_string:
+            raise RuntimeError("Cannot resume without a checkpointer configured")
+
+        # Phase 3: Compile graph
+        compiled, _node_idempotency_key = await self._resume_compile_graph(
+            pipeline=pipeline,
+            pipeline_id=pipeline_id,
+            snapshot_id=snapshot_id,
+            graph_json=graph_json,
+            eval_defs_by_node=eval_defs_by_node,
+            pipeline_retry_policy=scalars["pipeline_retry_policy"],
+            scalars=scalars,
+            org_id=org_id,
+        )
+
+        # Phase 4: Setup runtime
+        broker, model_backend_hub = await self._resume_setup_runtime(
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            snapshot=snapshot,
+            run_id=run_id,
+        )
+
+        # Phase 5: Stream and handle errors
+        config = {"configurable": {"thread_id": thread_id}}
+        node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
+        node_token_budgets = {
+            str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
+        }
+        # One shared instance threaded into BOTH the stream phase and finalize:
+        # ``_stream_graph`` mutates it IN PLACE, so a fresh dict at finalize
+        # would lose the resumed segment's outputs (FAR-505 regression).
+        completed_node_outputs: dict[str, Any] = {}
+        final_status: str = "failed"
+        error_code: str | None = None
+        error_detail: str | None = None
+        node_token_usage: dict[str, Any] | None = None
+        try:
+            final_status, error_code, error_detail, node_token_usage = await self._resume_stream_and_handle_errors(
+                compiled=compiled,
+                config=config,
+                node_ids=node_ids,
+                broker=broker,
+                run_id=run_id,
+                pipeline_id=pipeline_id,
+                org_id=org_id,
+                resume_data=resume_data,
+                completed_node_outputs=completed_node_outputs,
+                guard=guard,
+                node_token_budgets=node_token_budgets,
+                eval_definitions_by_node=eval_defs_by_node,
+                node_type_map=node_type_map,
+            )
+        finally:
+            # Teardown MUST stay exception-safe: a CancelledError or a
+            # re-raised non-checkpointer RuntimeError from the stream phase
+            # would otherwise leak process-global contextvars and the model
+            # hub (FAR-1534).
+            set_cancellation_check(None)
+            set_audit_hook(None)
+            set_model_backend_hub(None)
+            if model_backend_hub is not None:
+                await _teardown_hub(model_backend_hub)
+            if final_status not in ("awaiting_human", "complete"):
+                get_registry().close(run_id)
+
+        # Phase 6: Finalize
+        return await self._resume_cleanup_and_finalize(
+            final_status=final_status,
+            run_id=run_id,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            node_type_map=node_type_map,
             error_code=error_code,
             error_detail=error_detail,
             node_token_usage=node_token_usage,
@@ -6222,42 +6645,24 @@ class PipelineExecutor:
         ``dispatcher_reconcile`` (cron_helpers) and ``stale_run_recovery_sweep``.
         """
         self._claim_token = claim_token
-        # FAR-893: phase tracking — enter EXECUTOR_RUNNING before any work begins.
-        _tracker = self._dispatch_phase_tracker
-        if _tracker is not None:
-            _tracker.enter_phase("executor_running")
-        # Load run + pipeline + snapshot in one short-lived transaction.
-        if _tracker is not None:
-            _tracker.enter_phase("loading_context")
-        run, pipeline, snapshot, graph_json, node_type_map = await self._load_execution_context(
+
+        # Phase 1: Load execution context
+        run, pipeline, snapshot, graph_json, node_type_map = await self._execute_load_and_validate(
             run_id=run_id,
             org_id=org_id,
             input_payload=input_payload,
         )
-        # FAR-967 F1 — snapshot policy-gate pin integrity re-verify (§3.4
-        # backstop, mirrored on resume): a mismatch fails CLOSED before ANY
-        # evaluation happens — the run is terminalized eval_failed /
-        # eval_blocked and returned early (no compensation, no finalize;
-        # nothing has executed — spend-ceiling-gate early-return precedent).
-        async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-            # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE the
-            # transaction's first lock (``_check_policy_gate_pin``'s
-            # terminalizing ``update_run_status``). Issued in the caller's
-            # transaction; the shared ``update_run_status`` stays unbounded
-            # (FAR-1601). A 55P03 propagates to ``execute()``'s caller and
-            # terminal-fails the run visibly (executor_failed) — never silent.
-            await set_mutation_row_lock_timeout(session)
-            pin_run = await self._check_policy_gate_pin(
-                session,
-                run_id=run_id,
-                org_id=org_id,
-                snapshot=snapshot,
-                claim_token=claim_token,
-            )
+
+        # Phase 2: Check policy gate pin
+        pin_run = await self._execute_policy_gate_pin(
+            run_id=run_id,
+            org_id=org_id,
+            snapshot=snapshot,
+            claim_token=claim_token,
+        )
         if pin_run is not None:
             return pin_run
+
         variant_config_snapshot = run.variant_config_snapshot
         scalars = self._capture_execution_scalars(pipeline, run)
         pipeline_id = scalars["pipeline_id"]
@@ -6268,121 +6673,79 @@ class PipelineExecutor:
         thread_id = scalars["thread_id"]
         is_correction_run = scalars["is_correction_run"]
         run_number = scalars["run_number"]
-        # FAR-402 P5 / FAR-410: the runtime node-scoped idempotency-key provider.
-        # The compiled graph is cached across runs, so the key must be derived at
-        # RUNTIME from the run's stable logical identity (``<pipeline_id>:<run_number>``)
-        # plus the node id — NOT baked at compile time. A fresh per-replay
-        # ``run_id`` is never part of the derivation (a re-run recomputes the
-        # same key, so a retry of a side-effecting node dedupes its write).
-        run_ref = rc.build_run_ref(str(pipeline_id), run_number)
 
-        def _node_idempotency_key(node_id: str, _state: dict[str, Any]) -> str | None:
-            return rc.node_idempotency_key(run_ref=run_ref, node_ref=node_id)
-
-        # Load eval definitions for conditional HITL gating (eval-before-interrupt).
-        # FAR-967 chunk 10: thread the snapshot's policy-gate pins so the
-        # pinned ``action`` governs and the operator control re-check runs
-        # (criteria 8/9/10) on the execute path as well as on resume.
-        eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
-        async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-            eval_rows = await self._load_eval_defs_for_pipeline(session, pipeline_id)
-        eval_defs_by_node = self._build_eval_defs_by_node(
-            eval_rows,
-            org_id,
-            pipeline_id,
-            snapshot.policy_gate_pins_json,
+        # Phase 3: Load eval definitions
+        eval_defs_by_node = await self._execute_load_eval_defs(
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            policy_gate_pins_json=snapshot.policy_gate_pins_json,
         )
 
-        # Non-blocking capacity check — if at limit the run is demoted back to
-        # pending (with a reason marker) and recovered by dispatcher_reconcile /
-        # the stale-run sweep (plan F3b).
-        if _tracker is not None:
-            _tracker.enter_phase("capacity_check")
-        capacity_run = await self._check_capacity(
+        # Phase 4: Pre-stream checks (capacity, spend ceiling)
+        pre_stream_run = await self._execute_pre_stream_checks(
             run_id=run_id,
             org_id=org_id,
             pipeline_id=pipeline_id,
             max_concurrent=max_concurrent,
             graph_json=graph_json,
             snapshot_id=snapshot_id,
+            claim_token=claim_token,
         )
-        if capacity_run.status != "running":
-            # Capacity-blocked or terminal (plan F3b): return the run as-is.
-            # There is NO in-process ``_retry_pending`` loop — a capacity-blocked
-            # run stays ``pending`` with its reason marker and is recovered by
-            # ``dispatcher_reconcile`` (cron_helpers) when a slot frees, with
-            # ``stale_run_recovery_sweep``'s stranded re-dispatch as the durable
-            # liveness backstop. A terminal run (cancelled/completed while the
-            # capacity check ran) is never resurrected.
-            return capacity_run
+        if pre_stream_run is not None:
+            return pre_stream_run
 
-        # FAR-391 — hard spend-ceiling gate. Runs BEFORE any billable step is
-        # spawned (no LLM / E2B call happens until ``_prepare_and_stream`` below).
-        # If the org's lifetime budget is already exhausted, the run is halted
-        # immediately as ``cost_ceiling_exceeded`` so no billable work starts.
-        # FAIL-OPEN: any error reading the ceilings must never block the run —
-        # the terminal ledger block (finalize.py) is the authoritative hard
-        # ceiling that refuses billing beyond the limit regardless.
-        if _tracker is not None:
-            _tracker.enter_phase("spend_check")
-        ceiling_run = await self._check_spend_ceiling_gate(run_id=run_id, org_id=org_id, claim_token=claim_token)
-        if ceiling_run is not None:
-            return ceiling_run
-
-        final_status: str = "failed"
-        error_code: str | None = None
-        error_detail: str | None = None
-        node_token_usage: dict[str, Any] | None = None
-        completed_node_outputs: dict[str, Any] = {}
-        # FAR-592 (D6 F2): False only when the run terminal-failed through the
-        # deterministic tier-refusal shortcut (never requeue it).
-        retry_policy_eligible = True
-        # Initialised so the terminalization work_intact computation is safe even
-        # when the stream never started (compile/pre-stream failure) — a run with
-        # no executed nodes is never work-intact.
-        node_ids: set[str] = set()
-        model_backend_hub, connector_hub, broker, single_sandbox_node = await self._init_run_environment(
+        # Phase 5: Initialize environment
+        model_backend_hub, connector_hub, broker, single_sandbox_node = await self._execute_init_environment(
             org_id=org_id,
             run_id=run_id,
             pipeline_id=pipeline_id,
             graph_json=graph_json,
         )
-        # FAR-295: computed ONCE per run — a graph containing ANY node declared
-        # non-idempotent (idempotent=false) suppresses every retry path below
-        # (the node-level transient retry and the run-level retry_policy
-        # re-dispatch), because either retry re-executes the whole run and
-        # would re-run the side-effecting node.
         graph_idempotent = _graph_is_idempotent(graph_json)
-        # FAR-228: set when guard B suppressed a transient retry — gates the
-        # eval-suite/fire_agent_signal block. FAR-1534: it no longer publishes
-        # run_completed; that happens post-finalize like every other complete run.
         gate_suppressed = False
 
+        # Phase 6: Prepare stream config
+        run_ref = rc.build_run_ref(str(pipeline_id), run_number)
+
+        def _node_idempotency_key(node_id: str, _state: dict[str, Any]) -> str | None:
+            return rc.node_idempotency_key(run_ref=run_ref, node_ref=node_id)
+
+        node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
+        # ONE shared instance for the whole run: ``_stream_graph`` mutates it
+        # IN PLACE, so the stream config and the finalize call MUST receive the
+        # same dict or the accumulated outputs never reach finalize_cost.
+        completed_node_outputs: dict[str, Any] = {}
+        scope = _RunScope(
+            run_id=run_id,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            snapshot_id=snapshot_id,
+            thread_id=thread_id,
+        )
+        stream_config = _StreamConfig(
+            snapshot=snapshot,
+            input_payload=input_payload,
+            variant_config_snapshot=variant_config_snapshot,
+            graph_json=graph_json,
+            eval_defs_by_node=eval_defs_by_node,
+            node_ids=node_ids,
+            completed_node_outputs=completed_node_outputs,
+            guard=guard,
+            node_type_map=node_type_map,
+            pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
+            broker=broker,
+            pipeline_retry_policy=pipeline_retry_policy,
+            idempotency_key=_node_idempotency_key,
+        )
+
+        # Phase 7: Stream and handle exceptions
+        final_status = "failed"
+        error_code: str | None = None
+        error_detail: str | None = None
+        node_token_usage: dict[str, Any] | None = None
+        retry_policy_eligible = True
+
         try:
-            scope = _RunScope(
-                run_id=run_id,
-                org_id=org_id,
-                pipeline_id=pipeline_id,
-                snapshot_id=snapshot_id,
-                thread_id=thread_id,
-            )
-            stream_config = _StreamConfig(
-                snapshot=snapshot,
-                input_payload=input_payload,
-                variant_config_snapshot=variant_config_snapshot,
-                graph_json=graph_json,
-                eval_defs_by_node=eval_defs_by_node,
-                node_ids=node_ids,
-                completed_node_outputs=completed_node_outputs,
-                guard=guard,
-                node_type_map=node_type_map,
-                pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
-                broker=broker,
-                pipeline_retry_policy=pipeline_retry_policy,
-                idempotency_key=_node_idempotency_key,
-            )
             final_status, error_code, error_detail, node_token_usage = await self._prepare_and_stream(
                 scope=scope,
                 config=stream_config,
@@ -6390,27 +6753,12 @@ class PipelineExecutor:
         except asyncio.CancelledError:
             raise
         except RouterNoMatchError as exc:
-            # FAR-402 P1 (F2-A): a Router node had no matching rule and no
-            # default — terminalize the run with the dedicated router_no_match
-            # status (terminal, non-failure; classified as excluded/notify).
             _log.info("pipeline.router_no_match", extra={"run_id": str(run_id), "detail": str(exc)})
             final_status = "router_no_match"
             error_code = "router.no_match"
             error_detail = _sanitize_detail(str(exc), limit=None)
         except (NodeCancelledError, SandboxNodeFailedError) as exc:
-            # FAR-1994: a sandbox failure that produced no parseable node output
-            # records ZERO token usage by default. node_runner recovers the
-            # agent's own opencode ``step_finish`` counters from the retained
-            # raw output and attaches them to the exception; fold them into the
-            # accumulator as the AGENT-REPORTED family so the terminal write
-            # stops reporting a false zero (a no-op when nothing was recovered).
             node_token_usage = merge_recovered_token_usage(node_token_usage, exc)
-            # FAR-592 (D6 F2): the Local-tier refusal is a DETERMINISTIC config
-            # fault — the profile opt-in cannot change mid-run, so requeueing
-            # it would burn the retry budget on a refusal that cannot succeed.
-            # Terminal-fail DIRECTLY (before ``_decide_transient_failure``) so
-            # the typed ``sandbox.tier_refused`` code is written and the run
-            # never requeues.
             tier_refused = isinstance(exc, SandboxTierRefusedError)
             if tier_refused:
                 _log.warning(
@@ -6420,26 +6768,8 @@ class PipelineExecutor:
                 final_status = "failed"
                 error_code = _ERROR_CODE_SANDBOX_TIER_REFUSED
                 error_detail = _sanitize_detail(str(exc), limit=None)
-                # A tier refusal MUST also skip the pipeline retry_policy below:
-                # the "failure" event matches final_status == "failed" and would
-                # requeue the deterministic refusal despite the non-retryable
-                # registry flag.
                 retry_policy_eligible = False
             else:
-                # Transient node cancellation / sandbox-infra failure (e.g. an E2B
-                # sandbox command wait cancelled from outside, a stall, or a command
-                # timeout). Do NOT terminal-fail: the run is still retryable.
-                # Bounded by the SAQ node-attempt count (NOT the claim count —
-                # capacity-deferred / non-executing claims must not consume the
-                # retry budget). Uses the ORIGINAL executor's captured claim token
-                # for the fenced pending-reset; a superseded original, a watchdog
-                # stall, or a requested cancellation SKIP the reset (the run is
-                # owned elsewhere / terminal / cancelled — never demote it).
-                # The gate/requeue/superseded/terminal decision chain lives in
-                # ``_decide_transient_failure`` — this handler is a thin dispatcher.
-                # For requeue/superseded the helper already performed the fenced
-                # pending-reset + cleanup, and the bare re-raise below propagates out
-                # of execute() BEFORE the post-stream try/finally, exactly as today.
                 _log.warning(
                     "pipeline.node_cancelled_transient",
                     extra={"run_id": str(run_id), "exc_type": type(exc).__name__},
@@ -6462,99 +6792,39 @@ class PipelineExecutor:
                     completed_node_outputs=completed_node_outputs,
                     gate_suppressed=gate_suppressed,
                 )
-            # A tier refusal MUST also skip the pipeline retry_policy below: the
-            # "failure" event matches final_status == "failed" and would requeue
-            # the deterministic refusal despite the non-retryable registry flag.
         except Exception as exc:
-            _tb = _traceback_detail(exc, limit=2000)
-            # FAR-872: enrich the error detail with attribution (build SHA,
-            # failing column, table set) so executor failures are self-identifying.
-            error_detail = _enrich_failure_detail(_tb, exc)
-            _log.exception(
-                "pipeline.execution_error",
-                extra={
-                    "run_id": str(run_id),
-                    **(
-                        {
-                            "failure_build_sha": _failure_build_sha(),
-                            "failing_column": _failure_column(exc),
-                        }
-                        if _ATTRIBUTION_AVAILABLE
-                        else {}
-                    ),
-                },
-            )
-            final_status = "failed"
-            error_code = type(exc).__name__
-            # FAR-2006: a provider 401/402 raised out of a model backend is a
-            # provider refusal, not a generic exception. The raw class name
-            # (``APIStatusError``) resolved to ``harness.unknown``; classify
-            # the message so the run records provider.authentication /
-            # provider.billing and the terminal-path alert fires.
-            _provider_refusal = non_retryable_provider_code(str(exc)) or non_retryable_provider_code(error_detail)
-            if _provider_refusal is not None:
-                error_code = _provider_refusal
-
-        # Retry policy: if the run ended in a state the pipeline's
-        # retry_policy says to retry and the attempt budget remains, reset the
-        # run to pending + release the dispatch lease + re-raise so SAQ
-        # re-dispatches it as a new attempt — the same fenced pattern as the
-        # NodeCancelledError path above. The E2B dispatch fence was retired in
-        # favour of ``runs.claim_token`` fencing (settings.py F3a note), so the
-        # fenced pending-reset below IS the fence release.
-        retry_decision = "none"
-        if not retry_policy_eligible:
-            # FAR-592 (D6 F2): a tier-refused run never consults the retry
-            # policy — the deterministic config refusal cannot be retried
-            # away, only reconfigured.
-            _log.info(
-                "pipeline.retry_policy_skipped_tier_refused",
-                extra={"run_id": str(run_id)},
-            )
-        else:
-            retry_decision = await self._maybe_retry_after_policy(
+            (
+                final_status,
+                error_code,
+                error_detail,
+                node_token_usage,
+                retry_policy_eligible,
+            ) = await self._execute_handle_stream_exceptions(
+                exc=exc,
                 run_id=run_id,
-                org_id=org_id,
+                node_token_usage=node_token_usage,
                 pipeline_retry_policy=pipeline_retry_policy,
-                final_status=final_status,
-                error_code=error_code,
-                error_detail=error_detail,
-                is_correction_run=is_correction_run,
-                graph_idempotent=graph_idempotent,
-                graph_json=graph_json,
-                model_backend_hub=model_backend_hub,
-                connector_hub=connector_hub,
-                broker=broker,
-            )
-        if retry_decision == "side_effect_unknown":
-            # FAR-296 Phase 2: the lease probe blocked the requeue — a script
-            # process may have run with unknown side-effect state. Terminal-fail
-            # with ``script.side_effect_unknown`` (never retried) so the run
-            # reaches a needs-human state. The run_failed publish happened inside
-            # ``_maybe_retry_after_policy``; here we surface the code/detail so
-            # the terminalization write matches.
-            final_status = "failed"
-            error_code = _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN
-            error_detail = _sanitize_detail(
-                "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
-                "not retried — needs human review.",
-                limit=5000,
+                retry_policy_eligible=retry_policy_eligible,
             )
 
-        # The post-stream tail (agent_signal firing, gated run_completed
-        # publish) owns its own try/except
-        # (pipeline.post_stream_error); it can also mutate final_status /
-        # error_code / error_detail, so its returned
-        # values are rebound here. The tail + the resource teardown
-        # (contextvars, hubs, broker registry close) live in
-        # ``_run_post_stream_and_teardown`` — the teardown runs in a finally so
-        # it fires even when the tail re-raises (e.g. CancelledError), matching
-        # the original inline block.
-        #
-        # FAR-131: the signal map is EXTENDED from the snapshot edges so an
-        # edge-synthesized HITL gate node (absent from graph_json.nodes)
-        # resolves to "gate" and its child pipeline receives the gate's pure
-        # return. The base map stays unextended for every other consumer.
+        # Phase 8: Apply retry policy
+        _retry_decision, final_status, error_code, error_detail = await self._execute_retry_policy(
+            run_id=run_id,
+            org_id=org_id,
+            pipeline_retry_policy=pipeline_retry_policy,
+            final_status=final_status,
+            error_code=error_code,
+            error_detail=error_detail,
+            is_correction_run=is_correction_run,
+            graph_idempotent=graph_idempotent,
+            graph_json=graph_json,
+            model_backend_hub=model_backend_hub,
+            connector_hub=connector_hub,
+            broker=broker,
+            retry_policy_eligible=retry_policy_eligible,
+        )
+
+        # Phase 9: Post-stream tail and teardown
         signal_node_type_map = extend_node_type_map_from_edges(node_type_map, graph_json)
         final_status, error_code, error_detail = await self._run_post_stream_and_teardown(
             run_id=run_id,
@@ -6569,15 +6839,7 @@ class PipelineExecutor:
             connector_hub=connector_hub,
         )
 
-        # Mark complete/failed/cancelled/awaiting_human — the SINGLE
-        # finalization path (PR A2). finalize_cost merges the accumulated
-        # segment sets into the stored cumulative sets (segment-wins), builds
-        # the enriched union + breakdown (total == sum), and runs the
-        # terminal-only ledger block.
-        # FAR-152 §15.3 — work_intact computed at terminalization from
-        # completed-node artifacts + the full DAG ran. NOT from the async
-        # evidence probe. Written atomically inside the same terminalization
-        # transaction (restores the false-failure banner for #1/#3).
+        # Phase 10: Finalize
         return await self._finalize_then_publish_completed(
             defer_close=final_status == "complete",
             run_id=run_id,
@@ -8133,105 +8395,45 @@ class PipelineExecutor:
             if outcome == "reuse":
                 coalesce_reused = True
             else:
-                # FAR-613: resolve the pipeline name FIRST (the same
-                # failure-isolated seam the notifications use) so the fire-time
-                # briefing bundle carries it too. Runs inside a nested
-                # savepoint (see class docstring) so a DB-level failure
-                # degrades to None rather than poisoning the transaction.
-                try:
-                    async with session.begin_nested():
-                        pipeline = await get_pipeline(session, pipeline_id, organisation_id=org_id)
-                        pipeline_name = pipeline.name if pipeline is not None else None
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning(
-                        "hitl_review.pipeline_name_lookup_failed",
-                        extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
-                        exc_info=True,
-                    )
-                # FAR-613: capture the decision briefing at fire time.
-                # Failure-isolated — a briefing defect must never block the
-                # interrupt (build_hitl_review_context never raises; context is
-                # None on capture failure). The savepoint is what keeps a
-                # DB-level capture error from poisoning the shared transaction.
-                gate_context: HitlReviewContext | None = None
-                try:
-                    async with session.begin_nested():
-                        gate_context = await build_hitl_review_context(
-                            session,
-                            run_id=run_id,
-                            review_id=review_id,
-                            org_id=org_id,
-                            pipeline_name=pipeline_name,
-                            completed_node_outputs=completed_node_outputs,
-                            condition_result=condition_result,
-                            subject=subject,
-                            subject_parent=subject_parent,
-                            subject_leaf_key=subject_leaf_key,
-                        )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning(
-                        "hitl_review.context_capture_failed",
-                        extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
-                        exc_info=True,
-                    )
-                    gate_context = None
-                # FAR-634: resolve the fired gate's hitl_review_config and stamp
-                # it on the claim row so the human_only resolver reads it in
-                # ONE claim-row lookup at decision time instead of the
-                # snapshot/live walk. Same failure-isolated savepoint contract
-                # as the briefing capture: a stamp failure must never block
-                # the interrupt — the row carries NULL config and the
-                # resolver's walk fallback covers it (legacy semantics
-                # unchanged).
-                gate_config: dict[str, Any] | None = None
-                try:
-                    async with session.begin_nested():
-                        gate_config = await resolve_hitl_review_config(
-                            session,
-                            run_id=run_id,
-                            review_id=review_id,
-                            org_id=org_id,
-                        )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning(
-                        "hitl_review.config_stamp_failed",
-                        extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
-                        exc_info=True,
-                    )
-                    gate_config = None
-                # FAR-1257: resolve the review-window chain (pipeline override >
-                # org default > instance/env default) ONCE at fire time and stamp
-                # the resulting ABSOLUTE deadline onto the claim row. The sweep's
-                # predicate then collapses to ``terminalize_at < now()`` for this
-                # row and never re-reads config. Same failure-isolated savepoint
-                # contract as the briefing/config stamps above: a resolution
-                # failure leaves ``terminalize_at`` NULL, which sends the row
-                # down the legacy ``expires_at + grace`` fallback — shipped
-                # behaviour, never a broken interrupt.
-                terminalize_at: datetime | None = None
-                try:
-                    async with session.begin_nested():
-                        window_seconds = await resolve_review_window_for_gate(
-                            session,
-                            pipeline_id=pipeline_id,
-                            org_id=org_id,
-                        )
-                        terminalize_at = datetime.now(UTC) + timedelta(seconds=window_seconds)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning(
-                        "hitl_review.window_resolution_failed",
-                        extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
-                        exc_info=True,
-                    )
-                    terminalize_at = None
+                # Resolve pipeline name (failure-isolated)
+                pipeline_name = await self._create_interrupt_gate_resolve_pipeline_name(
+                    session=session,
+                    pipeline_id=pipeline_id,
+                    org_id=org_id,
+                    run_id=run_id,
+                )
+
+                # Capture HITL review context (failure-isolated)
+                gate_context = await self._create_interrupt_gate_capture_context(
+                    session=session,
+                    run_id=run_id,
+                    review_id=review_id,
+                    org_id=org_id,
+                    pipeline_name=pipeline_name,
+                    completed_node_outputs=completed_node_outputs,
+                    condition_result=condition_result,
+                    subject=subject,
+                    subject_parent=subject_parent,
+                    subject_leaf_key=subject_leaf_key,
+                )
+
+                # Resolve HITL review config (failure-isolated)
+                gate_config = await self._create_interrupt_gate_resolve_config(
+                    session=session,
+                    run_id=run_id,
+                    review_id=review_id,
+                    org_id=org_id,
+                )
+
+                # Resolve review window deadline (failure-isolated)
+                terminalize_at = await self._create_interrupt_gate_resolve_window(
+                    session=session,
+                    pipeline_id=pipeline_id,
+                    org_id=org_id,
+                    run_id=run_id,
+                    review_id=review_id,
+                )
+
                 # FAR-939 chunk 12 (M4): stamp the fire-time evaluation modes
                 # onto the fire-time review-config column (the same
                 # failure-isolated stamp FAR-634 established). Only merged
@@ -8241,6 +8443,7 @@ class PipelineExecutor:
                 # the extra member is inert to them.
                 if frozen_gated_eval_modes and isinstance(gate_config, dict):
                     gate_config = {**gate_config, _GATED_EVAL_MODES_KEY: frozen_gated_eval_modes}
+
                 await mgr.create_gate(
                     session,
                     run_id=run_id,
