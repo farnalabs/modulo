@@ -84,8 +84,8 @@ async function expectInside(
   expect(childBox!.x + childBox!.width).toBeLessThanOrEqual(parentBox!.x + parentBox!.width + 0.5)
 }
 
-test.describe('FAR-2396 mobile responsiveness', () => {
-  test('Agent Output Diff controls fit their card at 320px', async ({ page, env }) => {
+test.describe('FAR-2396 mobile responsiveness', { tag: '@regression' }, () => {
+  test('Agent Output Diff controls fit their card at 320px', { tag: '@regression' }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'route mocks are local-only')
     await loginAsAdmin(page, env)
     await page.goto('/runs/diff')
@@ -107,7 +107,7 @@ test.describe('FAR-2396 mobile responsiveness', () => {
     await expectNoPageOverflow(page)
   })
 
-  test('HITL Review row stacks and keeps select-all reachable at 320px', async ({ page, env }) => {
+  test('HITL Review row stacks and keeps select-all reachable at 320px', { tag: '@regression' }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'route mocks are local-only')
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/hitl/reviews**', (route) =>
@@ -131,7 +131,7 @@ test.describe('FAR-2396 mobile responsiveness', () => {
     await expectNoPageOverflow(page)
   })
 
-  test('Teams name stays readable and metadata stacks below it at 320px', async ({ page, env }) => {
+  test('Teams name stays readable and metadata stacks below it at 320px', { tag: '@regression' }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'route mocks are local-only')
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/admin/teams**', (route) =>
@@ -158,7 +158,7 @@ test.describe('FAR-2396 mobile responsiveness', () => {
     await expectNoPageOverflow(page)
   })
 
-  test('Costs ordinary labels use Inter while technical values stay monospace', async ({ page, env }) => {
+  test('Costs ordinary labels use Inter while technical values stay monospace', { tag: '@regression' }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'route mocks are local-only')
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/admin/costs/components**', (route) =>
