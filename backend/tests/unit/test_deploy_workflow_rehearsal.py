@@ -557,6 +557,10 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert '--prefix="$BUNDLE_PG_PREFIX"' in workflow_text
     assert "--without-llvm" in workflow_text
     assert "PG_REQUIRED_EXTENSIONS=" in versions
+    assert "PG_REQUIRED_EXTENSIONS=\n" in versions
+    assert "Verify PostgreSQL extension inventory before source build" in workflow_text
+    assert "CREATE[[:space:]]+EXTENSION" in workflow_text
+    assert "required_extensions?" in workflow_text
     assert 'test -z "${PG_REQUIRED_EXTENSIONS}"' in workflow_text
     assert 'test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"' in workflow_text
     assert 'test -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets"' in workflow_text
@@ -587,9 +591,13 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert "SELECT 1;" in smoke_script
     assert "America/New_York" in smoke_script
     assert "pg_dump" in smoke_script
+    assert "--format=custom" in smoke_script
+    assert "pg_restore --exit-on-error" in smoke_script
     assert "dropdb" in smoke_script
     assert "stop -m fast -w" in smoke_script
     assert "host PostgreSQL path" in smoke_script
+    assert "PGHOST" not in smoke_script
+    assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
 
 
 def test_bundle_release_scans_postgres_elf_paths_and_keeps_glibc_gate() -> None:
@@ -597,8 +605,12 @@ def test_bundle_release_scans_postgres_elf_paths_and_keeps_glibc_gate() -> None:
     assert "Scan shipped PostgreSQL ELF files for build and host paths" in workflow_text
     assert 'strings -a "$binary" | grep -Fq "$build_prefix"' in workflow_text
     assert "unexpected absolute PostgreSQL path" in workflow_text
-    assert 'check_binary "$BUNDLE/pg/bin/postgres"' in workflow_text
-    assert 'check_binary "$BUNDLE/pg/bin/pg_dump"' in workflow_text
+    assert 'find "$BUNDLE/pg/bin" -type f -perm /111' in workflow_text
+    assert "executable under pg/bin is not an ELF binary" in workflow_text
+    assert "absolute or non-origin dynamic library path" in workflow_text
+    assert "absolute dynamic dependency" in workflow_text
+    assert 'find "$BUNDLE/pg/bin" "$BUNDLE/redis" -type f -perm /111' in workflow_text
+    assert "could not determine the glibc requirement" in workflow_text
 
 
 def test_bundle_release_verifies_generated_signature_before_upload() -> None:

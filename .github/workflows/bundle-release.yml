@@ -170,6 +170,39 @@ jobs:
           echo "${PG_SOURCE_SHA256}  postgresql-${PG_VERSION}.tar.gz" | (cd downloads && sha256sum --check --strict -)
           test -s "downloads/postgresql-${PG_VERSION}.tar.gz"
 
+      - name: Verify PostgreSQL extension inventory before source build
+        run: |
+          set -euo pipefail
+          # Keep the supported inventory explicit. An empty inventory is valid,
+          # but any product/runtime requirement must be added deliberately before
+          # contrib is built or the release can pass.
+          required_extensions="${PG_REQUIRED_EXTENSIONS}"
+          extension_hits="$(mktemp)"
+          trap 'rm -f "$extension_hits"' EXIT
+          grep -RniE --include='*.py' --include='*.sql' \
+            -e 'CREATE[[:space:]]+EXTENSION' \
+            -e 'required_extensions?' \
+            -e 'extension_requirements?' \
+            backend/src/modulo/db/migrations backend/src/modulo > "$extension_hits" || true
+          if [ -s "$extension_hits" ]; then
+            while IFS= read -r hit; do
+              extension_name="$(printf '%s\n' "$hit" | sed -nE 's/.*CREATE[[:space:]]+EXTENSION([[:space:]]+IF[[:space:]]+NOT[[:space:]]+EXISTS)?[[:space:]]+([a-zA-Z0-9_]+).*/\2/p' | head -n1)"
+              if [ -z "$extension_name" ]; then
+                echo "::error::unclassified PostgreSQL extension requirement: $hit" >&2
+                exit 1
+              fi
+              case ",$required_extensions," in
+                *,"$extension_name",*) ;;
+                *) echo "::error::PostgreSQL extension $extension_name is required but not in PG_REQUIRED_EXTENSIONS" >&2; exit 1 ;;
+              esac
+            done < "$extension_hits"
+          fi
+          if [ -n "$required_extensions" ]; then
+            echo "PostgreSQL extension inventory: $required_extensions"
+          else
+            echo "PostgreSQL extension inventory is explicitly empty"
+          fi
+
       - name: Build and sha256-verify PostgreSQL from pinned upstream source
         run: |
           set -euo pipefail
@@ -186,9 +219,8 @@ jobs:
               --without-zlib \
               --without-icu \
               --without-llvm
-            # Modulo uses core PostgreSQL only: no CREATE EXTENSION call sites
-            # exist in product/runtime code, so contrib is intentionally empty.
-            # Keep the source build's dependency/configuration choices explicit.
+            # No contrib build: the preceding inventory scan proves whether
+            # product/runtime SQL requires an extension.
             make -j"$(nproc)"
             make install
           )
@@ -313,8 +345,12 @@ jobs:
           BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
           build_prefix="$PWD/build/${BUNDLE_ROOT}/pg"
           fail=0
+          checked=0
           while IFS= read -r -d '' binary; do
+            checked=$((checked + 1))
             if ! readelf -h "$binary" >/dev/null 2>&1; then
+              echo "::error::executable under pg/bin is not an ELF binary: $binary" >&2
+              fail=1
               continue
             fi
             if strings -a "$binary" | grep -Fq "$build_prefix"; then
@@ -325,7 +361,19 @@ jobs:
               echo "::error::PostgreSQL ELF embeds an unexpected absolute PostgreSQL path ($forbidden): $binary" >&2
               fail=1
             done < <(strings -a "$binary" | grep -E '/(usr|opt|home)/[^ ]*(postgresql|pgsql)' | sort -u || true)
-          done < <(find "$BUNDLE/pg" -type f -print0)
+            if readelf -d "$binary" | grep -Eq 'R(PATH|UNPATH).*\[(/|[^]]*:[^$])'; then
+              echo "::error::executable has an absolute or non-origin dynamic library path: $binary" >&2
+              fail=1
+            fi
+            if readelf -d "$binary" | grep -Eq 'NEEDED.*\[/'; then
+              echo "::error::executable has an absolute dynamic dependency: $binary" >&2
+              fail=1
+            fi
+          done < <(find "$BUNDLE/pg/bin" -type f -perm /111 -print0)
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no executable files found under pg/bin" >&2
+            exit 1
+          fi
           exit "$fail"
 
       - name: Assert bundled service binaries stay within the glibc 2.35 floor
@@ -334,9 +382,11 @@ jobs:
           BUNDLE="build/${BUNDLE_ROOT}"
           floor="2.35"
           fail=0
+          checked=0
           check_binary() {
             local bin="$1"
             local max
+            checked=$((checked + 1))
             max="$(objdump -p "$bin" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -Vu | tail -n1)"
             if [ -z "$max" ]; then
               echo "::error::could not determine the glibc requirement of ${bin}" >&2
@@ -350,10 +400,13 @@ jobs:
               echo "ok: ${bin} max GLIBC_${max} (<= ${floor})"
             fi
           }
-          check_binary "$BUNDLE/redis/redis-server"
-          check_binary "$BUNDLE/redis/redis-cli"
-          check_binary "$BUNDLE/pg/bin/postgres"
-          check_binary "$BUNDLE/pg/bin/pg_dump"
+          while IFS= read -r -d '' binary; do
+            check_binary "$binary"
+          done < <(find "$BUNDLE/pg/bin" "$BUNDLE/redis" -type f -perm /111 -print0)
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no executable ELF files found for glibc validation" >&2
+            exit 1
+          fi
           exit "$fail"
 
       - name: Set up uv
@@ -537,10 +590,10 @@ jobs:
               createdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
               psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip \
                 --command "CREATE TABLE proof(value integer); INSERT INTO proof VALUES (2192);"
-              pg_dump --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip > "$SMOKE_DUMP"
+              pg_dump --format=custom --host "$SMOKE_SOCKET" --port 55432 --username modulo --file "$SMOKE_DUMP" roundtrip
               dropdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
               createdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
-              psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip < "$SMOKE_DUMP"
+              pg_restore --exit-on-error --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip "$SMOKE_DUMP"
               test "$(psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip --tuples-only --no-align --command "SELECT value FROM proof")" = "2192"
             '
           if grep -R -E '/(usr|opt|home)/[^ ]*(postgresql|pgsql)' "$smoke_data/postgres.log"; then
