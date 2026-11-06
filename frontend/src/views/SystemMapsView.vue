@@ -6,7 +6,18 @@
         :subtitle="$t('views.SystemMapsView.subtitle')"
       >
         <template #right>
-          <button v-if="store.hasAccess" type="button" class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" @click="openCreateDialog" data-testid="system-maps-create">{{ $t('views.SystemMapsView.create_map') }}</button>
+          <div v-if="store.hasAccess" class="flex items-center gap-2">
+            <button
+              type="button"
+              class="rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-60"
+              :disabled="discovering"
+              @click="discoverSystem"
+              data-testid="system-maps-discover"
+            >
+              {{ discovering ? $t('views.SystemMapsView.discovering') : $t('views.SystemMapsView.discover_my_system') }}
+            </button>
+            <button type="button" class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" @click="openCreateDialog" data-testid="system-maps-create">{{ $t('views.SystemMapsView.create_map') }}</button>
+          </div>
           <span v-else-if="store.hasReadAccess" class="rounded bg-muted px-2.5 py-1.5 text-xs text-muted-foreground" data-testid="system-maps-read-only">{{ $t('views.SystemMapsView.read_only') }}</span>
         </template>
       </PageHeader>
@@ -111,14 +122,14 @@
 
     <!-- Create Map Dialog -->
     <Dialog v-model:visible="createDialogOpen" :modal="true" :dismissable-mask="true" :style="{ width: '28rem' }" :header="$t('views.SystemMapsView.create_map')" data-testid="system-map-create-dialog">
-      <form @submit.prevent="submitCreate" class="space-y-4">
+      <form @submit.prevent="submitCreate" class="w-full space-y-4">
         <div>
           <label :for="nameId" class="block text-sm font-medium mb-1">{{ $t('views.SystemMapsView.name') }} <span class="text-destructive">*</span></label>
-          <InputText :id="nameId" v-model="createForm.name" :placeholder="$t('views.SystemMapsView.name_placeholder')" :aria-required="true" data-testid="system-map-create-name" />
+          <InputText :id="nameId" v-model="createForm.name" class="w-full" :placeholder="$t('views.SystemMapsView.name_placeholder')" :aria-required="true" data-testid="system-map-create-name" />
         </div>
         <div>
           <label :for="descId" class="block text-sm font-medium mb-1">{{ $t('views.SystemMapsView.description') }}</label>
-          <Textarea :id="descId" v-model="createForm.description" :placeholder="$t('views.SystemMapsView.description_placeholder')" rows="3" data-testid="system-map-create-description" />
+          <Textarea :id="descId" v-model="createForm.description" class="w-full" :placeholder="$t('views.SystemMapsView.description_placeholder')" rows="3" data-testid="system-map-create-description" />
         </div>
         <div class="flex justify-end gap-2 pt-2">
           <button type="button" class="rounded-md border px-3 py-2 text-sm font-medium" @click="createDialogOpen = false" data-testid="system-map-create-cancel">{{ $t('common.cancel') }}</button>
@@ -175,6 +186,7 @@ const deleteDialogOpen = ref(false)
 const deleteDialog = ref<{ map: SystemMap | null }>({ map: null })
 const deleting = ref(false)
 const actionError = ref<string | null>(null)
+const discovering = ref(false)
 
 const maps = computed(() => store.maps)
 const total = computed(() => store.total)
@@ -205,6 +217,25 @@ async function loadMaps(nextPage = 1): Promise<void> {
 }
 
 async function openMap(map: SystemMap): Promise<void> { await router.push(`/system-maps/${map.id}`) }
+
+/**
+ * Discovery persists an unpublished draft, so send the operator to the draft's
+ * detail view with the review panel open. This lives on the System Maps page
+ * (not the dashboard) because it is the surface that owns map authoring.
+ */
+async function discoverSystem(): Promise<void> {
+  if (discovering.value) return
+  discovering.value = true
+  actionError.value = null
+  try {
+    const report = await store.discover()
+    await router.push(`/system-maps/${report.draft_map_id}?discovery=1`)
+  } catch (err: unknown) {
+    actionError.value = err instanceof Error ? err.message : t('views.SystemMapsView.discover_failed')
+  } finally {
+    discovering.value = false
+  }
+}
 
 async function openCreateDialog(): Promise<void> {
   createForm.value = { name: '', description: '' }

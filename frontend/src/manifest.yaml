@@ -1087,9 +1087,6 @@ elements:
       - testid: system-map-node
         type: element
         dynamic_testid: false
-      - testid: dashboard-system-discover
-        type: button
-        dynamic_testid: false
       - testid: system-map-draft-review
         type: element
         dynamic_testid: false
@@ -1156,6 +1153,9 @@ elements:
 
     /system-maps:
       - testid: system-maps-create
+        type: button
+        dynamic_testid: false
+      - testid: system-maps-discover
         type: button
         dynamic_testid: false
       - testid: system-map-create-dialog
