@@ -38,6 +38,7 @@ from modulo.launcher.platform import binary_name, initdb_locale, is_windows
 
 BOOTSTRAP_USERNAME = "modulo"
 INITDB_LOCALE = "C.UTF-8"
+PG_MAJOR = "16"
 PG_VERSION_FILE = "PG_VERSION"
 
 # Registered pause gates (consumed via the MODULO_TEST_PAUSE_AT env var).
@@ -59,6 +60,7 @@ __all__ = [
     "BOOTSTRAP_USERNAME",
     "GATE_INITDB_PRE_RENAME",
     "INITDB_LOCALE",
+    "PG_MAJOR",
     "InitdbError",
     "assert_supported_platform",
     "bootstrap_pgdata",
@@ -140,7 +142,14 @@ def validate_target_dir(pgdata: Path) -> None:
 
 
 def initdb_argv(tmp_pgdata: Path, bin_dir: Path, username: str, pwfile: Path) -> list[str]:
-    """Build the pinned initdb invocation (every argument explicit)."""
+    """Build the pinned initdb invocation (every argument explicit).
+
+    The native bundle keeps PostgreSQL's versioned share data beside the
+    bundled binaries at ``pg/share/postgresql/<major>``.  ``-L`` is initdb's
+    explicit share-path option; passing it avoids falling back to PostgreSQL's
+    host-compiled ``/usr/share/postgresql/<major>`` location.
+    """
+    share_dir = bin_dir.parent / "share" / "postgresql" / PG_MAJOR
     return [
         _binary(bin_dir, "initdb"),
         "--pgdata",
@@ -149,6 +158,8 @@ def initdb_argv(tmp_pgdata: Path, bin_dir: Path, username: str, pwfile: Path) ->
         username,
         "--locale",
         initdb_locale(),
+        "-L",
+        str(share_dir),
         "--auth=scram-sha-256",
         "--pwfile",
         str(pwfile),

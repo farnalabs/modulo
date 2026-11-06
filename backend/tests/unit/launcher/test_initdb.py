@@ -20,6 +20,7 @@ from modulo.launcher.initdb import (
     BOOTSTRAP_USERNAME,
     GATE_INITDB_PRE_RENAME,
     INITDB_LOCALE,
+    PG_MAJOR,
     InitdbError,
     assert_supported_platform,
     bootstrap_pgdata,
@@ -93,8 +94,9 @@ def test_validate_target_refuses_dotfiles_only_dir(tmp_path: Path) -> None:
 
 def test_initdb_argv_pins_every_argument(tmp_path: Path) -> None:
     tmp_pgdata = tmp_path / "tmp"
+    bin_dir = tmp_path / "pg" / "bin"
     pwfile = tmp_path / "pw"
-    argv = initdb_argv(tmp_pgdata, tmp_path / "bin", BOOTSTRAP_USERNAME, pwfile)
+    argv = initdb_argv(tmp_pgdata, bin_dir, BOOTSTRAP_USERNAME, pwfile)
     assert Path(argv[0]).stem == "initdb"
     assert "--pgdata" in argv
     assert str(tmp_pgdata) in argv
@@ -103,6 +105,7 @@ def test_initdb_argv_pins_every_argument(tmp_path: Path) -> None:
     assert "--locale" in argv
     # The Windows locale seam pins "C" (no POSIX C.UTF-8); see test_platform.py.
     assert ("C" if sys.platform == "win32" else INITDB_LOCALE) in argv
+    assert argv[argv.index("-L") + 1] == str(bin_dir.parent / "share" / "postgresql" / PG_MAJOR)
     assert "--auth=scram-sha-256" in argv
     assert "--pwfile" in argv
     assert str(pwfile) in argv
@@ -112,8 +115,10 @@ def test_initdb_argv_uses_windows_locale_and_executable_seam(monkeypatch: pytest
     tmp_pgdata = tmp_path / "tmp"
     pwfile = tmp_path / "pw"
     monkeypatch.setattr(sys, "platform", "win32")
-    argv = initdb_argv(tmp_pgdata, tmp_path / "bin", BOOTSTRAP_USERNAME, pwfile)
+    bin_dir = tmp_path / "pg" / "bin"
+    argv = initdb_argv(tmp_pgdata, bin_dir, BOOTSTRAP_USERNAME, pwfile)
     assert argv[argv.index("--locale") + 1] == "C"
+    assert argv[argv.index("-L") + 1] == str(tmp_path / "pg" / "share" / "postgresql" / PG_MAJOR)
     assert argv[0].endswith("initdb.exe")
 
 
