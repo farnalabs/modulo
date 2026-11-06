@@ -1011,7 +1011,8 @@ async def test_bounded_final_drain_logs_an_awaited_failure() -> None:
 
     The failure is logged by the awaiter (the done callback stays silent while
     ``_awaiting`` is True), so a post-cancel drain failure can never be
-    swallowed — and never produces a duplicate record.
+    swallowed — and never produces a duplicate record. ``_log.exception`` is
+    ``error`` with ``exc_info=True`` implied, so the traceback still travels.
     """
 
     async def _drain() -> None:
@@ -1021,9 +1022,9 @@ async def test_bounded_final_drain_logs_an_awaited_failure() -> None:
     with patch("modulo.core.pipeline_engine.node_runner._log") as mock_log:
         await sequencer.run_once()
 
-    mock_log.error.assert_called_once()
-    assert mock_log.error.call_args.args[0] == "sandbox_agent.cancel_retention_drain_failed"
-    assert mock_log.error.call_args.kwargs["exc_info"] is True
+    mock_log.exception.assert_called_once()
+    assert mock_log.exception.call_args.args[0] == "sandbox_agent.cancel_retention_drain_failed"
+    mock_log.error.assert_not_called()
     mock_log.warning.assert_not_called()
 
 
