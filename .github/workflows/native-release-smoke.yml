@@ -145,7 +145,7 @@ jobs:
             echo "TAG=${tag}" >> "$GITHUB_ENV"
             echo "TARBALL=${tarball}" >> "$GITHUB_ENV"
             curl --proto '=https' -fsSL -o "${tarball}" \
-              "https://github.com/${{ github.repository }}/releases/download/${tag}/modulo-${version}-linux-amd64.tar.gz" \
+              "https://github.com/${{ github.repository }}/releases/download/${tag}/${tarball}" \
               || { echo "::error::published artifact not downloadable at ${tag}"; exit 1; }
             curl --proto '=https' -fsSL -o RELEASE_MANIFEST.json "https://github.com/${{ github.repository }}/releases/download/${tag}/RELEASE_MANIFEST.json"
             curl --proto '=https' -fsSL -o RELEASE_MANIFEST.json.sig "https://github.com/${{ github.repository }}/releases/download/${tag}/RELEASE_MANIFEST.json.sig"
@@ -495,7 +495,7 @@ jobs:
               echo "::notice::${tag} is the first published bundle release in the release line; no N-1 upgrade leg applies"
             fi
             curl --proto '=https' -fsSL -o "${tarball}" \
-              "https://github.com/${{ github.repository }}/releases/download/${tag}/modulo-${version}-linux-amd64.tar.gz" \
+              "https://github.com/${{ github.repository }}/releases/download/${tag}/${tarball}" \
               || { echo "::error::published artifact not downloadable at ${tag}"; exit 1; }
             curl --proto '=https' -fsSL -o RELEASE_MANIFEST.json "https://github.com/${{ github.repository }}/releases/download/${tag}/RELEASE_MANIFEST.json"
             curl --proto '=https' -fsSL -o RELEASE_MANIFEST.json.sig "https://github.com/${{ github.repository }}/releases/download/${tag}/RELEASE_MANIFEST.json.sig"
