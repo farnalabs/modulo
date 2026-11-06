@@ -100,6 +100,51 @@ volumes:
     assert "redis_data" in data["volumes"]
 
 
+def test_transform_compose_content_removes_watchdog_with_blank_line_in_block():
+    """A blank line inside the watchdog block must not truncate the cut.
+
+    Regression for the Sonar-smell rewrite: the body loop previously stopped at
+    a bare newline, leaving the indented lines after the gap to attach to the
+    preceding service while every downstream validation still passed.
+    """
+    sample_content = """services:
+  postgres:
+    image: postgres:16-alpine
+  redis:
+    image: redis:8-alpine
+  modulo:
+    image: ghcr.io/farnalabs/modulo:${TAG:?required}
+    ports:
+      - "${PORT:-80}:80"
+  watchdog:
+    build: ../watchdog
+
+    ports:
+      - "127.0.0.1:8083:8080"
+volumes:
+  postgres_data:
+  redis_data:
+"""
+    transformed = transform_compose_content(sample_content, "v0.4.0")
+    data = yaml.safe_load(transformed)
+
+    services = data["services"]
+    assert "watchdog" not in services
+    assert services["modulo"]["ports"] == ["${PORT:-80}:80"]
+    assert "127.0.0.1:8083:8080" not in transformed
+
+
+def test_validate_release_tag_rejects_unicode_digits(tmp_path: Path):
+    """Python `\\d` is Unicode-aware; the tag patterns must stay ASCII-only.
+
+    Without re.ASCII a Unicode-digit version passed the semver check and a
+    7-char Unicode-digit tag was falsely rejected as a git SHA.
+    """
+    with pytest.raises(ValueError, match="semver"):
+        build_compose_release(version="v\u0661.\u0662.\u0663", output_dir=tmp_path)
+    assert validate_release_tag("\u0661" * 7) == "\u0661" * 7
+
+
 def test_transform_compose_content_rejects_missing_image():
     invalid_content = """services:
   modulo:

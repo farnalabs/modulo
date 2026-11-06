@@ -238,10 +238,9 @@ while [[ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]]; do
 
   # Check for 400 duplicate payload (handled no-op)
   is_400_dup=false
-  if [[ "$HTTP_CODE" == "400" ]] && [[ "$DISPATCH_DUP_400_IS_OK" == "1" ]]; then
-    if printf '%s' "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
-      is_400_dup=true
-    fi
+  if [[ "$HTTP_CODE" == "400" ]] && [[ "$DISPATCH_DUP_400_IS_OK" == "1" ]] &&
+    printf '%s' "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
+    is_400_dup=true
   fi
 
   if [[ "$is_400_dup" == "true" ]]; then

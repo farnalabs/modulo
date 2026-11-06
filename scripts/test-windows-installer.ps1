@@ -169,21 +169,21 @@ function Invoke-Iscc {
     # swallowed and never reach the build log - which is exactly how ISCC's
     # diagnosis went missing before.
     if ($exitCode -ne 0) {
-        Write-Host "--- ISCC output ($CaseName, exit $exitCode) ---"
+        Write-Information "--- ISCC output ($CaseName, exit $exitCode) ---" -InformationAction Continue
         if ($lines.Count -eq 0) {
-            Write-Host "  (ISCC wrote nothing to stdout or stderr)"
+            Write-Information "  (ISCC wrote nothing to stdout or stderr)" -InformationAction Continue
         } else {
             $tailCount = [System.Math]::Min(40, $lines.Count)
             $tail = $lines[($lines.Count - $tailCount)..($lines.Count - 1)]
             foreach ($line in $tail) {
-                Write-Host "  $line"
+                Write-Information "  $line" -InformationAction Continue
             }
             if ($lines.Count -gt $tailCount) {
-                Write-Host "  (showing the last $tailCount of $($lines.Count) lines)"
+                Write-Information "  (showing the last $tailCount of $($lines.Count) lines)" -InformationAction Continue
             }
         }
-        Write-Host "--- end ISCC output ($CaseName) ---"
-        Write-Host "Full ISCC output written to $logPath"
+        Write-Information "--- end ISCC output ($CaseName) ---" -InformationAction Continue
+        Write-Information "Full ISCC output written to $logPath" -InformationAction Continue
     }
 
     return @{ ExitCode = $exitCode; Output = $lines; LogPath = $logPath }
