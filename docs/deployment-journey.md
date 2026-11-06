@@ -17,7 +17,7 @@ codebase, same Docker images, same RuntimeProvider ABC.
 | Approach | What you need | How to run | RuntimeProvider |
 |---|---|---|---|
 | Docker Compose (recommended) | Docker Desktop | `docker compose -f docker-compose.local.yml up -d` then `uv run uvicorn ...` | `LocalRuntimeProvider` (default, max 2 concurrent agents) |
-| SQLite mode | Python 3.12, `uv` | Set `MODULO_DB=sqlite`, run `uv run uvicorn modulo.api.main:app` | `LocalRuntimeProvider` |
+| SQLite mode | Python 3.12-3.14, `uv` | Set `MODULO_DB=sqlite` plus the required `DATABASE_URL` (a `sqlite+aiosqlite:///` URL), `MODULO_SYSTEM_DATABASE_URL`, `SECRET_KEY` and `FERNET_KEY`, then run `uv run uvicorn modulo.api.main:app` - see `docs/deployment.md` §Standalone | `LocalRuntimeProvider` |
 | Full stack with Docker | Docker Compose | `docker compose -f docker-compose.local.yml --profile observability up -d` | `LocalRuntimeProvider` |
 
 SQLite removes the separate PostgreSQL service, but it does not remove the Redis
