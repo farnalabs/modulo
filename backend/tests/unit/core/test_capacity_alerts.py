@@ -579,6 +579,49 @@ async def test_sweep_does_not_alert_for_a_transient_unhealthy_bounce(
     assert not notifier.events
 
 
+async def test_sweep_warning_notice_warning_restarts_the_sustain_window() -> None:
+    """A NOTICE candidate clears the marker before warning returns."""
+    redis = FakeRedis()
+    notifier = FakeNotifier()
+    org_id = uuid.uuid4()
+    subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+    warning = ca.Candidate(subject=subject, rung=ca.WARNING_RUNG, event_type="queue_pressure_warning")
+    notice = ca.Candidate(subject=subject, rung=ca.NOTICE_RUNG, event_type=None)
+    summary = _empty_summary()
+
+    await ca._apply_org_candidates(
+        redis,
+        notifier,
+        org_id=org_id,
+        candidates={subject: warning},
+        summary=summary,
+        now=_NOW,
+    )
+    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+    assert await ca._read_state(redis, marker_key) is not None
+
+    await ca._apply_org_candidates(
+        redis,
+        notifier,
+        org_id=org_id,
+        candidates={subject: notice},
+        summary=summary,
+        now=_NOW + timedelta(minutes=1),
+    )
+    assert await ca._read_state(redis, marker_key) is None
+
+    await ca._apply_org_candidates(
+        redis,
+        notifier,
+        org_id=org_id,
+        candidates={subject: warning},
+        summary=summary,
+        now=_NOW + timedelta(minutes=ca.UNHEALTHY_SUSTAIN_SECONDS + 1),
+    )
+    assert await ca._read_state(redis, marker_key) is not None
+    assert not notifier.events
+
+
 async def test_sweep_alerts_after_a_sustained_unhealthy_episode(
     sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
 ) -> None:

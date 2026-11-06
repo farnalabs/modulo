@@ -773,7 +773,8 @@ async def _apply_org_candidates(
     async for raw_marker_key in redis_client.scan_iter(match=f"{marker_prefix}*"):
         marker_key = _decode(raw_marker_key)
         marked_subject = marker_key[len(marker_prefix) :]
-        if marked_subject not in current:
+        candidate = candidates.get(marked_subject)
+        if candidate is None or not _needs_unhealthy_sustain(candidate):
             await _delete_state(redis_client, marker_key)
 
     await _hold_unsustained_unhealthy_candidates(redis_client, org_id=org_id, candidates=candidates, now=now)
