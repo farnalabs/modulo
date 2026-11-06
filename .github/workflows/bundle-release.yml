@@ -379,6 +379,9 @@ jobs:
                   echo "::error::ELF has an absolute dynamic dependency: $dependency ($binary)" >&2
                   fail=1
                   ;;
+                *)
+                  :
+                  ;;
               esac
             done < <(readelf -d "$binary" | sed -nE '/\(NEEDED\)/s/.*\[([^]]*)\].*/\1/p')
           done < <(find "$BUNDLE/pg/bin" "$BUNDLE/redis" -type f -perm /111 -print0)
