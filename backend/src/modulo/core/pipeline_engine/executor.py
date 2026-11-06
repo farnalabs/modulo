@@ -1163,7 +1163,7 @@ def _streamed_interrupts(lg_event: dict[str, Any]) -> tuple[Any, ...]:
 
 
 @asynccontextmanager
-async def _checkpointer_scope(
+async def _checkpointer_scope(  # NOSONAR S7503 - async context-manager seam
     conn_string: str,
     organisation_id: uuid.UUID,
     fernet_key: str | None = None,
@@ -5319,7 +5319,7 @@ class PipelineExecutor:
         scalars = self._capture_execution_scalars(pipeline, run)
         return pipeline, scalars
 
-    async def _resume_compile_graph(
+    def _resume_compile_graph(
         self,
         *,
         pipeline: Pipeline,
@@ -5622,7 +5622,6 @@ class PipelineExecutor:
         *,
         run_id: uuid.UUID,
         node_token_usage: dict[str, Any] | None,
-        pipeline_retry_policy: dict[str, Any] | None,
         retry_policy_eligible: bool,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None, bool]:
         """Handle exceptions from _prepare_and_stream; return updated status tuple."""
@@ -5706,7 +5705,7 @@ class PipelineExecutor:
         session: AsyncSession,
         pipeline_id: uuid.UUID,
         org_id: uuid.UUID,
-        run_id: uuid.UUID,
+        _run_id: uuid.UUID,
     ) -> str | None:
         """Resolve pipeline name in a nested savepoint (failure-isolated)."""
         try:
@@ -5718,7 +5717,7 @@ class PipelineExecutor:
         except Exception:
             _log.warning(
                 "hitl_review.pipeline_name_lookup_failed",
-                extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                extra={"pipeline_id": str(pipeline_id)},
                 exc_info=True,
             )
             return None
@@ -5872,7 +5871,7 @@ class PipelineExecutor:
             raise RuntimeError("Cannot resume without a checkpointer configured")
 
         # Phase 3: Compile graph
-        compiled, _node_idempotency_key = await self._resume_compile_graph(
+        compiled, _node_idempotency_key = self._resume_compile_graph(
             pipeline=pipeline,
             pipeline_id=pipeline_id,
             snapshot_id=snapshot_id,
@@ -6803,7 +6802,6 @@ class PipelineExecutor:
                 exc=exc,
                 run_id=run_id,
                 node_token_usage=node_token_usage,
-                pipeline_retry_policy=pipeline_retry_policy,
                 retry_policy_eligible=retry_policy_eligible,
             )
 
@@ -8400,7 +8398,7 @@ class PipelineExecutor:
                     session=session,
                     pipeline_id=pipeline_id,
                     org_id=org_id,
-                    run_id=run_id,
+                    _run_id=run_id,
                 )
 
                 # Capture HITL review context (failure-isolated)

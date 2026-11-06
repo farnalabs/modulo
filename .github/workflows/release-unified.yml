@@ -599,14 +599,18 @@ jobs:
           POLL_INTERVAL_SECONDS="${SCHEMA_GATE_POLL_INTERVAL_SECONDS:-30}"
           MAX_WAIT_SECONDS="${SCHEMA_GATE_MAX_WAIT_SECONDS:-3600}"
           require_positive_integer() {
-            case "$2" in
+            local name="$1"
+            local value="$2"
+            case "$value" in
               ''|*[!0-9]*)
-                echo "::error::$1 must be a positive integer, got '$2'."
+                echo "::error::$name must be a positive integer, got '$value'."
                 exit 1
                 ;;
+              *)
+                ;;
             esac
-            if [ "$2" -lt 1 ]; then
-              echo "::error::$1 must be a positive integer, got '$2'."
+            if [ "$value" -lt 1 ]; then
+              echo "::error::$name must be a positive integer, got '$value'."
               exit 1
             fi
           }
