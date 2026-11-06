@@ -154,6 +154,17 @@ describe('SettingsTeamsView', () => {
     wrapper.unmount()
   })
 
+  it('renders an em dash when a team has no description (FAR-2396)', async () => {
+    mockTeams = [team({ description: '' })]
+    const wrapper = await mountView()
+
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="settings-teams-toggle-t1"]').exists()).toBe(true))
+    const paragraphs = wrapper.findAll('[data-testid="settings-teams-toggle-t1"] p')
+    expect(paragraphs[0].text()).toBe('Engineering')
+    expect(paragraphs[1].text()).toBe('—')
+    wrapper.unmount()
+  })
+
   it('renders the team disclosure toggle as a native button with full disclosure semantics', async () => {
     mockTeams = [team()]
     const wrapper = await mountView()
