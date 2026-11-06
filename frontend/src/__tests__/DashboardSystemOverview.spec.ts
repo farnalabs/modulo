@@ -234,14 +234,13 @@ describe('DashboardSystemOverview', () => {
       'Observed over the last 7 days',
     )
     const nodes = wrapper.findAll('[data-testid="system-map-node"]')
-    expect(nodes).toHaveLength(2)
+    expect(nodes).toHaveLength(1)
     expect(nodes[0].text()).toContain('Degraded')
     expect(nodes[0].text()).toContain('34%')
     expect(nodes[0].text()).toContain('50%')
     expect(nodes[0].text()).toContain('Build')
-    // Unobserved values stay n/a rather than being rendered as zero.
-    expect(nodes[1].text()).toContain('Unknown')
-    expect(nodes[1].text()).toContain('n/a')
+    // Nodes with no observed metrics are omitted instead of presenting a grid of
+    // unknown values; the card shows an explicit empty state when all are absent.
     expect(wrapper.find('[data-testid="system-map-draft-review"]').exists()).toBe(false)
   })
 
@@ -340,6 +339,18 @@ describe('DashboardSystemOverview', () => {
     expect(empty.classes()).toContain('card')
     expect(wrapper.find('[data-testid="system-map-overview-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-overview-metrics"]').exists()).toBe(false)
+  })
+
+  it('persists the collapse state and exposes the button state', async () => {
+    localStorage.removeItem('dashboard-system-overview-collapsed')
+    const { wrapper } = mountOverview()
+    const toggle = wrapper.get('[data-testid="system-map-overview-toggle"]')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+
+    await toggle.trigger('click')
+
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    expect(localStorage.getItem('dashboard-system-overview-collapsed')).toBe('true')
   })
 
   it('renders through the shared SectionCard without a live region', () => {
