@@ -339,39 +339,51 @@ jobs:
 
           echo "bundle-v${VERSION_NUM}" > "$BUNDLE/VERSION"
 
-      - name: Scan shipped PostgreSQL ELF files for build and host paths
+      - name: Scan shipped PostgreSQL ELF files for runtime path leakage
         run: |
           set -euo pipefail
           BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
-          build_prefix="$PWD/build/${BUNDLE_ROOT}/pg"
           fail=0
           checked=0
           while IFS= read -r -d '' binary; do
             checked=$((checked + 1))
             if ! readelf -h "$binary" >/dev/null 2>&1; then
-              echo "::error::executable under pg/bin is not an ELF binary: $binary" >&2
+              echo "::error::shipped service binary is not an ELF binary: $binary" >&2
               fail=1
               continue
             fi
-            if strings -a "$binary" | grep -Fq "$build_prefix"; then
-              echo "::error::PostgreSQL ELF embeds the original build prefix: $binary" >&2
-              fail=1
-            fi
-            while IFS= read -r forbidden; do
-              echo "::error::PostgreSQL ELF embeds an unexpected absolute PostgreSQL path ($forbidden): $binary" >&2
-              fail=1
-            done < <(strings -a "$binary" | grep -E '/(usr|opt|home)/[^ ]*(postgresql|pgsql)' | sort -u || true)
-            if readelf -d "$binary" | grep -Eq 'R(PATH|UNPATH).*\[(/|[^]]*:[^$])'; then
-              echo "::error::executable has an absolute or non-origin dynamic library path: $binary" >&2
-              fail=1
-            fi
-            if readelf -d "$binary" | grep -Eq 'NEEDED.*\[/'; then
-              echo "::error::executable has an absolute dynamic dependency: $binary" >&2
-              fail=1
-            fi
-          done < <(find "$BUNDLE/pg/bin" -type f -perm /111 -print0)
+
+            # PostgreSQL deliberately embeds configure-time prefix strings in
+            # pg_config_paths.h as relocation fallbacks. Those strings are not
+            # runtime loader inputs: relocation smoke below proves that the
+            # relative paths win after the tree moves. Inspect ELF dynamic
+            # metadata instead, where an absolute/non-$ORIGIN path is actually
+            # consumed by the loader.
+            while IFS= read -r runtime_path; do
+              case "$runtime_path" in
+                "\$ORIGIN"|"\$ORIGIN"/*) ;;
+                *)
+                  echo "::error::ELF has an absolute or non-origin RUNPATH/RPATH: $runtime_path ($binary)" >&2
+                  fail=1
+                  ;;
+              esac
+            done < <(
+              readelf -d "$binary" |
+                sed -nE '/\((RPATH|RUNPATH)\)/s/.*\[([^]]*)\].*/\2/p' |
+                tr ':' '\n'
+            )
+
+            while IFS= read -r dependency; do
+              case "$dependency" in
+                /*)
+                  echo "::error::ELF has an absolute dynamic dependency: $dependency ($binary)" >&2
+                  fail=1
+                  ;;
+              esac
+            done < <(readelf -d "$binary" | sed -nE '/\(NEEDED\)/s/.*\[([^]]*)\].*/\1/p')
+          done < <(find "$BUNDLE/pg/bin" "$BUNDLE/redis" -type f -perm /111 -print0)
           if [ "$checked" -eq 0 ]; then
-            echo "::error::no executable files found under pg/bin" >&2
+            echo "::error::no shipped executable ELF files found under pg/bin or redis" >&2
             exit 1
           fi
           exit "$fail"

@@ -602,12 +602,10 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
 
 def test_bundle_release_scans_postgres_elf_paths_and_keeps_glibc_gate() -> None:
     workflow_text = BUNDLE_WORKFLOW.read_text(encoding="utf-8")
-    assert "Scan shipped PostgreSQL ELF files for build and host paths" in workflow_text
-    assert 'strings -a "$binary" | grep -Fq "$build_prefix"' in workflow_text
-    assert "unexpected absolute PostgreSQL path" in workflow_text
-    assert 'find "$BUNDLE/pg/bin" -type f -perm /111' in workflow_text
-    assert "executable under pg/bin is not an ELF binary" in workflow_text
-    assert "absolute or non-origin dynamic library path" in workflow_text
+    assert "Scan shipped PostgreSQL ELF files for runtime path leakage" in workflow_text
+    assert "configure-time prefix strings" in workflow_text
+    assert 'readelf -d "$binary"' in workflow_text
+    assert "absolute or non-origin RUNPATH/RPATH" in workflow_text
     assert "absolute dynamic dependency" in workflow_text
     assert 'find "$BUNDLE/pg/bin" "$BUNDLE/redis" -type f -perm /111' in workflow_text
     assert "could not determine the glibc requirement" in workflow_text
