@@ -1535,6 +1535,63 @@ async def test_sweep_org_reraises_cancelled_from_backpressure(
         )
 
 
+async def test_sweep_cancellation_after_report_invalidates_marker_but_preserves_alert(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis, notifier, state = sweep_env
+    org_id = uuid.uuid4()
+    subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+    await ca._write_state(redis, marker_key, rung=ca.CLEAR_RUNG, label=subject, now=_NOW)
+    await redis.sadd(ca._open_key(org_id), subject)
+    await ca._write_state(redis, ca._state_key(org_id, subject), rung=ca.WARNING_RUNG, label="queue", now=_NOW)
+    state["report"] = _report(pending_total=0)
+    monkeypatch.setattr(ca, "_apply_org_candidates", AsyncMock(side_effect=asyncio.CancelledError()))
+    summary = {"orgs_evaluated": 0, "org_errors": 0, "dispatched": 0, "notify_failed": 0}
+
+    with pytest.raises(asyncio.CancelledError):
+        await ca._sweep_org(
+            factory=AsyncMock(),
+            org_id=org_id,
+            settings=AsyncMock(),
+            redis_client=redis,  # type: ignore[arg-type]
+            notifier=notifier,
+            now=_NOW,
+            summary=summary,
+        )
+
+    assert await ca._read_state(redis, marker_key) is None
+    assert await ca._read_state(redis, ca._state_key(org_id, subject)) is not None
+    assert subject in redis.sets[ca._open_key(org_id)]
+
+
+async def test_marker_only_orgs_beyond_tick_cap_are_invalidated(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis, notifier, state = sweep_env
+    orgs = [uuid.uuid4() for _ in range(ca.MAX_ORGS_PER_TICK + 1)]
+    marker_keys: list[str] = []
+    for org_id in orgs:
+        subject = ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=uuid.uuid4())
+        marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
+        marker_keys.append(marker_key)
+        await ca._write_state(redis, marker_key, rung=ca.CLEAR_RUNG, label=subject, now=_NOW)
+    monkeypatch.setattr(ca, "_org_ids_with_pending", AsyncMock(return_value=[]))
+    state["report"] = _report(pending_total=0)
+
+    summary = await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,  # type: ignore[arg-type]
+        notifier=notifier,
+        now=_NOW,
+    )
+
+    assert summary["orgs_considered"] == ca.MAX_ORGS_PER_TICK
+    assert await ca._read_state(redis, marker_keys[-1]) is None
+
+
 async def test_run_orgs_swallows_an_unexpected_sweep_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _boom(**_: Any) -> None:
         raise RuntimeError("boom")

@@ -991,6 +991,18 @@ def _org_from_unhealthy_marker_key(raw: str) -> uuid.UUID | None:
         return None
 
 
+async def _org_ids_with_unhealthy_markers(redis_client: AsyncRedis) -> list[uuid.UUID]:
+    """Return every org represented by a pre-alert sustain marker in Redis."""
+    found: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    async for raw in redis_client.scan_iter(match=f"{_STATE_KEY_PREFIX}:*:{_QUEUE_UNHEALTHY_MARKER}:*"):
+        org_id = _org_from_unhealthy_marker_key(_decode(raw))
+        if org_id is not None and org_id not in seen:
+            seen.add(org_id)
+            found.append(org_id)
+    return found
+
+
 async def _org_ids_with_open_alerts(redis_client: AsyncRedis) -> list[uuid.UUID]:
     """Orgs holding open alerts or pending queue unhealthy sustain markers.
 
@@ -1011,9 +1023,8 @@ async def _org_ids_with_open_alerts(redis_client: AsyncRedis) -> list[uuid.UUID]
         if org_id is not None and org_id not in seen:
             seen.add(org_id)
             found.append(org_id)
-    async for raw in redis_client.scan_iter(match=f"{_STATE_KEY_PREFIX}:*:{_QUEUE_UNHEALTHY_MARKER}:*"):
-        org_id = _org_from_unhealthy_marker_key(_decode(raw))
-        if org_id is not None and org_id not in seen:
+    for org_id in await _org_ids_with_unhealthy_markers(redis_client):
+        if org_id not in seen:
             seen.add(org_id)
             found.append(org_id)
     return found
@@ -1059,7 +1070,7 @@ async def _read_redis_memory(redis_client: AsyncRedis, summary: dict[str, Any]) 
     return info
 
 
-async def _sweep_org(
+async def _sweep_org_impl(
     *,
     factory: async_sessionmaker[AsyncSession],
     org_id: uuid.UUID,
@@ -1069,8 +1080,14 @@ async def _sweep_org(
     now: datetime,
     summary: dict[str, Any],
     redis_memory: dict[str, Any] | None = None,
-) -> None:
-    """Evaluate one org's ladder and act on it. Isolated — never raises."""
+) -> bool:
+    """Evaluate one org's ladder and act on it. Isolated — never raises.
+
+    Returns ``True`` only after every marker and candidate operation completes.
+    A report read by itself is not a completed evaluation: cancellation or a
+    later failure must invalidate pre-alert markers so they cannot assert
+    continuity on the next tick.
+    """
     try:
         report = await read_capacity_report(
             org_id=org_id,
@@ -1085,9 +1102,7 @@ async def _sweep_org(
         summary["org_errors"] += 1
         await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
         _log.warning("capacity_alerts.report_failed org=%s", org_id, exc_info=True)
-        return
-
-    summary["orgs_evaluated"] += 1
+        return False
 
     # Saturation sustain clock: start/extend the marker while the org limit is
     # fully held, drop it when it frees. The alert state is separate, so a held
@@ -1130,11 +1145,7 @@ async def _sweep_org(
         # as "backpressure lifted" (that would emit a spurious recovery and
         # then re-alert on the next successful tick).
         unverified_kinds.add(_SUBJECT_BACKPRESSURE)
-        await _invalidate_unhealthy_markers(
-            redis_client,
-            org_id=org_id,
-            subject_prefix=f"{_SUBJECT_BACKPRESSURE}:*",
-        )
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
     else:
         await _invalidate_unhealthy_markers(
             redis_client,
@@ -1142,16 +1153,60 @@ async def _sweep_org(
             subjects=unverified_subjects,
         )
 
-    await _apply_org_candidates(
-        redis_client,
-        notifier,
-        org_id=org_id,
-        candidates=candidates,
-        summary=summary,
-        now=now,
-        unverified_kinds=unverified_kinds,
-        unverified_subjects=unverified_subjects,
-    )
+    try:
+        await _apply_org_candidates(
+            redis_client,
+            notifier,
+            org_id=org_id,
+            candidates=candidates,
+            summary=summary,
+            now=now,
+            unverified_kinds=unverified_kinds,
+            unverified_subjects=unverified_subjects,
+        )
+    except asyncio.CancelledError:
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+        raise
+    except Exception:
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+        raise
+    return True
+
+
+async def _sweep_org(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    settings: Settings,
+    redis_client: AsyncRedis,
+    notifier: Any,
+    now: datetime,
+    summary: dict[str, Any],
+    redis_memory: dict[str, Any] | None = None,
+) -> bool:
+    """Run one org sweep and count it only after all state work succeeds."""
+    try:
+        completed = await _sweep_org_impl(
+            factory=factory,
+            org_id=org_id,
+            settings=settings,
+            redis_client=redis_client,
+            notifier=notifier,
+            now=now,
+            summary=summary,
+            redis_memory=redis_memory,
+        )
+    except asyncio.CancelledError:
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+        raise
+    except Exception:
+        summary["org_errors"] += 1
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+        _log.warning("capacity_alerts.org_sweep_failed org=%s", org_id, exc_info=True)
+        return False
+    if completed:
+        summary["orgs_evaluated"] += 1
+    return completed
 
 
 async def _run_orgs(
@@ -1178,8 +1233,7 @@ async def _run_orgs(
             _log.info("capacity_alerts.budget_exhausted evaluated=%d", summary["orgs_evaluated"])
             break
         try:
-            evaluated_before = summary["orgs_evaluated"]
-            await _sweep_org(
+            completed = await _sweep_org(
                 factory=factory,
                 org_id=org_id,
                 settings=settings,
@@ -1189,9 +1243,10 @@ async def _run_orgs(
                 summary=summary,
                 redis_memory=redis_memory,
             )
-            if summary["orgs_evaluated"] > evaluated_before:
+            if completed:
                 evaluated_org_ids.add(org_id)
         except asyncio.CancelledError:
+            await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
             raise
         except Exception:
             summary["org_errors"] += 1
@@ -1256,12 +1311,14 @@ async def evaluate_capacity_alerts(
             redis_memory.get("maxmemory_policy"),
         )
 
+    marker_orgs: list[uuid.UUID] = []
     try:
         if org_ids is not None:
             candidates = list(org_ids)
         else:
             # Union two sets: orgs with queued work AND orgs holding an open
             # alert (see :func:`_merge_org_sources` for why both are needed).
+            marker_orgs = await _org_ids_with_unhealthy_markers(redis_client)
             candidates = _merge_org_sources(
                 await _org_ids_with_open_alerts(redis_client),
                 await _org_ids_with_pending(factory),
@@ -1274,6 +1331,9 @@ async def evaluate_capacity_alerts(
 
     summary["orgs_considered"] = len(candidates)
     evaluated_org_ids: set[uuid.UUID] = set()
+    marker_orgs_outside_slice = set(marker_orgs) - set(candidates)
+    for marker_org_id in marker_orgs_outside_slice:
+        await _invalidate_unhealthy_markers(redis_client, org_id=marker_org_id)
     try:
         await asyncio.wait_for(
             _run_orgs(
