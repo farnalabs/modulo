@@ -802,7 +802,15 @@ PYEOF
 
 if [[ -n "${FROM_FILE}" ]]; then
   info "Offline install from ${FROM_FILE}"
-  manifest_file="${FROM_FILE%/*}/RELEASE_MANIFEST.json"
+  # Resolve the manifest beside the tarball. A bare filename (no '/') - the
+  # exact shape the canary leg passes - leaves `${FROM_FILE%/*}` UNCHANGED,
+  # which would make the tarball itself the manifest's directory. Fall back to
+  # the current directory in that case.
+  from_file_dir="${FROM_FILE%/*}"
+  if [[ "${from_file_dir}" = "${FROM_FILE}" ]]; then
+    from_file_dir="."
+  fi
+  manifest_file="${from_file_dir}/RELEASE_MANIFEST.json"
   signature_file="${manifest_file}.sig"
   # HARD GATE: the SIGNED manifest is NOT optional. A tarball without a
   # signature is exactly the bypass this design closes - the offline escape

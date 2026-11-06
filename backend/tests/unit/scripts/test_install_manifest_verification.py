@@ -15,6 +15,8 @@ sending them hunting for a key mismatch that did not exist.
 
 from __future__ import annotations
 
+import os
+import platform
 import re
 import shlex
 import shutil
@@ -265,3 +267,87 @@ def test_the_legacy_inform_argv_is_rejected_when_executed(signed_manifest: _Sign
     combined = result.stdout + result.stderr
     assert result.returncode != 0
     assert "Unknown option: -inform" in combined
+
+
+# ---------------------------------------------------------------------------
+# FAR-2912 — a bare `--from-file` name must resolve the manifest BESIDE it.
+# ---------------------------------------------------------------------------
+
+_ENV_KEYS_TO_DROP = (
+    "XDG_STATE_HOME",
+    "XDG_DATA_HOME",
+    "VERSION",
+    "MODULO_INSTALL_ROOT",
+    "MODULO_BIN_DIR",
+    "MODULO_DATA_DIR",
+    "MODULO_LEGACY_SHIM_PATH",
+)
+
+
+def _bash() -> str:
+    resolved = shutil.which("bash")
+    assert resolved is not None, "the installer is a bash script; bash must be on PATH to test it"
+    return resolved
+
+
+def _bare_tarball_name() -> str:
+    system = platform.system()
+    machine = platform.machine().lower()
+    archive_os = "darwin" if system == "Darwin" else "linux"
+    archive_arch = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(machine)
+    assert archive_arch is not None, f"unsupported test host architecture: {machine}"
+    return f"modulo-1.0.0-{archive_os}-{archive_arch}.tar.gz"
+
+
+def _run_installer_from_cwd(tmp_path: Path, tarball_arg: str) -> subprocess.CompletedProcess[str]:
+    """Run the real installer from ``tmp_path`` so a BARE ``--from-file`` resolves there."""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env = {key: value for key, value in os.environ.items() if key not in _ENV_KEYS_TO_DROP}
+    env.update(
+        {
+            "HOME": str(home),
+            "MODULO_INSTALL_ROOT": str(tmp_path / "install-root"),
+            "MODULO_BIN_DIR": str(tmp_path / "bin"),
+            "MODULO_LEGACY_SHIM_PATH": str(tmp_path / "no-legacy-shim"),
+        }
+    )
+    return subprocess.run(  # noqa: S603 - resolved bash and test-owned paths
+        [_bash(), str(_INSTALL_SH), "--from-file", tarball_arg],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+        check=False,
+    )
+
+
+@pytest.mark.posix_only
+def test_from_file_bare_filename_resolves_the_manifest_beside_the_tarball(tmp_path: Path) -> None:
+    """The canary leg passes a bare filename; ``${FROM_FILE%/*}`` must not become the tarball itself."""
+    tarball_name = _bare_tarball_name()
+    (tmp_path / tarball_name).write_bytes(b"placeholder")
+    result = _run_installer_from_cwd(tmp_path, tarball_name)
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "offline install REFUSED" in combined
+    assert f"{tarball_name}/RELEASE_MANIFEST.json" not in combined, (
+        "install.sh treated the bare tarball filename as the manifest's directory:\n" + combined
+    )
+    assert "./RELEASE_MANIFEST.json" in combined
+
+
+@pytest.mark.posix_only
+def test_from_file_bare_filename_finds_an_existing_manifest(tmp_path: Path) -> None:
+    """A manifest beside a bare-named tarball is found (no 'must sit beside the tarball' refusal)."""
+    tarball_name = _bare_tarball_name()
+    (tmp_path / tarball_name).write_bytes(b"placeholder")
+    (tmp_path / "RELEASE_MANIFEST.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "RELEASE_MANIFEST.json.sig").write_text('{"key_id": "modulo-2026-a"}', encoding="utf-8")
+    result = _run_installer_from_cwd(tmp_path, tarball_name)
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "offline install REFUSED" not in combined, combined
+    assert "the signed release manifest is missing" not in combined, combined
+    assert "the signature file is missing" not in combined, combined
