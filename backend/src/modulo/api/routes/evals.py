@@ -198,6 +198,28 @@ class EvalDefinitionResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _mask_guardrail_eval_internals(
+    config_json: Any,
+    pre_version_raw: Any,
+) -> tuple[dict[str, Any], Any]:
+    """Mask a guardrail eval row's deny-rule internals for sub-admin readers.
+
+    ``pre_version_raw`` snapshots the previous ``config_json`` on an edit
+    (``{"config_json": ...}``), so it carries the same deny-rule internals and
+    must be masked too — masking only the live row would leave the prior
+    pattern/schema readable.
+    """
+    from modulo.core.guardrails.config import mask_engine_config
+
+    masked_config = mask_engine_config(config_json or {})
+    if isinstance(pre_version_raw, dict) and isinstance(pre_version_raw.get("config_json"), dict):
+        pre_version_raw = {
+            **pre_version_raw,
+            "config_json": mask_engine_config(pre_version_raw["config_json"]),
+        }
+    return masked_config, pre_version_raw
+
+
 def _eval_def_to_dict(
     eval_row: Eval,
     *,
@@ -218,18 +240,7 @@ def _eval_def_to_dict(
     config_json = eval_row.config_json
     pre_version_raw = getattr(eval_row, "pre_version_raw", None)
     if mask_guardrail_internals and eval_row.eval_type == "guardrail":
-        from modulo.core.guardrails.config import mask_engine_config
-
-        config_json = mask_engine_config(config_json or {})
-        # ``pre_version_raw`` snapshots the previous ``config_json`` on an edit
-        # (``{"config_json": ...}``), so it carries the same deny-rule internals
-        # and must be masked too — masking only the live row would leave the
-        # prior pattern/schema readable.
-        if isinstance(pre_version_raw, dict) and isinstance(pre_version_raw.get("config_json"), dict):
-            pre_version_raw = {
-                **pre_version_raw,
-                "config_json": mask_engine_config(pre_version_raw["config_json"]),
-            }
+        config_json, pre_version_raw = _mask_guardrail_eval_internals(config_json, pre_version_raw)
     out: dict[str, Any] = {
         "id": str(eval_row.id),
         "pipeline_id": str(eval_row.pipeline_id),
