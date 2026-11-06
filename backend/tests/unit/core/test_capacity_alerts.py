@@ -1305,6 +1305,81 @@ async def test_org_ids_with_open_alerts_dedupes_and_skips_invalid(monkeypatch: p
     assert await ca._org_ids_with_open_alerts(redis) == [org_id]
 
 
+async def test_org_ids_with_open_alerts_discovers_unhealthy_markers() -> None:
+    org_id = uuid.uuid4()
+    redis = FakeRedis()
+    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:queue:{uuid.uuid4()}")
+    await ca._write_state(redis, marker_key, rung=ca.CLEAR_RUNG, label="queue", now=_NOW)
+
+    assert await ca._org_ids_with_open_alerts(redis) == [org_id]
+
+
+async def test_sweep_clears_a_pre_alert_marker_during_a_discovery_gap(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A queue that disappears must not retain sustain time across reintroduction."""
+    redis, notifier, state = sweep_env
+    pid = uuid.uuid4()
+    org_id = uuid.uuid4()
+    unhealthy = _report(
+        pending_by_pipeline=[_pipeline(pid, count=4, oldest=900.0)],
+        pending_total=4,
+    )
+    monkeypatch.setattr(ca, "_org_ids_with_pending", AsyncMock(return_value=[org_id]))
+    state["report"] = unhealthy
+
+    await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,
+        notifier=notifier,
+        now=_NOW,
+    )
+    marker_key = ca._state_key(
+        org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=pid)}"
+    )
+    assert await ca._read_state(redis, marker_key) is not None
+    assert not notifier.events
+
+    # The org has no pending run and no open alert, but its marker source keeps
+    # it in the normal discovery set so this healthy observation clears it.
+    state["report"] = _report(pending_total=0)
+    monkeypatch.setattr(ca, "_org_ids_with_pending", AsyncMock(return_value=[]))
+    summary = await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,
+        notifier=notifier,
+        now=_NOW + timedelta(minutes=1),
+    )
+    assert summary["orgs_evaluated"] == 1
+    assert await ca._read_state(redis, marker_key) is None
+
+    # Reintroducing the same unhealthy queue starts a fresh sustain window.
+    state["report"] = unhealthy
+    monkeypatch.setattr(ca, "_org_ids_with_pending", AsyncMock(return_value=[org_id]))
+    await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,
+        notifier=notifier,
+        now=_NOW + timedelta(minutes=2),
+    )
+    await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,
+        notifier=notifier,
+        now=_NOW + timedelta(minutes=2) + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS - 1),
+    )
+    assert not notifier.events
+
+    await ca.evaluate_capacity_alerts(
+        factory=AsyncMock(),
+        redis_client=redis,
+        notifier=notifier,
+        now=_NOW + timedelta(minutes=2) + timedelta(seconds=ca.UNHEALTHY_SUSTAIN_SECONDS),
+    )
+    assert [event[1] for event in notifier.events] == [ca.EVENT_QUEUE_PRESSURE_WARNING]
+
+
 # ---------------------------------------------------------------------------
 # Fake session plumbing for the backpressure + org-discovery DB paths
 # ---------------------------------------------------------------------------

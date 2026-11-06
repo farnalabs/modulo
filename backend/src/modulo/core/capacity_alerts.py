@@ -978,22 +978,41 @@ def _org_from_open_key(raw: str) -> uuid.UUID | None:
         return None
 
 
+def _org_from_unhealthy_marker_key(raw: str) -> uuid.UUID | None:
+    """Parse the org id out of a queue unhealthy sustain marker key."""
+    prefix = f"{_STATE_KEY_PREFIX}:"
+    marker = f":{_QUEUE_UNHEALTHY_MARKER}:"
+    if not (raw.startswith(prefix) and marker in raw):
+        return None
+    org_text = raw[len(prefix) : raw.index(marker)]
+    try:
+        return uuid.UUID(org_text)
+    except (TypeError, ValueError):
+        return None
+
+
 async def _org_ids_with_open_alerts(redis_client: AsyncRedis) -> list[uuid.UUID]:
-    """Orgs that currently hold at least one open capacity alert.
+    """Orgs holding open alerts or pending queue unhealthy sustain markers.
 
     The pending-run scan alone is not enough. An org whose queue fully drains
     (its last pending run starts or is cancelled) drops out of that scan, so
     with only that set the org is never evaluated again: ``_apply_org_candidates``
     never runs, the open subject SET is never consulted, and the alert state
-    lives out the 7-day TTL. The operator never receives ``capacity_recovered``,
-    and the stale high-water rung then suppresses a fresh identical incident
-    at the same rung. Unioning in the orgs with an open SET is what lets the
-    auto-clear path reach a fully-drained org.
+    lives out the 7-day TTL. The same discovery gap applies to a pre-alert
+    sustain marker: if the queue disappears before the warning opens, the
+    marker would otherwise survive until its TTL and make a reintroduced queue
+    look continuously unhealthy. Unioning both Redis state sources lets the
+    sweep clear stale alerts and markers without scanning every org.
     """
     found: list[uuid.UUID] = []
     seen: set[uuid.UUID] = set()
     async for raw in redis_client.scan_iter(match=f"{_STATE_KEY_PREFIX}:*:open"):
         org_id = _org_from_open_key(_decode(raw))
+        if org_id is not None and org_id not in seen:
+            seen.add(org_id)
+            found.append(org_id)
+    async for raw in redis_client.scan_iter(match=f"{_STATE_KEY_PREFIX}:*:{_QUEUE_UNHEALTHY_MARKER}:*"):
+        org_id = _org_from_unhealthy_marker_key(_decode(raw))
         if org_id is not None and org_id not in seen:
             seen.add(org_id)
             found.append(org_id)
