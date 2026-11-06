@@ -2612,7 +2612,6 @@ async def admin_billing_overview(
         )
     ],
     status_code=status.HTTP_403_FORBIDDEN,
-    response_model=None,
     responses={
         status.HTTP_403_FORBIDDEN: {
             "description": "Active-organisation deletion is refused; use the system-admin route.",
@@ -2644,7 +2643,6 @@ class ConfirmDeletionRequest(BaseModel):
     "/org/deletion-confirm",
     dependencies=[Depends(audited("api_access_post", "organisation", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_403_FORBIDDEN,
-    response_model=None,
     responses={
         status.HTTP_403_FORBIDDEN: {
             "description": "Active-organisation deletion is refused; use the system-admin route.",
@@ -2766,7 +2764,6 @@ async def export_org_data(
     "/org",
     dependencies=[Depends(audited("api_access_delete", "organisation", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_403_FORBIDDEN,
-    response_model=None,
     responses={
         status.HTTP_403_FORBIDDEN: {
             "description": "Active-organisation deletion is refused; use the system-admin route.",

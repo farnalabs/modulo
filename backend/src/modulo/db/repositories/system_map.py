@@ -1245,7 +1245,6 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         account_id: uuid.UUID | None,
         org_role: str | None,
         team_id: uuid.UUID,
-        visibility: str | None = "team",
     ) -> str | None:
         """Return an error when a team binding is foreign or caller-ineligible."""
         team_result = await session.execute(

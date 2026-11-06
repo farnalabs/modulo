@@ -246,7 +246,11 @@ def _replace_seeds(text: str, seeds: list[str]) -> tuple[str, int]:
     return output, count
 
 
-_EXPORT_PREFIX = re.compile(r"^(?P<indent>\s*)(?:export\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_.\-]*)\s*=\s*(?P<value>.*)$")
+_EXPORT_PREFIX_PATTERN = (
+    r"^(?P<indent>\s*)(?:export\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_.\-]*)"
+    r"\s*=\s*(?P<value>[^\n]*)$"
+)
+_EXPORT_PREFIX = re.compile(_EXPORT_PREFIX_PATTERN)
 _REDACTION_MARKERS = frozenset({REDACTED, SENSITIVE_VALUE_MASK, "", '""', "''"})
 
 
