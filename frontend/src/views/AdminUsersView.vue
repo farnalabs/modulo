@@ -663,7 +663,7 @@ function validateEmailAndName(): string {
   if (!email || !isValidEmail(email)) {
     return t('views.AdminUsersView.please_enter_a_valid_email_address')
   }
-  if (!display_name || !display_name.trim()) {
+  if (!display_name?.trim()) {
     return t('views.AdminUsersView.display_name_is_required')
   }
   return ''

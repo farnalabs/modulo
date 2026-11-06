@@ -237,7 +237,7 @@ async function discoverSystem(): Promise<void> {
   }
 }
 
-async function openCreateDialog(): Promise<void> {
+function openCreateDialog(): void {
   createForm.value = { name: '', description: '' }
   createDialogOpen.value = true
 }

@@ -1173,7 +1173,7 @@ async function doValidate() {
     }
     // A 2xx body can still be a failed validation — honour data.valid.
     const result = resp.data as { valid?: boolean; errors?: unknown[] } | undefined
-    if (result && result.valid === false) {
+    if (result?.valid === false) {
       validateResult.value = { valid: false, errors: result.errors ?? [] }
     } else {
       validateResult.value = { valid: true }

@@ -1080,7 +1080,7 @@ async function handleDelete() {
   }
 }
 
-onMounted(async () => {
+onMounted(() => {
   void loadFolders()
   void loadTotalCount()
 })

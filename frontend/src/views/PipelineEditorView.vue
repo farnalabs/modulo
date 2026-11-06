@@ -2184,7 +2184,7 @@ const rawEdges = ref<any[]>([])
 const flowNodes = ref<any[]>([])
 const flowEdges = ref<any[]>([])
 
-const selectedNodeData = ref<any | null>(null)
+const selectedNodeData = ref<any>(null)
 // FAR-1273: explicit one-PR-per-run guard flag for sandbox_agent nodes. The
 // raw node value may be absent on legacy graphs, so the getter normalises to a
 // boolean for the checkbox while the setter writes the field back onto the raw
@@ -2196,7 +2196,7 @@ const singlePrPerRun = computed<boolean>({
     if (selectedNodeData.value) selectedNodeData.value.single_pr_per_run = value
   },
 })
-const selectedEdgeData = ref<any | null>(null)
+const selectedEdgeData = ref<any>(null)
 const showSaveAsDropdown = ref(false)
 const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
 const saveAsDropdownRef = ref<HTMLElement | null>(null)
@@ -3267,7 +3267,7 @@ function doesNodeHaveCapabilityScope(node: any): boolean {
     .some((arr) => Array.isArray(arr) && arr.length > 0)
 }
 
-function nodeAgent(node: any): any | undefined {
+function nodeAgent(node: any): any {
   return agents.value.find((a: any) => a.id === node?.agent_id)
 }
 
@@ -3351,7 +3351,7 @@ const paramSets = ref<any[]>([])
 const selectedNodeParamSetId = ref<string | undefined>(undefined)
 const selectedNodeOverrides = ref<Record<string, any>>({})
 
-function agentParamSchema(agentId: string): any | undefined {
+function agentParamSchema(agentId: string): any {
   const agent = agents.value.find((a: any) => a.id === agentId)
   if (!agent?.parameter_schema_id) return undefined
   return paramSchemas.value.find((ps: any) => ps.id === agent.parameter_schema_id)
@@ -3369,7 +3369,7 @@ const availableParamSets = computed(() => {
 
 const paramSetOverridesKeys = computed(() => Object.keys(selectedNodeOverrides.value))
 
-function paramDefByKey(key: string): any | undefined {
+function paramDefByKey(key: string): any {
   const schema = agentParamSchema(selectedNodeData.value?.agent_id)
   return schema?.parameters?.find((p: any) => p.name === key)
 }
@@ -4618,7 +4618,7 @@ function nodeCommandFields(n: any): {
     return {}
   }
   const rows = (Array.isArray(n.agent_commands) ? n.agent_commands : [])
-    .map((c: unknown) => (typeof c === 'string' ? c : String(c ?? '')))
+    .map((c: unknown) => (typeof c === 'string' ? c : c == null ? '' : JSON.stringify(c)))
     .filter((c: string) => c.trim() !== '')
   if (rows.length === 0) {
     return { agent_commands: null, commands_concatenation_string: null }
@@ -4907,7 +4907,7 @@ async function findSnapshotIdByVersion(version: number): Promise<string | null> 
   if (pageOne.items.length === 0) return null // no snapshots at all
   // Sorted version-DESC: page 1 spans [newest … oldest-on-page-1].
   if (version > pageOne.items[0].snapshot_version) return null // newer than the newest
-  if (version >= pageOne.items[pageOne.items.length - 1].snapshot_version) {
+  if (version >= pageOne.items.at(-1)!.snapshot_version) {
     return null // inside page 1's range, not present — absent
   }
   // Below page 1: binary search the remaining pages by the range each spans.
@@ -4937,7 +4937,7 @@ async function findSnapshotIdByVersion(version: number): Promise<string | null> 
       hi = mid - 1 // belongs above this page
       continue
     }
-    if (version < page.items[page.items.length - 1].snapshot_version) {
+    if (version < page.items.at(-1)!.snapshot_version) {
       lo = mid + 1 // belongs below this page
       continue
     }
