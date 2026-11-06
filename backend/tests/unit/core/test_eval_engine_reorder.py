@@ -1065,6 +1065,7 @@ class TestOtelMetricsHelpers:
         with (
             patch.object(ep, "_get_otel_meter", return_value=meter),
             patch.object(ep, "_eval_result_persist_failures_total", None),
+            patch.object(ep, "_decision_record_persist_failures_total", MagicMock()),
         ):
             ep._ensure_metrics()
 
@@ -1077,6 +1078,7 @@ class TestOtelMetricsHelpers:
         with (
             patch.object(ep, "_get_otel_meter", return_value=meter),
             patch.object(ep, "_eval_result_persist_failures_total", MagicMock()),
+            patch.object(ep, "_decision_record_persist_failures_total", MagicMock()),
         ):
             ep._ensure_metrics()
 
