@@ -864,6 +864,8 @@ def classify_run(
             status,
             error_code,
             error_detail,
+            outputs_json,
+            telemetry_json,
             raw_output_markers,
             benign_signatures,
             computed_at=computed_at,
@@ -941,6 +943,8 @@ def _countable_result(
     status: str,
     error_code: str | None,
     error_detail: str | None,
+    outputs_json: Any,
+    telemetry_json: Any,
     raw_output_markers: Any,
     benign_signatures: Iterable[BenignSignature] | None,
     *,
@@ -949,6 +953,11 @@ def _countable_result(
     declared_success_nodes: int,
 ) -> ClassificationResult:
     """Classify a COUNTABLE terminal failure (benign signature or no_delivery).
+
+    Delivery observations are retained as additive metadata even when the
+    terminal verdict remains ``no_delivery``. A failed run must not become a
+    success merely because a PR URL was observed, but losing that URL when the
+    final node envelope is absent makes the durable run record incomplete.
 
     FAR-707 FIRST: an explicitly configured business-expected outcome (rebase
     conflict, superseded-by-design, empty-workload no-op, ...) classifies benign
@@ -966,6 +975,8 @@ def _countable_result(
     :func:`_any_marker_delivery_done` reads the same field the complete bucket
     trusts.
     """
+    pr_url_provenance: dict[str, str] = {}
+    pr_urls = collect_pr_urls(outputs_json, telemetry_json, raw_output_markers, pr_url_provenance)
     if matches_benign_signature(
         benign_signatures,
         error_code=error_code,
@@ -974,6 +985,8 @@ def _countable_result(
         return _classification(
             RunClassificationValue.benign,
             REASON_BENIGN,
+            delivered_pr_urls=tuple(pr_urls),
+            pr_url_provenance=tuple(sorted(pr_url_provenance.items())),
             computed_at=computed_at,
             work_intact=work_intact,
             declared_success_nodes=declared_success_nodes,
@@ -982,6 +995,8 @@ def _countable_result(
         return _classification(
             RunClassificationValue.delivered,
             REASON_DELIVERED_EMAIL,
+            delivered_pr_urls=tuple(pr_urls),
+            pr_url_provenance=tuple(sorted(pr_url_provenance.items())),
             computed_at=computed_at,
             work_intact=work_intact,
             declared_success_nodes=declared_success_nodes,
@@ -994,6 +1009,8 @@ def _countable_result(
     return _classification(
         RunClassificationValue.no_delivery,
         reason,
+        delivered_pr_urls=tuple(pr_urls),
+        pr_url_provenance=tuple(sorted(pr_url_provenance.items())),
         computed_at=computed_at,
         work_intact=work_intact,
         declared_success_nodes=declared_success_nodes,
