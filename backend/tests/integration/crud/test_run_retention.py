@@ -23,18 +23,73 @@ whole-set figure, per-run values are indicative).
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from modulo.db.crud.run_retention import list_retention_candidates
 from modulo.db.models.run import Run
 from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
 
 pytestmark = pytest.mark.integration
+
+
+@dataclass(frozen=True)
+class _RetentionFixture:
+    org_id: uuid.UUID
+    pipeline_id: uuid.UUID
+    snapshot_id: uuid.UUID
+
+
+@pytest_asyncio.fixture
+async def retention_fixture(migrated_db_url: str) -> _RetentionFixture:
+    """Provide a fresh organisation so retention counts cannot see shared runs."""
+    org_id = uuid.uuid4()
+    account_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    snapshot_id = uuid.uuid4()
+    engine = create_async_engine(migrated_db_url, poolclass=NullPool)
+    try:
+        async with engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text(
+                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
+                ),
+                {"id": str(org_id), "name": "Retention Test Org", "slug": f"ret-{org_id.hex[:8]}"},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
+                    "VALUES (:id, :email, :name, 'hash', 'local', true)"
+                ),
+                {"id": str(account_id), "email": f"ret-{org_id.hex[:8]}@test.local", "name": "Retention Test"},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, "
+                    "lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) "
+                    "VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
+                ),
+                {"id": str(pipeline_id), "oid": str(org_id), "name": "Retention Test Pipeline", "aid": str(account_id)},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, snapshot_version, graph_json, "
+                    "connector_bindings_json, schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                    "run_context_defaults, config_json) VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                    "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)"
+                ),
+                {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
+            )
+    finally:
+        await engine.dispose()
+    return _RetentionFixture(org_id, pipeline_id, snapshot_id)
 
 
 async def _seed_run(
@@ -50,8 +105,10 @@ async def _seed_run(
 ) -> Run:
     """Seed a run, allocating ``run_number`` through the production counter.
 
-    ``test_org`` is session-scoped and shared by every integration module in one
-    invocation, so a hardcoded low literal (1/2/3) may already belong to a run
+    Each test gets a fresh organisation so counts cannot include rows committed
+    by another integration module.
+
+    A hardcoded low literal (1/2/3) may already belong to a run
     committed by an earlier module — the insert then violates
     ``uq_runs_org_run_number`` order-dependently (the FAR-1968 flake class).
     Allocating from the same atomic per-org counter ``create_run`` uses makes
@@ -105,23 +162,21 @@ async def _seed_checkpoints(session: AsyncSession, org_id: uuid.UUID, thread_id:
 
 async def test_candidates_shape_and_estimates(
     rls_session: AsyncSession,
-    test_org: uuid.UUID,
-    test_pipeline: uuid.UUID,
-    test_snapshot: uuid.UUID,
+    retention_fixture: _RetentionFixture,
 ) -> None:
     bare = await _seed_run(
         rls_session,
-        org_id=test_org,
-        pipeline_id=test_pipeline,
-        snapshot_id=test_snapshot,
+        org_id=retention_fixture.org_id,
+        pipeline_id=retention_fixture.pipeline_id,
+        snapshot_id=retention_fixture.snapshot_id,
         status="complete",
         created_at=datetime(2026, 6, 1, tzinfo=UTC),
     )
     big = await _seed_run(
         rls_session,
-        org_id=test_org,
-        pipeline_id=test_pipeline,
-        snapshot_id=test_snapshot,
+        org_id=retention_fixture.org_id,
+        pipeline_id=retention_fixture.pipeline_id,
+        snapshot_id=retention_fixture.snapshot_id,
         status="complete",
         created_at=datetime(2026, 6, 2, tzinfo=UTC),
         input_payload={"data": "y" * 1000},
@@ -129,19 +184,19 @@ async def test_candidates_shape_and_estimates(
     )
     store = await _seed_run(
         rls_session,
-        org_id=test_org,
-        pipeline_id=test_pipeline,
-        snapshot_id=test_snapshot,
+        org_id=retention_fixture.org_id,
+        pipeline_id=retention_fixture.pipeline_id,
+        snapshot_id=retention_fixture.snapshot_id,
         status="pending",
         created_at=datetime(2026, 6, 3, tzinfo=UTC),
         input_payload={"k": "v"},
     )
     await rls_session.flush()
 
-    await _seed_checkpoints(rls_session, test_org, store.langgraph_thread_id)
+    await _seed_checkpoints(rls_session, retention_fixture.org_id, store.langgraph_thread_id)
     rls_session.add(
         RunNodeOutput(
-            organisation_id=test_org,
+            organisation_id=retention_fixture.org_id,
             run_id=store.id,
             node_id="node1",
             attempt_key=FINAL_ATTEMPT_KEY,
@@ -152,7 +207,7 @@ async def test_candidates_shape_and_estimates(
     # accounting by both the aggregate and the page reader.
     rls_session.add(
         RunNodeOutput(
-            organisation_id=test_org,
+            organisation_id=retention_fixture.org_id,
             run_id=store.id,
             node_id=META_NODE_ID,
             attempt_key=FINAL_ATTEMPT_KEY,
@@ -161,7 +216,7 @@ async def test_candidates_shape_and_estimates(
     )
     await rls_session.flush()
 
-    result = await list_retention_candidates(rls_session, org_id=test_org)
+    result = await list_retention_candidates(rls_session, org_id=retention_fixture.org_id)
 
     assert set(result) == {
         "runs",
@@ -196,9 +251,7 @@ async def test_candidates_shape_and_estimates(
 
 async def test_page_estimate_and_total_use_documented_different_byte_metrics(
     rls_session: AsyncSession,
-    test_org: uuid.UUID,
-    test_pipeline: uuid.UUID,
-    test_snapshot: uuid.UUID,
+    retention_fixture: _RetentionFixture,
 ) -> None:
     """qa Major (FAR-660): the page-level Python estimate (``json.dumps``,
     ensure_ascii-escaped) and the whole-set SQL aggregate (jsonb text
@@ -212,25 +265,25 @@ async def test_page_estimate_and_total_use_documented_different_byte_metrics(
     equality assertions stay on the ASCII render-equal subset above)."""
     ascii_run = await _seed_run(
         rls_session,
-        org_id=test_org,
-        pipeline_id=test_pipeline,
-        snapshot_id=test_snapshot,
+        org_id=retention_fixture.org_id,
+        pipeline_id=retention_fixture.pipeline_id,
+        snapshot_id=retention_fixture.snapshot_id,
         status="complete",
         created_at=datetime(2026, 6, 1, tzinfo=UTC),
         input_payload={"data": "a" * 100},
     )
     unicode_run = await _seed_run(
         rls_session,
-        org_id=test_org,
-        pipeline_id=test_pipeline,
-        snapshot_id=test_snapshot,
+        org_id=retention_fixture.org_id,
+        pipeline_id=retention_fixture.pipeline_id,
+        snapshot_id=retention_fixture.snapshot_id,
         status="complete",
         created_at=datetime(2026, 6, 2, tzinfo=UTC),
         input_payload={"accent": "é" * 10, "tiny": 1e-05},
     )
     await rls_session.flush()
 
-    result = await list_retention_candidates(rls_session, org_id=test_org)
+    result = await list_retention_candidates(rls_session, org_id=retention_fixture.org_id)
 
     assert result["estimate_degraded"] is False
     assert result["total_count"] == 2
@@ -249,31 +302,29 @@ async def test_page_estimate_and_total_use_documented_different_byte_metrics(
 
 async def test_candidates_status_filter_narrows_counts_and_estimates(
     rls_session: AsyncSession,
-    test_org: uuid.UUID,
-    test_pipeline: uuid.UUID,
-    test_snapshot: uuid.UUID,
+    retention_fixture: _RetentionFixture,
 ) -> None:
     await _seed_run(
         rls_session,
-        org_id=test_org,
-        pipeline_id=test_pipeline,
-        snapshot_id=test_snapshot,
+        org_id=retention_fixture.org_id,
+        pipeline_id=retention_fixture.pipeline_id,
+        snapshot_id=retention_fixture.snapshot_id,
         status="complete",
         created_at=datetime(2026, 6, 1, tzinfo=UTC),
     )
     store = await _seed_run(
         rls_session,
-        org_id=test_org,
-        pipeline_id=test_pipeline,
-        snapshot_id=test_snapshot,
+        org_id=retention_fixture.org_id,
+        pipeline_id=retention_fixture.pipeline_id,
+        snapshot_id=retention_fixture.snapshot_id,
         status="pending",
         created_at=datetime(2026, 6, 2, tzinfo=UTC),
         input_payload={"k": "v"},
     )
     await rls_session.flush()
-    await _seed_checkpoints(rls_session, test_org, store.langgraph_thread_id)
+    await _seed_checkpoints(rls_session, retention_fixture.org_id, store.langgraph_thread_id)
 
-    result = await list_retention_candidates(rls_session, org_id=test_org, status="pending")
+    result = await list_retention_candidates(rls_session, org_id=retention_fixture.org_id, status="pending")
 
     assert result["total_count"] == 1
     assert result["terminal_total"] == 0
@@ -285,31 +336,31 @@ async def test_candidates_status_filter_narrows_counts_and_estimates(
 
 async def test_candidates_date_filter_applies_to_the_aggregates(
     rls_session: AsyncSession,
-    test_org: uuid.UUID,
-    test_pipeline: uuid.UUID,
-    test_snapshot: uuid.UUID,
+    retention_fixture: _RetentionFixture,
 ) -> None:
     await _seed_run(
         rls_session,
-        org_id=test_org,
-        pipeline_id=test_pipeline,
-        snapshot_id=test_snapshot,
+        org_id=retention_fixture.org_id,
+        pipeline_id=retention_fixture.pipeline_id,
+        snapshot_id=retention_fixture.snapshot_id,
         status="complete",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         input_payload={"old": "o" * 100},
     )
     new = await _seed_run(
         rls_session,
-        org_id=test_org,
-        pipeline_id=test_pipeline,
-        snapshot_id=test_snapshot,
+        org_id=retention_fixture.org_id,
+        pipeline_id=retention_fixture.pipeline_id,
+        snapshot_id=retention_fixture.snapshot_id,
         status="complete",
         created_at=datetime(2026, 6, 1, tzinfo=UTC),
         input_payload={"new": "n" * 50},
     )
     await rls_session.flush()
 
-    result = await list_retention_candidates(rls_session, org_id=test_org, date_from=datetime(2026, 3, 1, tzinfo=UTC))
+    result = await list_retention_candidates(
+        rls_session, org_id=retention_fixture.org_id, date_from=datetime(2026, 3, 1, tzinfo=UTC)
+    )
 
     assert result["total_count"] == 1
     est = {item["id"]: item["estimated_bytes"] for item in result["runs"]}
@@ -376,15 +427,13 @@ async def _seed_foreign_run(db_engine: AsyncEngine) -> None:
 async def test_candidates_org_scoping_excludes_other_orgs(
     rls_session: AsyncSession,
     db_engine: AsyncEngine,
-    test_org: uuid.UUID,
-    test_pipeline: uuid.UUID,
-    test_snapshot: uuid.UUID,
+    retention_fixture: _RetentionFixture,
 ) -> None:
     await _seed_run(
         rls_session,
-        org_id=test_org,
-        pipeline_id=test_pipeline,
-        snapshot_id=test_snapshot,
+        org_id=retention_fixture.org_id,
+        pipeline_id=retention_fixture.pipeline_id,
+        snapshot_id=retention_fixture.snapshot_id,
         status="complete",
         created_at=datetime(2026, 6, 1, tzinfo=UTC),
         input_payload={"mine": "m" * 100},
@@ -392,9 +441,9 @@ async def test_candidates_org_scoping_excludes_other_orgs(
     await rls_session.flush()
     await _seed_foreign_run(db_engine)
 
-    result = await list_retention_candidates(rls_session, org_id=test_org)
+    result = await list_retention_candidates(rls_session, org_id=retention_fixture.org_id)
 
-    # Only test_org's run is listed — the foreign org's terminal run is never
+    # Only the fixture org's run is listed — the foreign org's terminal run is never
     # counted, neither in the page nor in the grouped aggregates.
     assert result["total_count"] == 1
     assert result["terminal_total"] == 1
