@@ -28,7 +28,19 @@ async function startLocalSsoBackend(): Promise<SsoBackendProcess> {
   const child = spawn('uv', [
     'run', '--project', '.', '--no-sync', 'python', 'tests/e2e/sso_fixture.py',
     '--port', String(port), '--frontend-url', getLocalE2eBaseUrl(),
-  ], { cwd: resolve(process.cwd(), '..', 'backend'), stdio: ['ignore', 'pipe', 'pipe'] })
+  ], {
+    cwd: resolve(process.cwd(), '..', 'backend'),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      DATABASE_URL: 'sqlite+aiosqlite:///./sso-e2e-fixture.db',
+      SECRET_KEY: 'sso-e2e-secret-key-012345678901234567890123',
+      FERNET_KEY: 'sso-e2e-fernet-key-012345678901234567890123',
+      MODULO_PUBLIC_URL: `http://127.0.0.1:${port}`,
+      MODULO_FRONTEND_URL: getLocalE2eBaseUrl(),
+      MODULO_MULTI_ORG_ENABLED: 'false',
+    },
+  })
   child.stdout?.on('data', (chunk) => process.stderr.write(`[sso-fixture] ${chunk}`))
   child.stderr?.on('data', (chunk) => process.stderr.write(`[sso-fixture] ${chunk}`))
   await waitForPort(port, child)
