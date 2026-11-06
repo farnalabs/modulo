@@ -190,7 +190,7 @@ The application sets `app.organisation_id` at connection pool checkout via
 **Checklist:**
 - [ ] Every table has `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY;`
 - [ ] Every table has a policy: `CREATE POLICY org_isolation ON <name> USING (organisation_id = current_setting('app.organisation_id')::uuid);`
-- [ ] Run the RLS test suite: `uv run pytest tests/unit/db/test_rls.py -v`
+- [ ] Run the RLS test suite (from `backend/`): `uv run pytest tests/unit/db/test_rls.py -v`
 
 **SQLite note:** RLS is not available in SQLite. `WHERE-clause` filtering is
 used instead, which is application-level only – do not rely on it for
@@ -702,7 +702,7 @@ before marking a production deployment as complete.
 ### Database
 
 - [ ] RLS is enabled on all tenant-scoped tables
-- [ ] RLS test suite passes: `uv run pytest tests/unit/db/test_rls.py -v`
+- [ ] RLS test suite passes (from `backend/`): `uv run pytest tests/unit/db/test_rls.py -v`
 - [ ] Postgres connections use `sslmode=require` (or `verify-full`) - accepted values are `disable`, `require`, `verify-ca`, `verify-full`; `prefer`/`allow` fail the boot (never a silent downgrade)
 - [ ] Alembic advisory lock ID does not conflict with other applications on the same Postgres instance
 - [ ] Backup encryption passphrase is 32+ characters and stored separately

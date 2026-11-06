@@ -154,6 +154,7 @@ Abstraction over external tool integrations. Each connector has a concrete `Conn
 | `MondayConnector` | `issue-tracker` | create/search/update items |
 | `ShortcutConnector` | `issue-tracker` | create/search/update stories |
 | `YouTrackConnector` | `issue-tracker` | create/search/update issues |
+| `PlaneConnector` | `issue-tracker` | create/search/update work items |
 | `NotionConnector` | `documentation` | read/write pages and databases |
 | `ConfluenceConnector` | `documentation` | read/write pages |
 | `DropboxPaperConnector` | `documentation` | read/write pages |
@@ -177,7 +178,7 @@ Abstraction over external tool integrations. Each connector has a concrete `Conn
 | `AzureKeyVaultConnector` | `secrets` | read secrets |
 | `SharePointConnector` | `documentation` | read/write files and pages |
 | `CodeClimateConnector` | `quality` | query code quality metrics |
-| *(40 concrete connectors; 43 `ConnectorType` enum members including the provider-dispatched `ci-runner` / `ticket-tracker` families and `custom`; see `modulo/connectors/`)* | | |
+| *(41 concrete connectors; 43 `ConnectorType` enum members including the provider-dispatched `ci-runner` / `ticket-tracker` families and `custom`; see `modulo/connectors/`)* | | |
 
 #### Integration Validation Levels (FAR-935)
 
