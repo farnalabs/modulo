@@ -131,6 +131,10 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
          can scroll it with the arrow keys; the ring makes that stop visible
          (A11Y-3). It carries no role and no handler: adding either would make it
          a static element claiming an interaction it does not have. -->
+    <!-- sonar-ignore:S6819,S6845 - Required for A11Y-3 keyboard scroll accessibility:
+     role="region" identifies the keyboard-reachable scroll viewport (ARIA landmark).
+     tabindex="0" makes it a focus stop so users can scroll with arrow keys
+     when no cell is focusable. Both are required by accessibility tests. -->
     <div
       class="overflow-x-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       role="region"
