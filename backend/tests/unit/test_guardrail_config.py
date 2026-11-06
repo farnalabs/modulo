@@ -28,6 +28,7 @@ from modulo.core.guardrails.config import (
     hash_guardrail_item,
     load_config_set,
     mask_config_set,
+    mask_engine_config,
     to_eval_config,
     validate_config_set,
 )
@@ -727,3 +728,70 @@ def test_mask_config_set_never_returns_a_masked_pattern_in_yaml_dump():
     masked_yaml = dump_config_set(mask_config_set(config_set))
     assert "AKIA[0-9A-Z]{16}" not in masked_yaml
     assert "********" in masked_yaml
+
+
+# ---------------------------------------------------------------------------
+# FAR-309 PR A — masking the flattened engine config (mask_engine_config)
+# ---------------------------------------------------------------------------
+
+
+def test_mask_engine_config_masks_flattened_regex():
+    config = {
+        "type": "regex",
+        "action": "block",
+        "interception_point": "input",
+        "field": "payload.secret",
+        "pattern": r"AKIA[0-9A-Z]{16}",
+        "required_capabilities": ["internet"],
+        "redaction": [{"path": "payload.secret", "mode": "transform"}],
+    }
+    masked = mask_engine_config(config)
+
+    assert masked["pattern"] == "********"
+    assert masked["redaction"][0]["path"] == "********"
+    # Topology stays readable.
+    assert masked["type"] == "regex"
+    assert masked["action"] == "block"
+    assert masked["field"] == "payload.secret"
+    assert masked["interception_point"] == "input"
+    assert masked["required_capabilities"] == ["internet"]
+    # The input is untouched (deep copy).
+    assert config["pattern"] == r"AKIA[0-9A-Z]{16}"
+    assert config["redaction"][0]["path"] == "payload.secret"
+
+
+def test_mask_engine_config_masks_flattened_json_schema():
+    config = {"type": "json_schema", "action": "block", "schema": {"type": "object"}}
+    masked = mask_engine_config(config)
+    assert masked["schema"] == {"redacted": True}
+    assert config["schema"] == {"type": "object"}
+
+
+def test_mask_engine_config_masks_detection_envelope():
+    config = {
+        "detection": {"type": "regex", "pattern": r"SECRET_[A-Z]{8}", "field": "body"},
+        "action": "warn",
+    }
+    masked = mask_engine_config(config)
+    assert masked["detection"]["pattern"] == "********"
+    assert masked["detection"]["field"] == "body"
+    assert config["detection"]["pattern"] == r"SECRET_[A-Z]{8}"
+
+
+def test_mask_engine_config_tolerates_malformed_sections():
+    """A non-dict envelope / non-dict redaction entry is left as-is — the read
+    surface must never raise on an old or malformed row."""
+    config = {
+        "detection": "not-a-mapping",
+        "redaction": ["not-a-mapping", {"path": "payload.secret", "mode": "transform"}],
+        "schema": None,
+    }
+    masked = mask_engine_config(config)
+    assert masked["detection"] == "not-a-mapping"
+    assert masked["redaction"][0] == "not-a-mapping"
+    assert masked["redaction"][1]["path"] == "********"
+    assert masked["schema"] is None
+
+
+def test_mask_engine_config_empty_is_a_noop():
+    assert mask_engine_config({}) == {}

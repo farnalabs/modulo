@@ -2174,9 +2174,6 @@ async def _seed_demo_readonly_surfaces(
             )
         ).scalars()
     )
-    if not runs:
-        return
-
     variant_name = "Demo review strategies"
     variant_values = {
         "pipeline_id": pipeline.id,
@@ -2217,6 +2214,13 @@ async def _seed_demo_readonly_surfaces(
         )
     else:
         _converge_fixture_attributes(variant, variant_values, tuple(variant_values))
+
+    if not runs:
+        # The variant group is runs-independent and must exist even when the
+        # demo pipeline has no runs yet; feedback and evidence reference the
+        # latest run, so only those are skipped.
+        await session.flush()
+        return
 
     feedback_values = {
         "run_id": runs[0].id,

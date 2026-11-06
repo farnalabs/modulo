@@ -4133,7 +4133,6 @@ export default {
       "edit": "Edit",
       "view_details": "View details",
       "configuration": "Configuration",
-      "configuration_unavailable": "Configuration details are unavailable.",
       "failed_to_update_trigger": "Failed to update trigger: {detail}",
       "failed_to_create_trigger": "Failed to create trigger: {detail}",
       "error_saving_trigger": "Error: {detail}",

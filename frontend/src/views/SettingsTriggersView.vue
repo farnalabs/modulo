@@ -138,9 +138,9 @@
                       />
                       {{ triggerToggling[t.id] ? $t('views.SettingsTriggersView.toggling') : (t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive')) }}
                     </button>
-                    <output v-else class="text-xs text-muted-foreground">
+                    <span v-else class="text-xs text-muted-foreground">
                       {{ t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive') }}
-                    </output>
+                    </span>
                     <Button v-if="isStreakDeactivated(t) && isOrgOperator" data-testid="settings-triggers-reenable" size="small" severity="secondary" outlined :disabled="triggerToggling[t.id]" @click="toggleActive(t)">
                       {{ $t('views.SettingsTriggersView.re_enable') }}
                     </Button>
@@ -1026,11 +1026,7 @@ function openDetailsDialog(trigger: TriggerItem): void {
 }
 
 function formatTriggerConfig(trigger: TriggerItem): string {
-  try {
-    return JSON.stringify(trigger.config_json ?? {}, null, 2)
-  } catch {
-    return t('views.SettingsTriggersView.configuration_unavailable')
-  }
+  return JSON.stringify(trigger.config_json ?? {}, null, 2)
 }
 
 function confirmDelete(trigger: TriggerItem) {
