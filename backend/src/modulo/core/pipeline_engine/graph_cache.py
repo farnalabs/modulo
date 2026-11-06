@@ -99,6 +99,18 @@ InvalidationScope = tuple[uuid.UUID, uuid.UUID]
 _invalidation_generations: dict[InvalidationScope, int] = {}
 
 
+def _advance_invalidation_generation(scope: InvalidationScope) -> None:
+    """Advance *scope* to a new cache epoch while the cache lock is held."""
+    _invalidation_generations[scope] = _invalidation_generations.get(scope, 0) + 1
+
+
+def _discard_invalidation_generation_if_idle(scope: InvalidationScope) -> None:
+    """Drop an idle generation record after no stale caller can remain."""
+    if any(key[:2] == scope for key in _compile_locks):
+        return
+    _invalidation_generations.pop(scope, None)
+
+
 def get_or_compile(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
@@ -161,6 +173,7 @@ def get_or_compile(
             entry.users -= 1
             if entry.users == 0 and _compile_locks.get(key) is entry:
                 _compile_locks.pop(key, None)
+            _discard_invalidation_generation_if_idle(scope)
 
 
 def compute_eval_defs_hash(eval_defs_by_node: dict[str, list[EvalDefDTO]] | None) -> str:
@@ -1602,11 +1615,13 @@ def evict(pipeline_id: uuid.UUID, snapshot_id: uuid.UUID) -> None:
     """
     scope = (pipeline_id, snapshot_id)
     with _CACHE_LOCK:
-        _invalidation_generations[scope] = _invalidation_generations.get(scope, 0) + 1
+        _advance_invalidation_generation(scope)
         keys = {
             *[k for k in _CACHE if k[0] == pipeline_id and k[1] == snapshot_id],
             *[k for k in _compile_locks if k[0] == pipeline_id and k[1] == snapshot_id],
         }
+        if not keys:
+            _discard_invalidation_generation_if_idle(scope)
     for key in keys:
         with _CACHE_LOCK:
             entry = _compile_locks.get(key)
@@ -1618,3 +1633,4 @@ def evict(pipeline_id: uuid.UUID, snapshot_id: uuid.UUID) -> None:
             _CACHE.pop(key, None)
             if entry.users == 0 and _compile_locks.get(key) is entry:
                 _compile_locks.pop(key, None)
+            _discard_invalidation_generation_if_idle(scope)

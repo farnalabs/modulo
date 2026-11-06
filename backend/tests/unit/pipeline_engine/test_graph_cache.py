@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from modulo.core.pipeline_engine import graph_cache as _graph_cache
 from modulo.core.pipeline_engine.graph_cache import (
     _CACHE,
     _CACHE_LOCK,
@@ -78,6 +79,15 @@ def test_evict_removes_entry():
 
     evict(pid, sid)
     assert _k(pid, sid, 300) not in _CACHE
+
+
+def test_evict_does_not_retain_idle_invalidation_generation():
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+
+    for _ in range(10):
+        evict(pid, sid)
+
+    assert (pid, sid) not in _invalidation_generations
 
 
 def test_cache_evicts_oldest_when_full():
@@ -735,9 +745,21 @@ def test_queued_waiter_cannot_repopulate_after_eviction():
     waiter_thread.start()
     with _CACHE_LOCK:
         assert _compile_locks[(pid, sid, 300, "")].users == 2
+    invalidated = threading.Event()
+    original_advance = _graph_cache._advance_invalidation_generation
+
+    def advance_and_signal(scope: tuple[uuid.UUID, uuid.UUID]) -> None:
+        original_advance(scope)
+        invalidated.set()
+
     evict_thread = threading.Thread(target=lambda: evict(pid, sid))
-    evict_thread.start()
-    release_compiler.set()
+    with patch(
+        "modulo.core.pipeline_engine.graph_cache._advance_invalidation_generation",
+        side_effect=advance_and_signal,
+    ):
+        evict_thread.start()
+        assert invalidated.wait(timeout=2)
+        release_compiler.set()
 
     compiler_thread.join(timeout=2)
     evict_thread.join(timeout=2)
