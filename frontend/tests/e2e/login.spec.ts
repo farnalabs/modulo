@@ -1,4 +1,4 @@
-import { test, expect, openLoginForm, completeLoginForm } from './setup/fixtures'
+import { test, expect, openLoginForm, completeLoginForm, setupLocalMockApi } from './setup/fixtures'
 
 test.describe('Login Flow', () => {
   test('shows login form fields', { tag: "@regression" }, async ({ page, env }) => {
@@ -70,6 +70,7 @@ test.describe('Login Flow', () => {
     test.skip(env.name !== 'local', 'Uses a deterministic local IdP seam; staging uses its real provider configuration')
     void localSsoBackend
 
+    await setupLocalMockApi(page)
     await page.goto('/login')
     const ssoButton = page.getByTestId('login-sso-oidc-ci-idp')
     await expect(ssoButton).toBeVisible()
@@ -93,6 +94,7 @@ test.describe('Login Flow', () => {
     test.skip(env.name !== 'local', 'Uses a deterministic local IdP seam; staging uses its real provider configuration')
     void localSsoBackend
 
+    await setupLocalMockApi(page)
     await page.goto('/login')
     await page.getByTestId('login-sso-oidc-ci-idp').click()
     await page.waitForURL(/\/test-idp\/authorize/)
