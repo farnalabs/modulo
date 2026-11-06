@@ -150,31 +150,41 @@ def normalise_discovery_output(output: Any) -> dict[str, Any]:
     return _canonical_graph(output)
 
 
+def _diff_mapping(
+    expected: dict[str, Any], actual: dict[str, Any], path: tuple[str | int, ...]
+) -> list[dict[str, Any]]:
+    differences: list[dict[str, Any]] = []
+    for key in sorted(set(expected) | set(actual)):
+        if key in expected and key in actual:
+            differences.extend(_diff(expected[key], actual[key], (*path, key)))
+        else:
+            differences.append({"path": [*path, key], "expected": expected.get(key), "actual": actual.get(key)})
+    return differences
+
+
+def _diff_sequence(expected: list[Any], actual: list[Any], path: tuple[str | int, ...]) -> list[dict[str, Any]]:
+    differences: list[dict[str, Any]] = []
+    for index in range(max(len(expected), len(actual))):
+        if index < len(expected) and index < len(actual):
+            differences.extend(_diff(expected[index], actual[index], (*path, index)))
+        else:
+            differences.append(
+                {
+                    "path": [*path, index],
+                    "expected": expected[index] if index < len(expected) else None,
+                    "actual": actual[index] if index < len(actual) else None,
+                }
+            )
+    return differences
+
+
 def _diff(expected: Any, actual: Any, path: tuple[str | int, ...] = ()) -> list[dict[str, Any]]:
     if expected == actual:
         return []
     if isinstance(expected, dict) and isinstance(actual, dict):
-        result: list[dict[str, Any]] = []
-        for key in sorted(set(expected) | set(actual)):
-            if key not in expected or key not in actual:
-                result.append({"path": [*path, key], "expected": expected.get(key), "actual": actual.get(key)})
-            else:
-                result.extend(_diff(expected[key], actual[key], (*path, key)))
-        return result
+        return _diff_mapping(expected, actual, path)
     if isinstance(expected, list) and isinstance(actual, list):
-        result = []
-        for index in range(max(len(expected), len(actual))):
-            if index >= len(expected) or index >= len(actual):
-                result.append(
-                    {
-                        "path": [*path, index],
-                        "expected": expected[index] if index < len(expected) else None,
-                        "actual": actual[index] if index < len(actual) else None,
-                    }
-                )
-            else:
-                result.extend(_diff(expected[index], actual[index], (*path, index)))
-        return result
+        return _diff_sequence(expected, actual, path)
     return [{"path": list(path), "expected": expected, "actual": actual}]
 
 

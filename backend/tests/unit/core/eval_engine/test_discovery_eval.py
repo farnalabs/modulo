@@ -183,3 +183,66 @@ def test_expected_output_rejects_unknown_and_missing_fields() -> None:
         normalise_discovery_output({**expected, "extra": []})
     with pytest.raises(DiscoveryEvalError, match="missing fields"):
         normalise_discovery_output({"nodes": []})
+
+
+def test_expected_output_rejects_malformed_graph_collections() -> None:
+    empty = {"nodes": [], "relationships": [], "warnings": [], "skipped": []}
+
+    with pytest.raises(DiscoveryEvalError, match="collections must be lists"):
+        normalise_discovery_output({**empty, "nodes": "not-a-list"})
+    with pytest.raises(DiscoveryEvalError, match="entries must be objects"):
+        normalise_discovery_output({**empty, "nodes": ["not-an-object"]})
+    with pytest.raises(DiscoveryEvalError, match="warnings entries must be strings"):
+        normalise_discovery_output({**empty, "warnings": [1]})
+    with pytest.raises(DiscoveryEvalError, match="relationship missing"):
+        normalise_discovery_output({**empty, "relationships": [{"source_node_key": "a"}]})
+
+
+def test_mismatch_reports_absent_nested_keys() -> None:
+    payload = {"sources": [_source("pipeline", "p1", "Build")]}
+    _payload, expected = _case([_source("pipeline", "p1", "Build")])
+    expected_node = expected["nodes"][0]
+    node = {key: value for key, value in expected_node.items() if key != "display_name"}
+    node["unexpected"] = True
+    wrong = {"nodes": [node], "relationships": [], "warnings": [], "skipped": []}
+
+    result = evaluate_discovery_case(payload, wrong)
+
+    assert result.passed is False
+    paths = {tuple(difference["path"]) for difference in result.diff}
+    assert ("nodes", 0, "display_name") in paths
+    assert ("nodes", 0, "unexpected") in paths
+
+
+def test_mismatch_reports_scalar_and_container_type_differences() -> None:
+    payload = {"sources": [_source("pipeline", "p1", "Build")]}
+    _payload, expected = _case([_source("pipeline", "p1", "Build")])
+    node = {
+        **expected["nodes"][0],
+        "config_json": ["not", "a", "mapping"],
+        "display_name": {"unexpected": "mapping"},
+    }
+    wrong = {"nodes": [node], "relationships": [], "warnings": [], "skipped": []}
+
+    result = evaluate_discovery_case(payload, wrong)
+
+    assert result.passed is False
+    paths = {tuple(difference["path"]) for difference in result.diff}
+    assert ("nodes", 0, "config_json") in paths
+    assert ("nodes", 0, "display_name") in paths
+
+
+@pytest.mark.parametrize("node_count", [0, 2])
+def test_mismatch_reports_sequence_length_differences(node_count: int) -> None:
+    payload = {"sources": [_source("pipeline", "p1", "Build")]}
+    wrong = {
+        "nodes": [{"node_key": f"pipeline:p{index}"} for index in range(node_count)],
+        "relationships": [],
+        "warnings": [],
+        "skipped": [],
+    }
+
+    result = evaluate_discovery_case(payload, wrong)
+
+    assert result.passed is False
+    assert any(isinstance(difference["path"][-1], int) for difference in result.diff)
