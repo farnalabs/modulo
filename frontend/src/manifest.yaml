@@ -5499,6 +5499,9 @@ elements:
       - testid: diff-comparing
         type: element
         dynamic_testid: false
+      - testid: diff-controls-card
+        type: element
+        dynamic_testid: false
       - testid: diff-recent-runs-a
         type: select
         dynamic_testid: false
@@ -5947,6 +5950,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: hitl-review-pipeline-name
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-created
         type: element
         dynamic_testid: false
       - testid: hitl-review-toggle-expand
@@ -6624,6 +6630,12 @@ elements:
         type: button
         dynamic_testid: false
       - testid: settings-teams-owned-resource-count
+        type: element
+        dynamic_testid: false
+      - testid: settings-teams-row
+        type: element
+        dynamic_testid: false
+      - testid: settings-teams-team-name
         type: element
         dynamic_testid: false
       - testid: settings-teams-rename-name
