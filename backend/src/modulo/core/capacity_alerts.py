@@ -653,6 +653,30 @@ def _needs_unhealthy_sustain(candidate: Candidate) -> bool:
     )
 
 
+async def _invalidate_unhealthy_markers(
+    redis_client: AsyncRedis,
+    *,
+    org_id: uuid.UUID,
+    subject_prefix: str | None = None,
+    subjects: set[str] | None = None,
+) -> None:
+    """Drop sustain markers for observations that were not evaluated.
+
+    A marker proves continuity only across successful evaluations of the same
+    subject. Report failures, skipped orgs, and unevaluated subject subsets
+    therefore invalidate the marker without touching the open alert state.
+    """
+    if subjects is not None:
+        for subject in subjects:
+            await _delete_state(redis_client, _state_key(org_id, f"{_QUEUE_UNHEALTHY_MARKER}:{subject}"))
+        return
+
+    marker_prefix = f"{_state_key(org_id, _QUEUE_UNHEALTHY_MARKER)}:"
+    match = f"{marker_prefix}{subject_prefix or '*'}"
+    async for raw_marker_key in redis_client.scan_iter(match=match):
+        await _delete_state(redis_client, _decode(raw_marker_key))
+
+
 async def _hold_unsustained_unhealthy_candidates(
     redis_client: AsyncRedis,
     *,
@@ -1040,6 +1064,7 @@ async def _sweep_org(
         raise
     except Exception:
         summary["org_errors"] += 1
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
         _log.warning("capacity_alerts.report_failed org=%s", org_id, exc_info=True)
         return
 
@@ -1086,6 +1111,17 @@ async def _sweep_org(
         # as "backpressure lifted" (that would emit a spurious recovery and
         # then re-alert on the next successful tick).
         unverified_kinds.add(_SUBJECT_BACKPRESSURE)
+        await _invalidate_unhealthy_markers(
+            redis_client,
+            org_id=org_id,
+            subject_prefix=f"{_SUBJECT_BACKPRESSURE}:*",
+        )
+    else:
+        await _invalidate_unhealthy_markers(
+            redis_client,
+            org_id=org_id,
+            subjects=unverified_subjects,
+        )
 
     await _apply_org_candidates(
         redis_client,
@@ -1110,15 +1146,20 @@ async def _run_orgs(
     summary: dict[str, Any],
     budget_seconds: float,
     redis_memory: dict[str, Any] | None = None,
+    evaluated_org_ids: set[uuid.UUID] | None = None,
 ) -> None:
     """Evaluate every candidate org, checking the wall-clock budget between orgs."""
     started = time.monotonic()
-    for org_id in org_ids:
+    evaluated_org_ids = evaluated_org_ids if evaluated_org_ids is not None else set()
+    for index, org_id in enumerate(org_ids):
         if time.monotonic() - started >= budget_seconds:
             summary["budget_exhausted"] = True
+            for skipped_org_id in org_ids[index:]:
+                await _invalidate_unhealthy_markers(redis_client, org_id=skipped_org_id)
             _log.info("capacity_alerts.budget_exhausted evaluated=%d", summary["orgs_evaluated"])
             break
         try:
+            evaluated_before = summary["orgs_evaluated"]
             await _sweep_org(
                 factory=factory,
                 org_id=org_id,
@@ -1129,10 +1170,13 @@ async def _run_orgs(
                 summary=summary,
                 redis_memory=redis_memory,
             )
+            if summary["orgs_evaluated"] > evaluated_before:
+                evaluated_org_ids.add(org_id)
         except asyncio.CancelledError:
             raise
         except Exception:
             summary["org_errors"] += 1
+            await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
             _log.warning("capacity_alerts.org_sweep_failed org=%s", org_id, exc_info=True)
 
 
@@ -1210,6 +1254,7 @@ async def evaluate_capacity_alerts(
         return summary
 
     summary["orgs_considered"] = len(candidates)
+    evaluated_org_ids: set[uuid.UUID] = set()
     try:
         await asyncio.wait_for(
             _run_orgs(
@@ -1222,11 +1267,15 @@ async def evaluate_capacity_alerts(
                 summary=summary,
                 budget_seconds=budget_seconds,
                 redis_memory=redis_memory,
+                evaluated_org_ids=evaluated_org_ids,
             ),
             timeout=budget_seconds + _HARD_TIMEOUT_SLACK_SECONDS,
         )
     except TimeoutError:
         summary["budget_exhausted"] = True
+        for skipped_org_id in candidates:
+            if skipped_org_id not in evaluated_org_ids:
+                await _invalidate_unhealthy_markers(redis_client, org_id=skipped_org_id)
         _log.warning(
             "capacity_alerts.hard_timeout evaluated=%d (bound=%ss)",
             summary["orgs_evaluated"],

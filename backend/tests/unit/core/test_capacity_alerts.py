@@ -641,6 +641,35 @@ async def test_sweep_alerts_after_a_sustained_unhealthy_episode(
     assert [event[1] for event in notifier.events] == ["queue_pressure_warning"]
 
 
+async def test_sweep_report_gap_restarts_unhealthy_sustain_window(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A report-read gap cannot count as an observed part of the episode."""
+    redis, notifier, state = sweep_env
+    pid = uuid.uuid4()
+    org_id = uuid.uuid4()
+    unhealthy = _report(
+        pending_by_pipeline=[_pipeline(pid, count=4, oldest=900.0)],
+        pending_total=4,
+    )
+    state["report"] = unhealthy
+
+    await _run(redis, notifier, org_id, _NOW)
+    monkeypatch.setattr(
+        ca,
+        "read_capacity_report",
+        AsyncMock(side_effect=[RuntimeError("report unavailable"), unhealthy, unhealthy, unhealthy]),
+    )
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
+
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=ca.UNHEALTHY_SUSTAIN_SECONDS))
+    assert not notifier.events
+
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=2 * ca.UNHEALTHY_SUSTAIN_SECONDS + 1))
+    assert [event[1] for event in notifier.events] == ["queue_pressure_warning"]
+
+
 async def test_sweep_fires_once_then_suppresses_identical_tick(
     sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
 ) -> None:
