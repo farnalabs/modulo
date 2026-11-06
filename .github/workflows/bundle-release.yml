@@ -224,6 +224,10 @@ jobs:
           cp -a build/redis-install/bin/. "$BUNDLE/redis/"
           test -x "$BUNDLE/redis/redis-server"
           test -x "$BUNDLE/redis/redis-cli"
+          # Also copy redis binaries to pg/bin so the bundled-binaries verification finds them.
+          cp -a build/redis-install/bin/. "$BUNDLE/pg/bin/"
+          test -x "$BUNDLE/pg/bin/redis-server"
+          test -x "$BUNDLE/pg/bin/redis-cli"
 
           # Native bundle entrypoint. Keep this as a small POSIX wrapper so the
           # shipped command uses the bundled CPython runtime and dependencies,
