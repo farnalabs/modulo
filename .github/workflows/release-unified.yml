@@ -2002,6 +2002,8 @@ jobs:
             "release-artefacts/RELEASE_MANIFEST.json.sig"
             "release-artefacts/openapi.json"
           )
+          # RELEASE_MANIFEST.json + .sig are required by native-release-smoke.yml
+          # (canary workflow) which verifies the signed manifest against the tarball.
           if [ "$INCLUDE_WINDOWS" = "true" ]; then
             ASSETS+=("release-artefacts/modulo-${VERSION}-windows-amd64.exe")
           fi
