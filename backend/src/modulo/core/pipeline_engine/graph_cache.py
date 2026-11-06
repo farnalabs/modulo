@@ -92,6 +92,12 @@ class _CompileLock:
 # key while an older compilation is still in flight.
 _compile_locks: dict[CacheKey, _CompileLock] = {}
 
+# Eviction invalidates every timeout/hash variant for a pipeline/snapshot pair.
+# A caller records this generation before queueing on the per-key lock; a waiter
+# that crosses eviction must not publish a result compiled for the old epoch.
+InvalidationScope = tuple[uuid.UUID, uuid.UUID]
+_invalidation_generations: dict[InvalidationScope, int] = {}
+
 
 def get_or_compile(
     pipeline_id: uuid.UUID,
@@ -114,11 +120,13 @@ def get_or_compile(
     compile only once.
     """
     key = (pipeline_id, snapshot_id, pipeline_node_timeout_seconds, graph_struct_hash)
+    scope = (pipeline_id, snapshot_id)
     with _CACHE_LOCK:
         cached = _CACHE.get(key, _MISSING)
         if cached is not _MISSING:
             _CACHE.move_to_end(key)
             return cached
+        generation = _invalidation_generations.get(scope, 0)
         entry = _compile_locks.get(key)
         if entry is None:
             entry = _CompileLock(threading.Lock())
@@ -129,11 +137,20 @@ def get_or_compile(
         with entry.lock:
             with _CACHE_LOCK:
                 cached = _CACHE.get(key, _MISSING)
+                current_generation = _invalidation_generations.get(scope, 0)
                 if cached is not _MISSING:
                     _CACHE.move_to_end(key)
                     return cached
+                if current_generation != generation:
+                    # This caller queued behind invalidation; compile in the
+                    # post-invalidation epoch rather than publishing stale data.
+                    generation = current_generation
             result = factory()
             with _CACHE_LOCK:
+                if _invalidation_generations.get(scope, 0) != generation:
+                    # The compile crossed invalidation. Return the result to this
+                    # caller, but never let it repopulate the cache.
+                    return result
                 _CACHE[key] = result
                 _CACHE.move_to_end(key)
                 if len(_CACHE) > _MAX_SIZE:
@@ -1583,7 +1600,9 @@ def evict(pipeline_id: uuid.UUID, snapshot_id: uuid.UUID) -> None:
     compilation is serialized with invalidation: its result is discarded, and
     it cannot repopulate the cache after this function returns.
     """
+    scope = (pipeline_id, snapshot_id)
     with _CACHE_LOCK:
+        _invalidation_generations[scope] = _invalidation_generations.get(scope, 0) + 1
         keys = {
             *[k for k in _CACHE if k[0] == pipeline_id and k[1] == snapshot_id],
             *[k for k in _compile_locks if k[0] == pipeline_id and k[1] == snapshot_id],

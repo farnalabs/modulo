@@ -10,7 +10,10 @@ import pytest
 
 from modulo.core.pipeline_engine.graph_cache import (
     _CACHE,
+    _CACHE_LOCK,
     _MAX_SIZE,
+    _compile_locks,
+    _invalidation_generations,
     _make_gate_kickback_router,
     _make_node_fn,
     build_graph_from_json,
@@ -25,6 +28,8 @@ from modulo.core.pipeline_engine.node_runner import _connector_inputs
 @pytest.fixture(autouse=True)
 def _auto_clear_cache() -> None:
     _CACHE.clear()
+    _compile_locks.clear()
+    _invalidation_generations.clear()
 
 
 def _k(pid: uuid.UUID, sid: uuid.UUID, timeout: int, h: str = "") -> tuple:
@@ -694,6 +699,54 @@ def test_evict_waits_for_inflight_compile_and_discards_result():
     compile_thread.join(timeout=2)
     evict_thread.join(timeout=2)
 
+    assert _k(pid, sid, 300) not in _CACHE
+    assert get_or_compile(pid, sid, lambda: "fresh") == "fresh"
+
+
+def test_queued_waiter_cannot_repopulate_after_eviction():
+    """A queued waiter must compile after eviction, not publish stale state."""
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+    compiler_started = threading.Event()
+    release_compiler = threading.Event()
+    waiter_started = threading.Event()
+    waiter_error: list[RuntimeError] = []
+    results: list[str] = []
+
+    def compiler() -> str:
+        compiler_started.set()
+        release_compiler.wait(timeout=2)
+        return "stale"
+
+    def waiter_factory() -> str:
+        waiter_started.set()
+        raise RuntimeError("fresh compilation failed")
+
+    compiler_thread = threading.Thread(target=lambda: results.append(get_or_compile(pid, sid, compiler)))
+    compiler_thread.start()
+    assert compiler_started.wait(timeout=2)
+
+    def waiter() -> None:
+        try:
+            get_or_compile(pid, sid, waiter_factory)
+        except RuntimeError as exc:
+            waiter_error.append(exc)
+
+    waiter_thread = threading.Thread(target=waiter)
+    waiter_thread.start()
+    with _CACHE_LOCK:
+        assert _compile_locks[(pid, sid, 300, "")].users == 2
+    evict_thread = threading.Thread(target=lambda: evict(pid, sid))
+    evict_thread.start()
+    release_compiler.set()
+
+    compiler_thread.join(timeout=2)
+    evict_thread.join(timeout=2)
+    waiter_thread.join(timeout=2)
+
+    assert results == ["stale"]
+    assert waiter_started.wait(timeout=2)
+    assert len(waiter_error) == 1
+    assert str(waiter_error[0]) == "fresh compilation failed"
     assert _k(pid, sid, 300) not in _CACHE
     assert get_or_compile(pid, sid, lambda: "fresh") == "fresh"
 
