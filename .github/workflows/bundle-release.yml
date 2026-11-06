@@ -567,7 +567,35 @@ jobs:
           smoke_data="$smoke_root/data"
           smoke_socket="$smoke_root/socket"
           smoke_dump="$smoke_root/roundtrip.sql"
+          smoke_script="$smoke_root/run-smoke.sh"
           mkdir -p "$smoke_data" "$smoke_socket"
+          cat > "$smoke_script" <<'SMOKE_EOF'
+          #!/usr/bin/env bash
+          set -eu
+          : "${SMOKE_BUNDLE:?SMOKE_BUNDLE is required}"
+          : "${PGDATA:?PGDATA is required}"
+          : "${SMOKE_SOCKET:?SMOKE_SOCKET is required}"
+          : "${SMOKE_DUMP:?SMOKE_DUMP is required}"
+          test "$(pg_config --sharedir)" = "$SMOKE_BUNDLE/pg/share/postgresql"
+          case "$(pg_config --sharedir)" in "$SMOKE_BUNDLE"/*) : ;; *) exit 1 ;; esac
+          initdb --pgdata "$PGDATA" --username modulo --auth=trust --locale C
+          pg_ctl --pgdata "$PGDATA" --log "$PGDATA/postgres.log" \
+            --options="-k $SMOKE_SOCKET -p 55432" start -w
+          trap 'pg_ctl --pgdata "$PGDATA" stop -m fast -w' EXIT
+          psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname postgres \
+            --command "SELECT 1;"
+          psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname postgres \
+            --command "SET TIME ZONE 'America/New_York'; SELECT now() AT TIME ZONE 'UTC';"
+          createdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
+          psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip \
+            --command "CREATE TABLE proof(value integer); INSERT INTO proof VALUES (2192);"
+          pg_dump --format=custom --host "$SMOKE_SOCKET" --port 55432 --username modulo --file "$SMOKE_DUMP" roundtrip
+          dropdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
+          createdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
+          pg_restore --exit-on-error --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip "$SMOKE_DUMP"
+          test "$(psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip --tuples-only --no-align --command "SELECT value FROM proof")" = "2192"
+          SMOKE_EOF
+          chmod 0755 "$smoke_script"
           chown -R "$smoke_user:$smoke_user" "$smoke_root"
           sudo -u "$smoke_user" env -i \
             HOME="$smoke_root/home" \
@@ -576,26 +604,8 @@ jobs:
             SMOKE_BUNDLE="$smoke_bundle" \
             SMOKE_SOCKET="$smoke_socket" \
             SMOKE_DUMP="$smoke_dump" \
-            bash -eu -c '
-              test "$(pg_config --sharedir)" = "$SMOKE_BUNDLE/pg/share/postgresql"
-              case "$(pg_config --sharedir)" in "$SMOKE_BUNDLE"/*) : ;; *) exit 1 ;; esac
-              initdb --pgdata "$PGDATA" --username modulo --auth=trust --locale C
-              pg_ctl --pgdata "$PGDATA" --log "$PGDATA/postgres.log" \
-                --options="-k $SMOKE_SOCKET -p 55432" start -w
-              trap "pg_ctl --pgdata \"$PGDATA\" stop -m fast -w" EXIT
-              psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname postgres \
-                --command "SELECT 1;"
-              psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname postgres \
-                --command "SET TIME ZONE 'America/New_York'; SELECT now() AT TIME ZONE 'UTC';"
-              createdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
-              psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip \
-                --command "CREATE TABLE proof(value integer); INSERT INTO proof VALUES (2192);"
-              pg_dump --format=custom --host "$SMOKE_SOCKET" --port 55432 --username modulo --file "$SMOKE_DUMP" roundtrip
-              dropdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
-              createdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
-              pg_restore --exit-on-error --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip "$SMOKE_DUMP"
-              test "$(psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip --tuples-only --no-align --command "SELECT value FROM proof")" = "2192"
-            '
+            bash "$smoke_script"
+
           if grep -R -E '/(usr|opt|home)/[^ ]*(postgresql|pgsql)' "$smoke_data/postgres.log"; then
             echo "::error::final PostgreSQL tarball smoke used a host PostgreSQL path" >&2
             exit 1
