@@ -11,12 +11,21 @@
         :disabled="discovering"
         class="rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-60"
         :aria-label="$t('views.DashboardView.discover_my_system')"
+        data-testid="dashboard-system-discover"
         @click="discoverSystem"
       >
         {{ $t('views.DashboardView.discover_my_system') }}
       </button>
     </template>
 
+    <ErrorAlert
+      v-if="discoverError"
+      :message="discoverError"
+      :on-dismiss="clearDiscoverError"
+      :dismiss-label="$t('common.dismiss')"
+      class="mb-3"
+      data-testid="dashboard-system-discover-error"
+    />
     <div v-if="store.overviewLoading" class="text-sm text-muted-foreground" data-testid="system-map-overview-loading">
       {{ $t('views.DashboardView.system_maps_loading') }}
     </div>
@@ -75,15 +84,28 @@ const { t } = useI18n()
 const router = useRouter()
 const store = useSystemMapsStore()
 const discovering = ref(false)
+const discoverError = ref<string | null>(null)
 const canDiscover = computed(() => store.accessLoaded && !store.error && store.hasAccess)
 const healthLabel = (health: string): string => t(`views.DashboardView.system_maps_health_${health}`)
 
+function clearDiscoverError(): void {
+  discoverError.value = null
+}
+
+/**
+ * Discovery can fail (network, authorization, server error). Surface that
+ * inline rather than letting the rejection escape the click handler and
+ * leaving the card silent with a re-enabled button.
+ */
 async function discoverSystem(): Promise<void> {
   if (discovering.value) return
   discovering.value = true
+  discoverError.value = null
   try {
     const report = await store.discover()
     await router.push(`/system-maps/${report.draft_map_id}?discovery=1`)
+  } catch {
+    discoverError.value = t('views.DashboardView.system_maps_discover_failed')
   } finally {
     discovering.value = false
   }

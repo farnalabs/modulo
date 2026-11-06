@@ -113,12 +113,12 @@ describe('DashboardSystemOverview', () => {
   it('shows discovery only after confirmed internal authoring access loads', async () => {
     const { wrapper, store } = mountOverview()
 
-    expect(wrapper.find('button[aria-label="Discover My System"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dashboard-system-discover"]').exists()).toBe(false)
     store.accessLoaded = true
     store.systemMapsEnabled = true
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.get('button[aria-label="Discover My System"]').text()).toContain('Discover My System')
+    expect(wrapper.get('[data-testid="dashboard-system-discover"]').text()).toContain('Discover My System')
   })
 
   it('does not present discovery for published-read viewers', async () => {
@@ -129,7 +129,7 @@ describe('DashboardSystemOverview', () => {
     store.systemMapsEnabled = true
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.find('button[aria-label="Discover My System"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dashboard-system-discover"]').exists()).toBe(false)
   })
 
   it('does not present discovery while access is loading or failed', async () => {
@@ -137,12 +137,12 @@ describe('DashboardSystemOverview', () => {
     store.accessLoaded = false
     store.systemMapsEnabled = true
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('button[aria-label="Discover My System"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dashboard-system-discover"]').exists()).toBe(false)
 
     store.accessLoaded = true
     store.error = 'access failed'
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('button[aria-label="Discover My System"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dashboard-system-discover"]').exists()).toBe(false)
   })
 
   it('discovers and routes to the created draft for internal operators', async () => {
@@ -153,10 +153,32 @@ describe('DashboardSystemOverview', () => {
     mockPush.mockResolvedValue(undefined)
     await wrapper.vm.$nextTick()
 
-    await wrapper.get('button[aria-label="Discover My System"]').trigger('click')
+    await wrapper.get('[data-testid="dashboard-system-discover"]').trigger('click')
 
     expect(discover).toHaveBeenCalledTimes(1)
     expect(mockPush).toHaveBeenCalledWith('/system-maps/map-9?discovery=1')
+  })
+
+  it('surfaces a discovery failure inline and re-enables the button', async () => {
+    const { wrapper, store } = mountOverview()
+    store.accessLoaded = true
+    store.systemMapsEnabled = true
+    const discover = vi.spyOn(store, 'discover').mockRejectedValue(new Error('discovery failed'))
+    await wrapper.vm.$nextTick()
+
+    await wrapper.get('[data-testid="dashboard-system-discover"]').trigger('click')
+
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="dashboard-system-discover-error"]').exists()).toBe(true),
+    )
+    expect(wrapper.get('[data-testid="dashboard-system-discover-error"]').text()).toContain(
+      'Could not discover your system',
+    )
+    expect(discover).toHaveBeenCalledTimes(1)
+    // The button is usable again so the operator can retry.
+    expect(wrapper.get('[data-testid="dashboard-system-discover"]').attributes('disabled')).toBeUndefined()
+    // A failed discovery must not navigate away from the dashboard.
+    expect(mockPush).not.toHaveBeenCalled()
   })
 
   it('renders observed metrics with interpolated window, rates and localized health', async () => {
