@@ -2363,7 +2363,7 @@ class _BoundedFinalDrain:
         except Exception:
             # The drain itself failed. Logged HERE (the callback stays silent
             # while awaited) so the failure is never swallowed.
-            _log.error(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context, exc_info=True)
+            _log.exception(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context)
         finally:
             self._awaiting = False
 
@@ -2382,7 +2382,7 @@ class _BoundedFinalDrain:
         exc = task.exception()
         if exc is None:
             return False
-        _log.error(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context, exc_info=exc)
+        _log.exception(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context)
         return True
 
     def _log_late_failure(self, task: asyncio.Future[None]) -> None:
@@ -2391,10 +2391,9 @@ class _BoundedFinalDrain:
             return
         exc = task.exception()
         if exc is not None and not self._awaiting:
-            _log.error(
+            _log.exception(
                 _CANCEL_DRAIN_FAILED_EVENT,
                 extra=self._log_context,
-                exc_info=exc,
             )
 
 
