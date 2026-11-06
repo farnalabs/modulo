@@ -65,15 +65,27 @@ function updateRect() {
   }
 }
 
+function removePositionListeners() {
+  window.removeEventListener('scroll', updateRect, true)
+  window.removeEventListener('resize', updateRect)
+}
+
+function addPositionListeners() {
+  window.addEventListener('scroll', updateRect, true)
+  window.addEventListener('resize', updateRect)
+}
+
 watch(() => spotlight.target.value, () => {
   if (resizeObserver) resizeObserver.disconnect()
+  removePositionListeners()
   elementRect.value = null
   if (spotlight.targetElement.value) {
     updateRect()
     resizeObserver = new ResizeObserver(updateRect)
     resizeObserver.observe(document.body)
+    addPositionListeners()
   }
-})
+}, { immediate: true })
 
 function handleDismiss() {
   spotlight.dismiss()
@@ -92,5 +104,6 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
   if (resizeObserver) resizeObserver.disconnect()
+  removePositionListeners()
 })
 </script>

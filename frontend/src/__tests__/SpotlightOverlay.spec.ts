@@ -120,18 +120,40 @@ describe('SpotlightOverlay', () => {
     wrapper.unmount()
   })
 
-  it('removes the document keydown listener on unmount', () => {
-    const removeSpy = vi.spyOn(document, 'removeEventListener')
+  it('updates the cutout position when the target moves', async () => {
+    const target = targetEl('spot-target')
+    const rect = { top: 10, right: 110, bottom: 60, left: 10, width: 100, height: 50 } as DOMRect
+    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue(rect)
+    spotlight.highlight('spot-target')
+    const wrapper = mountOverlay()
+    await nextTick()
+
+    expect((document.querySelector('[data-testid="spotlight-overlay"] > div') as HTMLElement).style.left).toBe('10px')
+
+    const movedRect = { ...rect, left: 40, right: 140 } as DOMRect
+    vi.mocked(target.getBoundingClientRect).mockReturnValue(movedRect)
+    window.dispatchEvent(new Event('scroll'))
+    await nextTick()
+
+    expect((document.querySelector('[data-testid="spotlight-overlay"] > div') as HTMLElement).style.left).toBe('40px')
+    wrapper.unmount()
+  })
+
+  it('removes document and position listeners on unmount', () => {
+    const removeDocumentSpy = vi.spyOn(document, 'removeEventListener')
+    const removeWindowSpy = vi.spyOn(window, 'removeEventListener')
     targetEl('spot-target')
     spotlight.highlight('spot-target')
     const wrapper = mountOverlay()
     expect(overlayEl()).not.toBeNull()
 
     wrapper.unmount()
-    // onUnmounted must detach the document-level keydown listener so a later
-    // Escape press cannot dismiss a spotlight that is no longer mounted.
-    expect(removeSpy).toHaveBeenCalledWith('keydown', expect.any(Function))
-    removeSpy.mockRestore()
+
+    expect(removeDocumentSpy).toHaveBeenCalledWith('keydown', expect.any(Function))
+    expect(removeWindowSpy).toHaveBeenCalledWith('scroll', expect.any(Function), true)
+    expect(removeWindowSpy).toHaveBeenCalledWith('resize', expect.any(Function))
+    removeDocumentSpy.mockRestore()
+    removeWindowSpy.mockRestore()
   })
 
   it('does not dismiss on Escape after unmount (listener removed)', async () => {

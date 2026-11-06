@@ -230,7 +230,8 @@ jobs:
           mkdir -p "$BUNDLE/pg/share/postgresql/${PG_MAJOR}"
           cp -a debx/pg-server/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/"
           cp -a debx/pg-client/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/"
-          test -f "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/postgres.bki"
+           test -f "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/postgres.bki"
+
 
           # Redis, compiled from source on this runner (see the build step above).
           cp -a build/redis-install/bin/. "$BUNDLE/redis/"
