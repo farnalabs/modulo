@@ -1471,14 +1471,15 @@ jobs:
             --from "$PREV" --to "$GA_TAG" \
             --version "$VERSION" --output CHANGELOG.md > "$NOTES_FILE"
 
+          RELEASE_TITLE="Modulo ${GA_TAG}"
           if gh release view "$GA_TAG" >/dev/null 2>&1; then
-            gh release edit "$GA_TAG" --target "$MERGED_SHA" --title "$GA_TAG" --notes-file "$NOTES_FILE"
-            echo "GitHub Release updated for ${GA_TAG}."
+            gh release edit "$GA_TAG" --target "$MERGED_SHA" --title "$RELEASE_TITLE" --notes-file "$NOTES_FILE"
+            echo "GitHub Release updated for ${GA_TAG} with title ${RELEASE_TITLE}."
           else
-            gh release create "$GA_TAG" --target "$MERGED_SHA" --title "$GA_TAG" --notes-file "$NOTES_FILE"
+            gh release create "$GA_TAG" --target "$MERGED_SHA" --title "$RELEASE_TITLE" --notes-file "$NOTES_FILE"
 
-             echo "GitHub Release created for ${GA_TAG}."
-           fi
+            echo "GitHub Release created for ${GA_TAG} with title ${RELEASE_TITLE}."
+          fi
 
       - name: Re-establish release freeze after failed GA publication
         if: inputs.mode == 'promote' && failure()
@@ -2018,12 +2019,13 @@ jobs:
           # invalidates every verify-against-the-manifest already downloaded.
           # An existing release gets an upload (which fails loudly on an
           # existing asset); a new one is created with its assets atomically.
+          RELEASE_TITLE="Modulo ${RC_TAG}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "::warning::release ${TAG} already exists - uploading assets without clobbering"
             gh release upload "$TAG" "${ASSETS[@]}"
           else
             gh release create "$TAG" \
-              --title "$TAG" \
+              --title "$RELEASE_TITLE" \
               --notes-file "$NOTES_FILE" \
               "${ASSETS[@]}"
           fi
