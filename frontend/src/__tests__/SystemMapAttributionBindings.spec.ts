@@ -253,6 +253,32 @@ describe('SystemMapAttributionBindings', () => {
     expect(second.text()).toContain('Could not load pipelines')
   })
 
+  it('surfaces trigger load failures and falls back for non-Error rejections', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/pipelines') return Promise.resolve(pipelinesResponse())
+      if (path === '/api/v1/triggers') return Promise.reject(new Error('triggers unavailable'))
+      return Promise.resolve({ data: {} })
+    })
+    const first = mountComponent()
+    await flushPromises()
+
+    await first.get('[data-testid="system-map-binding-pipeline"]').setValue('pipe-1')
+    await flushPromises()
+    expect(first.text()).toContain('triggers unavailable')
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/pipelines') return Promise.resolve(pipelinesResponse())
+      if (path === '/api/v1/triggers') return Promise.reject('offline')
+      return Promise.resolve({ data: {} })
+    })
+    const second = mountComponent()
+    await flushPromises()
+
+    await second.get('[data-testid="system-map-binding-pipeline"]').setValue('pipe-1')
+    await flushPromises()
+    expect(second.text()).toContain('Could not load triggers')
+  })
+
   async function submitActionPipelineBinding(wrapper: Awaited<ReturnType<typeof mountComponent>>): Promise<void> {
     await wrapper.get('[data-testid="system-map-binding-kind"]').setValue('action_pipeline')
     await wrapper.get('[data-testid="system-map-binding-node"]').setValue('loop-1')
