@@ -60,6 +60,7 @@
           <component :is="Component" :key="route.fullPath" />
         </transition>
       </router-view>
+      <div class="h-4 shrink-0" aria-hidden="true" />
     </main>
 
     <SpotlightOverlay />

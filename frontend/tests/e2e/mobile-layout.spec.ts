@@ -109,7 +109,7 @@ const DEACTIVATED_ROUTES: Record<string, string> = {
 
 const DEACTIVATED_ROUTES_SET = new Set(Object.keys(DEACTIVATED_ROUTES))
 
-const NARROW_ROUTES = ['/login', '/', '/pipelines', '/schemas']
+const NARROW_ROUTES = ['/login', '/', '/pipelines', '/schemas', '/analytics']
 
 function sanitizePath(p: string): string {
   return p.replace(/[^a-z0-9-]/gi, '_').replace(/^_+|_+$/g, '') || 'root'
@@ -602,7 +602,64 @@ async function checkNoHorizontalOverflow(page: Page) {
   expect(result.overflow, `Horizontal page overflow (scrollWidth ${result.scrollWidth} > viewportWidth ${result.viewportWidth})`).toBe(false)
 }
 
-// Check 3 — app shell fills the viewport width; main-content ratio is advisory.
+function elementIdentity(el: { tag: string; id: string; testId: string; className: string }): string {
+  const testId = el.testId ? ` data-testid="${el.testId}"` : ''
+  const id = el.id ? `#${el.id}` : ''
+  const className = el.className ? `.${el.className.split(/\s+/).filter(Boolean).slice(0, 2).join('.')}` : ''
+  return `<${el.tag}>${id}${className}${testId}`
+}
+
+// Check 3 — visible in-flow content must stay within its immediate parent.
+// Horizontal scrollers are intentional: their contents are reachable by
+// scrolling that container and are therefore excluded from this assertion.
+async function checkContentFitsParents(page: Page, route: string) {
+  const escaped = await page.evaluate(() => {
+    const failures: Array<{ tag: string; id: string; testId: string; className: string; parent: string; side: string; delta: number }> = []
+    const visible = (el: HTMLElement) => el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden'
+    const hasHorizontalScroller = (el: Element) => {
+      let node: Element | null = el
+      while (node) {
+        const style = getComputedStyle(node)
+        if (style.overflowX === 'auto' || style.overflowX === 'scroll') return true
+        node = node.parentElement
+      }
+      return false
+    }
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>('#app *'))) {
+      if (!visible(el)) continue
+      const style = getComputedStyle(el)
+      if (style.position === 'absolute' || style.position === 'fixed' || style.position === 'sticky') continue
+      const parent = el.parentElement
+      if (!parent || !visible(parent) || hasHorizontalScroller(el)) continue
+      const rect = el.getBoundingClientRect()
+      const parentRect = parent.getBoundingClientRect()
+      const leftDelta = parentRect.left - rect.left
+      const rightDelta = rect.right - parentRect.right
+      if (leftDelta > 1 || rightDelta > 1) {
+        failures.push({
+          tag: el.tagName.toLowerCase(),
+          id: el.id,
+          testId: el.dataset.testid ?? '',
+          className: typeof el.className === 'string' ? el.className : '',
+          parent: parent.tagName.toLowerCase(),
+          side: leftDelta > 1 ? 'left' : 'right',
+          delta: Math.round(Math.max(leftDelta, rightDelta)),
+        })
+      }
+      if (failures.length >= 20) break
+    }
+    return failures
+  })
+  if (escaped.length > 0) {
+    process.stdout.write(`[mobile-layout] ${route} content escaping parent bounds:\n`)
+    for (const item of escaped) {
+      process.stdout.write(`  ${elementIdentity(item)} escapes ${item.parent} on ${item.side} by ${item.delta}px\n`)
+    }
+  }
+  expect(escaped, `${route} has visible content escaping its parent: ${JSON.stringify(escaped)}`).toEqual([])
+}
+
+// Check 4 — app shell fills the viewport width; main-content ratio is advisory.
 async function checkAppShellFillsViewport(page: Page) {
   const data = await page.evaluate(() => {
     const vw = document.documentElement.clientWidth
@@ -843,6 +900,7 @@ async function runFullSweep(page: Page, route: string, env: TestEnv) {
 
   await checkViewportMeta(page)
   await checkNoHorizontalOverflow(page)
+  await checkContentFitsParents(page, route)
   await checkAppShellFillsViewport(page)
   await checkInteractiveNotClipped(page)
   await checkAxeMobile(page)
@@ -865,6 +923,7 @@ async function runNarrowChecks(page: Page, route: string, env: TestEnv) {
 
   await checkViewportMeta(page)
   await checkNoHorizontalOverflow(page)
+  await checkContentFitsParents(page, route)
   await checkInteractiveNotClipped(page)
 }
 
