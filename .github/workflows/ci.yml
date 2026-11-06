@@ -2351,6 +2351,22 @@ jobs:
                   LABEL_NOTE="The \`${FIXER_PENDING_LABEL}\` label could **not** be applied automatically, so the outstanding dispatch is recorded only in this comment and the job summary."
                 fi
                 ;;
+              terminal|config)
+                # Terminal rejections and missing-secret config failures are
+                # fixes (credential/payload/configuration), not pending
+                # dispatches, so deliberately NO retry label is applied. Fall
+                # through to the dispatch-failure comment below, which is the
+                # hard requirement for EVERY undelivered dispatch.
+                LABEL_NOTE="No \`${FIXER_PENDING_LABEL}\` label is applied: this is a fix (credential/payload/configuration), not a pending dispatch."
+                ;;
+              *)
+                # Defensive only: the shared policy emits just the four classes
+                # above. An unrecognised class must still never suppress the
+                # dispatch-failure comment, so warn and fall through rather
+                # than exiting before the PR is told.
+                echo "::warning::Unexpected dispatch failure class '${LAST_CLASS:-<empty>}' — not applying a retry label."
+                LABEL_NOTE="No \`${FIXER_PENDING_LABEL}\` label is applied for an unrecognised dispatch failure class."
+                ;;
             esac
             # FAR-1997: the job now checks out ONLY scripts/dispatch_with_retry.sh
             # (the dispatch policy is shared code, not an inline loop), but the
