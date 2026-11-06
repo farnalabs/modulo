@@ -685,7 +685,7 @@ async def _resolve_org_id(session: Any) -> Any:
         return row.scalar_one_or_none()
 
 
-async def _begin_org_context(session: Any, org_id: Any) -> Any:
+def _begin_org_context(session: Any, org_id: Any) -> Any:
     """Open a transaction bound to *org_id* (RLS-aware). Returns the context."""
 
     class _Context:
@@ -711,7 +711,7 @@ async def _begin_org_context(session: Any, org_id: Any) -> Any:
 async def _build_db_text(session: Any, org_id: Any) -> str:
     from sqlalchemy import text
 
-    async with await _begin_org_context(session, org_id):
+    async with _begin_org_context(session, org_id):
         head_row = await session.execute(text("SELECT version_num FROM alembic_version"))
         current_head = ", ".join(sorted(str(row[0]) for row in head_row.fetchall())) or "unknown"
         pg_row = await session.execute(text("SELECT current_setting('server_version')"))
@@ -750,7 +750,7 @@ def _expected_migration_head() -> str:
 async def _build_errors_json(session: Any, org_id: Any) -> str:
     from sqlalchemy import text
 
-    async with await _begin_org_context(session, org_id):
+    async with _begin_org_context(session, org_id):
         rows = await session.execute(
             text(
                 "SELECT g.id, g.fingerprint, g.level_peak, g.count, g.first_seen, g.last_seen, "
@@ -805,7 +805,7 @@ async def _build_runs_json(session: Any, org_id: Any) -> str:
         "WHERE r.organisation_id = :oid AND r.status IN :statuses "
         "ORDER BY r.created_at DESC LIMIT :limit"
     ).bindparams(bindparam("statuses", expanding=True))
-    async with await _begin_org_context(session, org_id):
+    async with _begin_org_context(session, org_id):
         rows = await session.execute(
             statement,
             {

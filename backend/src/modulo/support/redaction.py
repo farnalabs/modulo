@@ -312,9 +312,7 @@ _ASSET_EXTENSIONS: tuple[str, ...] = (
 #: a whole URL, because a credential in a URL path must still be caught.
 _HASHED_ASSET_NAME = re.compile(
     r"(?<![A-Za-z0-9_\-])"
-    r"[A-Za-z0-9_]{1,80}"
-    r"(?:[.\-][A-Za-z0-9_]{1,80})*"
-    r"-[A-Za-z0-9_\-]{8,}"
+    r"[A-Za-z0-9_][A-Za-z0-9_.\-]{0,160}-[A-Za-z0-9_\-]{8,}"
     r"(?:\.[A-Za-z0-9]{1,12})?"
     r"\.(?:" + "|".join(_ASSET_EXTENSIONS) + r")"
     r"(?![A-Za-z0-9_\-])"
