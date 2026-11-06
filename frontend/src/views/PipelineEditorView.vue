@@ -3654,7 +3654,7 @@ function onNodeClick(event: any) {
   if (backendNode?.parameter_set_id) {
     selectedNodeParamSetId.value = backendNode.parameter_set_id
     selectedNodeOverrides.value = { ...backendNode.parameter_overrides }
-    loadParamSets()
+    void loadParamSets()
   } else {
     selectedNodeParamSetId.value = undefined
     selectedNodeOverrides.value = {}

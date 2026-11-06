@@ -499,7 +499,7 @@ async function handleReFire() {
 watch(
   batchId,
   (id) => {
-    if (id) loadBatch(id)
+    if (id) void loadBatch(id)
   },
   { immediate: true },
 )
@@ -508,6 +508,6 @@ onBeforeUnmount(() => {
   /* no timers to clear */
 })
 
-loadComparisons()
-loadCurrency()
+void loadComparisons()
+void loadCurrency()
 </script>

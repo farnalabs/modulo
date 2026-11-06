@@ -851,6 +851,68 @@ describe('PipelineListView', () => {
     expect(patchMock).toHaveBeenCalled()
   })
 
+  it('drops a pipeline onto another pipeline row to move it, and ignores a self-drop', async () => {
+    mockResponses['/api/v1/pipeline-folders'] = [
+      { id: 'f1', organisation_id: 'org1', name: 'Folder One', parent_id: null, sort_order: 0 },
+      { id: 'f2', organisation_id: 'org1', name: 'Folder Two', parent_id: null, sort_order: 1 },
+    ]
+    localStorage.setItem('modulo.pipelines.expandedFolders', JSON.stringify(['f1', 'f2']))
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [
+        { id: 'p1', organisation_id: 'org1', name: 'Dragged', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: 'f1' },
+        { id: 'p2', organisation_id: 'org1', name: 'Target', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: 'f2' },
+        { id: 'p3', organisation_id: 'org1', name: 'Rootless', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: null },
+      ],
+      total: 3,
+      page: 1,
+      page_size: 100,
+    }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const dataTransfer = {
+      store: { 'text/plain': 'p1' } as Record<string, string>,
+      setData(k: string, v: string) { this.store[k] = v },
+      getData(k: string) { return this.store[k] },
+      effectAllowed: '',
+    }
+    const dispatchDrop = (row: ReturnType<typeof wrapper.find>) => {
+      const drop = new Event('drop') as unknown as DragEvent
+      ;(drop as unknown as { dataTransfer: unknown }).dataTransfer = dataTransfer
+      row.element.dispatchEvent(drop)
+    }
+
+    // A drop carrying no pipeline id is a no-op (left operand short-circuits).
+    const emptyTransfer = { getData: () => '', setData: () => {}, effectAllowed: '' }
+    const emptyDrop = new Event('drop') as unknown as DragEvent
+    ;(emptyDrop as unknown as { dataTransfer: unknown }).dataTransfer = emptyTransfer
+    wrapper.find('[data-testid="pipeline-tree-row-p2"]').element.dispatchEvent(emptyDrop)
+    await flushPromises()
+    expect(patchMock).not.toHaveBeenCalled()
+
+    // Dropping onto itself is a no-op: the handler's guard must skip the move.
+    dispatchDrop(wrapper.find('[data-testid="pipeline-tree-row-p1"]'))
+    await flushPromises()
+    expect(patchMock).not.toHaveBeenCalled()
+
+    // Dropping onto a pipeline with no folder moves it back to the root.
+    dispatchDrop(wrapper.find('[data-testid="pipeline-tree-row-p3"]'))
+    await flushPromises()
+    expect(patchMock).toHaveBeenCalled()
+
+    // Dropping onto a different pipeline row moves it into that row's folder.
+    patchMock.mockClear()
+    dispatchDrop(wrapper.find('[data-testid="pipeline-tree-row-p2"]'))
+    await flushPromises()
+    expect(patchMock).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('renames a pipeline via the action menu and persists the new name', async () => {
     const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Old Name', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
     mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }

@@ -206,6 +206,49 @@ describe('AdminNotificationDeliveryLogView', () => {
     expect(wrapper.find('[data-testid="admin-notification-log-next"]').exists()).toBe(true)
   })
 
+  it('loads the next page and jumps to the dead-letter queue', async () => {
+    const deadLetteredEntry = {
+      id: '1',
+      event_type: 'run_failed',
+      status: 'dead_lettered',
+      attempt_count: 3,
+      response_code: 500,
+      last_error: 'Internal server error',
+      response_body: null,
+      endpoint_url: 'https://example.com/hook',
+      endpoint_id: 'ep-1',
+      created_at: '2025-06-30T12:00:00Z',
+    }
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
+      (url: string) => {
+        if (url === '/api/v1/admin/notifications/available-events') {
+          return Promise.resolve({ data: mockAvailableEvents, error: undefined })
+        }
+        return Promise.resolve({
+          data: { items: [deadLetteredEntry], total: 1, next_cursor: 'cursor-2' },
+          error: undefined,
+        })
+      },
+    )
+
+    const wrapper = mount(AdminNotificationDeliveryLogView)
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-notification-log-next"]').trigger('click')
+    await flushPromises()
+    expect(deliveryCalls().at(-1)![1]).toMatchObject({
+      params: { query: expect.objectContaining({ cursor: 'cursor-2' }) },
+    })
+
+    await wrapper.find('[data-testid="admin-notification-log-dlq-filter"]').trigger('click')
+    await flushPromises()
+    expect(deliveryCalls().at(-1)![1]).toMatchObject({
+      params: { query: expect.objectContaining({ status: 'dead_lettered' }) },
+    })
+    wrapper.unmount()
+  })
+
   it('expands a delivery row via keyboard (Enter and Space) for a11y', async () => {
     const { api } = await import('../lib/api/client')
     const mockGet = (api as any).GET as ReturnType<typeof vi.fn>

@@ -1261,6 +1261,6 @@ function triggerActions(trigger: TriggerItem) {
   ]
 }
 
-onMounted(() => { planStore.fetchPlan(); loadAll() })
+onMounted(() => { void planStore.fetchPlan(); void loadAll() })
 
 </script>

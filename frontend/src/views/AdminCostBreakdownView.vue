@@ -305,9 +305,9 @@ async function dismissAnomaly(id: string) {
 
 onMounted(() => {
   planStore.fetchPlan()
-  loadData()
-  loadSuccessCount()
-  loadAnomalies()
-  loadCurrency()
+  void loadData()
+  void loadSuccessCount()
+  void loadAnomalies()
+  void loadCurrency()
 })
 </script>

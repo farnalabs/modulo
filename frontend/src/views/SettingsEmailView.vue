@@ -250,7 +250,7 @@ onMounted(async () => {
   const promise = planStore.fetchPlan()
   if (promise) await promise
   if (planStore.featureEnabled('email_config')) {
-    loadSettings()
+    void loadSettings()
   }
 })
 </script>

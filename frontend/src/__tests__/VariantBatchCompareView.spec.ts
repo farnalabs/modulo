@@ -639,3 +639,21 @@ describe('VariantBatchCompareView', () => {
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 })
+
+describe('VariantBatchCompareView — missing batch id', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    routeHolder.route = reactive(makeRoute(''))
+  })
+
+  it('does not fetch a batch when the route has no batch id', async () => {
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+
+    expect(batchMocks.fetchVariantBatch).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})

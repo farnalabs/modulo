@@ -429,13 +429,13 @@ function goToPage(c: string | null) {
   if (!c) return
   cursor.value = c
   retrySuccessMessage.value = null
-  loadDeliveries()
+  void loadDeliveries()
 }
 
 function applyFilters() {
   cursor.value = null
   retrySuccessMessage.value = null
-  loadDeliveries()
+  void loadDeliveries()
 }
 
 function resetFilters() {
@@ -446,7 +446,7 @@ function resetFilters() {
   filterDateTo.value = dateRange.to
   cursor.value = null
   retrySuccessMessage.value = null
-  loadDeliveries()
+  void loadDeliveries()
 }
 
 function showDeadLettered() {
@@ -456,7 +456,7 @@ function showDeadLettered() {
   filterDateTo.value = ''
   cursor.value = null
   retrySuccessMessage.value = null
-  loadDeliveries()
+  void loadDeliveries()
 }
 
 async function retryDelivery(entry: DeliveryLogEntry) {

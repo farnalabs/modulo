@@ -597,13 +597,13 @@ function getPipelineTrigger(pipelineId: string): string | undefined {
 }
 
 watch(allPipelines, () => {
-  loadTriggers()
-  loadLastRunDates()
+  void loadTriggers()
+  void loadLastRunDates()
 }, { immediate: true })
 
 watch(selectedFolderId, () => {
-  loadTriggers()
-  loadLastRunDates()
+  void loadTriggers()
+  void loadLastRunDates()
 })
 const totalPipelineCount = ref(0)
 const folderPipelineCounts = computed(() => {
@@ -677,14 +677,14 @@ function onPipelineDragStart(pipeline: PipelineItem, event: DragEvent) {
 function onTableFolderDrop(folderId: string, event: DragEvent) {
   const pipelineId = event.dataTransfer?.getData('text/plain')
   if (pipelineId) {
-    onMovePipeline({ pipelineId, folderId })
+    void onMovePipeline({ pipelineId, folderId })
   }
 }
 
 function onPipelineDrop(targetPipeline: PipelineItem, event: DragEvent) {
   const pipelineId = event.dataTransfer?.getData('text/plain')
   if (pipelineId && pipelineId !== targetPipeline.id) {
-    onMovePipeline({ pipelineId, folderId: targetPipeline.folder_id ?? null })
+    void onMovePipeline({ pipelineId, folderId: targetPipeline.folder_id ?? null })
   }
 }
 
@@ -701,9 +701,9 @@ async function onMovePipeline(ev: { pipelineId: string; folderId: string | null 
 
 function onSelectFolder(folderId: string | null) {
   selectedFolderId.value = folderId
-  loadPipelines()
-  loadFolders()
-  loadTotalCount()
+  void loadPipelines()
+  void loadFolders()
+  void loadTotalCount()
 }
 
 // Move to folder state
@@ -1081,7 +1081,7 @@ async function handleDelete() {
 }
 
 onMounted(async () => {
-  loadFolders()
-  loadTotalCount()
+  void loadFolders()
+  void loadTotalCount()
 })
 </script>
