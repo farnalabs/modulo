@@ -43,7 +43,7 @@ def parse_pins_file(path: Path) -> dict[str, str]:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        assert re.fullmatch(r"[A-Z0-9_]+=[^=]+", line), f"invalid pin line {number}"
+        assert re.fullmatch(r"[A-Z0-9_]+=[^=]*", line), f"invalid pin line {number}"
         key, value = line.split("=", 1)
         assert key not in pins, f"duplicate pin {key}"
         pins[key] = value

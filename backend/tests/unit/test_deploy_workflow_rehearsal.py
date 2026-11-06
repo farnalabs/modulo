@@ -541,26 +541,112 @@ def test_release_signing_derives_key_id_from_current_slot() -> None:
     assert "Merely changing the secret while CURRENT remains the old key" in manifest_source
 
 
-def test_bundle_release_includes_postgres_runtime_data_for_initdb() -> None:
+def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     workflow_text = BUNDLE_WORKFLOW.read_text(encoding="utf-8")
+    versions = (REPO_ROOT / "scripts" / "bundle-versions.env").read_text(encoding="utf-8")
 
-    assert 'mkdir -p "$BUNDLE/pg/share/postgresql/${PG_MAJOR}"' in workflow_text
-    assert (
-        'cp -a debx/pg-server/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/"'
-        in workflow_text
-    )
-    assert 'test -f "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/postgres.bki"' in workflow_text
+    assert "Install pinned PostgreSQL source-build dependencies" in workflow_text
+    assert "build-essential" in workflow_text
+    assert "bison" in workflow_text
+    assert "flex" in workflow_text
+    assert "Download and sha256-verify pinned PostgreSQL source" in workflow_text
+    assert 'echo "${PG_SOURCE_SHA256}  postgresql-${PG_VERSION}.tar.gz"' in workflow_text
+    assert "Build and sha256-verify PostgreSQL from pinned upstream source" in workflow_text
+    assert "../pg-src/configure" in workflow_text
+    assert 'BUNDLE_PG_PREFIX="$PWD/build/${BUNDLE_ROOT}/pg"' in workflow_text
+    assert '--prefix="$BUNDLE_PG_PREFIX"' in workflow_text
+    assert "--without-llvm" in workflow_text
+    assert "PG_REQUIRED_EXTENSIONS=" in versions
+    assert "PG_REQUIRED_EXTENSIONS=\n" in versions
+    assert "Verify PostgreSQL extension inventory before source build" in workflow_text
+    assert "CREATE[[:space:]]+EXTENSION" in workflow_text
+    assert "required_extensions?" in workflow_text
+    assert 'test -z "${PG_REQUIRED_EXTENSIONS}"' in workflow_text
+    assert 'test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"' in workflow_text
+    assert 'test -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets"' in workflow_text
+    assert "pg_config --sharedir" in workflow_text
+    assert 'test -f "$BUNDLE/pg/share/postgresql/postgres.bki"' in workflow_text
+    assert 'test -d "$BUNDLE/pg/share/postgresql/timezonesets"' in workflow_text
     assert 'export PATH="$BUNDLE_ROOT/runtime/bin:$BUNDLE_ROOT/pg/bin:$BUNDLE_ROOT/redis' in workflow_text
+    assert "postgresql-16.deb" not in workflow_text
+    assert "apt.postgresql.org" not in workflow_text
 
 
-def test_bundled_pg_major_matches_shared_bundle_versions() -> None:
-    from modulo.launcher.initdb import PG_MAJOR
+def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
+    workflow = yaml.safe_load(BUNDLE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["bundle"]["steps"]
+    names = _step_names(steps)
+    smoke_name = "Smoke the final PostgreSQL tarball after relocation as an unprivileged user"
+    smoke_script = steps[names.index(smoke_name)]["run"]
 
-    env_text = (REPO_ROOT / "scripts" / "bundle-versions.env").read_text(encoding="utf-8")
-    pins = dict(
-        line.split("=", 1) for line in env_text.splitlines() if "=" in line and not line.lstrip().startswith("#")
+    assert 'tarball="build/${TARBALL_NAME}"' in smoke_script
+    assert 'test ! -e "$original_bundle"' in smoke_script
+    assert 'tar -xzf "$tarball"' in smoke_script
+    assert "useradd --system" in smoke_script
+    assert "env -i" in smoke_script
+    assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
+    assert "pg_config --sharedir" in smoke_script
+    assert "initdb --pgdata" in smoke_script
+    assert "pg_ctl --pgdata" in smoke_script
+    assert "SELECT 1;" in smoke_script
+    assert "America/New_York" in smoke_script
+    assert "pg_dump" in smoke_script
+    assert "--format=custom" in smoke_script
+    assert "pg_restore --exit-on-error" in smoke_script
+    assert "dropdb" in smoke_script
+    assert "stop -m fast -w" in smoke_script
+    assert "host PostgreSQL path" in smoke_script
+    assert "PGHOST" not in smoke_script
+    assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
+
+
+def test_bundle_release_scans_postgres_elf_paths_and_keeps_glibc_gate() -> None:
+    workflow_text = BUNDLE_WORKFLOW.read_text(encoding="utf-8")
+    assert "Scan shipped PostgreSQL ELF files for runtime path leakage" in workflow_text
+    assert "configure-time prefix strings" in workflow_text
+    assert 'readelf -d "$binary"' in workflow_text
+    assert "absolute or non-origin RUNPATH/RPATH" in workflow_text
+    assert "absolute dynamic dependency" in workflow_text
+    assert 'find "$BUNDLE/pg/bin" "$BUNDLE/redis" -type f -perm /111' in workflow_text
+    assert "could not determine the glibc requirement" in workflow_text
+
+
+#: The exact sed program the ELF leakage scan uses to extract RUNPATH/RPATH
+#: entries. It has exactly ONE capture group (the bracketed path), so the
+#: replacement MUST be ``\1``. A ``\2`` makes GNU sed fail inside a ``<( )``
+#: process substitution, so the RUNPATH loop reads zero lines and the step
+#: still exits 0 - the guard silently never runs.
+_RUNPATH_PROBE = r"/\((RPATH|RUNPATH)\)/s/.*\[([^]]*)\].*/\1/p"
+
+
+def test_bundle_release_runpath_probe_is_live_and_extracts_runtime_paths() -> None:
+    workflow = yaml.safe_load(BUNDLE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["bundle"]["steps"]
+    names = _step_names(steps)
+    script = steps[names.index("Scan shipped PostgreSQL ELF files for runtime path leakage")]["run"]
+
+    assert _RUNPATH_PROBE in script
+    assert "/\\2/p" not in script
+
+    readelf_output = textwrap.dedent(
+        """\
+        0x000000000000001d (RUNPATH)            Library runpath: [$ORIGIN/../lib]
+        0x000000000000001d (RPATH)              Library rpath: [/opt/lib:/usr/lib]
+        0x0000000000000001 (NEEDED)             Shared library: [libpq.so.5]
+        """
     )
-    assert pins["PG_MAJOR"] == PG_MAJOR
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required to execute the ELF RUNPATH probe")
+    result = subprocess.run(  # noqa: S603 - resolved bash executable and test-owned pipeline
+        [bash, "-c", f"sed -nE '{_RUNPATH_PROBE}' | tr ':' '\\n'"],
+        input=readelf_output,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    assert result.stdout.splitlines() == ["$ORIGIN/../lib", "/opt/lib", "/usr/lib"]
 
 
 def test_bundle_release_verifies_generated_signature_before_upload() -> None:
