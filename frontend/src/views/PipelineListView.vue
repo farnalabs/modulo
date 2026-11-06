@@ -427,7 +427,16 @@
       <!-- Custom item template: PrimeVue's default menuitem renders no `title`,
            so a DISABLED item (Resume while the spend circuit breaker is tripped)
            would give the user no reason for the block. Binding `item.tooltip` to
-           the native title keeps the hover explanation on the disabled row. -->
+           the native title keeps the hover explanation on the disabled row.
+
+           The item root MUST stay an `<a>`. PrimeVue 4.5.5's `Menu.onEnterKey`
+           activates the keyboard-focused item by locating
+           `a[data-pc-section="itemlink"]` inside the focused `li` and clicking
+           it; when no such anchor exists it falls back to clicking the `li`,
+           whose click handler lives on the descendant itemContent div (events
+           never propagate downward), so Enter/Space silently no-ops. A
+           `<button>` therefore kills the menu's list-focus -> arrows -> Enter
+           keyboard model - do not "modernise" this element to a button. -->
       <Menu ref="actionMenuRef" :key="actionMenuKey" :model="actionMenuItems" popup>
         <template #item="{ item, label, props }">
           <a v-bind="props.action" :title="item.tooltip">
