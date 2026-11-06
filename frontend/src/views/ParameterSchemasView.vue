@@ -1144,8 +1144,8 @@ async function loadReferences() {
 }
 
 watch(activeEditorTab, (tab) => {
-  if (tab === 'sets') loadSets()
-  if (tab === 'references') loadReferences()
+  if (tab === 'sets') void loadSets()
+  if (tab === 'references') void loadReferences()
 })
 
 // Validate
@@ -1209,5 +1209,5 @@ async function loadPickers() {
     console.warn('Failed to load picker data', e)
   }
 }
-loadPickers()
+void loadPickers()
 </script>

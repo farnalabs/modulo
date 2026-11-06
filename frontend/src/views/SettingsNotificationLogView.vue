@@ -243,7 +243,7 @@ function statusLabel(status: string): string {
 
 function applyFilters() {
   resetCursor()
-  loadDeliveries()
+  void loadDeliveries()
 }
 
 function resetFilters() {
@@ -252,6 +252,6 @@ function resetFilters() {
   filterDateFrom.value = dateRange.from
   filterDateTo.value = dateRange.to
   resetCursor()
-  loadDeliveries()
+  void loadDeliveries()
 }
 </script>

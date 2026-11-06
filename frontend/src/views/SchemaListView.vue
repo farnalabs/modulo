@@ -366,13 +366,13 @@ async function loadFolders() {
 
 function onSelectFolder(folderId: string | null) {
   selectedFolderId.value = folderId
-  loadSchemas()
+  void loadSchemas()
 }
 
 function onFoldersChanged() {
-  loadSchemas()
-  loadFolders()
-  loadSchemaCounts()
+  void loadSchemas()
+  void loadFolders()
+  void loadSchemaCounts()
 }
 
 function onSchemaDragStart(schema: SchemaItem, event: DragEvent) {
@@ -513,7 +513,7 @@ async function deprecateSchema() {
 }
 
 onMounted(() => {
-  loadFolders()
-  loadSchemaCounts()
+  void loadFolders()
+  void loadSchemaCounts()
 })
 </script>

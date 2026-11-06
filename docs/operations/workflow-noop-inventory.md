@@ -58,6 +58,7 @@ replaces a marker with a job output silently disarms the signal – the guard su
 | `flyctl-version-drift.yml` | Detect a stale flyctl pin | Pin current and no open issue | Fails loud on unknown; "nothing to do" in summary | Yes | Operator | Legitimate |
 | `issue-notify.yml` | Email on a new external issue | Issue is internal / from a bot | Log; send failure exits 1 | Log | Operator | Legitimate (no notification needed) |
 | `k8s-conformance.yml` | Kind + managed conformance gate | Path-filtered kind leg skips the suite | **Staleness job reads the suite STEP conclusion** (FAR-1620) | Yes | The workflow's own staleness job | Legitimate (consumer measures the artifact – exemplar) |
+| `macos-installer.yml` | Build, sign, notarize and smoke-test the native macOS arm64/x86_64 `.dmg` (native build), or validate the installer contract | Direct `dry-run` dispatch with `build_native=false` validates the contract only and publishes nothing (by design) | Summary heading distinguishes `dry-run (contract-only)` from `dry-run (artifact rehearsal)` | Yes (explicit summary heading) | `release-unified.yml` (`workflow_call`) / operator | Legitimate (explicit contract-only dry-run path) |
 | `main-integration.yml` | Integration tests on main | None | Fails loud | n/a | Operator | Legitimate |
 | `merge-queue-watchdog.yml` | Detect/cancel stuck queue runs, re-arm | Healthy queue → no action | Emits alert outputs; **section 5 measures the last merged PR** | Yes | Operator / Linear | Legitimate (consumer measures merges) |
 | `merge-queue.yml` | Merge approved + green PRs | No approved PRs, or approved but none mergeable → merges nothing | **Added:** `NO MERGE` summary on both no-op paths (step presence on the no-op path) | **Added** | merge-queue-watchdog (already measures merged PRs) | **Masking (legibility) – fixed** |
@@ -76,6 +77,8 @@ replaces a marker with a job output silently disarms the signal – the guard su
 | `signing-canary.yml` | Sign + verify a release artifact | Dispatch from a non-main branch skips (documented) | Log | Log | Operator | Legitimate (manual-only edge) |
 | `tier1b-nightly.yml` | Heavy Tier 1b suite | None | Fails loud | n/a | Operator | Legitimate |
 | `web-watchdog.yml` | Restart a wedged app machine | Machine healthy / state unknown → no action | **`no-op: …` in the job summary on every path** | Yes | Operator | Legitimate (exemplar) |
+| `windows-artifacts.yml` | Download and verify the pinned native Windows payload binaries, stage them and upload the payload archive | None (pinned download/verification, staging and launcher checks fail loud) | Fails loud; uploads the verified `windows-native-artifacts` payload | n/a | `windows-installer.yml` (`workflow_call`) / `release-unified.yml` | Legitimate |
+| `windows-installer.yml` | Compile the Inno Setup installer, then sign and attest it on a release | `dry-run` compiles the installer contract and skips payload download, signing, attestation and publication (by design) | Dry-run summary names the skipped payload, signing, attestation and publication | Yes | `release-unified.yml` (`workflow_call`) | Legitimate (explicit contract-only dry-run path) |
 | `workflow-lint.yml` | actionlint over the workflow tree | None – refuses to run without shellcheck | Fails loud when it would otherwise be blind | Log | PR checks | Legitimate (exemplar) |
 
 Notes:

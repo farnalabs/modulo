@@ -312,8 +312,8 @@ function onLibraryTabClick(tab: { to: string }) {
   if (next === section.value) return
   page.value = 1
   section.value = next
-  if (section.value === 'collections') loadCollections()
-  else loadPrimitives()
+  if (section.value === 'collections') void loadCollections()
+  else void loadPrimitives()
 }
 
 const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<ListResponse>(
@@ -369,15 +369,15 @@ watch(
     if (next === section.value) return
     section.value = next
     page.value = 1
-    if (section.value === 'collections') loadCollections()
-    else loadPrimitives()
+    if (section.value === 'collections') void loadCollections()
+    else void loadPrimitives()
   },
   { flush: 'sync' },
 )
 
 watchDebounced(search, () => {
   page.value = 1
-  loadPrimitives()
+  void loadPrimitives()
 }, { debounce: 300 })
 
 function applyTypeFilter(items: LibraryPrimitive[]): LibraryPrimitive[] {
@@ -428,9 +428,9 @@ function onFilterChange() {
   page.value = 1
   showTypeDropdown.value = false
   if (section.value === 'collections') {
-    loadCollections()
+    void loadCollections()
   } else {
-    loadPrimitives()
+    void loadPrimitives()
   }
 }
 
@@ -444,9 +444,9 @@ function prevPage() {
   if (page.value > 1) {
     page.value--
     if (section.value === 'collections') {
-      loadCollections()
+      void loadCollections()
     } else {
-      loadPrimitives()
+      void loadPrimitives()
     }
   }
 }
@@ -455,9 +455,9 @@ function nextPage() {
   if (page.value < Math.ceil(displayTotal.value / pageSize.value)) {
     page.value++
     if (section.value === 'collections') {
-      loadCollections()
+      void loadCollections()
     } else {
-      loadPrimitives()
+      void loadPrimitives()
     }
   }
 }
@@ -506,7 +506,7 @@ onMounted(() => {
     selectedTypes.value = [typeParam]
   }
   document.addEventListener('mousedown', onClickOutside)
-  if (section.value === 'collections') loadCollections()
-  else loadPrimitives()
+  if (section.value === 'collections') void loadCollections()
+  else void loadPrimitives()
 })
 </script>

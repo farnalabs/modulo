@@ -332,7 +332,7 @@ function resetForm() {
   formError.value = null
   formSuccess.value = null
   testResult.value = null
-  loadSettings()
+  void loadSettings()
 }
 
 function addHeader() {

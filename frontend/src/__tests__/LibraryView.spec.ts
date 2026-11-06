@@ -437,6 +437,30 @@ describe('LibraryView tab routing (FAR-2260)', () => {
     wrapper.unmount()
   })
 
+  it('pages and filters within the collections section', async () => {
+    getMock.mockResolvedValue({ items: [], total: 24, page: 1, page_size: 12 })
+    const wrapper = await mountAt({ section: 'collections' })
+    await nextTick()
+
+    const collectionCalls = () => callsWhere((query) => query.primitive_type === 'library_collection').length
+    const vm = wrapper.vm as unknown as { section: string; onFilterChange: () => void }
+    expect(vm.section).toBe('collections')
+
+    const beforeFilter = collectionCalls()
+    vm.onFilterChange()
+    await nextTick()
+    expect(collectionCalls()).toBeGreaterThan(beforeFilter)
+
+    const beforePaging = collectionCalls()
+    await wrapper.get('[data-testid="library-next-page"]').trigger('click')
+    await nextTick()
+    expect(collectionCalls()).toBeGreaterThan(beforePaging)
+
+    await wrapper.get('[data-testid="library-previous-page"]').trigger('click')
+    await nextTick()
+    wrapper.unmount()
+  })
+
   it('marks the native tab active on a bare /library deep link', async () => {
     getMock.mockResolvedValue({ items: [NATIVE_ITEM], total: 1, page: 1, page_size: 12 })
     const wrapper = await mountAt({})

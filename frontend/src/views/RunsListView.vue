@@ -502,7 +502,7 @@ watch(filterSearch, () => {
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
   searchDebounceTimer = setTimeout(() => {
     resetPagination()
-    loadRuns()
+    void loadRuns()
     syncQuery()
   }, SEARCH_DEBOUNCE_MS)
 })
@@ -511,7 +511,7 @@ function handleFilterUpdate(key: string, value: string) {
   if (key === 'status') filterStatus.value = value
   else if (key === 'trigger_type') filterTriggerType.value = value
   resetPagination()
-  loadRuns()
+  void loadRuns()
   syncQuery()
 }
 
@@ -522,7 +522,7 @@ function nextPage() {
   cursor.value = nextCursor.value
   pagePosition.value += 1
   positionKnown.value = true
-  loadRuns()
+  void loadRuns()
   syncQuery()
 }
 
@@ -534,7 +534,7 @@ function prevPage() {
   cursorStack.value = stack
   pagePosition.value = Math.max(1, pagePosition.value - 1)
   positionKnown.value = true
-  loadRuns()
+  void loadRuns()
   syncQuery()
 }
 
@@ -604,7 +604,7 @@ async function rerunRun(run: RunListItem) {
   }
 }
 
-loadCurrency()
+void loadCurrency()
 
 function formatDuration(startIso: string | null | undefined, endIso: string | null | undefined): string {
   if (!startIso || !endIso) return '—'

@@ -131,8 +131,9 @@ The map is stored in dedicated System Maps tables (migration
       `api/dependencies.py`, `auth/permissions.py`). The unit cases pin a
       viewer denied, an operator denied with developer mode off, and an
       operator key denied without the grant and allowed with it; the
-      grant-denial case presents a grant-bearing key, so the ungranted-JWT path
-      is not covered there (`test_system_maps_routes.py`)
+      grant-denial case presents a grant-bearing key, and a legacy JWT with no
+      grant set is explicitly allowed by the same dependency
+      (`test_system_maps_routes.py::test_internal_jwt_without_grants_can_access`)
 - [x] Published reads are a distinct, viewer-level surface (FAR-2363):
       `system_maps.read` is a viewer permission and `system_maps_read` is a
       community-tier entitlement flag that is NOT internal/default-OFF, so a

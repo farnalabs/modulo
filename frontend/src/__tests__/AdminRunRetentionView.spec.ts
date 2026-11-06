@@ -85,6 +85,19 @@ describe('AdminRunRetentionView', () => {
     expect(wrapper.text()).toContain('Run Retention')
   })
 
+  it('reset filters reloads the candidates with the cleared query', async () => {
+    const wrapper = await mountView()
+    const candidateCalls = () =>
+      (api.GET as Mock).mock.calls.filter(c => c[0] === '/api/v1/admin/run-retention/candidates').length
+    const before = candidateCalls()
+
+    await wrapper.find('[data-testid="admin-run-retention-reset"]').trigger('click')
+    await flushPromises()
+
+    expect(candidateCalls()).toBeGreaterThan(before)
+    wrapper.unmount()
+  })
+
   it('shows candidate summary from the API', async () => {
     const wrapper = await mountView()
     expect(wrapper.find('[data-testid="admin-run-retention-total-runs"]').text()).toBe('3')

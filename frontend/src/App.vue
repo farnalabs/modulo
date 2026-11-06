@@ -155,7 +155,7 @@ onAuthChange((token) => {
   if (shouldReRunAutoLogin(wasAuthed, !!token, !!autoLogin)) {
     recovering = true
     isAuthenticated.value = true
-    runAutoLogin(false).then((ok) => {
+    void runAutoLogin(false).then((ok) => {
       recovering = false
       if (!ok) isAuthenticated.value = false
     })
@@ -195,6 +195,6 @@ onMounted(() => {
     void router.push('/demo')
     return
   }
-  runAutoLogin(true)
+  void runAutoLogin(true)
 })
 </script>

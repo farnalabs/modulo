@@ -498,5 +498,5 @@ async function doCleanup() {
   }
 }
 
-scan()
+void scan()
 </script>

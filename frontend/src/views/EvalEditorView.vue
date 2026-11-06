@@ -1740,7 +1740,7 @@ async function startEdit(ev: EvalDefinition) {
     typedDraft.value = createDefaultDraft()
   }
   // Fetch gate state for this eval (§3.2 — switching evals re-populates)
-  fetchPolicyGate(ev.id)
+  void fetchPolicyGate(ev.id)
 }
 
 function confirmDelete(id: string) {
@@ -1876,11 +1876,11 @@ function requestToggleGate() {
   if (!policyGate.exists || gateToggleBusy.value) return
   // Enabling: toggle immediately. Disabling a block gate: confirm first.
   if (!policyGate.enabled) {
-    doToggleGate(true)
+    void doToggleGate(true)
   } else if (policyGate.action === 'block') {
     gateToggleConfirming.value = true
   } else {
-    doToggleGate(false)
+    void doToggleGate(false)
   }
 }
 
@@ -1910,7 +1910,7 @@ async function doToggleGate(enabled: boolean) {
 
 function confirmToggleGate() {
   gateToggleConfirming.value = false
-  doToggleGate(false)
+  void doToggleGate(false)
 }
 
 function cancelToggleGate() {
@@ -1969,9 +1969,9 @@ async function retryPolicyGate() {
 
 onMounted(() => {
   planStore.fetchPlan()
-  loadAll()
+  void loadAll()
   // The typed builder's backing axis needs the org's model backends. A failure
   // is non-fatal: the select stays empty and shows an inline message.
-  loadModelBackends()
+  void loadModelBackends()
 })
 </script>

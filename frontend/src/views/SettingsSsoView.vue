@@ -241,7 +241,7 @@ async function loadPresets() {
     // Fallback: no presets available, Custom-only mode
   }
 }
-loadPresets()
+void loadPresets()
 
 const formMode = ref<'add' | 'edit' | null>(null)
 const formData = reactive<SsoFormState>(emptyForm())
@@ -397,7 +397,7 @@ async function createProvider() {
       formError.value = formatError(err)
     } else if (data) {
       closeForm()
-      loadProviders()
+      void loadProviders()
     }
   } catch (e: unknown) {
     formError.value = formatError(e)
@@ -423,7 +423,7 @@ async function updateProvider() {
       formError.value = formatError(err)
     } else if (data) {
       closeEditForm()
-      loadProviders()
+      void loadProviders()
     }
   } catch (e: unknown) {
     formError.value = formatError(e)
@@ -441,7 +441,7 @@ async function toggleProvider(provider: SsoProviderResponse) {
     if (err) {
       error.value = `Toggle failed: ${formatError(err)}`
     } else if (data) {
-      loadProviders()
+      void loadProviders()
     }
   } catch (e: unknown) {
     error.value = `Toggle failed: ${formatApiError(e)}`
