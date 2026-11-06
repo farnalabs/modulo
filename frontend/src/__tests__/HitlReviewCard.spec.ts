@@ -854,6 +854,41 @@ describe('HitlReviewCard', () => {
     expect(options.findAll('input[type="radio"]')).toHaveLength(2)
   })
 
+  it('coerces boolean, bigint and object option ids and labels to strings (FAR-366)', async () => {
+    await mockClaimThenDecide()
+    // An object holding a bigint makes JSON.stringify throw, exercising the
+    // catch fallback; a plain object exercises the JSON.stringify path.
+    const throwingValue = { nestedBigint: 1n }
+    wrapper = mount(HitlReviewCard, {
+      props: {
+        gate: gate({
+          context: {
+            response_contract: {
+              kind: 'choice',
+              options: [
+                { id: false, label: 'Boolean id' },
+                { id: 10n, label: 'Bigint id' },
+                { id: { nested: true }, label: 'Object id' },
+                { id: throwingValue, label: 'Throwing id' },
+              ],
+            },
+          },
+        }),
+      },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+
+    const options = wrapper.find('[data-testid="hitl-gate-choice-options"]')
+    expect(options.findAll('input[type="radio"]')).toHaveLength(4)
+    expect(wrapper.find('[data-testid="hitl-gate-option-false"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-option-10"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Object id')
+    expect(wrapper.text()).toContain('Throwing id')
+  })
+
   it('submits the selected option as the answer on approve-with-modification (FAR-907)', async () => {
     await mockClaimThenDecide()
     wrapper = mount(HitlReviewCard, {
