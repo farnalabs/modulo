@@ -222,11 +222,16 @@ jobs:
           mkdir -p debx/pg-server debx/pg-client debx/redis-server debx/redis-tools
           dpkg-deb -x downloads/postgresql-16.deb debx/pg-server
           dpkg-deb -x downloads/postgresql-client-16.deb debx/pg-client
-          mkdir -p "$BUNDLE/pg/share"
+          mkdir -p "$BUNDLE/pg/share/postgresql"
           cp -a debx/pg-server/usr/lib/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/"
           cp -a debx/pg-client/usr/lib/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/"
-          cp -a debx/pg-server/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/"
-          cp -a debx/pg-client/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/"
+          # Keep PostgreSQL's versioned share layout: initdb resolves its
+          # runtime files relative to pg/bin as ../share/postgresql/<major>.
+          mkdir -p "$BUNDLE/pg/share/postgresql/${PG_MAJOR}"
+          cp -a debx/pg-server/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/"
+          cp -a debx/pg-client/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/"
+          test -f "$BUNDLE/pg/share/postgresql/${PG_MAJOR}/postgres.bki"
+
 
           # Redis, compiled from source on this runner (see the build step above).
           cp -a build/redis-install/bin/. "$BUNDLE/redis/"
