@@ -1099,9 +1099,6 @@ elements:
       - testid: system-map-node
         type: element
         dynamic_testid: false
-      - testid: system-map-draft-review
-        type: element
-        dynamic_testid: false
       - testid: dashboard-recent-runs
         type: element
         dynamic_testid: false
