@@ -371,6 +371,7 @@ class TestSummary:
             "stalled",
             "rejected",
             "budget_exceeded",
+            "unknown",
         )
         run_ids: list[uuid.UUID] = []
         for i, status in enumerate(statuses, start=1):
@@ -400,6 +401,7 @@ class TestSummary:
         assert counts["stalled"] == 1, f"stalled run missing from status counts: {counts}"
         assert counts["rejected"] == 1, f"rejected run missing from status counts: {counts}"
         assert counts["budget_exceeded"] == 1, f"budget_exceeded run missing from status counts: {counts}"
+        assert counts["unknown"] == 1, f"unknown run missing from status counts: {counts}"
         assert counts["failed"] == 1, f"failed run missing from status counts: {counts}"
         assert counts["pending"] == 1, f"pending run missing from status counts: {counts}"
         assert counts["claimed"] == 1, f"claimed run missing from status counts: {counts}"
@@ -419,6 +421,18 @@ class TestSummary:
         assert team["run_counts_by_status"]["stalled"] == 1, f"team breakdown lost stalled: {team}"
         assert team["run_counts_by_status"]["rejected"] == 1, f"team breakdown lost rejected: {team}"
         assert team["run_counts_by_status"]["budget_exceeded"] == 1, f"team breakdown lost budget_exceeded: {team}"
+        assert team["run_counts_by_status"]["unknown"] == 1, f"team breakdown lost unknown: {team}"
+        team_counts = team["run_counts_by_status"]
+        assert (
+            team["total_runs"]
+            == sum(
+                team_counts[status]
+                for status in team_counts
+                if status not in {"idle", "pending", "claimed", "hitl_parked", "completed"}
+            )
+            + team_counts["idle"]
+        ), f"team buckets must reconcile with team total: {team}"
+        assert team["total_runs"] == payload["total_runs"], f"team total must reconcile with org total: {team}"
 
         eval_rate = payload["eval_pass_rate"]
         assert eval_rate is not None, "seeded eval results must produce a pass-rate block"
@@ -441,7 +455,10 @@ class TestSummary:
         assert {entry["run_count"] for entry in trend} == {0}, "an org with no ledger rows trends zero runs"
 
         recent_ids = {entry["id"] for entry in payload["recent_runs"]}
-        assert recent_ids == {str(rid) for rid in run_ids}, f"recent_runs must surface every seeded run: {recent_ids}"
+        expected_recent_ids = {str(rid) for rid in run_ids[-10:]}
+        assert recent_ids == expected_recent_ids, (
+            f"recent_runs must surface the 10 most recent seeded runs: {recent_ids}"
+        )
         recent_statuses = {entry["status"] for entry in payload["recent_runs"]}
         assert "failed" in recent_statuses, f"recent_runs must carry run status: {payload['recent_runs']}"
 

@@ -1154,8 +1154,12 @@ class TestDashboardSummaryEdgeCases:
             }
             assert team["total_runs"] == 0
             assert set(team["run_counts_by_status"].keys()) == {
+                "pending",
                 "running",
                 "awaiting_human",
+                "claimed",
+                "unknown",
+                "hitl_parked",
                 "failed",
                 "idle",
                 "completed",
