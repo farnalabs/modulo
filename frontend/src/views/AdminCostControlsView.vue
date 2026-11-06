@@ -5,7 +5,6 @@
       :subtitle="$t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se')"
        :tabs="costPageTabs"
     />
-    <Breadcrumb data-testid="admin-cost-controls-breadcrumb" />
 
     <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled class="space-y-6">
       <LoadingSpinner v-if="loading" />
@@ -241,7 +240,6 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
-import Breadcrumb from '@/components/Breadcrumb.vue'
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'

@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
-import { useRoute } from 'vue-router'
 
 const mockPut = vi.hoisted(() => vi.fn().mockResolvedValue({ data: null, error: undefined }))
 const defaultGet = vi.hoisted(() => (path: string) => {
@@ -59,22 +58,6 @@ vi.mock('../lib/api/client', () => ({
 import AdminCostControlsView from '../views/AdminCostControlsView.vue'
 import Select from '../components/shared/AppSelect.vue'
 
-// The shared setup's mock route has no `name` or `meta.breadcrumb`, so the
-// Breadcrumb component's segments computed would return [] and its `v-if`
-// nav would never render. Production hydrates both from the manifest in
-// hydrateManifestMeta, so give this view's route the same shape here.
-const adminCostsControlsRoute = {
-  path: '/admin/costs/controls',
-  fullPath: '/admin/costs/controls',
-  params: {} as Record<string, string>,
-  query: {} as Record<string, string>,
-  hash: '',
-  matched: [],
-  name: 'admin-costs-controls',
-  redirectedFrom: undefined,
-  meta: { breadcrumb: 'Cost Controls', parent: '/admin/costs' } as Record<string, unknown>,
-}
-
 describe('AdminCostControlsView', () => {
   let pinia: ReturnType<typeof createPinia>
 
@@ -83,9 +66,6 @@ describe('AdminCostControlsView', () => {
     setActivePinia(pinia)
     vi.clearAllMocks()
     mockGet.mockImplementation(defaultGet)
-    vi.mocked(useRoute).mockReturnValue(
-      adminCostsControlsRoute as unknown as ReturnType<typeof useRoute>,
-    )
   })
 
   async function mountView() {
@@ -100,9 +80,8 @@ describe('AdminCostControlsView', () => {
     const wrapper = await mountView()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Cost Controls')
-    expect(wrapper.find('.page-tabs-wrapper').exists()).toBe(true)
-    expect(wrapper.findAll('.page-tabs-wrapper .page-tab')).toHaveLength(4)
-    expect(wrapper.find('[data-testid="admin-cost-controls-breadcrumb"]').exists()).toBe(true)
+    expect(wrapper.find('header.page-header + .page-tabs-wrapper').exists()).toBe(true)
+    expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(4)
   })
 
   it('displays budget overview with spend and remaining', async () => {
