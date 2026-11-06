@@ -154,28 +154,47 @@ async def test_initialise_missing_credentials_is_typed_and_actionable(
     assert f"KeyError: '{row.id}'" not in caplog.text
 
 
+_EXPECTED_CREDENTIAL_FREE_LOCAL_BACKENDS: dict[str, str] = {
+    "jan": "http://localhost:1337/v1",
+    "llamacpp": "http://localhost:8080/v1",
+    "lm_studio": "http://localhost:1234/v1",
+    "localai": "http://localhost:8080/v1",
+    "ollama": "http://localhost:11434/v1",
+    "tgi": "http://localhost:8080/v1",
+    "vllm": "http://localhost:8000/v1",
+}
+
+
 @pytest.mark.anyio
-@pytest.mark.parametrize("provider", sorted(_NO_CREDENTIALS_REQUIRED_PROVIDERS))
 async def test_initialise_registers_credential_free_local_backends_without_credentials(
     hub: ModelBackendHub,
-    provider: str,
 ) -> None:
     """Every credential-free local adapter is built through the real hub path.
 
+    The expected provider set and endpoints are intentionally independent from
+    the production allowlist, so a production mapping change cannot make this
+    regression test pass while silently changing a local adapter's endpoint.
     The SSRF-safe constructor is patched only at its network boundary: adapter
     construction remains real, while no external or local service is contacted.
     """
-    row = _row(provider=provider, model_id="local-model", credentials_ciphertext=b"")
-    async_client = httpx.AsyncClient()
-    with patch("modulo.model_backends.module.pinned_async_client_sync", return_value=async_client) as pinned_client:
-        await hub.initialise([row], secrets_backend=_secrets(error=KeyError(str(row.id))))
+    assert set(_NO_CREDENTIALS_REQUIRED_PROVIDERS) == set(_EXPECTED_CREDENTIAL_FREE_LOCAL_BACKENDS)
 
-    backend = hub._backends[row.id]
-    assert row.id in hub.backend_ids
-    assert backend.backend_id == f"{provider}/local-model"
-    assert backend.base_url is not None
-    assert backend.base_url.startswith("http://localhost:")
-    pinned_client.assert_called_once()
+    rows = [
+        _row(provider=provider, model_id="local-model", credentials_ciphertext=b"")
+        for provider in _EXPECTED_CREDENTIAL_FREE_LOCAL_BACKENDS
+    ]
+    async_client = httpx.AsyncClient()
+    missing = frozenset(str(row.id) for row in rows)
+    with patch("modulo.model_backends.module.pinned_async_client_sync", return_value=async_client) as pinned_client:
+        await hub.initialise(rows, secrets_backend=_secrets_per_backend({}, missing=missing))
+
+    for row in rows:
+        backend = hub._backends[row.id]
+        provider = row.provider
+        assert row.id in hub.backend_ids
+        assert backend.backend_id == f"{provider}/local-model"
+        assert backend.base_url == _EXPECTED_CREDENTIAL_FREE_LOCAL_BACKENDS[provider]
+    assert pinned_client.call_count == len(rows)
     await hub.__aexit__(None, None, None)
 
 
