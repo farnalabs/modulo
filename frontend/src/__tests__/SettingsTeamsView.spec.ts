@@ -120,6 +120,16 @@ describe('SettingsTeamsView', () => {
     wrapper.unmount()
   })
 
+  it('falls back to an em dash when a team has no description', async () => {
+    mockTeams = [team({ description: '' })]
+    const wrapper = await mountView()
+
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="settings-teams-toggle-t1"]').exists()).toBe(true))
+    const toggle = wrapper.find('[data-testid="settings-teams-toggle-t1"]')
+    expect(toggle.text()).toContain('—')
+    wrapper.unmount()
+  })
+
   it('shows owned resource count for each team', async () => {
     mockTeams = [
       team(),
