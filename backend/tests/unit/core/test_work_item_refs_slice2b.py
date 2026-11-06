@@ -56,7 +56,8 @@ _CAP = "modulo.core.cost_controller.finalize.work_item_refs_cap"
 class TestMergeEffectiveRefs:
     def test_within_cap_returns_typed_union_in_order(self) -> None:
         refs = [_ref("jira", "X-1", "caller"), _ref("github_pr", "#2", "agent")]
-        kept, dropped = _merge_effective_refs(refs, [], org_id=uuid.uuid4())
+        with patch(_CAP, lambda: 2):
+            kept, dropped = _merge_effective_refs(refs, [], org_id=uuid.uuid4())
         assert [(r["kind"], r["ref"]) for r in kept] == [("jira", "X-1"), ("github_pr", "#2")]
         assert dropped == 0
 
