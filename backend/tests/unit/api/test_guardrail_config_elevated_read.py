@@ -172,8 +172,8 @@ def _patch_route_deps(pin: GuardrailPin | None = None) -> Generator[None, None, 
 
 
 def test_standard_read_masks_sensitive_values(runner_client: TestClient) -> None:
-    """The standard read (``eval.list``, runner-visible — the LOWEST role that
-    can reach it) exposes the guardrail topology but masks the deny-rule
+    """The standard read (``eval.list``, viewer-visible) exposes the guardrail
+    topology but masks the deny-rule
     internals — the real regex pattern and JSON schema must never appear in the
     returned YAML."""
     with _patch_route_deps():
@@ -193,13 +193,14 @@ def test_standard_read_masks_sensitive_values(runner_client: TestClient) -> None
     assert "********" in yaml_text
 
 
-def test_standard_read_denied_for_viewer(viewer_client: TestClient) -> None:
-    """Viewers cannot reach even the standard read (``eval.list`` requires
-    runner) — the guardrail config is never exposed to the lowest role."""
+def test_standard_read_available_to_viewer(viewer_client: TestClient) -> None:
+    """The masked topology is a viewer-safe read; sensitive rule bodies stay hidden."""
     with _patch_route_deps():
         resp = viewer_client.get("/api/v1/guardrails/config")
 
-    assert resp.status_code == 403
+    assert resp.status_code == 200
+    assert "AKIA[0-9A-Z]{16}" not in resp.json()["config_yaml"]
+    assert "********" in resp.json()["config_yaml"]
 
 
 def test_standard_read_masks_pending_proposal(runner_client: TestClient) -> None:

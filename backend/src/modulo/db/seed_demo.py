@@ -78,7 +78,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -88,6 +88,8 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.evidence import Evidence
+from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
@@ -112,6 +114,7 @@ from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
+from modulo.db.models.variant_group import VariantGroup
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import get_settings
@@ -2204,6 +2207,148 @@ async def _seed_demo_trigger_events(
         await _insert_demo_trigger_event(session, org, trigger, index, now)
 
 
+async def _seed_demo_readonly_surfaces(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
+) -> None:
+    """Seed non-sensitive records used by the viewer-facing demo read surfaces."""
+    pipeline, _ = pipeline_lookup[DEMO_PIPELINE_NAME]
+    runs = list(
+        (
+            await session.execute(
+                select(Run)
+                .where(Run.organisation_id == org.id, Run.pipeline_id == pipeline.id)
+                .order_by(Run.run_number.desc())
+                .limit(3)
+            )
+        ).scalars()
+    )
+    variant_name = "Demo review strategies"
+    variant_values = {
+        "pipeline_id": pipeline.id,
+        "description": "Read-only comparison fixture using two safe review strategies.",
+        "variants": [
+            {"name": "Balanced", "weight": 0.5, "config": {"temperature": 0.2}},
+            {"name": "Strict", "weight": 0.5, "config": {"temperature": 0.0}},
+        ],
+        "selection_strategy": "weighted",
+        "max_concurrent_runs": 5,
+    }
+    variant_recover_stmt = (
+        select(VariantGroup)
+        .where(
+            VariantGroup.organisation_id == org.id,
+            or_(
+                VariantGroup.id == demo_fixture_id(org.id, "variant-group:demo-review-strategies"),
+                VariantGroup.name == variant_name,
+            ),
+        )
+        .order_by(VariantGroup.id)
+        .limit(1)
+    )
+    variant = (await session.execute(variant_recover_stmt)).scalar_one_or_none()
+    if variant is None:
+        variant = await _insert_fixture_or_adopt(
+            session,
+            VariantGroup(
+                id=demo_fixture_id(org.id, "variant-group:demo-review-strategies"),
+                organisation_id=org.id,
+                name=variant_name,
+                **variant_values,
+            ),
+            variant_recover_stmt,
+            conflict_event="demo_seed.variant_group_recovered_after_conflict",
+            created_event="demo_seed.variant_group_created",
+            log_extra={"variant_group_name": variant_name},
+        )
+    else:
+        _converge_fixture_attributes(variant, variant_values, tuple(variant_values))
+
+    if not runs:
+        # The variant group is runs-independent and must exist even when the
+        # demo pipeline has no runs yet; feedback and evidence reference the
+        # latest run, so only those are skipped.
+        await session.flush()
+        return
+
+    feedback_values = {
+        "run_id": runs[0].id,
+        "account_id": account.id,
+        "rejection_reason": "The review should explicitly mention the deployment risk.",
+        "rejected_output": {"summary": "Demo review output requiring a clearer risk note."},
+        "producing_node_id": uuid.UUID(demo_node_id(DEMO_PIPELINE_NAME, "review")),
+        "feedback_status": "pending",
+        "feedback_handler_type": "human",
+        "eval_gap": True,
+        "needs_human_review": True,
+    }
+    feedback_recover_stmt = select(FeedbackRecord).where(
+        FeedbackRecord.organisation_id == org.id,
+        or_(
+            FeedbackRecord.id == demo_fixture_id(org.id, "feedback:demo-review-1"),
+            FeedbackRecord.review_id == "demo-review-1",
+        ),
+    )
+    feedback = (await session.execute(feedback_recover_stmt)).scalar_one_or_none()
+    if feedback is None:
+        feedback = await _insert_fixture_or_adopt(
+            session,
+            FeedbackRecord(
+                id=demo_fixture_id(org.id, "feedback:demo-review-1"),
+                organisation_id=org.id,
+                review_id="demo-review-1",
+                **feedback_values,
+            ),
+            feedback_recover_stmt,
+            conflict_event="demo_seed.feedback_recovered_after_conflict",
+            created_event="demo_seed.feedback_created",
+            log_extra={"review_id": "demo-review-1"},
+        )
+    else:
+        # Feedback is durable review provenance.  Once a human or evaluator has
+        # edited it, a refresh must adopt the row without rewriting that history.
+        _log.debug("demo_seed.feedback_preserved", extra={"review_id": "demo-review-1"})
+
+    evidence_key = "risk.demo_review_score"
+    evidence_values = {
+        "key": evidence_key,
+        "subject_type": "run",
+        "subject_id": str(runs[0].id),
+        "value": {"score": 0.84, "severity": "medium", "source": "demo_seed"},
+        "observed_at": runs[0].completed_at or runs[0].started_at or datetime.now(UTC),
+        "producer_type": "derived",
+        "producer_id": None,
+    }
+    evidence_recover_stmt = select(Evidence).where(
+        Evidence.organisation_id == org.id,
+        or_(
+            Evidence.id == demo_fixture_id(org.id, "evidence:risk.demo_review_score"),
+            (
+                (Evidence.key == evidence_key)
+                & (Evidence.subject_type == "run")
+                & (Evidence.subject_id == str(runs[0].id))
+            ),
+        ),
+    )
+    evidence = (await session.execute(evidence_recover_stmt)).scalar_one_or_none()
+    if evidence is None:
+        await _insert_fixture_or_adopt(
+            session,
+            Evidence(
+                id=demo_fixture_id(org.id, "evidence:risk.demo_review_score"),
+                organisation_id=org.id,
+                **evidence_values,
+            ),
+            evidence_recover_stmt,
+            conflict_event="demo_seed.evidence_recovered_after_conflict",
+            created_event="demo_seed.evidence_created",
+            log_extra={"evidence_key": evidence_key},
+        )
+    await session.flush()
+
+
 async def _seed_demo_governance_surfaces(
     session: AsyncSession,
     org: Organisation,
@@ -2217,6 +2362,7 @@ async def _seed_demo_governance_surfaces(
     await _seed_demo_connectors(session, org, account)
     await _seed_demo_notifications(session, org, now)
     await _seed_demo_trigger_events(session, org, now)
+    await _seed_demo_readonly_surfaces(session, org, account, pipeline_lookup)
 
 
 async def _seed_ticket_ready_trigger(
