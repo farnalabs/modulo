@@ -24,6 +24,8 @@ export type SystemMapNode = components['schemas']['SystemMapNodeResponse']
 export type SystemMapRelationship = components['schemas']['SystemMapRelationshipResponse']
 export type SystemMapGraph = components['schemas']['SystemMapRevisionDetailResponse']
 export type DiscoveryReport = components['schemas']['SystemMapDiscoveryReport']
+export type AttributionBinding = components['schemas']['AttributionBindingResponse']
+export type AttributionBindingCreate = components['schemas']['AttributionBindingCreate']
 
 export interface DiscoverySelection {
   acceptedNodes: number[]
@@ -80,6 +82,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const graph = ref<SystemMapGraph | null>(null)
   const revisions = ref<SystemMapRevision[]>([])
   const discovery = ref<DiscoveryReport | null>(null)
+  const attributionBindings = ref<AttributionBinding[]>([])
   const overview = ref<SystemMapOverview | null>(null)
   const overviewLoading = ref(false)
   const overviewError = ref<string | null>(null)
@@ -118,6 +121,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     graph.value = null
     revisions.value = []
     discovery.value = null
+    attributionBindings.value = []
     overview.value = null
     overviewLoading.value = false
     overviewError.value = null
@@ -486,6 +490,26 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     return response.data as SystemMapRevisionDiff
   }
 
+  async function loadAttributionBindings(mapId: string): Promise<void> {
+    const response = await api.GET('/api/v1/system-maps/{map_id}/attribution-bindings', { params: { path: { map_id: mapId } } })
+    if (response.error || !response.data) throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.load_attribution_bindings')))
+    attributionBindings.value = response.data as AttributionBinding[]
+  }
+
+  async function createAttributionBinding(mapId: string, binding: AttributionBindingCreate): Promise<AttributionBinding> {
+    const response = await api.POST('/api/v1/system-maps/{map_id}/attribution-bindings', { params: { path: { map_id: mapId } }, body: binding })
+    if (response.error || !response.data) throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.create_attribution_binding')))
+    const created = response.data as AttributionBinding
+    attributionBindings.value = [...attributionBindings.value, created]
+    return created
+  }
+
+  async function deleteAttributionBinding(mapId: string, bindingId: string): Promise<void> {
+    const response = await api.DELETE('/api/v1/system-maps/{map_id}/attribution-bindings/{binding_id}', { params: { path: { map_id: mapId, binding_id: bindingId } } })
+    if (response.error) throw new Error(apiErrorMessage(response.error, tr('systemMaps.errors.delete_attribution_binding')))
+    attributionBindings.value = attributionBindings.value.filter((binding) => binding.id !== bindingId)
+  }
+
   async function discover(name = 'Discovered System Map', description?: string): Promise<DiscoveryReport> {
     const response = await api.POST('/api/v1/system-maps/discover', { body: { name, description } })
     if (response.error || !response.data) throw new Error(tr('systemMaps.errors.discover_map'))
@@ -510,5 +534,5 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   // Kept for the dashboard's preview card; discovery is now a real operation.
   function fetchDiscovery(): void { loaded.value = true }
 
-  return { loaded, loading, error, unavailable, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, overview, overviewLoading, overviewError, overviewUnavailable, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, hasReadAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadRevisionHistory, loadCurrentRevision, loadRevisionByTime, saveDraft, publish, archive, restoreRevisionAsNew, diffRevision, discover, clearActive, fetchDiscovery }
+  return { loaded, loading, error, unavailable, maps, total, page, pageSize, activeMap, activeRevision, graph, revisions, discovery, attributionBindings, overview, overviewLoading, overviewError, overviewUnavailable, overviewEmpty, accessLoaded, systemMapsEnabled, hasAccess, hasReadAccess, reset, fetchAccess, fetchOverview, fetchDefaultOverview, fetchMaps, createMap, deleteMap, loadMap, loadRevision, loadRevisionHistory, loadCurrentRevision, loadRevisionByTime, loadAttributionBindings, createAttributionBinding, deleteAttributionBinding, saveDraft, publish, archive, restoreRevisionAsNew, diffRevision, discover, clearActive, fetchDiscovery }
 })

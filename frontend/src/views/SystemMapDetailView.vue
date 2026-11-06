@@ -129,6 +129,16 @@
             data-testid="system-map-discovery-panel"
           />
         </div>
+
+        <SystemMapAttributionBindings
+          v-if="activeMap && graph"
+          :nodes="graph.nodes"
+          :bindings="store.attributionBindings"
+          :read-only="readOnly"
+          @create="createAttributionBinding"
+          @delete="deleteAttributionBinding"
+          data-testid="system-map-attribution-bindings-panel"
+        />
       </main>
     </div>
   </div>
@@ -139,13 +149,14 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSystemMapsStore, NODE_TYPES, RELATIONSHIP_TYPES } from '../stores/systemMaps'
-import type { DiscoverySelection, SystemMapNode, SystemMapRelationship, SystemMapRevisionDiff } from '../stores/systemMaps'
+import type { AttributionBindingCreate, DiscoverySelection, SystemMapNode, SystemMapRelationship, SystemMapRevisionDiff } from '../stores/systemMaps'
 import BackLink from '../components/BackLink.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import HeaderBar from '../components/system-maps/SystemMapHeaderBar.vue'
 import GraphEditor from '../components/system-maps/SystemMapGraphEditor.vue'
 import RevisionSidebar from '../components/system-maps/SystemMapRevisionSidebar.vue'
 import DiscoveryPanel from '../components/system-maps/SystemMapDiscoveryPanel.vue'
+import SystemMapAttributionBindings from '../components/system-maps/SystemMapAttributionBindings.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import { mergeDiscoverySelections } from '../components/system-maps/discoveryMerge'
 
@@ -222,6 +233,11 @@ async function loadData(): Promise<void> {
   await store.fetchAccess()
   await store.loadMap(mapId.value)
   if (!activeMap.value) return
+  try {
+    await store.loadAttributionBindings(mapId.value)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.load_attribution_bindings')
+  }
   try {
     await store.loadRevisionHistory(mapId.value)
   } catch (err) {
@@ -366,6 +382,24 @@ async function archiveRevision(): Promise<void> {
     await store.archive(activeMap.value.id, activeRevision.value.id)
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.archive_revision')
+  }
+}
+
+async function createAttributionBinding(binding: AttributionBindingCreate): Promise<void> {
+  if (!activeMap.value) return
+  try {
+    await store.createAttributionBinding(activeMap.value.id, binding)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.create_attribution_binding')
+  }
+}
+
+async function deleteAttributionBinding(bindingId: string): Promise<void> {
+  if (!activeMap.value) return
+  try {
+    await store.deleteAttributionBinding(activeMap.value.id, bindingId)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.delete_attribution_binding')
   }
 }
 
