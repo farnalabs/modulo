@@ -1414,8 +1414,9 @@ def test_overview_detects_missing_loop_config_bottleneck(client: tuple[TestClien
     assert "missing loop configuration" in body["bottlenecks"][0]["detail"]
 
 
-def test_overview_passes_window_and_graph_ids_to_the_repository(
-    client: tuple[TestClient, _Harness],
+@pytest.mark.parametrize("window_days", [3, 7, 30, 90])
+def test_overview_passes_requested_window_and_graph_ids_to_the_repository(
+    client: tuple[TestClient, _Harness], window_days: int
 ) -> None:
     http, harness = client
     pipeline_id = uuid.uuid4()
@@ -1436,7 +1437,7 @@ def test_overview_passes_window_and_graph_ids_to_the_repository(
         ),
     )
 
-    resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
+    resp = http.get(f"{_BASE}/{_MAP_ID}/overview?window_days={window_days}")
 
     assert resp.status_code == 200, resp.text
     pipeline_call = harness.repository.get_overview_pipeline_metrics.await_args
@@ -1449,9 +1450,9 @@ def test_overview_passes_window_and_graph_ids_to_the_repository(
     assert loop_call.kwargs["organisation_id"] == _ORG_ID
     window_start = pipeline_call.kwargs["window_start"]
     window_end = pipeline_call.kwargs["window_end"]
-    assert window_end - window_start == timedelta(days=7)
+    assert window_end - window_start == timedelta(days=window_days)
     body = resp.json()
-    assert body["window_days"] == 7
+    assert body["window_days"] == window_days
     assert body["window_start"] == window_start.isoformat().replace("+00:00", "Z")
     assert body["window_end"] == window_end.isoformat().replace("+00:00", "Z")
     assert body["generated_at"] == body["window_end"]
