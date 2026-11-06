@@ -4,10 +4,26 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 
 const mockGet = vi.hoisted(() => vi.fn())
+const mockPush = vi.hoisted(() => vi.fn())
+const mockPlanStore = vi.hoisted(() => ({
+  loaded: true,
+  currentTier: 'community',
+  devMode: true,
+  userPermissions: ['system_maps_access', 'system.config.manage'],
+  fetchPlan: vi.fn(),
+  fetchPermissions: vi.fn(),
+}))
+const mockIsOperator = vi.hoisted(() => ({ value: true }))
+const mockIsSystemAdmin = vi.hoisted(() => ({ value: false }))
 
 vi.mock('../lib/api/client', () => ({
   api: { GET: mockGet },
   getAccessToken: () => 'test-token',
+}))
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: mockPush }) }))
+vi.mock('../stores/planStore', () => ({ usePlanStore: () => mockPlanStore }))
+vi.mock('../composables/useCurrentUser', () => ({
+  useCurrentUser: () => ({ isOperator: mockIsOperator, isSystemAdmin: mockIsSystemAdmin }),
 }))
 
 import enUS from '../locales/en-US.js'
@@ -78,6 +94,10 @@ describe('DashboardSystemOverview', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     mockGet.mockReset()
+    mockPush.mockReset()
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
   })
 
   it('loads discovery and then the default overview on mount', async () => {
@@ -90,12 +110,53 @@ describe('DashboardSystemOverview', () => {
     )
   })
 
-  it('does not present a discovery action on the dashboard', () => {
-    const { wrapper } = mountOverview()
+  it('shows discovery only after confirmed internal authoring access loads', async () => {
+    const { wrapper, store } = mountOverview()
 
-    expect(wrapper.find('[data-testid="dashboard-system-discover"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="system-maps-discover"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('Discover My System')
+    expect(wrapper.find('button[aria-label="Discover My System"]').exists()).toBe(false)
+    store.accessLoaded = true
+    store.systemMapsEnabled = true
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.get('button[aria-label="Discover My System"]').text()).toContain('Discover My System')
+  })
+
+  it('does not present discovery for published-read viewers', async () => {
+    const { wrapper, store } = mountOverview()
+    mockPlanStore.userPermissions = ['system_maps.read']
+    mockIsOperator.value = false
+    store.accessLoaded = true
+    store.systemMapsEnabled = true
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('button[aria-label="Discover My System"]').exists()).toBe(false)
+  })
+
+  it('does not present discovery while access is loading or failed', async () => {
+    const { wrapper, store } = mountOverview()
+    store.accessLoaded = false
+    store.systemMapsEnabled = true
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('button[aria-label="Discover My System"]').exists()).toBe(false)
+
+    store.accessLoaded = true
+    store.error = 'access failed'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('button[aria-label="Discover My System"]').exists()).toBe(false)
+  })
+
+  it('discovers and routes to the created draft for internal operators', async () => {
+    const { wrapper, store } = mountOverview()
+    store.accessLoaded = true
+    store.systemMapsEnabled = true
+    const discover = vi.spyOn(store, 'discover').mockResolvedValue({ draft_map_id: 'map-9' } as never)
+    mockPush.mockResolvedValue(undefined)
+    await wrapper.vm.$nextTick()
+
+    await wrapper.get('button[aria-label="Discover My System"]').trigger('click')
+
+    expect(discover).toHaveBeenCalledTimes(1)
+    expect(mockPush).toHaveBeenCalledWith('/system-maps/map-9?discovery=1')
   })
 
   it('renders observed metrics with interpolated window, rates and localized health', async () => {

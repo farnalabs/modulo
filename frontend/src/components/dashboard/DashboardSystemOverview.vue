@@ -4,6 +4,19 @@
     :description="$t('views.DashboardView.system_overview_description')"
     data-testid="dashboard-system-overview"
   >
+    <template #header>
+      <button
+        v-if="canDiscover"
+        type="button"
+        :disabled="discovering"
+        class="rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-60"
+        :aria-label="$t('views.DashboardView.discover_my_system')"
+        @click="discoverSystem"
+      >
+        {{ $t('views.DashboardView.discover_my_system') }}
+      </button>
+    </template>
+
     <div v-if="store.overviewLoading" class="text-sm text-muted-foreground" data-testid="system-map-overview-loading">
       {{ $t('views.DashboardView.system_maps_loading') }}
     </div>
@@ -53,13 +66,28 @@ import SectionCard from '../shared/SectionCard.vue'
 import EmptyState from '../shared/EmptyState.vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
 import SystemMapDraftReview from '../system-maps/SystemMapDraftReview.vue'
-import { onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { useSystemMapsStore } from '../../stores/systemMaps'
 
 const { t } = useI18n()
+const router = useRouter()
 const store = useSystemMapsStore()
+const discovering = ref(false)
+const canDiscover = computed(() => store.accessLoaded && !store.error && store.hasAccess)
 const healthLabel = (health: string): string => t(`views.DashboardView.system_maps_health_${health}`)
+
+async function discoverSystem(): Promise<void> {
+  if (discovering.value) return
+  discovering.value = true
+  try {
+    const report = await store.discover()
+    await router.push(`/system-maps/${report.draft_map_id}?discovery=1`)
+  } finally {
+    discovering.value = false
+  }
+}
 
 /**
  * Load every source this overview renders from. The retry affordance reuses
