@@ -529,7 +529,7 @@ function persistPositions(positions: Record<string, { x: number; y: number }>): 
 
 function handlePositionsChanged(positions: Record<string, { x: number; y: number }>): void {
   savedPositions.value = positions
-  void persistPositions(positions)
+  persistPositions(positions)
 }
 
 onBeforeUnmount(() => {

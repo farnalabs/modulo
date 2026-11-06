@@ -546,3 +546,48 @@ describe('RunDetailView — branch coverage sweep', () => {
     expect(agg.text()).not.toContain('1 run')
   })
 })
+
+describe('RunDetailView — payload normalisation branches', () => {
+  const ioWithNumber = (number: unknown, present = true): Record<string, unknown> => {
+    const pullRequest: Record<string, unknown> = { title: 'PR' }
+    if (present) pullRequest.number = number
+    return { input_payload: { repository: { full_name: 'org/repo' }, pull_request: pullRequest } }
+  }
+
+  it.each([
+    ['a numeric string', '42', true, '42'],
+    ['a plain number', 42, true, '42'],
+    ['null', null, true, ''],
+    ['undefined', undefined, true, ''],
+    ['an unsupported object', { id: 1 }, true, ''],
+    ['a missing number field', undefined, false, ''],
+  ])('normalises a pull_request number that is %s', async (_label, number, present, expected) => {
+    const wrapper = await mountWith(baseRun(), ioWithNumber(number, present))
+    const vm = wrapper.vm as unknown as { prContext: { number: string } | null }
+    expect(vm.prContext?.number).toBe(expected)
+    wrapper.unmount()
+  })
+
+  it('stringifies a structured prompt-reveal error detail', async () => {
+    const wrapper = await mountWith(baseRun({ node_token_usage: { n1: {} } }), {
+      outputs_json: { n1: { output: {} } },
+    })
+    postMock.mockResolvedValueOnce({ data: null, error: { detail: { code: 'boom' } } })
+    const vm = wrapper.vm as unknown as { revealPrompt: (name: string) => Promise<void>; error: string }
+    await vm.revealPrompt('n1')
+    await flushPromises()
+    expect(vm.error).toContain('{"code":"boom"}')
+  })
+
+  it('omits an absent prompt-reveal error detail', async () => {
+    const wrapper = await mountWith(baseRun({ node_token_usage: { n1: {} } }), {
+      outputs_json: { n1: { output: {} } },
+    })
+    postMock.mockResolvedValueOnce({ data: null, error: {} })
+    const vm = wrapper.vm as unknown as { revealPrompt: (name: string) => Promise<void>; error: string }
+    await vm.revealPrompt('n1')
+    await flushPromises()
+    expect(vm.error).not.toContain('[object Object]')
+    expect(vm.error).not.toContain('undefined')
+  })
+})

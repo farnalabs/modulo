@@ -748,11 +748,12 @@ function summarize(event: Summarisable): string {
   // catalogue like every other string in the view rather than being
   // concatenated in English here.
   const capitalisedAction = action.charAt(0).toUpperCase() + action.slice(1)
+  const nameText = typeof name === 'string' ? name : JSON.stringify(name)
   return name
     ? t('views.AdminAuditView.summary_fallback_named', {
         action: capitalisedAction,
         resource,
-        name: typeof name === 'string' ? name : JSON.stringify(name),
+        name: nameText,
       })
     : t('views.AdminAuditView.summary_fallback', {
         action: capitalisedAction,

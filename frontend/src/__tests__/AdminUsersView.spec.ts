@@ -405,6 +405,18 @@ describe('AdminUsersView', () => {
     expect(mockPost).not.toHaveBeenCalled()
   })
 
+  it('rejects a nullish display name before creating a user', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const vm = wrapper.vm as unknown as {
+      newUser: { email: string; display_name?: string }
+      validateEmailAndName: () => string
+    }
+    vm.newUser.email = 'carol@example.com'
+    vm.newUser.display_name = undefined
+    expect(vm.validateEmailAndName()).toBe('Display name is required')
+  })
+
   it('shows a visible error state when the clipboard write is rejected', async () => {
     mockPost.mockResolvedValue({ id: 'u-new', email: 'carol@example.com', display_name: 'Carol', org_role: 'runner' })
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } })
