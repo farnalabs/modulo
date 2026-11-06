@@ -3224,6 +3224,11 @@ jobs:
                   echo "::warning::production sandbox admission is not frozen (deployment_drain=false), so new sandbox runs can start at any moment and the active-run count cannot converge. Skipping the active-run wait gate and proceeding with the deploy. Provision MODULO_DEPLOY_DRAIN_TOKEN on both the GitHub repo and the production app to enable the drain."
                   exit 0
                   ;;
+                *)
+                  # ACTIVE, or ERROR when the endpoint could not be classified:
+                  # fall through to the active-run probe and fail closed via its
+                  # own ERROR/deadline paths. Never degrade to the legacy path.
+                  ;;
               esac
               probe=$(printf '%s' "$body" | jq -r '
                 if type != "object" then "ERROR"
