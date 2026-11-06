@@ -5623,9 +5623,6 @@ class PipelineExecutor:
         run_id: uuid.UUID,
         node_token_usage: dict[str, Any] | None,
         pipeline_retry_policy: dict[str, Any] | None,
-        final_status: str,
-        error_code: str | None,
-        error_detail: str | None,
         retry_policy_eligible: bool,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None, bool]:
         """Handle exceptions from _prepare_and_stream; return updated status tuple."""
@@ -6807,9 +6804,6 @@ class PipelineExecutor:
                 run_id=run_id,
                 node_token_usage=node_token_usage,
                 pipeline_retry_policy=pipeline_retry_policy,
-                final_status=final_status,
-                error_code=error_code,
-                error_detail=error_detail,
                 retry_policy_eligible=retry_policy_eligible,
             )
 
