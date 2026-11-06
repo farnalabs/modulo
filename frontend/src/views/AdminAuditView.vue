@@ -738,7 +738,7 @@ function summarize(event: Summarisable): string {
   if (typeof provided === 'string' && provided.length > 0) return provided
 
   const et = event.event_type
-  const action = et.includes('.') ? et.split('.').at(1) ?? et : et
+  const action = et.includes('.') ? et.split('.').at(1)! : et
   const resource = event.resource_type ?? 'resource'
 
   const p = event.payload_json ?? {}
