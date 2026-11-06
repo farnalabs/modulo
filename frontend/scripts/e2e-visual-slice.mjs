@@ -64,6 +64,11 @@ const SLICE = [
   'tests/e2e/filter-bar-overlay.spec.ts',
   'tests/e2e/select-clipping-container.spec.ts',
   'tests/e2e/pipeline-editor-select-overlay.spec.ts',
+  // FAR-2396: 320px overflow/stacking + font-family probes for the Diff, HITL
+  // Review, Teams and Costs surfaces. Local-only (route-mocked on the shared
+  // local fixture, skips on any non-local target), so it cannot run in the
+  // staging gate and belongs here. Four deterministic tests, cheap per PR.
+  'tests/e2e/mobile-responsive-far-2396.spec.ts',
 ]
 
 /**
