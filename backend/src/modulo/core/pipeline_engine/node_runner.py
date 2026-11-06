@@ -3374,7 +3374,7 @@ async def _resolve_connector_write_outcome(
     )
 
 
-async def _stamp_connector_write_delivered(
+async def _stamp_connector_write_delivered(  # NOSONAR S1172 - result preserves connector hook contract
     session_factory: Callable[..., Any] | None,
     *,
     run_id: str,
