@@ -79,8 +79,8 @@ test.describe('Login Flow', () => {
 
     await ssoButton.click()
     await expect(page.getByText('Continue with fixture IdP')).toBeVisible()
+    const authorizeUrl = new URL(await page.getByText('Continue with fixture IdP').getAttribute('href') ?? '')
     await page.getByText('Continue with fixture IdP').click()
-    const authorizeUrl = new URL(page.url())
     expect(authorizeUrl.searchParams.get('client_id')).toBe('ci-idp')
     expect(authorizeUrl.searchParams.get('redirect_uri')).toContain('/api/v1/auth/oidc/ci-idp/callback')
     expect(authorizeUrl.searchParams.get('state')).toBeTruthy()
@@ -172,7 +172,7 @@ test.describe('Login Flow', () => {
     await page.goto('/login')
     await page.getByTestId('login-sso-oidc-ci-idp').click()
     await expect(page.getByText('Continue with fixture IdP')).toBeVisible()
-    const authorizeUrl = new URL(page.url())
+    const authorizeUrl = new URL(await page.getByText('Continue with fixture IdP').getAttribute('href') ?? '')
     const state = authorizeUrl.searchParams.get('state')
     expect(state).toBeTruthy()
     await page.goto(`/api/v1/auth/oidc/ci-idp/callback?code=ci-invalid-code&state=${encodeURIComponent(state ?? '')}`)
