@@ -155,6 +155,8 @@ def _bundled_share_dir(bin_dir: Path) -> Path | None:
     share_dir = bin_dir.parent / "share" / "postgresql" / PG_MAJOR
     if (share_dir / "postgres.bki").is_file():
         return share_dir
+    if bin_dir.name == "bin" and bin_dir.parent.name == "pg":
+        raise InitdbError(f"Bundled Linux PostgreSQL share data is missing: {share_dir / 'postgres.bki'}")
     return None
 
 

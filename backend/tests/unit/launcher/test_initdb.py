@@ -120,15 +120,11 @@ def test_initdb_argv_pins_every_argument(tmp_path: Path) -> None:
     assert str(pwfile) in argv
 
 
-def test_initdb_argv_omits_share_dir_when_postgres_bki_is_absent(tmp_path: Path) -> None:
-    # A versioned share dir that lacks postgres.bki must not get an explicit
-    # -L: initdb aborts before creating the datadir on a wrong -L path.
-    tmp_pgdata = tmp_path / "tmp"
+def test_initdb_argv_refuses_missing_linux_share_data(tmp_path: Path) -> None:
     bin_dir = tmp_path / "pg" / "bin"
-    (bin_dir.parent / "share" / "postgresql" / PG_MAJOR).mkdir(parents=True)
-    pwfile = tmp_path / "pw"
-    argv = initdb_argv(tmp_pgdata, bin_dir, BOOTSTRAP_USERNAME, pwfile)
-    assert "-L" not in argv
+
+    with pytest.raises(InitdbError, match="Linux PostgreSQL share data is missing"):
+        initdb_argv(tmp_path / "tmp", bin_dir, BOOTSTRAP_USERNAME, tmp_path / "pw")
 
 
 def test_initdb_argv_omits_share_dir_for_macos_layout(tmp_path: Path) -> None:
@@ -153,6 +149,17 @@ def test_initdb_argv_uses_windows_locale_and_executable_seam(monkeypatch: pytest
     assert argv[argv.index("--locale") + 1] == "C"
     assert argv[argv.index("-L") + 1] == str(share_dir)
     assert argv[0].endswith("initdb.exe")
+
+
+def test_pg_major_matches_bundle_versions() -> None:
+    bundle_versions = Path(__file__).resolve().parents[4] / "scripts" / "bundle-versions.env"
+    values = {
+        line.split("=", 1)[0]: line.split("=", 1)[1]
+        for line in bundle_versions.read_text().splitlines()
+        if line.startswith("PG_MAJOR=")
+    }
+
+    assert values["PG_MAJOR"] == PG_MAJOR
 
 
 def test_bootstrap_role_name_is_fixed_not_os_username() -> None:
