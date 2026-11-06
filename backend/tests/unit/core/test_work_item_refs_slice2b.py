@@ -34,11 +34,32 @@ from modulo.core.trigger_engine import (
 )
 from modulo.db.lifecycle_refs import WORK_ITEM_REFS_KEY, validate_ref_entry
 from modulo.db.models.trigger import Trigger
-from modulo.settings import work_item_refs_cap
+from modulo.settings import get_settings, work_item_refs_cap
 
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_refs_cap_cache() -> None:
+    """Clear the process-wide refs-cap caches around every test in this module.
+
+    ``work_item_refs_cap`` and the ``get_settings`` it reads are ``lru_cache``d
+    for the life of the process, so a test in another module that exercises a
+    non-default cap (for example by setting ``MODULO_WORK_ITEM_REFS_CAP`` to a
+    value that clamps to 1) leaves that value cached and visible here once
+    xdist co-locates the modules in a shard. An unpinned test then sees a cap
+    of 1 instead of the default 100 and drops a ref it expects to keep. Clear
+    both caches before and after each test so an unpinned test always starts
+    from the environment the conftest established; tests that pin the cap via
+    ``patch(_CAP, ...)`` or the explicit cache fixtures are unaffected.
+    """
+    work_item_refs_cap.cache_clear()
+    get_settings.cache_clear()
+    yield
+    work_item_refs_cap.cache_clear()
+    get_settings.cache_clear()
 
 
 def _ref(kind: str, ref: str, source: str) -> dict[str, object]:
