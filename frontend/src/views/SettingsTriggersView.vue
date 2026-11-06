@@ -4,7 +4,7 @@
     <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.SettingsTriggersView.title')" :subtitle="$t('views.SettingsTriggersView.subtitle')">
       <template #right>
-        <Button data-testid="settings-triggers-create" class="border-primary/30 hover:border-primary/60" @click="openCreateDialog">
+         <Button v-if="isOrgOperator" data-testid="settings-triggers-create" class="border-primary/30 hover:border-primary/60" @click="openCreateDialog">
           {{ $t('views.SettingsTriggersView.create_trigger') }}
         </Button>
       </template>
@@ -124,23 +124,28 @@
                   </div>
                   <div class="flex items-center gap-2">
                     <button
+                      v-if="isOrgOperator"
                       type="button"
                       class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50"
                       :class="t.active ? 'bg-success/10 text-success-text hover:bg-success/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'"
                       :disabled="triggerToggling[t.id]"
                       data-testid="settings-triggers-toggle"
                       @click="toggleActive(t)"
-                    >
+                     >
                       <span
                         class="h-1.5 w-1.5 rounded-full"
                         :class="t.active ? 'bg-success' : 'bg-muted-foreground'"
                       />
                       {{ triggerToggling[t.id] ? $t('views.SettingsTriggersView.toggling') : (t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive')) }}
                     </button>
+                    <span v-else class="text-xs text-muted-foreground">
+                      {{ t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive') }}
+                    </span>
                     <Button v-if="isStreakDeactivated(t) && isOrgOperator" data-testid="settings-triggers-reenable" size="small" severity="secondary" outlined :disabled="triggerToggling[t.id]" @click="toggleActive(t)">
                       {{ $t('views.SettingsTriggersView.re_enable') }}
                     </Button>
                   </div>
+
                   <p
                     v-if="actionErrors[t.id]"
                     data-testid="settings-triggers-toggle-error"
@@ -206,6 +211,39 @@
         </table>
       </DataCard>
     </template>
+
+    <Dialog
+      v-model:visible="detailsDialogOpen"
+      modal
+      :header="$t('views.SettingsTriggersView.view_details')"
+      :style="{ width: '32rem' }"
+      :draggable="false"
+      :dismissable-mask="true"
+      data-testid="settings-triggers-details-dialog"
+    >
+      <dl v-if="detailsTarget" class="space-y-3 text-sm">
+        <div>
+          <dt class="font-medium">{{ $t('views.SettingsTriggersView.name') }}</dt>
+          <dd class="text-muted-foreground">{{ detailsTarget.name }}</dd>
+        </div>
+        <div>
+          <dt class="font-medium">{{ $t('views.SettingsTriggersView.pipeline') }}</dt>
+          <dd class="text-muted-foreground">{{ pipelineName(detailsTarget.pipeline_id) }}</dd>
+        </div>
+        <div>
+          <dt class="font-medium">{{ $t('views.SettingsTriggersView.type') }}</dt>
+          <dd class="text-muted-foreground">{{ typeLabel(detailsTarget.trigger_type) }}</dd>
+        </div>
+        <div>
+          <dt class="font-medium">{{ $t('views.SettingsTriggersView.status') }}</dt>
+          <dd class="text-muted-foreground">{{ detailsTarget.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive') }}</dd>
+        </div>
+        <div>
+          <dt class="font-medium">{{ $t('views.SettingsTriggersView.configuration') }}</dt>
+          <dd><pre class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border bg-muted/30 p-3 font-mono text-xs">{{ formatTriggerConfig(detailsTarget) }}</pre></dd>
+        </div>
+      </dl>
+    </Dialog>
 
     <FormDialog
       :open="dialogOpen"
@@ -531,6 +569,7 @@ import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useApi } from '../composables/useApi'
 import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
 import { api } from '../lib/api/client'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { formatApiError } from '../lib/api/formatError'
@@ -724,6 +763,8 @@ const pipelines = computed<PipelineItem[]>(() =>
 )
 
 const dialogOpen = ref(false)
+const detailsDialogOpen = ref(false)
+const detailsTarget = ref<TriggerItem | null>(null)
 const deleteDialogOpen = ref(false)
 const editingId = ref<string | null>(null)
 const editingType = ref('')
@@ -977,6 +1018,15 @@ function openEditDialog(trigger: TriggerItem) {
     snapshot_id: (cfg as any).snapshot_id ? String((cfg as any).snapshot_id) : '',
   }
   dialogOpen.value = true
+}
+
+function openDetailsDialog(trigger: TriggerItem): void {
+  detailsTarget.value = trigger
+  detailsDialogOpen.value = true
+}
+
+function formatTriggerConfig(trigger: TriggerItem): string {
+  return JSON.stringify(trigger.config_json ?? {}, null, 2)
 }
 
 function confirmDelete(trigger: TriggerItem) {
@@ -1246,6 +1296,15 @@ async function loadAll() {
 }
 
 function triggerActions(trigger: TriggerItem) {
+  if (!isOrgOperator.value) {
+    return [
+      {
+        key: 'details',
+        label: t('views.SettingsTriggersView.view_details'),
+        onClick: () => openDetailsDialog(trigger),
+      },
+    ]
+  }
   return [
     {
       key: 'edit',

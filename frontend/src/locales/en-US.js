@@ -4152,6 +4152,8 @@ export default {
       "delete_trigger_description": "Are you sure you want to delete this trigger? This action cannot be undone.",
       "delete": "Delete",
       "edit": "Edit",
+      "view_details": "View details",
+      "configuration": "Configuration",
       "failed_to_update_trigger": "Failed to update trigger: {detail}",
       "failed_to_create_trigger": "Failed to create trigger: {detail}",
       "error_saving_trigger": "Error: {detail}",

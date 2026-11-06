@@ -198,26 +198,61 @@ class EvalDefinitionResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _mask_guardrail_eval_internals(
+    config_json: Any,
+    pre_version_raw: Any,
+) -> tuple[dict[str, Any], Any]:
+    """Mask a guardrail eval row's deny-rule internals for sub-admin readers.
+
+    ``pre_version_raw`` snapshots the previous ``config_json`` on an edit
+    (``{"config_json": ...}``), so it carries the same deny-rule internals and
+    must be masked too — masking only the live row would leave the prior
+    pattern/schema readable.
+    """
+    from modulo.core.guardrails.config import mask_engine_config
+
+    masked_config = mask_engine_config(config_json or {})
+    if isinstance(pre_version_raw, dict) and isinstance(pre_version_raw.get("config_json"), dict):
+        pre_version_raw = {
+            **pre_version_raw,
+            "config_json": mask_engine_config(pre_version_raw["config_json"]),
+        }
+    return masked_config, pre_version_raw
+
+
 def _eval_def_to_dict(
     eval_row: Eval,
+    *,
+    mask_guardrail_internals: bool = False,
 ) -> dict[str, Any]:
     """Convert an ``Eval`` row to the response dict.
 
     Returns the public fields only; ``failure_behaviour`` is excluded from the
     response shape (it is an internal column, not exposed to callers).
+
+    ``mask_guardrail_internals`` replaces a guardrail row's deny-rule internals
+    (regex ``pattern``, JSON ``schema``, ``redaction[].path``) with the
+    config-as-code redaction mask, mirroring ``GET /guardrails/config``. The
+    caller sets it for roles below admin — those internals are exactly what the
+    elevated (admin-only) guardrail read exists to protect, so the widened
+    ``eval.list`` viewer read must not expose them.
     """
+    config_json = eval_row.config_json
+    pre_version_raw = getattr(eval_row, "pre_version_raw", None)
+    if mask_guardrail_internals and eval_row.eval_type == "guardrail":
+        config_json, pre_version_raw = _mask_guardrail_eval_internals(config_json, pre_version_raw)
     out: dict[str, Any] = {
         "id": str(eval_row.id),
         "pipeline_id": str(eval_row.pipeline_id),
         "node_id": str(eval_row.node_id) if eval_row.node_id else None,
         "name": eval_row.name,
         "eval_type": eval_row.eval_type,
-        "config_json": eval_row.config_json,
+        "config_json": config_json,
         "pass_threshold": float(eval_row.pass_threshold) if eval_row.pass_threshold is not None else None,
         "suite_id": eval_row.suite_id,
         "account_id": str(eval_row.account_id),
         "version": getattr(eval_row, "version", 1),
-        "pre_version_raw": getattr(eval_row, "pre_version_raw", None),
+        "pre_version_raw": pre_version_raw,
     }
     if eval_row.eval_type == "model_judge":
         from modulo.core.eval_engine.typed_judge import (
@@ -1459,8 +1494,12 @@ async def list_eval_definitions(
             detail="An unexpected error occurred while listing eval definitions.",
         ) from None
 
+    mask_guardrail_internals = principal.org_role != "admin"
     return EvalDefinitionListResponse(
-        items=[EvalDefinitionResponse(**_eval_def_to_dict(d)) for d in rows],
+        items=[
+            EvalDefinitionResponse(**_eval_def_to_dict(d, mask_guardrail_internals=mask_guardrail_internals))
+            for d in rows
+        ],
         total=total,
         page=page,
         page_size=page_size,
@@ -2628,7 +2667,7 @@ async def get_eval_definition(
         ) from None
     if eval_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
-    return _eval_def_to_dict(eval_row)
+    return _eval_def_to_dict(eval_row, mask_guardrail_internals=principal.org_role != "admin")
 
 
 @router.put(
