@@ -757,6 +757,13 @@ describe('AdminAuditView — summarize branches', () => {
     expect(wrapper.text()).toContain('"My Pipeline"')
   })
 
+  it('stringifies a non-string name in the named heuristic fallback', async () => {
+    mockAuditGet([auditEvent('evt-objname', { event_type: 'pipeline.created', resource_type: 'pipeline', payload_json: { name: { id: 'nested' } } })])
+    const wrapper = await mountLoaded()
+    expect(wrapper.text()).toContain('Created pipeline')
+    expect(wrapper.text()).toContain('{"id":"nested"}')
+  })
+
   it('falls back to heuristic with no name or display_name', async () => {
     mockAuditGet([auditEvent('evt-noname', { event_type: 'user.created', resource_type: 'user', payload_json: {} })])
     const wrapper = await mountLoaded()

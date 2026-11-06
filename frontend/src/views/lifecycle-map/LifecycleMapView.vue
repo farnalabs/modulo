@@ -452,7 +452,7 @@ function loadSavedPositions(): void {
   }
 }
 
-async function persistPositions(positions: Record<string, { x: number; y: number }>): Promise<void> {
+function persistPositions(positions: Record<string, { x: number; y: number }>): void {
   if (statusTimeout) { clearTimeout(statusTimeout); statusTimeout = null }
   if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null }
   // Abort any in-flight save from a previous debounce cycle.
@@ -529,7 +529,7 @@ async function persistPositions(positions: Record<string, { x: number; y: number
 
 function handlePositionsChanged(positions: Record<string, { x: number; y: number }>): void {
   savedPositions.value = positions
-  void persistPositions(positions)
+  persistPositions(positions)
 }
 
 onBeforeUnmount(() => {
