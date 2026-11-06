@@ -423,8 +423,8 @@ async def _load_team_metrics(
         team_statuses = {s: run_data.get(s, 0) for s in _TRACKED_STATUSES}
         team_statuses["completed"] = completed
         team_statuses["idle"] = idle
-        for terminal_status in TERMINAL_STATUSES:
-            team_statuses.setdefault(terminal_status, run_data.get(terminal_status, 0))
+        for status in ACTIVE_RUN_STATUSES | TERMINAL_STATUSES:
+            team_statuses.setdefault(status, run_data.get(status, 0))
 
         team_metrics.append(
             {
