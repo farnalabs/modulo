@@ -1,5 +1,6 @@
 """Unit tests for graph cache and graph compilation."""
 
+import threading
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -648,6 +649,55 @@ def test_gate_without_reject_target_compiles():
     assert compiled is not None
 
 
+def test_get_or_compile_is_thread_safe_and_compiles_once():
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+    barrier = threading.Barrier(8)
+    calls: list[int] = []
+    results: list[str] = []
+
+    def factory() -> str:
+        calls.append(1)
+        return "compiled"
+
+    def worker() -> None:
+        barrier.wait()
+        results.append(get_or_compile(pid, sid, factory))
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+    assert results == ["compiled"] * 8
+    assert calls == [1]
+
+
+def test_evict_waits_for_inflight_compile_and_discards_result():
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+    started = threading.Event()
+    release = threading.Event()
+
+    def factory() -> str:
+        started.set()
+        release.wait(timeout=2)
+        return "stale"
+
+    compile_thread = threading.Thread(target=lambda: get_or_compile(pid, sid, factory))
+    compile_thread.start()
+    assert started.wait(timeout=2)
+
+    evict_thread = threading.Thread(target=lambda: evict(pid, sid))
+    evict_thread.start()
+    release.set()
+    compile_thread.join(timeout=2)
+    evict_thread.join(timeout=2)
+
+    assert _k(pid, sid, 300) not in _CACHE
+    assert get_or_compile(pid, sid, lambda: "fresh") == "fresh"
+
+
 def test_inner_cache_check_returns_prepopulated_value():
     """The lock-guarded double-check serves a value another writer cached
     between the outer fast-path check and lock acquisition."""
@@ -663,7 +713,7 @@ def test_inner_cache_check_returns_prepopulated_value():
             # double-check sees the key populated by a "concurrent writer".
             return self._checks > 1
 
-        def __getitem__(self, _key: object) -> str:
+        def get(self, _key: object, _default: object = None) -> str:
             return "race-value"
 
         def move_to_end(self, _key: object) -> None:

@@ -8,9 +8,11 @@ timeout_seconds; keying on it means PATCHing node_timeout_seconds takes effect
 immediately instead of serving a stale graph until eviction.
 Eviction is true LRU via OrderedDict.
 
-The compilation factory is synchronous (build_graph_from_json) so it blocks
-the event loop — no thundering-herd risk in asyncio. A threading lock is
-kept for correctness if compilation becomes async in the future.
+The cache is safe to use from multiple threads. A process-wide lock protects
+all OrderedDict and per-key-lock-registry operations; a per-key lock prevents
+duplicate compilation without holding the process-wide lock while the factory
+runs. Invalidation takes the same per-key lock before removing an entry, so a
+compilation already in progress cannot repopulate an invalidated key.
 """
 
 from __future__ import annotations
@@ -72,8 +74,23 @@ CacheKey = tuple[uuid.UUID, uuid.UUID, int, str]
 _CACHE: OrderedDict[CacheKey, Any] = OrderedDict()
 _MAX_SIZE = 256
 
-# Per-key lock to prevent double compilation if factory becomes async.
-_compile_locks: dict[CacheKey, threading.Lock] = {}
+# Every operation that reads or mutates either shared structure takes this lock.
+# Per-key compilation locks are acquired only after releasing it, because the
+# factory may call back into this module.
+_CACHE_LOCK = threading.RLock()
+_MISSING = object()
+
+
+@dataclasses.dataclass
+class _CompileLock:
+    lock: threading.Lock
+    users: int = 0
+
+
+# The registry is reference-counted. A record remains present while a caller is
+# waiting for or holding its lock, so eviction cannot create a second lock for a
+# key while an older compilation is still in flight.
+_compile_locks: dict[CacheKey, _CompileLock] = {}
 
 
 def get_or_compile(
@@ -97,20 +114,36 @@ def get_or_compile(
     compile only once.
     """
     key = (pipeline_id, snapshot_id, pipeline_node_timeout_seconds, graph_struct_hash)
-    if key in _CACHE:
-        _CACHE.move_to_end(key)
-        return _CACHE[key]
+    with _CACHE_LOCK:
+        cached = _CACHE.get(key, _MISSING)
+        if cached is not _MISSING:
+            _CACHE.move_to_end(key)
+            return cached
+        entry = _compile_locks.get(key)
+        if entry is None:
+            entry = _CompileLock(threading.Lock())
+            _compile_locks[key] = entry
+        entry.users += 1
 
-    lock = _compile_locks.setdefault(key, threading.Lock())
-    with lock:
-        if key in _CACHE:
-            return _CACHE[key]
-        if len(_CACHE) >= _MAX_SIZE:
-            evicted_key = _CACHE.popitem(last=False)[0]
-            _compile_locks.pop(evicted_key, None)
-        result = factory()
-        _CACHE[key] = result
-    return result
+    try:
+        with entry.lock:
+            with _CACHE_LOCK:
+                cached = _CACHE.get(key, _MISSING)
+                if cached is not _MISSING:
+                    _CACHE.move_to_end(key)
+                    return cached
+            result = factory()
+            with _CACHE_LOCK:
+                _CACHE[key] = result
+                _CACHE.move_to_end(key)
+                if len(_CACHE) > _MAX_SIZE:
+                    _CACHE.popitem(last=False)
+            return result
+    finally:
+        with _CACHE_LOCK:
+            entry.users -= 1
+            if entry.users == 0 and _compile_locks.get(key) is entry:
+                _compile_locks.pop(key, None)
 
 
 def compute_eval_defs_hash(eval_defs_by_node: dict[str, list[EvalDefDTO]] | None) -> str:
@@ -1546,8 +1579,23 @@ def evict(pipeline_id: uuid.UUID, snapshot_id: uuid.UUID) -> None:
     """Remove every cached entry for a (pipeline_id, snapshot_id) pair.
 
     A snapshot can hold multiple compiled graphs — one per
-    pipeline_node_timeout_seconds — so all variants are removed.
+    pipeline_node_timeout_seconds — so all variants are removed. An in-flight
+    compilation is serialized with invalidation: its result is discarded, and
+    it cannot repopulate the cache after this function returns.
     """
-    for key in [k for k in _CACHE if k[0] == pipeline_id and k[1] == snapshot_id]:
-        _CACHE.pop(key, None)
-        _compile_locks.pop(key, None)
+    with _CACHE_LOCK:
+        keys = {
+            *[k for k in _CACHE if k[0] == pipeline_id and k[1] == snapshot_id],
+            *[k for k in _compile_locks if k[0] == pipeline_id and k[1] == snapshot_id],
+        }
+    for key in keys:
+        with _CACHE_LOCK:
+            entry = _compile_locks.get(key)
+        if entry is None:
+            with _CACHE_LOCK:
+                _CACHE.pop(key, None)
+            continue
+        with entry.lock, _CACHE_LOCK:
+            _CACHE.pop(key, None)
+            if entry.users == 0 and _compile_locks.get(key) is entry:
+                _compile_locks.pop(key, None)
