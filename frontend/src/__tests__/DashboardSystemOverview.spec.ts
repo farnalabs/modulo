@@ -123,6 +123,21 @@ describe('DashboardSystemOverview', () => {
     expect(fetchDefaultOverview).toHaveBeenCalledWith(30)
   })
 
+  it('refetches the overview when the selected window changes after mount', async () => {
+    setActivePinia(createPinia())
+    const store = useSystemMapsStore()
+    const fetchDiscovery = vi.spyOn(store, 'fetchDiscovery').mockResolvedValue()
+    const fetchDefaultOverview = vi.spyOn(store, 'fetchDefaultOverview').mockResolvedValue()
+    const wrapper = mount(DashboardSystemOverview, { props: { windowDays: 7 }, global: { plugins: [i18n] } })
+    await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledWith(7))
+
+    await wrapper.setProps({ windowDays: 30 })
+
+    await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledWith(30))
+    expect(fetchDefaultOverview).toHaveBeenCalledTimes(2)
+    expect(fetchDiscovery).toHaveBeenCalledTimes(2)
+  })
+
   it('shows discovery only after confirmed internal authoring access loads', async () => {
     const { wrapper, store } = mountOverview()
 

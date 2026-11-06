@@ -89,7 +89,7 @@
 import SectionCard from '../shared/SectionCard.vue'
 import EmptyState from '../shared/EmptyState.vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useStorage } from '@vueuse/core'
 import { ChevronDown } from '@lucide/vue'
@@ -144,4 +144,5 @@ async function loadOverview(): Promise<void> {
 }
 
 onMounted(loadOverview)
+watch(() => props.windowDays, loadOverview)
 </script>
