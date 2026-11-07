@@ -1631,6 +1631,4 @@ def evict(pipeline_id: uuid.UUID, snapshot_id: uuid.UUID) -> None:
             continue
         with entry.lock, _CACHE_LOCK:
             _CACHE.pop(key, None)
-            if entry.users == 0 and _compile_locks.get(key) is entry:
-                _compile_locks.pop(key, None)
             _discard_invalidation_generation_if_idle(scope)

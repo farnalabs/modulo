@@ -777,26 +777,38 @@ def test_inner_cache_check_returns_prepopulated_value():
     """The lock-guarded double-check serves a value another writer cached
     between the outer fast-path check and lock acquisition."""
     pid, sid = uuid.uuid4(), uuid.uuid4()
+    key = _k(pid, sid, 300)
 
     class _RaceCache:
+        """Cache that misses on the outer fast-path lookup and, on the inner
+        double-check, serves a value a "concurrent writer" published in the gap."""
+
         def __init__(self) -> None:
-            self._checks = 0
+            self.entries: dict[object, str] = {}
+            self.gets = 0
 
-        def __contains__(self, _key: object) -> bool:
-            self._checks += 1
-            # First check is the outer fast-path (miss); the lock-guarded
-            # double-check sees the key populated by a "concurrent writer".
-            return self._checks > 1
+        def get(self, cache_key: object, default: object = None) -> object:
+            self.gets += 1
+            if self.gets == 1:
+                return default
+            self[cache_key] = "race-value"
+            return self.entries[cache_key]
 
-        def get(self, _key: object, _default: object = None) -> str:
-            return "race-value"
+        def __setitem__(self, cache_key: object, value: str) -> None:
+            self.entries[cache_key] = value
 
-        def move_to_end(self, _key: object) -> None:
+        def __getitem__(self, cache_key: object) -> str:
+            return self.entries[cache_key]
+
+        def move_to_end(self, cache_key: object) -> None:
             pass
 
-    with patch("modulo.core.pipeline_engine.graph_cache._CACHE", _RaceCache()):
+    race_cache = _RaceCache()
+    with patch("modulo.core.pipeline_engine.graph_cache._CACHE", race_cache):
         result = get_or_compile(pid, sid, lambda: "factory-value")
     assert result == "race-value"
+    assert race_cache.gets == 2
+    assert race_cache[key] == "race-value"
 
 
 def test_reject_edge_missing_source_raises():
