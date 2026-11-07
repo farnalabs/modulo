@@ -1033,14 +1033,22 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
             )
 
 
-class PinnedHTTPTransport(httpx.HTTPTransport):
-    """A synchronous ``httpx.HTTPTransport`` with the async transport contract.
+class _PinnedTransportMixin:
+    """Shared construction and guard state for the pinned httpx transports.
 
-    The sync API deliberately has the same failover, TTL re-resolution, proxy
-    warning, unpinned-host rejection, and optional loudness guard as the async
-    transport. A synchronous caller must not get a weaker SSRF boundary merely
-    because it uses ``httpx.Client`` instead of ``httpx.AsyncClient``.
+    Mixed in BEFORE the concrete ``httpx`` transport base
+    (``httpx.HTTPTransport`` or ``httpx.AsyncHTTPTransport``) so the cooperative
+    ``super().__init__`` below reaches the correct base. Keeping the constructor
+    in one place guarantees the synchronous and asynchronous transports resolve
+    ``trust_env``, warn about proxies, install the pin backend and track the
+    loudness-guard state identically — the sync path must not drift from the
+    async SSRF boundary merely because it copies the code.
     """
+
+    _pool: Any
+    _pin_backend: _PinnedSyncNetworkBackend | _PinnedAsyncNetworkBackend
+    _pin_proven: bool
+    _loudness_guard: bool
 
     def __init__(
         self,
@@ -1055,15 +1063,37 @@ class PinnedHTTPTransport(httpx.HTTPTransport):
         loudness_guard: bool = False,
         connector_type: str = egress_metrics.DEFAULT_CONNECTOR_TYPE,
     ) -> None:
+        # ``trust_env`` is ``None`` by default and resolves to the process-wide
+        # SSRF_TRUST_PROXY setting. When true, honoring a proxy (HTTP_PROXY /
+        # HTTPS_PROXY / ALL_PROXY) makes httpcore re-resolve the target
+        # server-side and connect_tcp only ever sees the proxy host, which is not
+        # in the pin map — so pinning is effectively bypassed. Safe by default; an
+        # explicit opt-in (or the SSRF_TRUST_PROXY fleet setting) is for
+        # proxy-terminated egress where the proxy IS the trusted boundary.
         resolved_trust = _default_trust_env() if trust_env is None else trust_env
-        super().__init__(
+        # ``limits`` (when supplied) flows into the underlying httpcore pool so a
+        # connector that configures max_connections / max_keepalive keeps its
+        # pooling budget even though it now owns the transport explicitly. When
+        # the caller does not pass ``limits`` we forward httpx's default pool cap
+        # (Limits(100/20)) — NOT an empty ``httpx.Limits()`` (which httpcore
+        # substitutes with sys.maxsize, i.e. an unbounded pool) — so a pinned
+        # transport keeps the same connection cap as a stock httpx client.
+        super().__init__(  # type: ignore[call-arg]
             verify=verify,
             http2=http2,
             trust_env=resolved_trust,
             limits=limits if limits is not None else httpx.Limits(max_connections=100, max_keepalive_connections=20),
         )
         _warn_if_proxied(resolved_trust)
-        self._pin_backend = _PinnedSyncNetworkBackend(
+        # HTTPCORE SEAM: the pin is installed by overriding httpcore's PRIVATE
+        # `_pool._network_backend` attribute. httpcore (httpx 0.28.x / httpcore
+        # 1.0.x — the known-good range documented in backend/pyproject.toml)
+        # routes connect_tcp through this attribute when building each connection.
+        # This contract is private and unsupported: if httpcore ever stops routing
+        # that attribute into connection creation, the pin is silently DROPPED
+        # (re-opening the DNS-rebinding window) with no error at all. The loudness
+        # guard below makes that un-pin explicit.
+        self._pin_backend = self._build_pin_backend(
             pinned_hosts,
             allow_networks=allow_networks,
             re_resolve=re_resolve,
@@ -1073,6 +1103,44 @@ class PinnedHTTPTransport(httpx.HTTPTransport):
         self._pool._network_backend = self._pin_backend
         self._loudness_guard = loudness_guard
         self._pin_proven = False
+
+    def _build_pin_backend(
+        self,
+        pinned_hosts: Mapping[str, str | Sequence[str]],
+        *,
+        allow_networks: Sequence[str] | None,
+        re_resolve: bool,
+        resolve_ttl_seconds: float | None,
+        connector_type: str,
+    ) -> _PinnedSyncNetworkBackend | _PinnedAsyncNetworkBackend:
+        raise NotImplementedError
+
+
+class PinnedHTTPTransport(_PinnedTransportMixin, httpx.HTTPTransport):
+    """A synchronous ``httpx.HTTPTransport`` with the async transport contract.
+
+    The sync API deliberately has the same failover, TTL re-resolution, proxy
+    warning, unpinned-host rejection, and optional loudness guard as the async
+    transport. A synchronous caller must not get a weaker SSRF boundary merely
+    because it uses ``httpx.Client`` instead of ``httpx.AsyncClient``.
+    """
+
+    def _build_pin_backend(
+        self,
+        pinned_hosts: Mapping[str, str | Sequence[str]],
+        *,
+        allow_networks: Sequence[str] | None,
+        re_resolve: bool,
+        resolve_ttl_seconds: float | None,
+        connector_type: str,
+    ) -> _PinnedSyncNetworkBackend:
+        return _PinnedSyncNetworkBackend(
+            pinned_hosts,
+            allow_networks=allow_networks,
+            re_resolve=re_resolve,
+            resolve_ttl_seconds=resolve_ttl_seconds,
+            connector_type=connector_type,
+        )
 
     def _enforce_pin_live(self) -> None:
         """Raise if a completed request did not use the pinned backend."""
@@ -1220,7 +1288,7 @@ class _PinnedSyncNetworkBackend(httpcore.SyncBackend):
             )
 
 
-class PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport):
+class PinnedAsyncHTTPTransport(_PinnedTransportMixin, httpx.AsyncHTTPTransport):
     """An ``httpx.AsyncHTTPTransport`` pinned to validated addresses.
 
     Built with ``pinned_async_transport`` / ``pinned_async_client``. Pins the
@@ -1230,59 +1298,22 @@ class PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport):
     the backend fails over / re-resolves across it.
     """
 
-    def __init__(
+    def _build_pin_backend(
         self,
         pinned_hosts: Mapping[str, str | Sequence[str]],
-        verify: ssl.SSLContext | str | bool = True,
-        http2: bool = False,
-        trust_env: bool | None = None,
-        limits: httpx.Limits | None = None,
-        allow_networks: Sequence[str] | None = None,
-        re_resolve: bool = True,
-        resolve_ttl_seconds: float | None = None,
-        loudness_guard: bool = False,
-        connector_type: str = egress_metrics.DEFAULT_CONNECTOR_TYPE,
-    ) -> None:
-        # ``trust_env`` is ``None`` by default and resolves to the process-wide
-        # SSRF_TRUST_PROXY setting. When true, honoring a proxy (HTTP_PROXY /
-        # HTTPS_PROXY / ALL_PROXY) makes httpcore re-resolve the target
-        # server-side and connect_tcp only ever sees the proxy host, which is not
-        # in the pin map — so pinning is effectively bypassed. Safe by default; an
-        # explicit opt-in (or the SSRF_TRUST_PROXY fleet setting) is for
-        # proxy-terminated egress where the proxy IS the trusted boundary.
-        resolved_trust = _default_trust_env() if trust_env is None else trust_env
-        # ``limits`` (when supplied) flows into the underlying httpcore pool so a
-        # connector that configures max_connections / max_keepalive keeps its
-        # pooling budget even though it now owns the transport explicitly. When
-        # the caller does not pass ``limits`` we forward httpx's default pool cap
-        # (Limits(100/20)) — NOT an empty ``httpx.Limits()`` (which httpcore
-        # substitutes with sys.maxsize, i.e. an unbounded pool) — so a pinned
-        # transport keeps the same connection cap as a stock httpx client.
-        super().__init__(
-            verify=verify,
-            http2=http2,
-            trust_env=resolved_trust,
-            limits=limits if limits is not None else httpx.Limits(max_connections=100, max_keepalive_connections=20),
-        )
-        _warn_if_proxied(resolved_trust)
-        # HTTPCORE SEAM: the pin is installed by overriding httpcore's PRIVATE
-        # `_pool._network_backend` attribute. httpcore (httpx 0.28.x / httpcore
-        # 1.0.x — the known-good range documented in backend/pyproject.toml)
-        # routes connect_tcp through this attribute when building each connection.
-        # This contract is private and unsupported: if httpcore ever stops routing
-        # that attribute into connection creation, the pin is silently DROPPED
-        # (re-opening the DNS-rebinding window) with no error at all. The loudness
-        # guard below makes that un-pin explicit.
-        self._pin_backend = _PinnedAsyncNetworkBackend(
+        *,
+        allow_networks: Sequence[str] | None,
+        re_resolve: bool,
+        resolve_ttl_seconds: float | None,
+        connector_type: str,
+    ) -> _PinnedAsyncNetworkBackend:
+        return _PinnedAsyncNetworkBackend(
             pinned_hosts,
             allow_networks=allow_networks,
             re_resolve=re_resolve,
             resolve_ttl_seconds=resolve_ttl_seconds,
             connector_type=connector_type,
         )
-        self._pool._network_backend = self._pin_backend
-        self._loudness_guard = loudness_guard
-        self._pin_proven = False
 
     def _enforce_pin_live(self) -> None:
         """Prove the pin is live, or raise :class:`PinDroppedError`.
