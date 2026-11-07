@@ -491,6 +491,8 @@ __all__ = [
 class SystemMapDiscoveryRequest(BaseModel):
     name: str = Field(default="Discovered System Map", min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
+    model_backend_id: uuid.UUID | None = None
+    eval_definition_id: uuid.UUID | None = None
 
 
 class SystemMapDiscoverySource(BaseModel):
@@ -502,6 +504,16 @@ class SystemMapDiscoverySource(BaseModel):
 class SystemMapDiscoverySkipped(BaseModel):
     source: str
     reason: str
+
+
+class SystemMapDiscoveryProvenance(BaseModel):
+    mode: Literal["deterministic", "ai_assisted", "deterministic_fallback"] = "deterministic"
+    prompt_version: str | None = None
+    rubric_version: str | None = None
+    evaluator_version: str | None = None
+    selected_backend_id: uuid.UUID | None = None
+    input_hash: str | None = None
+    output_hash: str | None = None
 
 
 class SystemMapDiscoveryReport(BaseModel):
@@ -516,3 +528,10 @@ class SystemMapDiscoveryReport(BaseModel):
     draft_revision_id: uuid.UUID
     draft_revision_number: int
     published: bool = False
+    ai_assisted: bool | None = Field(default=None, description="Whether AI enhancement was accepted")
+    eval_gate_passed: bool | None = Field(default=None, description="Whether the optional eval gate passed")
+    eval_gate_verdict: Literal["not_requested", "pass", "fail", "error"] | None = Field(
+        default=None,
+        description="The optional eval gate outcome",
+    )
+    provenance: SystemMapDiscoveryProvenance = Field(default_factory=SystemMapDiscoveryProvenance)

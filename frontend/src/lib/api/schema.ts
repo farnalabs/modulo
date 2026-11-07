@@ -7525,7 +7525,7 @@ export interface paths {
         put?: never;
         /**
          * Discover System Map
-         * @description Inspect the organisation and persist an unpublished deterministic draft.
+         * @description Inspect the organisation and persist an unpublished draft.
          */
         post: operations["discover_system_map_api_v1_system_maps_discover_post"];
         delete?: never;
@@ -22403,29 +22403,29 @@ export interface components {
         SystemMapCurrentRevisionResponse: {
             revision: components["schemas"]["SystemMapRevisionResponse"];
         };
-         /** SystemMapDiscoveryProvenance */
-         SystemMapDiscoveryProvenance: {
-             /**
-              * Mode
-              * @default deterministic
-              * @enum {string}
-              */
-             mode: "deterministic" | "ai_assisted" | "deterministic_fallback";
-             /** Prompt Version */
-             prompt_version?: string | null;
-             /** Rubric Version */
-             rubric_version?: string | null;
-             /** Evaluator Version */
-             evaluator_version?: string | null;
-             /** Selected Backend Id */
-             selected_backend_id?: string | null;
-             /** Input Hash */
-             input_hash?: string | null;
-             /** Output Hash */
-             output_hash?: string | null;
-         };
-         /** SystemMapDiscoveryReport */
-         SystemMapDiscoveryReport: {
+        /** SystemMapDiscoveryProvenance */
+        SystemMapDiscoveryProvenance: {
+            /**
+             * Mode
+             * @default deterministic
+             * @enum {string}
+             */
+            mode: "deterministic" | "ai_assisted" | "deterministic_fallback";
+            /** Prompt Version */
+            prompt_version?: string | null;
+            /** Rubric Version */
+            rubric_version?: string | null;
+            /** Evaluator Version */
+            evaluator_version?: string | null;
+            /** Selected Backend Id */
+            selected_backend_id?: string | null;
+            /** Input Hash */
+            input_hash?: string | null;
+            /** Output Hash */
+            output_hash?: string | null;
+        };
+        /** SystemMapDiscoveryReport */
+        SystemMapDiscoveryReport: {
             /** Sources Inspected */
             sources_inspected: components["schemas"]["SystemMapDiscoverySource"][];
             /** Node Count */
@@ -22461,16 +22461,24 @@ export interface components {
              * @default false
              */
             published: boolean;
-            /** Ai Assisted */
+            /**
+             * Ai Assisted
+             * @description Whether AI enhancement was accepted
+             */
             ai_assisted?: boolean | null;
-            /** Eval Gate Passed */
+            /**
+             * Eval Gate Passed
+             * @description Whether the optional eval gate passed
+             */
             eval_gate_passed?: boolean | null;
-            /** Eval Gate Verdict */
+            /**
+             * Eval Gate Verdict
+             * @description The optional eval gate outcome
+             */
             eval_gate_verdict?: ("not_requested" | "pass" | "fail" | "error") | null;
-            /** Provenance */
             provenance?: components["schemas"]["SystemMapDiscoveryProvenance"];
         };
-         /** SystemMapDiscoveryRequest */
+        /** SystemMapDiscoveryRequest */
         SystemMapDiscoveryRequest: {
             /**
              * Name

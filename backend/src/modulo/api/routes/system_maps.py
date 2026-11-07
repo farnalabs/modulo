@@ -62,18 +62,30 @@ from modulo.api.schemas.system_maps import (
     SystemMapRevisionRestoreAsNewResponse,
     SystemMapUpdate,
 )
-from modulo.api.team_scope import validate_owner_team_for_create
+from modulo.api.team_scope import evaluate_team_gate, validate_owner_team_for_create
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import SYSTEM_MAPS_ACCESS_PERMISSION, SYSTEM_MAPS_READ_PERMISSION
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from modulo.core.eval_engine.discovery_judge import build_discovery_model_judge_callable
+from modulo.core.eval_engine.typed_judge import JudgeOutcome
+from modulo.core.model_backend_hub import BackendNotFoundError, BackendUnavailableError, ModelBackendHub
+from modulo.core.secrets_backend import create_secrets_backend
 from modulo.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
+from modulo.core.system_maps_ai_discovery import (
+    PROMPT_VERSION,
+    RUBRIC_VERSION,
+    enhance_discovery_with_outcome,
+)
 from modulo.core.system_maps_discovery import (
     DiscoverySource,
     discover_draft,
 )
 from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.eval import Eval
+from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_folder import PipelineFolder
 from modulo.db.models.system_map import SystemMap, SystemMapRevision
@@ -2145,6 +2157,7 @@ async def delete_attribution_binding_endpoint(
 # ─── Discovery endpoint ───
 
 _CODE_SYSTEM_MAPS_DISCOVER = "system_maps.discover"
+_DISCOVERY_EVALUATOR_VERSION = "system-map-ai-discovery-evaluator-v1"
 
 
 def _fingerprint(draft: Any) -> str:
@@ -2162,6 +2175,62 @@ def _stage_type(node: dict[str, Any]) -> str:
     if node["node_type"] == "pipeline":
         return "manual" if node["config_json"].get("source_kind") == "trigger" else "modulo"
     return "placeholder"
+
+
+async def _resolve_discovery_eval(
+    session: AsyncSession,
+    *,
+    eval_id: uuid.UUID,
+    org_id: uuid.UUID,
+    principal: TenantPrincipal,
+) -> EvalDefinition:
+    row = (
+        await session.execute(
+            select(Eval).where(
+                Eval.id == eval_id,
+                Eval.organisation_id == org_id,
+                Eval.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None or row.eval_type != EvalType.MODEL_JUDGE.value:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_eval_definition",
+                "message": "Eval gate must be an active org-owned model_judge definition",
+            },
+        )
+    eval_scope = await evaluate_team_gate(
+        session,
+        owner_team_id=None,
+        visibility="org",
+        account_id=principal.account_id,
+        org_role=principal.org_role,
+    )
+    if eval_scope is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "eval_definition_unauthorised", "message": "Eval gate is not authorised for this caller"},
+        )
+    config = dict(row.config_json or {})
+    if config.get("answer_contract") != "typed_questions":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_eval_definition", "message": "Eval gate must use the typed judge contract"},
+        )
+    return EvalDefinition(
+        id=row.id,
+        org_id=row.organisation_id,
+        pipeline_id=row.pipeline_id,
+        node_id=None,
+        name=row.name or "System Map discovery eval",
+        eval_type=EvalType.MODEL_JUDGE,
+        config=config,
+        failure_behaviour="block",
+        pass_threshold=float(row.pass_threshold) if row.pass_threshold is not None else None,
+        version=row.version,
+    )
 
 
 async def _persist_discovery_draft(
@@ -2195,6 +2264,197 @@ async def _persist_discovery_draft(
     return map_obj, revision_id, revision_number
 
 
+async def _authorise_discovery_backend(
+    session: AsyncSession,
+    *,
+    model_backend_id: uuid.UUID,
+    principal: TenantPrincipal,
+) -> list[ModelBackend]:
+    """Load the selected model backend and enforce org/team authorisation."""
+    backend_rows = list(
+        (
+            await session.execute(
+                select(ModelBackend).where(
+                    ModelBackend.organisation_id == principal.organisation_id,
+                    ModelBackend.id == model_backend_id,
+                    ModelBackend.status == "active",
+                    (ModelBackend.visibility == "org") | (ModelBackend.visibility.is_(None)),
+                )
+            )
+        ).scalars()
+    )
+    if not backend_rows:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "model_backend_unauthorised",
+                "message": "Selected model backend is not active and authorised for this organisation",
+            },
+        )
+    backend_scope = await evaluate_team_gate(
+        session,
+        owner_team_id=backend_rows[0].owner_team_id,
+        visibility=backend_rows[0].visibility,
+        account_id=principal.account_id,
+        org_role=principal.org_role,
+    )
+    if backend_scope is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "model_backend_unauthorised",
+                "message": "Selected model backend is not authorised for this caller",
+            },
+        )
+    return backend_rows
+
+
+async def _resolve_discovery_backend(hub: ModelBackendHub, model_backend_id: uuid.UUID) -> Any:
+    """Resolve the backend from the hub, mapping hub errors onto HTTP errors."""
+    try:
+        return await hub.get(model_backend_id)
+    except BackendNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "model_backend_unauthorised",
+                "message": "Selected model backend is not active and authorised for this organisation",
+            },
+        ) from exc
+    except BackendUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "model_backend_unavailable",
+                "message": "Selected model backend is unhealthy or unavailable",
+            },
+        ) from exc
+
+
+async def _evaluate_discovery_gate(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    hub: ModelBackendHub,
+    draft: Any,
+    model_backend_id: uuid.UUID,
+    eval_definition_id: uuid.UUID,
+) -> tuple[bool, str]:
+    """Run the configured model-judge eval gate over the enhanced draft."""
+    eval_def = await _resolve_discovery_eval(
+        session,
+        eval_id=eval_definition_id,
+        org_id=principal.organisation_id,
+        principal=principal,
+    )
+    judge = build_discovery_model_judge_callable(hub, model_backend_id)
+    eval_result = await EvalEngine().evaluate_result_async(
+        {"candidate": {"nodes": list(draft.nodes), "relationships": list(draft.relationships)}},
+        eval_def,
+        model_judge_callable=judge,
+    )
+    passed = eval_result.outcome is JudgeOutcome.PASS
+    verdict = "pass" if passed else ("error" if eval_result.outcome is JudgeOutcome.ERROR else "fail")
+    if not passed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "eval_gate_failed",
+                "message": "AI-assisted discovery did not pass its evaluation gate",
+                "verdict": verdict,
+            },
+        )
+    return passed, verdict
+
+
+async def _run_ai_discovery(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    model_backend_id: uuid.UUID,
+    eval_definition_id: uuid.UUID | None,
+    draft: Any,
+    provenance: dict[str, Any],
+) -> tuple[Any, bool, bool | None, str]:
+    """Apply an authorised AI enhancement and optional eval gate to the draft.
+
+    An explicit AI request never silently degrades to a deterministic draft: a
+    provider that answers outside the AI contract is a refusal, not a success.
+    """
+    backend_rows = await _authorise_discovery_backend(
+        session,
+        model_backend_id=model_backend_id,
+        principal=principal,
+    )
+    secrets_backend = create_secrets_backend(
+        fernet_key=get_settings().fernet_key,
+        session=session,
+    )
+    hub = ModelBackendHub()
+    await hub.__aenter__()
+    try:
+        await hub.initialise(
+            backend_rows,
+            secrets_backend=secrets_backend,
+        )
+    except BaseException:
+        await hub.__aexit__(None, None, None)
+        raise
+    if model_backend_id not in hub.backend_ids:
+        await hub.__aexit__(None, None, None)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "model_backend_unavailable", "message": "Selected model backend is unavailable"},
+        )
+    try:
+        backend = await _resolve_discovery_backend(hub, model_backend_id)
+        candidate, ai_outcome = await enhance_discovery_with_outcome(
+            draft,
+            backend,
+            safe_additions=(),
+        )
+        if ai_outcome == "error":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "model_backend_unavailable",
+                    "message": "AI discovery backend invocation failed",
+                },
+            )
+        if ai_outcome != "accepted":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "model_backend_invalid_response",
+                    "message": "AI discovery backend returned no accepted enhancement",
+                },
+            )
+        provenance.update(
+            {
+                "mode": "ai_assisted",
+                "prompt_version": PROMPT_VERSION,
+                "rubric_version": RUBRIC_VERSION,
+                "selected_backend_id": str(model_backend_id),
+                "output_hash": _fingerprint(candidate),
+            }
+        )
+        eval_gate_passed: bool | None = None
+        eval_gate_verdict = "not_requested"
+        if eval_definition_id is not None:
+            eval_gate_passed, eval_gate_verdict = await _evaluate_discovery_gate(
+                session,
+                principal=principal,
+                hub=hub,
+                draft=candidate,
+                model_backend_id=model_backend_id,
+                eval_definition_id=eval_definition_id,
+            )
+            provenance["evaluator_version"] = _DISCOVERY_EVALUATOR_VERSION
+        return candidate, True, eval_gate_passed, eval_gate_verdict
+    finally:
+        await hub.__aexit__(None, None, None)
+
+
 @router.post(
     "/discover",
     status_code=status.HTTP_201_CREATED,
@@ -2214,7 +2474,12 @@ async def discover_system_map(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("system_maps_access"),
 ) -> SystemMapDiscoveryReport:
-    """Inspect the organisation and persist an unpublished deterministic draft."""
+    """Inspect the organisation and persist an unpublished draft."""
+    if request.eval_definition_id is not None and request.model_backend_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_request", "message": "eval_definition_id requires model_backend_id"},
+        )
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
@@ -2289,9 +2554,32 @@ async def discover_system_map(
             *[DiscoverySource(kind="folder", identifier=str(folder.id), name=folder.name) for folder in folders],
         ]
         draft = discover_draft(sources)
+        deterministic_fingerprint = _fingerprint(draft)
+        ai_assisted = False
+        eval_gate_passed: bool | None = None
+        eval_gate_verdict = "not_requested"
+        provenance: dict[str, Any] = {
+            "mode": "deterministic",
+            "prompt_version": None,
+            "rubric_version": None,
+            "evaluator_version": None,
+            "selected_backend_id": None,
+            "input_hash": deterministic_fingerprint,
+            "output_hash": deterministic_fingerprint,
+        }
+        model_backend_id = request.model_backend_id
+        if model_backend_id is not None:
+            draft, ai_assisted, eval_gate_passed, eval_gate_verdict = await _run_ai_discovery(
+                session,
+                principal=principal,
+                model_backend_id=model_backend_id,
+                eval_definition_id=request.eval_definition_id,
+                draft=draft,
+                provenance=provenance,
+            )
         raw_content = {
-            "nodes": list(draft.nodes),
-            "relationships": list(draft.relationships),
+            "nodes": json.loads(json.dumps(list(draft.nodes), default=str)),
+            "relationships": json.loads(json.dumps(list(draft.relationships), default=str)),
             "stages": [
                 {
                     "id": node["node_key"],
@@ -2314,7 +2602,14 @@ async def discover_system_map(
             ],
             "notes": "System Maps discovery draft; inferred edges are suggestions and are not published.",
             "discovery_fingerprint": _fingerprint(draft),
-            "discovery": {"warnings": list(draft.warnings), "skipped": list(draft.skipped)},
+            "discovery": {
+                "warnings": list(draft.warnings),
+                "skipped": list(draft.skipped),
+                "ai_assisted": ai_assisted,
+                "eval_gate_passed": eval_gate_passed,
+                "eval_gate_verdict": eval_gate_verdict,
+                "provenance": provenance,
+            },
         }
         map_obj, revision_id, revision_number = await _persist_discovery_draft(
             session,
@@ -2339,4 +2634,8 @@ async def discover_system_map(
         draft_revision_id=revision_id,
         draft_revision_number=revision_number,
         published=False,
+        ai_assisted=ai_assisted,
+        eval_gate_passed=eval_gate_passed,
+        eval_gate_verdict=eval_gate_verdict,
+        provenance=provenance,
     )
