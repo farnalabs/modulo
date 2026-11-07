@@ -16,20 +16,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.node_output_split import split_node_output
+from modulo.core.pipeline_engine import retry_policy as retry_policy_module
 from modulo.core.pipeline_engine.executor import (
     GraphValidationError,
     PipelineExecutor,
     RunNotFoundError,
     _accumulate_chat_model_tokens,
     _accumulate_llm_tokens,
-    _failure_event_matches,
     _graph_contains_sandbox_agent,
     _node_output_connector_failure,
     _node_output_stall_reason,
     _record_node_markers,
-    _retry_after_policy,
     _seed_state,
     _terminal_failure,
+)
+from modulo.core.pipeline_engine.retry_policy import (
+    _failure_event_matches,
+    retry_after_policy,
 )
 from modulo.core.pipeline_engine.node_runner import (
     SANDBOX_AGENT_FAILED_SUMMARY,
@@ -4287,13 +4290,13 @@ async def test_execute_returns_terminal_run_without_retry_task(terminal_status: 
 # ---------------------------------------------------------------------------
 
 
-def test_retry_after_policy_never_retries_script_mode_terminal_codes():
+def testretry_after_policy_never_retries_script_mode_terminal_codes():
     """A ``failure`` retry_policy must NEVER retry script-mode terminal codes.
 
     Once a script-mode node's process started (fencing lease claimed), any
     fault is exactly-once — re-dispatching could double-execute a side effect.
     Both the canonical dotted code and the raw exception-class spelling are
-    excluded at the run level (``_retry_after_policy``).
+    excluded at the run level (``retry_after_policy``).
     """
     policy = {"on": ["failure"], "max_retries": 3}
     for code in (
@@ -4307,14 +4310,14 @@ def test_retry_after_policy_never_retries_script_mode_terminal_codes():
         "script.schema_failed",
         "script.no_output",
     ):
-        assert _retry_after_policy(policy, "failed", code) is None, code
+        assert retry_after_policy(policy, "failed", code) is None, code
 
 
-def test_retry_after_policy_still_retries_retryable_sandbox_failure():
+def testretry_after_policy_still_retries_retryable_sandbox_failure():
     """A retryable sandbox-infra failure (pre-claim / LLM mode) still retries."""
     policy = {"on": ["failure"], "max_retries": 2}
-    assert _retry_after_policy(policy, "failed", "sandbox.no_output_json") == 2
-    assert _retry_after_policy(policy, "failed", "SandboxNodeFailedError") == 2
+    assert retry_after_policy(policy, "failed", "sandbox.no_output_json") == 2
+    assert retry_after_policy(policy, "failed", "SandboxNodeFailedError") == 2
 
 
 def test_failure_event_matches_excludes_never_retryable_script_codes():
@@ -6496,23 +6499,24 @@ async def test_execute_pre_stream_checks_tracks_phases_and_returns_ceiling_run()
 
 async def test_execute_retry_policy_flags_side_effect_unknown() -> None:
     executor = PipelineExecutor(MagicMock())
-    executor._maybe_retry_after_policy = AsyncMock(return_value="side_effect_unknown")
+    with patch("modulo.core.pipeline_engine.retry_policy.maybe_retry_after_policy", new_callable=AsyncMock) as mock_maybe:
+        mock_maybe.return_value = "side_effect_unknown"
 
-    decision, status, code, detail = await executor._execute_retry_policy(
-        run_id=uuid.uuid4(),
-        org_id=uuid.uuid4(),
-        pipeline_retry_policy={"max_retries": 1},
-        final_status="failed",
-        error_code="script.failed",
-        error_detail="boom",
-        is_correction_run=False,
-        graph_idempotent=True,
-        graph_json={},
-        model_backend_hub=None,
-        connector_hub=None,
-        broker=MagicMock(),
-        retry_policy_eligible=True,
-    )
+        decision, status, code, detail = await executor._execute_retry_policy(
+            run_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            pipeline_retry_policy={"max_retries": 1},
+            final_status="failed",
+            error_code="script.failed",
+            error_detail="boom",
+            is_correction_run=False,
+            graph_idempotent=True,
+            graph_json={},
+            model_backend_hub=None,
+            connector_hub=None,
+            broker=MagicMock(),
+            retry_policy_eligible=True,
+        )
 
     assert decision == "side_effect_unknown"
     assert status == "failed"
@@ -6630,25 +6634,25 @@ async def test_resume_raises_without_configured_checkpointer() -> None:
 async def test_execute_retry_policy_none_when_eligible_but_no_policy() -> None:
     """An eligible run with no pipeline retry policy is not retried (skip arm)."""
     executor = PipelineExecutor(MagicMock())
-    executor._maybe_retry_after_policy = AsyncMock()
+    with patch("modulo.core.pipeline_engine.retry_policy.maybe_retry_after_policy", new_callable=AsyncMock) as mock_maybe:
 
-    decision, status, code, _detail = await executor._execute_retry_policy(
-        run_id=uuid.uuid4(),
-        org_id=uuid.uuid4(),
-        pipeline_retry_policy=None,
-        final_status="failed",
-        error_code="script.failed",
-        error_detail="boom",
-        is_correction_run=False,
-        graph_idempotent=True,
-        graph_json={},
-        model_backend_hub=None,
-        connector_hub=None,
-        broker=MagicMock(),
-        retry_policy_eligible=True,
-    )
+        decision, status, code, _detail = await executor._execute_retry_policy(
+            run_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            pipeline_retry_policy=None,
+            final_status="failed",
+            error_code="script.failed",
+            error_detail="boom",
+            is_correction_run=False,
+            graph_idempotent=True,
+            graph_json={},
+            model_backend_hub=None,
+            connector_hub=None,
+            broker=MagicMock(),
+            retry_policy_eligible=True,
+        )
 
     assert decision == "none"
     assert status == "failed"
     assert code == "script.failed"
-    executor._maybe_retry_after_policy.assert_not_awaited()
+    mock_maybe.assert_not_awaited()
