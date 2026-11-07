@@ -40,8 +40,6 @@ from modulo.core.pipeline_engine.executor import (
     _extract_llm_token_usage,
     _failure_build_sha,
     _failure_column,
-    _failure_event_matches,
-    _get_otel_meter,
     _graph_has_script_mode,
     _graph_is_idempotent,
     _graph_is_interactive,
@@ -66,7 +64,6 @@ from modulo.core.pipeline_engine.executor import (
     _resolve_post_node_eval_target,
     _retry_after_policy,
     _retry_backoff_seconds,
-    _retry_delay_bucket,
     _retry_policy_applies,
     _safe_pipeline_name,
     _sandbox_agent_for_snapshot,
@@ -85,6 +82,11 @@ from modulo.core.pipeline_engine.node_runner import (
     ConnectorNodeFailedError,
     SupersededNodeError,
     make_connector_fn,
+)
+from modulo.core.pipeline_engine.retry_policy import (
+    _failure_event_matches,
+    _get_otel_meter,
+    _retry_delay_bucket,
 )
 from modulo.core.pipeline_engine.runaway_protection import RunawayRunError
 
@@ -310,7 +312,7 @@ def test_record_retry_redispatch_with_meter():
     mock_meter = MagicMock()
     mock_counter = MagicMock()
     mock_meter.create_counter.return_value = mock_counter
-    with patch("modulo.core.pipeline_engine.executor._get_otel_meter", return_value=mock_meter):
+    with patch("modulo.core.pipeline_engine.retry_policy._get_otel_meter", return_value=mock_meter):
         _record_retry_redispatch(reason="failed", schedule_state="valid", delay_seconds=10.0)
     mock_meter.create_counter.assert_called_once()
     mock_counter.add.assert_called_once()
@@ -322,7 +324,7 @@ def test_record_retry_redispatch_with_meter():
 
 def test_record_retry_redispatch_no_meter():
     """When no meter is available, it returns without error."""
-    with patch("modulo.core.pipeline_engine.executor._get_otel_meter", return_value=None) as mock_meter:
+    with patch("modulo.core.pipeline_engine.retry_policy._get_otel_meter", return_value=None) as mock_meter:
         _record_retry_redispatch(reason="failed", schedule_state="absent", delay_seconds=0.5)
     assert mock_meter.call_count == 1
 
@@ -331,7 +333,7 @@ def test_record_retry_redispatch_exception_is_swallowed():
     """When the meter raises, the exception is swallowed."""
     mock_meter = MagicMock()
     mock_meter.create_counter.side_effect = RuntimeError("metrics down")
-    with patch("modulo.core.pipeline_engine.executor._get_otel_meter", return_value=mock_meter):
+    with patch("modulo.core.pipeline_engine.retry_policy._get_otel_meter", return_value=mock_meter):
         _record_retry_redispatch(reason="failed", schedule_state="valid", delay_seconds=1.0)
     assert mock_meter.create_counter.call_count == 1
 

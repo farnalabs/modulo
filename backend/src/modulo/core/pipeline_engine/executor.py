@@ -100,8 +100,6 @@ from modulo.core.pipeline_engine.error_codes import (
     _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
     _CODE_SANDBOX_AGENT_FAILED,
     _CODE_SANDBOX_NO_OUTPUT_JSON,
-    ERROR_CODE_REGISTRY,
-    LEGACY_ALIASES,
     map_legacy_code,
     sanitize_error_text,
     should_notify_terminal_failure,
@@ -152,6 +150,8 @@ from modulo.core.pipeline_engine.retry_policy import (
     _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN,
     _attempt_started_at,
     _can_fenced_requeue,
+    _graph_has_script_mode,
+    _is_non_retryable_error_code,
     _non_retryable_failure_detail,
     _transient_retry_allowance,
     maybe_retry_after_policy,
@@ -859,27 +859,6 @@ def compute_retry_aware_topology_hash(
         return base
     policy_payload = json.dumps(pipeline_retry_policy, sort_keys=True, default=str).encode("utf-8")
     return base + ":" + hashlib.sha256(policy_payload).hexdigest()[:16]
-
-
-def _graph_has_script_mode(graph_json: dict[str, Any] | None) -> bool:
-    """True when the graph contains a ``sandbox_agent`` node in ``mode="script"``.
-
-    The fencing lease + stage-split contract apply ONLY to script-mode nodes.
-    Any script-mode sandbox node in the graph means a retry of this run must
-    first prove no script process could still be alive (the lease probe) before
-    a requeue.
-    """
-    if not isinstance(graph_json, dict):
-        return False
-    for node in graph_json.get("nodes", []) or []:
-        if not isinstance(node, dict):
-            continue
-        if (
-            str(node.get("node_type", "")).strip() == "sandbox_agent"
-            and str(node.get("mode") or "").strip() == "script"
-        ):
-            return True
-    return False
 
 
 # Node types that can PAUSE a run for human input and therefore REQUIRE a
@@ -1885,23 +1864,6 @@ class _CapacitySnapshot(NamedTuple):
 def _all_capacities_ok(pipeline_ok: bool, sandbox_ok: bool, run_ok: bool) -> bool:
     """All three capacity gates (pipeline / sandbox / org-run) admit the run."""
     return pipeline_ok and sandbox_ok and run_ok
-
-
-def _is_non_retryable_error_code(code: str | None) -> bool:
-    """True when *code* is a REGISTERED error code its registry marks non-retryable.
-
-    A code with NO registry entry has no retryability verdict to honour, so it
-    is NOT treated as non-retryable — the caller's existing behaviour is
-    preserved (the same fail-open posture the provider classifier takes). Legacy
-    spellings resolve through ``LEGACY_ALIASES`` first, so a raw
-    ``model_insufficient_funds`` is judged as its canonical code.
-    """
-    if not code:
-        return False
-    spec = ERROR_CODE_REGISTRY.get(LEGACY_ALIASES.get(code, code))
-    if spec is None:
-        return False
-    return not spec.retryable
 
 
 @dataclass(frozen=True)

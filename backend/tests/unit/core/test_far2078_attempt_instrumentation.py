@@ -35,6 +35,7 @@ from modulo.core import pipeline_execution as pe
 from modulo.core import worker_handoff as wh
 from modulo.core.pipeline_engine import PipelineExecutor
 from modulo.core.pipeline_engine import executor as ex
+from modulo.core.pipeline_engine import retry_policy as retry_policy_module
 from modulo.core.pipeline_engine import watchdog_retry as wr
 from modulo.db.crud import run_attempts as attempt_crud
 from modulo.db.models.run_attempt import (
@@ -450,12 +451,12 @@ async def test_a_retry_policy_redispatch_closes_the_attempt_as_a_reset() -> None
     executor._cleanup_run_resources = AsyncMock()
     executor._record_attempt_reset = AsyncMock()
     with (
-        patch.object(ex, "_record_retry_redispatch", MagicMock()),
+        patch.object(retry_policy_module, "record_retry_redispatch", MagicMock()),
         patch("modulo.settings.get_settings", return_value=SimpleNamespace(saq_retry_delay=0)),
-        patch.object(ex.asyncio, "sleep", AsyncMock()),
+        patch("asyncio.sleep", AsyncMock()),
         pytest.raises(ex.RunRetryPolicyError),
     ):
-        await executor._redispatch_after_policy(
+        await retry_policy_module._redispatch_after_policy(
             run_id=RUN,
             org_id=ORG,
             final_status="failed",
@@ -465,6 +466,9 @@ async def test_a_retry_policy_redispatch_closes_the_attempt_as_a_reset() -> None
             pipeline_retry_policy={"on": ["failure"], "max_retries": 2},
             model_backend_hub=None,
             connector_hub=None,
+            fenced_pending_reset_fn=executor._fenced_pending_reset,
+            cleanup_run_resources_fn=executor._cleanup_run_resources,
+            record_attempt_reset_fn=executor._record_attempt_reset,
         )
 
     executor._record_attempt_reset.assert_awaited_once()
