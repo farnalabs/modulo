@@ -565,7 +565,7 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert 'test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"' in workflow_text
     assert 'test -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets"' in workflow_text
     assert "pg_config --sharedir" in workflow_text
-    assert '[ -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki" ] || {' in workflow_text
+    assert 'test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"' in workflow_text
     assert (
         'echo "::error::PostgreSQL runtime data file missing: '
         '${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }' in workflow_text
