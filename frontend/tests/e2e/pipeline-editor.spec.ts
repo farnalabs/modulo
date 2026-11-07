@@ -157,7 +157,7 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
     await expect(page.locator('.vue-flow').first()).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
     await expect(page.getByTestId('pipeline-editor-arrange-graph')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
     const edgePath = page.locator('.vue-flow__edge-path').first()
-    await expect(edgePath).toHaveAttribute('marker-end', /url\(#.+\)/)
+    await expect(edgePath).toHaveAttribute('marker-end', /url\(['"]?#.+\)/)
     // Direction must not depend on colour: the arrow marker exists even for a
     // normal (non-loop, non-LLM) edge.
     await expect(page.getByTestId('pipeline-node-hitl')).toBeVisible()

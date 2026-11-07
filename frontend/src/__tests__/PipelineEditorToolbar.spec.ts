@@ -191,6 +191,27 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     expect(wrapper.find('[data-testid="pipeline-editor-undo-arrange"]').exists()).toBe(false)
   })
 
+  it('surfaces an Arrange graph fit failure without breaking the layout action', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'a', node_type: 'agent', label: 'A', position: { x: 9, y: 9 } }]
+    vm.flowNodes = [{ id: 'a', type: 'agent', position: { x: 9, y: 9 }, data: { label: 'A' } }]
+    vm.rawEdges = []
+
+    fitViewSpy.mockRejectedValueOnce(new Error('viewport missing'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vm.arrangeGraph()
+    await flushPromises()
+
+    expect(vm.rawNodes[0].position).toEqual({ x: 0, y: 0 })
+    expect(warn).toHaveBeenCalledWith(
+      '[PipelineEditorView] Arrange graph fitView failed',
+      expect.any(Error),
+    )
+    warn.mockRestore()
+  })
+
   it('sizes the toolbar node-type Select to the uniform h-7 row height', async () => {
     const wrapper = mountEditor()
     await flushPromises()

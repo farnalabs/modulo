@@ -3620,6 +3620,14 @@ function computeGraphLayout(): Record<string, PositionSnapshot> {
   return Object.fromEntries(laidOut.map((node) => [node.id, { ...node.position }]))
 }
 
+/** Keep the inspector bound to the raw node after immutable position updates. */
+function rebindSelectedNode(): void {
+  const selected = selectedNodeData.value
+  if (!selected) return
+  const replacement = rawNodes.value.find((node: any) => node.id === selected.id)
+  if (replacement) selectedNodeData.value = replacement
+}
+
 /** Position-only update: every non-position node field is preserved. */
 function applyGraphPositions(positions: Record<string, PositionSnapshot>): void {
   const apply = (nodes: any[]): any[] =>
@@ -3629,6 +3637,7 @@ function applyGraphPositions(positions: Record<string, PositionSnapshot>): void 
     })
   rawNodes.value = apply(rawNodes.value)
   flowNodes.value = apply(flowNodes.value)
+  rebindSelectedNode()
 }
 
 /**
@@ -3663,7 +3672,11 @@ function arrangeGraph(): void {
   arrangeUndo.value = undo
   layoutUserOwned.value = false
   userOwnedLayoutPipelines.set(pipelineId, false)
-  void nextTick().then(() => fitView())
+  void nextTick().then(() =>
+    fitView({ padding: 0.1 }).catch((error) => {
+      console.warn('[PipelineEditorView] Arrange graph fitView failed', error)
+    }),
+  )
 }
 
 /** One-step local undo for the last Arrange graph action. */
@@ -3686,6 +3699,7 @@ function syncNodePositionsFromFlow(): void {
     if (!flowNode?.position) return node
     return { ...node, position: { x: flowNode.position.x, y: flowNode.position.y } }
   })
+  rebindSelectedNode()
 }
 
 function onNodeDragStop(): void {

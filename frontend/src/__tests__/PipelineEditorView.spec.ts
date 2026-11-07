@@ -4065,10 +4065,13 @@ describe('PipelineEditorView — FAR-2410 canvas layout & edge direction', () =>
     ]
     vm.graphBaseline = JSON.stringify({ nodes: rawNodes, edges: vm.rawEdges })
 
+    vm.selectedNodeData = rawNodes[0]
     vm.arrangeGraph()
     await nextTick()
 
     const byId = Object.fromEntries(vm.rawNodes.map((node: any) => [node.id, node]))
+    // The inspector stays bound to the replacement raw node object.
+    expect(vm.selectedNodeData).toBe(byId.a)
     expect(byId.a.position).toEqual({ x: 0, y: 0 })
     expect(byId.b.position).toEqual({ x: 240, y: 0 })
     expect(byId.a.env_vars).toEqual({ SECRET_TOKEN: 'masked-value' })
@@ -4153,6 +4156,10 @@ describe('PipelineEditorView — FAR-2410 canvas layout & edge direction', () =>
     // both safe no-ops.
     vm.arrangeUndo = null
     vm.undoArrangeGraph()
+    vm.selectedNodeData = { id: 'ghost-node' }
+    vm.rawNodes = [{ id: 'a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } }]
+    vm.arrangeGraph()
+    expect(vm.selectedNodeData).toEqual({ id: 'ghost-node' })
     vm.rawNodes = [
       { id: 'only-raw', node_type: 'agent', label: 'Only raw', position: { x: 1, y: 2 } },
     ]
