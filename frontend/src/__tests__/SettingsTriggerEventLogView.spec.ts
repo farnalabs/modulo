@@ -482,6 +482,21 @@ describe('SettingsTriggerEventLogView', () => {
     expect(wrapper.text()).toContain('\u2014')
   })
 
+  it('formatTimestamp returns dash for invalid dates', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        items: [makeEvent({ received_at: 'not-a-date' })],
+        total: 1,
+        next_cursor: null,
+      },
+      error: undefined,
+    })
+    const wrapper = mount(SettingsTriggerEventLogView)
+    await flushPromises()
+    expect(wrapper.text()).toContain('\u2014')
+    expect(wrapper.text()).not.toContain('Invalid Date')
+  })
+
   it('formatTimestamp formats valid date', async () => {
     // nosemgrep: new-date-without-guard
     const date = new Date('2026-09-15T10:30:00Z')

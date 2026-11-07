@@ -25,6 +25,22 @@ export function formatDateShortWithTime(date: DateLike): string {
   return format(d, 'MMM d, yyyy, h:mm a')
 }
 
+/**
+ * Short log timestamp ("Mar 15, 02:05 PM") shared by the log/detail surfaces.
+ * Dash placeholder for invalid input so a malformed value never renders
+ * "Invalid Date".
+ */
+export function formatDateLogTimestamp(date: DateLike): string {
+  const d = toDate(date)
+  if (!d) return '—'
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 export function formatDateFilename(date: DateLike): string {
   const d = toDate(date)
   if (!d) return '—'

@@ -4,6 +4,7 @@ import {
   dateRangeQuery,
   defaultDateRange,
   formatDateInput,
+  formatDateLogTimestamp,
 } from '../lib/formatDate'
 
 describe('formatDateInput', () => {
@@ -25,6 +26,18 @@ describe('defaultDateRange', () => {
     const now = new Date(2026, 0, 1, 12, 0, 0)
     // Jan 1 minus 29 days is Dec 3 (not Dec 2, which a 30-day subtraction gives).
     expect(defaultDateRange(now)).toEqual({ from: '2025-12-03', to: '2026-01-01' })
+  })
+})
+
+describe('formatDateLogTimestamp', () => {
+  it('formats valid timestamps with time', () => {
+    expect(formatDateLogTimestamp('2024-03-15T14:05:00Z')).toContain('Mar')
+    expect(formatDateLogTimestamp('2024-03-15T14:05:00Z')).toContain('15')
+  })
+
+  it('returns an em dash for invalid timestamps', () => {
+    expect(formatDateLogTimestamp('not-a-date')).toBe('—')
+    expect(formatDateLogTimestamp(null)).toBe('—')
   })
 })
 
