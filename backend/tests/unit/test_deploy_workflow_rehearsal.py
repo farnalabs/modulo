@@ -620,7 +620,11 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert "env -i" in smoke_script
     assert "chown -R" not in smoke_script
     assert 'chmod 0755 "$smoke_root"' in smoke_script
+    assert 'chmod -R a+rX "$extract_root"' in smoke_script
+    assert "chmod -R a+w" not in smoke_script
+    assert "chown" not in smoke_script
     assert 'smoke_home="$smoke_root/home"' in smoke_script
+
     assert 'smoke_dump="$smoke_home/roundtrip.sql"' in smoke_script
     assert 'sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket"' in smoke_script
     assert 'HOME="$smoke_home"' in smoke_script

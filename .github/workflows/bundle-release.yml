@@ -678,6 +678,7 @@ jobs:
           # and every directory/file below it may retain restrictive tar modes.
           chmod 0755 "$smoke_root" "$extract_root"
           chmod -R a+rX "$extract_root"
+          sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket"
           cat > "$smoke_script" <<'SMOKE_EOF'
           #!/usr/bin/env bash
           set -eu
