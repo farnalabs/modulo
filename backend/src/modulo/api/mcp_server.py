@@ -11045,9 +11045,27 @@ _SYSTEM_MAPS_HTTP_ERROR_CODES: dict[int, str] = {
 }
 
 
+_SYSTEM_MAPS_AI_ERROR_CODES = frozenset(
+    {"model_backend_unauthorised", "eval_definition_unauthorised", "eval_gate_failed"}
+)
+
+
 def _system_maps_http_error_payload(exc: StarletteHTTPException) -> dict[str, Any]:
-    """Render a System Maps route refusal as the MCP tool-error envelope."""
+    """Render a System Maps route refusal as the MCP tool-error envelope.
+
+    AI discovery uses a small, explicitly allow-listed structured-detail
+    vocabulary. Other System Maps errors retain the generic transport mapping;
+    in particular, arbitrary route detail dictionaries are never exposed.
+    """
     code = _SYSTEM_MAPS_HTTP_ERROR_CODES.get(exc.status_code, "server_error")
+    if isinstance(exc.detail, dict) and exc.detail.get("code") in _SYSTEM_MAPS_AI_ERROR_CODES:
+        payload: dict[str, Any] = {
+            "error": exc.detail["code"],
+            "detail": exc.detail.get("message", _MSG_UNEXPECTED_ERROR),
+        }
+        if exc.detail["code"] == "eval_gate_failed" and exc.detail.get("verdict") in {"fail", "error"}:
+            payload["verdict"] = exc.detail["verdict"]
+        return payload
     detail = exc.detail if isinstance(exc.detail, str) else _MSG_UNEXPECTED_ERROR
     return _tool_error(detail, code=code)
 
