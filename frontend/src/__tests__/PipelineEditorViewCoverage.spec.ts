@@ -1937,3 +1937,61 @@ describe('PipelineEditorView - agent reference is not a dead link', () => {
     wrapper.unmount()
   })
 })
+
+describe('PipelineEditorView — FAR-2410 router/HITL node cards', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useApiFns.get.mockReset()
+    useApiFns.post.mockReset()
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
+      return Promise.resolve({ items: [] })
+    })
+    useApiFns.post.mockResolvedValue({})
+  })
+
+  it('renders router and HITL cards with authored labels and semantic default labels', async () => {
+    // The default stub renders only the unnamed slot, so the router/HITL
+    // scoped slots (and their label fallbacks) would never run. Invoke both
+    // slots with and without a label to exercise the non-colour card markup.
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true }
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          VueFlow: {
+            render(this: { $slots: Record<string, any> }) {
+              const routerSlot = this.$slots['node-router']
+              const hitlSlot = this.$slots['node-hitl']
+              return h('div', [
+                routerSlot?.({ data: { label: 'Choose path', description: 'route' } }),
+                routerSlot?.({ data: { label: '', description: 'route default' } }),
+                hitlSlot?.({ data: { label: 'Approve', description: 'gate' } }),
+                hitlSlot?.({ data: { label: '', description: 'gate default' } }),
+              ])
+            },
+          },
+          Background: true,
+          Controls: true,
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-node-router"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-node-hitl"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Choose path')
+    expect(wrapper.text()).toContain('Router')
+    expect(wrapper.text()).toContain('Approve')
+    expect(wrapper.text()).toContain('Human-in-the-loop')
+    wrapper.unmount()
+  })
+})

@@ -93,6 +93,7 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
     await expect(page.getByTestId('pipeline-editor-run')).toBeVisible()
     // Canvas tools group
     await expect(page.getByTestId('pipeline-editor-add-node')).toBeVisible()
+    await expect(page.getByTestId('pipeline-editor-arrange-graph')).toBeVisible()
     await expect(page.getByTestId('pipeline-editor-fit-view')).toBeVisible()
 
     // The Vue Flow canvas area renders (empty graph → empty-state overlay hint)
@@ -127,6 +128,39 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
     }).toBeGreaterThan(0)
     await expect(page.getByTestId('pipeline-editor-save-error')).toHaveCount(0)
     await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible()
+  })
+
+  test('renders directional edge arrowheads for a connected graph', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await page.route(`**/api/v1/pipelines/${PIPELINE_ID}`, (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(PIPELINE) })
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    })
+    await page.route(`**/api/v1/pipelines/${PIPELINE_ID}/graph`, (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          nodes: [
+            { id: 'node-a', node_type: 'agent', label: 'Plan', position: { x: 0, y: 0 } },
+            { id: 'node-b', node_type: 'hitl', label: 'Review', position: { x: 240, y: 0 } },
+          ],
+          edges: [{ id: 'edge-a-b', source_node_id: 'node-a', target_node_id: 'node-b', edge_type: 'normal' }],
+        }),
+      })
+    })
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+
+    await expect(page.locator('.vue-flow').first()).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    await expect(page.getByTestId('pipeline-editor-arrange-graph')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    const edgePath = page.locator('.vue-flow__edge-path').first()
+    await expect(edgePath).toHaveAttribute('marker-end', /url\(#.+\)/)
+    // Direction must not depend on colour: the arrow marker exists even for a
+    // normal (non-loop, non-LLM) edge.
+    await expect(page.getByTestId('pipeline-node-hitl')).toBeVisible()
   })
 
   test('renders graph nodes from the pipeline graph', { tag: '@regression' }, async ({ page, env }) => {

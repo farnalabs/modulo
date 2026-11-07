@@ -182,6 +182,13 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     const fitButton = wrapper.find('[data-testid="pipeline-editor-fit-view"]')
     expect(fitButton.exists()).toBe(true)
     expect(fitButton.text()).toContain('Fit to View')
+
+    // FAR-2410: the explicit layout action lives in the editable canvas group.
+    const arrangeButton = wrapper.find('[data-testid="pipeline-editor-arrange-graph"]')
+    expect(arrangeButton.exists()).toBe(true)
+    expect(arrangeButton.text()).toContain('Arrange graph')
+    // No layout action has run yet, so the one-step undo stays unmounted.
+    expect(wrapper.find('[data-testid="pipeline-editor-undo-arrange"]').exists()).toBe(false)
   })
 
   it('sizes the toolbar node-type Select to the uniform h-7 row height', async () => {
