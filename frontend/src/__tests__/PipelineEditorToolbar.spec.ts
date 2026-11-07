@@ -172,12 +172,14 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     // covers the canvas or node details.
     expect(toolbar.classes()).not.toContain('absolute')
 
+    expect(toolbar.attributes('role')).toBe('toolbar')
     for (const group of ['identity', 'file', 'run', 'settings', 'canvas']) {
-      expect(
-        wrapper.find(`[data-testid="pipeline-editor-toolbar-group-${group}"]`).exists(),
-        `toolbar group ${group}`,
-      ).toBe(true)
+      const groupElement = wrapper.find(`[data-testid="pipeline-editor-toolbar-group-${group}"]`)
+      expect(groupElement.exists(), `toolbar group ${group}`).toBe(true)
+      expect(groupElement.attributes('role')).toBe('group')
+      expect(groupElement.attributes('aria-label')).toBeTruthy()
     }
+    expect(wrapper.find('[data-testid="pipeline-editor-settings-toggle"]').exists()).toBe(true)
 
     const fitButton = wrapper.find('[data-testid="pipeline-editor-fit-view"]')
     expect(fitButton.exists()).toBe(true)
@@ -189,6 +191,22 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     expect(arrangeButton.text()).toContain('Arrange graph')
     // No layout action has run yet, so the one-step undo stays unmounted.
     expect(wrapper.find('[data-testid="pipeline-editor-undo-arrange"]').exists()).toBe(false)
+  })
+
+  it('progressively discloses secondary settings on narrow layouts', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    const settings = wrapper.find('[data-testid="pipeline-editor-toolbar-group-settings"]')
+    const toggle = wrapper.find('[data-testid="pipeline-editor-settings-toggle"]')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    const controls = settings.find('#pipeline-editor-settings-controls')
+    expect(controls.classes()).toContain('max-md:hidden')
+
+    await toggle.trigger('click')
+    await nextTick()
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(controls.classes()).not.toContain('max-md:hidden')
   })
 
   it('surfaces an Arrange graph fit failure without breaking the layout action', async () => {
