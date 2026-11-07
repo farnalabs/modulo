@@ -1061,6 +1061,33 @@ def child_shim_argv(argv: list[str], *, parent_pid: int | None = None) -> list[s
     ]
 
 
+def _child_shim_pythonpath() -> str:
+    """Return only the relocated bundle paths needed to import the shim.
+
+    The launcher deliberately scrubs the caller's ``PYTHONPATH`` before boot,
+    and bundled service environments must not inherit it.  The shim is still
+    started with the bundled interpreter, so it needs a trusted path back to
+    this checkout in order to import ``modulo.launcher.supervisor`` after the
+    service environment has been reduced to its allowlist.
+    """
+    source_root = Path(__file__).resolve().parents[2]
+    backend_root = source_root.parent
+    site_package_roots = [
+        path
+        for pattern in ("lib/python*/site-packages", "Lib/site-packages")
+        for path in backend_root.joinpath(".venv").glob(pattern)
+        if path.is_dir()
+    ]
+    return os.pathsep.join(str(path) for path in [source_root, *site_package_roots])
+
+
+def _child_shim_env(env: dict[str, str] | None) -> dict[str, str]:
+    """Build the shim environment without forwarding caller-controlled paths."""
+    shim_env = dict(os.environ) if env is None else dict(env)
+    shim_env["PYTHONPATH"] = _child_shim_pythonpath()
+    return shim_env
+
+
 def _set_pdeathsig() -> None:  # pragma: no cover - runs in the forked child
     """Pre-exec hook: PR_SET_PDEATHSIG (Linux) — kernel-side orphan guard.
 
@@ -1194,8 +1221,12 @@ def child_shim_main(argv: list[str]) -> int:
     signal.signal(signal.SIGTERM, _make_forward_signal(shutting_down, child_holder))
     signal.signal(signal.SIGINT, _make_forward_signal(shutting_down, child_holder))
     preexec = _set_pdeathsig if sys.platform == "linux" else None
+    child_env = dict(os.environ)
+    if not child_argv or not Path(child_argv[0]).name.startswith("python"):
+        child_env.pop("PYTHONPATH", None)
     child_proc = subprocess.Popen(  # noqa: S603 — argv built by the supervisor, never shell  # NOSONAR — supervisor-built argv, not user input
         child_argv,
+        env=child_env,
         preexec_fn=preexec,
     )
     child_holder.append(child_proc)
@@ -1805,7 +1836,7 @@ def _default_spawner(argv: list[str], env: dict[str, str] | None) -> ChildProces
     shim_argv = child_shim_argv(argv)
     proc = subprocess.Popen(  # noqa: S603 — argv fully constructed by the supervisor
         shim_argv,
-        env=env,
+        env=_child_shim_env(env),
         stderr=subprocess.PIPE,
         start_new_session=sys.platform != "win32",
     )

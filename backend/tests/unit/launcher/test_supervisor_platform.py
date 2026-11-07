@@ -40,6 +40,7 @@ from modulo.launcher.supervisor import (
     ChildSpec,
     Supervisor,
     SupervisorKnobs,
+    _child_shim_env,
     _children_of,
     _DarwinProcessBackend,
     _is_postgres_process,
@@ -49,6 +50,7 @@ from modulo.launcher.supervisor import (
     _ProcBsdInfo,
     _process_backend,
     child_shim_argv,
+    child_shim_main,
     read_proc_starttime,
 )
 
@@ -321,6 +323,90 @@ def test_linux_shim_starttime_preserves_the_unreadable_sentinel(
     backend = _LinuxProcessBackend()
     monkeypatch.setattr(backend, "starttime", lambda _pid: None)
     assert backend.shim_starttime(1234) == -1
+
+
+def test_child_shim_env_restores_relocated_bundle_import_paths_without_caller_paths() -> None:
+    env = _child_shim_env({"PATH": "/usr/bin", "PYTHONPATH": "/untrusted"})
+    pythonpath = env["PYTHONPATH"]
+    assert pythonpath.split(os.pathsep)[0] == str(Path(supervisor_module.__file__).resolve().parents[2])
+    assert "/untrusted" not in pythonpath
+    assert env["PATH"] == "/usr/bin"
+
+
+def test_child_shim_main_preserves_pythonpath_for_python_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _CompletedChild:
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    def fake_popen(argv: list[str], **kwargs: Any) -> _CompletedChild:
+        captured["argv"] = argv
+        captured["env"] = kwargs["env"]
+        return _CompletedChild()
+
+    monkeypatch.setattr(supervisor_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(supervisor_module, "read_proc_starttime", lambda _pid: 1)
+    monkeypatch.setenv("PYTHONPATH", "/untrusted/caller")
+
+    result = child_shim_main(
+        [
+            "modulo-child-shim",
+            "--parent-pid",
+            str(os.getpid()),
+            "--parent-starttime",
+            "1",
+            "--",
+            sys.executable,
+            "-c",
+            "pass",
+        ]
+    )
+
+    assert result == 0
+    assert captured["env"]["PYTHONPATH"] == "/untrusted/caller"
+
+
+def test_child_shim_main_removes_pythonpath_for_non_python_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _CompletedChild:
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    def fake_popen(argv: list[str], **kwargs: Any) -> _CompletedChild:
+        captured["argv"] = argv
+        captured["env"] = kwargs["env"]
+        return _CompletedChild()
+
+    monkeypatch.setattr(supervisor_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(supervisor_module, "read_proc_starttime", lambda _pid: 1)
+    monkeypatch.setenv("PYTHONPATH", "/untrusted/caller")
+
+    result = child_shim_main(
+        [
+            "modulo-child-shim",
+            "--parent-pid",
+            str(os.getpid()),
+            "--parent-starttime",
+            "1",
+            "--",
+            "redis-server",
+        ]
+    )
+
+    assert result == 0
+    assert "PYTHONPATH" not in captured["env"]
 
 
 def test_linux_child_shim_argv_is_byte_identical_to_the_historical_shape() -> None:
