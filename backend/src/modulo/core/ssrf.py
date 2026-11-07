@@ -69,14 +69,14 @@ then forces the TCP connection to the validated address while keeping the
 DNS-rebinding window that a validate-then-connect pattern leaves open (see the
 note on :func:`validate_outbound_url`).
 
-FAR-526C — honest scope of the ``no-raw-httpx-client`` import gate
+Honest scope of the ``no-raw-httpx-client`` import gate
 ------------------------------------------------------------------
 The semgrep rule ``no-raw-httpx-client`` forbids ``httpx.AsyncClient`` /
 ``httpx.Client`` CONSTRUCTION outside this factory module (``core/ssrf.py``) and
 the REST connector's injected/pinned transport seam. That gate deliberately
 covers the **connector egress surface** — every connector's ``_client()`` now
 builds through :func:`pinned_async_client_sync` / :func:`pinned_async_client`
-(Part A/B + FAR-526C migrations). The following are explicitly OUT OF SCOPE and
+(Part A/B migrations). The following are explicitly OUT OF SCOPE and
 are **known residual**, documented here so the gate is honest about what it does
 and does not cover:
 
@@ -97,14 +97,14 @@ and does not cover:
   remain un-migrated. ``core/library_sync/client`` and
   ``core/product_analytics/vendor_client`` are NOT residual: both build their
   client through :func:`pinned_async_client` and are covered by the gate, so a
-  raw construction there is caught like anywhere else. ``cli/apply`` (FAR-681)
-  joins the residual list for the same reason the sync world needs a pinless
-  path: the click executor is sync and no sync pinned factory exists, and the
-  target is the single operator-configured
-  ``MODULO_URL`` the operator's credentials already address, so it is excluded
-  as documented residual (no validate-then-connect attached - test harnesses
-  use unresolvable fixture URLs). A NEW raw
-  ``httpx`` construction anywhere else in the tree is still caught by the rule.
+  raw construction there is caught like anywhere else. ``cli/apply`` joins the
+  residual list for the same reason the sync world needs a pinless path: the
+  click executor is sync and no sync pinned factory exists, and the target is
+  the single operator-configured ``MODULO_URL`` the operator's credentials
+  already address, so it is excluded as documented residual (no
+  validate-then-connect attached - test harnesses use unresolvable fixture
+  URLs). A NEW raw ``httpx`` construction anywhere else in the tree is still
+  caught by the rule.
 """
 
 from __future__ import annotations
@@ -160,7 +160,7 @@ _EXCLUDED_NETWORKS = [
 # link-local / the metadata ranges above as a NON-NEGOTIABLE blocked floor —
 # fd00:ec2::254 is inside the ULA range, which a self-hosted deployment may
 # plausibly allowlist for its internal gateways, so it must be blocked BEFORE
-# the allowlist is consulted (FAR-2046).
+# the allowlist is consulted.
 _NON_NEGOTIABLE_BLOCKED = [
     ipaddress.ip_network("fec0::/10"),  # IPv6 site-local
     ipaddress.ip_network("ff00::/8"),  # IPv6 multicast
@@ -419,7 +419,7 @@ def default_trust_env() -> bool:
 
     Public so the shared egress pool factory (``modulo.connectors._egress``)
     builds the cached TLS context with the SAME ``trust_env`` the pinned
-    transport resolves — a single implementation that cannot drift (FAR-1650).
+    transport resolves — a single implementation that cannot drift.
     """
     return os.environ.get(_TRUST_PROXY_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 

@@ -83,11 +83,70 @@ Includes:
 Built on LangGraph's `StateGraph` with `dict[str, Any]` state. Each pipeline snapshot compiles to a StateGraph at run-start. Node types: `agent`, `sandbox_agent`, `manual` (human output), `composite` (expand-only), `router` (ordered JMESPath rules + `default`, lowers to the conditional-edge compile path, FAR-402 P1), `hitl` (human-in-the-loop gate that compiles to the existing synthetic-gate path, FAR-402 P1), `join` (fan-in for scatter/gather patterns), `dispatch` (fires a CI-runner operation through a connector binding, FAR-1141), and `connector` (an API-authorable node type whose whole job is its `connector_binding`: the binding is routed to the bound connector by `make_connector_fn`, FAR-2089). Edges carry HITL gate config, rejection routing, or a `loop`/`conditional`/`normal`/`reject` edge type.
 
 Key design:
-- Compiled graphs cached by `(pipeline_id, snapshot_id)` with LRU eviction
+- Compiled graphs cached by `(pipeline_id, snapshot_id, node_timeout_seconds, struct_hash)` with LRU eviction (see [Graph Cache Strategy](#graph-cache-strategy))
 - `run_context` and `artifact` are sibling keys in state – context-setter-only write enforcement
 - Human/manual nodes produce `interrupt()` in LangGraph
 - `@cancellable_node` decorator wraps every node for graceful cancellation and per-node timeouts (`asyncio.wait_for`)
 - Pipeline nesting max depth: 3 levels
+
+#### Pipeline Executor Patterns
+
+The `PipelineExecutor` (`backend/src/modulo/core/pipeline_engine/executor.py`) orchestrates a single run end-to-end. It implements several cross-cutting patterns:
+
+**Capacity Gates (admission control)**
+- Per-pipeline: `max_concurrent_runs` counted over `running`/`claimed`/`unknown` runs (excludes `awaiting_human`/`hitl_parked`)
+- Per-org sandbox: `sandbox_concurrency_limit` for `sandbox_agent` nodes
+- Per-org run: `run_concurrency_limit` counted over active run statuses
+- A capacity-deferred run stays `pending` with `pipeline_capacity` or `org_capacity_limited` marker and is re-dispatched when a slot frees
+- Reconciliation sweeps (cron) terminalize stale `running` runs and clear leaked slots
+
+**Retry Policy (FAR-402 P5)**
+- Pipeline-level `retry_policy` defines `max_retries` and `on` events: `stall`, `timeout`, `failure`, `eval_failed`
+- Per-node `retry` blocks override the pipeline default
+- Retry re-executes the WHOLE run (fenced pending-reset + backoff + SAQ job re-dispatch)
+- Over-budget guard refuses retry when the attempt already consumed the graph's node-budget allowance
+- Never-retryable codes: script-mode terminal codes (side-effect safety), provider billing faults (401/402)
+
+**Terminalization & Error Codes**
+- Canonical dotted error codes (`agent.failed`, `node.timeout`, `node.deadline_exceeded`, `eval.blocked`, `harness.idempotency_gate`, `sandbox.tier_refused`)
+- Legacy aliases mapped via shared `map_legacy_code` table so dotted and legacy spellings behave identically
+- Agent failure elevation (A1): self-reported agent failure elevates to `agent.failed` (feature-flagged)
+- Session-lost classification: envelope retained text surfaces classified to provider codes (e.g., `model.insufficient_funds` for HTTP 402) rather than masked as retryable `sandbox.no_output_json`
+
+**Idempotency Gate (FAR-228)**
+- Guard A (early skip): node output carries `output_json.idempotency_gate` → skip re-firing `agent_signal` triggers
+- Guard B (retry suppression): run markers carry `delivery_done` → suppress transient node failure retry
+- Fenced by claim token so a superseded executor cannot stamp a successor's run
+
+See [Run admission and healing](#run-admission-and-healing-far-604) for capacity gate details and reconciliation sweeps.
+
+#### Graph Cache Strategy
+
+The `graph_cache` module (`backend/src/modulo/core/pipeline_engine/graph_cache.py`) provides an in-memory LRU cache for compiled LangGraph `StateGraph` objects.
+
+**Cache Key**
+`(pipeline_id, snapshot_id, pipeline_node_timeout_seconds, graph_struct_hash)`
+
+- `pipeline_id` + `snapshot_id`: identifies the frozen pipeline definition
+- `pipeline_node_timeout_seconds`: the pipeline-level timeout is baked into every node with a null timeout; keying on it means a PATCH to `node_timeout_seconds` takes effect immediately
+- `graph_struct_hash`: deterministic hash of the graph's port topology (FAR-416/F1) + pipeline retry policy + node-scoped eval definitions (FAR-502); forces recompile when ports, node types, retry policy, or eval definitions change
+
+**Compilation Pipeline**
+1. `_assemble_nodes`: builds raw node functions, computes DAG ancestor sets (FAR-795), wraps each with the retry/compensation wrapper (FAR-402 P5)
+2. `_assemble_edges`: compiles edges via dispatch precedence (Router > HITL node > loop > LLM routing > conditional > normal), inserts HITL gate nodes, loop counter nodes, routers
+3. Entry point: first node not in `target_ids` (no incoming forwarding edges)
+
+**Eviction**
+- True LRU via `OrderedDict` (max 256 entries)
+- Per-key `threading.Lock` prevents double compilation if factory becomes async
+- `evict(pipeline_id, snapshot_id)` removes all variants for a snapshot pair
+
+**Cache-Consistent Derived Data**
+- Port topology hash (`compute_port_topology_hash`) and eval defs hash (`compute_eval_defs_hash`) are pure functions of `graph_json` — identical for every compile of the same snapshot
+- DAG ancestor sets (`_compute_dag_ancestor_ids`) derived from forwarding edges only (reject edges excluded)
+- Node type map for HITL gate eval path (source node's CONTRACT output, not merged state)
+
+See `backend/src/modulo/core/pipeline_engine/graph_cache.py` for implementation.
 
 ### Eval Engine (`modulo/core/eval_engine/`)
 
@@ -178,7 +237,46 @@ Abstraction over external tool integrations. Each connector has a concrete `Conn
 | `AzureKeyVaultConnector` | `secrets` | read secrets |
 | `SharePointConnector` | `documentation` | read/write files and pages |
 | `CodeClimateConnector` | `quality` | query code quality metrics |
-| *(41 concrete connectors; 43 `ConnectorType` enum members including the provider-dispatched `ci-runner` / `ticket-tracker` families and `custom`; see `modulo/connectors/`)* | | |
+| `*(41 concrete connectors; 43 ConnectorType enum members including the provider-dispatched ci-runner / ticket-tracker families and custom; see modulo/connectors/)*` | | |
+
+#### SSRF-safe Outbound Egress Guard
+
+The `ssrf` module (`backend/src/modulo/core/ssrf.py`) provides the shared SSRF (Server-Side Request Forgery) protection for every outbound network hop in Modulo. It is used by notification endpoints, SSO test connections, observability test paths, error forwarders, every `base_url`-bearing connector, and OpenAI-compatible model backends.
+
+**Threat Model**
+- Blocks private/link-local/cloud-metadata/CGNAT ranges via DNS resolution
+- Loopback is blocked by default but allowlistable via `SSRF_ALLOW_PRIVATE_RANGES` (cluster-wide CIDR list)
+- Link-local (`169.254.0.0/16`), multicast, CGNAT (`100.64.0.0/10`), benchmarking (`198.18.0.0/15`), current-network (`0.0.0.0/8`), and cloud-metadata endpoints (AWS IMDS `169.254.169.254`, Aliyun `100.100.100.200`, AWS IMDS IPv6 `fd00:ec2::254`) are **non-negotiable** — no allowlist can open them
+- IPv6 site-local (`fec0::/10`) and multicast (`ff00::/8`) are also non-negotiable
+
+**Two Validation Paths**
+1. **Validate-then-connect** (`validate_outbound_url` / `validate_outbound_url_async`): resolves hostname, verifies all resolved addresses are non-internal, returns. Does NOT pin the address — a hostname under attacker DNS control can resolve to public at validation time and internal at connect time (DNS rebinding). This matches pre-existing connector/model-backend call sites.
+2. **Pinned transport** (`pinned_async_client` / `pinned_async_client_sync`): resolves and validates once, then forces the TCP connection to the validated address set while keeping the **original hostname for TLS SNI and certificate verification**. This closes the DNS-rebinding window. Preferred for new call sites that own their client construction.
+
+**Pinned Transport Behaviour**
+- Pins the **full validated IP set** (not just `ips[0]`), fails over/round-robins across it on connect
+- Re-resolves after `resolve_ttl_seconds` (default 300s, configurable via `SSRF_RESOLVE_TTL`) or when every pinned address fails to connect — self-heals decommissioned/stale IPs
+- Re-resolved set containing a private/internal address is refused fail-closed
+- Loudness guard (`PinDroppedError`) proves the pin backend was consulted; if httpcore stops routing the private `_pool._network_backend` attribute, the failure is loud, not silent
+
+**Allowlist Semantics**
+- `SSRF_ALLOW_PRIVATE_RANGES`: cluster-wide env var, comma-separated CIDRs (e.g., `127.0.0.0/8,::1/128` for dual-stack loopback)
+- **Dual-stack loopback needs BOTH entries**: `localhost` resolves to `127.0.0.1` AND `::1`; validation fails closed if ANY resolved address is blocked
+- Tenant-scoped `allow_networks` parameter layers on top of the global floor for a single connector/model backend
+- The allowlist is consulted AFTER the non-negotiable floor — it can never weaken link-local/multicast/metadata blocks
+
+**Proxy Trust**
+- `SSRF_TRUST_PROXY` (default `false`): when `true`, honours `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` env vars
+- Enabling proxy trust means the proxy re-resolves the target server-side; the pin map sees only the proxy host, so pinning is effectively bypassed
+- Warning logged when proxy env vars are present and `trust_env=true`
+
+**Known Residual Risks (FAR-526C)**
+The `no-raw-httpx-client` semgrep rule forbids `httpx.AsyncClient`/`httpx.Client` construction outside `ssrf.py` and the REST connector's pinned transport seam. Explicitly OUT OF SCOPE (known residual):
+- SDK-internal clients (`langchain_openai`, `anthropic`, `openai` SDKs) — mitigated by injecting pinned client where SDK supports it
+- Core support modules building their own client (`core/notifier`, `core/error_tracking/**`, `core/watchdog/worker_liveness`, `core/reports/scheduler`) — multi-host, pending per-call-site pin
+- `cli/apply` — sync executor, no sync pinned factory exists; target is single operator-configured `MODULO_URL`
+
+**Configuration Reference** — see `docs/configuration-reference.md` "Outbound Egress Guard (SSRF)" for all environment variables.
 
 #### Integration Validation Levels (FAR-935)
 
