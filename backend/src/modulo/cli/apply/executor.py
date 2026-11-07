@@ -35,6 +35,7 @@ from modulo.cli.apply.plan import (
     has_blockers,
 )
 from modulo.core.model_backend_endpoints import BaseUrlValidationError, validate_base_url
+from modulo.core.ssrf import pinned_http_client_sync
 
 _log = logging.getLogger(__name__)
 
@@ -261,16 +262,11 @@ class ApplyExecutor:
         self._api_key = api_key
         self._auth_headers = {AUTH_HEADER: f"Bearer {api_key}"}
         if client is None:
-            # CLI egress residual (no sync pinned-egress factory exists in
-            # core/ssrf.py - it only builds pinned ASYNC pools, and this click
-            # executor is sync). The base URL is the operator-configured
-            # MODULO_URL, the same deployment the operator's own credentials
-            # already target; excluded from the semgrep no-raw-httpx-client
-            # gate as documented residual, like the operator-config support
-            # modules rather than as accepted raw perimeter egress.
-            self._client = httpx.Client(
+            self._client = pinned_http_client_sync(
+                self._base_url,
                 timeout=timeout,
                 follow_redirects=False,
+                connector_type="apply",
             )
             self._owns_client = True
         else:

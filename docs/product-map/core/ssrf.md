@@ -61,7 +61,8 @@ route, so it is tracked here rather than in the manifest registry.
       sync call sites) and async validation
       (``validate_outbound_url_async``, non-blocking ``loop.getaddrinfo``)
 - [x] Pinned transport - ``resolve_pinned_ip`` /
-      ``pinned_async_transport`` / ``pinned_async_client`` resolve and
+      ``pinned_async_transport`` / ``pinned_async_client`` and the synchronous
+       ``pinned_http_transport_sync`` / ``pinned_http_client_sync`` factories resolve and
       validate once, then force the TCP connection to the validated
       address while keeping the **original** hostname for TLS SNI and
       certificate verification (the URL is never rewritten to the IP)
@@ -88,7 +89,8 @@ route, so it is tracked here rather than in the manifest registry.
   connection creation, pinning would silently drop - the module offers an
   **opt-in** runtime guard (``loudness_guard=True`` → ``PinDroppedError``)
   that makes that un-pin loud where enabled; it defaults to off and is not a
-  public API contract.
+  public API contract. The synchronous client uses the same pinned network
+  backend seam, and its unsupported-host refusal is covered by unit tests.
 
 ## QA History
 
