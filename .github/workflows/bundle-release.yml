@@ -279,13 +279,8 @@ jobs:
           set -euo pipefail
           # Keep this step fail-loud: the previous dry-run only reported exit 1,
           # which hid whether layout, copy, pg_config, or patchelf failed.
-          # shellcheck disable=SC2329 # invoked indirectly by the ERR trap
-          assemble_error() {
-            local rc=$?
-            echo "::error::Assemble bundle layout failed at line ${LINENO}: ${BASH_COMMAND} (exit ${rc})" >&2
-            exit "$rc"
-          }
-          trap assemble_error ERR
+          rc=0
+          trap 'rc=$?; echo "::error::Assemble bundle layout failed at line ${LINENO}: ${BASH_COMMAND} (exit ${rc})" >&2; exit "$rc"' ERR
           # shellcheck source=scripts/bundle-versions.env
           source scripts/bundle-versions.env
           BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
