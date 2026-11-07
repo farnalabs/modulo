@@ -11058,15 +11058,20 @@ def _system_maps_http_error_payload(exc: StarletteHTTPException) -> dict[str, An
     in particular, arbitrary route detail dictionaries are never exposed.
     """
     code = _SYSTEM_MAPS_HTTP_ERROR_CODES.get(exc.status_code, "server_error")
-    if isinstance(exc.detail, dict) and exc.detail.get("code") in _SYSTEM_MAPS_AI_ERROR_CODES:
-        payload: dict[str, Any] = {
-            "error": exc.detail["code"],
-            "detail": exc.detail.get("message", _MSG_UNEXPECTED_ERROR),
-        }
-        if exc.detail["code"] == "eval_gate_failed" and exc.detail.get("verdict") in {"fail", "error"}:
-            payload["verdict"] = exc.detail["verdict"]
-        return payload
-    detail = exc.detail if isinstance(exc.detail, str) else _MSG_UNEXPECTED_ERROR
+    route_detail = exc.detail
+    if isinstance(route_detail, dict):
+        ai_detail: dict[str, Any] = route_detail
+        ai_code = ai_detail.get("code")
+        verdict = ai_detail.get("verdict")
+        if ai_code in _SYSTEM_MAPS_AI_ERROR_CODES:
+            payload: dict[str, Any] = {
+                "error": ai_code,
+                "detail": ai_detail.get("message", _MSG_UNEXPECTED_ERROR),
+            }
+            if ai_code == "eval_gate_failed" and verdict in {"fail", "error"}:
+                payload["verdict"] = verdict
+            return payload
+    detail = route_detail if isinstance(route_detail, str) else _MSG_UNEXPECTED_ERROR
     return _tool_error(detail, code=code)
 
 
