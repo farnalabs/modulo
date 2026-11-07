@@ -2254,19 +2254,56 @@ const defaultEdgeOptions = {
   },
 }
 
-// Conservative frontend/session layout ownership (FAR-2410). The graph API has
-// no ownership field and this PR deliberately does not add a migration. The
-// map lives for the SPA session: a manual drag marks the pipeline user-owned,
-// Arrange graph clears it. Saved positions are always authoritative on load,
-// so a fresh session still reopens the persisted arrangement exactly.
+// Layout ownership is frontend provenance (FAR-2420), not inferred from
+// coordinates. The graph API still has no ownership field, so this small map is
+// persisted in localStorage per pipeline: a manual drag records `user`, while
+// Arrange records `generated`. The entry is deliberately absent for legacy
+// graphs; those retain the FAR-2410 non-zero-position heuristic until the user
+// or Arrange establishes explicit provenance. This keeps finite {x: 0, y: 0}
+// positions authoritative once they have an ownership record without mutating
+// historic snapshot data.
+type LayoutOwnership = 'user' | 'generated'
+const LAYOUT_OWNERSHIP_STORAGE_KEY = 'modulo.pipeline.layoutOwnership'
+function readLayoutOwnership(): Record<string, LayoutOwnership> {
+  if (typeof localStorage === 'undefined') return {}
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LAYOUT_OWNERSHIP_STORAGE_KEY) ?? '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, LayoutOwnership] =>
+        entry[1] === 'user' || entry[1] === 'generated',
+      ),
+    )
+  } catch {
+    return {}
+  }
+}
+function persistLayoutOwnership(pipelineId: string, ownership: LayoutOwnership): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    const stored = readLayoutOwnership()
+    stored[pipelineId] = ownership
+    localStorage.setItem(LAYOUT_OWNERSHIP_STORAGE_KEY, JSON.stringify(stored))
+  } catch {
+    // Layout persistence is an enhancement; the in-memory map remains authoritative.
+  }
+}
+// These maps are component-local caches only. Never read ownership once at
+// module initialisation: two mounted editors (or two tabs) can otherwise keep
+// disagreeing about the persisted provenance.
+const layoutOwnershipPipelines = new Map<string, LayoutOwnership>()
+// Kept as a compatibility/readability map for existing editor logic and tests.
 const userOwnedLayoutPipelines = new Map<string, boolean>()
 const layoutUserOwned = ref(false)
+const draftLayoutOwnership = ref<LayoutOwnership | undefined>(undefined)
 interface PositionSnapshot { x: number; y: number }
 interface ArrangeUndoSnapshot {
   raw: Record<string, PositionSnapshot>
   flow: Record<string, PositionSnapshot>
   userOwned: boolean
+  ownership: LayoutOwnership | undefined
 }
+
 const arrangeUndo = ref<ArrangeUndoSnapshot | null>(null)
 const connectionAnnouncement = ref('')
 
@@ -3573,6 +3610,54 @@ function convertBackendEdge(e: any, i: number): any {
   }
 }
 
+function cacheLayoutOwnership(ownership: LayoutOwnership | undefined): void {
+  if (ownership) {
+    layoutOwnershipPipelines.set(pipelineId, ownership)
+    userOwnedLayoutPipelines.set(pipelineId, ownership === 'user')
+  } else {
+    layoutOwnershipPipelines.delete(pipelineId)
+    userOwnedLayoutPipelines.delete(pipelineId)
+  }
+}
+
+function refreshPersistedLayoutOwnership(): LayoutOwnership | undefined {
+  const persisted = readLayoutOwnership()[pipelineId]
+  cacheLayoutOwnership(persisted)
+  return persisted
+}
+
+function setDraftLayoutOwnership(ownership: LayoutOwnership | undefined): void {
+  draftLayoutOwnership.value = ownership
+  cacheLayoutOwnership(ownership)
+}
+
+function commitLayoutOwnership(ownershipOverride?: LayoutOwnership): void {
+  const ownership = ownershipOverride ?? draftLayoutOwnership.value
+  if (!ownership) return
+  persistLayoutOwnership(pipelineId, ownership)
+  cacheLayoutOwnership(ownership)
+}
+
+function getLayoutOwnership(): LayoutOwnership | undefined {
+  if (draftLayoutOwnership.value) return draftLayoutOwnership.value
+  // A fresh storage read is authoritative: refreshPersistedLayoutOwnership
+  // syncs both compatibility caches and returns the persisted value. The old
+  // fallbacks here were unreachable because the refresh clears the caches when
+  // storage has no entry, so they could never return anything but undefined.
+  return refreshPersistedLayoutOwnership()
+}
+
+function handleLayoutOwnershipStorage(event: StorageEvent): void {
+  if (event.key !== LAYOUT_OWNERSHIP_STORAGE_KEY) return
+  // Do not overwrite an in-progress local draft. The existing dirty guard keeps
+  // a second tab from silently replacing unsaved graph edits; the next reload
+  // will read this newer persisted ownership deterministically.
+  if (isGraphDirty.value || draftLayoutOwnership.value !== undefined) return
+  const persisted = refreshPersistedLayoutOwnership()
+  draftLayoutOwnership.value = persisted
+  layoutUserOwned.value = persisted === 'user'
+}
+
 function snapshotPositions(nodes: any[]): Record<string, PositionSnapshot> {
   const snapshot: Record<string, PositionSnapshot> = {}
   for (const node of nodes) {
@@ -3643,13 +3728,16 @@ function applyGraphPositions(positions: Record<string, PositionSnapshot>): void 
 /**
  * Generated layout is the default for a new/unplaced graph. Saved positions
  * are authoritative: an already-placed graph is never silently re-laid out.
- * `userOwnedLayoutPipelines` carries the explicit ownership decision for the
- * duration of the SPA session (see the note beside its declaration).
+ * `layoutOwnershipPipelines` carries explicit provenance across reloads. Legacy
+ * graphs without an entry retain the non-zero-position fallback for compatibility.
  */
 function applyGeneratedLayoutIfUnplaced(): void {
   if (rawNodes.value.length === 0) return
-  if (userOwnedLayoutPipelines.get(pipelineId)) {
-    layoutUserOwned.value = true
+  const ownership = getLayoutOwnership()
+  if (ownership === 'user' || ownership === 'generated') {
+    // An explicit provenance record makes even finite all-zero coordinates
+    // authoritative. Never infer that a persisted generated graph is unplaced.
+    layoutUserOwned.value = ownership === 'user'
     return
   }
   if (hasPlacedPositions(rawNodes.value)) {
@@ -3658,6 +3746,7 @@ function applyGeneratedLayoutIfUnplaced(): void {
   }
   applyGraphPositions(computeGraphLayout())
   layoutUserOwned.value = false
+  setDraftLayoutOwnership('generated')
 }
 
 /** Explicit Arrange graph: replace the arrangement and restore generated ownership. */
@@ -3667,11 +3756,12 @@ function arrangeGraph(): void {
     raw: snapshotPositions(rawNodes.value),
     flow: snapshotPositions(flowNodes.value),
     userOwned: layoutUserOwned.value,
+    ownership: getLayoutOwnership(),
   }
   applyGraphPositions(computeGraphLayout())
   arrangeUndo.value = undo
   layoutUserOwned.value = false
-  userOwnedLayoutPipelines.set(pipelineId, false)
+  setDraftLayoutOwnership('generated')
   void nextTick().then(() =>
     fitView({ padding: 0.1 }).catch((error) => {
       console.warn('[PipelineEditorView] Arrange graph fitView failed', error)
@@ -3686,7 +3776,7 @@ function undoArrangeGraph(): void {
   rawNodes.value = restorePositions(rawNodes.value, undo.raw)
   flowNodes.value = restorePositions(flowNodes.value, undo.flow)
   layoutUserOwned.value = undo.userOwned
-  userOwnedLayoutPipelines.set(pipelineId, undo.userOwned)
+  setDraftLayoutOwnership(undo.ownership)
   arrangeUndo.value = null
 }
 
@@ -3706,11 +3796,11 @@ function onNodeDragStop(): void {
   if (isViewing.value) return
   syncNodePositionsFromFlow()
   layoutUserOwned.value = true
-  userOwnedLayoutPipelines.set(pipelineId, true)
+  setDraftLayoutOwnership('user')
   arrangeUndo.value = null
 }
 
-async function loadGraph() {
+async function loadGraph(preserveDraftOwnership = false): Promise<boolean> {
   pageError.value = null
   try {
     const { data, error: graphError } = await withTimeout((signal) => api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
@@ -3719,7 +3809,7 @@ async function loadGraph() {
     }))
     if (graphError) {
       pageError.value = t('views.PipelineEditorView.failed_to_load_graph', { error: formatApiError(graphError) })
-      return
+      return false
     }
     const result = data as any
     if (!result) {
@@ -3728,20 +3818,26 @@ async function loadGraph() {
       flowNodes.value = []
       flowEdges.value = []
       graphBaseline.value = graphFingerprint()
-      return
+      if (!preserveDraftOwnership) draftLayoutOwnership.value = refreshPersistedLayoutOwnership()
+      return true
     }
     rawNodes.value = result.nodes || []
     rawEdges.value = result.edges || []
     flowNodes.value = rawNodes.value.map(convertBackendNode)
     flowEdges.value = rawEdges.value.map(convertBackendEdge)
+    // Ownership is read only after the backend graph has arrived. This avoids
+    // applying a stale module-level snapshot to a reload/remount.
+    if (!preserveDraftOwnership) draftLayoutOwnership.value = refreshPersistedLayoutOwnership()
     // FAR-2410: only an unplaced graph receives generated positions; saved
     // arrangements are authoritative and are never silently replaced.
     applyGeneratedLayoutIfUnplaced()
     // FAR-1812: every load (and therefore every successful save, which
     // round-trips through loadGraph) re-baselines the dirty check.
     graphBaseline.value = graphFingerprint()
+    return true
   } catch (e: unknown) {
     pageError.value = t('views.PipelineEditorView.failed_to_load_graph', { error: formatApiError(e) })
+    return false
   }
 }
 
@@ -4241,10 +4337,12 @@ watch([selectedNodeData, selectedEdgeData], () => {
 onMounted(() => {
   refitEditorFit()
   window.addEventListener('resize', scheduleEditorRefit)
+  window.addEventListener('storage', handleLayoutOwnershipStorage)
   setupEditorFitObserver(editorRootRef.value)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', scheduleEditorRefit)
+  window.removeEventListener('storage', handleLayoutOwnershipStorage)
   editorFitObserver?.disconnect()
   if (refitFrame) window.cancelAnimationFrame(refitFrame)
 })
@@ -4901,6 +4999,7 @@ async function saveGraph() {
   if (isViewing.value) return
   savingGraph.value = true
   saveGraphError.value = null
+  const ownershipToCommit = draftLayoutOwnership.value
   try {
     // Sync current param set + overrides into selected node data
     if (selectedNodeData.value) {
@@ -4909,7 +5008,7 @@ async function saveGraph() {
         ? { ...selectedNodeOverrides.value }
         : null
     }
-    await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
+    const saveResponse = await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
       body: {
         nodes: rawNodes.value.map(buildNodePayload),
@@ -4928,8 +5027,16 @@ async function saveGraph() {
       },
       signal,
     }))
-    // Reload graph to sync flowNodes with saved state
-    await loadGraph()
+    // openapi-fetch returns HTTP failures in `error` without rejecting. Treat
+    // those responses like transport failures so local ownership is committed
+    // only after the server has accepted the graph.
+    throwOnError(saveResponse)
+    // The server write is the commit point for ownership. Keep the local draft
+    // until the PUT succeeds; a failed PUT never changes the persisted cache.
+    if (ownershipToCommit) commitLayoutOwnership(ownershipToCommit)
+    // Reload graph to sync flowNodes with saved state. Preserve the ownership
+    // just committed even though this read starts from the backend graph.
+    await loadGraph(true)
   } catch (e: unknown) {
     saveGraphError.value = formatApiError(e)
   } finally {

@@ -197,6 +197,7 @@ async function mountEditorLoaded() {
 // view captures `route.params.id` at setup, so seed it before every mount so
 // pipeline-scoped calls carry the real id.
 beforeEach(async () => {
+  localStorage.removeItem('modulo.pipeline.layoutOwnership')
   const { useRoute } = await import('vue-router')
   const route = (useRoute as unknown as () => { params: Record<string, string> })()
   route.params = { id: 'test-pipeline-id' }
@@ -4091,6 +4092,36 @@ describe('PipelineEditorView — FAR-2410 canvas layout & edge direction', () =>
     wrapper.unmount()
   })
 
+  it('persists generated ownership through Arrange, save, and reload while preserving all-zero positions', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } },
+      { id: 'b', node_type: 'agent', label: 'B', position: { x: 0, y: 0 } },
+    ]
+    vm.rawEdges = [{ id: 'e1', source_node_id: 'a', target_node_id: 'b', edge_type: 'normal' }]
+    vm.flowNodes = vm.rawNodes.map((node: any) => ({ ...node }))
+    vm.arrangeGraph()
+    expect(JSON.parse(localStorage.getItem('modulo.pipeline.layoutOwnership') ?? '{}')['test-pipeline-id']).toBeUndefined()
+    expect(vm.layoutUserOwned).toBe(false)
+
+    const putMock = api.PUT as ReturnType<typeof vi.fn>
+    putMock.mockClear()
+    await vm.saveGraph()
+    expect((putMock.mock.calls[0][1] as any).body.nodes[0].position).toEqual({ x: 0, y: 0 })
+
+    vm.rawNodes = [
+      { id: 'a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } },
+      { id: 'b', node_type: 'agent', label: 'B', position: { x: 0, y: 0 } },
+    ]
+    vm.rawEdges = [{ id: 'e1', source_node_id: 'a', target_node_id: 'b', edge_type: 'normal' }]
+    vm.applyGeneratedLayoutIfUnplaced()
+    expect(vm.layoutUserOwned).toBe(false)
+    // Explicit generated provenance makes all-zero coordinates authoritative.
+    expect(vm.rawNodes[1].position).toEqual({ x: 0, y: 0 })
+    wrapper.unmount()
+  })
+
   it('syncs manual drag positions into rawNodes and the save payload, marking layout user-owned', async () => {
     const wrapper = await mountEditorLoaded()
     const vm = wrapper.vm as any
@@ -4105,6 +4136,7 @@ describe('PipelineEditorView — FAR-2410 canvas layout & edge direction', () =>
     expect(vm.rawNodes[0].position).toEqual({ x: 333, y: 444 })
     expect(vm.layoutUserOwned).toBe(true)
     expect(vm.userOwnedLayoutPipelines.get('test-pipeline-id')).toBe(true)
+    expect(JSON.parse(localStorage.getItem('modulo.pipeline.layoutOwnership') ?? '{}')['test-pipeline-id']).toBeUndefined()
 
     const putMock = api.PUT as ReturnType<typeof vi.fn>
     putMock.mockClear()
@@ -4112,6 +4144,79 @@ describe('PipelineEditorView — FAR-2410 canvas layout & edge direction', () =>
     const body = (putMock.mock.calls[0][1] as any).body
     expect(body.nodes[0].position).toEqual({ x: 333, y: 444 })
     expect(body.nodes[0].description).toBe('')
+    expect(JSON.parse(localStorage.getItem('modulo.pipeline.layoutOwnership') ?? '{}')['test-pipeline-id']).toBe('user')
+    wrapper.unmount()
+  })
+
+  it('does not persist draft ownership when the graph save fails', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } }]
+    vm.flowNodes = [{ id: 'a', type: 'agent', position: { x: 120, y: 80 }, data: { label: 'A' } }]
+    vm.rawEdges = []
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('save failed'))
+
+    vm.onNodeDragStop()
+    await vm.saveGraph()
+    await flushPromises()
+
+    expect(vm.saveGraphError).toContain('save failed')
+    expect(JSON.parse(localStorage.getItem('modulo.pipeline.layoutOwnership') ?? '{}')['test-pipeline-id']).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('does not persist draft ownership when the graph save returns an API error', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } }]
+    vm.flowNodes = [{ id: 'a', type: 'agent', position: { x: 120, y: 80 }, data: { label: 'A' } }]
+    vm.rawEdges = []
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: undefined,
+      error: { detail: 'save rejected' },
+      response: { status: 422 },
+    })
+
+    vm.onNodeDragStop()
+    await vm.saveGraph()
+    await flushPromises()
+
+    expect(vm.saveGraphError).toContain('save rejected')
+    expect(JSON.parse(localStorage.getItem('modulo.pipeline.layoutOwnership') ?? '{}')['test-pipeline-id']).toBeUndefined()
+    expect(vm.draftLayoutOwnership).toBe('user')
+    wrapper.unmount()
+  })
+
+  it('does not persist draft ownership when the editor is abandoned', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } }]
+    vm.flowNodes = [{ id: 'a', type: 'agent', position: { x: 120, y: 80 }, data: { label: 'A' } }]
+    vm.onNodeDragStop()
+    expect(JSON.parse(localStorage.getItem('modulo.pipeline.layoutOwnership') ?? '{}')['test-pipeline-id']).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('refreshes ownership from storage events when the graph is clean', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    localStorage.setItem('modulo.pipeline.layoutOwnership', JSON.stringify({ 'test-pipeline-id': 'user' }))
+    window.dispatchEvent(new StorageEvent('storage', { key: 'modulo.pipeline.layoutOwnership', newValue: localStorage.getItem('modulo.pipeline.layoutOwnership') }))
+    await nextTick()
+    expect(vm.layoutUserOwned).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('does not let a storage event overwrite an unsaved layout draft', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } }]
+    vm.flowNodes = [{ id: 'a', type: 'agent', position: { x: 120, y: 80 }, data: { label: 'A' } }]
+    vm.onNodeDragStop()
+    localStorage.setItem('modulo.pipeline.layoutOwnership', JSON.stringify({ 'test-pipeline-id': 'generated' }))
+    window.dispatchEvent(new StorageEvent('storage', { key: 'modulo.pipeline.layoutOwnership', newValue: localStorage.getItem('modulo.pipeline.layoutOwnership') }))
+    await nextTick()
+    expect(vm.layoutUserOwned).toBe(true)
     wrapper.unmount()
   })
 
@@ -4135,7 +4240,7 @@ describe('PipelineEditorView — FAR-2410 canvas layout & edge direction', () =>
     expect(vm.rawNodes).toEqual([])
 
     // A session-owned pipeline is never re-laid out on load.
-    vm.userOwnedLayoutPipelines.set(pipeline, true)
+    vm.setDraftLayoutOwnership('user')
     vm.rawNodes = [
       { id: 'a', node_type: 'agent', label: 'A' },
       { id: 'b', node_type: 'agent', label: 'B' },
@@ -4202,6 +4307,82 @@ describe('PipelineEditorView — FAR-2410 canvas layout & edge direction', () =>
 
     const region = wrapper.find('[data-testid="pipeline-editor-connection-announcement"]')
     expect(region.attributes('aria-live')).toBe('polite')
+    wrapper.unmount()
+  })
+
+  it('reads only valid persisted layout ownership and tolerates corrupt or missing storage', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    localStorage.setItem(
+      'modulo.pipeline.layoutOwnership',
+      JSON.stringify({ userPipeline: 'user', generatedPipeline: 'generated', invalid: 'bogus', numeric: 7 }),
+    )
+    expect(vm.readLayoutOwnership()).toEqual({ userPipeline: 'user', generatedPipeline: 'generated' })
+
+    // Non-object payloads are rejected wholesale.
+    for (const payload of ['null', '[]', '"string"']) {
+      localStorage.setItem('modulo.pipeline.layoutOwnership', payload)
+      expect(vm.readLayoutOwnership()).toEqual({})
+    }
+
+    // Corrupt JSON falls back to an empty map instead of throwing.
+    localStorage.setItem('modulo.pipeline.layoutOwnership', '{not-json')
+    expect(vm.readLayoutOwnership()).toEqual({})
+
+    wrapper.unmount()
+  })
+
+  it('skips layout persistence when localStorage is unavailable', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vi.stubGlobal('localStorage', undefined)
+    try {
+      expect(vm.readLayoutOwnership()).toEqual({})
+      vm.setDraftLayoutOwnership('user')
+      expect(() => vm.commitLayoutOwnership()).not.toThrow()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    wrapper.unmount()
+  })
+
+  it('commits layout ownership only when a draft or override exists', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    // Nothing to commit: no draft, no override.
+    vm.setDraftLayoutOwnership(undefined)
+    vm.commitLayoutOwnership()
+    expect(vm.readLayoutOwnership()).toEqual({})
+
+    // The draft is used when no explicit override is supplied.
+    vm.setDraftLayoutOwnership('generated')
+    vm.commitLayoutOwnership()
+    expect(vm.readLayoutOwnership()).toEqual({ 'test-pipeline-id': 'generated' })
+
+    // An explicit override wins over the draft.
+    vm.setDraftLayoutOwnership('user')
+    vm.commitLayoutOwnership('generated')
+    expect(vm.readLayoutOwnership()).toEqual({ 'test-pipeline-id': 'generated' })
+    expect(vm.layoutOwnershipPipelines.get('test-pipeline-id')).toBe('generated')
+
+    // getLayoutOwnership prefers the draft, then falls back to storage.
+    vm.setDraftLayoutOwnership('user')
+    expect(vm.getLayoutOwnership()).toBe('user')
+    vm.setDraftLayoutOwnership(undefined)
+    expect(vm.getLayoutOwnership()).toBe('generated')
+
+    wrapper.unmount()
+  })
+
+  it('ignores storage events for unrelated keys', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    localStorage.setItem('modulo.pipeline.layoutOwnership', JSON.stringify({ 'test-pipeline-id': 'user' }))
+    window.dispatchEvent(new StorageEvent('storage', { key: 'unrelated-key' }))
+    await nextTick()
+    expect(vm.layoutUserOwned).toBe(false)
     wrapper.unmount()
   })
 })
