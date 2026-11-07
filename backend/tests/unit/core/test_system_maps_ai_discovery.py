@@ -45,8 +45,14 @@ class _Backend(ModelBackendBase):
         self.calls.append({"messages": messages, "output_schema": output_schema})
         return _Response(self._response)
 
-    def stream(self, messages: list[BaseMessage], **kwargs: Any) -> Any:
-        del messages, kwargs
+    def stream(
+        self,
+        messages: list[BaseMessage],
+        tools: list[dict[str, Any]] | None = None,
+        output_schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[BaseMessage]:
+        del messages, tools, output_schema, kwargs
         raise NotImplementedError
 
 
