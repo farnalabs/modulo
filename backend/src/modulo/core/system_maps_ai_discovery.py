@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Any, Protocol
+from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -36,14 +36,6 @@ high-confidence additions. Every endpoint must be an existing deterministic
 node or an explicitly allowlisted safe addition. Do not invent inventory,
 credentials, or relationships unsupported by the supplied data.
 """
-
-
-class _DiscoveryInvoker(Protocol):
-    def __call__(
-        self,
-        messages: list[BaseMessage],
-        output_schema: dict[str, Any] | None = None,
-    ) -> Awaitable[Any]: ...
 
 
 DiscoveryCallable = Callable[[list[BaseMessage], dict[str, Any] | None], Awaitable[Any]]
@@ -113,7 +105,13 @@ def build_discovery_prompt(draft: DiscoveryDraft, *, safe_additions: Sequence[Ma
 def _response_text(response: Any) -> str:
     """Use the established backend response convention without inventing a type."""
     content = getattr(response, "content", None)
-    return content if isinstance(content, str) else str(response)
+    text = content if isinstance(content, str) else str(response)
+    stripped = text.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 2:
+            return "\n".join(lines[1:-1]).strip()
+    return text
 
 
 def _safe_addition_keys(safe_additions: Sequence[Mapping[str, Any]]) -> set[str]:
@@ -168,8 +166,6 @@ def _validate_contract(
     }
     if any(endpoint not in accepted_node_keys for endpoint in endpoints):
         return None
-    if not prompt_version or not rubric_version:
-        return None
     return enhancement
 
 
@@ -220,7 +216,7 @@ def _merge_enhancement(
 
 async def enhance_discovery(
     draft: DiscoveryDraft,
-    backend: ModelBackendBase | DiscoveryCallable | _DiscoveryInvoker,
+    backend: ModelBackendBase | DiscoveryCallable,
     *,
     prompt_version: str = PROMPT_VERSION,
     rubric_version: str = RUBRIC_VERSION,
