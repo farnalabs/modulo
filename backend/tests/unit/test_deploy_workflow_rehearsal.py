@@ -562,8 +562,6 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert "CREATE[[:space:]]+EXTENSION" in workflow_text
     assert "required_extensions?" in workflow_text
     assert 'test -z "${PG_REQUIRED_EXTENSIONS}"' in workflow_text
-    assert 'test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"' in workflow_text
-    assert 'test -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets"' in workflow_text
     assert "pg_config --sharedir" in workflow_text
     assert '[ -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki" ] || {' in workflow_text
     assert (
