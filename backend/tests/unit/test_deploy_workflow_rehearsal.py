@@ -565,8 +565,18 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert 'test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"' in workflow_text
     assert 'test -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets"' in workflow_text
     assert "pg_config --sharedir" in workflow_text
-    assert 'test -f "$BUNDLE/pg/share/postgresql/postgres.bki"' in workflow_text
-    assert 'test -d "$BUNDLE/pg/share/postgresql/timezonesets"' in workflow_text
+    assert '[ -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki" ] || {' in workflow_text
+    assert (
+        'echo "::error::PostgreSQL runtime data file missing: '
+        '${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }' in workflow_text
+    )
+    assert '[ -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets" ] || {' in workflow_text
+    assert (
+        'echo "::error::PostgreSQL runtime data directory missing: '
+        '${BUNDLE}/pg/share/postgresql/timezonesets" >&2; exit 1; }' in workflow_text
+    )
+    assert '[ -f "$BUNDLE/pg/share/postgresql/postgres.bki" ] || {' in workflow_text
+    assert '[ -d "$BUNDLE/pg/share/postgresql/timezonesets" ] || {' in workflow_text
     assert 'BUNDLE_ROOT_ABS="$(realpath -e -- "$BUNDLE")"' in workflow_text
     assert 'sharedir_abs="$(realpath -e -- "$sharedir")"' in workflow_text
     assert 'expected_sharedir_abs="$(realpath -e -- "$BUNDLE/pg/share/postgresql")"' in workflow_text
@@ -3855,14 +3865,36 @@ def _post_condition_env(tmp_path: Path, *, gh_body: str, gh_rc: int, git_rc: int
     }
 
 
-def test_publish_release_assertion_is_the_last_step_after_the_tag_push() -> None:
-    """The verification must be terminal: after the release create and tag push,
-    and the final step of the job so nothing after it can mask a failure."""
+def test_publish_release_assertion_is_the_last_failing_step_after_the_tag_push() -> None:
+    """The verification is after the tag push and is the last failing step.
+
+    A best-effort post-publication notification may follow it only when its
+    safety conditions keep it from masking a publication failure.
+    """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
-    names = _step_names(workflow["jobs"]["publish-release"]["steps"])
+    steps = workflow["jobs"]["publish-release"]["steps"]
+    names = _step_names(steps)
     assert _ASSERT_STEP_NAME in names, "release/bundle-tag assertion step missing"
     assert names.index(_ASSERT_STEP_NAME) > names.index("Push the bundle tag")
-    assert names[-1] == _ASSERT_STEP_NAME, "the assertion must be the job's final step"
+
+    trailing = steps[names.index(_ASSERT_STEP_NAME) + 1 :]
+    assert _step_names(trailing) == ["Notify website to rebuild (Cloudflare Pages deploy hook)"], (
+        "only the best-effort website notification may follow the terminal assertion"
+    )
+    for step in trailing:
+        assert "continue-on-error" not in step, (
+            f"{step.get('name')!r} after the terminal assertion may not mask a failure"
+        )
+        assert "always()" not in str(step.get("if", "")), (
+            f"{step.get('name')!r} after the terminal assertion must not run when it failed"
+        )
+        trailing_script = step.get("run", "")
+        assert "exit 1" not in trailing_script, (
+            f"{step.get('name')!r} after the terminal assertion must never fail the job"
+        )
+        assert trailing_script.rstrip().endswith("exit 0"), (
+            f"{step.get('name')!r} after the terminal assertion must exit 0 on every path"
+        )
 
     script = _post_condition_script()
     raw_script = _extract_publish_release_step_script(_ASSERT_STEP_NAME)
