@@ -18,6 +18,7 @@ import shutil
 import stat
 import subprocess
 import tarfile
+import tempfile
 import textwrap
 from pathlib import Path
 from shutil import which
@@ -33,13 +34,6 @@ RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
 NATIVE_SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "native-release-smoke.yml"
 MANIFEST_SOURCE = REPO_ROOT / "backend" / "src" / "modulo" / "launcher" / "manifest.py"
 
-#: This module EXECUTES the workflows' shipped shell fragments under a real
-#: POSIX shell, so it needs a POSIX shell rather than the Windows WSL launcher
-#: stub. The platform requirement is declared once, as a marker; the gate that
-#: skips it on Windows lives in ``backend/tests/conftest.py``
-#: (``POSIX_ONLY_MARKER``) and Linux CI executes this suite for real.
-pytestmark = pytest.mark.posix_only
-
 _REHEARSAL_STEP_NAME = "Pre-deploy REHEARSAL migrations (one-off machine — always rolls back)"
 _REAL_STEP_NAME = "Pre-deploy migrations (one-off machine)"
 _REHEARSAL_DESTROY_NAME = "Destroy pre-rehearsal machine"
@@ -50,14 +44,8 @@ _LEGS = (
     ("deploy-production", "app-modulo", "prod"),
 )
 
-#: This module executes the shipped deploy/release shell scripts for real in a
-#: subprocess, with stubbed binaries placed first on PATH - so it needs
-#: executable-bit semantics, a POSIX PATH the shell can read, and ``jq``, none
-#: of which a Windows host provides (``bash`` resolves to the WSL stub and the
-#: stubs are unreadable to it). The platform requirement is declared once, as a
-#: marker; the gate that skips it on Windows lives in ``backend/tests/conftest.py``
-#: (``POSIX_ONLY_MARKER``) and Linux CI executes this suite for real.
-pytestmark = pytest.mark.posix_only
+#: The shell-execution tests below carry ``pytest.mark.posix_only`` individually.
+#: Structural workflow assertions remain runnable on every platform.
 
 
 def _workflow() -> dict[str, Any]:
@@ -604,19 +592,54 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert "apt.postgresql.org" not in workflow_text
 
 
-def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
+def _bundle_postgres_smoke_script() -> str:
     workflow = yaml.safe_load(BUNDLE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["bundle"]["steps"]
     names = _step_names(steps)
     smoke_name = "Smoke the final PostgreSQL tarball after relocation as an unprivileged user"
-    smoke_script = steps[names.index(smoke_name)]["run"]
+    script = steps[names.index(smoke_name)]["run"]
+    assert isinstance(script, str)
+    return script
 
+
+def _bundle_postgres_smoke_setup_script() -> str:
+    """Return the ownership/mode setup copied from the final smoke step.
+
+    Keep this deliberately separate from the PostgreSQL commands: the test below
+    proves the security boundary without downloading or starting PostgreSQL.
+    """
+    script = _bundle_postgres_smoke_script()
+    marker = "# The extracted bundle remains runner-owned:"
+    start = script.index(marker)
+    end = script.index('cat > "$smoke_script"', start)
+    return textwrap.dedent(script[start:end])
+
+
+def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
+    smoke_script = _bundle_postgres_smoke_script()
+    setup_script = _bundle_postgres_smoke_setup_script()
+
+    assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in setup_script
     assert 'tarball="build/${TARBALL_NAME}"' in smoke_script
+
     assert 'test ! -e "$original_bundle"' in smoke_script
     assert 'tar -xzf "$tarball"' in smoke_script
     assert "useradd --system" in smoke_script
     assert "env -i" in smoke_script
+    assert "chown -R" not in setup_script
+    assert 'chmod 0755 "$smoke_root"' in setup_script
+    assert 'chmod -R a+rX "$extract_root"' in setup_script
+    assert "chmod -R a+w" not in setup_script
+    assert 'sudo chown "$smoke_user" "$smoke_workspace"' in setup_script
+    assert 'smoke_home="$smoke_workspace/home"' in smoke_script
+
+    assert 'smoke_dump="$smoke_dump_dir/roundtrip.sql"' in smoke_script
+    assert (
+        'sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"'
+    ) in smoke_script
+    assert 'HOME="$smoke_home"' in smoke_script
     assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
+
     assert "pg_config --sharedir" in smoke_script
     assert 'sharedir_abs="$(realpath -e -- "$sharedir")"' in smoke_script
     assert 'smoke_bundle_abs="$(realpath -e -- "$SMOKE_BUNDLE")"' in smoke_script
@@ -635,13 +658,12 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert "host PostgreSQL path" in smoke_script
     assert "PGHOST" not in smoke_script
     assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
-    assert 'smoke_dump_dir="$smoke_root/dump"' in smoke_script
-    assert 'mkdir -p "$smoke_data" "$smoke_socket" "$smoke_dump_dir" "$smoke_root/home"' in smoke_script
+    assert 'smoke_dump_dir="$smoke_workspace/dump"' in smoke_script
+    assert 'mkdir -p "$smoke_root" "$smoke_workspace"' in smoke_script
     assert (
-        'sudo chown -R "$smoke_user:$smoke_user" '
-        '"$smoke_data" "$smoke_socket" "$smoke_dump_dir" '
-        '"$smoke_root/home" "$smoke_script"'
+        'sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"'
     ) in smoke_script
+    assert 'sudo chown "$smoke_user" "$smoke_workspace"' in smoke_script
     assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in smoke_script
     assert 'chmod 0755 "$smoke_root" "$extract_root"' in smoke_script
     assert "status=$?" in smoke_script
@@ -652,6 +674,145 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert "refusing to remove an unsafe PostgreSQL relocation smoke root" in smoke_script
     assert 'userdel "$smoke_user" >/dev/null 2>&1 || true' not in smoke_script
     assert smoke_script.index('sudo rm -rf -- "$smoke_root"') < smoke_script.index('sudo userdel "$smoke_user"')
+    # The smoke script must stay in the runner-owned smoke root: the workspace
+    # is handed to the unprivileged user, so the runner could not create it there.
+    assert 'smoke_script="$smoke_root/run-smoke.sh"' in smoke_script
+    assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in setup_script
+    assert 'chmod 0755 "$smoke_root" "$extract_root"' in setup_script
+
+
+@pytest.mark.posix_only
+def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace() -> None:
+    """Execute the smoke setup's real POSIX ownership boundary.
+
+    This intentionally does not start PostgreSQL. It creates the same shape as
+    the final smoke step, runs the exact chmod and smoke-user directory setup,
+    then checks the resulting read/execute and write boundaries as the user.
+    """
+    required = ("bash", "sudo", "useradd", "userdel", "id")
+    missing = [command for command in required if shutil.which(command) is None]
+    if missing:
+        pytest.skip("POSIX smoke ownership contract requires: " + ", ".join(missing))
+    sudo = shutil.which("sudo")
+    assert sudo is not None
+    sudo_probe = subprocess.run(  # noqa: S603 - resolved sudo executable and fixed arguments
+        [sudo, "-n", "true"], check=False, capture_output=True, text=True, timeout=30
+    )
+    if sudo_probe.returncode != 0:
+        pytest.skip("POSIX smoke ownership contract requires passwordless sudo for user setup")
+
+    smoke_user = f"modulo-smoke-{os.getpid()}"
+
+    # Mirror the real smoke step's ``smoke_root="$(mktemp -d)"``: the root must
+    # live somewhere the unprivileged user can traverse (``/tmp``), not under
+    # pytest's private 0700 tmp_path tree, or the smoke user cannot reach it.
+    smoke_root = Path(tempfile.mkdtemp(prefix="modulo-smoke-"))
+    extract_root = smoke_root / "extracted"
+    bundle = extract_root / "modulo-0.1.0-linux-amd64"
+    workspace = smoke_root / "workspace"
+    home = workspace / "home"
+    data = workspace / "data"
+    socket_dir = workspace / "socket"
+    dump_dir = workspace / "dump"
+    smoke_script = smoke_root / "run-smoke.sh"
+    bundle_file = bundle / "runtime" / "bin" / "bundle-tool"
+    try:
+        useradd = shutil.which("useradd")
+        userdel = shutil.which("userdel")
+        assert useradd is not None
+        assert userdel is not None
+        subprocess.run(  # noqa: S603 - resolved useradd executable and fixed arguments
+            [sudo, useradd, "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", smoke_user],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        extract_root.mkdir()
+        workspace.mkdir()
+        bundle_file.parent.mkdir(parents=True)
+        bundle_file.write_text("#!/usr/bin/env bash\nprintf 'bundle-ok\\n'\n", encoding="utf-8")
+        (bundle / "README.txt").write_text("runner-owned bundle\n", encoding="utf-8")
+        smoke_script.parent.mkdir(exist_ok=True)
+        smoke_script.write_text("#!/usr/bin/env bash\nset -eu\nexit 0\n", encoding="utf-8")
+
+        # Start from the restrictive modes produced by a real tar extraction.
+        # The setup fragment must be what grants the smoke user access; creating
+        # a permissive fixture would let a removed or weakened chmod pass.
+        smoke_root.chmod(0o700)
+        extract_root.chmod(0o700)
+        bundle.chmod(0o700)
+        bundle_file.chmod(0o700)
+        (bundle / "README.txt").chmod(0o600)
+        smoke_script.chmod(0o700)
+
+        setup_script = textwrap.dedent(
+            f"""\
+            set -euo pipefail
+            smoke_user={shlex.quote(smoke_user)}
+            smoke_root={shlex.quote(str(smoke_root))}
+            extract_root={shlex.quote(str(extract_root))}
+            smoke_workspace={shlex.quote(str(workspace))}
+            smoke_home={shlex.quote(str(home))}
+            smoke_data={shlex.quote(str(data))}
+            smoke_socket={shlex.quote(str(socket_dir))}
+            smoke_dump_dir={shlex.quote(str(dump_dir))}
+            {_bundle_postgres_smoke_setup_script()}
+            """
+        )
+        setup = _run_bash(setup_script, cwd=smoke_root, env=dict(os.environ))
+        assert setup.returncode == 0, setup.stdout + setup.stderr
+
+        id_command = shutil.which("id")
+        assert id_command is not None
+        smoke_id = subprocess.run(  # noqa: S603 - resolved id executable and fixed arguments
+            [id_command, "-u", smoke_user], check=True, capture_output=True, text=True, timeout=30
+        ).stdout.strip()
+        assert smoke_id.isdigit()
+        probe = textwrap.dedent(
+            f"""\
+            set -eu
+            test -r {shlex.quote(str(bundle / "README.txt"))}
+            test -x {shlex.quote(str(bundle_file))}
+            test "$( {shlex.quote(str(bundle_file))} )" = bundle-ok
+            for directory in {shlex.quote(str(home))} {shlex.quote(str(data))} \\
+                {shlex.quote(str(socket_dir))} {shlex.quote(str(dump_dir))}; do
+              test -w "$directory"
+              touch "$directory/probe"
+            done
+            if touch {shlex.quote(str(bundle / "must-not-write"))} 2>/dev/null; then
+              exit 1
+            fi
+            """
+        )
+        env_command = shutil.which("env")
+        bash = shutil.which("bash")
+        assert env_command is not None
+        assert bash is not None
+        result = subprocess.run(  # noqa: S603 - resolved executables and test-owned probe
+            [sudo, "-u", smoke_user, env_command, "-i", "PATH=/usr/bin:/bin", bash, "-c", probe],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not (bundle / "must-not-write").exists()
+    finally:
+        subprocess.run(  # noqa: S603 - resolved sudo executable and test-owned temp root
+            [sudo, "rm", "-rf", "--", str(smoke_root)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        subprocess.run(  # noqa: S603 - resolved sudo/userdel executables and fixed arguments
+            [sudo, userdel, "--remove", smoke_user],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
 
 def test_bundle_release_scans_postgres_elf_paths_and_keeps_glibc_gate() -> None:
@@ -2963,6 +3124,8 @@ def _run_rc_output_step(tmp_path: Path, *, cut: str, recut: str) -> tuple[dict[s
         "RECUT_RC_TAG": recut,
     }
     result = _run_bash(script, cwd=tmp_path, env=env)
+    if os.name == "nt" and result.returncode != 0 and "No such file or directory" in result.stderr:
+        pytest.skip("POSIX shell unavailable on Windows host")
     assert result.returncode == 0, result.stderr
 
     values: dict[str, str] = {}
@@ -3718,6 +3881,7 @@ esac
     return result, calls
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_existing_exact_annotated_target_is_idempotent(tmp_path: Path) -> None:
     result, calls = _bundle_tag_harness(tmp_path, scenario="annotated")
     assert result.returncode == 0, result.stderr
@@ -3725,6 +3889,7 @@ def test_bundle_tag_existing_exact_annotated_target_is_idempotent(tmp_path: Path
     assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_existing_exact_lightweight_target_is_idempotent(tmp_path: Path) -> None:
     result, calls = _bundle_tag_harness(tmp_path, scenario="lightweight")
     assert result.returncode == 0, result.stderr
@@ -3732,6 +3897,7 @@ def test_bundle_tag_existing_exact_lightweight_target_is_idempotent(tmp_path: Pa
     assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_existing_different_target_fails_without_push(tmp_path: Path) -> None:
     result, calls = _bundle_tag_harness(tmp_path, scenario="different")
     assert result.returncode != 0
@@ -3739,6 +3905,7 @@ def test_bundle_tag_existing_different_target_fails_without_push(tmp_path: Path)
     assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_remote_query_unknown_fails_without_push(tmp_path: Path) -> None:
     result, calls = _bundle_tag_harness(tmp_path, scenario="unknown")
     assert result.returncode != 0
@@ -3746,12 +3913,14 @@ def test_bundle_tag_remote_query_unknown_fails_without_push(tmp_path: Path) -> N
     assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_absent_push_and_exact_verification_succeed(tmp_path: Path) -> None:
     result, calls = _bundle_tag_harness(tmp_path, scenario="absent")
     assert result.returncode == 0, result.stderr
     assert "push origin bundle-v0.1.0" in calls.read_text(encoding="utf-8")
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_post_push_verification_mismatch_fails(tmp_path: Path) -> None:
     result, _ = _bundle_tag_harness(tmp_path, scenario="push-mismatch")
     assert result.returncode != 0
@@ -3760,6 +3929,7 @@ def test_bundle_tag_post_push_verification_mismatch_fails(tmp_path: Path) -> Non
     assert "could not be verified after push" not in result.stdout
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_post_push_lightweight_fallback_succeeds_without_second_push(tmp_path: Path) -> None:
     """A lightweight tag uses the full-ref fallback and is verified once."""
     result, calls = _bundle_tag_harness(tmp_path, scenario="push-lightweight")
@@ -3768,6 +3938,7 @@ def test_bundle_tag_post_push_lightweight_fallback_succeeds_without_second_push(
     assert calls.read_text(encoding="utf-8").splitlines().count("push origin bundle-v0.1.0") == 1
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_post_push_verification_unknown_fails(tmp_path: Path) -> None:
     result, _ = _bundle_tag_harness(tmp_path, scenario="push-unknown")
     assert result.returncode != 0
@@ -4210,6 +4381,7 @@ exit 0
     return env, root
 
 
+@pytest.mark.posix_only
 def test_bundle_redis_step_verifies_a_matching_tarball_from_the_download_dir(tmp_path: Path) -> None:
     """The checksum passes only when the manifest name is valid where the check runs."""
     tarball = _redis_source_tarball()
@@ -4222,6 +4394,7 @@ def test_bundle_redis_step_verifies_a_matching_tarball_from_the_download_dir(tmp
     assert (root / "build" / "redis-install" / "bin" / "redis-server").is_file()
 
 
+@pytest.mark.posix_only
 def test_bundle_redis_step_fails_on_a_digest_mismatch_and_never_extracts(tmp_path: Path) -> None:
     tarball = _redis_source_tarball()
     env, root = _redis_step_harness(tmp_path, tarball=tarball, pin_sha256="0" * 64)
@@ -4233,6 +4406,7 @@ def test_bundle_redis_step_fails_on_a_digest_mismatch_and_never_extracts(tmp_pat
     assert not (root / "redis-src").exists(), "a mismatched tarball must never be extracted"
 
 
+@pytest.mark.posix_only
 def test_bundle_redis_step_fails_loudly_when_the_download_writes_no_file(tmp_path: Path) -> None:
     env, root = _redis_step_harness(tmp_path, tarball=None, pin_sha256="0" * 64)
 
