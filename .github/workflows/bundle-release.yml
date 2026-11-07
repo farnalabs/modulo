@@ -227,8 +227,14 @@ jobs:
           test -x "$BUNDLE_PG_PREFIX/bin/postgres"
           test -x "$BUNDLE_PG_PREFIX/bin/initdb"
           test -x "$BUNDLE_PG_PREFIX/bin/pg_dump"
-          test -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki"
-          test -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets"
+          [ -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki" ] || {
+            echo "::error::PostgreSQL runtime data file missing: ${BUNDLE_PG_PREFIX}/share/postgresql/postgres.bki" >&2
+            exit 1
+          }
+          [ -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets" ] || {
+            echo "::error::PostgreSQL runtime data directory missing: ${BUNDLE_PG_PREFIX}/share/postgresql/timezonesets" >&2
+            exit 1
+          }
           test -z "${PG_REQUIRED_EXTENSIONS}"
           test "$("$BUNDLE_PG_PREFIX/bin/pg_config" --version)" = "PostgreSQL ${PG_VERSION}"
           sharedir="$("$BUNDLE_PG_PREFIX/bin/pg_config" --sharedir)"
@@ -308,8 +314,8 @@ jobs:
             [ -x "$required" ] || { echo "::error::required PostgreSQL executable missing or not executable: ${required}" >&2; exit 1; }
             echo "assemble: found PostgreSQL executable ${required}"
           done
-          test -f "$BUNDLE/pg/share/postgresql/postgres.bki" || { echo "::error::PostgreSQL runtime data file missing: ${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }
-          test -d "$BUNDLE/pg/share/postgresql/timezonesets" || { echo "::error::PostgreSQL runtime data directory missing: ${BUNDLE}/pg/share/postgresql/timezonesets" >&2; exit 1; }
+          [ -f "$BUNDLE/pg/share/postgresql/postgres.bki" ] || { echo "::error::PostgreSQL runtime data file missing: ${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }
+          [ -d "$BUNDLE/pg/share/postgresql/timezonesets" ] || { echo "::error::PostgreSQL runtime data directory missing: ${BUNDLE}/pg/share/postgresql/timezonesets" >&2; exit 1; }
           sharedir="$("$BUNDLE/pg/bin/pg_config" --sharedir)" || {
              echo "::error::pg_config --sharedir failed: executable=${BUNDLE}/pg/bin/pg_config" >&2
              exit 1
