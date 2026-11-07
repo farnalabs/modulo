@@ -41,8 +41,8 @@
             </select>
           </div>
           <p v-if="loading" class="text-sm text-muted-foreground" aria-live="polite">{{ $t('views.SystemMapDetailView.loading_ai_options') }}</p>
-  <p v-if="failed" class="rounded border border-destructive bg-destructive/10 p-3 text-sm text-destructive" aria-live="assertive">{{ failedMessage }}</p>
-           <p v-else-if="!accessProbePositive" class="rounded border border-destructive bg-destructive/10 p-3 text-sm text-destructive" aria-live="assertive">{{ $t('views.SystemMapDetailView.internal_probe_required') }}</p>
+          <p v-if="failed" class="rounded border border-destructive bg-destructive/10 p-3 text-sm text-destructive" aria-live="assertive">{{ failedMessage }}</p>
+          <p v-else-if="!accessProbePositive" class="rounded border border-destructive bg-destructive/10 p-3 text-sm text-destructive" aria-live="assertive">{{ $t('views.SystemMapDetailView.internal_probe_required') }}</p>
         </div>
         <p v-if="submitting" class="rounded border bg-muted/40 p-3 text-sm" aria-live="polite" data-testid="system-map-discovery-request-loading">{{ $t('views.SystemMapDetailView.discovery_request_loading') }}</p>
         <p v-if="submitError" class="rounded border border-destructive bg-destructive/10 p-3 text-sm text-destructive" aria-live="assertive" data-testid="system-map-discovery-request-error">{{ submitError }}</p>
@@ -85,17 +85,21 @@ const accessProbePositive = ref(false)
 
 const canSubmit = computed(() => mode.value === 'deterministic' || (props.canUseAi && !loading.value && !failed.value && accessProbePositive.value && Boolean(backendId.value) && Boolean(evalId.value)))
 
+let loadToken = 0
+
 async function loadAiOptions(): Promise<void> {
+  const token = ++loadToken
   loading.value = true
   failed.value = false
   failedMessage.value = ''
   accessProbePositive.value = false
   try {
     const [probe, backendResponse, evalResponse] = await Promise.all([
-      api.GET('/api/v1/admin/feature-flags', { params: { query: { _fresh: true } } }),
+      api.GET('/api/v1/admin/feature-flags'),
       api.GET('/api/v1/model-backends', { params: { query: { page: 1, page_size: 100 } } }),
       api.GET('/api/v1/evals', { params: { query: { page: 1, page_size: 100, eval_type: 'model_judge' } } }),
     ])
+    if (token !== loadToken) return
     const responses = [probe, backendResponse, evalResponse]
     const denied = responses.some((response) => response.response?.status === 403)
     if (denied) {
@@ -114,12 +118,13 @@ async function loadAiOptions(): Promise<void> {
     backends.value = backendResponse.data.items.filter((backend) => backend.visibility === 'org' && backend.tier !== 'in_dev')
     evals.value = evalResponse.data.items.filter((evaluation) => evaluation.eval_type === 'model_judge')
   } catch {
+    if (token !== loadToken) return
     failed.value = true
     if (!failedMessage.value) failedMessage.value = $t('views.SystemMapDetailView.ai_options_unavailable')
     backends.value = []
     evals.value = []
   } finally {
-    loading.value = false
+    if (token === loadToken) loading.value = false
   }
 }
 

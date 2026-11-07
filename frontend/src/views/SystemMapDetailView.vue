@@ -19,10 +19,10 @@
           @select-current="selectCurrentRevision"
           @select-by-time="selectRevisionByTime"
           :read-only="readOnly"
-           @new-draft="createNewDraft"
-           @restore-revision="restoreRevision"
-           @diff-revision="diffRevision"
-           @discover="runDiscovery"
+          @new-draft="createNewDraft"
+          @restore-revision="restoreRevision"
+          @diff-revision="diffRevision"
+          @discover="runDiscovery"
 
         />
       </div>

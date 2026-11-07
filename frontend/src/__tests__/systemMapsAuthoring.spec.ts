@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 
 const mockGet = vi.hoisted(() => vi.fn())
@@ -313,7 +313,7 @@ describe('DiscoveryConfigPanel', () => {
     const wrapper = mountConfig()
     await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
     await vi.waitFor(() => expect(wrapper.text()).toContain('Loading authorised AI discovery options'))
-    expect(wrapper.text()).toContain('A fresh internal-access check is required')
+    expect(wrapper.text()).toContain('An internal-access check is required')
     expect(wrapper.get('[data-testid="system-map-discovery-backend"]').attributes('disabled')).toBeDefined()
     await wrapper.get('form').trigger('submit')
     expect(wrapper.emitted('submit')).toBeUndefined()
@@ -329,6 +329,66 @@ describe('DiscoveryConfigPanel', () => {
     await wrapper.setProps({ canUseAi: false })
     await vi.waitFor(() => expect(wrapper.find('[data-testid="system-map-discovery-mode-ai"]').exists()).toBe(false))
     expect(mockGet).not.toHaveBeenCalled()
+  })
+
+  it('ignores a stale options response that resolves after a newer load', async () => {
+    const loads: Array<Array<{ resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>> = []
+    let optionsCalls = 0
+    mockGet.mockImplementation(() => {
+      const loadIndex = Math.floor(optionsCalls++ / 3)
+      const calls = loads[loadIndex] ?? (loads[loadIndex] = [])
+      return new Promise((resolve, reject) => {
+        calls.push({ resolve, reject })
+      })
+    })
+
+    const wrapper = mountConfig()
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await wrapper.get('[data-testid="system-map-discovery-mode-deterministic"]').setValue(true)
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await vi.waitFor(() => expect(loads).toHaveLength(2))
+
+    loads[1][0].resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+    loads[1][1].resolve({ data: { items: [backend] } })
+    loads[1][2].resolve({ data: { items: [evaluation] } })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="system-map-discovery-backend"] option[value="backend-1"]').exists()).toBe(true))
+
+    loads[0][0].resolve({ data: { flags: [{ name: 'system_maps', currently_active: false }] } })
+    loads[0][1].resolve({ data: { items: [] } })
+    loads[0][2].resolve({ data: { items: [] } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="system-map-discovery-backend"] option[value="backend-1"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('AI discovery options could not be loaded')
+  })
+
+  it('ignores a stale options failure that rejects after a newer load', async () => {
+    const loads: Array<Array<{ resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>> = []
+    let optionsCalls = 0
+    mockGet.mockImplementation(() => {
+      const loadIndex = Math.floor(optionsCalls++ / 3)
+      const calls = loads[loadIndex] ?? (loads[loadIndex] = [])
+      return new Promise((resolve, reject) => {
+        calls.push({ resolve, reject })
+      })
+    })
+
+    const wrapper = mountConfig()
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await wrapper.get('[data-testid="system-map-discovery-mode-deterministic"]').setValue(true)
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await vi.waitFor(() => expect(loads).toHaveLength(2))
+
+    loads[1][0].resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+    loads[1][1].resolve({ data: { items: [backend] } })
+    loads[1][2].resolve({ data: { items: [evaluation] } })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="system-map-discovery-backend"] option[value="backend-1"]').exists()).toBe(true))
+
+    loads[0][0].reject(new Error('stale load failed'))
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="system-map-discovery-backend"] option[value="backend-1"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('AI discovery options could not be loaded')
   })
 
   it('submits deterministic discovery with no options and closes from every control', async () => {

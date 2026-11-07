@@ -381,7 +381,7 @@ describe('SystemMapDiscoveryPanel provenance', () => {
       {
         ai_assisted: true,
         eval_gate_passed: false,
-        eval_gate_verdict: 'blocked',
+        eval_gate_verdict: 'fail',
         provenance: {
           selected_backend_id: 'backend-1',
           prompt_version: 'p1',
@@ -402,7 +402,7 @@ describe('SystemMapDiscoveryPanel provenance', () => {
     expect(wrapper.text()).toContain('e1')
     expect(wrapper.text()).toContain('in-hash')
     expect(wrapper.text()).toContain('out-hash')
-    expect(wrapper.text()).toContain('Blocked: the eval gate returned blocked')
+    expect(wrapper.text()).toContain('Blocked: the eval gate returned fail')
     expect(wrapper.text()).toContain('Choose deterministic discovery explicitly')
     expect(wrapper.find('[data-testid="system-map-discovery-eval-blocked"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="system-map-discovery-save"]').attributes('disabled')).toBeDefined()
@@ -411,7 +411,7 @@ describe('SystemMapDiscoveryPanel provenance', () => {
 
   it('shows the passed gate and enables saving', () => {
     const wrapper = mountWith(
-      { ai_assisted: true, eval_gate_passed: true, eval_gate_verdict: 'passed', provenance: { selected_backend_id: 'backend-1' } },
+      { ai_assisted: true, eval_gate_passed: true, eval_gate_verdict: 'pass', provenance: { selected_backend_id: 'backend-1' } },
       { backendNames: { 'backend-1': 'Primary Backend' }, evalIdentity: 'Judge (v3)' },
     )
 
@@ -421,7 +421,7 @@ describe('SystemMapDiscoveryPanel provenance', () => {
   })
 
   it('falls back to unavailable when the provenance identity is missing', () => {
-    const wrapper = mountWith({ ai_assisted: true, eval_gate_passed: true, eval_gate_verdict: 'passed', provenance: {} })
+    const wrapper = mountWith({ ai_assisted: true, eval_gate_passed: true, eval_gate_verdict: 'pass', provenance: {} })
 
     expect(wrapper.text()).toContain('Unavailable')
     expect(wrapper.text()).not.toContain('Prompt version')

@@ -2071,7 +2071,7 @@ export default {
       "ai_options_unavailable": "AI discovery options could not be loaded. Check your connection and try again from this panel.",
        "ai_options_private_preview": "AI-assisted discovery is unavailable for this account. It is limited to the internal private preview.",
        "ai_options_unavailable_private": "AI-assisted discovery is unavailable for this account or workspace.",
-      "internal_probe_required": "A fresh internal-access check is required before AI-assisted discovery can run.",
+      "internal_probe_required": "An internal-access check is required before AI-assisted discovery can run.",
       "start_discovery": "Start discovery",
       "discovery_provenance": "Discovery provenance",
       "discovery_mode": "Mode",
