@@ -477,7 +477,11 @@ const responseContract = computed<ResponseContract | null>(() => {
   const options = Array.isArray(obj.options)
     ? obj.options
         .filter((o): o is Record<string, unknown> => o !== null && typeof o === 'object')
-        .map((o) => ({ id: `${o.id ?? ''}`, label: `${o.label ?? ''}`, description: typeof o.description === 'string' ? o.description : null }))
+        .map((o) => ({
+          id: stringifyOptionValue(o.id),
+          label: stringifyOptionValue(o.label),
+          description: typeof o.description === 'string' ? o.description : null,
+        }))
         .filter((o) => o.id !== '' && o.label !== '')
     : null
   return { kind, options }
@@ -570,6 +574,17 @@ const subjectLeafKey = computed(() => {
   const value = (ctx as Record<string, unknown>).subject_leaf_key
   return typeof value === 'string' && value.trim() ? value : null
 })
+
+function stringifyOptionValue(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return value.toString()
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return Object.prototype.toString.call(value)
+  }
+}
 
 function statusBadgeClass(state: string): string {
   const classMap: Record<string, string> = {

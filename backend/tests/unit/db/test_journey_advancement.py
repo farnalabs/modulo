@@ -59,6 +59,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import JourneyFact
 from modulo.db.models.run_node_outputs import RunNodeOutput
+from modulo.settings import get_settings, work_item_refs_cap
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -114,6 +115,27 @@ async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as s:
         yield s
+
+
+@pytest.fixture(autouse=True)
+def _isolate_refs_cap_cache() -> Generator[None]:
+    """Clear the process-wide refs-cap caches around every test in this module.
+
+    ``work_item_refs_cap`` and the ``get_settings`` it reads are ``lru_cache``d
+    for the life of the process. A test in another module that exercises a
+    non-default cap (for example ``MODULO_WORK_ITEM_REFS_CAP`` set to a value
+    that clamps to 1) can leave that value cached and visible here once xdist
+    co-locates the modules in a shard, silently shrinking the unified cap so
+    this module's self-report merge drops the agent ref it expects to keep.
+    Clear both caches before and after each test so every test starts from the
+    environment the conftest established. Mirrors the isolation in
+    ``tests/unit/core/test_work_item_refs_slice2b.py``.
+    """
+    work_item_refs_cap.cache_clear()
+    get_settings.cache_clear()
+    yield
+    work_item_refs_cap.cache_clear()
+    get_settings.cache_clear()
 
 
 async def _seed_stage(session: AsyncSession, *, pipeline_id: uuid.UUID = _MAP_PIPELINE) -> None:
@@ -770,8 +792,13 @@ def _patch_finalize_machinery(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("modulo.core.cost_controller.finalize.load_live_components", _fake_components)
     # ``finalize_cost`` calls ``get_settings()`` at argument-evaluation time for
     # ``build_cost_breakdown(..., settings=...)`` — stub it so no real Settings
-    # (which requires env vars) is constructed.
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: MagicMock())
+    # (which requires env vars) is constructed. The stub carries the default
+    # unified refs cap because ``work_item_refs_cap`` reads this same module
+    # global; a bare ``MagicMock`` coerces to ``1`` (``int(MagicMock)``) and
+    # would shrink the cap, silently dropping refs the merge assertions keep.
+    stub_settings = MagicMock()
+    stub_settings.modulo_work_item_refs_cap = 100
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: stub_settings)
     monkeypatch.setattr(
         "modulo.core.cost_controller.finalize.build_telemetry",
         lambda _enriched, _components: ({}, {}),
