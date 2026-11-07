@@ -199,43 +199,34 @@ async def test_resolve_discovery_eval_rejects_missing_or_non_model_judge(
             session,
             eval_id=_EVAL_ID,
             org_id=_ORG_ID,
-            principal=_principal(),
         )
 
     assert exc_info.value.status_code == 422
     assert _detail(exc_info.value)["code"] == expected_code
 
 
-async def test_resolve_discovery_eval_rejects_team_scope_denial() -> None:
+async def test_resolve_discovery_eval_does_not_consult_the_team_gate() -> None:
     session = _eval_session(_eval_row())
 
-    with (
-        patch.object(routes, "evaluate_team_gate", new=AsyncMock(return_value=object())),
-        pytest.raises(HTTPException) as exc_info,
-    ):
-        await routes._resolve_discovery_eval(
+    with patch.object(routes, "evaluate_team_gate", new=AsyncMock(return_value=object())) as gate:
+        definition = await routes._resolve_discovery_eval(
             session,
             eval_id=_EVAL_ID,
             org_id=_ORG_ID,
-            principal=_principal(),
         )
 
-    assert exc_info.value.status_code == 403
-    assert _detail(exc_info.value)["code"] == "eval_definition_unauthorised"
+    gate.assert_not_awaited()
+    assert definition.id == _EVAL_ID
 
 
 async def test_resolve_discovery_eval_rejects_non_typed_contract() -> None:
     session = _eval_session(_eval_row(config_json={"answer_contract": "legacy"}))
 
-    with (
-        patch.object(routes, "evaluate_team_gate", new=AsyncMock(return_value=None)),
-        pytest.raises(HTTPException) as exc_info,
-    ):
+    with pytest.raises(HTTPException) as exc_info:
         await routes._resolve_discovery_eval(
             session,
             eval_id=_EVAL_ID,
             org_id=_ORG_ID,
-            principal=_principal(),
         )
 
     assert exc_info.value.status_code == 422
@@ -245,13 +236,11 @@ async def test_resolve_discovery_eval_rejects_non_typed_contract() -> None:
 async def test_resolve_discovery_eval_builds_definition_from_row() -> None:
     session = _eval_session(_eval_row())
 
-    with patch.object(routes, "evaluate_team_gate", new=AsyncMock(return_value=None)):
-        definition = await routes._resolve_discovery_eval(
-            session,
-            eval_id=_EVAL_ID,
-            org_id=_ORG_ID,
-            principal=_principal(),
-        )
+    definition = await routes._resolve_discovery_eval(
+        session,
+        eval_id=_EVAL_ID,
+        org_id=_ORG_ID,
+    )
 
     assert definition.id == _EVAL_ID
     assert definition.org_id == _ORG_ID

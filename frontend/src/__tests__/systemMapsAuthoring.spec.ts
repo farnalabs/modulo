@@ -152,6 +152,15 @@ describe('DiscoveryPanel', () => {
     published: false,
   }
 
+  it('localizes a missing backend identity', () => {
+    const wrapper = mount(DiscoveryPanel, {
+      props: { discovery: { ...discovery, ai_assisted: true, provenance: { mode: 'ai_assisted', selected_backend_id: 'missing-backend' } }, backendNames: {} },
+      global: { plugins: [i18n] },
+    })
+
+    expect(wrapper.text()).toContain('Unavailable')
+  })
+
   it('only includes accepted suggestions in the save payload', async () => {
     const wrapper = mount(DiscoveryPanel, {
       props: { discovery },
@@ -186,10 +195,18 @@ describe('DiscoveryPanel', () => {
 describe('DiscoveryConfigPanel', () => {
   it('fails closed when AI option loading fails', async () => {
     mockGet.mockRejectedValue(new Error('unavailable'))
-     const wrapper = mount(DiscoveryConfigPanel, { props: { canUseAi: true }, global: { plugins: [i18n] } })
+    const wrapper = mount(DiscoveryConfigPanel, { props: { canUseAi: true }, global: { plugins: [i18n] } })
     await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
     await vi.waitFor(() => expect(wrapper.get('[data-testid="system-map-discovery-submit"]').attributes('disabled')).toBeDefined())
-    expect(wrapper.text()).toContain('AI discovery is unavailable')
+    expect(wrapper.text()).toContain('AI discovery options could not be loaded')
+  })
+
+  it('does not offer a retry message when the access probe returns 403', async () => {
+    mockGet.mockImplementation(() => Promise.resolve({ data: undefined, error: { detail: 'forbidden' }, response: { status: 403 } }))
+    const wrapper = mount(DiscoveryConfigPanel, { props: { canUseAi: true }, global: { plugins: [i18n] } })
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('limited to the internal private preview'))
+    expect(wrapper.text()).not.toContain('try again')
   })
 })
 

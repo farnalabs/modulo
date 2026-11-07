@@ -98,13 +98,15 @@
 </template>
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { DiscoveryReport, DiscoverySelection } from '../../stores/systemMaps'
 
 const props = defineProps<{ discovery: DiscoveryReport | null; dataTestId?: string; backendNames?: Record<string, string>; evalIdentity?: string }>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'save', selections: DiscoverySelection): void }>()
+const { t } = useI18n()
 const canSave = computed(() => props.discovery?.ai_assisted !== true || props.discovery.eval_gate_passed === true)
 function backendName(id: string): string {
-  return props.backendNames?.[id] ?? 'Unavailable'
+  return props.backendNames?.[id] ?? t('views.SystemMapDetailView.provenance_unavailable')
 }
 
 type Decision = 'accepted' | 'rejected'

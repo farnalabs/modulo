@@ -41,8 +41,8 @@
             </select>
           </div>
           <p v-if="loading" class="text-sm text-muted-foreground" aria-live="polite">{{ $t('views.SystemMapDetailView.loading_ai_options') }}</p>
-          <p v-if="failed" class="rounded border border-destructive bg-destructive/10 p-3 text-sm text-destructive" aria-live="assertive">{{ $t('views.SystemMapDetailView.ai_options_unavailable') }}</p>
-          <p v-else-if="!accessProbePositive" class="rounded border border-destructive bg-destructive/10 p-3 text-sm text-destructive" aria-live="assertive">{{ $t('views.SystemMapDetailView.internal_probe_required') }}</p>
+  <p v-if="failed" class="rounded border border-destructive bg-destructive/10 p-3 text-sm text-destructive" aria-live="assertive">{{ failedMessage }}</p>
+           <p v-else-if="!accessProbePositive" class="rounded border border-destructive bg-destructive/10 p-3 text-sm text-destructive" aria-live="assertive">{{ $t('views.SystemMapDetailView.internal_probe_required') }}</p>
         </div>
         <p v-if="submitting" class="rounded border bg-muted/40 p-3 text-sm" aria-live="polite" data-testid="system-map-discovery-request-loading">{{ $t('views.SystemMapDetailView.discovery_request_loading') }}</p>
         <p v-if="submitError" class="rounded border border-destructive bg-destructive/10 p-3 text-sm text-destructive" aria-live="assertive" data-testid="system-map-discovery-request-error">{{ submitError }}</p>
@@ -57,12 +57,15 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../../lib/api/client'
 import type { components } from '../../lib/api/schema'
 import type { DiscoveryMode } from '../../stores/systemMaps'
 
 type Backend = components['schemas']['ModelBackendResponse']
 type Evaluation = components['schemas']['EvalDefinitionResponse']
+
+const { t: $t } = useI18n()
 
 const props = withDefaults(defineProps<{ canUseAi?: boolean; submitting?: boolean; submitError?: string | null }>(), {
   canUseAi: false,
@@ -77,6 +80,7 @@ const backends = ref<Backend[]>([])
 const evals = ref<Evaluation[]>([])
 const loading = ref(false)
 const failed = ref(false)
+const failedMessage = ref('')
 const accessProbePositive = ref(false)
 
 const canSubmit = computed(() => mode.value === 'deterministic' || (props.canUseAi && !loading.value && !failed.value && accessProbePositive.value && Boolean(backendId.value) && Boolean(evalId.value)))
@@ -85,6 +89,7 @@ async function loadAiOptions(): Promise<void> {
   if (!props.canUseAi) return
   loading.value = true
   failed.value = false
+  failedMessage.value = ''
   accessProbePositive.value = false
   try {
     const [probe, backendResponse, evalResponse] = await Promise.all([
@@ -92,14 +97,26 @@ async function loadAiOptions(): Promise<void> {
       api.GET('/api/v1/model-backends', { params: { query: { page: 1, page_size: 100 } } }),
       api.GET('/api/v1/evals', { params: { query: { page: 1, page_size: 100, eval_type: 'model_judge' } } }),
     ])
+    const responses = [probe, backendResponse, evalResponse]
+    const denied = responses.some((response) => response.response?.status === 403)
+    if (denied) {
+      failedMessage.value = $t('views.SystemMapDetailView.ai_options_private_preview')
+      throw new Error('AI discovery options are not available to this caller')
+    }
+    const unavailable = responses.some((response) => response.response?.status !== undefined && response.response.status >= 400 && response.response.status < 500)
+    if (unavailable) {
+      failedMessage.value = $t('views.SystemMapDetailView.ai_options_unavailable_private')
+      throw new Error('AI discovery options are unavailable to this caller')
+    }
     if (probe.error || backendResponse.error || evalResponse.error || !backendResponse.data || !evalResponse.data) throw new Error('AI discovery options unavailable')
     const flags = (probe.data as { flags?: Array<{ name: string; currently_active: boolean }> }).flags
     accessProbePositive.value = Array.isArray(flags) && flags.some((flag) => flag.name === 'system_maps' && flag.currently_active)
     if (!accessProbePositive.value) throw new Error('Internal access probe failed')
     backends.value = backendResponse.data.items.filter((backend) => backend.visibility === 'org' && backend.tier !== 'in_dev')
     evals.value = evalResponse.data.items.filter((evaluation) => evaluation.eval_type === 'model_judge')
-  } catch {
+  } catch (error: unknown) {
     failed.value = true
+    if (!failedMessage.value) failedMessage.value = error instanceof Error ? $t('views.SystemMapDetailView.ai_options_unavailable') : $t('views.SystemMapDetailView.ai_options_unavailable')
     backends.value = []
     evals.value = []
   } finally {
