@@ -22,7 +22,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.pipeline_engine.executor import (
-    _failure_event_matches,
     _graph_has_script_mode,
     _retry_after_policy,
     _script_lease_probe_ok,
@@ -34,6 +33,7 @@ from modulo.core.pipeline_engine.node_runner import (
     SupersededNodeError,
     make_sandbox_agent_fn,
 )
+from modulo.core.pipeline_engine.retry_policy import _failure_event_matches
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 
