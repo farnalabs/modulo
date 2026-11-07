@@ -2254,12 +2254,46 @@ const defaultEdgeOptions = {
   },
 }
 
-// Conservative frontend/session layout ownership (FAR-2410). The graph API has
-// no ownership field and this PR deliberately does not add a migration. The
-// map lives for the SPA session: a manual drag marks the pipeline user-owned,
-// Arrange graph clears it. Saved positions are always authoritative on load,
-// so a fresh session still reopens the persisted arrangement exactly.
-const userOwnedLayoutPipelines = new Map<string, boolean>()
+// Layout ownership is frontend provenance (FAR-2420), not inferred from
+// coordinates. The graph API still has no ownership field, so this small map is
+// persisted in localStorage per pipeline: a manual drag records `user`, while
+// Arrange records `generated`. The entry is deliberately absent for legacy
+// graphs; those retain the FAR-2410 non-zero-position heuristic until the user
+// or Arrange establishes explicit provenance. This keeps finite {x: 0, y: 0}
+// positions authoritative once they have an ownership record without mutating
+// historic snapshot data.
+type LayoutOwnership = 'user' | 'generated'
+const LAYOUT_OWNERSHIP_STORAGE_KEY = 'modulo.pipeline.layoutOwnership'
+function readLayoutOwnership(): Record<string, LayoutOwnership> {
+  if (typeof localStorage === 'undefined') return {}
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LAYOUT_OWNERSHIP_STORAGE_KEY) ?? '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, LayoutOwnership] =>
+        entry[1] === 'user' || entry[1] === 'generated',
+      ),
+    )
+  } catch {
+    return {}
+  }
+}
+function persistLayoutOwnership(pipelineId: string, ownership: LayoutOwnership): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    const stored = readLayoutOwnership()
+    stored[pipelineId] = ownership
+    localStorage.setItem(LAYOUT_OWNERSHIP_STORAGE_KEY, JSON.stringify(stored))
+  } catch {
+    // Layout persistence is an enhancement; the in-memory map remains authoritative.
+  }
+}
+const persistedLayoutOwnership = readLayoutOwnership()
+const layoutOwnershipPipelines = new Map<string, LayoutOwnership>(Object.entries(persistedLayoutOwnership))
+// Kept as a compatibility/readability map for existing editor logic and tests.
+const userOwnedLayoutPipelines = new Map<string, boolean>(
+  Object.entries(persistedLayoutOwnership).map(([id, ownership]) => [id, ownership === 'user']),
+)
 const layoutUserOwned = ref(false)
 interface PositionSnapshot { x: number; y: number }
 interface ArrangeUndoSnapshot {
@@ -3573,6 +3607,22 @@ function convertBackendEdge(e: any, i: number): any {
   }
 }
 
+function setLayoutOwnership(ownership: LayoutOwnership): void {
+  layoutOwnershipPipelines.set(pipelineId, ownership)
+  userOwnedLayoutPipelines.set(pipelineId, ownership === 'user')
+  persistLayoutOwnership(pipelineId, ownership)
+}
+
+function getLayoutOwnership(): LayoutOwnership | undefined {
+  const explicit = layoutOwnershipPipelines.get(pipelineId)
+  if (explicit) return explicit
+  // Existing callers/tests may seed the compatibility map directly; treat only
+  // its `true` value as explicit user provenance. `false` remains generated
+  // ownership only after it has gone through setLayoutOwnership().
+  if (userOwnedLayoutPipelines.get(pipelineId) === true) return 'user'
+  return undefined
+}
+
 function snapshotPositions(nodes: any[]): Record<string, PositionSnapshot> {
   const snapshot: Record<string, PositionSnapshot> = {}
   for (const node of nodes) {
@@ -3643,13 +3693,19 @@ function applyGraphPositions(positions: Record<string, PositionSnapshot>): void 
 /**
  * Generated layout is the default for a new/unplaced graph. Saved positions
  * are authoritative: an already-placed graph is never silently re-laid out.
- * `userOwnedLayoutPipelines` carries the explicit ownership decision for the
- * duration of the SPA session (see the note beside its declaration).
+ * `layoutOwnershipPipelines` carries explicit provenance across reloads. Legacy
+ * graphs without an entry retain the non-zero-position fallback for compatibility.
  */
 function applyGeneratedLayoutIfUnplaced(): void {
   if (rawNodes.value.length === 0) return
-  if (userOwnedLayoutPipelines.get(pipelineId)) {
+  const ownership = getLayoutOwnership()
+  if (ownership === 'user') {
     layoutUserOwned.value = true
+    return
+  }
+  if (ownership === 'generated') {
+    applyGraphPositions(computeGraphLayout())
+    layoutUserOwned.value = false
     return
   }
   if (hasPlacedPositions(rawNodes.value)) {
@@ -3671,7 +3727,7 @@ function arrangeGraph(): void {
   applyGraphPositions(computeGraphLayout())
   arrangeUndo.value = undo
   layoutUserOwned.value = false
-  userOwnedLayoutPipelines.set(pipelineId, false)
+  setLayoutOwnership('generated')
   void nextTick().then(() =>
     fitView({ padding: 0.1 }).catch((error) => {
       console.warn('[PipelineEditorView] Arrange graph fitView failed', error)
@@ -3686,7 +3742,7 @@ function undoArrangeGraph(): void {
   rawNodes.value = restorePositions(rawNodes.value, undo.raw)
   flowNodes.value = restorePositions(flowNodes.value, undo.flow)
   layoutUserOwned.value = undo.userOwned
-  userOwnedLayoutPipelines.set(pipelineId, undo.userOwned)
+  setLayoutOwnership(undo.userOwned ? 'user' : 'generated')
   arrangeUndo.value = null
 }
 
@@ -3706,7 +3762,7 @@ function onNodeDragStop(): void {
   if (isViewing.value) return
   syncNodePositionsFromFlow()
   layoutUserOwned.value = true
-  userOwnedLayoutPipelines.set(pipelineId, true)
+  setLayoutOwnership('user')
   arrangeUndo.value = null
 }
 
