@@ -58,11 +58,11 @@ from modulo.db.crud.hitl_review_config import human_only_effective
 # third element matters because the compiled graph bakes the effective per-node
 # timeout in — without it, PATCHing node_timeout_seconds would be a no-op until
 # LRU eviction/restart. The fourth element is a deterministic structural hash of
-# the graph's port topology (FAR-416 / F1): it forces a recompile when ports or
+# the graph's port topology: it forces a recompile when ports or
 # node types change, even though the (pipeline_id, snapshot_id, timeout) triple
 # is unchanged. The executor further folds content hashes into that fourth
 # element via ``struct_hash_with_eval_defs`` — the pipeline retry policy
-# (FAR-402 P5) and the node-scoped eval definitions (FAR-502) are baked into
+# and the node-scoped eval definitions are baked into
 # node/gate closures at compile time, so a change to either must miss the cache
 # and recompile rather than serve a stale graph to a replay/resume.
 CacheKey = tuple[uuid.UUID, uuid.UUID, int, str]
@@ -90,8 +90,8 @@ def get_or_compile(
     compiled graph embeds the effective per-node timeout (the pipeline value is
     used for every node with a null ``timeout_seconds``). Keying on it means a
     PATCH to the pipeline setting takes effect immediately. ``graph_struct_hash``
-    (FAR-416 / F1) folds the port topology into the key so a port change forces
-    a fresh compile rather than serving a stale cached graph.
+    folds the port topology into the key so a port change forces a fresh compile
+    rather than serving a stale cached graph.
 
     Uses a per-key lock so concurrent calls for the same uncached key
     compile only once.
@@ -114,7 +114,7 @@ def get_or_compile(
 
 
 def compute_eval_defs_hash(eval_defs_by_node: dict[str, list[EvalDefDTO]] | None) -> str:
-    """Deterministic content hash of the node-scoped eval definitions (FAR-502).
+    """Deterministic content hash of the node-scoped eval definitions.
 
     ``build_graph_from_json`` bakes ``eval_definitions_by_node`` into the HITL
     gate closures (eval-before-interrupt). Replays / variant runs / resumes
@@ -128,7 +128,7 @@ def compute_eval_defs_hash(eval_defs_by_node: dict[str, list[EvalDefDTO]] | None
     not guaranteed) and serialised with sorted JSON keys.  UUIDs and Decimals
     are serialised via ``json.dumps(default=str)``.
 
-    NOTE (FAR-1100 cutover): the prior Pydantic ``EvalDefinition`` path used
+    NOTE: the prior Pydantic ``EvalDefinition`` path used
     ``model_dump(mode="json")`` which converts Decimals to floats (e.g.
     ``0.5``).  The new ``EvalDefDTO`` dataclass path uses
     ``dataclasses.asdict`` + ``json.dumps(default=str)`` which converts
@@ -204,7 +204,7 @@ class RouterConfigError(ValueError):
 
 
 def _validate_router_config(router_config: dict[str, Any], node_id: str) -> None:
-    """Enforce Router-node compile-time invariants (FAR-402 P1 / F2-A).
+    """Enforce Router-node compile-time invariants.
 
     A Router node MUST declare a ``default`` rule so every run has a defined
     terminal hop. This is enforced ONLY for new Router nodes (backward-compat:
@@ -227,7 +227,7 @@ def _make_gate_kickback_router(
 ) -> Callable[[dict[str, Any]], str]:
     """Build a router that kicks back to reject_target on HITL rejection.
 
-    FAR-210 (reject→correction edge): a gate config MAY declare a
+    Reject→correction edge: a gate config MAY declare a
     ``correction_target``. The router still kicks a rejection back to the plain
     ``reject_target`` — the correction DISPATCH happens in the gate node itself
     (``node_runner._hitl_review``), which invokes
@@ -236,7 +236,7 @@ def _make_gate_kickback_router(
     Routing a rejection to the ``correction_target`` here would be dead routing
     state; T1's ``recover_node`` override stays the break-glass path.
 
-    FAR-541 gate-identity check: this router sits on the gate's outgoing edge,
+    Gate-identity check: this router sits on the gate's outgoing edge,
     so it normally runs immediately after the gate node consumed and validated
     a decision stamped for THIS gate. But the edge is ALSO reachable when the
     gate completed WITHOUT consuming a decision (condition / eval-condition /
@@ -265,11 +265,11 @@ def _make_gate_terminate_router(
     *,
     review_id: str,
 ) -> Callable[[dict[str, Any]], str]:
-    """Build a router that ENDS the run on a stamped HITL rejection (FAR-1487).
+    """Build a router that ENDs the run on a stamped HITL rejection.
 
     The gate has no reject destination and no explicit ``on_reject: proceed``
     (nor a ``correction_target``), so a rejection must terminate instead of
-    silently continuing to the approve target. Uses the SAME FAR-541
+    silently continuing to the approve target. Uses the SAME gate-identity
     gate-identity stamp check as :func:`_make_gate_kickback_router` - a
     stale/foreign/missing stamp (the gate was skipped and ``_hitl_decision``
     belongs to an earlier gate) routes to the normal target, never END.
@@ -452,7 +452,7 @@ _CONCAT_KEYS: frozenset[str] = frozenset(
     {
         "artifacts",
         "_hitl_reviews",
-        "_hitl_gates",  # _hitl_gates: transition shim (FAR-1104)
+        "_hitl_gates",  # _hitl_gates: transition shim
         "_run_context_write_log",
         "_iteration_counts",
     }
@@ -514,7 +514,7 @@ def _pipeline_state_reducer(current: dict[str, Any], update: dict[str, Any]) -> 
 
 
 def _count_sandbox_nodes(nodes: list[dict[str, Any]]) -> bool:
-    """Return True when the graph has exactly one sandbox_agent node (FAR-228)."""
+    """Return True when the graph has exactly one sandbox_agent node."""
     return sum(1 for n in nodes if str(n.get("node_type", "")).strip() == "sandbox_agent") == 1
 
 
@@ -522,7 +522,7 @@ def _compute_dag_ancestor_ids(
     node_ids: list[str],
     edges: list[dict[str, Any]],
 ) -> dict[str, frozenset[str]]:
-    """Compute each node's transitive DAG-ancestor id set (FAR-795).
+    """Compute each node's transitive DAG-ancestor id set.
 
     Ancestors are computed over FORWARDING edges only — reject edges are
     EXCLUDED: a reject edge is a correction kick-back that re-enters the same
@@ -582,13 +582,13 @@ def _make_node_fn(
     connector_binding = node_def.get("connector_binding")
 
     if node_type in ("dispatch", "connector") and not connector_binding:
-        # FAR-1141 (MAJOR 7): a dispatch node's whole job is its binding. With
+        # A dispatch node's whole job is its binding. With
         # none it used to fall through to the general agent-node factory and
         # silently execute as an LLM node — no dispatch, no error. Fail LOUD at
         # graph build instead (the API model rejects the shape at save time;
         # this catches hand-written and legacy graphs).
 
-        # FAR-2089: a ``connector`` node is the same shape — its whole job is the
+        # A ``connector`` node is the same shape — its whole job is the
 
         # binding, and the ownerless fall-through below is the general LLM
         # factory. A binding-less connector node therefore ran as an agent node
@@ -609,7 +609,7 @@ def _make_node_fn(
     # (sandbox_agent above; an ``agent`` node with an ``agent_id`` below, which
     # runs the LLM factory). Keying the run classifier on the binding WITHOUT
     # this gate stamped an ``agent``-node graph ``dispatched`` although nothing
-    # fires (FAR-1141 criterion 4), so both sides now ask the same function.
+    # fires, so both sides now ask the same function.
     if node_routes_binding_to_connector(node_def):
         return make_connector_fn(node_def, timeout=timeout, session_factory=session_factory)
     if node_type == "manual":
@@ -703,7 +703,7 @@ def make_scatter_node_fn(
                 # failed branch so a downstream join can apply its partial-failure
                 # policy (``join_partial_policy="fail"`` raises; the default
                 # ``collect_and_proceed`` aggregates the partial result). This is
-                # what makes ``__scatter_read`` statuses real at runtime (FAR-402
+                # what makes ``__scatter_read`` statuses real at runtime
                 # §4 B).
                 status_map[child_id] = "failed"
                 return {"error": str(exc), "_scatter_child_failed": True}
@@ -765,11 +765,11 @@ def _build_raw_node_fn(
     The same branching used by the node-adding path (join / scatter /
     agent / connector / manual / sandbox). Returns the callable rather than
     adding it to the graph so the retry/compensation wrapper can be applied
-    around it (FAR-402 P5 runtime wiring).
+    around it (runtime wiring).
     """
     node_type: str = node_def.get("node_type", "agent")
 
-    # FAR-402 P3 / FAR-417: compile-time fail-closed validation of scatter/join
+    # Compile-time fail-closed validation of scatter/join
     # configuration (typed error surfaces before any execution).
     validate_scatter_join_node(node_def)
 
@@ -951,7 +951,7 @@ def _add_hitl_review_edge(
     reject_target: str | None = hitl_config.get("reject_target")
     if reject_target is None:
         reject_target = reject_targets_by_source.get(source)
-    # FAR-1487: stamp the compile-time disposition onto the gate config BEFORE
+    # Stamp the compile-time disposition onto the gate config BEFORE
     # the gate fn is built, so the gate node's rejected artifact carries it
     # (the executor finalize keys its ``rejected`` downgrade on it).
     hitl_config["reject_disposition"] = resolve_reject_disposition(hitl_config, has_reject_route=bool(reject_target))
@@ -978,13 +978,13 @@ def _add_hitl_review_edge(
         graph.add_conditional_edges(review_id, gate_router)
         target_ids.add(reject_target_str)
     elif resolve_reject_disposition(hitl_config, has_reject_route=False) == REJECT_DISPOSITION_TERMINATE:
-        # FAR-1487: no reject route, no correction_target, no explicit
+        # No reject route, no correction_target, no explicit
         # ``on_reject: proceed`` -> a stamped rejection ENDS the run. The
         # approve target stays reachable via the same conditional edge.
         graph.add_conditional_edges(review_id, _make_gate_terminate_router(target, review_id=review_id))
     else:
         # Explicit ``on_reject: proceed`` (or an automated correction_target):
-        # a rejection continues to the approve target, as before FAR-1487.
+        # a rejection continues to the approve target, as before.
         graph.add_edge(review_id, target)
 
     gate_node_ids.add(review_id)
@@ -1055,7 +1055,7 @@ def _inject_node_hitl_configs(
 ) -> None:
     """Stamp a HITL node's ``hitl_config`` onto each of its normal outgoing edges.
 
-    HITL node (FAR-402 P1 / F2-D): compile-equivalent to the legacy edge-level
+    HITL node: compile-equivalent to the legacy edge-level
     HITL gate. Inject the node's hitl_config onto every outgoing (normal) edge
     so the existing synthetic-gate path picks it up unchanged. Mutates the edge
     dicts in place, before :func:`_add_normal_edges` reads them back.
@@ -1067,7 +1067,7 @@ def _inject_node_hitl_configs(
 
 
 def _register_router_rule_targets(nodes: list[dict[str, Any]], target_ids: set[str]) -> None:
-    """Register every Router-node rule/default target in *target_ids* (FAR-415).
+    """Register every Router-node rule/default target in *target_ids*.
 
     Router nodes route via ``router_config`` (not outgoing edges), so their rule
     targets are never seen by the edge-driven ``target_ids`` population. The
@@ -1119,11 +1119,11 @@ def _assemble_nodes(
 ) -> None:
     """Build and add every pipeline node's wrapped callable to *graph*.
 
-    FAR-228: the idempotency gate is inert on multi-node graphs — computed once
+    The idempotency gate is inert on multi-node graphs — computed once
     here and threaded into the sandbox node builder so guard A (early skip) can
     require it without re-deriving from the node's own def.
 
-    FAR-795: per-node DAG-ancestor id sets (over forwarding edges), frozen at
+    Per-node DAG-ancestor id sets (over forwarding edges), frozen at
     compile time and threaded into the agent node fns so the node-start
     work_item_refs injection (node_runner ``make_node_fn``) can union the
     ancestors' emissions with the create-time refs through the pure
@@ -1273,14 +1273,14 @@ def _link_sources(
     conditional, loop_edges, normal = dispatch.conditional, dispatch.loop_edges, dispatch.normal
 
     if dispatch.branch == "router":
-        # Router node (FAR-402 P1 / F2-A): lowers to the existing
+        # Router node: lowers to the existing
         # conditional-edge compile path via the shared JMESPath evaluator.
         # Compile-time default-rule enforcement guards mis-configured graphs.
         router_config = dict(source_node_def.get("router_config") or {})
         _validate_router_config(router_config, source)
         graph.add_conditional_edges(source, make_router_node_fn(router_config, node_id=source))
     elif dispatch.branch == "hitl":
-        # HITL node (FAR-402 P1 / F2-D): stamp the node-level hitl_config onto
+        # HITL node: stamp the node-level hitl_config onto
         # every outgoing normal edge, then compile them via the legacy
         # synthetic-gate path unchanged.
         _inject_node_hitl_configs(source, normal, source_node_def)
@@ -1385,7 +1385,7 @@ def _validate_human_mode_pause_edges(
     edges: list[dict[str, Any]],
     eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None,
 ) -> None:
-    """FAR-939 chunk 12 §3.3 — fail-closed graph-build validation.
+    """Fail-closed graph-build validation.
 
     A node whose eval list contains a HUMAN-mode-governed DTO must be the
     source of EXACTLY ONE edge that compiles an HITL review gate, and that
@@ -1396,7 +1396,7 @@ def _validate_human_mode_pause_edges(
     a pause edge the human-governed eval would be skipped with nothing to
     decide it (a silent no-decision hole); with two, one gate would raise
     two interrupts for a single evaluation; and a human-decided gate is
-    definitionally human-only (FAR-609), so an explicit opt-out is
+    definitionally human-only, so an explicit opt-out is
     rejected. Violations raise ``ValueError`` — run start fails loudly, the
     run never begins.
     """
@@ -1430,13 +1430,13 @@ def _validate_human_mode_pause_edges(
         # M5: the SAME semantics the runtime enforces — a falsy opt-out
         # (``false``, ``0``, ``""`` — a node-level hitl_config bypasses the
         # Pydantic model, so any of these can persist) is rejected, not just
-        # the literal ``False``. ``human_only_effective`` is the FAR-609
+        # the literal ``False``. ``human_only_effective`` is the
         # single source the runtime resolution reads through.
         if isinstance(hitl_config, dict) and human_only_effective(hitl_config) is False:
             raise ValueError(
                 f"human-mode policy-gate eval on node {node_id}: the HITL review config sets "
                 f"human_only={hitl_config.get('human_only')!r} (falsy) — a human-decided gate is "
-                "definitionally human-only (chunk 12 §3.3 / FAR-609)."
+                "definitionally human-only (chunk 12 §3.3)."
             )
 
 
@@ -1476,7 +1476,7 @@ def build_graph_from_json(
     router — normal edges from that source serve as fallback targets (the
     router picks ONE target; this is NOT a fan-out).
 
-    Parallel fan-out (FAR-171 / ``parallel_branches``): when a source has
+    Parallel fan-out: when a source has
     MULTIPLE normal (non-conditional, non-loop) outgoing edges and no
     conditional/llm-routing/loop edges, each edge is added directly via
     ``graph.add_edge(source, target)`` — LangGraph's native parallel fan-out.
@@ -1491,7 +1491,7 @@ def build_graph_from_json(
     state_schema = cast("type[Any]", Annotated[dict[str, Any], _pipeline_state_reducer])
     graph: StateGraph[Any] = StateGraph(state_schema)
 
-    # FAR-416 (FAR-402 F1): lazy backfill. Synthesize default out/in ports for
+    # Lazy backfill. Synthesize default out/in ports for
     # legacy (port-less) nodes at load/first-compile. Ports are ADDITIVE metadata
     # over the flat run_context/artifact dict — the runtime still reads/writes
     # the flat dict unchanged; this only ensures every node has a port model.
@@ -1501,13 +1501,13 @@ def build_graph_from_json(
     if not nodes:
         raise ValueError("graph_json has no nodes")
 
-    # FAR-311: node type map for the HITL gate eval path — the gate validates
+    # Node type map for the HITL gate eval path — the gate validates
     # the source node's CONTRACT output (not the merged state), so it needs the
     # source node's type to split the envelope. Derived from the immutable
     # graph_json, so it is identical for every compiled snapshot.
     node_type_map = {str(n["id"]): (n.get("node_type") or DEFAULT_NODE_TYPE) for n in nodes if n.get("id")}
 
-    # FAR-939 chunk 12 §3.3 — fail closed BEFORE compiling: a human-mode
+    # Fail closed BEFORE compiling: a human-mode
     # governed eval without exactly one HITL pause edge (or with an explicit
     # human_only=false opt-out) must refuse to start rather than silently
     # decide nothing at runtime.
