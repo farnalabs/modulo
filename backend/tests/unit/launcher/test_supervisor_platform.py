@@ -40,6 +40,7 @@ from modulo.launcher.supervisor import (
     ChildSpec,
     Supervisor,
     SupervisorKnobs,
+    _child_shim_env,
     _children_of,
     _DarwinProcessBackend,
     _is_postgres_process,
@@ -321,6 +322,14 @@ def test_linux_shim_starttime_preserves_the_unreadable_sentinel(
     backend = _LinuxProcessBackend()
     monkeypatch.setattr(backend, "starttime", lambda _pid: None)
     assert backend.shim_starttime(1234) == -1
+
+
+def test_child_shim_env_restores_relocated_bundle_import_paths_without_caller_paths() -> None:
+    env = _child_shim_env({"PATH": "/usr/bin", "PYTHONPATH": "/untrusted"})
+    pythonpath = env["PYTHONPATH"]
+    assert pythonpath.split(os.pathsep)[0] == str(Path(supervisor_module.__file__).resolve().parents[2])
+    assert "/untrusted" not in pythonpath
+    assert env["PATH"] == "/usr/bin"
 
 
 def test_linux_child_shim_argv_is_byte_identical_to_the_historical_shape() -> None:
