@@ -91,7 +91,6 @@ class _CompileLock:
 # waiting for or holding its lock, so eviction cannot create a second lock for a
 # key while an older compilation is still in flight.
 _compile_locks: dict[CacheKey, _CompileLock] = {}
-<<<<<<< HEAD
 
 # Eviction invalidates every timeout/hash variant for a pipeline/snapshot pair.
 # A caller records this generation before queueing on the per-key lock; a waiter
@@ -110,8 +109,6 @@ def _discard_invalidation_generation_if_idle(scope: InvalidationScope) -> None:
     if any(key[:2] == scope for key in _compile_locks):
         return
     _invalidation_generations.pop(scope, None)
-=======
->>>>>>> c47fbae29 (fix: synchronize graph cache concurrency)
 
 
 def get_or_compile(
@@ -135,19 +132,13 @@ def get_or_compile(
     compile only once.
     """
     key = (pipeline_id, snapshot_id, pipeline_node_timeout_seconds, graph_struct_hash)
-<<<<<<< HEAD
     scope = (pipeline_id, snapshot_id)
-=======
->>>>>>> c47fbae29 (fix: synchronize graph cache concurrency)
     with _CACHE_LOCK:
         cached = _CACHE.get(key, _MISSING)
         if cached is not _MISSING:
             _CACHE.move_to_end(key)
             return cached
-<<<<<<< HEAD
         generation = _invalidation_generations.get(scope, 0)
-=======
->>>>>>> c47fbae29 (fix: synchronize graph cache concurrency)
         entry = _compile_locks.get(key)
         if entry is None:
             entry = _CompileLock(threading.Lock())
@@ -158,7 +149,6 @@ def get_or_compile(
         with entry.lock:
             with _CACHE_LOCK:
                 cached = _CACHE.get(key, _MISSING)
-<<<<<<< HEAD
                 current_generation = _invalidation_generations.get(scope, 0)
                 if cached is not _MISSING:
                     _CACHE.move_to_end(key)
@@ -173,13 +163,6 @@ def get_or_compile(
                     # The compile crossed invalidation. Return the result to this
                     # caller, but never let it repopulate the cache.
                     return result
-=======
-                if cached is not _MISSING:
-                    _CACHE.move_to_end(key)
-                    return cached
-            result = factory()
-            with _CACHE_LOCK:
->>>>>>> c47fbae29 (fix: synchronize graph cache concurrency)
                 _CACHE[key] = result
                 _CACHE.move_to_end(key)
                 if len(_CACHE) > _MAX_SIZE:
@@ -190,10 +173,7 @@ def get_or_compile(
             entry.users -= 1
             if entry.users == 0 and _compile_locks.get(key) is entry:
                 _compile_locks.pop(key, None)
-<<<<<<< HEAD
             _discard_invalidation_generation_if_idle(scope)
-=======
->>>>>>> c47fbae29 (fix: synchronize graph cache concurrency)
 
 
 def compute_eval_defs_hash(eval_defs_by_node: dict[str, list[EvalDefDTO]] | None) -> str:
@@ -1633,22 +1613,15 @@ def evict(pipeline_id: uuid.UUID, snapshot_id: uuid.UUID) -> None:
     compilation is serialized with invalidation: its result is discarded, and
     it cannot repopulate the cache after this function returns.
     """
-<<<<<<< HEAD
     scope = (pipeline_id, snapshot_id)
     with _CACHE_LOCK:
         _advance_invalidation_generation(scope)
-=======
-    with _CACHE_LOCK:
->>>>>>> c47fbae29 (fix: synchronize graph cache concurrency)
         keys = {
             *[k for k in _CACHE if k[0] == pipeline_id and k[1] == snapshot_id],
             *[k for k in _compile_locks if k[0] == pipeline_id and k[1] == snapshot_id],
         }
-<<<<<<< HEAD
         if not keys:
             _discard_invalidation_generation_if_idle(scope)
-=======
->>>>>>> c47fbae29 (fix: synchronize graph cache concurrency)
     for key in keys:
         with _CACHE_LOCK:
             entry = _compile_locks.get(key)
@@ -1660,7 +1633,4 @@ def evict(pipeline_id: uuid.UUID, snapshot_id: uuid.UUID) -> None:
             _CACHE.pop(key, None)
             if entry.users == 0 and _compile_locks.get(key) is entry:
                 _compile_locks.pop(key, None)
-<<<<<<< HEAD
             _discard_invalidation_generation_if_idle(scope)
-=======
->>>>>>> c47fbae29 (fix: synchronize graph cache concurrency)
