@@ -18,6 +18,7 @@ import shutil
 import stat
 import subprocess
 import tarfile
+import tempfile
 import textwrap
 from pathlib import Path
 from shutil import which
@@ -629,7 +630,7 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert 'chmod 0755 "$smoke_root"' in setup_script
     assert 'chmod -R a+rX "$extract_root"' in setup_script
     assert "chmod -R a+w" not in setup_script
-    assert "chown" not in setup_script
+    assert 'sudo chown "$smoke_user" "$smoke_workspace"' in setup_script
     assert 'smoke_home="$smoke_workspace/home"' in smoke_script
 
     assert 'smoke_dump="$smoke_dump_dir/roundtrip.sql"' in smoke_script
@@ -662,7 +663,7 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert (
         'sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"'
     ) in smoke_script
-    assert "sudo chown" not in smoke_script
+    assert 'sudo chown "$smoke_user" "$smoke_workspace"' in smoke_script
     assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in smoke_script
     assert 'chmod 0755 "$smoke_root" "$extract_root"' in smoke_script
     assert "status=$?" in smoke_script
@@ -673,13 +674,15 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert "refusing to remove an unsafe PostgreSQL relocation smoke root" in smoke_script
     assert 'userdel "$smoke_user" >/dev/null 2>&1 || true' not in smoke_script
     assert smoke_script.index('sudo rm -rf -- "$smoke_root"') < smoke_script.index('sudo userdel "$smoke_user"')
-    assert "sudo chown" not in setup_script
+    # The smoke script must stay in the runner-owned smoke root: the workspace
+    # is handed to the unprivileged user, so the runner could not create it there.
+    assert 'smoke_script="$smoke_root/run-smoke.sh"' in smoke_script
     assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in setup_script
     assert 'chmod 0755 "$smoke_root" "$extract_root"' in setup_script
 
 
 @pytest.mark.posix_only
-def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace(tmp_path: Path) -> None:
+def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace() -> None:
     """Execute the smoke setup's real POSIX ownership boundary.
 
     This intentionally does not start PostgreSQL. It creates the same shape as
@@ -700,7 +703,10 @@ def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace(tm
 
     smoke_user = f"modulo-smoke-{os.getpid()}"
 
-    smoke_root = tmp_path / "smoke-root"
+    # Mirror the real smoke step's ``smoke_root="$(mktemp -d)"``: the root must
+    # live somewhere the unprivileged user can traverse (``/tmp``), not under
+    # pytest's private 0700 tmp_path tree, or the smoke user cannot reach it.
+    smoke_root = Path(tempfile.mkdtemp(prefix="modulo-smoke-"))
     extract_root = smoke_root / "extracted"
     bundle = extract_root / "modulo-0.1.0-linux-amd64"
     workspace = smoke_root / "workspace"
@@ -708,7 +714,7 @@ def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace(tm
     data = workspace / "data"
     socket_dir = workspace / "socket"
     dump_dir = workspace / "dump"
-    smoke_script = workspace / "run-smoke.sh"
+    smoke_script = smoke_root / "run-smoke.sh"
     bundle_file = bundle / "runtime" / "bin" / "bundle-tool"
     try:
         useradd = shutil.which("useradd")
@@ -722,7 +728,6 @@ def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace(tm
             text=True,
             timeout=30,
         )
-        smoke_root.mkdir()
         extract_root.mkdir()
         workspace.mkdir()
         bundle_file.parent.mkdir(parents=True)
@@ -742,7 +747,7 @@ def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace(tm
         smoke_script.chmod(0o700)
 
         setup_script = textwrap.dedent(
-            f"""\\
+            f"""\
             set -euo pipefail
             smoke_user={shlex.quote(smoke_user)}
             smoke_root={shlex.quote(str(smoke_root))}
@@ -755,7 +760,7 @@ def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace(tm
             {_bundle_postgres_smoke_setup_script()}
             """
         )
-        setup = _run_bash(setup_script, cwd=tmp_path, env=dict(os.environ))
+        setup = _run_bash(setup_script, cwd=smoke_root, env=dict(os.environ))
         assert setup.returncode == 0, setup.stdout + setup.stderr
 
         id_command = shutil.which("id")
@@ -765,7 +770,7 @@ def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace(tm
         ).stdout.strip()
         assert smoke_id.isdigit()
         probe = textwrap.dedent(
-            f"""\\
+            f"""\
             set -eu
             test -r {shlex.quote(str(bundle / "README.txt"))}
             test -x {shlex.quote(str(bundle_file))}
@@ -794,6 +799,13 @@ def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace(tm
         assert result.returncode == 0, result.stdout + result.stderr
         assert not (bundle / "must-not-write").exists()
     finally:
+        subprocess.run(  # noqa: S603 - resolved sudo executable and test-owned temp root
+            [sudo, "rm", "-rf", "--", str(smoke_root)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
         subprocess.run(  # noqa: S603 - resolved sudo/userdel executables and fixed arguments
             [sudo, userdel, "--remove", smoke_user],
             check=False,

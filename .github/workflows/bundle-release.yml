@@ -670,7 +670,7 @@ jobs:
           smoke_socket="$smoke_workspace/socket"
           smoke_dump_dir="$smoke_workspace/dump"
           smoke_dump="$smoke_dump_dir/roundtrip.sql"
-          smoke_script="$smoke_workspace/run-smoke.sh"
+          smoke_script="$smoke_root/run-smoke.sh"
           mkdir -p "$smoke_root" "$smoke_workspace"
 
           # The extracted bundle remains runner-owned: changing ownership of
@@ -681,6 +681,11 @@ jobs:
           # and every directory/file below it may retain restrictive tar modes.
           chmod 0755 "$smoke_root" "$extract_root"
           chmod -R a+rX "$extract_root"
+          # The mutable workspace is created fresh by the runner and holds no
+          # runner-owned release files, so a single non-recursive ownership
+          # handoff lets the unprivileged smoke user create its own state
+          # directories. The extracted bundle above is never chowned.
+          sudo chown "$smoke_user" "$smoke_workspace"
           sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"
           cat > "$smoke_script" <<'SMOKE_EOF'
 
