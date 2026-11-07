@@ -1,8 +1,9 @@
 # Security Policy
 
-Modulo is a self-hosted Agentic Delivery Governance platform for building
-governed, repeatable AI-assisted software delivery pipelines. We take the security of Modulo and its
-users seriously. This document outlines our vulnerability disclosure process
+Modulo is a self-hosted Delivery Governance Platform for governing the
+software development lifecycle as AI and automation take on more of the work.
+Its current implementation includes governed, repeatable AI-assisted software
+delivery pipelines. We take the security of Modulo and its users seriously. This document outlines our vulnerability disclosure process
 and supported versions.
 
 ## Reporting a Vulnerability

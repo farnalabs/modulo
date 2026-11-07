@@ -2,7 +2,7 @@
 
 Welcome to Modulo. Get a local Modulo stack running in under 10 minutes, then run your first pipeline.
 
-Modulo is a self-hosted Agentic Delivery Governance platform: an autonomous software factory you run on your own infrastructure, building governed, repeatable AI-assisted software delivery pipelines. There is no hosted SaaS version yet. See [`docs/system-requirements.md`](./system-requirements.md) for supported platforms and minimum resource requirements.
+Modulo is a self-hosted Delivery Governance Platform. Govern the software development lifecycle as AI and automation take on more of the work: record automated work, evaluate its outputs and evidence, control what proceeds, and improve the delivery system. The local stack currently demonstrates governed, repeatable AI-assisted software delivery pipelines; there is no hosted SaaS version yet. See [`docs/system-requirements.md`](./system-requirements.md) for supported platforms and minimum resource requirements.
 
 ## Prerequisites
 
