@@ -4309,4 +4309,80 @@ describe('PipelineEditorView — FAR-2410 canvas layout & edge direction', () =>
     expect(region.attributes('aria-live')).toBe('polite')
     wrapper.unmount()
   })
+
+  it('reads only valid persisted layout ownership and tolerates corrupt or missing storage', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    localStorage.setItem(
+      'modulo.pipeline.layoutOwnership',
+      JSON.stringify({ userPipeline: 'user', generatedPipeline: 'generated', invalid: 'bogus', numeric: 7 }),
+    )
+    expect(vm.readLayoutOwnership()).toEqual({ userPipeline: 'user', generatedPipeline: 'generated' })
+
+    // Non-object payloads are rejected wholesale.
+    for (const payload of ['null', '[]', '"string"']) {
+      localStorage.setItem('modulo.pipeline.layoutOwnership', payload)
+      expect(vm.readLayoutOwnership()).toEqual({})
+    }
+
+    // Corrupt JSON falls back to an empty map instead of throwing.
+    localStorage.setItem('modulo.pipeline.layoutOwnership', '{not-json')
+    expect(vm.readLayoutOwnership()).toEqual({})
+
+    wrapper.unmount()
+  })
+
+  it('skips layout persistence when localStorage is unavailable', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vi.stubGlobal('localStorage', undefined)
+    try {
+      expect(vm.readLayoutOwnership()).toEqual({})
+      vm.setDraftLayoutOwnership('user')
+      expect(() => vm.commitLayoutOwnership()).not.toThrow()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    wrapper.unmount()
+  })
+
+  it('commits layout ownership only when a draft or override exists', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    // Nothing to commit: no draft, no override.
+    vm.setDraftLayoutOwnership(undefined)
+    vm.commitLayoutOwnership()
+    expect(vm.readLayoutOwnership()).toEqual({})
+
+    // The draft is used when no explicit override is supplied.
+    vm.setDraftLayoutOwnership('generated')
+    vm.commitLayoutOwnership()
+    expect(vm.readLayoutOwnership()).toEqual({ 'test-pipeline-id': 'generated' })
+
+    // An explicit override wins over the draft.
+    vm.setDraftLayoutOwnership('user')
+    vm.commitLayoutOwnership('generated')
+    expect(vm.readLayoutOwnership()).toEqual({ 'test-pipeline-id': 'generated' })
+    expect(vm.layoutOwnershipPipelines.get('test-pipeline-id')).toBe('generated')
+
+    // getLayoutOwnership prefers the draft, then falls back to storage.
+    vm.setDraftLayoutOwnership('user')
+    expect(vm.getLayoutOwnership()).toBe('user')
+    vm.setDraftLayoutOwnership(undefined)
+    expect(vm.getLayoutOwnership()).toBe('generated')
+
+    wrapper.unmount()
+  })
+
+  it('ignores storage events for unrelated keys', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    localStorage.setItem('modulo.pipeline.layoutOwnership', JSON.stringify({ 'test-pipeline-id': 'user' }))
+    window.dispatchEvent(new StorageEvent('storage', { key: 'unrelated-key' }))
+    await nextTick()
+    expect(vm.layoutUserOwned).toBe(false)
+    wrapper.unmount()
+  })
 })

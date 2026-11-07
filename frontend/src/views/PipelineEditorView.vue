@@ -3640,14 +3640,11 @@ function commitLayoutOwnership(ownershipOverride?: LayoutOwnership): void {
 
 function getLayoutOwnership(): LayoutOwnership | undefined {
   if (draftLayoutOwnership.value) return draftLayoutOwnership.value
-  const persisted = refreshPersistedLayoutOwnership()
-  if (persisted) return persisted
-  // Existing callers/tests may seed the compatibility map directly; this is
-  // only a fallback when storage has no entry, never a replacement for a fresh
-  // storage read.
-  if (draftLayoutOwnership.value) return draftLayoutOwnership.value
-  if (userOwnedLayoutPipelines.get(pipelineId) === true) return 'user'
-  return layoutOwnershipPipelines.get(pipelineId)
+  // A fresh storage read is authoritative: refreshPersistedLayoutOwnership
+  // syncs both compatibility caches and returns the persisted value. The old
+  // fallbacks here were unreachable because the refresh clears the caches when
+  // storage has no entry, so they could never return anything but undefined.
+  return refreshPersistedLayoutOwnership()
 }
 
 function handleLayoutOwnershipStorage(event: StorageEvent): void {
