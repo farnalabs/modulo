@@ -591,25 +591,45 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert "apt.postgresql.org" not in workflow_text
 
 
-def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
+def _bundle_postgres_smoke_script() -> str:
     workflow = yaml.safe_load(BUNDLE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["bundle"]["steps"]
     names = _step_names(steps)
     smoke_name = "Smoke the final PostgreSQL tarball after relocation as an unprivileged user"
-    smoke_script = steps[names.index(smoke_name)]["run"]
+    script = steps[names.index(smoke_name)]["run"]
+    assert isinstance(script, str)
+    return script
 
-    assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in smoke_script
+
+def _bundle_postgres_smoke_setup_script() -> str:
+    """Return the ownership/mode setup copied from the final smoke step.
+
+    Keep this deliberately separate from the PostgreSQL commands: the test below
+    proves the security boundary without downloading or starting PostgreSQL.
+    """
+    script = _bundle_postgres_smoke_script()
+    marker = "# The extracted bundle remains runner-owned:"
+    start = script.index(marker)
+    end = script.index('cat > "$smoke_script"', start)
+    return textwrap.dedent(script[start:end])
+
+
+def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
+    smoke_script = _bundle_postgres_smoke_script()
+    setup_script = _bundle_postgres_smoke_setup_script()
+
+    assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in setup_script
     assert 'tarball="build/${TARBALL_NAME}"' in smoke_script
 
     assert 'test ! -e "$original_bundle"' in smoke_script
     assert 'tar -xzf "$tarball"' in smoke_script
     assert "useradd --system" in smoke_script
     assert "env -i" in smoke_script
-    assert "chown -R" not in smoke_script
-    assert 'chmod 0755 "$smoke_root"' in smoke_script
-    assert 'chmod -R a+rX "$extract_root"' in smoke_script
-    assert "chmod -R a+w" not in smoke_script
-    assert "chown" not in smoke_script
+    assert "chown -R" not in setup_script
+    assert 'chmod 0755 "$smoke_root"' in setup_script
+    assert 'chmod -R a+rX "$extract_root"' in setup_script
+    assert "chmod -R a+w" not in setup_script
+    assert "chown" not in setup_script
     assert 'smoke_home="$smoke_workspace/home"' in smoke_script
 
     assert 'smoke_dump="$smoke_dump_dir/roundtrip.sql"' in smoke_script
@@ -653,6 +673,126 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert "refusing to remove an unsafe PostgreSQL relocation smoke root" in smoke_script
     assert 'userdel "$smoke_user" >/dev/null 2>&1 || true' not in smoke_script
     assert smoke_script.index('sudo rm -rf -- "$smoke_root"') < smoke_script.index('sudo userdel "$smoke_user"')
+    assert "sudo chown" not in setup_script
+    assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in setup_script
+    assert 'chmod 0755 "$smoke_root" "$extract_root"' in setup_script
+
+
+@pytest.mark.posix_only
+def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace(tmp_path: Path) -> None:
+    """Execute the smoke setup's real POSIX ownership boundary.
+
+    This intentionally does not start PostgreSQL. It creates the same shape as
+    the final smoke step, runs the exact chmod and smoke-user directory setup,
+    then checks the resulting read/execute and write boundaries as the user.
+    """
+    required = ("bash", "sudo", "useradd", "userdel", "id")
+    missing = [command for command in required if shutil.which(command) is None]
+    if missing:
+        pytest.skip("POSIX smoke ownership contract requires: " + ", ".join(missing))
+    sudo = shutil.which("sudo")
+    assert sudo is not None
+    sudo_probe = subprocess.run(  # noqa: S603 - resolved sudo executable and fixed arguments
+        [sudo, "-n", "true"], check=False, capture_output=True, text=True, timeout=30
+    )
+    if sudo_probe.returncode != 0:
+        pytest.skip("POSIX smoke ownership contract requires passwordless sudo for user setup")
+
+    smoke_user = f"modulo-smoke-{os.getpid()}"
+
+    smoke_root = tmp_path / "smoke-root"
+    extract_root = smoke_root / "extracted"
+    bundle = extract_root / "modulo-0.1.0-linux-amd64"
+    workspace = smoke_root / "workspace"
+    home = workspace / "home"
+    data = workspace / "data"
+    socket_dir = workspace / "socket"
+    dump_dir = workspace / "dump"
+    smoke_script = workspace / "run-smoke.sh"
+    bundle_file = bundle / "runtime" / "bin" / "bundle-tool"
+    try:
+        useradd = shutil.which("useradd")
+        userdel = shutil.which("userdel")
+        assert useradd is not None
+        assert userdel is not None
+        subprocess.run(  # noqa: S603 - resolved useradd executable and fixed arguments
+            [sudo, useradd, "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", smoke_user],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        smoke_root.mkdir()
+        extract_root.mkdir()
+        workspace.mkdir()
+        bundle_file.parent.mkdir(parents=True)
+        bundle_file.write_text("#!/usr/bin/env bash\\nprintf 'bundle-ok\\n'\\n", encoding="utf-8")
+        bundle_file.chmod(0o755)
+        (bundle / "README.txt").write_text("runner-owned bundle\\n", encoding="utf-8")
+        smoke_script.parent.mkdir(exist_ok=True)
+        smoke_script.write_text("#!/usr/bin/env bash\\nset -eu\\nexit 0\\n", encoding="utf-8")
+        smoke_script.chmod(0o755)
+
+        setup_script = textwrap.dedent(
+            f"""\\
+            set -euo pipefail
+            smoke_user={shlex.quote(smoke_user)}
+            smoke_root={shlex.quote(str(smoke_root))}
+            extract_root={shlex.quote(str(extract_root))}
+            smoke_workspace={shlex.quote(str(workspace))}
+            smoke_home={shlex.quote(str(home))}
+            smoke_data={shlex.quote(str(data))}
+            smoke_socket={shlex.quote(str(socket_dir))}
+            smoke_dump_dir={shlex.quote(str(dump_dir))}
+            {_bundle_postgres_smoke_setup_script()}
+            """
+        )
+        setup = _run_bash(setup_script, cwd=tmp_path, env=dict(os.environ))
+        assert setup.returncode == 0, setup.stdout + setup.stderr
+
+        id_command = shutil.which("id")
+        assert id_command is not None
+        smoke_id = subprocess.run(  # noqa: S603 - resolved id executable and fixed arguments
+            [id_command, "-u", smoke_user], check=True, capture_output=True, text=True, timeout=30
+        ).stdout.strip()
+        assert smoke_id.isdigit()
+        probe = textwrap.dedent(
+            f"""\\
+            set -eu
+            test -r {shlex.quote(str(bundle / "README.txt"))}
+            test -x {shlex.quote(str(bundle_file))}
+            test "$( {shlex.quote(str(bundle_file))} )" = bundle-ok
+            for directory in {shlex.quote(str(home))} {shlex.quote(str(data))} \\
+                {shlex.quote(str(socket_dir))} {shlex.quote(str(dump_dir))}; do
+              test -w "$directory"
+              touch "$directory/probe"
+            done
+            if touch {shlex.quote(str(bundle / "must-not-write"))} 2>/dev/null; then
+              exit 1
+            fi
+            """
+        )
+        env_command = shutil.which("env")
+        bash = shutil.which("bash")
+        assert env_command is not None
+        assert bash is not None
+        result = subprocess.run(  # noqa: S603 - resolved executables and test-owned probe
+            [sudo, "-u", smoke_user, env_command, "-i", "PATH=/usr/bin:/bin", bash, "-c", probe],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not (bundle / "must-not-write").exists()
+    finally:
+        subprocess.run(  # noqa: S603 - resolved sudo/userdel executables and fixed arguments
+            [sudo, userdel, "--remove", smoke_user],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
 
 def test_bundle_release_scans_postgres_elf_paths_and_keeps_glibc_gate() -> None:
