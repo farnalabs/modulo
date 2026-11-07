@@ -271,54 +271,93 @@ jobs:
       - name: Assemble bundle layout
         run: |
           set -euo pipefail
+          # Keep this step fail-loud: the previous dry-run only reported exit 1,
+          # which hid whether layout, copy, pg_config, or patchelf failed.
+          trap 'rc=$?; echo "::error::Assemble bundle layout failed at line ${LINENO}: ${BASH_COMMAND} (exit ${rc})" >&2; exit "$rc"' ERR
           source scripts/bundle-versions.env
           BUNDLE="build/${BUNDLE_ROOT}"
-          mkdir -p "$BUNDLE/runtime" "$BUNDLE/pg" "$BUNDLE/redis"
+          echo "assemble: bundle=${BUNDLE}"
 
-          # CPython runtime (glibc build -- x86_64/aarch64-unknown-linux-gnu).
-          # Strip the top-level `python/` dir so runtime/ IS the interpreter
-          # tree: runtime/bin/python3.12, runtime/lib/...
-          tar -xzf "downloads/${PBS_TARBALL}" -C "$BUNDLE/runtime" --strip-components=1
+          mkdir -p "$BUNDLE/runtime" "$BUNDLE/pg" "$BUNDLE/redis" || {
+            echo "::error::mkdir failed for bundle layout: ${BUNDLE}/runtime ${BUNDLE}/pg ${BUNDLE}/redis" >&2
+            exit 1
+          }
 
-          # PostgreSQL server + client were compiled directly into the bundle
-          # prefix so pg_config --sharedir and runtime data remain relocatable.
-          test -x "$BUNDLE/pg/bin/postgres"
-          test -x "$BUNDLE/pg/bin/initdb"
-          test -x "$BUNDLE/pg/bin/pg_dump"
-          test -f "$BUNDLE/pg/share/postgresql/postgres.bki"
-          test -d "$BUNDLE/pg/share/postgresql/timezonesets"
-          sharedir="$("$BUNDLE/pg/bin/pg_config" --sharedir)"
-          test "$sharedir" = "$BUNDLE/pg/share/postgresql"
-          case "$sharedir" in
-            "$BUNDLE"/*) : ;;
-            *) echo "::error::bundled PostgreSQL sharedir escaped the bundle: $sharedir" >&2; exit 1 ;;
-          esac
+           # CPython runtime (glibc build -- x86_64/aarch64-unknown-linux-gnu).
+           # Strip the top-level `python/` dir so runtime/ IS the interpreter
+           # tree: runtime/bin/python3.12, runtime/lib/...
+           pbs_archive="downloads/${PBS_TARBALL}"
+           [ -s "$pbs_archive" ] || { echo "::error::CPython archive missing or empty: ${pbs_archive}" >&2; exit 1; }
+           echo "assemble: extracting CPython archive ${pbs_archive}"
+           tar -xzf "$pbs_archive" -C "$BUNDLE/runtime" --strip-components=1 || {
+             echo "::error::tar extraction failed: archive=${pbs_archive} destination=${BUNDLE}/runtime" >&2
+             exit 1
+           }
+           [ -x "$BUNDLE/runtime/bin/python3" ] || { echo "::error::CPython extraction did not produce executable: ${BUNDLE}/runtime/bin/python3" >&2; exit 1; }
 
-          # Redis, compiled from source on this runner (see the build step above).
-          cp -a build/redis-install/bin/. "$BUNDLE/redis/"
-          test -x "$BUNDLE/redis/redis-server"
-          test -x "$BUNDLE/redis/redis-cli"
-          # Also copy redis binaries to pg/bin so the bundled-binaries verification finds them.
-          cp -a build/redis-install/bin/. "$BUNDLE/pg/bin/"
-          test -x "$BUNDLE/pg/bin/redis-server"
-          test -x "$BUNDLE/pg/bin/redis-cli"
-          # PostgreSQL's source build installs libpq beside the server. Bake
-          # an $ORIGIN-relative RUNPATH into every bundled ELF so the loader
-          # finds pg/lib with no inherited environment at all; the launcher
-          # deliberately scrubs every LD_* variable at boot (ADR 031 Decision 2).
-          test -f "${BUNDLE}/pg/lib/libpq.so.5"
+           # PostgreSQL server + client were compiled directly into the bundle
+           # prefix so pg_config --sharedir and runtime data remain relocatable.
+           for required in \
+             "$BUNDLE/pg/bin/postgres" \
+             "$BUNDLE/pg/bin/initdb" \
+             "$BUNDLE/pg/bin/pg_dump"; do
+             [ -x "$required" ] || { echo "::error::required PostgreSQL executable missing or not executable: ${required}" >&2; exit 1; }
+             echo "assemble: found PostgreSQL executable ${required}"
+           done
+           [ -f "$BUNDLE/pg/share/postgresql/postgres.bki" ] || { echo "::error::PostgreSQL runtime data file missing: ${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }
+           [ -d "$BUNDLE/pg/share/postgresql/timezonesets" ] || { echo "::error::PostgreSQL runtime data directory missing: ${BUNDLE}/pg/share/postgresql/timezonesets" >&2; exit 1; }
+           sharedir="$($BUNDLE/pg/bin/pg_config --sharedir)" || {
+             echo "::error::pg_config --sharedir failed: executable=${BUNDLE}/pg/bin/pg_config" >&2
+             exit 1
+           }
+           echo "assemble: pg_config sharedir=${sharedir}"
+           [ "$sharedir" = "$BUNDLE/pg/share/postgresql" ] || {
+             echo "::error::pg_config returned unexpected sharedir: expected=${BUNDLE}/pg/share/postgresql actual=${sharedir}" >&2
+             exit 1
+           }
+           case "$sharedir" in
+             "$BUNDLE"/*) : ;;
+             *) echo "::error::bundled PostgreSQL sharedir escaped the bundle: ${sharedir}" >&2; exit 1 ;;
+           esac
 
-          for binary in "${BUNDLE}"/pg/bin/*; do
-            [ -f "$binary" ] || continue
-            if readelf -h "$binary" >/dev/null 2>&1; then
-              patchelf --set-rpath "\$ORIGIN/../lib" "$binary"
-            fi
-          done
+           # Redis, compiled from source on this runner (see the build step above).
+           redis_bin_dir="build/redis-install/bin"
+           [ -d "$redis_bin_dir" ] || { echo "::error::Redis install directory missing: ${redis_bin_dir}" >&2; exit 1; }
+           [ -x "$redis_bin_dir/redis-server" ] || { echo "::error::Redis server missing or not executable: ${redis_bin_dir}/redis-server" >&2; exit 1; }
+           [ -x "$redis_bin_dir/redis-cli" ] || { echo "::error::Redis CLI missing or not executable: ${redis_bin_dir}/redis-cli" >&2; exit 1; }
+           echo "assemble: copying Redis binaries from ${redis_bin_dir}"
+           cp -a "$redis_bin_dir"/. "$BUNDLE/redis/" || { echo "::error::Redis copy failed: source=${redis_bin_dir} destination=${BUNDLE}/redis" >&2; exit 1; }
+           [ -x "$BUNDLE/redis/redis-server" ] || { echo "::error::Redis server copy missing: ${BUNDLE}/redis/redis-server" >&2; exit 1; }
+           [ -x "$BUNDLE/redis/redis-cli" ] || { echo "::error::Redis CLI copy missing: ${BUNDLE}/redis/redis-cli" >&2; exit 1; }
+           # Also copy redis binaries to pg/bin so the bundled-binaries verification finds them.
+           cp -a "$redis_bin_dir"/. "$BUNDLE/pg/bin/" || { echo "::error::Redis-to-PostgreSQL bin copy failed: source=${redis_bin_dir} destination=${BUNDLE}/pg/bin" >&2; exit 1; }
+           [ -x "$BUNDLE/pg/bin/redis-server" ] || { echo "::error::Redis server not present after PostgreSQL bin copy: ${BUNDLE}/pg/bin/redis-server" >&2; exit 1; }
+           [ -x "$BUNDLE/pg/bin/redis-cli" ] || { echo "::error::Redis CLI not present after PostgreSQL bin copy: ${BUNDLE}/pg/bin/redis-cli" >&2; exit 1; }
+           # PostgreSQL's source build installs libpq beside the server. Bake
+           # an $ORIGIN-relative RUNPATH into every bundled ELF so the loader
+           # finds pg/lib with no inherited environment at all; the launcher
+           # deliberately scrubs every LD_* variable at boot (ADR 031 Decision 2).
+           [ -f "${BUNDLE}/pg/lib/libpq.so.5" ] || { echo "::error::bundled libpq missing: ${BUNDLE}/pg/lib/libpq.so.5" >&2; exit 1; }
 
-          # Native bundle entrypoint. Keep this as a small POSIX wrapper so the
-          # shipped command uses the bundled CPython runtime and dependencies,
-          # while the implementation remains in modulo.cli.main.
-          cat > "$BUNDLE/launcher" <<'LAUNCHER'
+           patched=0
+           for binary in "${BUNDLE}"/pg/bin/*; do
+             [ -f "$binary" ] || continue
+             if readelf -h "$binary" >/dev/null 2>&1; then
+               echo "assemble: setting RUNPATH on ELF ${binary}"
+               patchelf --set-rpath "\$ORIGIN/../lib" "$binary" || {
+                 echo "::error::patchelf failed: command=patchelf --set-rpath \\$ORIGIN/../lib path=${binary}" >&2
+                 exit 1
+               }
+               patched=$((patched + 1))
+             fi
+           done
+           [ "$patched" -gt 0 ] || { echo "::error::no ELF files found to patch under ${BUNDLE}/pg/bin" >&2; exit 1; }
+           echo "assemble: patched ${patched} ELF files"
+
+           # Native bundle entrypoint. Keep this as a small POSIX wrapper so the
+           # shipped command uses the bundled CPython runtime and dependencies,
+           # while the implementation remains in modulo.cli.main.
+            cat > "$BUNDLE/launcher" <<'LAUNCHER'
           #!/bin/sh
           set -eu
 
@@ -338,6 +377,7 @@ jobs:
           chmod 755 "$BUNDLE/launcher"
 
           echo "bundle-v${VERSION_NUM}" > "$BUNDLE/VERSION"
+
 
       - name: Scan shipped PostgreSQL ELF files for runtime path leakage
         run: |
