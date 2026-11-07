@@ -292,6 +292,39 @@ async def test_empty_name_is_a_validation_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ai_options_are_forwarded_and_serialized() -> None:
+    backend_id = uuid.uuid4()
+    eval_id = uuid.uuid4()
+    rest_handler = AsyncMock(
+        return_value=SimpleNamespace(
+            model_dump=MagicMock(
+                return_value={
+                    "ai_assisted": True,
+                    "provenance": {"selected_backend_id": str(backend_id)},
+                    "eval_gate_verdict": "pass",
+                    "published": False,
+                }
+            )
+        )
+    )
+    session = _discovery_session()
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("modulo.api.routes.system_maps.discover_system_map", new=rest_handler),
+        _patch_discovery_session(session),
+    ):
+        result = await discover_system_map(model_backend_id=backend_id, eval_definition_id=eval_id)
+
+    assert result["ai_assisted"] is True
+    assert result["provenance"]["selected_backend_id"] == str(backend_id)
+    assert result["eval_gate_verdict"] == "pass"
+    call_request = rest_handler.await_args.kwargs["request"]
+    assert call_request.model_backend_id == backend_id
+    assert call_request.eval_definition_id == eval_id
+
+
+@pytest.mark.asyncio
 async def test_discovery_uses_the_authenticated_tenant() -> None:
     """The reused handler receives the MCP caller's org/account/role, not a default."""
     rest_handler = AsyncMock(return_value=SimpleNamespace(model_dump=MagicMock(return_value={"ok": True})))
@@ -519,6 +552,32 @@ def test_http_error_payload_maps_statuses_directly(
     payload = _system_maps_http_error_payload(StarletteHTTPException(status_code=status_code, detail=detail))
 
     assert payload == {"error": expected_code, "detail": detail}
+
+
+@pytest.mark.parametrize(
+    ("code", "status_code", "message", "extra"),
+    [
+        (
+            "model_backend_unauthorised",
+            403,
+            "Selected model backend is not active and authorised for this organisation",
+            {},
+        ),
+        ("eval_definition_unauthorised", 403, "Eval gate is not authorised for this caller", {}),
+        ("eval_gate_failed", 422, "AI-assisted discovery did not pass its evaluation gate", {"verdict": "fail"}),
+    ],
+)
+def test_ai_discovery_errors_preserve_safe_structured_codes(
+    code: str,
+    status_code: int,
+    message: str,
+    extra: dict[str, str],
+) -> None:
+    payload = _system_maps_http_error_payload(
+        StarletteHTTPException(status_code=status_code, detail={"code": code, "message": message, **extra})
+    )
+    expected = {"error": code, "detail": message, **extra}
+    assert payload == expected
 
 
 def test_http_error_payload_never_echoes_a_structured_detail() -> None:

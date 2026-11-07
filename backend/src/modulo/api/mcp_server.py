@@ -11045,10 +11045,33 @@ _SYSTEM_MAPS_HTTP_ERROR_CODES: dict[int, str] = {
 }
 
 
+_SYSTEM_MAPS_AI_ERROR_CODES = frozenset(
+    {"model_backend_unauthorised", "eval_definition_unauthorised", "eval_gate_failed"}
+)
+
+
 def _system_maps_http_error_payload(exc: StarletteHTTPException) -> dict[str, Any]:
-    """Render a System Maps route refusal as the MCP tool-error envelope."""
+    """Render a System Maps route refusal as the MCP tool-error envelope.
+
+    AI discovery uses a small, explicitly allow-listed structured-detail
+    vocabulary. Other System Maps errors retain the generic transport mapping;
+    in particular, arbitrary route detail dictionaries are never exposed.
+    """
     code = _SYSTEM_MAPS_HTTP_ERROR_CODES.get(exc.status_code, "server_error")
-    detail = exc.detail if isinstance(exc.detail, str) else _MSG_UNEXPECTED_ERROR
+    route_detail = exc.detail
+    if isinstance(route_detail, dict):
+        ai_detail: dict[str, Any] = route_detail
+        ai_code = ai_detail.get("code")
+        verdict = ai_detail.get("verdict")
+        if ai_code in _SYSTEM_MAPS_AI_ERROR_CODES:
+            payload: dict[str, Any] = {
+                "error": ai_code,
+                "detail": ai_detail.get("message", _MSG_UNEXPECTED_ERROR),
+            }
+            if ai_code == "eval_gate_failed" and verdict in {"fail", "error"}:
+                payload["verdict"] = verdict
+            return payload
+    detail = route_detail if isinstance(route_detail, str) else _MSG_UNEXPECTED_ERROR
     return _tool_error(detail, code=code)
 
 
@@ -11096,6 +11119,8 @@ async def _system_maps_discovery_session() -> AsyncGenerator[AsyncSession, None]
 async def discover_system_map(
     name: str = "Discovered System Map",
     description: str | None = None,
+    model_backend_id: uuid.UUID | None = None,
+    eval_definition_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Trigger System Maps discovery over MCP (FAR-2288).
 
@@ -11139,7 +11164,12 @@ async def discover_system_map(
         from modulo.api.schemas.system_maps import SystemMapDiscoveryRequest
 
         try:
-            discovery_request = SystemMapDiscoveryRequest(name=name, description=description)
+            discovery_request = SystemMapDiscoveryRequest(
+                name=name,
+                description=description,
+                model_backend_id=model_backend_id,
+                eval_definition_id=eval_definition_id,
+            )
         except _PydanticValidationError as exc:
             return {
                 "error": "validation_failed",
