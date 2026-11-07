@@ -42,6 +42,7 @@
       <ErrorAlert v-if="error" class="mb-4" :message="error" :on-retry="retryDashboard" />
       <DashboardSystemOverview
         v-if="systemMapsStore.accessLoaded && systemMapsStore.systemMapsEnabled"
+        :window-days="selectedWindow ?? 7"
         class="mb-4"
       />
       <!-- Row 1: Summary stat cards -->
@@ -124,6 +125,7 @@
             <tr class="border-b text-left text-muted-foreground">
               <th class="pb-2 font-medium">{{ $t('views.DashboardView.team') }}</th>
               <th class="pb-2 font-medium text-right">{{ $t('views.DashboardView.runs') }}</th>
+              <th class="pb-2 font-medium text-right">{{ $t('views.DashboardView.completed') }}</th>
               <th class="pb-2 font-medium text-right">{{ $t('views.DashboardView.running') }}</th>
               <th class="pb-2 font-medium text-right">{{ $t('views.DashboardView.failed') }}</th>
               <th class="pb-2 font-medium text-right">{{ $t('views.DashboardView.eval_pass') }}</th>
@@ -146,16 +148,17 @@
                 >{{ team.name }}</button>
               </td>
               <td class="py-2.5 text-right">{{ team.total_runs }}</td>
+              <td class="py-2.5 text-right text-success-text">{{ team.completed_runs ?? team.run_counts_by_status?.completed ?? 0 }}</td>
               <td class="py-2.5 text-right text-success-text">{{ team.run_counts_by_status?.running ?? 0 }}</td>
               <td class="py-2.5 text-right text-destructive">{{ team.run_counts_by_status?.failed ?? 0 }}</td>
-               <td class="py-2.5 text-right">{{ team.eval_pass_rate ? team.eval_pass_rate.pass_rate + '%' : $t('common.na') }}</td>
+                <td class="py-2.5 text-right">{{ team.eval_pass_rate?.total_evals ? team.eval_pass_rate.pass_rate + '%' : $t('common.na') }}</td>
               <td class="py-2.5 text-right">
                 <ChevronUp v-if="expandedTeam === team.id" class="h-3.5 w-3.5" aria-hidden="true" />
                 <ChevronDown v-else class="h-3.5 w-3.5" aria-hidden="true" />
               </td>
             </tr>
             <tr v-if="expandedTeam && expandedTeamData">
-              <td colspan="6" class="py-3 pl-6">
+              <td colspan="7" class="py-3 pl-6">
                 <div class="text-xs text-muted-foreground space-y-1">
                   <p>{{ $t('views.DashboardView.pipelines') }}: <span class="font-medium text-foreground">{{ expandedTeamData.active_pipelines }}</span></p>
                   <p>{{ $t('views.DashboardView.awaiting_human') }}: <span class="font-medium text-foreground">{{ expandedTeamData.run_counts_by_status.awaiting_human }}</span></p>

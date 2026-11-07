@@ -133,7 +133,7 @@ function lockFor(tab: Tab): TabLock | null {
   // at a tier-entitled user and then flip it off (FAR-47 review). Leave the
   // tab unlocked until the plan has resolved — the analogue of the sidebar's
   // `tierInfoLoaded` gating in config/navigation.ts.
-  if (!planStore || !planStore.loaded) return null
+  if (!planStore?.loaded) return null
   if (planStore.isAtMinimumTier(tier)) return null
   const plan = planStore.getTierLabel(tier)
   return {

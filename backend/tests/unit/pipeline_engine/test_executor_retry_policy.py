@@ -20,26 +20,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine import executor as executor_module
 from modulo.core.pipeline_engine import retry_policy as retry_policy_module
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     _graph_is_idempotent,
 )
 from modulo.core.pipeline_engine.retry_policy import (
+    _RETRY_BACKOFF_BASE_SECONDS,
+    _RETRY_BACKOFF_CAP_SECONDS,
+    _RETRY_BACKOFF_DEFAULT_MULTIPLIER,
     RunRetryPolicyError,
-    retry_after_policy,
-    retry_backoff_seconds,
-    _stall_event_matches,
-    _timeout_event_matches,
     _attempt_consumed_node_budget,
     _attempt_elapsed_seconds,
     _attempt_started_at,
-    _RETRY_BACKOFF_BASE_SECONDS,
-    _RETRY_BACKOFF_CAP_SECONDS,
-    _RETRY_BACKOFF_JITTER_FRACTION,
-    _RETRY_BACKOFF_DEFAULT_MULTIPLIER,
+    _stall_event_matches,
+    _timeout_event_matches,
     can_retry_after_policy,
+    retry_after_policy,
+    retry_backoff_seconds,
 )
 
 
@@ -1318,7 +1316,7 @@ def test_retry_backoff_defaults_single_sourced_from_retry_compensation():
     assert _RETRY_BACKOFF_DEFAULT_MULTIPLIER == rc.RETRY_SCHEDULE_DEFAULT_MULTIPLIER
     assert rc.RETRY_SCHEDULE_DEFAULT_MULTIPLIER == 2.0
     # The live parameter defaults reference the rc constants directly.
-    sig = inspect.signature(executor_module.retry_backoff_seconds)
+    sig = inspect.signature(retry_policy_module.retry_backoff_seconds)
     assert sig.parameters["base"].default == rc.RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS
     assert sig.parameters["multiplier"].default == rc.RETRY_SCHEDULE_DEFAULT_MULTIPLIER
 
@@ -1411,7 +1409,7 @@ async def test_execute_retry_policy_resolver_defect_cannot_strand_a_reset():
         stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_engine.retry_compensation.resolve_backoff_schedule",
+                "modulo.core.pipeline_engine.retry_policy.resolve_backoff_schedule",
                 side_effect=RuntimeError("resolver defect"),
             )
         )
@@ -1671,25 +1669,34 @@ async def test_run_start_valid_schedule_no_schedule_warning():
 
 @contextmanager
 def _capture_executor_logs(level: int):
-    """Capture executor log RECORDS (incl. `extra` attrs) without caplog."""
+    """Capture executor + extracted retry-policy log RECORDS (incl. `extra`)."""
     import logging as _logging
 
-    logger = _logging.getLogger("modulo.core.pipeline_engine.executor")
+    loggers = [
+        _logging.getLogger("modulo.core.pipeline_engine.executor"),
+        _logging.getLogger("modulo.core.pipeline_engine.retry_policy"),
+    ]
     records: list = []
 
     class _Handler(_logging.Handler):
         def emit(self, record):
             records.append(record)
 
-    handler = _Handler(level=level)
-    old_level = logger.level
-    logger.addHandler(handler)
-    logger.setLevel(level)
+    handlers = []
+    old_levels = []
+    for logger in loggers:
+        handler = _Handler(level=level)
+        handlers.append((logger, handler))
+        old_levels.append((logger, logger.level))
+        logger.addHandler(handler)
+        logger.setLevel(level)
     try:
         yield records
     finally:
-        logger.removeHandler(handler)
-        logger.setLevel(old_level)
+        for logger, handler in handlers:
+            logger.removeHandler(handler)
+        for logger, old_level in old_levels:
+            logger.setLevel(old_level)
 
 
 # ---------------------------------------------------------------------------
@@ -1868,8 +1875,8 @@ async def _drive_mayberetry_after_policy(*, elapsed_seconds: float) -> str:
     ``_redispatch_after_policy`` is the ``NoReturn`` re-raise seam in
     production, so its double raises ``RunRetryPolicyError`` too: a caller that
     reaches the re-dispatch never returns normally. Returns the decision string
-    so a refused retry can assert it was "none" and a successful retry can assert
-    it was "retried" or "side_effect_unknown".
+    on the refused path ("none"); the re-dispatched path raises
+    ``RunRetryPolicyError`` out of the seam.
     """
     from modulo.core.pipeline_engine.retry_policy import maybe_retry_after_policy
 
@@ -1882,7 +1889,7 @@ async def _drive_mayberetry_after_policy(*, elapsed_seconds: float) -> str:
     redispatch = AsyncMock(side_effect=RunRetryPolicyError("failed", 2))
 
     with patch("modulo.core.pipeline_engine.retry_policy._redispatch_after_policy", new=redispatch):
-        decision = await maybe_retry_after_policy(
+        return await maybe_retry_after_policy(
             run_id=run_id,
             org_id=org_id,
             pipeline_retry_policy={"on": ["timeout"], "max_retries": 2},
@@ -1901,10 +1908,12 @@ async def _drive_mayberetry_after_policy(*, elapsed_seconds: float) -> str:
             cleanup_run_resources_fn=executor._cleanup_run_resources,
             record_attempt_reset_fn=executor._record_attempt_reset,
             probe_script_lease_fn=executor._probe_script_lease,
-            read_retry_attempt_state_fn=AsyncMock(return_value=(1, "tok-claim-abc", datetime.now(UTC) - timedelta(seconds=elapsed_seconds))),
+            read_retry_attempt_state_fn=AsyncMock(
+                return_value=(1, "tok-claim-abc", datetime.now(UTC) - timedelta(seconds=elapsed_seconds))
+            ),
             graph_has_script_mode_fn=lambda gj: False,
+            node_timeouts=executor._node_timeouts.values(),
         )
-    return decision
 
 
 async def test_mayberetry_after_policy_refuses_an_over_budget_attempt(
@@ -1925,6 +1934,8 @@ async def test_mayberetry_after_policy_still_redispatches_a_fast_failure() -> No
     """FAR-2025 false-positive guard on the in-execute path: the identical call
     with a 60 s attempt keeps its retry, so the refusal above is attributable to
     the budget check and nothing else."""
-    decision = await _drive_mayberetry_after_policy(elapsed_seconds=60.0)
+    with pytest.raises(RunRetryPolicyError) as exc_info:
+        await _drive_mayberetry_after_policy(elapsed_seconds=60.0)
 
-    assert decision == "retried"
+    assert exc_info.value.status == "failed"
+    assert exc_info.value.max_retries == 2

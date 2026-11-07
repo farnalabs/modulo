@@ -100,14 +100,42 @@ describe('DashboardSystemOverview', () => {
     mockIsSystemAdmin.value = false
   })
 
-  it('loads discovery and then the default overview on mount', async () => {
+  it('loads discovery and the selected default overview window on mount', async () => {
     const { fetchDiscovery, fetchDefaultOverview } = mountOverview()
     await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(1))
 
     expect(fetchDiscovery).toHaveBeenCalledTimes(1)
+    expect(fetchDefaultOverview).toHaveBeenCalledWith(7)
     expect(fetchDiscovery.mock.invocationCallOrder[0]).toBeLessThan(
       fetchDefaultOverview.mock.invocationCallOrder[0],
     )
+  })
+
+  it('passes a non-default selected window to the overview store', async () => {
+    setActivePinia(createPinia())
+    const store = useSystemMapsStore()
+    vi.spyOn(store, 'fetchDiscovery').mockResolvedValue()
+    const fetchDefaultOverview = vi.spyOn(store, 'fetchDefaultOverview').mockResolvedValue()
+
+    mount(DashboardSystemOverview, { props: { windowDays: 30 }, global: { plugins: [i18n] } })
+    await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(1))
+
+    expect(fetchDefaultOverview).toHaveBeenCalledWith(30)
+  })
+
+  it('refetches the overview when the selected window changes after mount', async () => {
+    setActivePinia(createPinia())
+    const store = useSystemMapsStore()
+    const fetchDiscovery = vi.spyOn(store, 'fetchDiscovery').mockResolvedValue()
+    const fetchDefaultOverview = vi.spyOn(store, 'fetchDefaultOverview').mockResolvedValue()
+    const wrapper = mount(DashboardSystemOverview, { props: { windowDays: 7 }, global: { plugins: [i18n] } })
+    await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledWith(7))
+
+    await wrapper.setProps({ windowDays: 30 })
+
+    await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledWith(30))
+    expect(fetchDefaultOverview).toHaveBeenCalledTimes(2)
+    expect(fetchDiscovery).toHaveBeenCalledTimes(2)
   })
 
   it('shows discovery only after confirmed internal authoring access loads', async () => {
@@ -234,15 +262,55 @@ describe('DashboardSystemOverview', () => {
       'Observed over the last 7 days',
     )
     const nodes = wrapper.findAll('[data-testid="system-map-node"]')
-    expect(nodes).toHaveLength(2)
+    expect(nodes).toHaveLength(1)
     expect(nodes[0].text()).toContain('Degraded')
     expect(nodes[0].text()).toContain('34%')
     expect(nodes[0].text()).toContain('50%')
     expect(nodes[0].text()).toContain('Build')
-    // Unobserved values stay n/a rather than being rendered as zero.
-    expect(nodes[1].text()).toContain('Unknown')
-    expect(nodes[1].text()).toContain('n/a')
+    // Nodes with no observed metrics are omitted instead of presenting a grid of
+    // unknown values; the card shows an explicit empty state when all are absent.
     expect(wrapper.find('[data-testid="system-map-draft-review"]').exists()).toBe(false)
+  })
+
+  it('renders n/a for an observed node whose individual metrics are absent', async () => {
+    const { wrapper, store } = mountOverview()
+    store.overview = {
+      ...overview,
+      nodes: [
+        {
+          ...overview.nodes[0],
+          node_key: 'node-unmeasured',
+          display_name: 'Healthy but unmeasured',
+          health: 'healthy',
+          queue_depth: null,
+          throughput_per_min: null,
+          failure_rate: null,
+          telemetry_coverage: null,
+        },
+      ],
+    } as never
+    store.overviewLoading = false
+    store.overviewError = null
+    store.overviewEmpty = false
+    await wrapper.vm.$nextTick()
+
+    const node = wrapper.get('[data-testid="system-map-node"]')
+    expect(node.text()).toContain('Healthy but unmeasured')
+    // Each absent metric renders the shared n/a fallback rather than a blank grid.
+    expect(node.text().match(/n\/a/g)).toHaveLength(4)
+  })
+
+  it('shows the no-observed empty state when every node has no measured activity', async () => {
+    const { wrapper, store } = mountOverview()
+    store.overview = { ...overview, nodes: [overview.nodes[1]] } as never
+    store.overviewLoading = false
+    store.overviewError = null
+    store.overviewEmpty = false
+    await wrapper.vm.$nextTick()
+
+    const empty = wrapper.get('[data-testid="system-map-overview-empty"]')
+    expect(empty.text()).toContain('No observed activity yet')
+    expect(wrapper.find('[data-testid="system-map-overview-metrics"]').exists()).toBe(false)
   })
 
   it('renders the loading state first', async () => {
@@ -340,6 +408,18 @@ describe('DashboardSystemOverview', () => {
     expect(empty.classes()).toContain('card')
     expect(wrapper.find('[data-testid="system-map-overview-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-overview-metrics"]').exists()).toBe(false)
+  })
+
+  it('persists the collapse state and exposes the button state', async () => {
+    localStorage.removeItem('dashboard-system-overview-collapsed')
+    const { wrapper } = mountOverview()
+    const toggle = wrapper.get('[data-testid="system-map-overview-toggle"]')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+
+    await toggle.trigger('click')
+
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    expect(localStorage.getItem('dashboard-system-overview-collapsed')).toBe('true')
   })
 
   it('renders through the shared SectionCard without a live region', () => {

@@ -524,6 +524,7 @@ async def maybe_retry_after_policy(
     probe_script_lease_fn: Any,
     read_retry_attempt_state_fn: Any,
     graph_has_script_mode_fn: Any,
+    node_timeouts: Any,
 ) -> str:
     """Apply the pipeline retry_policy after a terminal outcome.
 
@@ -556,7 +557,7 @@ async def maybe_retry_after_policy(
     # ladder cannot multiply occupancy for no chance of success.
     attempt_consumed_budget = _attempt_consumed_node_budget(
         _attempt_elapsed_seconds(attempt_started_at),
-        _resolved_node_timeouts(graph_json).values(),
+        node_timeouts,
     )
     if attempt_consumed_budget:
         _log.warning(
@@ -566,9 +567,7 @@ async def maybe_retry_after_policy(
                 "error_code": error_code,
                 "attempt": execution_attempt_count,
                 "budget": retry_budget,
-                "node_budget_seconds": sum(
-                    t for t in _resolved_node_timeouts(graph_json).values() if isinstance(t, int) and t > 0
-                ),
+                "node_budget_seconds": sum(t for t in node_timeouts if isinstance(t, int) and t > 0),
             },
         )
     # FAR-2076: ``execution_attempt_count`` counts EXECUTIONS of the graph

@@ -7,16 +7,17 @@ Responsibilities:
     concurrency cap, and the per-org run-concurrency cap via count-based
     capacity checks (no FOR UPDATE; runs declined at capacity are demoted
     back to ``pending`` with a reason marker and recovered by
-    ``dispatcher_reconcile`` (cron_helpers) when a slot frees, with
-    ``stale_run_recovery_sweep``'s stranded re-dispatch as the durable
-    liveness backstop — plan F3b: there is NO in-process retry loop)
+    ``dispatcher_reconcile`` when a slot frees; stranded re-dispatch is the
+    durable liveness backstop — there is NO in-process retry loop)
   - Consume astream_events() and publish to the per-run RunEventBroker
   - Set up AsyncPostgresSaver as LangGraph checkpointer
   - Stream graph execution, updating Run status on transitions
   - Mark run complete/failed/cancelled/awaiting_human/eval_failed in DB
 
 Handles GraphInterrupt by transitioning the run to awaiting_human.
-Does NOT handle WebSocket fan-out, HITL claim/approve/reject, or webhook triggers (phases 3+).
+Does NOT handle WebSocket fan-out, HITL claim/approve/reject, or webhook triggers.
+
+Architecture: see docs/architecture.md "Pipeline Executor Patterns" and "Run admission and healing".
 """
 
 from __future__ import annotations
@@ -84,6 +85,7 @@ from modulo.core.notifier import (
     EVENT_RUN_STALLED,
 )
 from modulo.core.pipeline_engine import retry_compensation as rc
+from modulo.core.pipeline_engine import retry_policy as _retry_policy_module
 from modulo.core.pipeline_engine.decorator import (
     _RESERVED_RUN_CONTEXT_KEYS,
     RunCancelledError,
@@ -210,23 +212,35 @@ from modulo.otel_bridge import LangGraphOtelBridge, trace_id_for_thread
 
 _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
 
+# Backward-compatible re-exports of the retry-policy symbols extracted into
+# ``retry_policy``. Untouched consumers (watchdog_retry, cron_helpers,
+# worker_handoff, pipeline_execution) and existing tests still import these
+# legacy names from ``executor``; keep that public surface intact.
+RunRetryPolicyError = _retry_policy_module.RunRetryPolicyError
+_retry_after_policy = _retry_policy_module.retry_after_policy
+_retry_policy_applies = _retry_policy_module.retry_policy_applies
+_can_retry_after_policy = _retry_policy_module.can_retry_after_policy
+_retry_backoff_seconds = _retry_policy_module.retry_backoff_seconds
+_record_retry_redispatch = _retry_policy_module.record_retry_redispatch
+_attempt_consumed_node_budget = _retry_policy_module._attempt_consumed_node_budget
+_attempt_elapsed_seconds = _retry_policy_module._attempt_elapsed_seconds
+
 # Statuses a run may still be admitted from when a retry's backoff elapses.
 # Any terminal status (complete/failed/cancelled/eval_failed) means the run
 # was already finalised while the retry loop slept — it must never be
 # resurrected back to ``running``. Single-sourced from
-# ``db.models.run.ACTIVE_RUN_STATUSES`` (the never-entered ``waiting_for_lock``
-# sub-state was excised in migration 0074/0075).
+# ``db.models.run.ACTIVE_RUN_STATUSES``.
 _ADMISSIBLE_STATUSES = ACTIVE_RUN_STATUSES
 
 # Terminal statuses. A run in one of these is already finalised; it must never
 # be resurrected AND must never spawn (or hold) a retry task. Single-sourced
-# from ``db.models.run.TERMINAL_STATUSES`` (includes ``stalled`` since #1011).
+# from ``db.models.run.TERMINAL_STATUSES`` (includes ``stalled``).
 _TERMINAL_STATUSES = TERMINAL_STATUSES
 
-# FAR-2138 — terminal run statuses that carry their own notifier event. Read
+# Terminal run statuses that carry their own notifier event. Read
 # off the COMMITTED run row (never the pre-finalize locals) so the per-agent
-# token budget override applied inside ``finalize_cost`` is observed. The
-# ``eval_blocked`` event is keyed on a status+error_code pair instead of a
+# token budget override applied inside ``finalize_cost`` is observed.
+# The ``eval_blocked`` event is keyed on a status+error_code pair instead of a
 # status, so it is resolved separately in
 # ``_dispatch_terminal_status_notification``.
 _TERMINAL_STATUS_EVENTS: dict[str, str] = {
@@ -278,17 +292,17 @@ def _is_finalize_lock_retryable(exc: BaseException) -> bool:
 
 _log = logging.getLogger(__name__)
 
-# FAR-209 Track B: the guardrail eval_type value the executor splits out of
-# the node-scoped eval defs (interception-owned, never eval-engine-owned —
-# the eval engine raises GuardrailMisroutedError on a guardrail-typed def).
+# Guardrail eval_type value the executor splits out of the node-scoped eval defs
+# (interception-owned, never eval-engine-owned — the eval engine raises
+# GuardrailMisroutedError on a guardrail-typed def).
 GUARDRAIL_EVAL_TYPE = "guardrail"
 
 # NOTE: the output-point predicate is NOT re-implemented here. The canonical
 # ``is_output_interception`` lives in ``modulo.core.guardrails.output_intercept``
 # and is lazily imported inside ``_handle_chain_end_event`` (a module-level
-# import cycles guardrails -> eval_engine -> executor). A local copy of a
-# security-seam predicate is exactly the duplication the FAR-209 review
-# flagged — never reintroduce one.
+# import cycle guards against guardrails -> eval_engine -> executor). A local
+# copy of a security-seam predicate is exactly the duplication flagged in
+# review — never reintroduce one.
 
 
 # FAR-939 chunk 12 (M4, §3.3 run-frozen): key under which the fire-time
@@ -298,10 +312,9 @@ GUARDRAIL_EVAL_TYPE = "guardrail"
 # the write site and the read site so the stamp cannot drift.
 _GATED_EVAL_MODES_KEY = "gated_eval_modes"
 
-# FAR-967 §3.1 / FAR-939 chunk 12: the shared "no gate governs this eval"
-# verdict of the policy-gate resolution helpers — warn semantics, no
-# PolicyGateDecision row (``policy_gate_id is None`` downstream). One name
-# so every ungoverned arm returns an identical, recognisable value.
+# The shared "no gate governs this eval" verdict of the policy-gate resolution
+# helpers — warn semantics, no PolicyGateDecision row (``policy_gate_id is None``
+# downstream). One name so every ungoverned arm returns an identical, recognisable value.
 _NO_GOVERNED_GATE: tuple[str, uuid.UUID | None, int | None, uuid.UUID | None, str | None] = (
     "warn",
     None,
@@ -326,11 +339,11 @@ def _governed_evaluation_mode(gate: PolicyGate) -> str:
 
 
 def _sanitize_detail(detail: Any, limit: int | None = 5000) -> str:
-    """Sanitize an error detail at a write surface (FAR-163).
+    """Sanitize an error detail at a write surface.
 
     Redaction runs before any truncation so a secret straddling the cut point is
     still removed. Pass ``limit=None`` to skip the cap — ``runs.error_detail`` was
-    widened to ``Text`` by migration 0199, so error-detail writes no longer need
+    widened to ``Text`` by migration, so error-detail writes no longer need
     to be bounded. Never raises — :func:`sanitize_error_text` coerces any input
     via ``str()`` and is a NO-OP for clean strings.
     """
@@ -367,7 +380,7 @@ def _traceback_detail(exc: BaseException, limit: int = 2000) -> str:
     """Sanitized, bounded traceback text for a caught exception.
 
     Formats the full traceback of *exc* into a single string, sanitizes it
-    (FAR-163 redaction runs before truncation), and caps it at *limit* chars.
+    (redaction runs before truncation), and caps it at *limit* chars.
     Shared by the generic ``except Exception`` handlers in ``execute`` /
     ``resume`` / ``_stream_graph`` so each stays a one-liner.
     """
@@ -380,10 +393,10 @@ def _traceback_detail(exc: BaseException, limit: int = 2000) -> str:
 
 
 # ---------------------------------------------------------------------------
-# FAR-872: failure-context attribution helpers (log-line extras)
+# Failure-context attribution helpers (log-line extras)
 # ---------------------------------------------------------------------------
 # Single import gate: every helper below delegates to the (itself fail-open)
-# failure_context module.  A single module-level guard is the only layer
+# failure_context module. A single module-level guard is the only layer
 # needed — the per-call re-imports previously duplicated this guard.
 _ATTRIBUTION_AVAILABLE = True
 try:
@@ -418,11 +431,11 @@ def _failure_column(exc: BaseException) -> str | None:
 
 
 def _enrich_failure_detail(raw_detail: str, exc: BaseException) -> str:
-    """Append FAR-872 attribution to a failure detail.
+    """Append failure attribution to a failure detail.
 
     Thin executor-side boundary around ``failure_context.enrich_error_detail``
     so both executor failure paths share one call site and a test can prove
-    the enrichment is wired.  The flag guard is the only executor-side layer:
+    the enrichment is wired. The flag guard is the only executor-side layer:
     ``enrich_error_detail`` is itself fail-open by construction, so returns
     ``raw_detail`` unchanged when the module is unavailable.
     """
@@ -510,7 +523,7 @@ AdmissionResetState = Literal[
 
 
 class AdmissionLockTimeoutError(Exception):
-    """FAR-2076: the claim-time admission transaction kept hitting a row lock.
+    """The claim-time admission transaction kept hitting a row lock.
 
     Raised after the bounded retry in :meth:`PipelineExecutor._check_capacity`
     is exhausted (two consecutive SQLSTATE 55P03 waits). The admission+bump
@@ -569,7 +582,7 @@ class AdmissionLockTimeoutError(Exception):
 
 
 class RetryBudgetGateRefusedError(Exception):
-    """FAR-2076: the retry-ceiling gate refused admission and its terminal write lost the fence.
+    """The retry-ceiling gate refused admission and its terminal write lost the fence.
 
     Raised by ``_claim_under_capacity`` when the run is at its policy ceiling,
     the fenced ``failed`` write was rejected, and the re-read row is still
@@ -602,11 +615,10 @@ async def _teardown_hub(hub: Any) -> None:
     abort the cleanup). The shielded future is re-awaited on cancellation so no
     "Task was destroyed but it is pending" warning is emitted at loop close.
 
-    The runtime provider hub the executor built alongside the ConnectorHub
-    (FAR-587) is aclosed here too, best-effort: workspaces tracked at
-    teardown are destroyed. A workspace whose provision was cancelled
-    mid-create may outlive the run (known gap, tracked for D4 lifecycle
-    work).
+    The runtime provider hub the executor built alongside the ConnectorHub is
+    aclosed here too, best-effort: workspaces tracked at teardown are destroyed.
+    A workspace whose provision was cancelled mid-create may outlive the run
+    (known gap, tracked for D4 lifecycle work).
     """
     shielded = asyncio.shield(hub.__aexit__(None, None, None))
     try:
@@ -618,8 +630,8 @@ async def _teardown_hub(hub: Any) -> None:
     except Exception:
         _log.exception("pipeline.hub_cleanup_failed")
     finally:
-        # Read the runtime hub through the ConnectorHub constructor seam
-        # (FAR-587). Depending on construction ``_runtime_provider`` may hold
+        # Read the runtime hub through the ConnectorHub constructor seam.
+        # Depending on construction ``_runtime_provider`` may hold
         # a bare provider (no ``aclose`` — disposal is then driven by the
         # hub's own ``__aexit__``) or a ``RuntimeProviderHub`` whose
         # ``aclose()`` disposes tracked workspaces.
@@ -633,7 +645,7 @@ async def _teardown_hub(hub: Any) -> None:
                 _log.exception("pipeline.runtime_hub_cleanup_failed")
 
 
-# FAR-1163: engine-managed run_context keys that a caller-supplied
+# Engine-managed run_context keys that a caller-supplied
 # ``snapshot.run_context_defaults`` spread must never seed. Derived from the
 # decorator's reserved-key set (imported — no cycle: decorator does not
 # import executor) UNION ``_run_overrides``, which is NOT in that set (it is
@@ -675,7 +687,7 @@ def _seed_state(
     ``run_context_defaults``. A normal run has no variant config, so a
     caller-supplied ``_run_overrides`` inside ``input_payload`` stays DATA in
     ``run_context["input"]`` and can never reach the node_runner's override
-    boundary (FAR-342 injection surface).
+    boundary (injection surface).
 
     The same holds for the ``run_context_defaults`` spread: it is
     unfiltered arbitrary JSON (it travels through snapshot/clone/
@@ -689,7 +701,7 @@ def _seed_state(
     # Copy input_payload to avoid mutating the caller's dict.
     payload = dict(input_payload)
     run_context_defaults: dict[str, Any] = snapshot.run_context_defaults or {}
-    # FAR-1163: filter the SPREAD (not the just-built dict — it already
+    # Filter the SPREAD (not the just-built dict — it already
     # legitimately sets cancelled/input). With a NULL ceiling/default the
     # autonomy keys stay absent and resolution falls back exactly as
     # designed; the snapshot values pinned below are authoritative.
@@ -707,7 +719,7 @@ def _seed_state(
     # Seed autonomy from snapshot-level default so gate nodes can resolve it.
     if snapshot.default_autonomy_level:
         run_context["_pipeline_default_autonomy"] = snapshot.default_autonomy_level
-    # FAR-1163 S0: pin the autonomy CEILING from the snapshot (nullable —
+    # Pin the autonomy CEILING from the snapshot (nullable —
     # NULL means resolution falls back to the default as the effective
     # ceiling). isinstance-str guards non-string stand-ins (test mocks).
     max_autonomy = getattr(snapshot, "max_autonomy_level", None)
@@ -795,7 +807,7 @@ def _sandbox_agent_for_snapshot(snapshot_id: uuid.UUID, graph_json: dict[str, An
 
 
 def _graph_is_idempotent(graph_json: dict[str, Any] | None) -> bool:
-    """True when every node in the graph is safe to re-run (FAR-295).
+    """True when every node in the graph is safe to re-run.
 
     A node is idempotent unless it EXPLICITLY declares ``idempotent=false``:
     the field defaults to ``true`` on the ``PipelineGraphNode`` schema, and a
@@ -804,16 +816,16 @@ def _graph_is_idempotent(graph_json: dict[str, Any] | None) -> bool:
     Returns False when ANY node is non-idempotent — a retry re-executes the
     whole run, so a single side-effecting node makes re-running the run unsafe.
 
-    FAR-1141 (CRITICAL 1): the graph itself is also non-idempotent when it
-    contains a binding that FIRES an external job — ``operation="dispatch"`` +
-    ``dispatch_action="trigger_run"`` — regardless of the stored ``idempotent``
-    flag. The flag is a write-path side effect of the REST model, so an
-    MCP-authored or hand-written graph could carry ``idempotent=true`` (or omit
-    it) on a job-firing node and silently re-arm BOTH retry paths; the binding
-    is the durable, writer-independent truth, keyed on the same
-    ``connector_binding_operation`` the engine routes and the run classifier
-    reads. Read-only dispatch actions (``get_run_status`` / ``get_run_logs`` /
-    ``list_runs``) stay idempotent — re-running a read fires nothing.
+    The graph itself is also non-idempotent when it contains a binding that
+    FIRES an external job — ``operation="dispatch"`` + ``dispatch_action="trigger_run"``
+    — regardless of the stored ``idempotent`` flag. The flag is a write-path side
+    effect of the REST model, so an MCP-authored or hand-written graph could
+    carry ``idempotent=true`` (or omit it) on a job-firing node and silently
+    re-arm BOTH retry paths; the binding is the durable, writer-independent
+    truth, keyed on the same ``connector_binding_operation`` the engine routes
+    and the run classifier reads. Read-only dispatch actions
+    (``get_run_status`` / ``get_run_logs`` / ``list_runs``) stay idempotent —
+    re-running a read fires nothing.
     """
     if not isinstance(graph_json, dict):
         return True
@@ -833,12 +845,12 @@ def compute_retry_aware_topology_hash(
 ) -> str:
     """Structural compile-cache hash that folds the pipeline retry policy in.
 
-    FAR-402 P5 wires a per-node retry/compensation wrapper into the compiled
-    graph that reads the pipeline ``retry_policy`` as the node default. The
-    graph_cache key is ``(pipeline_id, snapshot_id, node_timeout, struct_hash)``;
-    folding the policy into ``struct_hash`` means a PATCH to ``retry_policy``
-    recompiles the wrapped nodes instead of serving a stale graph (the same
-    reason ``pipeline_node_timeout_seconds`` is part of the key). The per-node
+    The per-node retry/compensation wrapper reads the pipeline ``retry_policy``
+    as the node default. The graph_cache key is
+    ``(pipeline_id, snapshot_id, node_timeout, struct_hash)``; folding the
+    policy into ``struct_hash`` means a PATCH to ``retry_policy`` recompiles
+    the wrapped nodes instead of serving a stale graph (the same reason
+    ``pipeline_node_timeout_seconds`` is part of the key). The per-node
     ``retry`` blocks live in ``graph_json`` (already part of the topology hash),
     so only the pipeline-level default needs folding here.
     """
@@ -852,10 +864,10 @@ def compute_retry_aware_topology_hash(
 def _graph_has_script_mode(graph_json: dict[str, Any] | None) -> bool:
     """True when the graph contains a ``sandbox_agent`` node in ``mode="script"``.
 
-    FAR-296 Phase 2: the fencing lease + stage-split contract apply ONLY to
-    script-mode nodes. Any script-mode sandbox node in the graph means a retry
-    of this run must first prove no script process could still be alive (the
-    lease probe) before a requeue.
+    The fencing lease + stage-split contract apply ONLY to script-mode nodes.
+    Any script-mode sandbox node in the graph means a retry of this run must
+    first prove no script process could still be alive (the lease probe) before
+    a requeue.
     """
     if not isinstance(graph_json, dict):
         return False
@@ -890,7 +902,7 @@ def _graph_is_interactive(graph_json: dict[str, Any] | None) -> bool:
 
     Batch pipelines (pure ``agent`` / ``connector`` / ``sandbox_agent`` nodes,
     no HITL gates) never pause, so persisting a checkpoint after every
-    superstep is pure overhead (FAR-432: drive persist-off for them).
+    superstep is pure overhead.
 
     When the graph cannot be inspected (None / not a dict) we are conservative
     and return True so a genuinely interactive pipeline is never broken by
@@ -910,7 +922,7 @@ def _graph_is_interactive(graph_json: dict[str, Any] | None) -> bool:
 
 
 def _resolved_node_timeouts(graph_json: dict[str, Any] | None, default_seconds: int) -> dict[str, int]:
-    """Resolve each graph node's effective ``timeout_seconds`` (FAR-369).
+    """Resolve each graph node's effective ``timeout_seconds``.
 
     The absolute node-deadline watchdog holds every node to its own hard
     deadline, falling back to the pipeline-level default when a node does not
@@ -939,7 +951,7 @@ async def _script_lease_probe_ok(
     org_id: Any,
     claim_token: str | None,
 ) -> bool:
-    """FAR-296 Phase 2 stale-claim probe: is it SAFE to requeue this run?
+    """Stale-claim probe: is it SAFE to requeue this run?
 
     Reads ``runs.sandbox_dispatch_state`` for a live ``script_executing`` lease
     (execution claimed, completion marker pending) that belongs to THIS claim.
@@ -1005,7 +1017,7 @@ def _resolve_post_node_eval_target(
     envelope: dict[str, Any],
     node_type_map: dict[str, str] | None,
 ) -> Any:
-    """Resolve the eval target for a completed node envelope (FAR-311).
+    """Resolve the eval target for a completed node envelope.
 
     Returns the node's CONTRACT output — the same pure return users see as the
     node return — so evals validate what the agent actually produced, not the
@@ -1039,7 +1051,7 @@ def _node_output_stall_reason(node_output: Any) -> str | None:
 
     Sandbox-agent nodes return ``{"artifacts": [...], "output": {...}}`` where
     the inner ``output`` dict carries ``stall_reason`` when the idle watchdog
-    fired (FAR-98). Returns None for non-dict / garbage output and for nodes
+    fired. Returns None for non-dict / garbage output and for nodes
     that did not stall, so non-sandbox node outputs are never misread.
     """
     if not isinstance(node_output, dict):
@@ -1202,7 +1214,7 @@ def _record_connector_failure(
 
 
 def _node_output_sandbox_session_lost(node_output: Any) -> str | None:
-    """Return a reason string when a captured node output carries the FAR-227
+    """Return a reason string when a captured node output carries the
     session-lost marker.
 
     node_runner stamps ``sandbox_session_lost: True`` on the output dict ONLY
@@ -1226,7 +1238,7 @@ def _node_output_sandbox_session_lost(node_output: Any) -> str | None:
 
 
 def _node_output_sandbox_session_lost_text(node_output: Any) -> str:
-    """The retained text surfaces of a FAR-227 session-lost envelope (FAR-1800).
+    """The retained text surfaces of a session-lost envelope.
 
     ``_node_output_sandbox_session_lost`` returns the marker REASON, which for
     the E2B wrapper's dead-session echo is the fixed PLACEHOLDER ("No output
@@ -1269,7 +1281,7 @@ def _node_output_sandbox_session_lost_text(node_output: Any) -> str:
 
 
 def _should_skip_retry(node_id: str | None, markers: Any, run_id: Any) -> bool:
-    """FAR-228 guard B decision: should a transient node failure be suppressed
+    """Guard B decision: should a transient node failure be suppressed
     as a retry because the run's delivery was already made?
 
     ``node_id`` is ``exc.node_id`` (only ``SandboxNodeFailedError`` carries it)
@@ -1287,7 +1299,7 @@ def _should_skip_retry(node_id: str | None, markers: Any, run_id: Any) -> bool:
 
 
 def _node_output_has_idempotency_gate(node_output: Any) -> bool:
-    """True when a captured node output carries the FAR-228 idempotency-gate
+    """True when a captured node output carries the idempotency-gate
     skip marker (``output_json.idempotency_gate``) — such a node must NOT
     re-fire agent_signal triggers.
 
@@ -1321,7 +1333,7 @@ async def _apply_work_intact(
     """Fenced UPDATE of ``runs.work_intact`` — mirrors ``update_run_status``
     fencing (F3a): a superseded executor's token no longer matches and the
     write is a no-op, so it cannot stamp work_intact on a successor's run.
-    Runs INSIDE the caller's terminalization transaction (FAR-152 §15.3).
+    Runs INSIDE the caller's terminalization transaction.
 
     ``run_id`` is bound with the ``Uuid`` type so the raw SQL matches the
     stored id on every backend (SQLite stores the 32-hex form, not the
@@ -1346,7 +1358,7 @@ async def _apply_work_intact(
 
 
 async def _reclassify_after_work_intact(session: AsyncSession, run_id: uuid.UUID) -> None:
-    """FAR-189 round-2 FIX 3: refresh + re-persist the classification record
+    """Refresh + re-persist the classification record
     after the ``work_intact`` write so the record carries the real value.
 
     ``finalize_cost`` triggers the terminal status write → inline classify
@@ -1393,7 +1405,7 @@ async def _apply_work_intact_best_effort(
         return
     try:
         await _apply_work_intact(session, run_id, work_intact, claim_token=claim_token)
-        # FAR-189 round-2 FIX 3: finalize_cost's inline classify ran BEFORE this
+        # finalize_cost's inline classify ran BEFORE this
         # write (work_intact still NULL at classify time). Re-persist the
         # classification with the real value — the sweep skips already-classified
         # rows, so this is the only correction for executor-terminalized runs.
@@ -1415,7 +1427,7 @@ async def org_sandbox_capacity_free(
     committed when the org is at sandbox capacity. Fail-open — any error reads
     as ``True`` (admit) with a warning, never raises.
 
-    D8 (FAR-594): lock-free by contract — the resume path's advisory-lock gate
+    D8: lock-free by contract — the resume path's advisory-lock gate
     (``_enforce_resume_sandbox_capacity``) is the enforcement point; taking
     the advisory lock here would invert the uniform row→advisory ordering
     (this pre-check holds no run row). Flag-on converges onto the shared
@@ -1470,7 +1482,7 @@ def _compute_otel_run_context(
     config: dict[str, Any],
     bridge: Any,
 ) -> tuple[str | None, Any | None]:
-    """FAR-198: compute the run's deterministic OTel trace id and root span.
+    """Compute the run's deterministic OTel trace id and root span.
 
     The root span is created via the bridge (spans created by the bridge
     inherit it). The ``context_api.attach`` is deferred to the caller so the
@@ -1486,7 +1498,7 @@ def _compute_otel_run_context(
 
 
 def _is_supersede_rejection(claim: Any) -> bool:
-    """True for a coalesced-supersede SYSTEM rejection (FAR-1487).
+    """True for a coalesced-supersede SYSTEM rejection.
 
     The committed ``decision_payload.reason`` is the supersede marker AND no
     account decided it (``decided_by`` is NULL - the supersede close-out never
@@ -1500,7 +1512,7 @@ def _is_supersede_rejection(claim: Any) -> bool:
 def _is_terminating_rejection_output(name: str, output: Any) -> bool:
     """True when a gate node's chain-end output is a stamped terminate-rejection.
 
-    FAR-1487: the gate's artifact must be for THIS gate (``node_id == name``),
+    The gate's artifact must be for THIS gate (``node_id == name``),
     carry ``result == "rejected"`` and the compile-time
     ``reject_disposition == "terminate"`` stamp. (A rejected gate that routes or
     proceeds carries a different disposition and never ends the run.)
@@ -1527,7 +1539,7 @@ def _record_chain_end_output(
     bridge: Any,
     lg_run_id: Any,
 ) -> Any | None:
-    """FAR-198: stamp and store a completed node's output envelope.
+    """Stamp and store a completed node's output envelope.
 
     Stamps the node's real OTel span id (and the run's trace id) onto a
     shallow copy of the envelope, stores it into ``completed_node_outputs``
@@ -1540,7 +1552,7 @@ def _record_chain_end_output(
     output = data.get("output") if isinstance(data, dict) else None
     if output is None:
         return None
-    # FAR-198: stamp the node's real OTel span id (and the run's trace id)
+    # Stamp the node's real OTel span id (and the run's trace id)
     # onto a shallow copy of the envelope. The node_output_split splitter
     # folds unknown top-level envelope keys into the node_telemetry entry, so
     # these surface in the per-node span column — never in the pure return.
@@ -1716,7 +1728,7 @@ class _StreamState:
     first_node_signalled: bool = False
     # Set when a captured sandbox-agent node output carries stall_reason — a
     # stalled node RETURNS a failed output dict instead of raising, so the run
-    # must be recorded as 'stalled', not 'complete' (FAR-98).
+    # must be recorded as 'stalled', not 'complete'.
     stall_reason: str | None = None
     # Set when a captured sandbox-agent node output self-reported failure
     # (agent_status=failed OR outcome=failed) — A1 elevation (agent-failure UX,
@@ -1724,11 +1736,11 @@ class _StreamState:
     agent_failure_reason: str | None = None
     connector_failure_reason: str | None = None
     connector_failure_code: str | None = None
-    # FAR-227: set when a captured sandbox-agent node output carries the
+    # set when a captured sandbox-agent node output carries the
     # sandbox-session-lost marker (the E2B wrapper's fallback echo — a dead
     # opencode session). Routes to retryable ``sandbox.no_output_json``.
     session_lost_reason: str | None = None
-    # FAR-1800: the envelope's retained text surfaces (output.json's
+    # The envelope's retained text surfaces (output.json's
     # ``no_output_reason`` + the captured stdout/stderr), which is where the
     # terminal PROVIDER error that killed the session lives. The marker reason
     # above is the wrapper's fixed placeholder, so classification must run
@@ -1736,7 +1748,7 @@ class _StreamState:
     # terminalise ``model.insufficient_funds``, not be masked as the retryable
     # ``sandbox.no_output_json``.
     session_lost_retained_text: str | None = None
-    # FAR-1487: ids of HITL gates whose REJECTED artifact was stamped
+    # IDs of HITL gates whose REJECTED artifact was stamped
     # ``reject_disposition == "terminate"`` in this stream. The gate's router
     # ENDs the graph on such a rejection, which is a NORMAL stream exit, so
     # ``_finalize_run_after_stream`` needs this (plus the committed claim row)
@@ -1809,16 +1821,16 @@ def _stream_terminal_reason(
     Extracted from ``_stream_graph``'s post-loop tail (pure refactor). A dead
     sandbox session routes to the retryable ``sandbox.no_output_json`` — unless
     the envelope's retained text classifies to a provider error code
-    (``model.insufficient_funds`` for an HTTP 402 billing refusal, FAR-1800) —
+    (``model.insufficient_funds`` for an HTTP 402 billing refusal) —
     a self-reported agent failure elevates to ``agent.failed``, and a node that
     stalled takes priority (existing precedence preserved). ``None`` means the
     caller returns ``complete``; ``run_completed`` is published later, only after
-    finalize commits the terminal status (FAR-1534), by
+    finalize commits the terminal status, by
     ``_finalize_then_publish_completed``.
     """
     usage = state.node_token_usage or None
     if state.session_lost_reason and not state.stall_reason:
-        # FAR-1800: the marker reason is the wrapper's fixed PLACEHOLDER, so the
+        # The marker reason is the wrapper's fixed PLACEHOLDER, so the
         # provider classification must run against the envelope's RETAINED text
         # (output.json's ``no_output_reason`` / the stdout tail), falling back to
         # the reason itself for callers that only carry that. A session killed
@@ -1942,7 +1954,7 @@ def _interrupt_required_team_id(gate_payload: dict[str, Any]) -> uuid.UUID | Non
 
 
 def _interrupt_condition_result(gate_payload: dict[str, Any]) -> dict[str, Any] | None:
-    """The interrupt payload's ``condition_result`` member (FAR-688), or None.
+    """The interrupt payload's ``condition_result`` member, or None.
 
     The gate node evaluates the JMESPath condition at fire time and stamps the
     MATCHED value ({"expression", "value"}, redacted + bounded) into the
@@ -1955,7 +1967,7 @@ def _interrupt_condition_result(gate_payload: dict[str, Any]) -> dict[str, Any] 
 
 
 def _interrupt_subject(gate_payload: dict[str, Any]) -> str | None:
-    """The interrupt payload's ``subject`` member (FAR-859), or None.
+    """The interrupt payload's ``subject`` member, or None.
 
     The gate node resolves ``subject_path`` against the run state at fire
     time and stamps the serialised value into the payload; the briefing
@@ -1967,7 +1979,7 @@ def _interrupt_subject(gate_payload: dict[str, Any]) -> str | None:
 
 
 def _interrupt_subject_parent(gate_payload: dict[str, Any]) -> dict[str, Any] | None:
-    """The interrupt payload's ``subject_parent`` member (FAR-862), or None.
+    """The interrupt payload's ``subject_parent`` member, or None.
 
     The gate node resolves the JMESPath prefix of ``subject_path`` to find
     the container dict holding the subject value; the briefing capture
@@ -1980,7 +1992,7 @@ def _interrupt_subject_parent(gate_payload: dict[str, Any]) -> dict[str, Any] | 
 
 
 def _interrupt_subject_leaf_key(gate_payload: dict[str, Any]) -> str | None:
-    """The interrupt payload's ``subject_leaf_key`` member (FAR-862), or None.
+    """The interrupt payload's ``subject_leaf_key`` member, or None.
 
     The leaf key within ``subject_parent`` whose value is the subject.
     """
@@ -1989,7 +2001,7 @@ def _interrupt_subject_leaf_key(gate_payload: dict[str, Any]) -> str | None:
 
 
 def _clamp_to_ceiling(base_level: AutonomyLevel, ceiling: str | None) -> str:
-    """Clamp ``base_level`` to a raw ceiling string, by rank (FAR-1175).
+    """Clamp ``base_level`` to a raw ceiling string, by rank.
 
     Levels are not lexicographic, so the clamp compares ``autonomy_level_rank``.
     An absent or unparseable ceiling imposes no constraint — the base wins.
@@ -2062,7 +2074,7 @@ class PipelineExecutor:
     """Execute a single pipeline run (HITL-aware, supports parallel fan-out).
 
     ``astream_events`` delivers every node's events (including nodes running in
-    parallel branches, FAR-171) through ONE async generator in superstep
+    parallel branches) through ONE async generator in superstep
     completion order, so ``_stream_graph`` needs no per-branch task management:
     ``completed_node_outputs`` is keyed by node_id (no clobbering), token usage
     accumulates per node name, and the RunawayGuard counters are incremented
@@ -2096,7 +2108,7 @@ class PipelineExecutor:
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
         self._checkpointer_conn_string = checkpointer_conn_string
         self._otel_bridge = LangGraphOtelBridge()
-        # Evidence seam (FAR-152 §15.3): injected FakeEvidenceProvider in tests;
+        # Evidence seam: injected FakeEvidenceProvider in tests;
         # None selects the production E2B+DB-backed provider per run.
         self._evidence_provider = evidence_provider
         # Zombie-run protection hook (2026-08-05): wired by
@@ -2105,7 +2117,7 @@ class PipelineExecutor:
         # distinguish "hung in pre-node setup" (no progress) from a legitimate
         # long-running node (progress already signalled → watchdog stands down).
         self.on_first_progress: Callable[[], None] | None = None
-        # Absolute node-deadline watchdog hooks (FAR-369, defense-in-depth): wired
+        # Absolute node-deadline watchdog hooks (defense-in-depth): wired
         # by ``pipeline_execution.run_executor_with_watchdog`` to asyncio.Events.
         # Called when EACH node starts / completes (by node_id) so the watchdog
         # can measure each node's execution against its own ``timeout_seconds``
@@ -2124,16 +2136,16 @@ class PipelineExecutor:
         # write out from under a successor. Seeded into LangGraph state as
         # ``_claim_lease`` for the sandbox dispatch marker.
         self._claim_token: str | None = None
-        # FAR-1487: gate ids whose stamped terminate-rejection ended the last
+        # Gate IDs whose stamped terminate-rejection ended the last
         # stream (set by ``_stream_graph``, consumed by
         # ``_finalize_run_after_stream``). Per-executor, like ``_claim_token``.
         self._terminating_rejected_gates: set[str] = set()
-        # FAR-435: the run-level connector fetch scope (``allowed_connectors``),
+        # The run-level connector fetch scope (``allowed_connectors``),
         # computed once at run start from the graph (node capability_scope union
         # Agent connector_type_refs grants) and reused by the compensation hub
         # so both run paths apply the same deny-by-default fetch gate.
         self._run_connector_scope: list[str] | None = None
-        # FAR-764: agent IDs whose collection_install is community-sourced and
+        # Agent IDs whose collection_install is community-sourced and
         # not-yet-granted.  These agents run under default-deny tool/connector
         # scope (no connectors, read-only tools) until the operator grants them.
         self._community_gated_agents: set[str] = set()
@@ -2148,7 +2160,7 @@ class PipelineExecutor:
         # execute/resume path (which already builds a Notifier for the system
         # worker crons); None skips dispatch (fail-open, never blocks the run).
         self._notifier: Any | None = notifier
-        # FAR-893: dispatch phase tracker (optional, wired by execute_run).
+        # Dispatch phase tracker (optional, wired by execute_run).
         # The tracker reports which phase the executor is in between claim and
         # first node dispatch.  Read by the zombie watchdog when the grace
         # period fires.
@@ -2192,7 +2204,7 @@ class PipelineExecutor:
         runs, or scanning the graph logs a warning and ADMITS the run (treats
         it as no-cap) rather than raising.
 
-        FAR-2076: a 55P03 row-lock timeout on the admission transaction is
+        A 55P03 row-lock timeout on the admission transaction is
         retried ONCE. That transaction also spends one execution attempt, so a
         silent recovery would let the graph run uncounted. A second consecutive
         timeout does NOT terminalise: the executor attempts the fenced
@@ -2211,7 +2223,7 @@ class PipelineExecutor:
         )
         org_run_limit: int | None = await self._read_org_run_concurrency_limit(org_id)
 
-        # FAR-2076: the admission transaction ALSO spends one execution against
+        # The admission transaction ALSO spends one execution against
         # the retry budget (see ``_claim_under_capacity``). A 55P03 row-lock
         # timeout rolls that transaction back WHOLE — including the bump — so
         # proceeding after recovery would execute the graph UNCOUNTED. Retry the
@@ -2352,13 +2364,13 @@ class PipelineExecutor:
     ) -> Run:
         """Claim the run or demote it to pending, in one bounded transaction.
 
-        FAR-1610: ``set_mutation_row_lock_timeout`` bounds the hot ``runs``
+        ``set_mutation_row_lock_timeout`` bounds the hot ``runs``
         row-lock wait BEFORE this transaction's first lock (``get_run`` below
         is a plain read; the first lock is the cancel/claim/demote write). This
         claim-time write is a RECOVERY path — the run was already claimed
         ``running`` by ``claim_run_async``, so a contended row must NOT
         terminal-fail it. Issued in the caller's transaction; the shared
-        ``update_run_status`` stays unbounded (FAR-1601).
+        ``update_run_status`` stays unbounded -.
         """
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
@@ -2415,7 +2427,7 @@ class PipelineExecutor:
                 org_id=org_id,
                 pipeline_id=pipeline_id,
             )
-            # FAR-2076: this attempt is EXECUTING — spend ONE execution
+            # This attempt is EXECUTING — spend ONE execution
             # against the pipeline's retry budget. Placement is the
             # invariant: the capacity check above has passed (a demotion
             # returns above and never reaches this line), so the counter
@@ -2455,7 +2467,7 @@ class PipelineExecutor:
                     org_id,
                 )
             else:
-                # FAR-2078: open the durable per-attempt row at the EXACT point
+                # Open the durable per-attempt row at the EXACT point
                 # the retry budget is spent, in the SAME transaction — the two
                 # describe the same event, so they can never disagree, and a
                 # crash after this commit leaves both the spend and the attempt
@@ -2544,11 +2556,11 @@ class PipelineExecutor:
     ) -> Run | None:
         """Refuse an admission that would exceed the pipeline's retry budget.
 
-        FAR-2076 defence in depth: THIS is the single point every graph
+        Defence in depth: THIS is the single point every graph
         execution is granted through (the capacity check has passed; the caller
         spends one execution after this gate). Returns the terminal row when the
         attempt is refused and ``None`` when the caller may admit. The policy is
-        read here (soft-delete opt-out, FAR-1025 parity) rather than threaded
+        read here (soft-delete opt-out) rather than threaded
         from a caller, so no call site can omit the gate. ``None``/``{}``
         imposes no ceiling and is unaffected.
         """
@@ -2640,7 +2652,7 @@ class PipelineExecutor:
         superseded original (token rotated by a successor) cannot demote the
         successor's running row back to pending.
 
-        D8 (FAR-594): this claim-time demotion is explicitly ADVISORY — a
+        D8: this claim-time demotion is explicitly ADVISORY — a
         best-effort, lock-free, population-only read (its own-row lock exists
         only at this fenced demote write) that must NEVER take the per-org
         advisory lock (a count-then-row shape would invert the uniform
@@ -2681,8 +2693,8 @@ class PipelineExecutor:
     ) -> Run | None:
         """Halt a run BEFORE any billable step when the org budget is exhausted.
 
-        Reads the org's FAR-391 lifetime spend ceiling and its consumed total
-        from the per-org cost-state row (``organisation_cost_state``; FAR-1833).
+        Reads the org's lifetime spend ceiling and its consumed total
+        from the per-org cost-state row (``organisation_cost_state``; .
         If the org is already at/over its ceiling (no remaining budget for ANY
         new run), the run is terminalized as ``cost_ceiling_exceeded`` and
         returned so ``execute()`` never spawns an LLM / E2B call. Returns
@@ -2702,15 +2714,15 @@ class PipelineExecutor:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await set_rls_execution_context(session)
-                # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE the
+                # Bound the hot ``runs`` row-lock wait BEFORE the
                 # transaction's first lock (the terminalizing
                 # ``update_run_status`` below). Issued in the caller's
                 # transaction; the shared ``update_run_status`` stays unbounded
-                # (FAR-1601). A 55P03 lands in this method's existing fail-open
+                # -. A 55P03 lands in this method's existing fail-open
                 # ``except Exception`` (WARNING + return None) — the ledger block
                 # remains the authoritative hard ceiling.
                 await set_mutation_row_lock_timeout(session)
-                # FAR-1025: opt out of the global soft-delete filter — a
+                # Opt out of the global soft-delete filter — a
                 # pending-deletion org (deleted_at stamped at initiate) is still
                 # operationally live.  Skipping here means the pre-dispatch
                 # ceiling gate returns None and the run proceeds unchecked.
@@ -2721,7 +2733,7 @@ class PipelineExecutor:
                 ).scalar_one_or_none()
                 if org is None:
                     return None
-                # FAR-1833: the ceiling/cumulative live on the per-org cost-state
+                # The ceiling/cumulative live on the per-org cost-state
                 # row; a missing row is the defaults (both ceilings unlimited,
                 # cumulative 0), not an error.
                 state = await get_org_cost_state(session, org_id)
@@ -2774,7 +2786,7 @@ class PipelineExecutor:
         snapshot: PipelineSnapshot,
         claim_token: str | None,
     ) -> Run | None:
-        """Re-verify the snapshot's policy-gate pin fingerprint (FAR-967 F1).
+        """Re-verify the snapshot's policy-gate pin fingerprint.
 
         Fail-CLOSED backstop for §3.4 on BOTH the execute() and resume()
         paths: the run-creation seam blocks a mismatched snapshot before
@@ -2865,10 +2877,10 @@ class PipelineExecutor:
             )
             payload: dict[str, Any] = {
                 "pipeline_id": str(pipeline_id),
-                # FAR-1141 / ADR-042: the run-keyed audit payload carries the
+                # The run-keyed audit payload carries the
                 # run's execution origin ('dispatched' / NULL) so the audit log
                 # can tell a dispatched run from one Modulo executed. Composed
-                # from the shared serializer (FAR-1565) — core may not import
+                # from the shared serializer — core may not import
                 # the API layer, which is exactly why the serializer lives here
                 # in core and serves both layers.
                 **run_provenance_fields(running_run),
@@ -2910,7 +2922,7 @@ class PipelineExecutor:
     ) -> int:
         """Count the org's active sandbox runs (fail-open to 0 on read error).
 
-        D8 (FAR-594): ``population="marker"`` (the flag-on claim-time path)
+        D8: ``population="marker"`` (the flag-on claim-time path)
         counts the narrowed running-only marker population; the default
         ``"graph"`` keeps the pre-D8 sandbox-graph count for flag-off.
         """
@@ -2995,7 +3007,7 @@ class PipelineExecutor:
 
                     cap, host_resource_only = await read_runner_cap_contract(session, org_id)
                     return cap, host_resource_only, "marker"
-                # FAR-589 D3b: the one reader returns the full contract; this
+                # The one reader returns the full contract; this
                 # claim-time cap read enforces the flag-off window cap only
                 # (absent key = no gate until D8's rollout flag).
                 return (await get_sandbox_concurrency_limit(session, org_id)).enforced_cap, False, "graph"
@@ -3066,7 +3078,7 @@ class PipelineExecutor:
         org_id: uuid.UUID,
         pipeline_id: uuid.UUID,
     ) -> tuple[list[Any], bool]:
-        """FAR-215: hoisted per-run claim discovery for the conformance re-check.
+        """Hoisted per-run claim discovery for the conformance re-check.
 
         Computed ONCE at run start (both ``execute`` and ``resume``) and seeded
         into the run-scoped conformance context, so the per-node check pays
@@ -3090,12 +3102,12 @@ class PipelineExecutor:
     ) -> list[tuple[Eval, PolicyGate | None]]:
         """Load eval definitions for a pipeline that are scoped to a node.
 
-        Reads from ``evals`` + ``policy_gates`` (FAR-1100 cutover).  Returns
+        Reads from ``evals`` + ``policy_gates``.  Returns
         ``(Eval, PolicyGate | None)`` tuples — the PolicyGate is ``None``
         for guardrail-typed Evals and any eval whose binding was rejected
         during backfill.
 
-        FAR-967 chunk 10: the gate row is returned EVEN WHEN ``enabled`` is
+        The gate row is returned EVEN WHEN ``enabled`` is
         ``false`` — the operator-control re-check happens in
         :meth:`_build_eval_defs_by_node`, where a deliberately-disabled gate
         remains distinguishable from a gate that never existed (the
@@ -3130,7 +3142,7 @@ class PipelineExecutor:
     ) -> tuple[str, uuid.UUID | None, int | None, uuid.UUID | None, str | None]:
         """Resolve the gate that governs THIS run for one node-scoped eval.
 
-        FAR-967 chunk 10 (§3.1, §5.2, §6.1):
+        Chunk 10 (§3.1, §5.2, §6.1):
 
         * **Live fallback** (``pinned_universe=False`` — a snapshot with no
           ``policy_gate_pins_json``, §6.1 case (i)): the live, enabled
@@ -3154,7 +3166,7 @@ class PipelineExecutor:
         AND no pin keeps its pre-existing ``eval_defs.node_without_gate``
         anomaly warning.
 
-        ``evaluation_mode`` (FAR-939 chunk 12, extended by FAR-1749) is the
+        ``evaluation_mode`` (chunk 12, extended by 1749) is the
         gate's ``policy_gates.evaluation_mode``, resolved ONLY when the gate
         governs — ``"human"`` marks the eval for the shared-helper skip
         (chunk 12 §3.3). For a pinned gate the mode comes from the snapshot
@@ -3187,7 +3199,7 @@ class PipelineExecutor:
             return _NO_GOVERNED_GATE
 
         # Operator control (§5.2): a disabled live row removes the gate from
-        # evaluation — it overrides the pin. STRICT attribute read (FAR-967
+        # evaluation — it overrides the pin. STRICT attribute read
         # F7): ``enabled`` is a NOT NULL column on every live row, so a
         # stand-in without the field is a fixture bug that must fail loudly
         # — the old getattr-default silently evaluated such a stand-in as
@@ -3233,7 +3245,7 @@ class PipelineExecutor:
         pinned_universe: bool,
         pipeline_id: uuid.UUID,
     ) -> tuple[str, uuid.UUID | None, int | None, uuid.UUID | None, str | None]:
-        """Verdict when NO live PolicyGate row exists for this eval (FAR-967 §3.1).
+        """Verdict when NO live PolicyGate row exists for this eval.
 
         Extracted from :meth:`_resolve_governed_gate` for cognitive-complexity
         budget (S3776) — behaviour is unchanged: every arm returns the
@@ -3276,7 +3288,7 @@ class PipelineExecutor:
         eval_id: str,
         pipeline_key: str,
     ) -> tuple[str, uuid.UUID | None, int | None, uuid.UUID | None, str | None]:
-        """Resolve the governing verdict from a snapshot PIN (FAR-967 §3.1/§3.3).
+        """Resolve the governing verdict from a snapshot PIN.
 
         Extracted from :meth:`_resolve_governed_gate` for cognitive-complexity
         budget (S3776). The pin's ``policy_gate_id`` must still match the live
@@ -3284,10 +3296,10 @@ class PipelineExecutor:
         optional ``node_id`` (when parseable) overrides the live row's node.
         Returns the ungoverned verdict on any pin-side rejection.
 
-        ``evaluation_mode`` (FAR-1749): a pin carrying a closed-vocabulary
+        ``evaluation_mode`` (1749): a pin carrying a closed-vocabulary
         ``evaluation_mode`` FREEZES the mode the run started with — a live
         flip before resume cannot change it. A legacy pin without the field
-        falls back to the live row's mode (pre-FAR-1749 behaviour), and a
+        falls back to the live row's mode (pre-1749 behaviour), and a
         malformed pinned value logs and does the same. A replaced gate (pin id
         mismatch) is ungoverned, so its pinned mode is never used.
         """
@@ -3331,8 +3343,8 @@ class PipelineExecutor:
         if pinned_mode in ("human", "automatic"):
             evaluation_mode = str(pinned_mode)
         else:
-            # Legacy pin (pre-FAR-1749 snapshots carry no mode) or a malformed
-            # value: fall back to the live row's mode — the pre-FAR-1749
+            # Legacy pin (pre-1749 snapshots carry no mode) or a malformed
+            # value: fall back to the live row's mode — the pre-1749
             # behaviour. The fingerprint covers the stored pin, so a malformed
             # value here means an unverified (case ii) pin list; log it rather
             # than swallow it.
@@ -3365,7 +3377,7 @@ class PipelineExecutor:
         """Convert (Eval, PolicyGate) rows to a dict keyed by node id.
 
         ``failure_behaviour`` and the PolicyGate metadata are resolved per
-        eval by :meth:`_resolve_governed_gate` (FAR-967 chunk 10):
+        eval by :meth:`_resolve_governed_gate` (chunk 10):
 
         * ``policy_gate_pins is None`` — legacy live fallback (§6.1 case
           (i)): the live, enabled ``PolicyGate.action`` populates
@@ -3473,7 +3485,7 @@ class PipelineExecutor:
     ) -> list[dict[str, Any]]:
         """The evaluation modes of the fired gate's source node, as of FIRE time.
 
-        FAR-939 chunk 12 (M4, §3.3 / §10): the mode is run-frozen — resolved
+        Chunk 12 (M4, §3.3 / §10): the mode is run-frozen — resolved
         when the run starts and unchanged for the run's duration. The
         interrupt handler stamps this list onto the claim row's
         ``gate_config_json`` when the gate fires; ``resume()`` reads it back
@@ -3482,7 +3494,7 @@ class PipelineExecutor:
         resume cannot change the resumed run's behaviour (neither the
         human-governed eval skip nor the Evidence grounding can drift).
 
-        Relationship to the FAR-1749 pin freeze: for a snapshot whose pins
+        Relationship to the 1749 pin freeze: for a snapshot whose pins
         carry ``evaluation_mode`` the freshly built DTO already holds the
         SAME run-start mode, so re-applying this stamp is a consistent
         NO-OP there. The stamp stays load-bearing for legacy pins (which
@@ -3918,7 +3930,7 @@ class PipelineExecutor:
         """Build, enter and initialise the ConnectorHub for the active rows.
 
         Connectors confirmed configured — any failure below re-raises
-        (fail closed) via the configured path. FAR-587: the runtime-provider
+        (fail closed) via the configured path. The runtime-provider
         hub stays reachable for the teardown path via the ConnectorHub
         constructor seam (``runtime_provider=`` -> ``_runtime_provider``);
         _teardown_hub acloses it there, disposing provider-tracked workspaces
@@ -3954,7 +3966,7 @@ class PipelineExecutor:
             # fail-closed re-raise: the caller sees hub=None for this
             # failure mode (this helper never returned), so without this
             # guard the teardown — and with it the runtime-provider
-            # aclose disposing provider-tracked workspaces (FAR-587, e.g.
+            # aclose disposing provider-tracked workspaces (e.g.
             # billable E2B sandboxes) — would be skipped exactly here.
             # Cleanup failures are logged inside _teardown_hub and
             # suppressed here so they never mask the original error.
@@ -5076,6 +5088,7 @@ class PipelineExecutor:
                 probe_script_lease_fn=self._probe_script_lease,
                 read_retry_attempt_state_fn=self._read_retry_attempt_state,
                 graph_has_script_mode_fn=_graph_has_script_mode,
+                node_timeouts=self._node_timeouts.values(),
             )
         if retry_decision == "side_effect_unknown":
             final_status = "failed"
@@ -6532,7 +6545,7 @@ class PipelineExecutor:
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
-            # FAR-1025: opt out of the global soft-delete filter -- an in-flight
+            # Opt out of the global soft-delete filter -- an in-flight
             # run's pipeline may have been soft-deleted; the pipeline must still
             # be loadable for graph construction.
             from modulo.db.soft_delete import include_soft_deleted
