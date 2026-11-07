@@ -10,17 +10,23 @@ type SsoBackendProcess = { stop: () => Promise<void> }
 
 async function waitForPort(port: number, child: ChildProcess): Promise<void> {
   const deadline = Date.now() + 15_000
+  let lastProbeError: unknown
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`[sso-fixture] backend exited before readiness (code ${child.exitCode})`)
     try {
       const response = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(500) })
       if (response.status < 500) return
-    } catch {
+    } catch (err) {
       // The backend is still booting; the deadline bounds this polling loop.
+      // Retain the probe error so a readiness timeout reports the real cause.
+      lastProbeError = err
     }
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  throw new Error(`[sso-fixture] backend did not become ready on port ${port} within 15000ms`)
+  throw new Error(
+    `[sso-fixture] backend did not become ready on port ${port} within 15000ms (last probe error: ${String(lastProbeError)})`,
+    { cause: lastProbeError },
+  )
 }
 
 async function startLocalSsoBackend(): Promise<SsoBackendProcess> {
