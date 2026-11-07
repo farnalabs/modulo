@@ -4727,6 +4727,9 @@ elements:
       - testid: pipeline-editor-toolbar-group-settings
         type: element
         dynamic_testid: false
+      - testid: pipeline-editor-settings-toggle
+        type: button
+        dynamic_testid: false
       - testid: pipeline-editor-archive
         type: button
         dynamic_testid: false

@@ -1275,6 +1275,13 @@ export default {
     },
     "PipelineEditorView": {
       "pipeline_editor": "Pipeline Editor",
+      "pipeline_editor_toolbar": "Pipeline editor actions",
+      "toolbar_identity": "Pipeline identity",
+      "toolbar_primary_actions": "Primary actions",
+      "toolbar_run_actions": "Run actions",
+      "toolbar_settings": "Pipeline settings",
+      "toolbar_settings_toggle": "Settings",
+      "toolbar_canvas_actions": "Canvas actions",
       "loading_editor": "Loading pipeline editor...",
       "node_properties": "Node Properties",
       "type_label": "Type",

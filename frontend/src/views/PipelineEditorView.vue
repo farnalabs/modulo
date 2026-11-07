@@ -75,9 +75,9 @@
              `shrink-0`: when the content column is shorter than the wrapped
              toolbar, the toolbar must keep its min-content height (scroll the
              column to reach it) rather than being squeezed. -->
-        <div class="flex shrink-0 flex-wrap items-start gap-x-2 gap-y-2 border-b bg-card px-3 py-2 md:items-center" data-testid="pipeline-editor-toolbar">
+          <div class="flex shrink-0 flex-wrap items-start gap-x-2 gap-y-2 border-b bg-card px-3 py-2 md:items-center" :aria-label="$t('views.PipelineEditorView.pipeline_editor_toolbar')" data-testid="pipeline-editor-toolbar">
           <!-- Group: identity -->
-          <div class="flex min-w-0 items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-identity">
+          <div class="flex min-w-0 items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_identity')" data-testid="pipeline-editor-toolbar-group-identity">
             <h2 class="truncate text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
             <button v-if="!isViewing" type="button" :class="btnToolbarIcon" :aria-label="$t('views.PipelineEditorView.rename_pipeline')" :title="$t('views.PipelineEditorView.rename_pipeline')" data-testid="pipeline-editor-rename" @click="openRenameDialog">
               <PencilIcon class="h-3 w-3" aria-hidden="true" />
@@ -119,7 +119,7 @@
           </div>
           <span :class="groupDividerClass" />
           <!-- Group: graph file actions -->
-          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-file">
+          <div class="flex items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_primary_actions')" data-testid="pipeline-editor-toolbar-group-file">
             <button v-if="!isViewing" type="button" :class="btnToolbarSecondary" :disabled="savingGraph" data-testid="pipeline-editor-save" @click="saveGraph">
               <LoaderCircleIcon v-if="savingGraph" class="h-3 w-3 animate-spin" aria-hidden="true" />
               {{ savingGraph ? $t('views.PipelineEditorView.saving_graph') : $t('views.PipelineEditorView.save') }}
@@ -172,7 +172,7 @@
           <template v-if="!isViewing">
             <span :class="groupDividerClass" />
             <!-- Group: run -->
-            <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-run">
+            <div class="flex items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_run_actions')" data-testid="pipeline-editor-toolbar-group-run">
               <button type="button" :class="btnToolbarPrimary" :disabled="running || flowNodes.length === 0" :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''" ref="runDialogTriggerRef"
                 data-testid="pipeline-editor-run" @click="openRunDialog">
                 <PlayIcon class="h-3 w-3" aria-hidden="true" />
@@ -184,8 +184,28 @@
           <template v-if="!isViewing">
           <span :class="groupDividerClass" />
           <!-- Group: pipeline settings -->
-          <div class="flex w-full flex-wrap items-center gap-1.5 md:w-auto" data-testid="pipeline-editor-toolbar-group-settings">
-            <button v-if="!pipeline?.archived_at" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+          <div class="flex w-full flex-wrap items-center gap-1.5 rounded-md border border-border/70 bg-muted/20 p-1.5 md:w-auto" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_settings')" data-testid="pipeline-editor-toolbar-group-settings">
+            <span class="sr-only">{{ $t('views.PipelineEditorView.toolbar_settings') }}</span>
+            <button
+              ref="settingsToggleRef"
+              type="button"
+              :class="[btnToolbarSecondary, 'md:hidden']"
+              :aria-expanded="settingsOpen"
+              :aria-controls="pipelineEditorSettingsControlsId"
+              data-testid="pipeline-editor-settings-toggle"
+              @click="toggleSettingsDisclosure($event)"
+              @keydown.escape.prevent="closeSettingsDisclosure"
+            >
+              {{ $t('views.PipelineEditorView.toolbar_settings_toggle') }}
+            </button>
+            <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- settings controls: Escape collapses the disclosure, except while a nested panel dialog owns the keypress -->
+            <div
+              :id="pipelineEditorSettingsControlsId"
+              ref="settingsControlsRef"
+              :class="['flex flex-wrap items-center gap-1.5', { 'max-md:hidden': !settingsOpen }]"
+              @keydown.escape="onSettingsControlsKeydown"
+            >
+            <button v-if="!pipeline?.archived_at" ref="firstSettingsControlRef" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
             <!-- FAR-1530: per-pipeline Paused execution state. Paused is a
                  visible state, not an archived one - the pipeline stays in the
@@ -648,11 +668,12 @@
                 </div>
               </dialog>
             </div>
+            </div>
           </div>
           </template>
           <span :class="groupDividerClass" />
           <!-- Group: canvas tools -->
-          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-canvas">
+          <div class="flex items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_canvas_actions')" data-testid="pipeline-editor-toolbar-group-canvas">
             <template v-if="!isViewing">
               <Select
                 v-model="newNodeType"
@@ -2378,6 +2399,48 @@ const showAgentPicker = ref(false)
 const showRevertDialog = ref(false)
 const showSaveAsComposite = ref(false)
 const showVersionTimeline = ref(false)
+const settingsOpen = ref(false)
+const settingsToggleRef = ref<HTMLButtonElement | null>(null)
+const settingsControlsRef = ref<HTMLElement | null>(null)
+const firstSettingsControlRef = ref<HTMLButtonElement | null>(null)
+const pipelineEditorSettingsControlsId = 'pipeline-editor-settings-controls'
+
+function focusFirstSettingsControl() {
+  nextTick(() => {
+    const firstControl = firstSettingsControlRef.value ?? settingsControlsRef.value?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])')
+    firstControl?.focus({ preventScroll: true })
+  })
+}
+
+function toggleSettingsDisclosure(event: MouseEvent) {
+  if (settingsOpen.value) {
+    closeSettingsDisclosure()
+    return
+  }
+  settingsOpen.value = true
+  // A keyboard activation produces a click with detail 0. Pointer users keep
+  // their pointer focus; only keyboard users are moved into the revealed form.
+  if (event.detail === 0) focusFirstSettingsControl()
+}
+
+function closeSettingsDisclosure() {
+  if (!settingsOpen.value) return
+  settingsOpen.value = false
+  settingsToggleRef.value?.focus()
+}
+
+function onSettingsControlsKeydown(event: KeyboardEvent) {
+  // A nested retry-policy / autonomy panel is a descendant <dialog open> with
+  // its own document-level Escape handler. That handler closes the panel and
+  // restores focus to the panel toggle; without this guard the same keypress
+  // also collapses the settings disclosure and steals focus back to the
+  // settings toggle (nested Escape double-close).
+  if (event.target instanceof Element && event.target.closest('dialog[open]')) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeSettingsDisclosure()
+  }
+}
 const pickerAgentId = ref<string>('__all__')
 const pickerConnectorId = ref<string>('__all__')
 const revertSnapshotId = ref<string>('__all__')
