@@ -554,11 +554,18 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert "Build and sha256-verify PostgreSQL from pinned upstream source" in workflow_text
     assert "../pg-src/configure" in workflow_text
     assert 'BUNDLE_PG_PREFIX="$PWD/build/${BUNDLE_ROOT}/pg"' in workflow_text
-
-    assert 'BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"' in workflow_text
     assert '--prefix="$BUNDLE_PG_PREFIX"' in workflow_text
-
     assert "--without-llvm" in workflow_text
+
+    # Pin the canonicalized-BUNDLE assertion to the Assemble step. The same
+    # canonicalized line exists in the ELF-scan and libpq-assert steps, so a
+    # whole-file match would still pass with this step reverted to the relative
+    # form. Also assert the relative form is gone from the step itself.
+    workflow = yaml.safe_load(workflow_text)
+    steps = workflow["jobs"]["bundle"]["steps"]
+    assemble_script = steps[_step_names(steps).index("Assemble bundle layout")]["run"]
+    assert 'BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"' in assemble_script
+    assert 'BUNDLE="build/${BUNDLE_ROOT}"' not in assemble_script
     assert "PG_REQUIRED_EXTENSIONS=" in versions
     assert "PG_REQUIRED_EXTENSIONS=\n" in versions
     assert "Verify PostgreSQL extension inventory before source build" in workflow_text

@@ -271,7 +271,7 @@ jobs:
       - name: Assemble bundle layout
         run: |
           set -euo pipefail
-           source scripts/bundle-versions.env
+          source scripts/bundle-versions.env
           BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
           mkdir -p "$BUNDLE/runtime" "$BUNDLE/pg" "$BUNDLE/redis"
 
