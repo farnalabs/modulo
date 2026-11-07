@@ -892,8 +892,8 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Discovery failed')
 
-    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
-    wrapper.findComponent(HeaderStub).vm.$emit('save')
+     await wrapper.get('[data-testid="system-map-discovery-config-cancel"]').trigger('click')
+     wrapper.findComponent(HeaderStub).vm.$emit('save')
     await flushPromises()
     expect(wrapper.text()).toContain('Could not save draft')
 

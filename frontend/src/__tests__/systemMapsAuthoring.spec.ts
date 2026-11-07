@@ -186,7 +186,7 @@ describe('DiscoveryPanel', () => {
 describe('DiscoveryConfigPanel', () => {
   it('fails closed when AI option loading fails', async () => {
     mockGet.mockRejectedValue(new Error('unavailable'))
-    const wrapper = mount(DiscoveryConfigPanel, { global: { plugins: [i18n] } })
+     const wrapper = mount(DiscoveryConfigPanel, { props: { canUseAi: true }, global: { plugins: [i18n] } })
     await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
     await vi.waitFor(() => expect(wrapper.get('[data-testid="system-map-discovery-submit"]').attributes('disabled')).toBeDefined())
     expect(wrapper.text()).toContain('AI discovery is unavailable')

@@ -123,17 +123,23 @@
           <!-- Discovery Review Panel (slide-over) -->
            <DiscoveryPanel
              v-if="discoveryOpen"
-             :discovery="discovery"
-             @close="discoveryOpen = false"
+              :discovery="discovery"
+              :backend-names="discoveryBackendNames"
+               :eval-identity="discoveryEvalIdentity"
+
+              @close="discoveryOpen = false"
              @save="saveDraftWithDiscovery"
              data-testid="system-map-discovery-panel"
            />
-           <DiscoveryConfigPanel
-             v-if="discoveryConfigOpen"
-             @close="discoveryConfigOpen = false"
-             @submit="startDiscovery"
-             data-testid="system-map-discovery-config"
-           />
+            <DiscoveryConfigPanel
+              v-if="discoveryConfigOpen"
+              :can-use-ai="aiAuthoringAvailable"
+              :submitting="discoverySubmitting"
+              :submit-error="discoverySubmitError"
+              @close="closeDiscoveryConfig"
+              @submit="startDiscovery"
+              data-testid="system-map-discovery-config"
+            />
         </div>
 
         <SystemMapAttributionBindings
@@ -203,6 +209,11 @@ const diffSummaryItems = computed<Array<[string, number]>>(() => {
 const isPublished = computed(() => activeRevision.value?.status === 'published')
 const isArchived = computed(() => activeRevision.value?.status === 'archived')
 const readOnly = computed(() => !store.hasAccess || isPublished.value || isArchived.value)
+const aiAuthoringAvailable = computed(() => store.accessLoaded && !store.error && store.hasAccess)
+const discoverySubmitting = ref(false)
+const discoverySubmitError = ref<string | null>(null)
+const discoveryBackendNames = ref<Record<string, string>>({})
+const discoveryEvalIdentity = ref<string | undefined>(undefined)
 
 watch(graph, (value) => {
   editedNodes.value = (value?.nodes ?? []).map((node) => ({ ...node, config_json: { ...node.config_json } }))
@@ -328,19 +339,30 @@ async function restoreRevision(revisionId: string): Promise<void> {
 }
 
 async function runDiscovery(): Promise<void> {
-  if (!activeMap.value || readOnly.value) return
+  if (!activeMap.value || readOnly.value || !store.accessLoaded || store.error) return
+  discoverySubmitError.value = null
   discoveryConfigOpen.value = true
 }
 
-async function startDiscovery(options?: { modelBackendId?: string; evalDefinitionId?: string }): Promise<void> {
-  if (!activeMap.value) return
-  discoveryConfigOpen.value = false
+function closeDiscoveryConfig(): void {
+  if (!discoverySubmitting.value) discoveryConfigOpen.value = false
+}
+
+async function startDiscovery(options?: { modelBackendId?: string; evalDefinitionId?: string; modelBackendName?: string; evalName?: string; evalVersion?: number }): Promise<void> {
+  if (!activeMap.value || discoverySubmitting.value) return
+  if (options?.modelBackendId && options.modelBackendName) discoveryBackendNames.value = { [options.modelBackendId]: options.modelBackendName }
+  if (options?.evalDefinitionId && options.evalName) discoveryEvalIdentity.value = `${options.evalName}${options.evalVersion == null ? '' : ` (v${options.evalVersion})`}`
+  discoverySubmitting.value = true
+  discoverySubmitError.value = null
   actionError.value = null
   try {
     await store.discover(`Discovered ${activeMap.value.name}`, `Discovery at ${new Date().toISOString()}`, options)
+    discoveryConfigOpen.value = false
     discoveryOpen.value = true
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.discovery_failed')
+    discoverySubmitError.value = err instanceof Error ? err.message : t('systemMaps.errors.discovery_failed')
+  } finally {
+    discoverySubmitting.value = false
   }
 }
 
@@ -371,6 +393,7 @@ async function saveDraft(): Promise<void> {
 }
 
 async function saveDraftWithDiscovery(selections: DiscoverySelection): Promise<void> {
+  if (discovery.value?.ai_assisted === true && discovery.value.eval_gate_passed !== true) return
   const merged = mergeDiscoverySelections(editedNodes.value, editedRelationships.value, discovery.value, selections)
   editedNodes.value = merged.nodes
   editedRelationships.value = merged.relationships
