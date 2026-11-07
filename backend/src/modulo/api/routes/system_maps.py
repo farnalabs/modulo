@@ -2464,14 +2464,26 @@ async def discover_system_map(
                             "message": "AI discovery backend invocation failed",
                         },
                     )
+                if ai_outcome != "accepted":
+                    # An explicit AI request must never silently degrade to a
+                    # deterministic draft. ``fallback`` means the provider
+                    # answered outside the AI contract; ``error`` is handled
+                    # above. Both are refusals, not successful discovery.
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={
+                            "code": "model_backend_invalid_response",
+                            "message": "AI discovery backend returned no accepted enhancement",
+                        },
+                    )
                 draft = candidate
-                ai_assisted = ai_outcome == "accepted"
+                ai_assisted = True
                 provenance.update(
                     {
                         "mode": "ai_assisted" if ai_assisted else "deterministic_fallback",
                         "prompt_version": PROMPT_VERSION,
                         "rubric_version": RUBRIC_VERSION,
-                        "selected_backend_id": request.model_backend_id,
+                        "selected_backend_id": str(request.model_backend_id),
                         "input_hash": deterministic_fingerprint,
                         "output_hash": _fingerprint(draft),
                     }
@@ -2508,8 +2520,8 @@ async def discover_system_map(
             finally:
                 await hub.__aexit__(None, None, None)
         raw_content = {
-            "nodes": list(draft.nodes),
-            "relationships": list(draft.relationships),
+            "nodes": json.loads(json.dumps(list(draft.nodes), default=str)),
+            "relationships": json.loads(json.dumps(list(draft.relationships), default=str)),
             "stages": [
                 {
                     "id": node["node_key"],

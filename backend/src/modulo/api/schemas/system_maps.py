@@ -528,7 +528,10 @@ class SystemMapDiscoveryReport(BaseModel):
     draft_revision_id: uuid.UUID
     draft_revision_number: int
     published: bool = False
-    ai_assisted: bool = False
-    eval_gate_passed: bool | None = None
-    eval_gate_verdict: Literal["not_requested", "pass", "fail", "error"] = "not_requested"
+    ai_assisted: bool | None = Field(default=None, description="Whether AI enhancement was accepted")
+    eval_gate_passed: bool | None = Field(default=None, description="Whether the optional eval gate passed")
+    eval_gate_verdict: Literal["not_requested", "pass", "fail", "error"] | None = Field(
+        default=None,
+        description="The optional eval gate outcome",
+    )
     provenance: SystemMapDiscoveryProvenance = Field(default_factory=SystemMapDiscoveryProvenance)
