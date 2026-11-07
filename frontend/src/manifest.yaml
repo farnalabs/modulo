@@ -4715,8 +4715,23 @@ elements:
       - testid: pipeline-editor-add-node
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-arrange-graph
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-undo-arrange
+        type: button
+        dynamic_testid: false
       - testid: pipeline-editor-fit-view
         type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-connection-announcement
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-router
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-hitl
+        type: element
         dynamic_testid: false
       - testid: pipeline-editor-root
         type: element

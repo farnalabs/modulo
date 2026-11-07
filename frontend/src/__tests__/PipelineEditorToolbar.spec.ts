@@ -182,6 +182,34 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     const fitButton = wrapper.find('[data-testid="pipeline-editor-fit-view"]')
     expect(fitButton.exists()).toBe(true)
     expect(fitButton.text()).toContain('Fit to View')
+
+    // FAR-2410: the explicit layout action lives in the editable canvas group.
+    const arrangeButton = wrapper.find('[data-testid="pipeline-editor-arrange-graph"]')
+    expect(arrangeButton.exists()).toBe(true)
+    expect(arrangeButton.text()).toContain('Arrange graph')
+    // No layout action has run yet, so the one-step undo stays unmounted.
+    expect(wrapper.find('[data-testid="pipeline-editor-undo-arrange"]').exists()).toBe(false)
+  })
+
+  it('surfaces an Arrange graph fit failure without breaking the layout action', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'a', node_type: 'agent', label: 'A', position: { x: 9, y: 9 } }]
+    vm.flowNodes = [{ id: 'a', type: 'agent', position: { x: 9, y: 9 }, data: { label: 'A' } }]
+    vm.rawEdges = []
+
+    fitViewSpy.mockRejectedValueOnce(new Error('viewport missing'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vm.arrangeGraph()
+    await flushPromises()
+
+    expect(vm.rawNodes[0].position).toEqual({ x: 0, y: 0 })
+    expect(warn).toHaveBeenCalledWith(
+      '[PipelineEditorView] Arrange graph fitView failed',
+      expect.any(Error),
+    )
+    warn.mockRestore()
   })
 
   it('sizes the toolbar node-type Select to the uniform h-7 row height', async () => {
