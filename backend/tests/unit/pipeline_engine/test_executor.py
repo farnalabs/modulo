@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.node_output_split import split_node_output
-from modulo.core.pipeline_engine import retry_policy as retry_policy_module
 from modulo.core.pipeline_engine.executor import (
     GraphValidationError,
     PipelineExecutor,
@@ -30,10 +29,6 @@ from modulo.core.pipeline_engine.executor import (
     _seed_state,
     _terminal_failure,
 )
-from modulo.core.pipeline_engine.retry_policy import (
-    _failure_event_matches,
-    retry_after_policy,
-)
 from modulo.core.pipeline_engine.node_runner import (
     SANDBOX_AGENT_FAILED_SUMMARY,
     ConnectorNodeFailedError,
@@ -42,6 +37,10 @@ from modulo.core.pipeline_engine.node_runner import (
     SandboxRateLimitedError,
     _build_sandbox_node_envelope,
     _SandboxNodeOutput,
+)
+from modulo.core.pipeline_engine.retry_policy import (
+    _failure_event_matches,
+    retry_after_policy,
 )
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.pipeline_engine.runtime_retry import (
@@ -6499,7 +6498,10 @@ async def test_execute_pre_stream_checks_tracks_phases_and_returns_ceiling_run()
 
 async def test_execute_retry_policy_flags_side_effect_unknown() -> None:
     executor = PipelineExecutor(MagicMock())
-    with patch("modulo.core.pipeline_engine.retry_policy.maybe_retry_after_policy", new_callable=AsyncMock) as mock_maybe:
+    with patch(
+        "modulo.core.pipeline_engine.executor.maybe_retry_after_policy",
+        new_callable=AsyncMock,
+    ) as mock_maybe:
         mock_maybe.return_value = "side_effect_unknown"
 
         decision, status, code, detail = await executor._execute_retry_policy(
@@ -6634,8 +6636,10 @@ async def test_resume_raises_without_configured_checkpointer() -> None:
 async def test_execute_retry_policy_none_when_eligible_but_no_policy() -> None:
     """An eligible run with no pipeline retry policy is not retried (skip arm)."""
     executor = PipelineExecutor(MagicMock())
-    with patch("modulo.core.pipeline_engine.retry_policy.maybe_retry_after_policy", new_callable=AsyncMock) as mock_maybe:
-
+    with patch(
+        "modulo.core.pipeline_engine.executor.maybe_retry_after_policy",
+        new_callable=AsyncMock,
+    ) as mock_maybe:
         decision, status, code, _detail = await executor._execute_retry_policy(
             run_id=uuid.uuid4(),
             org_id=uuid.uuid4(),
