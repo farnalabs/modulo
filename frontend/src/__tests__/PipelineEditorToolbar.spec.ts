@@ -172,7 +172,8 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     // covers the canvas or node details.
     expect(toolbar.classes()).not.toContain('absolute')
 
-    expect(toolbar.attributes('role')).toBe('toolbar')
+    expect(toolbar.attributes('role')).toBeUndefined()
+    expect(toolbar.attributes('aria-label')).toBe('Pipeline editor actions')
     for (const group of ['identity', 'file', 'run', 'settings', 'canvas']) {
       const groupElement = wrapper.find(`[data-testid="pipeline-editor-toolbar-group-${group}"]`)
       expect(groupElement.exists(), `toolbar group ${group}`).toBe(true)
@@ -196,6 +197,7 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
   it('progressively discloses secondary settings on narrow layouts', async () => {
     const wrapper = mountEditor()
     await flushPromises()
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus')
 
     const settings = wrapper.find('[data-testid="pipeline-editor-toolbar-group-settings"]')
     const toggle = wrapper.find('[data-testid="pipeline-editor-settings-toggle"]')
@@ -203,10 +205,26 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     const controls = settings.find('#pipeline-editor-settings-controls')
     expect(controls.classes()).toContain('max-md:hidden')
 
-    await toggle.trigger('click')
+    toggle.element.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
     await nextTick()
     expect(toggle.attributes('aria-expanded')).toBe('true')
     expect(controls.classes()).not.toContain('max-md:hidden')
+    expect(document.activeElement).not.toBe(wrapper.find('[data-testid="pipeline-editor-archive"]').element)
+
+    ;(wrapper.vm as any).closeSettingsDisclosure()
+    await nextTick()
+    ;(wrapper.vm as any).toggleSettingsDisclosure(new MouseEvent('click', { detail: 0 }))
+    await nextTick()
+    await vi.waitFor(() => expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true }))
+    expect(focusSpy.mock.instances.some((element) => (element as HTMLElement).dataset.testid === 'pipeline-editor-archive')).toBe(true)
+
+    ;(wrapper.vm as any).toggleSettingsDisclosure(new MouseEvent('click', { detail: 0 }))
+    await nextTick()
+    ;(wrapper.vm as any).onSettingsControlsKeydown(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await nextTick()
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    expect(focusSpy).toHaveBeenCalled()
+    focusSpy.mockRestore()
   })
 
   it('surfaces an Arrange graph fit failure without breaking the layout action', async () => {

@@ -75,7 +75,7 @@
              `shrink-0`: when the content column is shorter than the wrapped
              toolbar, the toolbar must keep its min-content height (scroll the
              column to reach it) rather than being squeezed. -->
-         <div class="flex shrink-0 flex-wrap items-start gap-x-2 gap-y-2 border-b bg-card px-3 py-2 md:items-center" role="toolbar" :aria-label="$t('views.PipelineEditorView.pipeline_editor_toolbar')" data-testid="pipeline-editor-toolbar">
+         <div class="flex shrink-0 flex-wrap items-start gap-x-2 gap-y-2 border-b bg-card px-3 py-2 md:items-center" :aria-label="$t('views.PipelineEditorView.pipeline_editor_toolbar')" data-testid="pipeline-editor-toolbar">
           <!-- Group: identity -->
           <div class="flex min-w-0 items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_identity')" data-testid="pipeline-editor-toolbar-group-identity">
             <h2 class="truncate text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
@@ -187,17 +187,24 @@
           <div class="flex w-full flex-wrap items-center gap-1.5 rounded-md border border-border/70 bg-muted/20 p-1.5 md:w-auto" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_settings')" data-testid="pipeline-editor-toolbar-group-settings">
             <span class="sr-only">{{ $t('views.PipelineEditorView.toolbar_settings') }}</span>
             <button
+              ref="settingsToggleRef"
               type="button"
               :class="[btnToolbarSecondary, 'md:hidden']"
               :aria-expanded="settingsOpen"
               :aria-controls="pipelineEditorSettingsControlsId"
               data-testid="pipeline-editor-settings-toggle"
-              @click="settingsOpen = !settingsOpen"
+              @click="toggleSettingsDisclosure($event)"
+              @keydown.escape.prevent="closeSettingsDisclosure"
             >
               {{ $t('views.PipelineEditorView.toolbar_settings_toggle') }}
             </button>
-            <div :id="pipelineEditorSettingsControlsId" :class="['flex flex-wrap items-center gap-1.5', { 'max-md:hidden': !settingsOpen }]">
-            <button v-if="!pipeline?.archived_at" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+            <div
+              :id="pipelineEditorSettingsControlsId"
+              ref="settingsControlsRef"
+              :class="['flex flex-wrap items-center gap-1.5', { 'max-md:hidden': !settingsOpen }]"
+              @keydown.escape="onSettingsControlsKeydown"
+            >
+             <button v-if="!pipeline?.archived_at" ref="firstSettingsControlRef" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
             <!-- FAR-1530: per-pipeline Paused execution state. Paused is a
                  visible state, not an archived one - the pipeline stays in the
@@ -2355,7 +2362,41 @@ const showRevertDialog = ref(false)
 const showSaveAsComposite = ref(false)
 const showVersionTimeline = ref(false)
 const settingsOpen = ref(false)
+const settingsToggleRef = ref<HTMLButtonElement | null>(null)
+const settingsControlsRef = ref<HTMLElement | null>(null)
+const firstSettingsControlRef = ref<HTMLButtonElement | null>(null)
 const pipelineEditorSettingsControlsId = 'pipeline-editor-settings-controls'
+
+function focusFirstSettingsControl() {
+  nextTick(() => {
+    const firstControl = firstSettingsControlRef.value ?? settingsControlsRef.value?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])')
+    firstControl?.focus({ preventScroll: true })
+  })
+}
+
+function toggleSettingsDisclosure(event: MouseEvent) {
+  if (settingsOpen.value) {
+    closeSettingsDisclosure()
+    return
+  }
+  settingsOpen.value = true
+  // A keyboard activation produces a click with detail 0. Pointer users keep
+  // their pointer focus; only keyboard users are moved into the revealed form.
+  if (event.detail === 0) focusFirstSettingsControl()
+}
+
+function closeSettingsDisclosure() {
+  if (!settingsOpen.value) return
+  settingsOpen.value = false
+  settingsToggleRef.value?.focus()
+}
+
+function onSettingsControlsKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeSettingsDisclosure()
+  }
+}
 const pickerAgentId = ref<string>('__all__')
 const pickerConnectorId = ref<string>('__all__')
 const revertSnapshotId = ref<string>('__all__')
