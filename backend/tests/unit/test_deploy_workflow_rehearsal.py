@@ -33,13 +33,6 @@ RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
 NATIVE_SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "native-release-smoke.yml"
 MANIFEST_SOURCE = REPO_ROOT / "backend" / "src" / "modulo" / "launcher" / "manifest.py"
 
-#: This module EXECUTES the workflows' shipped shell fragments under a real
-#: POSIX shell, so it needs a POSIX shell rather than the Windows WSL launcher
-#: stub. The platform requirement is declared once, as a marker; the gate that
-#: skips it on Windows lives in ``backend/tests/conftest.py``
-#: (``POSIX_ONLY_MARKER``) and Linux CI executes this suite for real.
-pytestmark = pytest.mark.posix_only
-
 _REHEARSAL_STEP_NAME = "Pre-deploy REHEARSAL migrations (one-off machine — always rolls back)"
 _REAL_STEP_NAME = "Pre-deploy migrations (one-off machine)"
 _REHEARSAL_DESTROY_NAME = "Destroy pre-rehearsal machine"
@@ -50,14 +43,8 @@ _LEGS = (
     ("deploy-production", "app-modulo", "prod"),
 )
 
-#: This module executes the shipped deploy/release shell scripts for real in a
-#: subprocess, with stubbed binaries placed first on PATH - so it needs
-#: executable-bit semantics, a POSIX PATH the shell can read, and ``jq``, none
-#: of which a Windows host provides (``bash`` resolves to the WSL stub and the
-#: stubs are unreadable to it). The platform requirement is declared once, as a
-#: marker; the gate that skips it on Windows lives in ``backend/tests/conftest.py``
-#: (``POSIX_ONLY_MARKER``) and Linux CI executes this suite for real.
-pytestmark = pytest.mark.posix_only
+#: The shell-execution tests below carry ``pytest.mark.posix_only`` individually.
+#: Structural workflow assertions remain runnable on every platform.
 
 
 def _workflow() -> dict[str, Any]:
@@ -623,10 +610,12 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert 'chmod -R a+rX "$extract_root"' in smoke_script
     assert "chmod -R a+w" not in smoke_script
     assert "chown" not in smoke_script
-    assert 'smoke_home="$smoke_root/home"' in smoke_script
+    assert 'smoke_home="$smoke_workspace/home"' in smoke_script
 
-    assert 'smoke_dump="$smoke_home/roundtrip.sql"' in smoke_script
-    assert 'sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket"' in smoke_script
+    assert 'smoke_dump="$smoke_dump_dir/roundtrip.sql"' in smoke_script
+    assert (
+        'sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"'
+    ) in smoke_script
     assert 'HOME="$smoke_home"' in smoke_script
     assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
 
@@ -648,13 +637,12 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert "host PostgreSQL path" in smoke_script
     assert "PGHOST" not in smoke_script
     assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
-    assert 'smoke_dump_dir="$smoke_root/dump"' in smoke_script
-    assert 'mkdir -p "$smoke_data" "$smoke_socket" "$smoke_dump_dir" "$smoke_root/home"' in smoke_script
+    assert 'smoke_dump_dir="$smoke_workspace/dump"' in smoke_script
+    assert 'mkdir -p "$smoke_root" "$smoke_workspace"' in smoke_script
     assert (
-        'sudo chown -R "$smoke_user:$smoke_user" '
-        '"$smoke_data" "$smoke_socket" "$smoke_dump_dir" '
-        '"$smoke_root/home" "$smoke_script"'
+        'sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"'
     ) in smoke_script
+    assert "sudo chown" not in smoke_script
     assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in smoke_script
     assert 'chmod 0755 "$smoke_root" "$extract_root"' in smoke_script
     assert "status=$?" in smoke_script
@@ -2976,6 +2964,8 @@ def _run_rc_output_step(tmp_path: Path, *, cut: str, recut: str) -> tuple[dict[s
         "RECUT_RC_TAG": recut,
     }
     result = _run_bash(script, cwd=tmp_path, env=env)
+    if os.name == "nt" and result.returncode != 0 and "No such file or directory" in result.stderr:
+        pytest.skip("POSIX shell unavailable on Windows host")
     assert result.returncode == 0, result.stderr
 
     values: dict[str, str] = {}
@@ -3731,6 +3721,7 @@ esac
     return result, calls
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_existing_exact_annotated_target_is_idempotent(tmp_path: Path) -> None:
     result, calls = _bundle_tag_harness(tmp_path, scenario="annotated")
     assert result.returncode == 0, result.stderr
@@ -3738,6 +3729,7 @@ def test_bundle_tag_existing_exact_annotated_target_is_idempotent(tmp_path: Path
     assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_existing_exact_lightweight_target_is_idempotent(tmp_path: Path) -> None:
     result, calls = _bundle_tag_harness(tmp_path, scenario="lightweight")
     assert result.returncode == 0, result.stderr
@@ -3745,6 +3737,7 @@ def test_bundle_tag_existing_exact_lightweight_target_is_idempotent(tmp_path: Pa
     assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_existing_different_target_fails_without_push(tmp_path: Path) -> None:
     result, calls = _bundle_tag_harness(tmp_path, scenario="different")
     assert result.returncode != 0
@@ -3752,6 +3745,7 @@ def test_bundle_tag_existing_different_target_fails_without_push(tmp_path: Path)
     assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_remote_query_unknown_fails_without_push(tmp_path: Path) -> None:
     result, calls = _bundle_tag_harness(tmp_path, scenario="unknown")
     assert result.returncode != 0
@@ -3759,12 +3753,14 @@ def test_bundle_tag_remote_query_unknown_fails_without_push(tmp_path: Path) -> N
     assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_absent_push_and_exact_verification_succeed(tmp_path: Path) -> None:
     result, calls = _bundle_tag_harness(tmp_path, scenario="absent")
     assert result.returncode == 0, result.stderr
     assert "push origin bundle-v0.1.0" in calls.read_text(encoding="utf-8")
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_post_push_verification_mismatch_fails(tmp_path: Path) -> None:
     result, _ = _bundle_tag_harness(tmp_path, scenario="push-mismatch")
     assert result.returncode != 0
@@ -3773,6 +3769,7 @@ def test_bundle_tag_post_push_verification_mismatch_fails(tmp_path: Path) -> Non
     assert "could not be verified after push" not in result.stdout
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_post_push_lightweight_fallback_succeeds_without_second_push(tmp_path: Path) -> None:
     """A lightweight tag uses the full-ref fallback and is verified once."""
     result, calls = _bundle_tag_harness(tmp_path, scenario="push-lightweight")
@@ -3781,6 +3778,7 @@ def test_bundle_tag_post_push_lightweight_fallback_succeeds_without_second_push(
     assert calls.read_text(encoding="utf-8").splitlines().count("push origin bundle-v0.1.0") == 1
 
 
+@pytest.mark.posix_only
 def test_bundle_tag_post_push_verification_unknown_fails(tmp_path: Path) -> None:
     result, _ = _bundle_tag_harness(tmp_path, scenario="push-unknown")
     assert result.returncode != 0
@@ -4223,6 +4221,7 @@ exit 0
     return env, root
 
 
+@pytest.mark.posix_only
 def test_bundle_redis_step_verifies_a_matching_tarball_from_the_download_dir(tmp_path: Path) -> None:
     """The checksum passes only when the manifest name is valid where the check runs."""
     tarball = _redis_source_tarball()
@@ -4235,6 +4234,7 @@ def test_bundle_redis_step_verifies_a_matching_tarball_from_the_download_dir(tmp
     assert (root / "build" / "redis-install" / "bin" / "redis-server").is_file()
 
 
+@pytest.mark.posix_only
 def test_bundle_redis_step_fails_on_a_digest_mismatch_and_never_extracts(tmp_path: Path) -> None:
     tarball = _redis_source_tarball()
     env, root = _redis_step_harness(tmp_path, tarball=tarball, pin_sha256="0" * 64)
@@ -4246,6 +4246,7 @@ def test_bundle_redis_step_fails_on_a_digest_mismatch_and_never_extracts(tmp_pat
     assert not (root / "redis-src").exists(), "a mismatched tarball must never be extracted"
 
 
+@pytest.mark.posix_only
 def test_bundle_redis_step_fails_loudly_when_the_download_writes_no_file(tmp_path: Path) -> None:
     env, root = _redis_step_harness(tmp_path, tarball=None, pin_sha256="0" * 64)
 
