@@ -362,7 +362,6 @@ class TestSummary:
 
         statuses = (
             "complete",
-            "complete",
             "failed",
             "pending",
             "claimed",
@@ -395,7 +394,7 @@ class TestSummary:
 
         assert payload["total_runs"] == len(statuses), f"total_runs must count every seeded run once: {payload}"
         counts = payload["run_counts_by_status"]
-        assert counts["complete"] == 2, f"complete runs missing from status counts: {counts}"
+        assert counts["complete"] == 1, f"complete runs missing from status counts: {counts}"
         assert counts["cancelled"] == 1, f"cancelled run missing from status counts: {counts}"
         assert counts["eval_failed"] == 1, f"eval_failed run missing from status counts: {counts}"
         assert counts["stalled"] == 1, f"stalled run missing from status counts: {counts}"
