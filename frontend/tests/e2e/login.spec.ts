@@ -66,7 +66,6 @@ test.describe('Login Flow', () => {
     await expect(page.getByTestId('login-submit')).toBeVisible()
   })
 
-<<<<<<< HEAD
   test('completes unauthenticated SSO login through the production callback route', { tag: '@regression' }, async ({ page, env, localSsoBackend }) => {
     test.skip(env.name !== 'local', 'Uses a deterministic local IdP seam; staging uses its real provider configuration')
     void localSsoBackend
@@ -87,83 +86,11 @@ test.describe('Login Flow', () => {
     await page.getByText('Continue with fixture IdP').click()
 
     await page.waitForURL(/\/auth\/callback$/)
-=======
-  test('completes unauthenticated SSO login through a deterministic IdP callback seam', { tag: '@regression' }, async ({ page, env }) => {
-    test.skip(env.name !== 'local', 'Uses a deterministic local IdP seam; staging uses its real provider configuration')
-
-    await setupLocalMockApi(page)
-    await page.route('**/api/v1/auth/login-context', (route) =>
-      void route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ multi_org: false, org: { name: 'Acme', slug: 'default' } }),
-      }),
-    )
-    await page.route('**/api/v1/auth/sso/providers', (route) =>
-      void route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ oidc: [{ provider_id: 'ci-idp', display_name: 'CI Identity Provider', preset: 'custom' }], saml: false }),
-      }),
-    )
-    await page.goto('/login')
-    const ssoButton = page.getByTestId('login-sso-oidc-ci-idp')
-    await expect(ssoButton).toBeVisible()
-
-    await page.route('**/api/v1/auth/oidc/ci-idp/login', async (route) => {
-      expect(route.request().method()).toBe('GET')
-      expect(route.request().headers().authorization).toBeUndefined()
-      await route.fulfill({
-        status: 307,
-        headers: {
-          location: '/test-idp/authorize?client_id=ci-idp&redirect_uri=%2Fapi%2Fv1%2Fauth%2Foidc%2Fci-idp%2Fcallback&state=ci-state',
-          'set-cookie': '__Host-modulo_oidc_flow=ci-flow; Path=/; HttpOnly; SameSite=Lax; Secure',
-        },
-      })
-    })
-    await page.route('**/test-idp/authorize**', async (route) => {
-      const requestUrl = new URL(route.request().url())
-      expect(requestUrl.searchParams.get('client_id')).toBe('ci-idp')
-      expect(requestUrl.searchParams.get('redirect_uri')).toBe('/api/v1/auth/oidc/ci-idp/callback')
-      expect(requestUrl.searchParams.get('state')).toBe('ci-state')
-      await route.fulfill({ status: 200, contentType: 'text/html', body: 'CI IdP authorized' })
-    })
-    await page.route('**/api/v1/auth/oidc/ci-idp/callback**', async (route) => {
-      const request = route.request()
-      expect(request.method()).toBe('GET')
-      expect(request.headers().authorization).toBeUndefined()
-      expect(request.headers().cookie).toContain('__Host-modulo_oidc_flow=ci-flow')
-      const callbackUrl = new URL(request.url())
-      expect(callbackUrl.searchParams.get('code')).toBe('ci-auth-code')
-      expect(callbackUrl.searchParams.get('state')).toBe('ci-state')
-      await route.fulfill({
-        status: 307,
-        headers: {
-          location: '/auth/callback#access_token=ci-sso-access-token',
-          'set-cookie': 'modulo_refresh=ci-refresh-token; Path=/; HttpOnly; SameSite=Lax',
-        },
-      })
-    })
-
-    await ssoButton.click()
-    await page.waitForURL(/\/test-idp\/authorize/)
-<<<<<<< HEAD
-    await expect(page.getByText('CI IdP ready')).toBeVisible()
-    await page.goto('/auth/callback#access_token=ci-sso-access-token')
-    await expect(page).toHaveURL(/\/auth\/callback$/)
->>>>>>> 825d19d61 (test: cover unauthenticated SSO login journey)
-=======
-    const callbackRequest = page.waitForRequest('**/api/v1/auth/oidc/ci-idp/callback**')
-    await page.goto('/api/v1/auth/oidc/ci-idp/callback?code=ci-auth-code&state=ci-state')
-    await callbackRequest
-    await page.waitForURL(/\/auth\/callback$/)
->>>>>>> 4ebbbe539 (test: exercise backend SSO callback redirects)
     await expect(page.getByText('Signing in')).toBeVisible()
     await page.waitForURL((url) => !url.pathname.includes('/login') && url.pathname !== '/auth/callback')
     await expect(page.getByTestId('dashboard-title')).toContainText('Dashboard')
   })
 
-<<<<<<< HEAD
   test('returns an actionable SSO failure to the unauthenticated login surface', { tag: '@regression' }, async ({ page, env, localSsoBackend }) => {
     test.skip(env.name !== 'local', 'Uses a deterministic local IdP seam; staging uses its real provider configuration')
     void localSsoBackend
@@ -177,69 +104,6 @@ test.describe('Login Flow', () => {
     expect(state).toBeTruthy()
     await page.goto(`/api/v1/auth/oidc/ci-idp/callback?code=ci-invalid-code&state=${encodeURIComponent(state ?? '')}`)
     await page.waitForURL(/\/login\?sso_error=auth_failed$/)
-=======
-  test('returns an actionable SSO failure to the unauthenticated login surface', { tag: '@regression' }, async ({ page, env }) => {
-    test.skip(env.name !== 'local', 'Uses a deterministic local IdP seam; staging uses its real provider configuration')
-
-    await setupLocalMockApi(page)
-    await page.route('**/api/v1/auth/login-context', (route) =>
-      void route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ multi_org: false, org: { name: 'Acme', slug: 'default' } }),
-      }),
-    )
-    await page.route('**/api/v1/auth/sso/providers', (route) =>
-      void route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ oidc: [{ provider_id: 'ci-idp', display_name: 'CI Identity Provider', preset: 'custom' }], saml: false }),
-      }),
-    )
-    await page.route('**/api/v1/auth/oidc/ci-idp/login', async (route) => {
-      expect(route.request().method()).toBe('GET')
-      expect(route.request().headers().authorization).toBeUndefined()
-      await route.fulfill({
-        status: 307,
-        headers: {
-          location: '/test-idp/authorize?client_id=ci-idp&redirect_uri=%2Fapi%2Fv1%2Fauth%2Foidc%2Fci-idp%2Fcallback&state=ci-state',
-          'set-cookie': '__Host-modulo_oidc_flow=ci-flow; Path=/; HttpOnly; SameSite=Lax; Secure',
-        },
-      })
-    })
-    await page.route('**/test-idp/authorize**', async (route) => {
-      const requestUrl = new URL(route.request().url())
-      expect(requestUrl.searchParams.get('redirect_uri')).toBe('/api/v1/auth/oidc/ci-idp/callback')
-      expect(requestUrl.searchParams.get('state')).toBe('ci-state')
-      await route.fulfill({ status: 200, contentType: 'text/html', body: 'CI IdP authorized' })
-    })
-    await page.route('**/api/v1/auth/oidc/ci-idp/callback**', async (route) => {
-      const request = route.request()
-      expect(request.method()).toBe('GET')
-      expect(request.headers().authorization).toBeUndefined()
-      expect(request.headers().cookie).toContain('__Host-modulo_oidc_flow=ci-flow')
-      const callbackUrl = new URL(request.url())
-      expect(callbackUrl.searchParams.get('code')).toBe('ci-auth-code')
-      expect(callbackUrl.searchParams.get('state')).toBe('ci-state')
-      await route.fulfill({
-        status: 303,
-        headers: { location: '/login?sso_error=auth_failed' },
-      })
-    })
-
-    await page.goto('/login')
-    await page.getByTestId('login-sso-oidc-ci-idp').click()
-    await page.waitForURL(/\/test-idp\/authorize/)
-<<<<<<< HEAD
-    await expect(page.getByText('CI IdP denied')).toBeVisible()
-    await page.goto('/login?sso_error=auth_failed')
->>>>>>> 825d19d61 (test: cover unauthenticated SSO login journey)
-=======
-    const callbackRequest = page.waitForRequest('**/api/v1/auth/oidc/ci-idp/callback**')
-    await page.goto('/api/v1/auth/oidc/ci-idp/callback?code=ci-auth-code&state=ci-state')
-    await callbackRequest
-    await page.waitForURL(/\/login\?sso_error=auth_failed$/)
->>>>>>> 4ebbbe539 (test: exercise backend SSO callback redirects)
     await expect(page.getByTestId('login-sso-error')).toBeVisible()
     await expect(page.getByTestId('login-submit')).toBeVisible()
   })

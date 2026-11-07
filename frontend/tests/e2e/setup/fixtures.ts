@@ -148,17 +148,13 @@ export async function setupLocalMockApi(page: Page) {
       })
     }
     // Leave the real SSO login/callback legs to the test's deterministic IdP
-    // seam. Route handlers registered later in the spec assert the unauthenticated
-    // backend contract instead of this general local mock swallowing those GETs.
-<<<<<<< HEAD
+    // seam (backend/tests/e2e/sso_fixture.py) instead of letting this general
+    // local mock swallow those requests.
     if (
       url.includes('/api/v1/auth/oidc/') ||
       url.includes('/api/v1/auth/login-context') ||
       url.includes('/api/v1/auth/sso/providers')
     ) return route.fallback()
-=======
-    if (url.includes('/api/v1/auth/oidc/')) return route.fallback()
->>>>>>> 4ebbbe539 (test: exercise backend SSO callback redirects)
     if (url.includes('/api/v1/me/settings')) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ locale: 'en-US' }) })
     }
