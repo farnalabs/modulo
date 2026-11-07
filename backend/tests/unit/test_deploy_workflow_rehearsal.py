@@ -727,11 +727,19 @@ def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace(tm
         workspace.mkdir()
         bundle_file.parent.mkdir(parents=True)
         bundle_file.write_text("#!/usr/bin/env bash\\nprintf 'bundle-ok\\n'\\n", encoding="utf-8")
-        bundle_file.chmod(0o755)
         (bundle / "README.txt").write_text("runner-owned bundle\\n", encoding="utf-8")
         smoke_script.parent.mkdir(exist_ok=True)
         smoke_script.write_text("#!/usr/bin/env bash\\nset -eu\\nexit 0\\n", encoding="utf-8")
-        smoke_script.chmod(0o755)
+
+        # Start from the restrictive modes produced by a real tar extraction.
+        # The setup fragment must be what grants the smoke user access; creating
+        # a permissive fixture would let a removed or weakened chmod pass.
+        smoke_root.chmod(0o700)
+        extract_root.chmod(0o700)
+        bundle.chmod(0o700)
+        bundle_file.chmod(0o700)
+        (bundle / "README.txt").chmod(0o600)
+        smoke_script.chmod(0o700)
 
         setup_script = textwrap.dedent(
             f"""\\
