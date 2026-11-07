@@ -643,9 +643,12 @@ jobs:
           smoke_bundle="$extract_root/$BUNDLE_ROOT"
           smoke_data="$smoke_root/data"
           smoke_socket="$smoke_root/socket"
-          smoke_dump="$smoke_root/roundtrip.sql"
+          smoke_dump_dir="$smoke_root/dump"
+          smoke_dump="$smoke_dump_dir/roundtrip.sql"
           smoke_script="$smoke_root/run-smoke.sh"
-          mkdir -p "$smoke_data" "$smoke_socket"
+          mkdir -p "$smoke_data" "$smoke_socket" "$smoke_dump_dir" "$smoke_root/home"
+          chmod 0755 "$smoke_root" "$extract_root"
+
           cat > "$smoke_script" <<'SMOKE_EOF'
           #!/usr/bin/env bash
           set -eu
@@ -677,7 +680,10 @@ jobs:
           test "$(psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip --tuples-only --no-align --command "SELECT value FROM proof")" = "2192"
           SMOKE_EOF
           chmod 0755 "$smoke_script"
-          chown -R "$smoke_user:$smoke_user" "$smoke_root"
+          # The extracted bundle may contain immutable/copied virtualenv files;
+          # ownership is not required for read/execute access.  Only hand the
+          # unprivileged smoke user the writable runtime paths it creates.
+          sudo chown -R "$smoke_user:$smoke_user" "$smoke_data" "$smoke_socket" "$smoke_dump_dir" "$smoke_root/home" "$smoke_script"
           sudo -u "$smoke_user" env -i \
             HOME="$smoke_root/home" \
             PATH="$smoke_bundle/pg/bin:/usr/bin:/bin" \
