@@ -644,6 +644,14 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     ) in smoke_script
     assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in smoke_script
     assert 'chmod 0755 "$smoke_root" "$extract_root"' in smoke_script
+    assert "status=$?" in smoke_script
+    assert 'sudo rm -rf -- "$smoke_root"' in smoke_script
+    assert 'sudo userdel "$smoke_user"' in smoke_script
+    assert 'rm -rf "$smoke_root"' not in smoke_script
+    assert "failed to remove PostgreSQL relocation smoke root" in smoke_script
+    assert "refusing to remove an unsafe PostgreSQL relocation smoke root" in smoke_script
+    assert 'userdel "$smoke_user" >/dev/null 2>&1 || true' not in smoke_script
+    assert smoke_script.index('sudo rm -rf -- "$smoke_root"') < smoke_script.index('sudo userdel "$smoke_user"')
 
 
 def test_bundle_release_scans_postgres_elf_paths_and_keeps_glibc_gate() -> None:
