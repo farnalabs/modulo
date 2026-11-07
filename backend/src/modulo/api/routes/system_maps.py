@@ -2182,7 +2182,6 @@ async def _resolve_discovery_eval(
     *,
     eval_id: uuid.UUID,
     org_id: uuid.UUID,
-    principal: TenantPrincipal,
 ) -> EvalDefinition:
     row = (
         await session.execute(
@@ -2200,18 +2199,6 @@ async def _resolve_discovery_eval(
                 "code": "invalid_eval_definition",
                 "message": "Eval gate must be an active org-owned model_judge definition",
             },
-        )
-    eval_scope = await evaluate_team_gate(
-        session,
-        owner_team_id=None,
-        visibility="org",
-        account_id=principal.account_id,
-        org_role=principal.org_role,
-    )
-    if eval_scope is not None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "eval_definition_unauthorised", "message": "Eval gate is not authorised for this caller"},
         )
     config = dict(row.config_json or {})
     if config.get("answer_contract") != "typed_questions":
@@ -2345,7 +2332,6 @@ async def _evaluate_discovery_gate(
         session,
         eval_id=eval_definition_id,
         org_id=principal.organisation_id,
-        principal=principal,
     )
     judge = build_discovery_model_judge_callable(hub, model_backend_id)
     eval_result = await EvalEngine().evaluate_result_async(
