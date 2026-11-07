@@ -193,20 +193,164 @@ describe('DiscoveryPanel', () => {
 })
 
 describe('DiscoveryConfigPanel', () => {
+  const activeFlag = { data: { flags: [{ name: 'system_maps', currently_active: true }] } }
+  const backend = { id: 'backend-1', display_name: 'Primary', provider: 'openai', visibility: 'org', tier: 'ga' }
+  const evaluation = { id: 'eval-1', name: 'Judge', version: 3, eval_type: 'model_judge' }
+
+  function mockOptions(overrides: { flags?: unknown; backends?: unknown[]; evals?: unknown[]; status?: number } = {}) {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        if (overrides.status) return Promise.resolve({ data: undefined, error: { detail: 'nope' }, response: { status: overrides.status } })
+        return Promise.resolve(overrides.flags ?? activeFlag)
+      }
+      if (path === '/api/v1/model-backends') return Promise.resolve({ data: { items: overrides.backends ?? [] } })
+      if (path === '/api/v1/evals') return Promise.resolve({ data: { items: overrides.evals ?? [] } })
+      return Promise.resolve({ data: {} })
+    })
+  }
+
+  function mountConfig(props: Record<string, unknown> = {}) {
+    return mount(DiscoveryConfigPanel, { props: { canUseAi: true, ...props }, global: { plugins: [i18n] } })
+  }
+
   it('fails closed when AI option loading fails', async () => {
     mockGet.mockRejectedValue(new Error('unavailable'))
-    const wrapper = mount(DiscoveryConfigPanel, { props: { canUseAi: true }, global: { plugins: [i18n] } })
+    const wrapper = mountConfig()
     await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
     await vi.waitFor(() => expect(wrapper.get('[data-testid="system-map-discovery-submit"]').attributes('disabled')).toBeDefined())
     expect(wrapper.text()).toContain('AI discovery options could not be loaded')
   })
 
+  it('fails closed when AI option loading rejects with a non-Error value', async () => {
+    mockGet.mockRejectedValue('offline')
+    const wrapper = mountConfig()
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('AI discovery options could not be loaded'))
+  })
+
   it('does not offer a retry message when the access probe returns 403', async () => {
-    mockGet.mockImplementation(() => Promise.resolve({ data: undefined, error: { detail: 'forbidden' }, response: { status: 403 } }))
-    const wrapper = mount(DiscoveryConfigPanel, { props: { canUseAi: true }, global: { plugins: [i18n] } })
+    mockOptions({ status: 403 })
+    const wrapper = mountConfig()
     await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
     await vi.waitFor(() => expect(wrapper.text()).toContain('limited to the internal private preview'))
     expect(wrapper.text()).not.toContain('try again')
+    expect(wrapper.get('[data-testid="system-map-discovery-submit"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('reports a non-403 client error as unavailable', async () => {
+    mockOptions({ status: 404 })
+    const wrapper = mountConfig()
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('AI-assisted discovery is unavailable for this account or workspace'))
+  })
+
+  it('fails closed when an AI options response is missing data', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(activeFlag)
+      return Promise.resolve({ data: undefined })
+    })
+    const wrapper = mountConfig()
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('AI discovery options could not be loaded'))
+  })
+
+  it('fails closed when the internal access probe is negative', async () => {
+    mockOptions({ flags: { data: { flags: [{ name: 'system_maps', currently_active: false }] } }, backends: [backend], evals: [evaluation] })
+    const wrapper = mountConfig()
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('AI discovery options could not be loaded'))
+    expect(wrapper.get('[data-testid="system-map-discovery-submit"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('renders only authorised org backends and model-judge evals', async () => {
+    mockOptions({
+      backends: [
+        backend,
+        { id: 'backend-2', display_name: 'Team only', provider: 'openai', visibility: 'team', tier: 'ga' },
+        { id: 'backend-3', display_name: 'In dev', provider: 'openai', visibility: 'org', tier: 'in_dev' },
+      ],
+      evals: [
+        evaluation,
+        { id: 'eval-2', name: 'Other', version: 1, eval_type: 'quality' },
+      ],
+    })
+    const wrapper = mountConfig()
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="system-map-discovery-backend"] option[value="backend-1"]').exists()).toBe(true))
+
+    const backendLabels = wrapper.get('[data-testid="system-map-discovery-backend"]').findAll('option').map((option) => option.text())
+    expect(backendLabels).toContain('Primary (openai)')
+    expect(backendLabels).not.toContain('Team only (openai)')
+    expect(backendLabels).not.toContain('In dev (openai)')
+    const evalLabels = wrapper.get('[data-testid="system-map-discovery-eval"]').findAll('option').map((option) => option.text())
+    expect(evalLabels).toContain('Judge (v3)')
+    expect(evalLabels).not.toContain('Other (v1)')
+  })
+
+  it('submits AI-assisted discovery only once a backend and eval are selected', async () => {
+    mockOptions({ backends: [backend], evals: [evaluation] })
+    const wrapper = mountConfig()
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="system-map-discovery-backend"] option[value="backend-1"]').exists()).toBe(true))
+
+    await wrapper.get('[data-testid="system-map-discovery-backend"]').setValue('backend-1')
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
+    expect(wrapper.emitted('submit')).toBeUndefined()
+
+    await wrapper.get('[data-testid="system-map-discovery-eval"]').setValue('eval-1')
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
+    expect(wrapper.emitted('submit')![0][0]).toEqual({
+      modelBackendId: 'backend-1',
+      evalDefinitionId: 'eval-1',
+      modelBackendName: 'Primary',
+      evalName: 'Judge',
+      evalVersion: 3,
+    })
+  })
+
+  it('does not submit while the authorised options are still loading', async () => {
+    mockGet.mockReturnValue(new Promise(() => {}))
+    const wrapper = mountConfig()
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Loading authorised AI discovery options'))
+    expect(wrapper.text()).toContain('A fresh internal-access check is required')
+    expect(wrapper.get('[data-testid="system-map-discovery-backend"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('submit')).toBeUndefined()
+  })
+
+  it('does not reload authorised options when AI access is withdrawn', async () => {
+    mockOptions({ backends: [backend], evals: [evaluation] })
+    const wrapper = mountConfig()
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="system-map-discovery-backend"] option[value="backend-1"]').exists()).toBe(true))
+    mockGet.mockClear()
+
+    await wrapper.setProps({ canUseAi: false })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="system-map-discovery-mode-ai"]').exists()).toBe(false))
+    expect(mockGet).not.toHaveBeenCalled()
+  })
+
+  it('submits deterministic discovery with no options and closes from every control', async () => {
+    const wrapper = mount(DiscoveryConfigPanel, { props: { canUseAi: false }, global: { plugins: [i18n] } })
+    await wrapper.get('[data-testid="system-map-discovery-mode-deterministic"]').setValue(true)
+    await wrapper.get('[data-testid="system-map-discovery-config-backdrop"]').trigger('click')
+    await wrapper.get('[data-testid="system-map-discovery-config-close"]').trigger('click')
+    await wrapper.get('[data-testid="system-map-discovery-config-cancel"]').trigger('click')
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
+
+    expect(wrapper.emitted('close')).toHaveLength(3)
+    expect(wrapper.emitted('submit')![0]).toEqual([])
+  })
+
+  it('disables every control while a discovery request is in flight', () => {
+    const wrapper = mount(DiscoveryConfigPanel, { props: { canUseAi: true, submitting: true }, global: { plugins: [i18n] } })
+
+    expect(wrapper.get('[data-testid="system-map-discovery-config-backdrop"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="system-map-discovery-config-close"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="system-map-discovery-config-cancel"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="system-map-discovery-submit"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('Discovering your system')
   })
 })
 

@@ -354,6 +354,97 @@ describe('SystemMapDiscoveryPanel coverage', () => {
   })
 })
 
+describe('SystemMapDiscoveryPanel provenance', () => {
+  const discovery = {
+    sources_inspected: [],
+    node_count: 1,
+    edge_count: 0,
+    inferred_nodes: [{ node_key: 'pipeline:a', node_type: 'pipeline', display_name: 'Pipeline A', config_json: null }],
+    inferred_edges: [],
+    skipped: [],
+    warnings: [],
+    draft_map_id: 'map',
+    draft_revision_id: 'rev',
+    draft_revision_number: 1,
+    published: false,
+  }
+
+  function mountWith(overrides: Record<string, unknown>, props: Record<string, unknown> = {}) {
+    return mount(SystemMapDiscoveryPanel, {
+      props: { discovery: { ...discovery, ...overrides } as never, ...props },
+      global: { plugins: [i18n] },
+    })
+  }
+
+  it('shows AI provenance and blocks saving until the eval gate passes', () => {
+    const wrapper = mountWith(
+      {
+        ai_assisted: true,
+        eval_gate_passed: false,
+        eval_gate_verdict: 'blocked',
+        provenance: {
+          selected_backend_id: 'backend-1',
+          prompt_version: 'p1',
+          rubric_version: 'r1',
+          evaluator_version: 'e1',
+          input_hash: 'in-hash',
+          output_hash: 'out-hash',
+        },
+      },
+      { backendNames: { 'backend-1': 'Primary Backend' }, evalIdentity: 'Judge (v3)' },
+    )
+
+    expect(wrapper.text()).toContain('AI-assisted')
+    expect(wrapper.text()).toContain('Primary Backend')
+    expect(wrapper.text()).toContain('Judge (v3)')
+    expect(wrapper.text()).toContain('p1')
+    expect(wrapper.text()).toContain('r1')
+    expect(wrapper.text()).toContain('e1')
+    expect(wrapper.text()).toContain('in-hash')
+    expect(wrapper.text()).toContain('out-hash')
+    expect(wrapper.text()).toContain('Blocked: the eval gate returned blocked')
+    expect(wrapper.text()).toContain('Choose deterministic discovery explicitly')
+    expect(wrapper.find('[data-testid="system-map-discovery-eval-blocked"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="system-map-discovery-save"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="system-map-accept-node-pipeline:a"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('shows the passed gate and enables saving', () => {
+    const wrapper = mountWith(
+      { ai_assisted: true, eval_gate_passed: true, eval_gate_verdict: 'passed', provenance: { selected_backend_id: 'backend-1' } },
+      { backendNames: { 'backend-1': 'Primary Backend' }, evalIdentity: 'Judge (v3)' },
+    )
+
+    expect(wrapper.text()).toContain('Eval gate passed')
+    expect(wrapper.find('[data-testid="system-map-discovery-eval-blocked"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="system-map-discovery-save"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('falls back to unavailable when the provenance identity is missing', () => {
+    const wrapper = mountWith({ ai_assisted: true, eval_gate_passed: true, eval_gate_verdict: 'passed', provenance: {} })
+
+    expect(wrapper.text()).toContain('Unavailable')
+    expect(wrapper.text()).not.toContain('Prompt version')
+    expect(wrapper.text()).not.toContain('Output hash')
+  })
+
+  it('renders deterministic results without AI-only provenance and ignores a not-requested gate', () => {
+    const wrapper = mountWith({ eval_gate_verdict: 'not_requested' })
+
+    expect(wrapper.text()).toContain('Deterministic')
+    expect(wrapper.find('[data-testid="system-map-discovery-eval-blocked"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Blocked: the eval gate')
+    expect(wrapper.get('[data-testid="system-map-discovery-save"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('renders nothing but the shell when no discovery report is present', () => {
+    const wrapper = mount(SystemMapDiscoveryPanel, { props: { discovery: null }, global: { plugins: [i18n] } })
+
+    expect(wrapper.find('[data-testid="system-map-discovery-provenance"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="system-map-discovery-save"]').attributes('disabled')).toBeUndefined()
+  })
+})
+
 describe('SystemMapGraphEditor coverage', () => {
   const emptyProps = { nodes: [], relationships: [], loopConfigs: [], nodeTypes: NODE_TYPES, relationshipTypes: RELATIONSHIP_TYPES }
 

@@ -23,7 +23,7 @@
               <div v-if="discovery.provenance?.output_hash"><dt class="text-muted-foreground">{{ $t('views.SystemMapDetailView.output_hash') }}</dt><dd class="break-all">{{ discovery.provenance.output_hash }}</dd></div>
             </dl>
            <div v-if="discovery.eval_gate_verdict && discovery.eval_gate_verdict !== 'not_requested'" class="mt-3 text-sm" :class="discovery.eval_gate_passed === true ? 'text-success-text' : 'text-destructive'" aria-live="assertive">
-             <p>{{ discovery.eval_gate_passed === true ? $t('views.SystemMapDetailView.eval_passed') : $t('views.SystemMapDetailView.eval_blocked', { verdict: discovery.eval_gate_verdict ?? 'error' }) }}</p>
+             <p>{{ discovery.eval_gate_passed === true ? $t('views.SystemMapDetailView.eval_passed') : $t('views.SystemMapDetailView.eval_blocked', { verdict: discovery.eval_gate_verdict }) }}</p>
              <p v-if="discovery.eval_gate_passed !== true" class="mt-1">{{ $t('views.SystemMapDetailView.deterministic_fallback_note') }}</p>
            </div>
            <div v-if="discovery.ai_assisted && !discovery.eval_gate_passed" class="mt-3 rounded border border-destructive bg-destructive/10 p-3 text-sm text-destructive" aria-live="assertive" data-testid="system-map-discovery-eval-blocked">

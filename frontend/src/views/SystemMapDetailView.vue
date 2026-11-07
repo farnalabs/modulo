@@ -338,7 +338,7 @@ async function restoreRevision(revisionId: string): Promise<void> {
   }
 }
 
-async function runDiscovery(): Promise<void> {
+function runDiscovery(): void {
   if (!activeMap.value || readOnly.value || !store.accessLoaded || store.error) return
   discoverySubmitError.value = null
   discoveryConfigOpen.value = true
@@ -351,7 +351,10 @@ function closeDiscoveryConfig(): void {
 async function startDiscovery(options?: { modelBackendId?: string; evalDefinitionId?: string; modelBackendName?: string; evalName?: string; evalVersion?: number }): Promise<void> {
   if (!activeMap.value || discoverySubmitting.value) return
   if (options?.modelBackendId && options.modelBackendName) discoveryBackendNames.value = { [options.modelBackendId]: options.modelBackendName }
-  if (options?.evalDefinitionId && options.evalName) discoveryEvalIdentity.value = `${options.evalName}${options.evalVersion == null ? '' : ` (v${options.evalVersion})`}`
+  if (options?.evalDefinitionId && options.evalName) {
+    const versionSuffix = options.evalVersion == null ? '' : ` (v${options.evalVersion})`
+    discoveryEvalIdentity.value = `${options.evalName}${versionSuffix}`
+  }
   discoverySubmitting.value = true
   discoverySubmitError.value = null
   actionError.value = null

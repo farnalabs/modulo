@@ -56,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../../lib/api/client'
 import type { components } from '../../lib/api/schema'
@@ -86,7 +86,6 @@ const accessProbePositive = ref(false)
 const canSubmit = computed(() => mode.value === 'deterministic' || (props.canUseAi && !loading.value && !failed.value && accessProbePositive.value && Boolean(backendId.value) && Boolean(evalId.value)))
 
 async function loadAiOptions(): Promise<void> {
-  if (!props.canUseAi) return
   loading.value = true
   failed.value = false
   failedMessage.value = ''
@@ -114,9 +113,9 @@ async function loadAiOptions(): Promise<void> {
     if (!accessProbePositive.value) throw new Error('Internal access probe failed')
     backends.value = backendResponse.data.items.filter((backend) => backend.visibility === 'org' && backend.tier !== 'in_dev')
     evals.value = evalResponse.data.items.filter((evaluation) => evaluation.eval_type === 'model_judge')
-  } catch (error: unknown) {
+  } catch {
     failed.value = true
-    if (!failedMessage.value) failedMessage.value = error instanceof Error ? $t('views.SystemMapDetailView.ai_options_unavailable') : $t('views.SystemMapDetailView.ai_options_unavailable')
+    if (!failedMessage.value) failedMessage.value = $t('views.SystemMapDetailView.ai_options_unavailable')
     backends.value = []
     evals.value = []
   } finally {
@@ -125,7 +124,6 @@ async function loadAiOptions(): Promise<void> {
 }
 
 watch(() => [mode.value, props.canUseAi] as const, ([value, allowed]) => { if (value === 'ai_assisted' && allowed) void loadAiOptions() })
-onMounted(() => { if (mode.value === 'ai_assisted') void loadAiOptions() })
 
 function submit(): void {
   if (!canSubmit.value) return
