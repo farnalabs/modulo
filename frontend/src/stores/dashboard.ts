@@ -11,12 +11,14 @@ interface TeamMetrics {
   id: string;
   name: string;
   total_runs: number;
+  completed_runs?: number;
   active_pipelines: number;
   run_counts_by_status: {
     running: number;
     awaiting_human: number;
     failed: number;
     idle: number;
+    completed?: number;
   };
   eval_pass_rate?: {
     total_evals: number;

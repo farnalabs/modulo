@@ -360,7 +360,18 @@ class TestSummary:
         snapshot_id = await _seed_snapshot(db_engine, org_id, pipeline_id)
         team_id = await _seed_team(db_engine, org_id, user_id, "summary")
 
-        statuses = ("complete", "complete", "failed", "pending", "claimed")
+        statuses = (
+            "complete",
+            "failed",
+            "pending",
+            "claimed",
+            "cancelled",
+            "eval_failed",
+            "stalled",
+            "rejected",
+            "budget_exceeded",
+            "unknown",
+        )
         run_ids: list[uuid.UUID] = []
         for i, status in enumerate(statuses, start=1):
             run_ids.append(
@@ -381,9 +392,15 @@ class TestSummary:
 
         payload = await _get(integration_client, org_id, user_id, "/api/v1/dashboard/summary")
 
-        assert payload["total_runs"] == 5, f"total_runs must count every seeded run once: {payload}"
+        assert payload["total_runs"] == len(statuses), f"total_runs must count every seeded run once: {payload}"
         counts = payload["run_counts_by_status"]
-        assert counts["complete"] == 2, f"complete runs missing from status counts: {counts}"
+        assert counts["complete"] == 1, f"complete runs missing from status counts: {counts}"
+        assert counts["cancelled"] == 1, f"cancelled run missing from status counts: {counts}"
+        assert counts["eval_failed"] == 1, f"eval_failed run missing from status counts: {counts}"
+        assert counts["stalled"] == 1, f"stalled run missing from status counts: {counts}"
+        assert counts["rejected"] == 1, f"rejected run missing from status counts: {counts}"
+        assert counts["budget_exceeded"] == 1, f"budget_exceeded run missing from status counts: {counts}"
+        assert counts["unknown"] == 1, f"unknown run missing from status counts: {counts}"
         assert counts["failed"] == 1, f"failed run missing from status counts: {counts}"
         assert counts["pending"] == 1, f"pending run missing from status counts: {counts}"
         assert counts["claimed"] == 1, f"claimed run missing from status counts: {counts}"
@@ -395,8 +412,26 @@ class TestSummary:
         assert len(teams) == 1, f"expected exactly the seeded team: {teams}"
         team = teams[0]
         assert team["name"] == "Dash Team summary", f"team name must round-trip: {team}"
+        assert team["total_runs"] == len(statuses), f"team total must reconcile with org total: {team}"
         assert team["run_counts_by_status"]["failed"] == 1, f"team breakdown lost the failed run: {team}"
         assert team["run_counts_by_status"]["idle"] == 2, f"team breakdown lost the idle fold: {team}"
+        assert team["run_counts_by_status"]["cancelled"] == 1, f"team breakdown lost cancelled: {team}"
+        assert team["run_counts_by_status"]["eval_failed"] == 1, f"team breakdown lost eval_failed: {team}"
+        assert team["run_counts_by_status"]["stalled"] == 1, f"team breakdown lost stalled: {team}"
+        assert team["run_counts_by_status"]["rejected"] == 1, f"team breakdown lost rejected: {team}"
+        assert team["run_counts_by_status"]["budget_exceeded"] == 1, f"team breakdown lost budget_exceeded: {team}"
+        assert team["run_counts_by_status"]["unknown"] == 1, f"team breakdown lost unknown: {team}"
+        team_counts = team["run_counts_by_status"]
+        assert (
+            team["total_runs"]
+            == sum(
+                team_counts[status]
+                for status in team_counts
+                if status not in {"idle", "pending", "claimed", "hitl_parked", "completed"}
+            )
+            + team_counts["idle"]
+        ), f"team buckets must reconcile with team total: {team}"
+        assert team["total_runs"] == payload["total_runs"], f"team total must reconcile with org total: {team}"
 
         eval_rate = payload["eval_pass_rate"]
         assert eval_rate is not None, "seeded eval results must produce a pass-rate block"
@@ -419,7 +454,10 @@ class TestSummary:
         assert {entry["run_count"] for entry in trend} == {0}, "an org with no ledger rows trends zero runs"
 
         recent_ids = {entry["id"] for entry in payload["recent_runs"]}
-        assert recent_ids == {str(rid) for rid in run_ids}, f"recent_runs must surface every seeded run: {recent_ids}"
+        expected_recent_ids = {str(rid) for rid in run_ids[-10:]}
+        assert recent_ids == expected_recent_ids, (
+            f"recent_runs must surface the 10 most recent seeded runs: {recent_ids}"
+        )
         recent_statuses = {entry["status"] for entry in payload["recent_runs"]}
         assert "failed" in recent_statuses, f"recent_runs must carry run status: {payload['recent_runs']}"
 

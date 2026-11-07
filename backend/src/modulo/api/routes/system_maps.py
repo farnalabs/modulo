@@ -142,10 +142,12 @@ _EP_DELETE_ATTRIBUTION_BINDING = "system_maps.delete_attribution_binding_endpoin
 _DESC_SYSTEM_MAP_ID = "System map ID"
 _DESC_REVISION_ID = "Revision ID"
 
-# The overview window: the trailing seven UTC days, half-open on both ends
-# (``[window_start, window_end)``). Named so the response, the repository call
-# and the tests cannot drift apart.
+# Allowed overview windows, expressed as trailing UTC days and half-open on both
+# ends (``[window_start, window_end)``). The frontend dashboard passes its selected
+# window through this query contract so the label and observed data agree.
 OVERVIEW_WINDOW_DAYS = 7
+OVERVIEW_WINDOW_MIN_DAYS = 1
+OVERVIEW_WINDOW_MAX_DAYS = 90
 
 # A node whose observed failure rate reaches this share of countable runs is
 # reported unhealthy; any lower non-zero rate is degraded.
@@ -1584,6 +1586,12 @@ async def get_system_map_overview_endpoint(
     at: datetime | None = Query(
         default=None, description="ISO8601 timestamp to get overview for the revision active at that time"
     ),
+    window_days: int = Query(
+        default=OVERVIEW_WINDOW_DAYS,
+        ge=OVERVIEW_WINDOW_MIN_DAYS,
+        le=OVERVIEW_WINDOW_MAX_DAYS,
+        description="Trailing UTC days included in the overview metrics",
+    ),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
@@ -1593,7 +1601,7 @@ async def get_system_map_overview_endpoint(
 
     Can optionally specify a revision_id or 'at' timestamp to get the overview
     for a specific historical revision (FAR-2288 version-aware read model).
-    Metrics cover the trailing seven UTC days.
+    Metrics cover the trailing `window_days` UTC days.
     """
     if revision_id and at:
         raise HTTPException(
@@ -1633,7 +1641,7 @@ async def get_system_map_overview_endpoint(
             loop_configs = graph["loop_configs"]
 
             window_end = datetime.now(UTC)
-            window_start = window_end - timedelta(days=OVERVIEW_WINDOW_DAYS)
+            window_start = window_end - timedelta(days=window_days)
             pipeline_ids = {node.pipeline_id for node in nodes if node.pipeline_id is not None}
             metrics = await repository.get_overview_pipeline_metrics(
                 session,
@@ -1655,7 +1663,7 @@ async def get_system_map_overview_endpoint(
                 revision_id=target_revision.id,
                 revision_number=target_revision.revision_number,
                 generated_at=window_end,
-                window_days=OVERVIEW_WINDOW_DAYS,
+                window_days=window_days,
                 window_start=window_start,
                 window_end=window_end,
                 nodes=_build_overview_node_health(nodes, metrics),

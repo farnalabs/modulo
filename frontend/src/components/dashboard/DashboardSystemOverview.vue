@@ -16,6 +16,17 @@
       >
         {{ $t('views.DashboardView.discover_my_system') }}
       </button>
+      <button
+        type="button"
+        class="rounded p-1 text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        data-testid="system-map-overview-toggle"
+        :aria-expanded="!collapsed"
+        aria-controls="system-map-overview-content"
+        :aria-label="$t(collapsed ? 'views.DashboardView.expand_system_overview' : 'views.DashboardView.collapse_system_overview')"
+        @click="collapsed = !collapsed"
+      >
+        <ChevronDown class="h-4 w-4 transition-transform" :class="{ 'rotate-180': !collapsed }" aria-hidden="true" />
+      </button>
     </template>
 
     <ErrorAlert
@@ -26,47 +37,51 @@
       class="mb-3"
       data-testid="dashboard-system-discover-error"
     />
-    <div v-if="store.overviewLoading" class="text-sm text-muted-foreground" data-testid="system-map-overview-loading">
-      {{ $t('views.DashboardView.system_maps_loading') }}
+    <div v-if="collapsed" id="system-map-overview-content" data-testid="system-map-overview-content" class="text-sm text-muted-foreground">
+      {{ $t('views.DashboardView.system_overview_collapsed') }}
     </div>
-    <!-- 402 feature_required: unavailable, not a failed fetch - no retry. -->
-    <ErrorAlert
-      v-else-if="store.overviewUnavailable"
-      :message="$t('views.DashboardView.system_maps_unavailable')"
-      aria-live="polite"
-      data-testid="system-map-overview-error"
-    />
-    <ErrorAlert
-      v-else-if="store.overviewError"
-      :message="$t('views.DashboardView.system_maps_error')"
-      :on-retry="loadOverview"
-      aria-live="assertive"
-      data-testid="system-map-overview-error"
-    />
-    <EmptyState
-      v-else-if="store.overviewEmpty"
-      :title="$t('views.DashboardView.system_maps_empty_title')"
-      :description="$t('views.DashboardView.system_maps_empty_description')"
-      data-testid="system-map-overview-empty"
-    />
-    <div v-else-if="store.overview" class="space-y-3" data-testid="system-map-overview-metrics">
-      <p class="text-xs text-muted-foreground">
-        {{ $t('views.DashboardView.system_maps_window', { days: store.overview.window_days }) }}
-      </p>
-      <div v-for="node in store.overview.nodes" :key="node.node_key" class="rounded-md border p-3" data-testid="system-map-node">
-        <div class="flex items-center justify-between gap-2">
-          <span class="font-medium">{{ node.display_name }}</span>
-          <span class="text-xs text-muted-foreground">{{ healthLabel(node.health) }}</span>
-        </div>
-        <div class="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-4">
-          <span>{{ $t('views.DashboardView.system_maps_throughput') }}: {{ node.throughput_per_min ?? $t('common.na') }}</span>
-          <span>{{ $t('views.DashboardView.system_maps_failure_rate') }}: {{ node.failure_rate == null ? $t('common.na') : `${Math.round(node.failure_rate * 100)}%` }}</span>
-          <span>{{ $t('views.DashboardView.system_maps_queue') }}: {{ node.queue_depth ?? $t('common.na') }}</span>
-          <span>{{ $t('views.DashboardView.system_maps_telemetry') }}: {{ node.telemetry_coverage == null ? $t('common.na') : `${Math.round(node.telemetry_coverage * 100)}%` }}</span>
+    <div v-else id="system-map-overview-content">
+      <div v-if="store.overviewLoading" class="text-sm text-muted-foreground" data-testid="system-map-overview-loading">
+        {{ $t('views.DashboardView.system_maps_loading') }}
+      </div>
+      <!-- 402 feature_required: unavailable, not a failed fetch - no retry. -->
+      <ErrorAlert
+        v-else-if="store.overviewUnavailable"
+        :message="$t('views.DashboardView.system_maps_unavailable')"
+        aria-live="polite"
+        data-testid="system-map-overview-error"
+      />
+      <ErrorAlert
+        v-else-if="store.overviewError"
+        :message="$t('views.DashboardView.system_maps_error')"
+        :on-retry="loadOverview"
+        aria-live="assertive"
+        data-testid="system-map-overview-error"
+      />
+      <EmptyState
+        v-else-if="store.overviewEmpty || !hasObservedNodes"
+        :title="$t(store.overviewEmpty ? 'views.DashboardView.system_maps_empty_title' : 'views.DashboardView.system_maps_no_observed_title')"
+        :description="$t(store.overviewEmpty ? 'views.DashboardView.system_maps_empty_description' : 'views.DashboardView.system_maps_no_observed_description')"
+        data-testid="system-map-overview-empty"
+      />
+      <div v-else class="space-y-3" data-testid="system-map-overview-metrics">
+        <p class="text-xs text-muted-foreground">
+          {{ $t('views.DashboardView.system_maps_window', { days: props.windowDays }) }}
+        </p>
+        <div v-for="node in observedNodes" :key="node.node_key" class="rounded-md border p-3" data-testid="system-map-node">
+          <div class="flex items-center justify-between gap-2">
+            <span class="font-medium">{{ node.display_name }}</span>
+            <span class="text-xs text-muted-foreground">{{ healthLabel(node.health) }}</span>
+          </div>
+          <div class="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-4">
+            <span>{{ $t('views.DashboardView.system_maps_throughput') }}: {{ node.throughput_per_min ?? $t('common.na') }}</span>
+            <span>{{ $t('views.DashboardView.system_maps_failure_rate') }}: {{ node.failure_rate == null ? $t('common.na') : `${Math.round(node.failure_rate * 100)}%` }}</span>
+            <span>{{ $t('views.DashboardView.system_maps_queue') }}: {{ node.queue_depth ?? $t('common.na') }}</span>
+            <span>{{ $t('views.DashboardView.system_maps_telemetry') }}: {{ node.telemetry_coverage == null ? $t('common.na') : `${Math.round(node.telemetry_coverage * 100)}%` }}</span>
+          </div>
         </div>
       </div>
     </div>
-    <SystemMapDraftReview v-else />
   </SectionCard>
 </template>
 
@@ -74,18 +89,25 @@
 import SectionCard from '../shared/SectionCard.vue'
 import EmptyState from '../shared/EmptyState.vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
-import SystemMapDraftReview from '../system-maps/SystemMapDraftReview.vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useStorage } from '@vueuse/core'
+import { ChevronDown } from '@lucide/vue'
 import { useRouter } from 'vue-router'
 import { useSystemMapsStore } from '../../stores/systemMaps'
 
+const props = withDefaults(defineProps<{ windowDays?: number }>(), { windowDays: 7 })
 const { t } = useI18n()
 const router = useRouter()
 const store = useSystemMapsStore()
 const discovering = ref(false)
 const discoverError = ref<string | null>(null)
 const canDiscover = computed(() => store.accessLoaded && !store.error && store.hasAccess)
+const collapsed = useStorage('dashboard-system-overview-collapsed', false)
+const observedNodes = computed(() => store.overview?.nodes.filter((node) =>
+  node.health !== 'unknown' || node.queue_depth != null || node.throughput_per_min != null || node.failure_rate != null || node.telemetry_coverage != null,
+) ?? [])
+const hasObservedNodes = computed(() => observedNodes.value.length > 0)
 const healthLabel = (health: string): string => t(`views.DashboardView.system_maps_health_${health}`)
 
 function clearDiscoverError(): void {
@@ -118,8 +140,9 @@ async function discoverSystem(): Promise<void> {
  */
 async function loadOverview(): Promise<void> {
   await store.fetchDiscovery()
-  await store.fetchDefaultOverview()
+  await store.fetchDefaultOverview(props.windowDays)
 }
 
 onMounted(loadOverview)
+watch(() => props.windowDays, loadOverview)
 </script>
