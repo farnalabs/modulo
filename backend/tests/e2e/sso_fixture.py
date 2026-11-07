@@ -36,7 +36,6 @@ from modulo.settings import get_settings
 _LOG = logging.getLogger("e2e.sso_fixture")
 _FIXTURE_PROVIDER = "ci-idp"
 _FIXTURE_EMAIL = "sso-user@example.com"
-_FIXTURE_ACCESS_TOKEN = "fixture-sso-access-token"
 _FIXTURE_REFRESH_TOKEN = "fixture-sso-refresh-token"
 
 
@@ -217,8 +216,10 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--frontend-url", default="http://127.0.0.1:5173")
     args = parser.parse_args()
+    base_url = f"http://127.0.0.1:{args.port}"
+    os.environ.setdefault("E2E_IDP_BASE_URL", base_url)
     _install_fixture()
     settings = get_settings()
     settings.modulo_frontend_url = args.frontend_url
-    settings.modulo_public_url = "http://127.0.0.1:8000"
+    settings.modulo_public_url = base_url
     uvicorn.run(app, host="127.0.0.1", port=args.port, lifespan="off", log_level="warning")
