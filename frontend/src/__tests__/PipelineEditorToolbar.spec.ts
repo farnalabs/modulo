@@ -227,6 +227,29 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     focusSpy.mockRestore()
   })
 
+  it('falls back to the controls container and ignores non-Escape keys in the settings disclosure', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus')
+
+    // An archived pipeline renders the unarchive button instead of the archive
+    // button that carries firstSettingsControlRef, so the disclosure falls back
+    // to querying the controls container for the first focusable element.
+    ;(wrapper.vm as any).pipeline = { id: 'test-pipeline-id', name: 'Archived Pipeline', archived_at: '2026-01-01T00:00:00Z' }
+    await nextTick()
+
+    ;(wrapper.vm as any).toggleSettingsDisclosure(new MouseEvent('click', { detail: 0 }))
+    await nextTick()
+    await vi.waitFor(() => expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true }))
+    expect(focusSpy.mock.instances.some((element) => (element as HTMLElement).dataset.testid === 'pipeline-editor-unarchive')).toBe(true)
+
+    // Only Escape closes the disclosure; other keys leave it open.
+    ;(wrapper.vm as any).onSettingsControlsKeydown(new KeyboardEvent('keydown', { key: 'Tab' }))
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-settings-toggle"]').attributes('aria-expanded')).toBe('true')
+    focusSpy.mockRestore()
+  })
+
   it('surfaces an Arrange graph fit failure without breaking the layout action', async () => {
     const wrapper = mountEditor()
     await flushPromises()
