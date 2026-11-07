@@ -67,8 +67,8 @@ async def test_valid_enhancement_merges_only_allowlisted_node_and_preserves_draf
     result = await enhance_discovery(
         _draft(),
         _callable(response, calls),
-        prompt_version="prompt-test",
-        rubric_version="rubric-test",
+        prompt_version=PROMPT_VERSION,
+        rubric_version=RUBRIC_VERSION,
         safe_additions=[{"node_key": "safe:store"}],
     )
 
@@ -77,8 +77,8 @@ async def test_valid_enhancement_merges_only_allowlisted_node_and_preserves_draf
     addition = result.nodes[-1]
     assert addition["config_json"]["source"] == "ai"
     assert addition["config_json"]["confidence"] == pytest.approx(0.95)
-    assert addition["config_json"]["prompt_version"] == "prompt-test"
-    assert addition["config_json"]["rubric_version"] == "rubric-test"
+    assert addition["config_json"]["prompt_version"] == PROMPT_VERSION
+    assert addition["config_json"]["rubric_version"] == RUBRIC_VERSION
     assert result.relationships[0]["config_json"]["reason"] == "build output is retained as evidence"
     assert calls[0][1] is not None
 
@@ -192,7 +192,7 @@ async def test_backend_exception_fails_safe_without_mutation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_custom_versions_are_required_for_provenance_contract() -> None:
+async def test_canonical_versions_are_required_for_provenance_contract() -> None:
     response = json.dumps(
         {
             "additional_nodes": [{"node_key": "safe:queue", "node_type": "queue", "display_name": "Queue"}],
@@ -201,14 +201,44 @@ async def test_custom_versions_are_required_for_provenance_contract() -> None:
             "reasoning": "An explicitly safe queue is useful.",
         }
     )
+    draft = _draft()
 
     result = await enhance_discovery(
-        _draft(),
+        draft,
+        _callable(response, []),
+        safe_additions=[{"node_key": "safe:queue"}],
+        prompt_version="untrusted-v99",
+        rubric_version="untrusted-r99",
+    )
+
+    assert result == draft
+
+
+@pytest.mark.asyncio
+async def test_edge_endpoint_must_be_materialized_as_an_additional_node() -> None:
+    response = json.dumps(
+        {
+            "additional_nodes": [],
+            "additional_edges": [
+                {
+                    "source_node_key": "pipeline:p1",
+                    "target_node_key": "safe:queue",
+                    "relationship_type": "flow",
+                    "reason": "The queue receives build output.",
+                }
+            ],
+            "confidence": 0.99,
+            "reasoning": "An explicitly safe queue is useful.",
+        }
+    )
+    draft = _draft()
+
+    result = await enhance_discovery(
+        draft,
         _callable(response, []),
         safe_additions=[{"node_key": "safe:queue"}],
         prompt_version=PROMPT_VERSION,
         rubric_version=RUBRIC_VERSION,
     )
 
-    assert result.nodes[-1]["config_json"]["source"] == "ai"
-    assert result.nodes[-1]["config_json"]["reason"] == "An explicitly safe queue is useful."
+    assert result == draft

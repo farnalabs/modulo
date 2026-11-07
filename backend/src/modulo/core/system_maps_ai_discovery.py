@@ -136,14 +136,17 @@ def _validate_contract(
     if enhancement.confidence < MIN_CONFIDENCE:
         return None
 
+    if prompt_version != PROMPT_VERSION or rubric_version != RUBRIC_VERSION:
+        return None
+
     deterministic_keys = {str(node.get("node_key")) for node in draft.nodes}
     safe_keys = _safe_addition_keys(safe_additions)
-    accepted_node_keys = deterministic_keys | safe_keys
     candidate_node_keys = [node.node_key for node in enhancement.additional_nodes]
     if len(candidate_node_keys) != len(set(candidate_node_keys)):
         return None
     if any(key not in safe_keys or key in deterministic_keys for key in candidate_node_keys):
         return None
+    accepted_node_keys = deterministic_keys | set(candidate_node_keys)
 
     existing_edge_keys = {
         (
