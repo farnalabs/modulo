@@ -276,48 +276,60 @@ jobs:
           trap 'rc=$?; echo "::error::Assemble bundle layout failed at line ${LINENO}: ${BASH_COMMAND} (exit ${rc})" >&2; exit "$rc"' ERR
           source scripts/bundle-versions.env
           BUNDLE="build/${BUNDLE_ROOT}"
-          echo "assemble: bundle=${BUNDLE}"
-
+          # pg_config emits the absolute configure-time prefix, while the
+          # assembly paths above are intentionally relative to the checkout.
+          # Canonicalise both sides before comparing so this accepts the same
+          # bundle path in either spelling and still rejects symlink escapes.
           mkdir -p "$BUNDLE/runtime" "$BUNDLE/pg" "$BUNDLE/redis" || {
             echo "::error::mkdir failed for bundle layout: ${BUNDLE}/runtime ${BUNDLE}/pg ${BUNDLE}/redis" >&2
             exit 1
           }
+          BUNDLE_ROOT_ABS="$(realpath -e -- "$BUNDLE")"
+          echo "assemble: bundle=${BUNDLE_ROOT_ABS}"
 
-           # CPython runtime (glibc build -- x86_64/aarch64-unknown-linux-gnu).
-           # Strip the top-level `python/` dir so runtime/ IS the interpreter
-           # tree: runtime/bin/python3.12, runtime/lib/...
-           pbs_archive="downloads/${PBS_TARBALL}"
-           [ -s "$pbs_archive" ] || { echo "::error::CPython archive missing or empty: ${pbs_archive}" >&2; exit 1; }
-           echo "assemble: extracting CPython archive ${pbs_archive}"
-           tar -xzf "$pbs_archive" -C "$BUNDLE/runtime" --strip-components=1 || {
-             echo "::error::tar extraction failed: archive=${pbs_archive} destination=${BUNDLE}/runtime" >&2
-             exit 1
-           }
-           [ -x "$BUNDLE/runtime/bin/python3" ] || { echo "::error::CPython extraction did not produce executable: ${BUNDLE}/runtime/bin/python3" >&2; exit 1; }
+          # CPython runtime (glibc build -- x86_64/aarch64-unknown-linux-gnu).
+          # Strip the top-level `python/` dir so runtime/ IS the interpreter
+          # tree: runtime/bin/python3.12, runtime/lib/...
+          pbs_archive="downloads/${PBS_TARBALL}"
+          [ -s "$pbs_archive" ] || { echo "::error::CPython archive missing or empty: ${pbs_archive}" >&2; exit 1; }
+          echo "assemble: extracting CPython archive ${pbs_archive}"
+          tar -xzf "$pbs_archive" -C "$BUNDLE/runtime" --strip-components=1 || {
+            echo "::error::tar extraction failed: archive=${pbs_archive} destination=${BUNDLE}/runtime" >&2
+            exit 1
+          }
+          [ -x "$BUNDLE/runtime/bin/python3" ] || { echo "::error::CPython extraction did not produce executable: ${BUNDLE}/runtime/bin/python3" >&2; exit 1; }
 
-           # PostgreSQL server + client were compiled directly into the bundle
-           # prefix so pg_config --sharedir and runtime data remain relocatable.
-           for required in \
-             "$BUNDLE/pg/bin/postgres" \
-             "$BUNDLE/pg/bin/initdb" \
-             "$BUNDLE/pg/bin/pg_dump"; do
-             [ -x "$required" ] || { echo "::error::required PostgreSQL executable missing or not executable: ${required}" >&2; exit 1; }
-             echo "assemble: found PostgreSQL executable ${required}"
-           done
-           [ -f "$BUNDLE/pg/share/postgresql/postgres.bki" ] || { echo "::error::PostgreSQL runtime data file missing: ${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }
-           [ -d "$BUNDLE/pg/share/postgresql/timezonesets" ] || { echo "::error::PostgreSQL runtime data directory missing: ${BUNDLE}/pg/share/postgresql/timezonesets" >&2; exit 1; }
-           sharedir="$($BUNDLE/pg/bin/pg_config --sharedir)" || {
+          # PostgreSQL server + client were compiled directly into the bundle
+          # prefix so pg_config --sharedir and runtime data remain relocatable.
+          for required in \
+            "$BUNDLE/pg/bin/postgres" \
+            "$BUNDLE/pg/bin/initdb" \
+            "$BUNDLE/pg/bin/pg_dump"; do
+            [ -x "$required" ] || { echo "::error::required PostgreSQL executable missing or not executable: ${required}" >&2; exit 1; }
+            echo "assemble: found PostgreSQL executable ${required}"
+          done
+          [ -f "$BUNDLE/pg/share/postgresql/postgres.bki" ] || { echo "::error::PostgreSQL runtime data file missing: ${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }
+          [ -d "$BUNDLE/pg/share/postgresql/timezonesets" ] || { echo "::error::PostgreSQL runtime data directory missing: ${BUNDLE}/pg/share/postgresql/timezonesets" >&2; exit 1; }
+          sharedir="$("$BUNDLE/pg/bin/pg_config" --sharedir)" || {
              echo "::error::pg_config --sharedir failed: executable=${BUNDLE}/pg/bin/pg_config" >&2
              exit 1
            }
-           echo "assemble: pg_config sharedir=${sharedir}"
-           [ "$sharedir" = "$BUNDLE/pg/share/postgresql" ] || {
-             echo "::error::pg_config returned unexpected sharedir: expected=${BUNDLE}/pg/share/postgresql actual=${sharedir}" >&2
+          sharedir_abs="$(realpath -e -- "$sharedir")" || {
+             echo "::error::pg_config --sharedir does not resolve to an existing directory: ${sharedir}" >&2
              exit 1
            }
-           case "$sharedir" in
-             "$BUNDLE"/*) : ;;
-             *) echo "::error::bundled PostgreSQL sharedir escaped the bundle: ${sharedir}" >&2; exit 1 ;;
+          expected_sharedir_abs="$(realpath -e -- "$BUNDLE/pg/share/postgresql")" || {
+             echo "::error::bundled PostgreSQL sharedir is missing: ${BUNDLE}/pg/share/postgresql" >&2
+             exit 1
+           }
+          echo "assemble: pg_config sharedir=${sharedir} canonical=${sharedir_abs}"
+          [ "$sharedir_abs" = "$expected_sharedir_abs" ] || {
+             echo "::error::pg_config returned unexpected sharedir: expected=${expected_sharedir_abs} actual=${sharedir_abs} (raw=${sharedir})" >&2
+             exit 1
+           }
+          case "$sharedir_abs" in
+             "$BUNDLE_ROOT_ABS"/*) : ;;
+             *) echo "::error::bundled PostgreSQL sharedir escaped the bundle: ${sharedir_abs} (raw=${sharedir})" >&2; exit 1 ;;
            esac
 
            # Redis, compiled from source on this runner (see the build step above).
@@ -631,8 +643,12 @@ jobs:
           : "${PGDATA:?PGDATA is required}"
           : "${SMOKE_SOCKET:?SMOKE_SOCKET is required}"
           : "${SMOKE_DUMP:?SMOKE_DUMP is required}"
-          test "$(pg_config --sharedir)" = "$SMOKE_BUNDLE/pg/share/postgresql"
-          case "$(pg_config --sharedir)" in "$SMOKE_BUNDLE"/*) : ;; *) exit 1 ;; esac
+          sharedir="$(pg_config --sharedir)"
+          sharedir_abs="$(realpath -e -- "$sharedir")"
+          smoke_bundle_abs="$(realpath -e -- "$SMOKE_BUNDLE")"
+          expected_sharedir_abs="$(realpath -e -- "$SMOKE_BUNDLE/pg/share/postgresql")"
+          test "$sharedir_abs" = "$expected_sharedir_abs"
+          case "$sharedir_abs" in "$smoke_bundle_abs"/*) : ;; *) exit 1 ;; esac
           initdb --pgdata "$PGDATA" --username modulo --auth=trust --locale C
           pg_ctl --pgdata "$PGDATA" --log "$PGDATA/postgres.log" \
             --options="-k $SMOKE_SOCKET -p 55432" start -w

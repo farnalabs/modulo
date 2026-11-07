@@ -567,7 +567,12 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert "pg_config --sharedir" in workflow_text
     assert 'test -f "$BUNDLE/pg/share/postgresql/postgres.bki"' in workflow_text
     assert 'test -d "$BUNDLE/pg/share/postgresql/timezonesets"' in workflow_text
+    assert 'BUNDLE_ROOT_ABS="$(realpath -e -- "$BUNDLE")"' in workflow_text
+    assert 'sharedir_abs="$(realpath -e -- "$sharedir")"' in workflow_text
+    assert 'expected_sharedir_abs="$(realpath -e -- "$BUNDLE/pg/share/postgresql")"' in workflow_text
+    assert 'case "$sharedir_abs" in' in workflow_text
     workflow = yaml.safe_load(workflow_text)
+
     steps = workflow["jobs"]["bundle"]["steps"]
     assemble_script = steps[_step_names(steps).index("Assemble bundle layout")]["run"]
     assert "Assemble bundle layout failed at line" in assemble_script
@@ -595,7 +600,12 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert "env -i" in smoke_script
     assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
     assert "pg_config --sharedir" in smoke_script
+    assert 'sharedir_abs="$(realpath -e -- "$sharedir")"' in smoke_script
+    assert 'smoke_bundle_abs="$(realpath -e -- "$SMOKE_BUNDLE")"' in smoke_script
+    assert 'expected_sharedir_abs="$(realpath -e -- "$SMOKE_BUNDLE/pg/share/postgresql")"' in smoke_script
+    assert 'case "$sharedir_abs" in "$smoke_bundle_abs"/*)' in smoke_script
     assert "initdb --pgdata" in smoke_script
+
     assert "pg_ctl --pgdata" in smoke_script
     assert "SELECT 1;" in smoke_script
     assert "America/New_York" in smoke_script
