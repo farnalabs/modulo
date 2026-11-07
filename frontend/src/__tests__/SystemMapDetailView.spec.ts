@@ -588,6 +588,9 @@ describe('SystemMapDetailView authoring actions', () => {
 
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
     await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-discovery-submit"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
+    await flushPromises()
     expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
 
     wrapper.findComponent(DiscoveryStub).vm.$emit('save', { acceptedNodes: [0], acceptedEdges: [], rejectedNodes: [], rejectedEdges: [] })
@@ -603,6 +606,8 @@ describe('SystemMapDetailView authoring actions', () => {
     await flushPromises()
 
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('Could not discover system map')
 
@@ -620,6 +625,8 @@ describe('SystemMapDetailView authoring actions', () => {
 
     mockPost.mockResolvedValue({ data: { draft_map_id: 'map-1', draft_revision_id: 'rev-1', inferred_nodes: [], inferred_edges: [] } })
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
     await flushPromises()
     wrapper.findComponent(DiscoveryStub).vm.$emit('close')
     await flushPromises()
@@ -817,7 +824,7 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     mockPlanStore.devMode = true
     mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
     mockGet.mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
       return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
     })
   })
@@ -880,6 +887,9 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
     await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-discovery-submit"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
+    await flushPromises()
     expect(wrapper.text()).toContain('Discovery failed')
 
     await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
@@ -916,6 +926,10 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     store.discovery = { inferred_nodes: [], inferred_edges: [] } as never
 
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(false)
+    store.activeRevision = { id: 'rev-1', revision_number: 1, status: 'draft' } as never
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
     await flushPromises()
     expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
 

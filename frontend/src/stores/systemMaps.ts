@@ -34,6 +34,12 @@ export interface DiscoverySelection {
   rejectedEdges: number[]
 }
 
+export type DiscoveryMode = 'deterministic' | 'ai_assisted'
+export interface DiscoveryOptions {
+  backends: Array<components['schemas']['ModelBackendResponse']>
+  evals: Array<components['schemas']['EvalDefinitionResponse']>
+}
+
 // These vocabularies MUST mirror the backend CHECK constraints in
 // backend/src/modulo/api/schemas/system_maps.py (VALID_NODE_TYPES / VALID_REL_TYPES).
 // A mismatch makes every authored payload fail validation with a 422.
@@ -510,8 +516,13 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     attributionBindings.value = attributionBindings.value.filter((binding) => binding.id !== bindingId)
   }
 
-  async function discover(name = 'Discovered System Map', description?: string): Promise<DiscoveryReport> {
-    const response = await api.POST('/api/v1/system-maps/discover', { body: { name, description } })
+  async function discover(name = 'Discovered System Map', description?: string, options?: { modelBackendId?: string; evalDefinitionId?: string }): Promise<DiscoveryReport> {
+    const body: components['schemas']['SystemMapDiscoveryRequest'] = { name, description }
+    if (options?.modelBackendId && options.evalDefinitionId) {
+      body.model_backend_id = options.modelBackendId
+      body.eval_definition_id = options.evalDefinitionId
+    }
+    const response = await api.POST('/api/v1/system-maps/discover', { body })
     if (response.error || !response.data) throw new Error(tr('systemMaps.errors.discover_map'))
     discovery.value = response.data
     await loadMap(response.data.draft_map_id)

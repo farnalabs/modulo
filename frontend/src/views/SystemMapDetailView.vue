@@ -121,13 +121,19 @@
           </div>
 
           <!-- Discovery Review Panel (slide-over) -->
-          <DiscoveryPanel
-            v-if="discoveryOpen"
-            :discovery="discovery"
-            @close="discoveryOpen = false"
-            @save="saveDraftWithDiscovery"
-            data-testid="system-map-discovery-panel"
-          />
+           <DiscoveryPanel
+             v-if="discoveryOpen"
+             :discovery="discovery"
+             @close="discoveryOpen = false"
+             @save="saveDraftWithDiscovery"
+             data-testid="system-map-discovery-panel"
+           />
+           <DiscoveryConfigPanel
+             v-if="discoveryConfigOpen"
+             @close="discoveryConfigOpen = false"
+             @submit="startDiscovery"
+             data-testid="system-map-discovery-config"
+           />
         </div>
 
         <SystemMapAttributionBindings
@@ -156,6 +162,7 @@ import HeaderBar from '../components/system-maps/SystemMapHeaderBar.vue'
 import GraphEditor from '../components/system-maps/SystemMapGraphEditor.vue'
 import RevisionSidebar from '../components/system-maps/SystemMapRevisionSidebar.vue'
 import DiscoveryPanel from '../components/system-maps/SystemMapDiscoveryPanel.vue'
+import DiscoveryConfigPanel from '../components/system-maps/SystemMapDiscoveryConfigPanel.vue'
 import SystemMapAttributionBindings from '../components/system-maps/SystemMapAttributionBindings.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import { mergeDiscoverySelections } from '../components/system-maps/discoveryMerge'
@@ -176,6 +183,7 @@ const loading = computed(() => store.loading)
 
 const showSidebar = ref(true)
 const discoveryOpen = ref(false)
+const discoveryConfigOpen = ref(false)
 const saving = ref(false)
 const actionError = ref<string | null>(null)
 const diffResult = ref<SystemMapRevisionDiff | null>(null)
@@ -320,10 +328,16 @@ async function restoreRevision(revisionId: string): Promise<void> {
 }
 
 async function runDiscovery(): Promise<void> {
+  if (!activeMap.value || readOnly.value) return
+  discoveryConfigOpen.value = true
+}
+
+async function startDiscovery(options?: { modelBackendId?: string; evalDefinitionId?: string }): Promise<void> {
   if (!activeMap.value) return
+  discoveryConfigOpen.value = false
   actionError.value = null
   try {
-    await store.discover(`Discovered ${activeMap.value.name}`, `Discovery at ${new Date().toISOString()}`)
+    await store.discover(`Discovered ${activeMap.value.name}`, `Discovery at ${new Date().toISOString()}`, options)
     discoveryOpen.value = true
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.discovery_failed')

@@ -33,6 +33,7 @@ import {
 } from '../stores/systemMaps'
 import GraphEditor from '../components/system-maps/SystemMapGraphEditor.vue'
 import DiscoveryPanel from '../components/system-maps/SystemMapDiscoveryPanel.vue'
+import DiscoveryConfigPanel from '../components/system-maps/SystemMapDiscoveryConfigPanel.vue'
 import { mergeDiscoverySelections } from '../components/system-maps/discoveryMerge'
 import enUS from '../locales/en-US.js'
 
@@ -182,6 +183,16 @@ describe('DiscoveryPanel', () => {
   })
 })
 
+describe('DiscoveryConfigPanel', () => {
+  it('fails closed when AI option loading fails', async () => {
+    mockGet.mockRejectedValue(new Error('unavailable'))
+    const wrapper = mount(DiscoveryConfigPanel, { global: { plugins: [i18n] } })
+    await wrapper.get('[data-testid="system-map-discovery-mode-ai"]').setValue(true)
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="system-map-discovery-submit"]').attributes('disabled')).toBeDefined())
+    expect(wrapper.text()).toContain('AI discovery is unavailable')
+  })
+})
+
 describe('mergeDiscoverySelections', () => {
   const discovery = {
     sources_inspected: [],
@@ -289,5 +300,18 @@ describe('useSystemMapsStore authoring', () => {
     expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/discover', { body: { name: 'Discovered', description: 'desc' } })
     expect(store.discovery).toEqual(report)
     expect(store.activeMap?.id).toBe('map-2')
+  })
+
+  it('sends AI discovery selections only when both authorised IDs are selected', async () => {
+    const report = { draft_map_id: 'map-3', inferred_nodes: [], inferred_edges: [] }
+    mockPost.mockResolvedValue({ data: report })
+    mockGet.mockResolvedValue({ data: { id: 'map-3', name: 'AI map', published_revision_id: null } })
+
+    const store = useSystemMapsStore()
+    await store.discover('AI map', 'desc', { modelBackendId: 'backend-1', evalDefinitionId: 'eval-1' })
+
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/discover', {
+      body: { name: 'AI map', description: 'desc', model_backend_id: 'backend-1', eval_definition_id: 'eval-1' },
+    })
   })
 })

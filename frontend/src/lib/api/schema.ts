@@ -22403,8 +22403,29 @@ export interface components {
         SystemMapCurrentRevisionResponse: {
             revision: components["schemas"]["SystemMapRevisionResponse"];
         };
-        /** SystemMapDiscoveryReport */
-        SystemMapDiscoveryReport: {
+         /** SystemMapDiscoveryProvenance */
+         SystemMapDiscoveryProvenance: {
+             /**
+              * Mode
+              * @default deterministic
+              * @enum {string}
+              */
+             mode: "deterministic" | "ai_assisted" | "deterministic_fallback";
+             /** Prompt Version */
+             prompt_version?: string | null;
+             /** Rubric Version */
+             rubric_version?: string | null;
+             /** Evaluator Version */
+             evaluator_version?: string | null;
+             /** Selected Backend Id */
+             selected_backend_id?: string | null;
+             /** Input Hash */
+             input_hash?: string | null;
+             /** Output Hash */
+             output_hash?: string | null;
+         };
+         /** SystemMapDiscoveryReport */
+         SystemMapDiscoveryReport: {
             /** Sources Inspected */
             sources_inspected: components["schemas"]["SystemMapDiscoverySource"][];
             /** Node Count */
@@ -22440,8 +22461,16 @@ export interface components {
              * @default false
              */
             published: boolean;
+            /** Ai Assisted */
+            ai_assisted?: boolean | null;
+            /** Eval Gate Passed */
+            eval_gate_passed?: boolean | null;
+            /** Eval Gate Verdict */
+            eval_gate_verdict?: ("not_requested" | "pass" | "fail" | "error") | null;
+            /** Provenance */
+            provenance?: components["schemas"]["SystemMapDiscoveryProvenance"];
         };
-        /** SystemMapDiscoveryRequest */
+         /** SystemMapDiscoveryRequest */
         SystemMapDiscoveryRequest: {
             /**
              * Name
@@ -22450,6 +22479,10 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
+            /** Model Backend Id */
+            model_backend_id?: string | null;
+            /** Eval Definition Id */
+            eval_definition_id?: string | null;
         };
         /** SystemMapDiscoverySkipped */
         SystemMapDiscoverySkipped: {
