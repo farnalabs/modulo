@@ -662,7 +662,7 @@ export default {
       "annual": "Annual"
     },
     "LoginView": {
-      "agent_governance_for_your_agentic_sdlc": "Agent governance for your agentic SDLC",
+      "agent_governance_for_your_agentic_sdlc": "Govern the software development lifecycle as AI and automation take on more of the work.",
       "email_placeholder": "admin{'@'}example.com",
       "login_failed": "Login failed:",
       "enter_your_password": "Enter your password",

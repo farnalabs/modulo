@@ -7292,7 +7292,7 @@ features:
             - "No pre-flight / predictive run-cost ESTIMATE — spend limits and ceilings are enforced reactively at run finalization; there is no 'this run will cost ≈X' projection before dispatch"
             - "Cost-probe ledger self-healing (core/cost_controller/probe.py) tracks run-total vs breakdown consistency as an operational probe, not a surfaced admin report"
     feat-dashboard:
-        description: Home dashboard, metrics overview, and trend series
+        description: Delivery governance dashboard, metrics overview, and trend series
         status: covered
         behaviours:
             - "[x] The dashboard renders token spend, eval rate, and run activity widgets"
