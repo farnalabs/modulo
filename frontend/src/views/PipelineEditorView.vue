@@ -75,7 +75,7 @@
              `shrink-0`: when the content column is shorter than the wrapped
              toolbar, the toolbar must keep its min-content height (scroll the
              column to reach it) rather than being squeezed. -->
-         <div class="flex shrink-0 flex-wrap items-start gap-x-2 gap-y-2 border-b bg-card px-3 py-2 md:items-center" :aria-label="$t('views.PipelineEditorView.pipeline_editor_toolbar')" data-testid="pipeline-editor-toolbar">
+          <div class="flex shrink-0 flex-wrap items-start gap-x-2 gap-y-2 border-b bg-card px-3 py-2 md:items-center" :aria-label="$t('views.PipelineEditorView.pipeline_editor_toolbar')" data-testid="pipeline-editor-toolbar">
           <!-- Group: identity -->
           <div class="flex min-w-0 items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_identity')" data-testid="pipeline-editor-toolbar-group-identity">
             <h2 class="truncate text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
@@ -198,13 +198,14 @@
             >
               {{ $t('views.PipelineEditorView.toolbar_settings_toggle') }}
             </button>
+            <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- settings controls: Escape collapses the disclosure, except while a nested panel dialog owns the keypress -->
             <div
               :id="pipelineEditorSettingsControlsId"
               ref="settingsControlsRef"
               :class="['flex flex-wrap items-center gap-1.5', { 'max-md:hidden': !settingsOpen }]"
               @keydown.escape="onSettingsControlsKeydown"
             >
-             <button v-if="!pipeline?.archived_at" ref="firstSettingsControlRef" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+            <button v-if="!pipeline?.archived_at" ref="firstSettingsControlRef" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
             <!-- FAR-1530: per-pipeline Paused execution state. Paused is a
                  visible state, not an archived one - the pipeline stays in the
@@ -670,8 +671,8 @@
             </div>
           </div>
           </template>
-           <span :class="groupDividerClass" />
-           <!-- Group: canvas tools -->
+          <span :class="groupDividerClass" />
+          <!-- Group: canvas tools -->
           <div class="flex items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_canvas_actions')" data-testid="pipeline-editor-toolbar-group-canvas">
             <template v-if="!isViewing">
               <Select
@@ -2392,6 +2393,12 @@ function closeSettingsDisclosure() {
 }
 
 function onSettingsControlsKeydown(event: KeyboardEvent) {
+  // A nested retry-policy / autonomy panel is a descendant <dialog open> with
+  // its own document-level Escape handler. That handler closes the panel and
+  // restores focus to the panel toggle; without this guard the same keypress
+  // also collapses the settings disclosure and steals focus back to the
+  // settings toggle (nested Escape double-close).
+  if (event.target instanceof Element && event.target.closest('dialog[open]')) return
   if (event.key === 'Escape') {
     event.preventDefault()
     closeSettingsDisclosure()

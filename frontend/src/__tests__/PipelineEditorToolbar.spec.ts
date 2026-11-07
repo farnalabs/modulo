@@ -61,8 +61,9 @@ import PipelineEditorView from '../views/PipelineEditorView.vue'
 
 const seededFlowNodes = [{ id: 'node-1', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Agent Node', description: '' } }]
 
-function mountEditor() {
+function mountEditor(attachTo?: HTMLElement) {
   return mount(PipelineEditorView, {
+    ...(attachTo ? { attachTo } : {}),
     global: {
       plugins: [createPinia()],
       stubs: {
@@ -248,6 +249,61 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="pipeline-editor-settings-toggle"]').attributes('aria-expanded')).toBe('true')
     focusSpy.mockRestore()
+  })
+
+  it('keeps the settings disclosure open when Escape closes a nested retry-policy panel', async () => {
+    // attachTo is required: the nested panel's Escape handler is a document-level
+    // listener, so the keydown must bubble to the real document.
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    // Mobile-style disclosure is open, and the retry-policy panel (a descendant
+    // <dialog open>) is also open.
+    vm.toggleSettingsDisclosure(new MouseEvent('click', { detail: 0 }))
+    await nextTick()
+    const settingsToggle = wrapper.find('[data-testid="pipeline-editor-settings-toggle"]')
+    expect(settingsToggle.attributes('aria-expanded')).toBe('true')
+
+    vm.toggleRetryPolicy()
+    await nextTick()
+    const panel = wrapper.find('[data-testid="pipeline-editor-retry-policy-panel"]')
+    expect(panel.exists()).toBe(true)
+
+    // Escape originates inside the nested dialog: it must close the panel and
+    // return focus to the panel toggle, NOT collapse the settings disclosure or
+    // steal focus back to the settings toggle.
+    panel.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-retry-policy-panel"]').exists()).toBe(false)
+    expect(settingsToggle.attributes('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(wrapper.find('[data-testid="pipeline-editor-retry-policy-toggle"]').element)
+    wrapper.unmount()
+  })
+
+  it('keeps the settings disclosure open when Escape closes a nested autonomy panel', async () => {
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    vm.toggleSettingsDisclosure(new MouseEvent('click', { detail: 0 }))
+    await nextTick()
+    const settingsToggle = wrapper.find('[data-testid="pipeline-editor-settings-toggle"]')
+    expect(settingsToggle.attributes('aria-expanded')).toBe('true')
+
+    vm.toggleAutonomyPanel()
+    await nextTick()
+    const panel = wrapper.find('[data-testid="pipeline-editor-autonomy-panel-dialog"]')
+    expect(panel.exists()).toBe(true)
+
+    panel.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-autonomy-panel-dialog"]').exists()).toBe(false)
+    expect(settingsToggle.attributes('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(wrapper.find('[data-testid="pipeline-editor-autonomy-panel-toggle"]').element)
+    wrapper.unmount()
   })
 
   it('surfaces an Arrange graph fit failure without breaking the layout action', async () => {
