@@ -432,7 +432,9 @@ describe('useSystemMapsStore overview', () => {
 
     expect(mockGet).toHaveBeenCalledWith(
       '/api/v1/system-maps/{map_id}/overview',
-      expect.objectContaining({ params: { path: { map_id: 'published-default' } } }),
+      expect.objectContaining({
+        params: { path: { map_id: 'published-default' }, query: { window_days: 7 } },
+      }),
     )
     expect(store.overview?.system_map_id).toBe('published-default')
     expect(store.overviewError).toBeNull()
@@ -613,13 +615,20 @@ describe('useSystemMapsStore overview', () => {
     expect(overviewInit.signal).toBeInstanceOf(AbortSignal)
   })
 
-  it('loads an overview for an explicit map id', async () => {
-    mockGet.mockResolvedValue({ data: overviewPayload({ system_map_id: 'map-x' }) })
+  it('loads an overview for an explicit map id with the selected window', async () => {
+    mockGet.mockResolvedValue({ data: overviewPayload({ system_map_id: 'map-x', window_days: 30 }) })
     const store = useSystemMapsStore()
 
-    await store.fetchOverview('map-x')
+    await store.fetchOverview('map-x', 30)
 
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/v1/system-maps/{map_id}/overview',
+      expect.objectContaining({
+        params: { path: { map_id: 'map-x' }, query: { window_days: 30 } },
+      }),
+    )
     expect(store.overview?.system_map_id).toBe('map-x')
+    expect(store.overview?.window_days).toBe(30)
     expect(store.overviewError).toBeNull()
     expect(store.overviewLoading).toBe(false)
   })

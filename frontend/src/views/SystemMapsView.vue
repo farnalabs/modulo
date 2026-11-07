@@ -237,7 +237,7 @@ async function discoverSystem(): Promise<void> {
   }
 }
 
-async function openCreateDialog(): Promise<void> {
+function openCreateDialog(): void {
   createForm.value = { name: '', description: '' }
   createDialogOpen.value = true
 }
@@ -289,5 +289,5 @@ async function executeDelete(): Promise<void> {
   } finally { deleting.value = false }
 }
 
-onMounted(async () => { await store.fetchAccess(); await loadMaps() })
+onMounted(() => { void store.fetchAccess().then(() => loadMaps()) })
 </script>

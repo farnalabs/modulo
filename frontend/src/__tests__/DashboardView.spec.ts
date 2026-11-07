@@ -11,16 +11,18 @@ const mockSummaryData = {
     {
       id: 'team-a',
       name: 'Alpha Team',
-      total_runs: 80,
-      active_pipelines: 4,
+       total_runs: 80,
+       completed_runs: 68,
+       active_pipelines: 4,
       run_counts_by_status: { running: 2, awaiting_human: 1, failed: 3, idle: 7 },
       eval_pass_rate: { total_evals: 40, passed_evals: 32, pass_rate: 80.0 },
     },
     {
       id: 'team-b',
       name: 'Beta Team',
-      total_runs: 62,
-      active_pipelines: 4,
+       total_runs: 62,
+       completed_runs: 55,
+       active_pipelines: 4,
       run_counts_by_status: { running: 1, awaiting_human: 1, failed: 2, idle: 5 },
     },
   ],
@@ -76,6 +78,7 @@ vi.mock('../lib/api/client', () => ({
 
 import DashboardView from '../views/DashboardView.vue'
 import StatCard from '../components/StatCard.vue'
+import DashboardSystemOverview from '../components/dashboard/DashboardSystemOverview.vue'
 
 function setupDefaultMocks() {
   mockGet.mockImplementation((url: string) => {
@@ -205,6 +208,26 @@ describe('DashboardView', () => {
 
     expect(wrapper.find('[data-testid="dashboard-system-overview"]').exists()).toBe(true)
     expect(mockGet).toHaveBeenCalledWith('/api/v1/admin/feature-flags')
+  })
+
+  it('falls back to a 7-day System Overview window when All time is selected', async () => {
+    localStorage.setItem('modulo.dashboard.trendWindow', 'all')
+    vi.mocked(getAccessToken).mockReturnValue(jwtForUser('operator'))
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: { ...mockPlanData, dev_mode: true }, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: ['system_maps_access', 'system.config.manage'] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] }, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+
+    const overview = wrapper.findComponent(DashboardSystemOverview)
+    expect(overview.exists()).toBe(true)
+    // All time has no finite window, so the overview keeps its default window.
+    expect(overview.props('windowDays')).toBe(7)
   })
 
   it('does not probe internal feature flags for an ordinary user', async () => {

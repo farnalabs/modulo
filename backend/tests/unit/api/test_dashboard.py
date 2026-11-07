@@ -1148,11 +1148,31 @@ class TestDashboardSummaryEdgeCases:
                 "id",
                 "name",
                 "total_runs",
+                "completed_runs",
                 "active_pipelines",
                 "run_counts_by_status",
             }
             assert team["total_runs"] == 0
-            assert set(team["run_counts_by_status"].keys()) == {"running", "awaiting_human", "failed", "idle"}
+            assert set(team["run_counts_by_status"].keys()) == {
+                "pending",
+                "running",
+                "awaiting_human",
+                "claimed",
+                "unknown",
+                "hitl_parked",
+                "failed",
+                "idle",
+                "completed",
+                "complete",
+                "cancelled",
+                "eval_failed",
+                "stalled",
+                "budget_exceeded",
+                "router_no_match",
+                "cost_ceiling_exceeded",
+                "compensation_failed",
+                "rejected",
+            }
 
     def test_summary_forbidden_for_principal_without_org_role(self) -> None:
         """A valid JWT with no org role gets 403, not 200.

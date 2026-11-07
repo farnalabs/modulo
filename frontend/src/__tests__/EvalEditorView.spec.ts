@@ -467,4 +467,24 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
 
     expect(wrapper.text()).toContain('views.EvalEditorView.no_evals_yet')
   })
+
+  it('ignores non-string values from the mechanism and type model-value events', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    const vm = wrapper.vm as unknown as {
+      onMechanismChange: (value: unknown) => void
+      onDeterministicTypeChange: (value: unknown) => void
+      setQuestionType: (question: { type: string }, value: unknown) => void
+    }
+
+    expect(() => vm.onMechanismChange(42)).not.toThrow()
+    expect(() => vm.onDeterministicTypeChange(42)).not.toThrow()
+
+    vm.onDeterministicTypeChange('not-a-type')
+    const question = { type: 'noul' }
+    vm.setQuestionType(question, 'not-a-type')
+    vm.setQuestionType(question, 42)
+    expect(question.type).toBe('noul')
+  })
 })

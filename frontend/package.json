@@ -1,6 +1,6 @@
 {
     "name": "modulo-frontend",
-    "version": "0.3.325",
+    "version": "0.3.328",
     "private": true,
     "scripts": {
         "generate:api": "uv run --project ../backend --no-sync python ../scripts/run_generate_api_types.py",

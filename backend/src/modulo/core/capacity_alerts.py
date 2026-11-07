@@ -1040,7 +1040,9 @@ def _org_from_unhealthy_marker_key(raw: str) -> uuid.UUID | None:
         return None
 
 
-async def _org_ids_with_unhealthy_markers(redis_client: AsyncRedis) -> list[uuid.UUID]:
+async def _org_ids_with_unhealthy_markers(  # NOSONAR S7503 - async Redis scan seam
+    redis_client: AsyncRedis,
+) -> list[uuid.UUID]:
     """Return every org represented by a pre-alert sustain marker in Redis."""
     found: list[uuid.UUID] = []
     seen: set[uuid.UUID] = set()

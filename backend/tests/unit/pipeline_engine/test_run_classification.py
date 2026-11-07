@@ -63,6 +63,7 @@ from modulo.core.pipeline_engine.error_codes import class_for
 from modulo.db.crud.run import update_run_status
 from modulo.db.models.base import Base
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
 from tests.unit._store_seed import seed_run_blobs
@@ -323,7 +324,7 @@ class TestPrUrlSources:
 
     def test_failed_with_pr_url_from_markers_is_still_no_delivery(self) -> None:
         # A failed run is COUNTABLE no_delivery regardless of any pr_url
-        # evidence (the pr_url matters only for the complete verdict).
+        # evidence, but the observed URL must remain durable evidence.
         result = classify_run(
             "failed",
             "node.cancelled",
@@ -332,6 +333,20 @@ class TestPrUrlSources:
             raw_output_markers=_markers(_PR),
         )
         assert result.value == RunClassificationValue.no_delivery
+        assert result.delivered_pr_urls == (_PR,)
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_MATCHED}
+
+    def test_failed_with_pr_url_in_node_return_retains_declared_evidence(self) -> None:
+        """A missing terminal envelope must not erase a valid observed return."""
+        result = classify_run(
+            "failed",
+            "node_deadline_exceeded",
+            outputs_json={"builder": _node_return_with_pr(_PR)},
+            telemetry_json={"builder": {"agent_status": "completed"}},
+        )
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.delivered_pr_urls == (_PR,)
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_DECLARED}
 
 
 class TestDeliveryProvenance:
@@ -1112,6 +1127,9 @@ _TABLES: list[Table] = cast(
         # ``benign_signatures`` config inside the same transaction, so the
         # pipeline table must exist for the end-to-end config-wiring test.
         Pipeline.__table__,
+        # FAR-1274: the terminal hook's delivery-contract enforcement reads the
+        # run's frozen snapshot before scanning persisted PR evidence.
+        PipelineSnapshot.__table__,
     ],
 )
 
@@ -2289,6 +2307,22 @@ class TestBenignClassification:
         assert result.value == RunClassificationValue.benign
         assert result.reason == REASON_BENIGN
 
+    def test_benign_signature_retains_pr_evidence_without_changing_verdict(self) -> None:
+        """Benign is still the terminal verdict, but evidence remains durable."""
+        sigs = normalize_benign_signatures(_MERGE_QUEUE_SIGNATURES)
+        result = classify_run(
+            "failed",
+            "agent.failed",
+            error_detail="Rebase conflict",
+            outputs_json={"builder": _node_return_with_pr(_PR)},
+            telemetry_json={"builder": {"agent_status": "completed"}},
+            benign_signatures=sigs,
+        )
+        assert result.value == RunClassificationValue.benign
+        assert result.reason == REASON_BENIGN
+        assert result.delivered_pr_urls == (_PR,)
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_DECLARED}
+
     def test_without_signatures_a_failed_run_still_counts(self) -> None:
         """The DEFAULT is byte-identical to the pre-FAR-707 decision table."""
         result = classify_run(
@@ -2412,6 +2446,61 @@ class TestBenignConfigWiring:
         assert record is not None
         assert record["value"] == "benign"
         assert record["reason"] == "benign_outcome"
+
+    async def test_terminalization_persists_benign_pr_evidence_without_delivering(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """The production terminalization hook keeps evidence on benign failures.
+
+        This routes a running run through ``update_run_status`` so the test proves
+        the shared CRUD terminalizer invokes the classification hook, rather than
+        calling ``classify_and_persist_run`` directly. The benign verdict must
+        remain fail-closed as a business outcome while the PR evidence survives
+        in the persisted record.
+        """
+        from modulo.db.rls import set_rls_org
+
+        run_id = uuid.uuid4()
+        async with session.begin():
+            await self._seed_pipeline(session, signatures=_MERGE_QUEUE_SIGNATURES)
+            session.add(
+                PipelineSnapshot(
+                    id=_SNAPSHOT,
+                    organisation_id=_ORG,
+                    pipeline_id=_PIPELINE,
+                    snapshot_version=1,
+                    graph_json={"nodes": []},
+                    connector_bindings_json=[],
+                    schema_pins_json=[],
+                    prompt_pins_json=[],
+                    model_backend_pins_json=[],
+                    config_json={},
+                    run_context_defaults={},
+                )
+            )
+            await _seed_run(session, run_id, outputs=None, telemetry=None, error_code=None)
+            await set_rls_org(session, _ORG)
+            updated = await update_run_status(
+                session,
+                run_id,
+                "failed",
+                error_code="agent.failed",
+                error_detail="Rebase conflict",
+                outputs_json={"builder": _node_return_with_pr(_PR)},
+                node_telemetry_json={"builder": {"agent_status": "completed"}},
+            )
+
+        assert updated is not None
+        assert updated.status == "failed"
+        assert updated.error_detail == "Rebase conflict"
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["value"] == "benign"
+        assert record["reason"] == REASON_BENIGN
+        assert record["delivered_pr_urls"] == [_PR]
+        assert record["pr_url_provenance"] == {_PR: PR_URL_PROVENANCE_DECLARED}
 
     async def test_an_unconfigured_pipeline_keeps_the_historical_verdict(
         self,

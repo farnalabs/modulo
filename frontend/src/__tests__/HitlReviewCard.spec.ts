@@ -854,6 +854,59 @@ describe('HitlReviewCard', () => {
     expect(options.findAll('input[type="radio"]')).toHaveLength(2)
   })
 
+  it('stringifies boolean, bigint and object option ids distinctly (FAR-366)', async () => {
+    await mockClaimThenDecide()
+    // A plain object must serialise to its JSON form so two different object
+    // ids render distinctly instead of colliding on "[object Object]". The
+    // last value throws from toJSON to exercise the catch fallback; its custom
+    // toString gives the OLD template-literal coercion a different id, so this
+    // test cannot pass against the pre-fix component.
+    const unstringifiable = {
+      toJSON: () => {
+        throw new Error('not serialisable')
+      },
+      toString: () => 'old-template-coercion',
+      [Symbol.toStringTag]: 'Unstringifiable',
+    }
+    wrapper = mount(HitlReviewCard, {
+      props: {
+        gate: gate({
+          context: {
+            response_contract: {
+              kind: 'choice',
+              options: [
+                { id: false, label: 'Boolean id' },
+                { id: 10n, label: 'Bigint id' },
+                { id: { nested: true }, label: 'Object id A' },
+                { id: { other: 1 }, label: 'Object id B' },
+                { id: unstringifiable, label: 'Unstringifiable id' },
+              ],
+            },
+          },
+        }),
+      },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+
+    const options = wrapper.find('[data-testid="hitl-gate-choice-options"]')
+    const inputIds = options.findAll('input[type="radio"]').map((input) => input.attributes('data-testid'))
+    expect(inputIds).toHaveLength(5)
+    expect(inputIds).toContain('hitl-gate-option-false')
+    expect(inputIds).toContain('hitl-gate-option-10')
+    // Distinct JSON serialisations prove different objects no longer collide.
+    expect(inputIds).toContain('hitl-gate-option-{"nested":true}')
+    expect(inputIds).toContain('hitl-gate-option-{"other":1}')
+    // The catch fallback renders the object tag, not the old template coercion.
+    expect(inputIds).toContain('hitl-gate-option-[object Unstringifiable]')
+    expect(inputIds).not.toContain('hitl-gate-option-old-template-coercion')
+    expect(wrapper.text()).toContain('Object id A')
+    expect(wrapper.text()).toContain('Object id B')
+    expect(wrapper.text()).toContain('Unstringifiable id')
+  })
+
   it('submits the selected option as the answer on approve-with-modification (FAR-907)', async () => {
     await mockClaimThenDecide()
     wrapper = mount(HitlReviewCard, {

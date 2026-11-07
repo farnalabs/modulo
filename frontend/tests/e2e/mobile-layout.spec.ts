@@ -109,7 +109,7 @@ const DEACTIVATED_ROUTES: Record<string, string> = {
 
 const DEACTIVATED_ROUTES_SET = new Set(Object.keys(DEACTIVATED_ROUTES))
 
-const NARROW_ROUTES = ['/login', '/', '/pipelines', '/schemas']
+const NARROW_ROUTES = ['/login', '/', '/pipelines', '/schemas', '/analytics']
 
 function sanitizePath(p: string): string {
   return p.replace(/[^a-z0-9-]/gi, '_').replace(/^_+|_+$/g, '') || 'root'
@@ -602,7 +602,113 @@ async function checkNoHorizontalOverflow(page: Page) {
   expect(result.overflow, `Horizontal page overflow (scrollWidth ${result.scrollWidth} > viewportWidth ${result.viewportWidth})`).toBe(false)
 }
 
-// Check 3 — app shell fills the viewport width; main-content ratio is advisory.
+function elementIdentity(el: { tag: string; id: string; testId?: string; className?: string; cls?: string }): string {
+  const testId = el.testId ? ` data-testid="${el.testId}"` : ''
+  const id = el.id ? `#${el.id}` : ''
+  const className = (el.className ?? el.cls ?? '') ? `.${(el.className ?? el.cls ?? '').split(/\s+/).filter(Boolean).slice(0, 2).join('.')}` : ''
+  return `<${el.tag}>${id}${className}${testId}`
+}
+
+// Check 3 — meaningful content roots and clipping boundaries must fit their
+// containing layout. Do not compare every descendant with its immediate parent:
+// inline, flex, grid and table descendants routinely have bounds that differ
+// from that parent without being layout bugs.
+async function checkContentFitsParents(page: Page, route: string) {
+  const escaped = await page.evaluate(() => {
+    type Failure = {
+      tag: string
+      id: string
+      testId: string
+      className: string
+      parent: string
+      parentOverflow: string
+      side: string
+      delta: number
+    }
+    const failures: Failure[] = []
+    const visible = (el: HTMLElement) => el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden'
+    const isHorizontalScroller = (el: Element) => {
+      const style = getComputedStyle(el)
+      return (style.overflowX === 'auto' || style.overflowX === 'scroll') && el instanceof HTMLElement && el.scrollWidth > el.clientWidth + 1
+    }
+    const isClippingBoundary = (el: Element) => {
+      const overflowX = getComputedStyle(el).overflowX
+      return overflowX === 'hidden' || overflowX === 'clip' || overflowX === 'auto' || overflowX === 'scroll'
+    }
+    const validatedScrollContainers = new Set<Element>()
+    const invalidScrollContainers = new Set<Element>()
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>('#app *'))) {
+      if (!isHorizontalScroller(el)) continue
+      const parent = el.parentElement
+      if (!parent) continue
+      const rect = el.getBoundingClientRect()
+      const parentRect = parent.getBoundingClientRect()
+      const leftDelta = parentRect.left - rect.left
+      const rightDelta = rect.right - parentRect.right
+      if (leftDelta > 1 || rightDelta > 1) invalidScrollContainers.add(el)
+      else validatedScrollContainers.add(el)
+    }
+    const hasValidatedScrollerAncestor = (el: Element) => {
+      let node = el.parentElement
+      while (node) {
+        if (validatedScrollContainers.has(node)) return true
+        node = node.parentElement
+      }
+      return false
+    }
+    const roots = new Set<HTMLElement>()
+    for (const root of Array.from(document.querySelectorAll<HTMLElement>('#app, #app main, #app [role="main"]'))) {
+      for (const child of Array.from(root.children)) {
+        if (child instanceof HTMLElement) roots.add(child)
+      }
+    }
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>('#app *'))) {
+      if (isClippingBoundary(el)) {
+        for (const child of Array.from(el.children)) {
+          if (child instanceof HTMLElement) roots.add(child)
+        }
+        if (isHorizontalScroller(el)) roots.add(el)
+      }
+    }
+    for (const el of invalidScrollContainers) roots.add(el as HTMLElement)
+    for (const el of roots) {
+      if (!visible(el)) continue
+      if (hasValidatedScrollerAncestor(el) && !invalidScrollContainers.has(el)) continue
+      const style = getComputedStyle(el)
+      if (style.position === 'absolute' || style.position === 'fixed' || style.position === 'sticky') continue
+      const parent = el.parentElement
+      if (!parent || !visible(parent)) continue
+      const rect = el.getBoundingClientRect()
+      const parentRect = parent.getBoundingClientRect()
+      const leftDelta = parentRect.left - rect.left
+      const rightDelta = rect.right - parentRect.right
+      if (leftDelta > 1 || rightDelta > 1) {
+        const parentStyle = getComputedStyle(parent)
+        failures.push({
+          tag: el.tagName.toLowerCase(),
+          id: el.id,
+          testId: el.dataset.testid ?? '',
+          className: typeof el.className === 'string' ? el.className : '',
+          parent: parent.tagName.toLowerCase() + (parent.id ? `#${parent.id}` : ''),
+          parentOverflow: `x=${parentStyle.overflowX}, y=${parentStyle.overflowY}`,
+          side: leftDelta > 1 ? 'left' : 'right',
+          delta: Math.round(Math.max(leftDelta, rightDelta)),
+        })
+      }
+      if (failures.length >= 20) break
+    }
+    return failures
+  })
+  if (escaped.length > 0) {
+    process.stdout.write(`[mobile-layout] ${route} content escaping layout bounds:\n`)
+    for (const item of escaped) {
+      process.stdout.write(`  ${elementIdentity(item)} escapes ${item.parent} on ${item.side} by ${item.delta}px; parent overflow ${item.parentOverflow}\n`)
+    }
+  }
+  expect(escaped, `${route} has visible content escaping a meaningful layout boundary: ${JSON.stringify(escaped)}`).toEqual([])
+}
+
+// Check 4 — app shell fills the viewport width; main-content ratio is advisory.
 async function checkAppShellFillsViewport(page: Page) {
   const data = await page.evaluate(() => {
     const vw = document.documentElement.clientWidth
@@ -648,19 +754,46 @@ async function checkInteractiveNotClipped(page: Page) {
     const vw = document.documentElement.clientWidth
     const hasHScroll = doc.scrollWidth > vw + 1
     if (hasHScroll) {
-      return { skip: true, clipped: [], allowlistedClipped: [], allowlistCount: 0, sampled: false, interactiveCount: 0 }
+      return { skip: true, clipped: [], allowlistedClipped: [], allowlistCount: 0, sampled: false, interactiveCount: 0, scrollContainerFailures: [] }
     }
-    // A right-side overhang inside a horizontal scroll container (e.g. a wide
-    // table with overflow-x: auto) is reachable by scrolling the container —
-    // not a clipping bug. Walk the ancestor chain (bounded).
+    type LayoutElement = { tag: string; id: string; cls: string; text: string; left: number; right: number }
+    const scrollContainerFailures: Array<LayoutElement & { parent: string; parentOverflow: string }> = []
+    const validatedScrollContainers = new Set<Element>()
+    for (const container of Array.from(document.querySelectorAll<HTMLElement>('#app *'))) {
+      const style = getComputedStyle(container)
+      if ((style.overflowX !== 'auto' && style.overflowX !== 'scroll') || container.scrollWidth <= container.clientWidth + 1) continue
+      const parent = container.parentElement
+      if (!parent) continue
+      const rect = container.getBoundingClientRect()
+      const parentRect = parent.getBoundingClientRect()
+      const leftDelta = parentRect.left - rect.left
+      const rightDelta = rect.right - parentRect.right
+      if (leftDelta > 1 || rightDelta > 1) {
+        const parentStyle = getComputedStyle(parent)
+        scrollContainerFailures.push({
+          tag: container.tagName.toLowerCase(),
+          id: container.id,
+          cls: typeof container.className === 'string' ? container.className.slice(0, 80) : '',
+          text: (container.textContent ?? '').trim().slice(0, 60),
+          left: Math.round(rect.left),
+          right: Math.round(rect.right),
+          parent: parent.tagName.toLowerCase() + (parent.id ? `#${parent.id}` : ''),
+          parentOverflow: `x=${parentStyle.overflowX}, y=${parentStyle.overflowY}`,
+        })
+      } else {
+        validatedScrollContainers.add(container)
+      }
+    }
+    // A right-side overhang inside a validated horizontal scroll container
+    // (e.g. a wide table with overflow-x: auto) is reachable by scrolling that
+    // container — not a clipping bug. Walk the ancestor chain (bounded).
     // Bounded ancestor walk — 30 steps covers realistic wrapper nesting while
     // keeping per-element work O(30) instead of walking to the document root.
-    function hasHorizontalScrollableAncestor(el: Element): boolean {
+    function hasValidatedHorizontalScrollableAncestor(el: Element): boolean {
       let node = el.parentElement
       let depth = 0
       while (node && depth < 30) {
-        const overflowX = getComputedStyle(node).overflowX
-        if (overflowX === 'auto' || overflowX === 'scroll') return true
+        if (validatedScrollContainers.has(node)) return true
         node = node.parentElement
         depth += 1
       }
@@ -668,8 +801,8 @@ async function checkInteractiveNotClipped(page: Page) {
     }
     const selector = 'button, a, input, select, textarea, [tabindex], [role="button"]'
     const interactives = Array.from(document.querySelectorAll(selector))
-    const clipped: { tag: string; cls: string; text: string; left: number; right: number }[] = []
-    const allowlistedClipped: { tag: string; cls: string; text: string; left: number; right: number }[] = []
+    const clipped: LayoutElement[] = []
+    const allowlistedClipped: LayoutElement[] = []
     for (const el of interactives.slice(0, 500)) {
       const htmlEl = el as HTMLElement
       if (htmlEl.offsetParent === null) continue
@@ -688,9 +821,10 @@ async function checkInteractiveNotClipped(page: Page) {
       // clipping bug.
       if (rect.left >= window.innerWidth) continue
       // Right-side overhang reachable by scrolling a horizontal container.
-      if (overhangsRight && hasHorizontalScrollableAncestor(htmlEl)) continue
+      if (overhangsRight && hasValidatedHorizontalScrollableAncestor(htmlEl)) continue
       const entry = {
         tag: htmlEl.tagName.toLowerCase(),
+        id: htmlEl.id,
         cls: typeof htmlEl.className === 'string' ? htmlEl.className.slice(0, 80) : '',
         text: (htmlEl.textContent ?? '').trim().slice(0, 60),
         left: Math.round(rect.left),
@@ -712,11 +846,17 @@ async function checkInteractiveNotClipped(page: Page) {
       allowlistCount: document.querySelectorAll(allowlistSelector).length,
       sampled: interactives.length > 500,
       interactiveCount: interactives.length,
+      scrollContainerFailures,
     }
   }, CLIPPED_ALLOWLIST_SELECTOR)
   if (result.skip) {
     process.stdout.write(`[mobile-layout] ${page.url()} has horizontal scroll — skipping clipped-interactive check\n`)
     return
+  }
+  if (result.scrollContainerFailures.length > 0) {
+    for (const container of result.scrollContainerFailures) {
+      process.stdout.write(`[mobile-layout] invalid horizontal scroll container: ${elementIdentity(container)} escapes ${container.parent}; parent overflow ${container.parentOverflow}\n`)
+    }
   }
   if (result.sampled) {
     process.stdout.write(`[mobile-layout] clipped scan sampled: ${result.interactiveCount} interactives, processing first 500\n`)
@@ -728,9 +868,13 @@ async function checkInteractiveNotClipped(page: Page) {
   }
   if (result.allowlistedClipped.length > 0) {
     for (const c of result.allowlistedClipped) {
-      console.log(`[mobile-layout]   allowlisted clipped (${CLIPPED_ALLOWLIST_SELECTOR}): <${c.tag}> class="${c.cls}" left=${c.left} right=${c.right}`)
+      process.stdout.write(`[mobile-layout]   allowlisted clipped (${CLIPPED_ALLOWLIST_SELECTOR}): <${c.tag}> class="${c.cls}" left=${c.left} right=${c.right}\n`)
     }
   }
+  expect(
+    result.scrollContainerFailures,
+    `Horizontal scroll containers must fit their immediate parent (${result.scrollContainerFailures.length} invalid); unexpected: ${JSON.stringify(result.scrollContainerFailures)}`,
+  ).toEqual([])
   expect(
     result.clipped,
     `Interactive elements clipped off-screen (${result.clipped.length}); expected clipped count is ${result.allowlistCount} (allowlisted ${CLIPPED_ALLOWLIST_SELECTOR} element(s) present). Unexpected: ${JSON.stringify(result.clipped)}`,
@@ -843,6 +987,7 @@ async function runFullSweep(page: Page, route: string, env: TestEnv) {
 
   await checkViewportMeta(page)
   await checkNoHorizontalOverflow(page)
+  await checkContentFitsParents(page, route)
   await checkAppShellFillsViewport(page)
   await checkInteractiveNotClipped(page)
   await checkAxeMobile(page)
@@ -865,6 +1010,7 @@ async function runNarrowChecks(page: Page, route: string, env: TestEnv) {
 
   await checkViewportMeta(page)
   await checkNoHorizontalOverflow(page)
+  await checkContentFitsParents(page, route)
   await checkInteractiveNotClipped(page)
 }
 

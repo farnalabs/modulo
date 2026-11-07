@@ -55,6 +55,90 @@ async function flush() {
 
 const baseListData = { items: [], total: 0, page: 1, page_size: 100 }
 
+describe('SettingsTriggersView — viewer read-only actions', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('hides mutation actions and exposes trigger details for viewers', async () => {
+    const wrapper = mountView(fakeJwt('viewer'), {
+      items: [{
+        id: 'trigger-1',
+        pipeline_id: 'pipeline-1',
+        name: 'PR opened',
+        trigger_type: 'webhook',
+        active: true,
+        config_json: { events: ['pull_request'] },
+      }],
+      total: 1,
+      page: 1,
+      page_size: 100,
+    })
+    await flush()
+
+    expect(wrapper.find('[data-testid="settings-triggers-create"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-triggers-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="table-action-edit"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="table-action-delete"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="table-action-details"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="table-action-details"]').trigger('click')
+    await flush()
+    expect(wrapper.find('[data-testid="settings-triggers-details-dialog"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('PR opened')
+    expect(api.PUT).not.toHaveBeenCalled()
+    expect(api.DELETE).not.toHaveBeenCalled()
+  })
+
+  it('renders the details body and config for both present and absent config_json', async () => {
+    ;(api.GET as any).mockResolvedValue({
+      data: {
+        items: [
+          {
+            id: 'trigger-1',
+            pipeline_id: 'pipeline-1',
+            name: 'PR opened',
+            trigger_type: 'webhook',
+            active: true,
+            config_json: { events: ['pull_request'] },
+          },
+          {
+            id: 'trigger-2',
+            pipeline_id: 'pipeline-1',
+            name: 'Cron trigger',
+            trigger_type: 'cron',
+            active: false,
+          },
+        ],
+        total: 2,
+        page: 1,
+        page_size: 100,
+      },
+      error: undefined,
+    })
+    ;(getAccessToken as any).mockReturnValue(fakeJwt('viewer'))
+    const wrapper = mount(SettingsTriggersView, {
+      global: {
+        renderStubDefaultSlot: true,
+        stubs: { ...dialogStubs.reduce((a, k) => ({ ...a, [k]: true }), {}), FeatureGate: featureGateStub },
+      },
+    })
+    await flush()
+
+    const detailsButtons = wrapper.findAll('[data-testid="table-action-details"]')
+    expect(detailsButtons).toHaveLength(2)
+
+    await detailsButtons[0].trigger('click')
+    await flush()
+    expect(wrapper.text()).toContain('"events"')
+
+    await detailsButtons[1].trigger('click')
+    await flush()
+    expect(wrapper.text()).toContain('Cron trigger')
+  })
+})
+
 describe('SettingsTriggersView — org-wide trigger pause', () => {
   beforeEach(() => {
     setActivePinia(createPinia())

@@ -1,4 +1,4 @@
-import { test, expect, openLoginForm, completeLoginForm } from './setup/fixtures'
+import { test, expect, openLoginForm, completeLoginForm, setupLocalMockApi } from './setup/fixtures'
 
 test.describe('Login Flow', () => {
   test('shows login form fields', { tag: "@regression" }, async ({ page, env }) => {
@@ -63,6 +63,48 @@ test.describe('Login Flow', () => {
     await page.goto('/login')
 
     await expect(page.getByTestId('login-sso-section')).toHaveCount(0)
+    await expect(page.getByTestId('login-submit')).toBeVisible()
+  })
+
+  test('completes unauthenticated SSO login through the production callback route', { tag: '@regression' }, async ({ page, env, localSsoBackend }) => {
+    test.skip(env.name !== 'local', 'Uses a deterministic local IdP seam; staging uses its real provider configuration')
+    void localSsoBackend
+
+    await setupLocalMockApi(page)
+    await page.goto('/login')
+    const ssoButton = page.getByTestId('login-sso-oidc-ci-idp')
+    await expect(ssoButton).toBeVisible()
+    await expect(page.evaluate(() => localStorage.getItem('modulo_access_token'))).resolves.toBeNull()
+
+    await ssoButton.click()
+    await expect(page.getByText('Continue with fixture IdP')).toBeVisible()
+    const continuationUrl = new URL(page.url())
+    expect(continuationUrl.searchParams.get('client_id')).toBe('ci-idp')
+    expect(continuationUrl.searchParams.get('redirect_uri')).toContain('/api/v1/auth/oidc/ci-idp/callback')
+    expect(continuationUrl.searchParams.get('state')).toBeTruthy()
+    await expect(page.context().cookies()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ name: '__Host-modulo_oidc_flow' })]))
+    await page.getByText('Continue with fixture IdP').click()
+
+    await page.waitForURL(/\/auth\/callback$/)
+    await expect(page.getByText('Signing in')).toBeVisible()
+    await page.waitForURL((url) => !url.pathname.includes('/login') && url.pathname !== '/auth/callback')
+    await expect(page.getByTestId('dashboard-title')).toContainText('Dashboard')
+  })
+
+  test('returns an actionable SSO failure to the unauthenticated login surface', { tag: '@regression' }, async ({ page, env, localSsoBackend }) => {
+    test.skip(env.name !== 'local', 'Uses a deterministic local IdP seam; staging uses its real provider configuration')
+    void localSsoBackend
+
+    await setupLocalMockApi(page)
+    await page.goto('/login')
+    await page.getByTestId('login-sso-oidc-ci-idp').click()
+    await expect(page.getByText('Continue with fixture IdP')).toBeVisible()
+    const continuationUrl = new URL(page.url())
+    const state = continuationUrl.searchParams.get('state')
+    expect(state).toBeTruthy()
+    await page.goto(`/api/v1/auth/oidc/ci-idp/callback?code=ci-invalid-code&state=${encodeURIComponent(state ?? '')}`)
+    await page.waitForURL(/\/login\?sso_error=auth_failed$/)
+    await expect(page.getByTestId('login-sso-error')).toBeVisible()
     await expect(page.getByTestId('login-submit')).toBeVisible()
   })
 

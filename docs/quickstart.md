@@ -41,6 +41,25 @@ If `FERNET_KEY` is unset, `docker compose up` fails immediately with
 `required variable FERNET_KEY is missing a value` and the generation command –
 that is the intended behavior, not a bug.
 
+### Optional host-local Ollama or other model backend
+
+The compose files keep SSRF protection enabled by default. If a model backend
+runs on the Docker host, first confirm the address that `host.docker.internal`
+resolves to from a container, then allowlist only that private CIDR in the root
+`.env` file alongside `FERNET_KEY`:
+
+```dotenv
+# Example only: use the CIDR containing the address resolved in your Docker setup.
+SSRF_ALLOW_PRIVATE_RANGES=192.168.65.0/24
+```
+
+The setting is passed to the API and both SAQ workers, so model-backend
+validation and pipeline execution use the same policy. It is an opt-in
+cluster-wide exception: do not use `0.0.0.0/0`, and do not disable SSRF
+validation. Keep the value unset when no host-local/private model endpoint is
+needed. For a host-run backend rather than the compose API, export the same
+variable in the backend process environment before starting it.
+
 ## 2. Set up the backend
 
 ```bash

@@ -57,22 +57,22 @@
 
       <div class="space-y-3">
         <div v-for="team in teams" :key="team.id" class="card">
-          <div class="flex items-center p-4" :class="{ 'border-b': expandedTeamId === team.id }">
+          <div class="flex items-start gap-3 p-4 max-sm:flex-wrap sm:items-center" :class="{ 'border-b': expandedTeamId === team.id }">
             <button
               type="button"
               :data-testid="'settings-teams-toggle-' + team.id"
-              class="flex flex-1 items-center gap-3 border-none bg-transparent p-0 text-left"
+              class="flex min-w-0 flex-1 items-start gap-3 border-none bg-transparent p-0 text-left sm:items-center"
               :aria-expanded="expandedTeamId === team.id"
               :aria-controls="'settings-teams-panel-' + team.id"
               @click="toggleExpand(team.id)"
             >
               <ChevronRight class="h-4 w-4 shrink-0 text-muted-foreground transition-transform" :class="{ 'rotate-90': expandedTeamId === team.id }" aria-hidden="true" />
-              <div>
-                <p class="font-medium">{{ team.name }}</p>
-                <p class="text-sm text-muted-foreground">{{ team.description || '—' }}</p>
+              <div class="min-w-0">
+                <p class="break-words font-medium">{{ team.name }}</p>
+                <p class="break-words text-sm text-muted-foreground">{{ team.description || '—' }}</p>
               </div>
             </button>
-            <div class="flex shrink-0 items-center gap-3">
+            <div class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 max-sm:ml-7 max-sm:w-full">
               <span class="text-sm text-muted-foreground">{{ $t('views.SettingsTeamsView.member_count', team.member_count) }}</span>
               <span class="text-sm text-muted-foreground" data-testid="settings-teams-owned-resource-count">
                 {{ $t('views.SettingsTeamsView.owned_resource_count', { count: team.owned_resource_count ?? 0 }) }}
@@ -132,8 +132,11 @@
                 <tbody>
                   <template v-for="member in membersByTeam[team.id]" :key="member.id">
                   <tr class="border-b last:border-0">
-                    <td class="py-2">{{ userDisplayName(member.user_id) }}</td>
-                    <td class="py-2 text-muted-foreground">{{ userEmail(member.user_id) }}</td>
+                    <td class="max-w-0 py-2 sm:max-w-none">
+                      <span class="block break-words font-medium sm:font-normal">{{ userDisplayName(member.user_id) }}</span>
+                      <span class="block break-all text-xs text-muted-foreground sm:hidden">{{ userEmail(member.user_id) }}</span>
+                    </td>
+                    <td class="hidden py-2 text-muted-foreground sm:table-cell">{{ userEmail(member.user_id) }}</td>
                     <td class="py-2">
                       <Select
   :aria-label="$t('views.SettingsTeamsView.aria_label_member_role')"

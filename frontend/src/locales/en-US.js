@@ -1892,6 +1892,7 @@ export default {
       "team_breakdown": "Team Breakdown",
       "team": "Team",
       "runs": "Runs",
+      "completed": "Completed",
       "eval_pass": "Eval Pass",
       "run_activity": "Run Activity",
       "run_count": "Run count",
@@ -1943,6 +1944,11 @@ export default {
       "system_maps_unavailable": "System Maps is not available on your plan. It is switched off for this organisation.",
       "system_maps_empty_title": "No published system map yet.",
       "system_maps_empty_description": "Publish a map to see observed metrics.",
+      "system_maps_no_observed_title": "No observed activity yet.",
+      "system_maps_no_observed_description": "This map has no measured runs in the selected window yet.",
+      "system_overview_collapsed": "System overview is collapsed.",
+      "collapse_system_overview": "Collapse system overview",
+      "expand_system_overview": "Expand system overview",
       "system_maps_window": "Observed over the last {days} days",
       "system_maps_throughput": "Throughput/min",
       "system_maps_failure_rate": "Failure rate",
@@ -2066,7 +2072,20 @@ export default {
       "ambiguous_matches": "Ambiguous matches",
       "rescan_preserves_edits": "Re-scan never publishes automatically and does not overwrite operator edits.",
       "apply_rescan": "Apply to draft",
-      "back": "Back to System Maps"
+      "back": "Back to System Maps",
+      "attribution_bindings": "Attribution bindings",
+      "attribution_bindings_hint": "Connect published map nodes to pipelines and triggers used for attribution.",
+      "binding_kind": "Binding type",
+      "trigger_binding": "Trigger",
+      "action_pipeline_binding": "Action pipeline",
+      "binding_node": "Map node",
+      "binding_pipeline": "Pipeline",
+      "binding_trigger": "Trigger",
+      "select_node": "Select a node",
+      "select_pipeline": "Select a pipeline",
+      "select_trigger": "Select a trigger",
+      "add_binding": "Add binding",
+      "no_attribution_bindings": "No attribution bindings configured yet."
     },
     "ComplianceEvidenceIndex": {
       "title": "Compliance Evidence Index",
@@ -3789,6 +3808,8 @@ export default {
     },
     "SettingsMonitorConfigView": {
       "feature_locked": "Monitoring configuration is not available on your current plan.",
+      "permission_denied_title": "Browser Monitoring is managed at the instance level",
+      "permission_denied_description": "Your account does not have the system administrator permission required to view or change browser monitoring settings. Contact your system administrator if you need access.",
       "browser_monitoring": "Browser Monitoring",
       "description": "Configure which client-side monitoring SDKs to load. Changes take effect immediately — no rebuild or page reload required.",
       "retry": "Retry",
@@ -4131,6 +4152,8 @@ export default {
       "delete_trigger_description": "Are you sure you want to delete this trigger? This action cannot be undone.",
       "delete": "Delete",
       "edit": "Edit",
+      "view_details": "View details",
+      "configuration": "Configuration",
       "failed_to_update_trigger": "Failed to update trigger: {detail}",
       "failed_to_create_trigger": "Failed to create trigger: {detail}",
       "error_saving_trigger": "Error: {detail}",
@@ -4668,12 +4691,18 @@ export default {
       "restore_revision": "Could not restore revision",
       "diff_revision": "Could not compare revisions",
       "save_draft": "Could not save draft",
-      "discovery_failed": "Discovery failed"
+      "discovery_failed": "Discovery failed",
+      "load_pipelines": "Could not load pipelines",
+      "load_triggers": "Could not load triggers",
+      "load_attribution_bindings": "Could not load attribution bindings",
+      "create_attribution_binding": "Could not create attribution binding",
+      "delete_attribution_binding": "Could not delete attribution binding"
     }
   },
   "components": {
     "DataTable": {
-      "scroll_instructions": "Swipe horizontally to view all table columns."
+      "scroll_instructions": "Swipe horizontally to view all table columns.",
+      "scroll_region_label": "Scrollable table"
     },
     "LicenceRenewalNotice": {
       "renewal_due_auto_title": "Your Team license renews on {date}",
@@ -5125,6 +5154,7 @@ export default {
       "callback_url_label": "Callback URL — register this at your IdP",
       "copy_callback_url": "Copy callback URL",
       "copied": "Copied!",
+      "copy_failed": "Copy failed — select the URL and copy it manually.",
       "derived_discovery_url": "Discovery URL (derived)",
       "derived_scopes": "Scopes (derived)"
     },

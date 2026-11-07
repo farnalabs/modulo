@@ -876,6 +876,22 @@ describe('SettingsHitlReviewView', () => {
     expect(lastQuery?.status).toBe('approved')
   })
 
+  it('stacks review metadata below the primary row content on narrow screens', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const row = wrapper!.find('[data-testid="hitl-review-toggle-expand"]')
+    expect(row.classes()).toContain('flex-wrap')
+    expect(row.classes()).toContain('md:flex-nowrap')
+    expect(wrapper!.find('[data-testid="hitl-review-column-headers"]').classes()).toContain('md:flex')
+  })
+
   it('renders column headers above the gate rows (FAR-727)', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))

@@ -621,14 +621,14 @@ function isNonCanonicalIpLiteral(host: string): boolean {
 
 function rawHostFromUrl(value: string): string {
   // Callers enforce the "://" form before this runs, so the authority exists.
-  const authority = value.slice(value.indexOf('://') + 3).split(/[/?#]/)[0]
+  const authority = value.slice(value.indexOf('://') + 3).split(/[/?#]/).at(0)!
   // slice(lastIndexOf+1) drops any userinfo and is the whole authority when
   // there is no '@' (lastIndexOf returns -1).
   const withoutUserinfo = authority.slice(authority.lastIndexOf('@') + 1)
   if (withoutUserinfo.startsWith('[')) {
     return withoutUserinfo.slice(0, withoutUserinfo.indexOf(']') + 1)
   }
-  return withoutUserinfo.split(':')[0]
+  return withoutUserinfo.split(':').at(0)!
 }
 
 function isMetadataHost(host: string): boolean {
@@ -639,10 +639,10 @@ function isMetadataHost(host: string): boolean {
   // IPv4-mapped IPv6 in hex form ([::ffff:a9fe:a9fe] normalises here). The URL
   // parser canonicalises IPv6 to hex, so a dotted mapped form never reaches
   // this function and does not need a separate prefix check.
-  const mapped = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(normalized)
   if (mapped) {
-    const high = Number.parseInt(mapped[1], 16)
-    const low = Number.parseInt(mapped[2], 16)
+    const high = Number.parseInt(mapped.at(1)!, 16)
+    const low = Number.parseInt(mapped.at(2)!, 16)
     const ipv4 = `${(high >> 8) & 255}.${high & 255}.${(low >> 8) & 255}.${low & 255}`
     if (ipv4.startsWith(linkLocalIpv4Prefix) || ipv4 === cloudMetadataIpv4) return true
   }

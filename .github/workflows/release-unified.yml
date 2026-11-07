@@ -599,14 +599,18 @@ jobs:
           POLL_INTERVAL_SECONDS="${SCHEMA_GATE_POLL_INTERVAL_SECONDS:-30}"
           MAX_WAIT_SECONDS="${SCHEMA_GATE_MAX_WAIT_SECONDS:-3600}"
           require_positive_integer() {
-            case "$2" in
+            local name="$1"
+            local value="$2"
+            case "$value" in
               ''|*[!0-9]*)
-                echo "::error::$1 must be a positive integer, got '$2'."
+                echo "::error::$name must be a positive integer, got '$value'."
                 exit 1
                 ;;
+              *)
+                ;;
             esac
-            if [ "$2" -lt 1 ]; then
-              echo "::error::$1 must be a positive integer, got '$2'."
+            if [ "$value" -lt 1 ]; then
+              echo "::error::$name must be a positive integer, got '$value'."
               exit 1
             fi
           }
@@ -2160,6 +2164,45 @@ jobs:
             exit 1
           fi
           echo "Publication verified: GitHub Release 'bundle-v${VERSION}' and bundle tag '${BUNDLE_TAG}' both exist."
+
+      - name: Notify website to rebuild (Cloudflare Pages deploy hook)
+        # Optional. The marketing website reads the latest GitHub Release at
+        # build time (version + installer links), so it must rebuild once a new
+        # release is public. This step is last: it runs only if every earlier
+        # step of this job succeeded, i.e. the release was created and its assets
+        # uploaded. This job only runs for mode cut/recut (dry-run and promote
+        # never reach it) and the release it creates is a normal, non-prerelease
+        # GitHub Release. Set the repository secret WEBSITE_DEPLOY_HOOK_URL to a
+        # Cloudflare Pages deploy hook URL to enable it; unset means skip.
+        # Rotate by creating a new hook in Cloudflare Pages, updating the secret,
+        # then deleting the old hook. See docs/release-process.md.
+        # It must never fail a release. `continue-on-error` is banned by
+        # .semgrep/continue-on-error-in-ci.yaml, so every command below is
+        # individually best-effort and the script reports a non-fatal outcome
+        # explicitly (::notice:: / ::warning::) before exiting 0 on every path.
+        if: ${{ success() }}
+        env:
+          WEBSITE_DEPLOY_HOOK_URL: ${{ secrets.WEBSITE_DEPLOY_HOOK_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBSITE_DEPLOY_HOOK_URL:-}" ]; then
+            echo "::notice::WEBSITE_DEPLOY_HOOK_URL is not configured - skipping the website rebuild hook."
+            exit 0
+          fi
+          echo "::add-mask::${WEBSITE_DEPLOY_HOOK_URL}"
+          for attempt in 1 2 3; do
+            if curl --fail --silent --show-error --max-time 30 -X POST "$WEBSITE_DEPLOY_HOOK_URL" >/dev/null; then
+              echo "Website rebuild hook triggered (attempt ${attempt})."
+              exit 0
+            fi
+            echo "Website rebuild hook attempt ${attempt} failed."
+            if [ "$attempt" -lt 3 ]; then
+              sleep 5
+            fi
+          done
+          echo "::warning::Website rebuild hook failed after 3 attempts - the release is unaffected; trigger the website deploy manually."
+          exit 0
 
   # ---------------------------------------------------------------------------
   # Final GA compose asset (promote only)

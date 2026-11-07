@@ -83,6 +83,15 @@ describe('CostComponentsView', () => {
     expect(wrapper.find('header.page-header [data-testid="cost-components-add"]').exists()).toBe(true)
   })
 
+  it('keeps ordinary Costs typography on the product font while retaining technical value scopes', async () => {
+    const wrapper = await mountView()
+
+    const page = wrapper.get('.page-wide')
+    expect(page.classes()).not.toContain('font-sans')
+    expect(page.get('h1[data-page-heading]').classes()).not.toContain('font-mono')
+    expect(page.find('.font-mono').exists()).toBe(true)
+  })
+
   it('displays component rows with kind, rate and formula', async () => {
     const wrapper = await mountView()
     expect(wrapper.text()).toContain('LLM Tokens')
@@ -484,5 +493,22 @@ describe('CostComponentsView', () => {
     const vm = wrapper.vm as unknown as { editing: boolean; editingId: string | null }
     expect(vm.editing).toBe(true)
     expect(vm.editingId).toBe('comp-1')
+  })
+
+  it('normalises the env_fallback select value to a non-empty string or null', async () => {
+    const wrapper = await mountView()
+    const vm = wrapper.vm as unknown as {
+      form: { rate_fallback: string | null }
+      onFallbackChange: (value: unknown) => void
+    }
+
+    vm.onFallbackChange('e2b_rate')
+    expect(vm.form.rate_fallback).toBe('e2b_rate')
+
+    vm.onFallbackChange('')
+    expect(vm.form.rate_fallback).toBeNull()
+
+    vm.onFallbackChange(null)
+    expect(vm.form.rate_fallback).toBeNull()
   })
 })

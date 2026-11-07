@@ -452,16 +452,16 @@ function loadSavedPositions(): void {
   }
 }
 
-async function persistPositions(positions: Record<string, { x: number; y: number }>): Promise<void> {
+function persistPositions(positions: Record<string, { x: number; y: number }>): void {
   if (statusTimeout) { clearTimeout(statusTimeout); statusTimeout = null }
   if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null }
   // Abort any in-flight save from a previous debounce cycle.
   if (saveAbortController) { saveAbortController.abort(); saveAbortController = null }
-  saveTimeout = setTimeout(async () => {
+  saveTimeout = setTimeout(() => { void (async () => {
     saveStatus.value = 'saving'
     // Build the version-update payload: current stages with updated x/y, current edges.
     const map = mapData.value
-    const versionId = map?.versions?.[0]?.id
+    const versionId = map?.versions?.at(0)?.id
     if (!map || !mapId.value || !versionId) {
       saveStatus.value = 'error'
       statusTimeout = setTimeout(() => { saveStatus.value = 'idle' }, 3000)
@@ -524,12 +524,12 @@ async function persistPositions(positions: Record<string, { x: number; y: number
     } finally {
       if (saveAbortController === controller) saveAbortController = null
     }
-  }, 500)
+    })() }, 500)
 }
 
 function handlePositionsChanged(positions: Record<string, { x: number; y: number }>): void {
   savedPositions.value = positions
-  void persistPositions(positions)
+  persistPositions(positions)
 }
 
 onBeforeUnmount(() => {

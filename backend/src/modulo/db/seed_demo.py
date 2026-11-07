@@ -78,7 +78,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -88,6 +88,8 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.evidence import Evidence
+from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
@@ -112,6 +114,7 @@ from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
+from modulo.db.models.variant_group import VariantGroup
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import get_settings
@@ -616,6 +619,23 @@ _DEMO_FAILURE_DETAIL = "Demo sample failure — no real work was performed."
 # result.  Named so the seed and the test arithmetic move together when
 # ``_DEMO_RUN_SPECS`` changes.
 _DEMO_EVAL_RESULT_RUN_LIMIT = 6
+_DEMO_EVAL_RESULT_WINDOW_DAYS = 3
+
+
+def _demo_fixture_now() -> datetime:
+    """Return the UTC anchor shared by demo fixture timestamps and eval windows."""
+    return datetime.now(UTC)
+
+
+def _demo_eval_result_cutoff(now: datetime | None = None) -> datetime:
+    """Return the rolling cutoff used to select current demo eval runs.
+
+    The dashboard evaluates results in ``[now - days, now)`` windows, so the
+    seed must use the same rolling boundary rather than today's midnight.
+    ``now`` is injectable for a deterministic boundary test; production callers
+    leave it unset and read the current UTC time.
+    """
+    return (now or _demo_fixture_now()) - timedelta(days=_DEMO_EVAL_RESULT_WINDOW_DAYS)
 
 
 @dataclass(frozen=True)
@@ -916,7 +936,7 @@ def _build_run_trace(
 
 def _run_window(spec: _PipelineSpec, run_number: int, days_ago: int, hours_into_day: int) -> tuple[datetime, datetime]:
     """(started_at, completed_at) for a seeded run, relative to today (UTC)."""
-    started = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
+    started = _demo_fixture_now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
         days=days_ago, hours=-hours_into_day
     )
     minutes = spec.duration_minutes
@@ -1389,22 +1409,31 @@ async def _ensure_daily_fact(
     """Create (best-effort) or converge the run's RunDailyFact analytics row.
 
     Mirrors the Run row: non-terminal statuses have no completed_at /
-    duration_ms. An existing fact has its cost/tokens/status converged (the
-    analytics surfaces sum these); its timestamps are left alone.
+    duration_ms. Demo-owned fields and timestamps converge to the current
+    fixture values, while non-owned provenance fields remain untouched.
     """
     # nosemgrep: raw-status-complete — seed script, not routing code.
     is_terminal = run.status in ("complete", "failed")
+    duration_ms = int((completed - started).total_seconds() * 1000) if is_terminal else None
+    completed_at = completed if is_terminal else None
     fact_result = await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == run.id).limit(1))
     fact = fact_result.scalars().first()
     if fact is not None:
         changed = False
-        for attr, val in (
-            ("status", run.status),
-            ("trigger_type", run.trigger_type),
-            ("total_cost_usd", run.total_cost_usd),
-            ("total_tokens", run.total_tokens),
-        ):
-            if getattr(fact, attr) != val:
+        desired_fact_values = {
+            "run_date": started.date(),
+            "pipeline_id": pipeline.id,
+            "pipeline_name": pipeline_name,
+            "trigger_type": run.trigger_type,
+            "status": run.status,
+            "total_cost_usd": run.total_cost_usd,
+            "total_tokens": run.total_tokens,
+            "duration_ms": duration_ms,
+            "started_at": started,
+            "completed_at": completed_at,
+        }
+        for attr, val in desired_fact_values.items():
+            if not _values_match(getattr(fact, attr), val):
                 setattr(fact, attr, val)
                 changed = True
         if changed:
@@ -1423,10 +1452,10 @@ async def _ensure_daily_fact(
                     status=run.status,
                     total_cost_usd=run.total_cost_usd,
                     total_tokens=run.total_tokens,
-                    duration_ms=(int((completed - started).total_seconds() * 1000) if is_terminal else None),
+                    duration_ms=duration_ms,
                     run_number=run.run_number,
                     started_at=started,
-                    completed_at=completed if is_terminal else None,
+                    completed_at=completed_at,
                 )
             )
             await session.flush()
@@ -1622,7 +1651,19 @@ async def _ensure_demo_eval_result(
     Race-safe: savepoint + ``IntegrityError`` recovery, matching every other
     seed write in this file.
     """
-    if await _find_demo_eval_result(session, org, evaluation, run) is not None:
+    existing = await _find_demo_eval_result(session, org, evaluation, run)
+    if existing is not None:
+        desired_evaluated_at = run.completed_at or run.started_at or datetime.now(UTC)
+        if (
+            existing.judge_result_json
+            and existing.judge_result_json.get("source") == "demo_seed"
+            and not _values_match(existing.evaluated_at, desired_evaluated_at)
+        ):
+            existing.evaluated_at = desired_evaluated_at
+            _log.info(
+                "demo_seed.eval_result_converged",
+                extra={"eval_name": evaluation.name, "run_number": run.run_number},
+            )
         return
     passed = _demo_eval_passed(run)
     eval_result = EvalResult(
@@ -1653,6 +1694,27 @@ async def _ensure_demo_eval_result(
         )
 
 
+async def _select_current_demo_eval_runs(
+    session: AsyncSession,
+    org: Organisation,
+    pipeline: Pipeline,
+) -> list[Run]:
+    """Select the runs that belong in the dashboard's current eval window."""
+    result = await session.execute(
+        select(Run)
+        .where(
+            Run.organisation_id == org.id,
+            Run.pipeline_id == pipeline.id,
+            # Match dashboard._eval_rate_window: evaluated_at is included from
+            # the rolling ``now - days`` boundary, not today's UTC midnight.
+            Run.started_at >= _demo_eval_result_cutoff(),
+        )
+        .order_by(Run.started_at.desc(), Run.run_number.desc())
+        .limit(_DEMO_EVAL_RESULT_RUN_LIMIT)
+    )
+    return list(result.scalars())
+
+
 async def _seed_demo_evals(
     session: AsyncSession,
     org: Organisation,
@@ -1661,10 +1723,11 @@ async def _seed_demo_evals(
 ) -> None:
     """Seed durable eval definitions and recent results for dashboard consumers.
 
-    The most-recent ``_DEMO_EVAL_RESULT_RUN_LIMIT`` runs of each pipeline get a
-    synthetic result: the dashboard eval rate is a rolling window on
-    ``evaluated_at``, so anchoring results to the oldest runs would age them
-    out of the cards immediately.
+    The most-recent ``_DEMO_EVAL_RESULT_RUN_LIMIT`` runs by their relative
+    fixture timestamp get a synthetic result. Run numbers are historical
+    identifiers and do not necessarily increase with recency, so ordering by
+    ``started_at`` keeps the result set inside the current rolling window after
+    each refresh.
     """
     for index, (pipeline_name, label) in enumerate(
         ((DEMO_PIPELINE_NAME, "PR risk quality"), (PR_REVIEW_PIPELINE_NAME, "Review completeness")),
@@ -1672,16 +1735,7 @@ async def _seed_demo_evals(
     ):
         pipeline, _ = pipeline_lookup[pipeline_name]
         evaluation = await _get_or_create_demo_eval(session, org, account, pipeline, label)
-        runs = list(
-            (
-                await session.execute(
-                    select(Run)
-                    .where(Run.organisation_id == org.id, Run.pipeline_id == pipeline.id)
-                    .order_by(Run.run_number.desc())
-                    .limit(_DEMO_EVAL_RESULT_RUN_LIMIT)
-                )
-            ).scalars()
-        )
+        runs = await _select_current_demo_eval_runs(session, org, pipeline)
         for run in runs:
             await _ensure_demo_eval_result(session, org, evaluation, run, index)
     await session.flush()
@@ -2153,6 +2207,148 @@ async def _seed_demo_trigger_events(
         await _insert_demo_trigger_event(session, org, trigger, index, now)
 
 
+async def _seed_demo_readonly_surfaces(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
+) -> None:
+    """Seed non-sensitive records used by the viewer-facing demo read surfaces."""
+    pipeline, _ = pipeline_lookup[DEMO_PIPELINE_NAME]
+    runs = list(
+        (
+            await session.execute(
+                select(Run)
+                .where(Run.organisation_id == org.id, Run.pipeline_id == pipeline.id)
+                .order_by(Run.run_number.desc())
+                .limit(3)
+            )
+        ).scalars()
+    )
+    variant_name = "Demo review strategies"
+    variant_values = {
+        "pipeline_id": pipeline.id,
+        "description": "Read-only comparison fixture using two safe review strategies.",
+        "variants": [
+            {"name": "Balanced", "weight": 0.5, "config": {"temperature": 0.2}},
+            {"name": "Strict", "weight": 0.5, "config": {"temperature": 0.0}},
+        ],
+        "selection_strategy": "weighted",
+        "max_concurrent_runs": 5,
+    }
+    variant_recover_stmt = (
+        select(VariantGroup)
+        .where(
+            VariantGroup.organisation_id == org.id,
+            or_(
+                VariantGroup.id == demo_fixture_id(org.id, "variant-group:demo-review-strategies"),
+                VariantGroup.name == variant_name,
+            ),
+        )
+        .order_by(VariantGroup.id)
+        .limit(1)
+    )
+    variant = (await session.execute(variant_recover_stmt)).scalar_one_or_none()
+    if variant is None:
+        variant = await _insert_fixture_or_adopt(
+            session,
+            VariantGroup(
+                id=demo_fixture_id(org.id, "variant-group:demo-review-strategies"),
+                organisation_id=org.id,
+                name=variant_name,
+                **variant_values,
+            ),
+            variant_recover_stmt,
+            conflict_event="demo_seed.variant_group_recovered_after_conflict",
+            created_event="demo_seed.variant_group_created",
+            log_extra={"variant_group_name": variant_name},
+        )
+    else:
+        _converge_fixture_attributes(variant, variant_values, tuple(variant_values))
+
+    if not runs:
+        # The variant group is runs-independent and must exist even when the
+        # demo pipeline has no runs yet; feedback and evidence reference the
+        # latest run, so only those are skipped.
+        await session.flush()
+        return
+
+    feedback_values = {
+        "run_id": runs[0].id,
+        "account_id": account.id,
+        "rejection_reason": "The review should explicitly mention the deployment risk.",
+        "rejected_output": {"summary": "Demo review output requiring a clearer risk note."},
+        "producing_node_id": uuid.UUID(demo_node_id(DEMO_PIPELINE_NAME, "review")),
+        "feedback_status": "pending",
+        "feedback_handler_type": "human",
+        "eval_gap": True,
+        "needs_human_review": True,
+    }
+    feedback_recover_stmt = select(FeedbackRecord).where(
+        FeedbackRecord.organisation_id == org.id,
+        or_(
+            FeedbackRecord.id == demo_fixture_id(org.id, "feedback:demo-review-1"),
+            FeedbackRecord.review_id == "demo-review-1",
+        ),
+    )
+    feedback = (await session.execute(feedback_recover_stmt)).scalar_one_or_none()
+    if feedback is None:
+        feedback = await _insert_fixture_or_adopt(
+            session,
+            FeedbackRecord(
+                id=demo_fixture_id(org.id, "feedback:demo-review-1"),
+                organisation_id=org.id,
+                review_id="demo-review-1",
+                **feedback_values,
+            ),
+            feedback_recover_stmt,
+            conflict_event="demo_seed.feedback_recovered_after_conflict",
+            created_event="demo_seed.feedback_created",
+            log_extra={"review_id": "demo-review-1"},
+        )
+    else:
+        # Feedback is durable review provenance.  Once a human or evaluator has
+        # edited it, a refresh must adopt the row without rewriting that history.
+        _log.debug("demo_seed.feedback_preserved", extra={"review_id": "demo-review-1"})
+
+    evidence_key = "risk.demo_review_score"
+    evidence_values = {
+        "key": evidence_key,
+        "subject_type": "run",
+        "subject_id": str(runs[0].id),
+        "value": {"score": 0.84, "severity": "medium", "source": "demo_seed"},
+        "observed_at": runs[0].completed_at or runs[0].started_at or datetime.now(UTC),
+        "producer_type": "derived",
+        "producer_id": None,
+    }
+    evidence_recover_stmt = select(Evidence).where(
+        Evidence.organisation_id == org.id,
+        or_(
+            Evidence.id == demo_fixture_id(org.id, "evidence:risk.demo_review_score"),
+            (
+                (Evidence.key == evidence_key)
+                & (Evidence.subject_type == "run")
+                & (Evidence.subject_id == str(runs[0].id))
+            ),
+        ),
+    )
+    evidence = (await session.execute(evidence_recover_stmt)).scalar_one_or_none()
+    if evidence is None:
+        await _insert_fixture_or_adopt(
+            session,
+            Evidence(
+                id=demo_fixture_id(org.id, "evidence:risk.demo_review_score"),
+                organisation_id=org.id,
+                **evidence_values,
+            ),
+            evidence_recover_stmt,
+            conflict_event="demo_seed.evidence_recovered_after_conflict",
+            created_event="demo_seed.evidence_created",
+            log_extra={"evidence_key": evidence_key},
+        )
+    await session.flush()
+
+
 async def _seed_demo_governance_surfaces(
     session: AsyncSession,
     org: Organisation,
@@ -2166,6 +2362,7 @@ async def _seed_demo_governance_surfaces(
     await _seed_demo_connectors(session, org, account)
     await _seed_demo_notifications(session, org, now)
     await _seed_demo_trigger_events(session, org, now)
+    await _seed_demo_readonly_surfaces(session, org, account, pipeline_lookup)
 
 
 async def _seed_ticket_ready_trigger(

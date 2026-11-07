@@ -1,5 +1,6 @@
 """Unit tests for graph cache and graph compilation."""
 
+import threading
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -7,9 +8,13 @@ from unittest.mock import patch
 
 import pytest
 
+from modulo.core.pipeline_engine import graph_cache as _graph_cache
 from modulo.core.pipeline_engine.graph_cache import (
     _CACHE,
+    _CACHE_LOCK,
     _MAX_SIZE,
+    _compile_locks,
+    _invalidation_generations,
     _make_gate_kickback_router,
     _make_node_fn,
     build_graph_from_json,
@@ -24,6 +29,8 @@ from modulo.core.pipeline_engine.node_runner import _connector_inputs
 @pytest.fixture(autouse=True)
 def _auto_clear_cache() -> None:
     _CACHE.clear()
+    _compile_locks.clear()
+    _invalidation_generations.clear()
 
 
 def _k(pid: uuid.UUID, sid: uuid.UUID, timeout: int, h: str = "") -> tuple:
@@ -72,6 +79,15 @@ def test_evict_removes_entry():
 
     evict(pid, sid)
     assert _k(pid, sid, 300) not in _CACHE
+
+
+def test_evict_does_not_retain_idle_invalidation_generation():
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+
+    for _ in range(10):
+        evict(pid, sid)
+
+    assert (pid, sid) not in _invalidation_generations
 
 
 def test_cache_evicts_oldest_when_full():
@@ -648,30 +664,151 @@ def test_gate_without_reject_target_compiles():
     assert compiled is not None
 
 
+def test_get_or_compile_is_thread_safe_and_compiles_once():
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+    barrier = threading.Barrier(8)
+    calls: list[int] = []
+    results: list[str] = []
+
+    def factory() -> str:
+        calls.append(1)
+        return "compiled"
+
+    def worker() -> None:
+        barrier.wait()
+        results.append(get_or_compile(pid, sid, factory))
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+    assert results == ["compiled"] * 8
+    assert calls == [1]
+
+
+def test_evict_waits_for_inflight_compile_and_discards_result():
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+    started = threading.Event()
+    release = threading.Event()
+
+    def factory() -> str:
+        started.set()
+        release.wait(timeout=2)
+        return "stale"
+
+    compile_thread = threading.Thread(target=lambda: get_or_compile(pid, sid, factory))
+    compile_thread.start()
+    assert started.wait(timeout=2)
+
+    evict_thread = threading.Thread(target=lambda: evict(pid, sid))
+    evict_thread.start()
+    release.set()
+    compile_thread.join(timeout=2)
+    evict_thread.join(timeout=2)
+
+    assert _k(pid, sid, 300) not in _CACHE
+    assert get_or_compile(pid, sid, lambda: "fresh") == "fresh"
+
+
+def test_queued_waiter_cannot_repopulate_after_eviction():
+    """A queued waiter must compile after eviction, not publish stale state."""
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+    compiler_started = threading.Event()
+    release_compiler = threading.Event()
+    waiter_started = threading.Event()
+    waiter_error: list[RuntimeError] = []
+    results: list[str] = []
+
+    def compiler() -> str:
+        compiler_started.set()
+        release_compiler.wait(timeout=2)
+        return "stale"
+
+    def waiter_factory() -> str:
+        waiter_started.set()
+        raise RuntimeError("fresh compilation failed")
+
+    compiler_thread = threading.Thread(target=lambda: results.append(get_or_compile(pid, sid, compiler)))
+    compiler_thread.start()
+    assert compiler_started.wait(timeout=2)
+
+    def waiter() -> None:
+        try:
+            get_or_compile(pid, sid, waiter_factory)
+        except RuntimeError as exc:
+            waiter_error.append(exc)
+
+    waiter_thread = threading.Thread(target=waiter)
+    waiter_thread.start()
+    with _CACHE_LOCK:
+        assert _compile_locks[(pid, sid, 300, "")].users == 2
+    invalidated = threading.Event()
+    original_advance = _graph_cache._advance_invalidation_generation
+
+    def advance_and_signal(scope: tuple[uuid.UUID, uuid.UUID]) -> None:
+        original_advance(scope)
+        invalidated.set()
+
+    evict_thread = threading.Thread(target=lambda: evict(pid, sid))
+    with patch(
+        "modulo.core.pipeline_engine.graph_cache._advance_invalidation_generation",
+        side_effect=advance_and_signal,
+    ):
+        evict_thread.start()
+        assert invalidated.wait(timeout=2)
+        release_compiler.set()
+
+    compiler_thread.join(timeout=2)
+    evict_thread.join(timeout=2)
+    waiter_thread.join(timeout=2)
+
+    assert results == ["stale"]
+    assert waiter_started.wait(timeout=2)
+    assert len(waiter_error) == 1
+    assert str(waiter_error[0]) == "fresh compilation failed"
+    assert _k(pid, sid, 300) not in _CACHE
+    assert get_or_compile(pid, sid, lambda: "fresh") == "fresh"
+
+
 def test_inner_cache_check_returns_prepopulated_value():
     """The lock-guarded double-check serves a value another writer cached
     between the outer fast-path check and lock acquisition."""
     pid, sid = uuid.uuid4(), uuid.uuid4()
+    key = _k(pid, sid, 300)
 
     class _RaceCache:
+        """Cache that misses on the outer fast-path lookup and, on the inner
+        double-check, serves a value a "concurrent writer" published in the gap."""
+
         def __init__(self) -> None:
-            self._checks = 0
+            self.entries: dict[object, str] = {}
+            self.gets = 0
 
-        def __contains__(self, _key: object) -> bool:
-            self._checks += 1
-            # First check is the outer fast-path (miss); the lock-guarded
-            # double-check sees the key populated by a "concurrent writer".
-            return self._checks > 1
+        def get(self, cache_key: object, default: object = None) -> object:
+            self.gets += 1
+            if self.gets == 1:
+                return default
+            self[cache_key] = "race-value"
+            return self.entries[cache_key]
 
-        def __getitem__(self, _key: object) -> str:
-            return "race-value"
+        def __setitem__(self, cache_key: object, value: str) -> None:
+            self.entries[cache_key] = value
 
-        def move_to_end(self, _key: object) -> None:
+        def __getitem__(self, cache_key: object) -> str:
+            return self.entries[cache_key]
+
+        def move_to_end(self, cache_key: object) -> None:
             pass
 
-    with patch("modulo.core.pipeline_engine.graph_cache._CACHE", _RaceCache()):
+    race_cache = _RaceCache()
+    with patch("modulo.core.pipeline_engine.graph_cache._CACHE", race_cache):
         result = get_or_compile(pid, sid, lambda: "factory-value")
     assert result == "race-value"
+    assert race_cache.gets == 2
+    assert race_cache[key] == "race-value"
 
 
 def test_reject_edge_missing_source_raises():

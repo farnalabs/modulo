@@ -441,12 +441,16 @@ routes:
         type: form_page
         <<: *community
         deprecated: false
+        elements:
+          - settings-triggers-details-dialog
 
     /settings/guardrails:
         name: settings-guardrails
         breadcrumb: Guardrails
         parent: /
         product_map: [feat-guardrails]
+
+
         sidebar_group: configure
         sidebar_order: 5
         type: form_page
@@ -1072,6 +1076,12 @@ elements:
       - testid: dashboard-system-overview
         type: element
         dynamic_testid: false
+      - testid: system-map-overview-toggle
+        type: button
+        dynamic_testid: false
+      - testid: system-map-overview-content
+        type: element
+        dynamic_testid: false
       - testid: dashboard-system-discover
         type: button
         dynamic_testid: false
@@ -1091,9 +1101,6 @@ elements:
         type: element
         dynamic_testid: false
       - testid: system-map-node
-        type: element
-        dynamic_testid: false
-      - testid: system-map-draft-review
         type: element
         dynamic_testid: false
       - testid: dashboard-recent-runs
@@ -1299,6 +1306,33 @@ elements:
         type: button
         dynamic_testid: false
       - testid: system-map-relationships
+        type: element
+        dynamic_testid: false
+      - testid: system-map-attribution-bindings-panel
+        type: element
+        dynamic_testid: false
+      - testid: system-map-attribution-bindings
+        type: element
+        dynamic_testid: false
+      - testid: system-map-binding-kind
+        type: select
+        dynamic_testid: false
+      - testid: system-map-binding-node
+        type: select
+        dynamic_testid: false
+      - testid: system-map-binding-pipeline
+        type: select
+        dynamic_testid: false
+      - testid: system-map-binding-trigger
+        type: select
+        dynamic_testid: false
+      - testid: system-map-binding-create
+        type: button
+        dynamic_testid: false
+      - testid: system-map-binding-list
+        type: element
+        dynamic_testid: false
+      - testid: system-map-binding-empty
         type: element
         dynamic_testid: false
       - testid: error-alert-retry
@@ -2902,6 +2936,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: lock-icon
+        type: element
+        dynamic_testid: false
+      - testid: settings-monitor-permission-denied
         type: element
         dynamic_testid: false
     /admin/users:
@@ -6541,6 +6578,9 @@ elements:
       - testid: sso-callback-url-copied
         type: element
         dynamic_testid: false
+      - testid: sso-callback-url-copy-failed
+        type: element
+        dynamic_testid: false
       - testid: sso-tenant-domain
         type: input
         dynamic_testid: false
@@ -6717,6 +6757,9 @@ elements:
         type: button
         dynamic_testid: false
     /settings/triggers:
+      - testid: settings-triggers-details-dialog
+        type: element
+        dynamic_testid: false
       - testid: page-header-right
         type: element
         dynamic_testid: false
@@ -7240,6 +7283,7 @@ features:
             - "[x] The dashboard renders token spend, eval rate, and run activity widgets"
             - "[x] Dashboard metrics are scoped to the caller's organisation with per-team breakdown"
             - "[x] The rolling-window timespan toggle (24h/3d/7d/30d/90d + All time, default 3d, persisted in localStorage — FAR-92/FAR-115) scopes the stat cards to the selected window with per-metric trend arrows comparing it to the immediately-preceding equal-length window, value+arrow from the same source (run_daily_facts for counts/status/tokens/success/duration, the org-level org_daily_run_counts ledger row team_id IS NULL for spend, eval_results for pass rate); delta_pct is null with no prior baseline; when the analytics_page flag is off the toggle is hidden and GET /dashboard/summary keeps the legacy all-time shape (days ignored, no period block) with the summary cache keyed dashboard:summary:{org_id}:{days}:{flag} (backend/src/modulo/api/routes/dashboard.py, frontend/src/views/DashboardView.vue)"
+            - "[x] The dashboard System Overview follows the selected time window, can be collapsed with its state persisted in localStorage, and replaces entirely unobserved node grids with an explicit empty state; Team Breakdown includes completed runs and shows eval pass rate only when eval observations exist (frontend/src/views/DashboardView.vue, frontend/src/components/dashboard/DashboardSystemOverview.vue)"
     feat-evidence:
         description: Evidence dashboard with a server-side field-level redaction boundary
         status: covered

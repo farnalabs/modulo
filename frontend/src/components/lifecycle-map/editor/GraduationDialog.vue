@@ -116,7 +116,7 @@ const canGraduate = computed(() => {
   return !!selectedTemplateId.value
 })
 
-async function handleGraduate() {
+function handleGraduate() {
   if (!canGraduate.value) return
   graduating.value = true
   error.value = null
