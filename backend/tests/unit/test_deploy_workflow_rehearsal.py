@@ -731,10 +731,10 @@ def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace() 
         extract_root.mkdir()
         workspace.mkdir()
         bundle_file.parent.mkdir(parents=True)
-        bundle_file.write_text("#!/usr/bin/env bash\\nprintf 'bundle-ok\\n'\\n", encoding="utf-8")
-        (bundle / "README.txt").write_text("runner-owned bundle\\n", encoding="utf-8")
+        bundle_file.write_text("#!/usr/bin/env bash\nprintf 'bundle-ok\\n'\n", encoding="utf-8")
+        (bundle / "README.txt").write_text("runner-owned bundle\n", encoding="utf-8")
         smoke_script.parent.mkdir(exist_ok=True)
-        smoke_script.write_text("#!/usr/bin/env bash\\nset -eu\\nexit 0\\n", encoding="utf-8")
+        smoke_script.write_text("#!/usr/bin/env bash\nset -eu\nexit 0\n", encoding="utf-8")
 
         # Start from the restrictive modes produced by a real tar extraction.
         # The setup fragment must be what grants the smoke user access; creating
