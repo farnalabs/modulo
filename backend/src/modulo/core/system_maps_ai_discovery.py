@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, Protocol
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -36,6 +36,14 @@ high-confidence additions. Every endpoint must be an existing deterministic
 node or an explicitly allowlisted safe addition. Do not invent inventory,
 credentials, or relationships unsupported by the supplied data.
 """
+
+
+class _DiscoveryInvoker(Protocol):
+    def __call__(
+        self,
+        messages: list[BaseMessage],
+        output_schema: dict[str, Any] | None = None,
+    ) -> Awaitable[Any]: ...  # pragma: no cover - Protocol stub body, never executed
 
 
 DiscoveryCallable = Callable[[list[BaseMessage], dict[str, Any] | None], Awaitable[Any]]
@@ -216,7 +224,7 @@ def _merge_enhancement(
 
 async def enhance_discovery(
     draft: DiscoveryDraft,
-    backend: ModelBackendBase | DiscoveryCallable,
+    backend: ModelBackendBase | DiscoveryCallable | _DiscoveryInvoker,
     *,
     prompt_version: str = PROMPT_VERSION,
     rubric_version: str = RUBRIC_VERSION,
