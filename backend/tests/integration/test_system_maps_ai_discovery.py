@@ -146,7 +146,12 @@ async def _insert_backend(
     status: str = "active",
 ) -> uuid.UUID:
     backend_id = uuid.uuid4()
-    ciphertext = Fernet(_FERNET_KEY.encode()).encrypt(b"unused")
+    # The route resolves the process-wide settings (not the request-scoped
+    # dependency override) when it decrypts credentials, so the ciphertext must
+    # be produced with that same configured Fernet key. A hard-coded key silently
+    # passes locally where the env default applies and fails in CI, where the
+    # workflow supplies a different FERNET_KEY.
+    ciphertext = Fernet(get_settings().fernet_key.encode()).encrypt(b"unused")
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
