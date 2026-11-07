@@ -1939,3 +1939,122 @@ async def test_mayberetry_after_policy_still_redispatches_a_fast_failure() -> No
 
     assert exc_info.value.status == "failed"
     assert exc_info.value.max_retries == 2
+
+
+# ---------------------------------------------------------------------------
+# FAR-296 Phase 2 — script-mode lease-probe wiring on the in-execute path.
+#
+# ``maybe_retry_after_policy`` probes the script lease before ANY requeue of a
+# script-mode run, and terminal-fails with ``script.side_effect_unknown`` when
+# the probe reports a possible live process. These drive that branch directly
+# so the probe call, the terminal-fail publish and the decision string are
+# pinned (the execute()-level tests feed non-script graphs, so this arm was
+# otherwise unexercised).
+# ---------------------------------------------------------------------------
+
+
+def _maybe_retry_kwargs(
+    *,
+    broker: Any | None = None,
+    probe_script_lease_fn: Any,
+    graph_has_script_mode_fn: Any,
+) -> dict[str, Any]:
+    """Required-argument set for ``maybe_retry_after_policy`` in the probe tests."""
+    return {
+        "run_id": uuid.uuid4(),
+        "org_id": uuid.uuid4(),
+        "pipeline_retry_policy": {"on": ["timeout"], "max_retries": 2},
+        "final_status": "failed",
+        "error_code": "node_deadline_exceeded",
+        "error_detail": None,
+        "is_correction_run": False,
+        "graph_idempotent": True,
+        "graph_json": {"nodes": [{"id": "node-a", "mode": "script"}], "edges": []},
+        "model_backend_hub": None,
+        "connector_hub": None,
+        "broker": broker if broker is not None else MagicMock(),
+        "session_factory": MagicMock(),
+        "claim_token": "tok-claim-abc",
+        "fenced_pending_reset_fn": AsyncMock(return_value=1),
+        "cleanup_run_resources_fn": AsyncMock(),
+        "record_attempt_reset_fn": AsyncMock(),
+        "probe_script_lease_fn": probe_script_lease_fn,
+        "read_retry_attempt_state_fn": AsyncMock(return_value=(1, "tok-claim-abc", datetime.now(UTC))),
+        "graph_has_script_mode_fn": graph_has_script_mode_fn,
+        "node_timeouts": {"node-a": 3300}.values(),
+    }
+
+
+async def test_mayberetry_after_policy_probes_the_script_lease_before_requeue() -> None:
+    """A script-mode graph's retry is gated on the lease probe: the probe runs
+    with the run's identity BEFORE the re-dispatch seam is reached."""
+    from modulo.core.pipeline_engine.retry_policy import maybe_retry_after_policy
+
+    probe = AsyncMock(return_value=True)
+    redispatch = AsyncMock(side_effect=RunRetryPolicyError("failed", 2))
+    kwargs = _maybe_retry_kwargs(
+        probe_script_lease_fn=probe,
+        graph_has_script_mode_fn=lambda graph_json: True,
+    )
+
+    with (
+        patch("modulo.core.pipeline_engine.retry_policy._redispatch_after_policy", new=redispatch),
+        pytest.raises(RunRetryPolicyError),
+    ):
+        await maybe_retry_after_policy(**kwargs)
+
+    probe.assert_awaited_once_with(run_id=kwargs["run_id"], org_id=kwargs["org_id"])
+    redispatch.assert_awaited_once()
+
+
+async def test_mayberetry_after_policy_terminal_fails_when_the_script_probe_blocks() -> None:
+    """A blocked lease probe refuses the requeue and terminal-fails the run with
+    ``script.side_effect_unknown`` (never retried) so it cannot silently loop or
+    stay stuck in ``running``."""
+    from modulo.core.pipeline_engine.retry_policy import maybe_retry_after_policy
+
+    broker = MagicMock()
+    probe = AsyncMock(return_value=False)
+    redispatch = AsyncMock(side_effect=RunRetryPolicyError("failed", 2))
+    kwargs = _maybe_retry_kwargs(
+        broker=broker,
+        probe_script_lease_fn=probe,
+        graph_has_script_mode_fn=lambda graph_json: True,
+    )
+
+    with patch("modulo.core.pipeline_engine.retry_policy._redispatch_after_policy", new=redispatch):
+        decision = await maybe_retry_after_policy(**kwargs)
+
+    assert decision == "side_effect_unknown"
+    redispatch.assert_not_awaited()
+    channel, payload = broker.publish.call_args.args
+    assert channel == "run_failed"
+    assert payload["error"] == "script.side_effect_unknown"
+    assert "needs human review" in payload["detail"]
+
+
+async def test_mayberetry_after_policy_returns_none_when_the_budget_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive narrowing: ``retry_policy_applies`` returning True while the
+    computed budget or policy is None is a no-op, never a re-dispatch."""
+    from modulo.core.pipeline_engine import retry_policy as rp
+
+    monkeypatch.setattr(rp, "retry_policy_applies", lambda *args, **kwargs: True)
+
+    monkeypatch.setattr(rp, "retry_after_policy", lambda *args, **kwargs: None)
+    kwargs = _maybe_retry_kwargs(
+        probe_script_lease_fn=AsyncMock(return_value=True),
+        graph_has_script_mode_fn=lambda graph_json: False,
+    )
+    assert await rp.maybe_retry_after_policy(**kwargs) == "none"
+
+    monkeypatch.setattr(rp, "retry_after_policy", lambda *args, **kwargs: 1)
+    kwargs["pipeline_retry_policy"] = None
+    assert await rp.maybe_retry_after_policy(**kwargs) == "none"
+
+
+def test_attempt_elapsed_seconds_returns_none_for_a_non_datetime_start() -> None:
+    """A driver handing back a non-datetime must fail open (None), never raise —
+    the retry decision may not be why a run cannot terminalise."""
+    assert _attempt_elapsed_seconds("2026-10-20T12:00:00Z") is None
