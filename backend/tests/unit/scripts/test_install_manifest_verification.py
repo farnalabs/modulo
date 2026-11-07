@@ -21,6 +21,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -168,6 +169,25 @@ def test_extracted_argv_rejects_a_wrong_trust_key(signed_manifest: _SignedManife
     assert "Signature Verification Failure" in combined
 
 
+def _python_bin() -> str:
+    """The interpreter the extracted signature parser is EXECUTED with.
+
+    ``install.sh`` itself shells out to ``python3``, which is correct in the
+    installer's Linux environment but is not a name that exists on a Windows
+    host (which has only ``python`` / ``py``). These tests run the parser's
+    *body* in a Python process, so the interpreter under test is the one
+    actually running pytest — ``sys.executable``. A PATH lookup is only a
+    fallback for a degenerate embedded interpreter with an empty
+    ``sys.executable``; skipping is a last resort, never the Windows outcome.
+    """
+    if sys.executable:
+        return sys.executable
+    resolved = shutil.which("python3") or shutil.which("python")
+    if resolved is None:
+        pytest.skip("no Python interpreter available to execute install.sh's extracted signature parser")
+    return resolved
+
+
 def _run_signature_parser(
     signature_text: str,
     tmp_path: Path,
@@ -187,7 +207,7 @@ def _run_signature_parser(
     try:
         signature_file.write_text(signature_text, encoding="utf-8")
         return subprocess.run(  # noqa: S603 - resolved Python interpreter and temporary fixture paths
-            [shutil.which("python3") or "python3", "-", str(signature_file), current_id, next_id],
+            [_python_bin(), "-", str(signature_file), current_id, next_id],
             input=parser_source,
             capture_output=True,
             text=True,
