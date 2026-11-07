@@ -281,7 +281,7 @@ jobs:
           # which hid whether layout, copy, pg_config, or patchelf failed.
           trap 'rc=$?; echo "::error::Assemble bundle layout failed at line ${LINENO}: ${BASH_COMMAND} (exit ${rc})" >&2; exit "$rc"' ERR
           source scripts/bundle-versions.env
-          BUNDLE="build/${BUNDLE_ROOT}"
+          BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
           # pg_config emits the absolute configure-time prefix, while the
           # assembly paths above are intentionally relative to the checkout.
           # Canonicalise both sides before comparing so this accepts the same
