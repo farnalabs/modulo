@@ -611,12 +611,21 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     smoke_name = "Smoke the final PostgreSQL tarball after relocation as an unprivileged user"
     smoke_script = steps[names.index(smoke_name)]["run"]
 
+    assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in smoke_script
     assert 'tarball="build/${TARBALL_NAME}"' in smoke_script
+
     assert 'test ! -e "$original_bundle"' in smoke_script
     assert 'tar -xzf "$tarball"' in smoke_script
     assert "useradd --system" in smoke_script
     assert "env -i" in smoke_script
+    assert "chown -R" not in smoke_script
+    assert 'chmod 0755 "$smoke_root"' in smoke_script
+    assert 'smoke_home="$smoke_root/home"' in smoke_script
+    assert 'smoke_dump="$smoke_home/roundtrip.sql"' in smoke_script
+    assert 'sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket"' in smoke_script
+    assert 'HOME="$smoke_home"' in smoke_script
     assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
+
     assert "pg_config --sharedir" in smoke_script
     assert 'sharedir_abs="$(realpath -e -- "$sharedir")"' in smoke_script
     assert 'smoke_bundle_abs="$(realpath -e -- "$SMOKE_BUNDLE")"' in smoke_script

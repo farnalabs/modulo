@@ -663,14 +663,21 @@ jobs:
           mkdir -p "$extract_root"
           tar -xzf "$tarball" -C "$extract_root"
           smoke_bundle="$extract_root/$BUNDLE_ROOT"
+          smoke_home="$smoke_root/home"
           smoke_data="$smoke_root/data"
           smoke_socket="$smoke_root/socket"
           smoke_dump_dir="$smoke_root/dump"
           smoke_dump="$smoke_dump_dir/roundtrip.sql"
           smoke_script="$smoke_root/run-smoke.sh"
           mkdir -p "$smoke_data" "$smoke_socket" "$smoke_dump_dir" "$smoke_root/home"
+          # The extracted bundle remains runner-owned: changing ownership of
+          # the release tree can traverse runner-created files such as
+          # backend/.venv and fails deterministically on GitHub-hosted runners.
+          # Grant the smoke user read/traverse access without making the release
+          # tree writable or recursively changing ownership. The extracted root
+          # and every directory/file below it may retain restrictive tar modes.
           chmod 0755 "$smoke_root" "$extract_root"
-
+          chmod -R a+rX "$extract_root"
           cat > "$smoke_script" <<'SMOKE_EOF'
           #!/usr/bin/env bash
           set -eu
@@ -702,12 +709,8 @@ jobs:
           test "$(psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip --tuples-only --no-align --command "SELECT value FROM proof")" = "2192"
           SMOKE_EOF
           chmod 0755 "$smoke_script"
-          # The extracted bundle may contain immutable/copied virtualenv files;
-          # ownership is not required for read/execute access.  Only hand the
-          # unprivileged smoke user the writable runtime paths it creates.
-          sudo chown -R "$smoke_user:$smoke_user" "$smoke_data" "$smoke_socket" "$smoke_dump_dir" "$smoke_root/home" "$smoke_script"
           sudo -u "$smoke_user" env -i \
-            HOME="$smoke_root/home" \
+            HOME="$smoke_home" \
             PATH="$smoke_bundle/pg/bin:/usr/bin:/bin" \
             PGDATA="$smoke_data" \
             SMOKE_BUNDLE="$smoke_bundle" \
