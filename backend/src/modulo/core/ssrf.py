@@ -1110,6 +1110,7 @@ class _PinnedSyncNetworkBackend(httpcore.SyncBackend):
         resolve_ttl_seconds: float | None = None,
         connector_type: str,
     ) -> None:
+        super().__init__()
         self._pinned_hosts = {_normalize_host(host): _coerce_pin_ips(ips) for host, ips in pinned_hosts.items()}
         self._allow_networks = normalize_allow_networks(allow_networks)
         self._re_resolve = re_resolve
@@ -1520,6 +1521,7 @@ def pinned_http_transport_sync(
         http2=http2,
         trust_env=trust_env,
         limits=limits,
+        allow_networks=allow_networks,
         re_resolve=re_resolve,
         resolve_ttl_seconds=resolve_ttl_seconds,
         loudness_guard=loudness_guard,

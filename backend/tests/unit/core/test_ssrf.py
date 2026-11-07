@@ -1186,6 +1186,43 @@ def test_sync_pinned_transport_fails_over_and_reresolves(monkeypatch: pytest.Mon
     assert backend._pinned_hosts == {"heal.example": ("8.8.8.8",)}
 
 
+def test_sync_pinned_transport_forwards_allow_networks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync parity: the pinned sync transport carries the caller's allow-list.
+
+    The async twin forwards ``allow_networks`` into its transport. If the sync
+    factory drops it, the backend re-validates a TTL re-resolution against an
+    empty allow-list and rejects a fresh address the caller explicitly allowed.
+    """
+    resolutions = iter([["10.0.0.5"], ["10.0.0.6"]])
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: next(resolutions))
+    transport = ssrf.pinned_http_transport_sync(
+        "http://tenant.example/",
+        allow_networks=["10.0.0.0/8"],
+        resolve_ttl_seconds=1,
+    )
+    backend = transport._pin_backend
+    assert backend._allow_networks == ssrf.normalize_allow_networks(["10.0.0.0/8"])
+    assert backend._allow_networks
+    backend._resolved_at["tenant.example"] = time.time() - 5
+    attempted: list[str] = []
+
+    def fake_connect(
+        ip: str,
+        _port: int,
+        *,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: object = None,
+    ) -> object:
+        attempted.append(ip)
+        return _CONNECT_OK
+
+    backend._connect_to_ip = fake_connect  # type: ignore[method-assign]
+    assert backend.connect_tcp("tenant.example", 443) is _CONNECT_OK
+    assert attempted == ["10.0.0.6"]
+    assert backend._pinned_hosts == {"tenant.example": ("10.0.0.6",)}
+
+
 def test_sync_pinned_client_uses_pinned_path_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
     """A real sync client request must reach the configured pinned address."""
     server, port = _start_http_server()
