@@ -79,12 +79,12 @@ test.describe('Login Flow', () => {
 
     await ssoButton.click()
     await expect(page.getByText('Continue with fixture IdP')).toBeVisible()
-    const authorizeUrl = new URL(new URL(page.url()).searchParams.get('redirect_uri') ?? '')
-    await page.getByText('Continue with fixture IdP').click()
-    expect(authorizeUrl.searchParams.get('client_id')).toBe('ci-idp')
-    expect(authorizeUrl.searchParams.get('redirect_uri')).toContain('/api/v1/auth/oidc/ci-idp/callback')
-    expect(authorizeUrl.searchParams.get('state')).toBeTruthy()
+    const continuationUrl = new URL(page.url())
+    expect(continuationUrl.searchParams.get('client_id')).toBe('ci-idp')
+    expect(continuationUrl.searchParams.get('redirect_uri')).toContain('/api/v1/auth/oidc/ci-idp/callback')
+    expect(continuationUrl.searchParams.get('state')).toBeTruthy()
     await expect(page.context().cookies()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ name: '__Host-modulo_oidc_flow' })]))
+    await page.getByText('Continue with fixture IdP').click()
 
     await page.waitForURL(/\/auth\/callback$/)
 =======
@@ -172,8 +172,8 @@ test.describe('Login Flow', () => {
     await page.goto('/login')
     await page.getByTestId('login-sso-oidc-ci-idp').click()
     await expect(page.getByText('Continue with fixture IdP')).toBeVisible()
-    const authorizeUrl = new URL(new URL(page.url()).searchParams.get('redirect_uri') ?? '')
-    const state = authorizeUrl.searchParams.get('state')
+    const continuationUrl = new URL(page.url())
+    const state = continuationUrl.searchParams.get('state')
     expect(state).toBeTruthy()
     await page.goto(`/api/v1/auth/oidc/ci-idp/callback?code=ci-invalid-code&state=${encodeURIComponent(state ?? '')}`)
     await page.waitForURL(/\/login\?sso_error=auth_failed$/)
