@@ -2264,6 +2264,197 @@ async def _persist_discovery_draft(
     return map_obj, revision_id, revision_number
 
 
+async def _authorise_discovery_backend(
+    session: AsyncSession,
+    *,
+    model_backend_id: uuid.UUID,
+    principal: TenantPrincipal,
+) -> list[ModelBackend]:
+    """Load the selected model backend and enforce org/team authorisation."""
+    backend_rows = list(
+        (
+            await session.execute(
+                select(ModelBackend).where(
+                    ModelBackend.organisation_id == principal.organisation_id,
+                    ModelBackend.id == model_backend_id,
+                    ModelBackend.status == "active",
+                    (ModelBackend.visibility == "org") | (ModelBackend.visibility.is_(None)),
+                )
+            )
+        ).scalars()
+    )
+    if not backend_rows:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "model_backend_unauthorised",
+                "message": "Selected model backend is not active and authorised for this organisation",
+            },
+        )
+    backend_scope = await evaluate_team_gate(
+        session,
+        owner_team_id=backend_rows[0].owner_team_id,
+        visibility=backend_rows[0].visibility,
+        account_id=principal.account_id,
+        org_role=principal.org_role,
+    )
+    if backend_scope is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "model_backend_unauthorised",
+                "message": "Selected model backend is not authorised for this caller",
+            },
+        )
+    return backend_rows
+
+
+async def _resolve_discovery_backend(hub: ModelBackendHub, model_backend_id: uuid.UUID) -> Any:
+    """Resolve the backend from the hub, mapping hub errors onto HTTP errors."""
+    try:
+        return await hub.get(model_backend_id)
+    except BackendNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "model_backend_unauthorised",
+                "message": "Selected model backend is not active and authorised for this organisation",
+            },
+        ) from exc
+    except BackendUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "model_backend_unavailable",
+                "message": "Selected model backend is unhealthy or unavailable",
+            },
+        ) from exc
+
+
+async def _evaluate_discovery_gate(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    hub: ModelBackendHub,
+    draft: Any,
+    model_backend_id: uuid.UUID,
+    eval_definition_id: uuid.UUID,
+) -> tuple[bool, str]:
+    """Run the configured model-judge eval gate over the enhanced draft."""
+    eval_def = await _resolve_discovery_eval(
+        session,
+        eval_id=eval_definition_id,
+        org_id=principal.organisation_id,
+        principal=principal,
+    )
+    judge = build_discovery_model_judge_callable(hub, model_backend_id)
+    eval_result = await EvalEngine().evaluate_result_async(
+        {"candidate": {"nodes": list(draft.nodes), "relationships": list(draft.relationships)}},
+        eval_def,
+        model_judge_callable=judge,
+    )
+    passed = eval_result.outcome is JudgeOutcome.PASS
+    verdict = "pass" if passed else ("error" if eval_result.outcome is JudgeOutcome.ERROR else "fail")
+    if not passed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "eval_gate_failed",
+                "message": "AI-assisted discovery did not pass its evaluation gate",
+                "verdict": verdict,
+            },
+        )
+    return passed, verdict
+
+
+async def _run_ai_discovery(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    model_backend_id: uuid.UUID,
+    eval_definition_id: uuid.UUID | None,
+    draft: Any,
+    provenance: dict[str, Any],
+) -> tuple[Any, bool, bool | None, str]:
+    """Apply an authorised AI enhancement and optional eval gate to the draft.
+
+    An explicit AI request never silently degrades to a deterministic draft: a
+    provider that answers outside the AI contract is a refusal, not a success.
+    """
+    backend_rows = await _authorise_discovery_backend(
+        session,
+        model_backend_id=model_backend_id,
+        principal=principal,
+    )
+    secrets_backend = create_secrets_backend(
+        fernet_key=get_settings().fernet_key,
+        session=session,
+    )
+    hub = ModelBackendHub()
+    await hub.__aenter__()
+    try:
+        await hub.initialise(
+            backend_rows,
+            secrets_backend=secrets_backend,
+        )
+    except BaseException:
+        await hub.__aexit__(None, None, None)
+        raise
+    if model_backend_id not in hub.backend_ids:
+        await hub.__aexit__(None, None, None)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "model_backend_unavailable", "message": "Selected model backend is unavailable"},
+        )
+    try:
+        backend = await _resolve_discovery_backend(hub, model_backend_id)
+        candidate, ai_outcome = await enhance_discovery_with_outcome(
+            draft,
+            backend,
+            safe_additions=(),
+        )
+        if ai_outcome == "error":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "model_backend_unavailable",
+                    "message": "AI discovery backend invocation failed",
+                },
+            )
+        if ai_outcome != "accepted":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "model_backend_invalid_response",
+                    "message": "AI discovery backend returned no accepted enhancement",
+                },
+            )
+        provenance.update(
+            {
+                "mode": "ai_assisted",
+                "prompt_version": PROMPT_VERSION,
+                "rubric_version": RUBRIC_VERSION,
+                "selected_backend_id": str(model_backend_id),
+                "output_hash": _fingerprint(candidate),
+            }
+        )
+        eval_gate_passed: bool | None = None
+        eval_gate_verdict = "not_requested"
+        if eval_definition_id is not None:
+            eval_gate_passed, eval_gate_verdict = await _evaluate_discovery_gate(
+                session,
+                principal=principal,
+                hub=hub,
+                draft=candidate,
+                model_backend_id=model_backend_id,
+                eval_definition_id=eval_definition_id,
+            )
+            provenance["evaluator_version"] = _DISCOVERY_EVALUATOR_VERSION
+        return candidate, True, eval_gate_passed, eval_gate_verdict
+    finally:
+        await hub.__aexit__(None, None, None)
+
+
 @router.post(
     "/discover",
     status_code=status.HTTP_201_CREATED,
@@ -2376,149 +2567,16 @@ async def discover_system_map(
             "input_hash": deterministic_fingerprint,
             "output_hash": deterministic_fingerprint,
         }
-        if request.model_backend_id is not None:
-            backend_rows = list(
-                (
-                    await session.execute(
-                        select(ModelBackend).where(
-                            ModelBackend.organisation_id == principal.organisation_id,
-                            ModelBackend.id == request.model_backend_id,
-                            ModelBackend.status == "active",
-                            (ModelBackend.visibility == "org") | (ModelBackend.visibility.is_(None)),
-                        )
-                    )
-                ).scalars()
-            )
-            if not backend_rows:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
-                        "code": "model_backend_unauthorised",
-                        "message": "Selected model backend is not active and authorised for this organisation",
-                    },
-                )
-            backend_scope = await evaluate_team_gate(
+        model_backend_id = request.model_backend_id
+        if model_backend_id is not None:
+            draft, ai_assisted, eval_gate_passed, eval_gate_verdict = await _run_ai_discovery(
                 session,
-                owner_team_id=backend_rows[0].owner_team_id,
-                visibility=backend_rows[0].visibility,
-                account_id=principal.account_id,
-                org_role=principal.org_role,
+                principal=principal,
+                model_backend_id=model_backend_id,
+                eval_definition_id=request.eval_definition_id,
+                draft=draft,
+                provenance=provenance,
             )
-            if backend_scope is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
-                        "code": "model_backend_unauthorised",
-                        "message": "Selected model backend is not authorised for this caller",
-                    },
-                )
-            secrets_backend = create_secrets_backend(
-                fernet_key=get_settings().fernet_key,
-                session=session,
-            )
-            hub = ModelBackendHub()
-            await hub.__aenter__()
-            try:
-                await hub.initialise(
-                    backend_rows,
-                    secrets_backend=secrets_backend,
-                )
-            except BaseException:
-                await hub.__aexit__(None, None, None)
-                raise
-            if request.model_backend_id not in hub.backend_ids:
-                await hub.__aexit__(None, None, None)
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={"code": "model_backend_unavailable", "message": "Selected model backend is unavailable"},
-                )
-            try:
-                try:
-                    backend = await hub.get(request.model_backend_id)
-                except BackendNotFoundError as exc:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail={
-                            "code": "model_backend_unauthorised",
-                            "message": "Selected model backend is not active and authorised for this organisation",
-                        },
-                    ) from exc
-                except BackendUnavailableError as exc:
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail={
-                            "code": "model_backend_unavailable",
-                            "message": "Selected model backend is unhealthy or unavailable",
-                        },
-                    ) from exc
-                candidate, ai_outcome = await enhance_discovery_with_outcome(
-                    draft,
-                    backend,
-                    safe_additions=(),
-                )
-                if ai_outcome == "error":
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail={
-                            "code": "model_backend_unavailable",
-                            "message": "AI discovery backend invocation failed",
-                        },
-                    )
-                if ai_outcome != "accepted":
-                    # An explicit AI request must never silently degrade to a
-                    # deterministic draft. ``fallback`` means the provider
-                    # answered outside the AI contract; ``error`` is handled
-                    # above. Both are refusals, not successful discovery.
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail={
-                            "code": "model_backend_invalid_response",
-                            "message": "AI discovery backend returned no accepted enhancement",
-                        },
-                    )
-                draft = candidate
-                ai_assisted = True
-                provenance.update(
-                    {
-                        "mode": "ai_assisted" if ai_assisted else "deterministic_fallback",
-                        "prompt_version": PROMPT_VERSION,
-                        "rubric_version": RUBRIC_VERSION,
-                        "selected_backend_id": str(request.model_backend_id),
-                        "input_hash": deterministic_fingerprint,
-                        "output_hash": _fingerprint(draft),
-                    }
-                )
-                if request.eval_definition_id is not None:
-                    eval_def = await _resolve_discovery_eval(
-                        session,
-                        eval_id=request.eval_definition_id,
-                        org_id=principal.organisation_id,
-                        principal=principal,
-                    )
-                    judge = build_discovery_model_judge_callable(hub, request.model_backend_id)
-                    eval_result = await EvalEngine().evaluate_result_async(
-                        {"candidate": {"nodes": list(draft.nodes), "relationships": list(draft.relationships)}},
-                        eval_def,
-                        model_judge_callable=judge,
-                    )
-                    eval_gate_passed = eval_result.outcome is JudgeOutcome.PASS
-                    eval_gate_verdict = (
-                        "pass"
-                        if eval_gate_passed
-                        else ("error" if eval_result.outcome is JudgeOutcome.ERROR else "fail")
-                    )
-                    provenance["evaluator_version"] = _DISCOVERY_EVALUATOR_VERSION
-                    if not eval_gate_passed:
-                        raise HTTPException(
-                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                            detail={
-                                "code": "eval_gate_failed",
-                                "message": "AI-assisted discovery did not pass its evaluation gate",
-                                "verdict": eval_gate_verdict,
-                            },
-                        )
-            finally:
-                await hub.__aexit__(None, None, None)
         raw_content = {
             "nodes": json.loads(json.dumps(list(draft.nodes), default=str)),
             "relationships": json.loads(json.dumps(list(draft.relationships), default=str)),
