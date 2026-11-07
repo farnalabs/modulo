@@ -554,7 +554,10 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert "Build and sha256-verify PostgreSQL from pinned upstream source" in workflow_text
     assert "../pg-src/configure" in workflow_text
     assert 'BUNDLE_PG_PREFIX="$PWD/build/${BUNDLE_ROOT}/pg"' in workflow_text
+
+    assert 'BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"' in workflow_text
     assert '--prefix="$BUNDLE_PG_PREFIX"' in workflow_text
+
     assert "--without-llvm" in workflow_text
     assert "PG_REQUIRED_EXTENSIONS=" in versions
     assert "PG_REQUIRED_EXTENSIONS=\n" in versions
