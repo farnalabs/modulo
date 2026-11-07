@@ -1,6 +1,6 @@
 # Architecture Guide
 
-Modulo is a self-hosted Agentic Delivery Governance platform: an autonomous software factory you own and run on your own infrastructure. It builds governed, repeatable AI-assisted software delivery pipelines, and its pipeline engine applies graph engineering to compose agents, connectors, gates, and humans into an explicit graph. This document covers the system architecture, tech stack, key components, data flow, database schema, authentication, and deployment.
+Modulo is a self-hosted Delivery Governance Platform: govern the software development lifecycle as AI and automation take on more of the work. Its operating loop is **record → evaluate → control → improve**: capture automated work, assess outputs and evidence, control progression through gates and human decisions, and improve the delivery system from observed results. The current implementation demonstrates this through governed, repeatable AI-assisted software delivery pipelines; its pipeline engine applies graph engineering to compose agents, connectors, gates, and humans into an explicit graph. Issue-to-PR is one governed workflow, not the whole product. This document covers the system architecture, tech stack, key components, data flow, database schema, authentication, and deployment.
 
 ## System overview
 
