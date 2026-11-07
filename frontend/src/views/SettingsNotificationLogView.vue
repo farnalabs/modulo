@@ -161,7 +161,7 @@ import { api } from '../lib/api/client'
 import type { paths } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useCursorPageStack } from '../composables/useCursorPageStack'
-import { dateRangeQuery, defaultDateRange } from '../lib/formatDate'
+import { dateRangeQuery, defaultDateRange, formatDateLogTimestamp } from '../lib/formatDate'
 import PageHeader from '../components/shared/PageHeader.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -213,14 +213,7 @@ const items = computed(() => responseData.value?.items ?? [])
 const total = computed(() => responseData.value?.total ?? 0)
 
 function formatTimestamp(ts: string | null): string {
-  if (!ts) return '—'
-  const d = new Date(ts)
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatDateLogTimestamp(ts)
 }
 
 function statusBadge(status: string): string {
