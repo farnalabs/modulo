@@ -3855,14 +3855,40 @@ def _post_condition_env(tmp_path: Path, *, gh_body: str, gh_rc: int, git_rc: int
     }
 
 
-def test_publish_release_assertion_is_the_last_step_after_the_tag_push() -> None:
+def test_publish_release_assertion_is_the_last_failing_step_after_the_tag_push() -> None:
     """The verification must be terminal: after the release create and tag push,
-    and the final step of the job so nothing after it can mask a failure."""
+    and the last step that can fail, so nothing after it can mask a failure.
+
+    A best-effort post-publication notification (the website rebuild hook) may
+    follow it, but only because it cannot fail the job: it must not opt into
+    ``continue-on-error`` (semgrep-banned anyway), must never return non-zero,
+    and must not be ``always()``-guarded so it still skips when the assertion
+    fails. Anything that can fail must stay before the assertion.
+    """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
-    names = _step_names(workflow["jobs"]["publish-release"]["steps"])
+    steps = workflow["jobs"]["publish-release"]["steps"]
+    names = _step_names(steps)
     assert _ASSERT_STEP_NAME in names, "release/bundle-tag assertion step missing"
     assert names.index(_ASSERT_STEP_NAME) > names.index("Push the bundle tag")
-    assert names[-1] == _ASSERT_STEP_NAME, "the assertion must be the job's final step"
+
+    trailing = steps[names.index(_ASSERT_STEP_NAME) + 1 :]
+    assert _step_names(trailing) == ["Notify website to rebuild (Cloudflare Pages deploy hook)"], (
+        "only the best-effort website notification may follow the terminal assertion"
+    )
+    for step in trailing:
+        assert "continue-on-error" not in step, (
+            f"{step.get('name')!r} after the terminal assertion may not mask a failure"
+        )
+        assert "always()" not in str(step.get("if", "")), (
+            f"{step.get('name')!r} after the terminal assertion must not run when it failed"
+        )
+        trailing_script = step.get("run", "")
+        assert "exit 1" not in trailing_script, (
+            f"{step.get('name')!r} after the terminal assertion must never fail the job"
+        )
+        assert trailing_script.rstrip().endswith("exit 0"), (
+            f"{step.get('name')!r} after the terminal assertion must exit 0 on every path"
+        )
 
     script = _post_condition_script()
     raw_script = _extract_publish_release_step_script(_ASSERT_STEP_NAME)

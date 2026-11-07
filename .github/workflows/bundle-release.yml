@@ -308,8 +308,8 @@ jobs:
             [ -x "$required" ] || { echo "::error::required PostgreSQL executable missing or not executable: ${required}" >&2; exit 1; }
             echo "assemble: found PostgreSQL executable ${required}"
           done
-          [ -f "$BUNDLE/pg/share/postgresql/postgres.bki" ] || { echo "::error::PostgreSQL runtime data file missing: ${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }
-          [ -d "$BUNDLE/pg/share/postgresql/timezonesets" ] || { echo "::error::PostgreSQL runtime data directory missing: ${BUNDLE}/pg/share/postgresql/timezonesets" >&2; exit 1; }
+          test -f "$BUNDLE/pg/share/postgresql/postgres.bki" || { echo "::error::PostgreSQL runtime data file missing: ${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }
+          test -d "$BUNDLE/pg/share/postgresql/timezonesets" || { echo "::error::PostgreSQL runtime data directory missing: ${BUNDLE}/pg/share/postgresql/timezonesets" >&2; exit 1; }
           sharedir="$("$BUNDLE/pg/bin/pg_config" --sharedir)" || {
              echo "::error::pg_config --sharedir failed: executable=${BUNDLE}/pg/bin/pg_config" >&2
              exit 1
