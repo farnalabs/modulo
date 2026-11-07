@@ -150,8 +150,6 @@ from modulo.core.pipeline_engine.retry_policy import (
     _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN,
     _attempt_started_at,
     _can_fenced_requeue,
-    _graph_has_script_mode,
-    _is_non_retryable_error_code,
     _non_retryable_failure_detail,
     _transient_retry_allowance,
     maybe_retry_after_policy,
@@ -224,6 +222,8 @@ _retry_backoff_seconds = _retry_policy_module.retry_backoff_seconds
 _record_retry_redispatch = _retry_policy_module.record_retry_redispatch
 _attempt_consumed_node_budget = _retry_policy_module._attempt_consumed_node_budget
 _attempt_elapsed_seconds = _retry_policy_module._attempt_elapsed_seconds
+_graph_has_script_mode = _retry_policy_module._graph_has_script_mode
+_is_non_retryable_error_code = _retry_policy_module._is_non_retryable_error_code
 
 # Statuses a run may still be admitted from when a retry's backoff elapses.
 # Any terminal status (complete/failed/cancelled/eval_failed) means the run
