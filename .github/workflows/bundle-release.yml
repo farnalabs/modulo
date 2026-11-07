@@ -629,9 +629,31 @@ jobs:
           smoke_root="$(mktemp -d)"
           smoke_user="modulo-pg-smoke"
           cleanup() {
-            if id "$smoke_user" >/dev/null 2>&1; then sudo userdel "$smoke_user" >/dev/null 2>&1 || true; fi
-            if [ -d "$smoke_root/original" ] && [ ! -e "$original_bundle" ]; then mv "$smoke_root/original" "$original_bundle"; fi
-            rm -rf "$smoke_root"
+            status=$?
+            cleanup_rc=0
+            if [ -d "$smoke_root/original" ] && [ ! -e "$original_bundle" ]; then
+              if ! mv "$smoke_root/original" "$original_bundle"; then
+                echo "::error::failed to restore the original bundle after PostgreSQL relocation smoke" >&2
+                cleanup_rc=1
+              fi
+            fi
+            if [ -z "$smoke_root" ] || [ "$smoke_root" = "/" ]; then
+              echo "::error::refusing to remove an unsafe PostgreSQL relocation smoke root" >&2
+              cleanup_rc=1
+            elif ! sudo rm -rf -- "$smoke_root"; then
+              echo "::error::failed to remove PostgreSQL relocation smoke root: $smoke_root" >&2
+              cleanup_rc=1
+            fi
+            if id "$smoke_user" >/dev/null 2>&1; then
+              if ! sudo userdel "$smoke_user"; then
+                echo "::error::failed to delete PostgreSQL relocation smoke user: $smoke_user" >&2
+                cleanup_rc=1
+              fi
+            fi
+            if [ "$cleanup_rc" -ne 0 ]; then
+              exit "$cleanup_rc"
+            fi
+            exit "$status"
           }
           trap cleanup EXIT
           sudo useradd --system --no-create-home --shell /usr/sbin/nologin "$smoke_user"
