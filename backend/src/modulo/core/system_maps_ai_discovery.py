@@ -43,7 +43,7 @@ class _DiscoveryInvoker(Protocol):
         self,
         messages: list[BaseMessage],
         output_schema: dict[str, Any] | None = None,
-    ) -> Awaitable[Any]: ...
+    ) -> Awaitable[Any]: ...  # pragma: no cover - Protocol stub body, never executed
 
 
 DiscoveryCallable = Callable[[list[BaseMessage], dict[str, Any] | None], Awaitable[Any]]
@@ -167,8 +167,6 @@ def _validate_contract(
         endpoint for edge in enhancement.additional_edges for endpoint in (edge.source_node_key, edge.target_node_key)
     }
     if any(endpoint not in accepted_node_keys for endpoint in endpoints):
-        return None
-    if not prompt_version or not rubric_version:
         return None
     return enhancement
 

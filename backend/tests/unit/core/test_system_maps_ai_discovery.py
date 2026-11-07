@@ -7,17 +7,46 @@ import pytest
 from langchain_core.messages import BaseMessage
 
 from modulo.core.system_maps_ai_discovery import (
+    ENHANCEMENT_OUTPUT_SCHEMA,
     PROMPT_VERSION,
     RUBRIC_VERSION,
     build_discovery_prompt,
     enhance_discovery,
 )
 from modulo.core.system_maps_discovery import DiscoveryDraft, DiscoverySource, discover_draft
+from modulo.model_backends.base import ModelBackendBase
 
 
 class _Response:
     def __init__(self, content: str) -> None:
         self.content = content
+
+
+class _Backend(ModelBackendBase):
+    """Minimal concrete backend used to exercise the ModelBackendBase path."""
+
+    def __init__(self, response: str, *, native: bool) -> None:
+        self._response = response
+        self.supports_native_structured_output = native
+        self.calls: list[dict[str, Any]] = []
+
+    @property
+    def backend_id(self) -> str:
+        return "test/backend"
+
+    async def invoke(
+        self,
+        messages: list[BaseMessage],
+        output_schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> _Response:
+        del kwargs
+        self.calls.append({"messages": messages, "output_schema": output_schema})
+        return _Response(self._response)
+
+    def stream(self, messages: list[BaseMessage], **kwargs: Any) -> Any:
+        del messages, kwargs
+        raise NotImplementedError
 
 
 def _draft() -> DiscoveryDraft:
@@ -242,3 +271,94 @@ async def test_edge_endpoint_must_be_materialized_as_an_additional_node() -> Non
     )
 
     assert result == draft
+
+
+@pytest.mark.asyncio
+async def test_duplicate_additional_node_key_returns_original_draft() -> None:
+    response = json.dumps(
+        {
+            "additional_nodes": [
+                {"node_key": "safe:store", "node_type": "data_store", "display_name": "One"},
+                {"node_key": "safe:store", "node_type": "data_store", "display_name": "Two"},
+            ],
+            "additional_edges": [],
+            "confidence": 0.99,
+            "reasoning": "Duplicate node key.",
+        }
+    )
+    draft = _draft()
+
+    result = await enhance_discovery(
+        draft,
+        _callable(response, []),
+        safe_additions=[{"node_key": "safe:store"}],
+    )
+
+    assert result == draft
+
+
+@pytest.mark.asyncio
+async def test_non_allowlisted_additional_node_returns_original_draft() -> None:
+    response = json.dumps(
+        {
+            "additional_nodes": [{"node_key": "invented:node", "node_type": "queue", "display_name": "Invented"}],
+            "additional_edges": [],
+            "confidence": 0.99,
+            "reasoning": "Invented node.",
+        }
+    )
+    draft = _draft()
+
+    result = await enhance_discovery(
+        draft,
+        _callable(response, []),
+        safe_additions=[{"node_key": "safe:store"}],
+    )
+
+    assert result == draft
+
+
+@pytest.mark.asyncio
+async def test_duplicate_additional_edge_returns_original_draft() -> None:
+    edge = {
+        "source_node_key": "pipeline:p1",
+        "target_node_key": "pipeline:p2",
+        "relationship_type": "flow",
+        "reason": "duplicate claim",
+    }
+    response = json.dumps(
+        {
+            "additional_nodes": [],
+            "additional_edges": [edge, edge],
+            "confidence": 0.99,
+            "reasoning": "Duplicate edge.",
+        }
+    )
+    draft = _draft()
+
+    result = await enhance_discovery(draft, _callable(response, []))
+
+    assert result == draft
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [True, False])
+async def test_model_backend_invocation_honours_native_structured_output(native: bool) -> None:
+    response = json.dumps(
+        {
+            "additional_nodes": [{"node_key": "safe:store", "node_type": "data_store", "display_name": "Evidence"}],
+            "additional_edges": [],
+            "confidence": 0.95,
+            "reasoning": "The explicitly allowlisted store explains retention.",
+        }
+    )
+    backend = _Backend(response, native=native)
+
+    result = await enhance_discovery(
+        _draft(),
+        backend,
+        safe_additions=[{"node_key": "safe:store"}],
+    )
+
+    assert len(result.nodes) == 3
+    assert backend.calls[0]["output_schema"] == (ENHANCEMENT_OUTPUT_SCHEMA if native else None)
