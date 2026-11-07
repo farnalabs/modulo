@@ -279,7 +279,9 @@ jobs:
           set -euo pipefail
           # Keep this step fail-loud: the previous dry-run only reported exit 1,
           # which hid whether layout, copy, pg_config, or patchelf failed.
+          rc=0
           trap 'rc=$?; echo "::error::Assemble bundle layout failed at line ${LINENO}: ${BASH_COMMAND} (exit ${rc})" >&2; exit "$rc"' ERR
+          # shellcheck source=scripts/bundle-versions.env
           source scripts/bundle-versions.env
           BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
           # pg_config emits the absolute configure-time prefix, while the
@@ -395,7 +397,9 @@ jobs:
           chmod 755 "$BUNDLE/launcher"
 
           echo "bundle-v${VERSION_NUM}" > "$BUNDLE/VERSION"
-
+          test -s "$BUNDLE/VERSION"
+          echo "assemble: bundle layout complete"
+          exit 0
 
       - name: Scan shipped PostgreSQL ELF files for runtime path leakage
         run: |
