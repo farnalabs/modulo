@@ -272,7 +272,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/bundle-versions.env
-          BUNDLE="build/${BUNDLE_ROOT}"
+          BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
           mkdir -p "$BUNDLE/runtime" "$BUNDLE/pg" "$BUNDLE/redis"
 
           # CPython runtime (glibc build -- x86_64/aarch64-unknown-linux-gnu).
