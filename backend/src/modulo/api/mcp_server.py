@@ -11096,6 +11096,8 @@ async def _system_maps_discovery_session() -> AsyncGenerator[AsyncSession, None]
 async def discover_system_map(
     name: str = "Discovered System Map",
     description: str | None = None,
+    model_backend_id: uuid.UUID | None = None,
+    eval_definition_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Trigger System Maps discovery over MCP (FAR-2288).
 
@@ -11139,7 +11141,12 @@ async def discover_system_map(
         from modulo.api.schemas.system_maps import SystemMapDiscoveryRequest
 
         try:
-            discovery_request = SystemMapDiscoveryRequest(name=name, description=description)
+            discovery_request = SystemMapDiscoveryRequest(
+                name=name,
+                description=description,
+                model_backend_id=model_backend_id,
+                eval_definition_id=eval_definition_id,
+            )
         except _PydanticValidationError as exc:
             return {
                 "error": "validation_failed",

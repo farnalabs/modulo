@@ -222,20 +222,20 @@ def _merge_enhancement(
     )
 
 
-async def enhance_discovery(
+async def enhance_discovery_with_outcome(
     draft: DiscoveryDraft,
     backend: ModelBackendBase | DiscoveryCallable | _DiscoveryInvoker,
     *,
     prompt_version: str = PROMPT_VERSION,
     rubric_version: str = RUBRIC_VERSION,
     safe_additions: Sequence[Mapping[str, Any]] = (),
-) -> DiscoveryDraft:
-    """Return a validated enhancement, or the original draft on any failure.
+) -> tuple[DiscoveryDraft, str]:
+    """Enhance a draft and distinguish provider errors from safe fallbacks.
 
-    A ``ModelBackendBase`` is invoked using its existing ``invoke`` contract.
-    An injected callable follows the typed-judge transport shape:
-    ``(messages, output_schema) -> awaitable response``. The service never
-    resolves, stores, publishes, or dispatches anything itself.
+    The returned outcome is ``accepted`` for a validated enhancement,
+    ``fallback`` for malformed/low-confidence model output, and ``error`` for
+    an invocation failure. Callers that own backend availability must not turn
+    ``error`` into an unreported deterministic fallback.
     """
     messages = build_discovery_prompt(draft, safe_additions=safe_additions)
     try:
@@ -252,15 +252,37 @@ async def enhance_discovery(
         )
         enhancement = _validate_contract(raw, draft, safe_additions, prompt_version, rubric_version)
         if enhancement is None:
-            return draft
-        return _merge_enhancement(
-            draft,
-            enhancement,
-            prompt_version=prompt_version,
-            rubric_version=rubric_version,
+            return draft, "fallback"
+        return (
+            _merge_enhancement(
+                draft,
+                enhancement,
+                prompt_version=prompt_version,
+                rubric_version=rubric_version,
+            ),
+            "accepted",
         )
     except Exception:
-        return draft
+        return draft, "error"
+
+
+async def enhance_discovery(
+    draft: DiscoveryDraft,
+    backend: ModelBackendBase | DiscoveryCallable | _DiscoveryInvoker,
+    *,
+    prompt_version: str = PROMPT_VERSION,
+    rubric_version: str = RUBRIC_VERSION,
+    safe_additions: Sequence[Mapping[str, Any]] = (),
+) -> DiscoveryDraft:
+    """Return a validated enhancement, or the original draft on any failure."""
+    result, _outcome = await enhance_discovery_with_outcome(
+        draft,
+        backend,
+        prompt_version=prompt_version,
+        rubric_version=rubric_version,
+        safe_additions=safe_additions,
+    )
+    return result
 
 
 __all__ = [
@@ -271,4 +293,5 @@ __all__ = [
     "DiscoveryCallable",
     "build_discovery_prompt",
     "enhance_discovery",
+    "enhance_discovery_with_outcome",
 ]
