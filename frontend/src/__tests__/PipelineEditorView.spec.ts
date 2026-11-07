@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
+import { MarkerType } from '@vue-flow/core'
 
 const useApiFns = vi.hoisted(() => ({
   get: vi.fn(),
@@ -3965,6 +3966,242 @@ describe('PipelineEditorView - system-admin snapshot lock (FAR-1287)', () => {
     expect(error.exists()).toBe(true)
     expect(error.text()).toContain('Failed to release the snapshot lock')
     expect(error.text()).toContain('socket reset')
+    wrapper.unmount()
+  })
+})
+
+describe('PipelineEditorView — FAR-2410 canvas layout & edge direction', () => {
+  beforeEach(async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+  })
+
+  it('converts every edge with a closed arrowhead that matches its stroke', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    const loopEdge = vm.convertBackendEdge({ id: 'e1', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'loop' }, 0)
+    const llmEdge = vm.convertBackendEdge({ id: 'e2', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'llm' }, 1)
+    const normalEdge = vm.convertBackendEdge({ id: 'e3', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'reject' }, 2)
+
+    for (const edge of [loopEdge, llmEdge, normalEdge]) {
+      expect(edge.markerEnd.type).toBe(MarkerType.ArrowClosed)
+      expect(edge.markerEnd.color).toBe(edge.style.stroke)
+    }
+    // Semantic metadata survives the presentation-only conversion.
+    expect(loopEdge.data.edge_type).toBe('loop')
+    expect(llmEdge.data.edge_type).toBe('llm')
+    expect(normalEdge.data.edge_type).toBe('reject')
+    wrapper.unmount()
+  })
+
+  it('lays an unplaced graph out on load but never silently replaces saved positions', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.userOwnedLayoutPipelines.delete('test-pipeline-id')
+
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({
+          data: {
+            nodes: [
+              { id: 'a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } },
+              { id: 'b', node_type: 'agent', label: 'B', position: { x: 0, y: 0 } },
+            ],
+            edges: [{ id: 'e1', source_node_id: 'a', target_node_id: 'b', edge_type: 'normal' }],
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    await vm.loadGraph()
+    const laidOut = Object.fromEntries(vm.rawNodes.map((node: any) => [node.id, node.position]))
+    expect(laidOut.a).toEqual({ x: 0, y: 0 })
+    expect(laidOut.b).toEqual({ x: 240, y: 0 })
+
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({
+          data: {
+            nodes: [
+              { id: 'a', node_type: 'agent', label: 'A', position: { x: 50, y: 60 } },
+              { id: 'b', node_type: 'agent', label: 'B', position: { x: 300, y: 70 } },
+            ],
+            edges: [],
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    await vm.loadGraph()
+    expect(vm.rawNodes[0].position).toEqual({ x: 50, y: 60 })
+    expect(vm.rawNodes[1].position).toEqual({ x: 300, y: 70 })
+    wrapper.unmount()
+  })
+
+  it('arranges locally, marks the graph dirty, preserves every non-position field, and can undo', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    const rawNodes = [
+      {
+        id: 'a', node_type: 'agent', label: 'A', position: { x: 9, y: 9 },
+        env_vars: { SECRET_TOKEN: 'masked-value' }, agent_commands: ['run one'],
+        idempotent: false, execution_metadata: { attempt: 2 },
+      },
+      {
+        id: 'b', node_type: 'hitl', label: 'B', position: { x: 12, y: 12 },
+        hitl_config: { approver_team: 'ops' },
+      },
+    ]
+    vm.rawNodes = rawNodes
+    vm.rawEdges = [{ id: 'e1', source_node_id: 'a', target_node_id: 'b', edge_type: 'normal' }]
+    vm.flowNodes = [
+      ...rawNodes.map((node) => ({ ...node })),
+      // A Flow-only node that has no backend counterpart must be untouched.
+      { id: 'flow-only', position: { x: 7, y: 8 }, data: { label: 'Flow only' } },
+    ]
+    vm.graphBaseline = JSON.stringify({ nodes: rawNodes, edges: vm.rawEdges })
+
+    vm.selectedNodeData = rawNodes[0]
+    vm.arrangeGraph()
+    await nextTick()
+
+    const byId = Object.fromEntries(vm.rawNodes.map((node: any) => [node.id, node]))
+    // The inspector stays bound to the replacement raw node object.
+    expect(vm.selectedNodeData).toBe(byId.a)
+    expect(byId.a.position).toEqual({ x: 0, y: 0 })
+    expect(byId.b.position).toEqual({ x: 240, y: 0 })
+    expect(byId.a.env_vars).toEqual({ SECRET_TOKEN: 'masked-value' })
+    expect(byId.a.agent_commands).toEqual(['run one'])
+    expect(byId.a.idempotent).toBe(false)
+    expect(byId.a.execution_metadata).toEqual({ attempt: 2 })
+    expect(byId.b.hitl_config).toEqual({ approver_team: 'ops' })
+    expect(vm.flowNodes.find((node: any) => node.id === 'flow-only').position).toEqual({ x: 7, y: 8 })
+    expect(vm.isGraphDirty).toBe(true)
+    expect(vm.layoutUserOwned).toBe(false)
+
+    vm.undoArrangeGraph()
+    await nextTick()
+    expect(vm.rawNodes[0].position).toEqual({ x: 9, y: 9 })
+    expect(vm.rawNodes[1].position).toEqual({ x: 12, y: 12 })
+    expect(vm.arrangeUndo).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('syncs manual drag positions into rawNodes and the save payload, marking layout user-owned', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    const rawNode = { id: 'a', node_type: 'agent', label: 'A', description: '', position: { x: 0, y: 0 } }
+    vm.rawNodes = [rawNode]
+    vm.flowNodes = [{ id: 'a', type: 'agent', position: { x: 333, y: 444 }, data: { label: 'A' } }]
+    vm.rawEdges = []
+    vm.userOwnedLayoutPipelines.delete('test-pipeline-id')
+
+    vm.onNodeDragStop()
+    expect(vm.rawNodes[0].position).toEqual({ x: 333, y: 444 })
+    expect(vm.layoutUserOwned).toBe(true)
+    expect(vm.userOwnedLayoutPipelines.get('test-pipeline-id')).toBe(true)
+
+    const putMock = api.PUT as ReturnType<typeof vi.fn>
+    putMock.mockClear()
+    await vm.saveGraph()
+    const body = (putMock.mock.calls[0][1] as any).body
+    expect(body.nodes[0].position).toEqual({ x: 333, y: 444 })
+    expect(body.nodes[0].description).toBe('')
+    wrapper.unmount()
+  })
+
+  it('does not arrange in read-only or empty states', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = []
+    vm.arrangeGraph()
+    expect(vm.arrangeUndo).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('honours user-owned ownership and handles position-less graphs safely', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    const pipeline = 'test-pipeline-id'
+
+    // Empty graph: generated layout is a no-op.
+    vm.rawNodes = []
+    vm.applyGeneratedLayoutIfUnplaced()
+    expect(vm.rawNodes).toEqual([])
+
+    // A session-owned pipeline is never re-laid out on load.
+    vm.userOwnedLayoutPipelines.set(pipeline, true)
+    vm.rawNodes = [
+      { id: 'a', node_type: 'agent', label: 'A' },
+      { id: 'b', node_type: 'agent', label: 'B' },
+    ]
+    vm.applyGeneratedLayoutIfUnplaced()
+    expect(vm.rawNodes[0].position).toBeUndefined()
+    expect(vm.layoutUserOwned).toBe(true)
+    vm.userOwnedLayoutPipelines.delete(pipeline)
+
+    // Position-less nodes count as unplaced; only finite non-zero coordinates
+    // count as a real saved arrangement.
+    expect(vm.hasPlacedPositions([{ id: 'a' }])).toBe(false)
+    expect(vm.hasPlacedPositions([{ id: 'a', position: { x: 0, y: 0 } }])).toBe(false)
+    expect(vm.hasPlacedPositions([{ id: 'a', position: { x: Number.NaN, y: 0 } }])).toBe(false)
+    expect(vm.hasPlacedPositions([{ id: 'a', position: { x: 1, y: 0 } }])).toBe(true)
+
+    // Undo with no pending arrange and a flow node missing from rawNodes are
+    // both safe no-ops.
+    vm.arrangeUndo = null
+    vm.undoArrangeGraph()
+    vm.selectedNodeData = { id: 'ghost-node' }
+    vm.rawNodes = [{ id: 'a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } }]
+    vm.arrangeGraph()
+    expect(vm.selectedNodeData).toEqual({ id: 'ghost-node' })
+    vm.rawNodes = [
+      { id: 'only-raw', node_type: 'agent', label: 'Only raw', position: { x: 1, y: 2 } },
+    ]
+    vm.flowNodes = []
+    vm.syncNodePositionsFromFlow()
+    expect(vm.rawNodes[0].position).toEqual({ x: 1, y: 2 })
+
+    // Capturing/restoring positions skips nodes without coordinates and keeps
+    // nodes absent from a snapshot untouched.
+    expect(vm.snapshotPositions([{ id: 'no-position' }])).toEqual({})
+    const restored = vm.restorePositions(
+      [{ id: 'kept', position: { x: 3, y: 4 } }, { id: 'missing' }],
+      { kept: { x: 0, y: 0 } },
+    )
+    expect(restored[0].position).toEqual({ x: 0, y: 0 })
+    expect(restored[1].position).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('announces the selected connection for assistive technology', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'a', node_type: 'agent', label: 'Source Node', position: { x: 0, y: 0 } },
+      { id: 'b', node_type: 'agent', label: 'Target Node', position: { x: 200, y: 0 } },
+    ]
+    vm.rawEdges = [{ id: 'e1', source_node_id: 'a', target_node_id: 'b', edge_type: 'loop' }]
+
+    vm.onEdgeClick({ edge: { id: 'e1' } })
+    await nextTick()
+    expect(vm.connectionAnnouncement).toContain('Source Node')
+    expect(vm.connectionAnnouncement).toContain('Target Node')
+    expect(vm.connectionAnnouncement).toContain('loop')
+
+    // An edge without an explicit type is announced as a normal edge.
+    vm.rawEdges = [{ id: 'e2', source_node_id: 'a', target_node_id: 'b' }]
+    vm.onEdgeClick({ edge: { id: 'e2' } })
+    await nextTick()
+    expect(vm.connectionAnnouncement).toContain('normal')
+
+    const region = wrapper.find('[data-testid="pipeline-editor-connection-announcement"]')
+    expect(region.attributes('aria-live')).toBe('polite')
     wrapper.unmount()
   })
 })

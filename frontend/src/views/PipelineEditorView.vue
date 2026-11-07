@@ -675,6 +675,27 @@
                 <PlusIcon class="h-3 w-3" aria-hidden="true" />
                 {{ $t('views.PipelineEditorView.add_node') }}
               </button>
+              <button
+                type="button"
+                :class="btnToolbarSecondary"
+                :disabled="flowNodes.length === 0"
+                :title="$t('views.PipelineEditorView.arrange_graph_hint')"
+                data-testid="pipeline-editor-arrange-graph"
+                @click="arrangeGraph"
+              >
+                <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h6M4 12h10M4 18h6" /><path d="M16 4l4 2-4 2M16 16l4 2-4 2" /></svg>
+                {{ $t('views.PipelineEditorView.arrange_graph') }}
+              </button>
+              <button
+                v-if="arrangeUndo"
+                type="button"
+                :class="btnToolbarSecondary"
+                :title="$t('views.PipelineEditorView.undo_arrange_hint')"
+                data-testid="pipeline-editor-undo-arrange"
+                @click="undoArrangeGraph"
+              >
+                {{ $t('views.PipelineEditorView.undo_arrange') }}
+              </button>
             </template>
             <button
               type="button"
@@ -961,19 +982,23 @@
           v-model:nodes="displayNodes"
           v-model:edges="displayEdges"
           :node-types="nodeTypes"
-          :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: CANVAS_EDGE_STROKE } }"
+          :default-edge-options="defaultEdgeOptions"
           :fit-view-on-init="false"
           :source-position="Position.Right"
           :target-position="Position.Left"
           :nodes-draggable="!isViewing"
           :nodes-connectable="!isViewing"
+          :nodes-focusable="true"
+          :edges-focusable="true"
           :edges-updatable="!isViewing"
           :delete-key-code="isViewing ? null : undefined"
           @node-click="onNodeClick"
           @edge-click="onEdgeClick"
           @pane-click="onPaneClick"
+          @node-drag-stop="onNodeDragStop"
         >
           <Background :gap="20" :size="1" />
+          <output class="sr-only" aria-live="polite" data-testid="pipeline-editor-connection-announcement">{{ connectionAnnouncement }}</output>
           <FlowControls :show-interactive="false" />
           <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning-text">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
@@ -984,12 +1009,22 @@
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                     <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
                   </div></template>
-          <template #node-router="nodeProps"><div class="rounded-lg border-2 border-indigo-500/60 bg-indigo-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-indigo-600 dark:text-indigo-300">{{ $t('views.PipelineEditorView.node_router_badge') }}</div>
+          <!-- Router/HITL cards carry a non-colour affordance too: a dashed
+               border + branch glyph and a double border + gate glyph. The
+               badges already name the kind, so the shape survives greyscale
+               and colour-vision differences. -->
+          <template #node-router="nodeProps"><div class="rounded-lg rounded-r-3xl border-2 border-dashed border-indigo-500/60 bg-indigo-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-router">
+                    <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-indigo-600 dark:text-indigo-300">
+                      <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="18" r="2" /><path d="M6 8v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8M12 13v3" /></svg>
+                      {{ $t('views.PipelineEditorView.node_router_badge') }}
+                    </div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_router_label') }}</div>
                   </div></template>
-          <template #node-hitl="nodeProps"><div class="rounded-lg border-2 border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</div>
+          <template #node-hitl="nodeProps"><div class="rounded-lg border-4 border-double border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-hitl">
+                    <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">
+                      <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 10-4-2.5-7-5.5-7-10V6z" /><path d="M9 12l2 2 4-4" /></svg>
+                      {{ $t('views.PipelineEditorView.node_hitl_badge') }}
+                    </div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
                   </div></template>
           <!-- FAR-1141: dispatch nodes render with their own badge/colour.
@@ -2095,7 +2130,7 @@ import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } 
 import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
-import { VueFlow, useVueFlow, Position } from '@vue-flow/core'
+import { VueFlow, useVueFlow, MarkerType, Position } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
@@ -2129,6 +2164,7 @@ import { formatDateShort } from '../lib/formatDate'
 import { formatCompactDuration, worstCaseForEvent, type WorstCase } from '../lib/worstCase'
 import { withTimeout } from '../lib/requestTimeout'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'
+import { layoutNodes } from '../utils/graph-layout'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
 import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
@@ -2203,6 +2239,36 @@ const saveAsDropdownRef = ref<HTMLElement | null>(null)
 const saveAsDropdownStyle = ref<Record<string, string>>({})
 const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch', connector: 'connector' }
 const { fitView, onPaneReady } = useVueFlow()
+
+// Vue Flow renders edge geometry from these presentation options; semantic
+// edge metadata lives on each edge's `data` and is never affected.
+const defaultEdgeOptions = {
+  type: 'smoothstep',
+  animated: false,
+  style: { stroke: CANVAS_EDGE_STROKE },
+  markerEnd: {
+    type: MarkerType.ArrowClosed,
+    width: 16,
+    height: 16,
+    color: CANVAS_EDGE_STROKE,
+  },
+}
+
+// Conservative frontend/session layout ownership (FAR-2410). The graph API has
+// no ownership field and this PR deliberately does not add a migration. The
+// map lives for the SPA session: a manual drag marks the pipeline user-owned,
+// Arrange graph clears it. Saved positions are always authoritative on load,
+// so a fresh session still reopens the persisted arrangement exactly.
+const userOwnedLayoutPipelines = new Map<string, boolean>()
+const layoutUserOwned = ref(false)
+interface PositionSnapshot { x: number; y: number }
+interface ArrangeUndoSnapshot {
+  raw: Record<string, PositionSnapshot>
+  flow: Record<string, PositionSnapshot>
+  userOwned: boolean
+}
+const arrangeUndo = ref<ArrangeUndoSnapshot | null>(null)
+const connectionAnnouncement = ref('')
 
 // Docked-toolbar styling: one height/radius/spacing per action class so the
 // menu bar reads as one consistent control set (presentation only).
@@ -3469,13 +3535,17 @@ function convertBackendNode(n: any): any {
 function convertBackendEdge(e: any, i: number): any {
   const isLoop = e.edge_type === 'loop'
   const isLlm = e.edge_type === 'llm'
+  let stroke: string
   let style: Record<string, string>
   if (isLoop) {
-    style = { stroke: '#3b82f6', strokeDasharray: '5,5' }
+    stroke = '#3b82f6'
+    style = { stroke, strokeDasharray: '5,5' }
   } else if (isLlm) {
-    style = { stroke: '#8b5cf6' }
+    stroke = '#8b5cf6'
+    style = { stroke }
   } else {
-    style = { stroke: CANVAS_EDGE_STROKE }
+    stroke = CANVAS_EDGE_STROKE
+    style = { stroke }
   }
   return {
     id: e.id || `edge-${i}`,
@@ -3484,6 +3554,15 @@ function convertBackendEdge(e: any, i: number): any {
     type: 'smoothstep',
     animated: isLoop,
     style,
+    // Direction is conveyed by geometry (a closed arrowhead), not colour
+    // alone, so loop / LLM / normal edges all remain readable without relying
+    // on their tint. Edge semantics stay in `data`.
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      width: 16,
+      height: 16,
+      color: stroke,
+    },
     data: {
       hitl_review_config: e.hitl_review_config || null,
       edge_type: e.edge_type || 'normal',
@@ -3492,6 +3571,143 @@ function convertBackendEdge(e: any, i: number): any {
       routing_label: e.routing_label || '',
     },
   }
+}
+
+function snapshotPositions(nodes: any[]): Record<string, PositionSnapshot> {
+  const snapshot: Record<string, PositionSnapshot> = {}
+  for (const node of nodes) {
+    if (node?.id && node.position) {
+      snapshot[node.id] = { x: node.position.x, y: node.position.y }
+    }
+  }
+  return snapshot
+}
+
+function restorePositions(
+  nodes: any[],
+  snapshot: Record<string, PositionSnapshot>,
+): any[] {
+  return nodes.map((node) => {
+    const position = snapshot[node.id]
+    return position ? { ...node, position: { ...position } } : node
+  })
+}
+
+/** True when the graph already carries a meaningful saved arrangement. */
+function hasPlacedPositions(nodes: any[]): boolean {
+  return nodes.some((node) => {
+    const x = Number(node?.position?.x)
+    const y = Number(node?.position?.y)
+    return Number.isFinite(x) && Number.isFinite(y) && (x !== 0 || y !== 0)
+  })
+}
+
+function computeGraphLayout(): Record<string, PositionSnapshot> {
+  const laidOut = layoutNodes(
+    rawNodes.value.map((node: any) => ({
+      id: node.id,
+      node_type: node.node_type,
+      label: node.label,
+      width: node.width,
+      height: node.height,
+    })),
+    rawEdges.value.map((edge: any) => ({
+      source: edge.source_node_id,
+      target: edge.target_node_id,
+      edge_type: edge.edge_type,
+    })),
+  )
+  return Object.fromEntries(laidOut.map((node) => [node.id, { ...node.position }]))
+}
+
+/** Keep the inspector bound to the raw node after immutable position updates. */
+function rebindSelectedNode(): void {
+  const selected = selectedNodeData.value
+  if (!selected) return
+  const replacement = rawNodes.value.find((node: any) => node.id === selected.id)
+  if (replacement) selectedNodeData.value = replacement
+}
+
+/** Position-only update: every non-position node field is preserved. */
+function applyGraphPositions(positions: Record<string, PositionSnapshot>): void {
+  const apply = (nodes: any[]): any[] =>
+    nodes.map((node) => {
+      const position = positions[node.id]
+      return position ? { ...node, position: { ...position } } : node
+    })
+  rawNodes.value = apply(rawNodes.value)
+  flowNodes.value = apply(flowNodes.value)
+  rebindSelectedNode()
+}
+
+/**
+ * Generated layout is the default for a new/unplaced graph. Saved positions
+ * are authoritative: an already-placed graph is never silently re-laid out.
+ * `userOwnedLayoutPipelines` carries the explicit ownership decision for the
+ * duration of the SPA session (see the note beside its declaration).
+ */
+function applyGeneratedLayoutIfUnplaced(): void {
+  if (rawNodes.value.length === 0) return
+  if (userOwnedLayoutPipelines.get(pipelineId)) {
+    layoutUserOwned.value = true
+    return
+  }
+  if (hasPlacedPositions(rawNodes.value)) {
+    layoutUserOwned.value = true
+    return
+  }
+  applyGraphPositions(computeGraphLayout())
+  layoutUserOwned.value = false
+}
+
+/** Explicit Arrange graph: replace the arrangement and restore generated ownership. */
+function arrangeGraph(): void {
+  if (isViewing.value || rawNodes.value.length === 0) return
+  const undo: ArrangeUndoSnapshot = {
+    raw: snapshotPositions(rawNodes.value),
+    flow: snapshotPositions(flowNodes.value),
+    userOwned: layoutUserOwned.value,
+  }
+  applyGraphPositions(computeGraphLayout())
+  arrangeUndo.value = undo
+  layoutUserOwned.value = false
+  userOwnedLayoutPipelines.set(pipelineId, false)
+  void nextTick().then(() =>
+    fitView({ padding: 0.1 }).catch((error) => {
+      console.warn('[PipelineEditorView] Arrange graph fitView failed', error)
+    }),
+  )
+}
+
+/** One-step local undo for the last Arrange graph action. */
+function undoArrangeGraph(): void {
+  if (isViewing.value || !arrangeUndo.value) return
+  const undo = arrangeUndo.value
+  rawNodes.value = restorePositions(rawNodes.value, undo.raw)
+  flowNodes.value = restorePositions(flowNodes.value, undo.flow)
+  layoutUserOwned.value = undo.userOwned
+  userOwnedLayoutPipelines.set(pipelineId, undo.userOwned)
+  arrangeUndo.value = null
+}
+
+/** Copy Vue Flow's live drag positions into the graph payload. */
+function syncNodePositionsFromFlow(): void {
+  if (isViewing.value) return
+  const flowById = new Map(flowNodes.value.map((node: any) => [node.id, node]))
+  rawNodes.value = rawNodes.value.map((node: any) => {
+    const flowNode = flowById.get(node.id)
+    if (!flowNode?.position) return node
+    return { ...node, position: { x: flowNode.position.x, y: flowNode.position.y } }
+  })
+  rebindSelectedNode()
+}
+
+function onNodeDragStop(): void {
+  if (isViewing.value) return
+  syncNodePositionsFromFlow()
+  layoutUserOwned.value = true
+  userOwnedLayoutPipelines.set(pipelineId, true)
+  arrangeUndo.value = null
 }
 
 async function loadGraph() {
@@ -3518,6 +3734,9 @@ async function loadGraph() {
     rawEdges.value = result.edges || []
     flowNodes.value = rawNodes.value.map(convertBackendNode)
     flowEdges.value = rawEdges.value.map(convertBackendEdge)
+    // FAR-2410: only an unplaced graph receives generated positions; saved
+    // arrangements are authoritative and are never silently replaced.
+    applyGeneratedLayoutIfUnplaced()
     // FAR-1812: every load (and therefore every successful save, which
     // round-trips through loadGraph) re-baselines the dirty check.
     graphBaseline.value = graphFingerprint()
@@ -3639,6 +3858,7 @@ async function loadCurrentVersionSnapshot() {
 
 function onNodeClick(event: any) {
   selectedEdgeData.value = null
+  connectionAnnouncement.value = ''
   const node = event.node
   if (!node) return
   // FAR-1812: the inspector reads the graph the canvas is SHOWING — the
@@ -3669,6 +3889,13 @@ function onEdgeClick(event: any) {
   if (backendEdge) {
     selectedEdgeData.value = backendEdge
     populateEdgeForm(backendEdge)
+    const labelFor = (id: string): string =>
+      inspectSourceNodes.value.find((node: any) => node.id === id)?.label || id
+    connectionAnnouncement.value = t('views.PipelineEditorView.connection_selected', {
+      source: labelFor(backendEdge.source_node_id),
+      target: labelFor(backendEdge.target_node_id),
+      type: backendEdge.edge_type || 'normal',
+    })
   }
 }
 
@@ -3809,6 +4036,7 @@ async function saveEdgeConfig() {
 function onPaneClick() {
   selectedNodeData.value = null
   selectedEdgeData.value = null
+  connectionAnnouncement.value = ''
   showSaveAsDropdown.value = false
   selectedNodeParamSetId.value = undefined
   selectedNodeOverrides.value = {}
@@ -5592,6 +5820,28 @@ const { loading, load: reloadPage } = useDataFetch<null>(
 .toolbar-select :deep(.p-select-label) {
   padding: 0 0.5rem;
   font-size: 0.75rem;
+}
+
+/* FAR-2410: direction and selection are visible without colour: thicker
+   stroke + focus ring on the focused/selected edge, and a visible keyboard
+   focus ring on canvas nodes. Edge semantics stay untouched. */
+:deep(.vue-flow__edge.selected .vue-flow__edge-path),
+:deep(.vue-flow__edge:focus-visible .vue-flow__edge-path),
+:deep(.vue-flow__edge:hover .vue-flow__edge-path) {
+  stroke-width: 2.75;
+}
+
+:deep(.vue-flow__edge:focus-visible),
+:deep(.vue-flow__edge.selected) {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+:deep(.vue-flow__node:focus-visible) {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 3px;
+  border-radius: 8px;
 }
 
 @media (max-width: 767px) {

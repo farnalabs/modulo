@@ -448,6 +448,8 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
       'pipeline-editor-save-as-template',
       'pipeline-editor-run',
       'pipeline-editor-add-node',
+      'pipeline-editor-arrange-graph',
+      'pipeline-editor-undo-arrange',
       'pipeline-editor-node-type-select',
       'pipeline-editor-rename',
       'pipeline-editor-toolbar-group-run',
@@ -532,6 +534,17 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
     expect(apiPatchMock).not.toHaveBeenCalled()
     // Still the live graph, still un-hydrated.
     expect(vm.rawNodes.map((n: any) => n.id)).toEqual([LIVE_NODE_ID])
+
+    // FAR-2410: the layout actions are inert while viewing — no frozen or
+    // live position can be mutated by Arrange, drag-stop or undo.
+    const frozenPositions = JSON.stringify(vm.viewFlowNodes.map((node: any) => node.position))
+    const livePositions = JSON.stringify(vm.rawNodes.map((node: any) => node.position))
+    vm.arrangeGraph()
+    vm.onNodeDragStop()
+    vm.syncNodePositionsFromFlow()
+    vm.undoArrangeGraph()
+    expect(JSON.stringify(vm.viewFlowNodes.map((node: any) => node.position))).toBe(frozenPositions)
+    expect(JSON.stringify(vm.rawNodes.map((node: any) => node.position))).toBe(livePositions)
     wrapper.unmount()
   })
 
