@@ -82,8 +82,8 @@ access classes: every principal with the viewer-level `system_maps.read`
 permission can read the **published** maps, revisions, overview, history,
 by-time and diff views (routes `/system-maps` and `/system-maps/:id`, visible in
 the manifest as `public` and gated on `required_permissions:
-[system_maps.read]`), while authoring — discovery, create, update, delete,
-publish, archive, restore-as-new, apply, loop dispatch and MCP discovery —
+[system_maps.read]`), while authoring (discovery, create, update, delete,
+publish, archive, restore-as-new, apply, loop dispatch and MCP discovery)
 remains behind the internal-only `system_maps` gate. Both classes are registered
 in the manifest `features:` registry as `feat-system-maps`.
 
