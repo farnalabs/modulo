@@ -635,6 +635,15 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert "host PostgreSQL path" in smoke_script
     assert "PGHOST" not in smoke_script
     assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
+    assert 'smoke_dump_dir="$smoke_root/dump"' in smoke_script
+    assert 'mkdir -p "$smoke_data" "$smoke_socket" "$smoke_dump_dir" "$smoke_root/home"' in smoke_script
+    assert (
+        'sudo chown -R "$smoke_user:$smoke_user" '
+        '"$smoke_data" "$smoke_socket" "$smoke_dump_dir" '
+        '"$smoke_root/home" "$smoke_script"'
+    ) in smoke_script
+    assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in smoke_script
+    assert 'chmod 0755 "$smoke_root" "$extract_root"' in smoke_script
 
 
 def test_bundle_release_scans_postgres_elf_paths_and_keeps_glibc_gate() -> None:
