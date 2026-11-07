@@ -5011,7 +5011,7 @@ async function saveGraph() {
         ? { ...selectedNodeOverrides.value }
         : null
     }
-    await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
+    const saveResponse = await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
       body: {
         nodes: rawNodes.value.map(buildNodePayload),
@@ -5030,6 +5030,10 @@ async function saveGraph() {
       },
       signal,
     }))
+    // openapi-fetch returns HTTP failures in `error` without rejecting. Treat
+    // those responses like transport failures so local ownership is committed
+    // only after the server has accepted the graph.
+    throwOnError(saveResponse)
     // The server write is the commit point for ownership. Keep the local draft
     // until the PUT succeeds; a failed PUT never changes the persisted cache.
     if (ownershipToCommit) commitLayoutOwnership(ownershipToCommit)

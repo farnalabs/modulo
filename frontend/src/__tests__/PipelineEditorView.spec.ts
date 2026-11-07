@@ -4165,6 +4165,28 @@ describe('PipelineEditorView — FAR-2410 canvas layout & edge direction', () =>
     wrapper.unmount()
   })
 
+  it('does not persist draft ownership when the graph save returns an API error', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } }]
+    vm.flowNodes = [{ id: 'a', type: 'agent', position: { x: 120, y: 80 }, data: { label: 'A' } }]
+    vm.rawEdges = []
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: undefined,
+      error: { detail: 'save rejected' },
+      response: { status: 422 },
+    })
+
+    vm.onNodeDragStop()
+    await vm.saveGraph()
+    await flushPromises()
+
+    expect(vm.saveGraphError).toContain('save rejected')
+    expect(JSON.parse(localStorage.getItem('modulo.pipeline.layoutOwnership') ?? '{}')['test-pipeline-id']).toBeUndefined()
+    expect(vm.draftLayoutOwnership).toBe('user')
+    wrapper.unmount()
+  })
+
   it('does not persist draft ownership when the editor is abandoned', async () => {
     const wrapper = await mountEditorLoaded()
     const vm = wrapper.vm as any
