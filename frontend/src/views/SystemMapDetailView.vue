@@ -19,10 +19,10 @@
           @select-current="selectCurrentRevision"
           @select-by-time="selectRevisionByTime"
           :read-only="readOnly"
-           @new-draft="createNewDraft"
-           @restore-revision="restoreRevision"
-           @diff-revision="diffRevision"
-           @discover="runDiscovery"
+          @new-draft="createNewDraft"
+          @restore-revision="restoreRevision"
+          @diff-revision="diffRevision"
+          @discover="runDiscovery"
 
         />
       </div>
@@ -121,13 +121,25 @@
           </div>
 
           <!-- Discovery Review Panel (slide-over) -->
-          <DiscoveryPanel
-            v-if="discoveryOpen"
-            :discovery="discovery"
-            @close="discoveryOpen = false"
-            @save="saveDraftWithDiscovery"
-            data-testid="system-map-discovery-panel"
-          />
+           <DiscoveryPanel
+             v-if="discoveryOpen"
+              :discovery="discovery"
+              :backend-names="discoveryBackendNames"
+               :eval-identity="discoveryEvalIdentity"
+
+              @close="discoveryOpen = false"
+             @save="saveDraftWithDiscovery"
+             data-testid="system-map-discovery-panel"
+           />
+            <DiscoveryConfigPanel
+              v-if="discoveryConfigOpen"
+              :can-use-ai="aiAuthoringAvailable"
+              :submitting="discoverySubmitting"
+              :submit-error="discoverySubmitError"
+              @close="closeDiscoveryConfig"
+              @submit="startDiscovery"
+              data-testid="system-map-discovery-config"
+            />
         </div>
 
         <SystemMapAttributionBindings
@@ -156,6 +168,7 @@ import HeaderBar from '../components/system-maps/SystemMapHeaderBar.vue'
 import GraphEditor from '../components/system-maps/SystemMapGraphEditor.vue'
 import RevisionSidebar from '../components/system-maps/SystemMapRevisionSidebar.vue'
 import DiscoveryPanel from '../components/system-maps/SystemMapDiscoveryPanel.vue'
+import DiscoveryConfigPanel from '../components/system-maps/SystemMapDiscoveryConfigPanel.vue'
 import SystemMapAttributionBindings from '../components/system-maps/SystemMapAttributionBindings.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import { mergeDiscoverySelections } from '../components/system-maps/discoveryMerge'
@@ -176,6 +189,7 @@ const loading = computed(() => store.loading)
 
 const showSidebar = ref(true)
 const discoveryOpen = ref(false)
+const discoveryConfigOpen = ref(false)
 const saving = ref(false)
 const actionError = ref<string | null>(null)
 const diffResult = ref<SystemMapRevisionDiff | null>(null)
@@ -195,6 +209,11 @@ const diffSummaryItems = computed<Array<[string, number]>>(() => {
 const isPublished = computed(() => activeRevision.value?.status === 'published')
 const isArchived = computed(() => activeRevision.value?.status === 'archived')
 const readOnly = computed(() => !store.hasAccess || isPublished.value || isArchived.value)
+const aiAuthoringAvailable = computed(() => store.accessLoaded && !store.error && store.hasAccess)
+const discoverySubmitting = ref(false)
+const discoverySubmitError = ref<string | null>(null)
+const discoveryBackendNames = ref<Record<string, string>>({})
+const discoveryEvalIdentity = ref<string | undefined>(undefined)
 
 watch(graph, (value) => {
   editedNodes.value = (value?.nodes ?? []).map((node) => ({ ...node, config_json: { ...node.config_json } }))
@@ -319,14 +338,34 @@ async function restoreRevision(revisionId: string): Promise<void> {
   }
 }
 
-async function runDiscovery(): Promise<void> {
-  if (!activeMap.value) return
+function runDiscovery(): void {
+  if (!activeMap.value || readOnly.value || !store.accessLoaded || store.error) return
+  discoverySubmitError.value = null
+  discoveryConfigOpen.value = true
+}
+
+function closeDiscoveryConfig(): void {
+  if (!discoverySubmitting.value) discoveryConfigOpen.value = false
+}
+
+async function startDiscovery(options?: { modelBackendId?: string; evalDefinitionId?: string; modelBackendName?: string; evalName?: string; evalVersion?: number }): Promise<void> {
+  if (!activeMap.value || discoverySubmitting.value) return
+  if (options?.modelBackendId && options.modelBackendName) discoveryBackendNames.value = { [options.modelBackendId]: options.modelBackendName }
+  if (options?.evalDefinitionId && options.evalName) {
+    const versionSuffix = options.evalVersion == null ? '' : ` (v${options.evalVersion})`
+    discoveryEvalIdentity.value = `${options.evalName}${versionSuffix}`
+  }
+  discoverySubmitting.value = true
+  discoverySubmitError.value = null
   actionError.value = null
   try {
-    await store.discover(`Discovered ${activeMap.value.name}`, `Discovery at ${new Date().toISOString()}`)
+    await store.discover(`Discovered ${activeMap.value.name}`, `Discovery at ${new Date().toISOString()}`, options)
+    discoveryConfigOpen.value = false
     discoveryOpen.value = true
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.discovery_failed')
+    discoverySubmitError.value = err instanceof Error ? err.message : t('systemMaps.errors.discovery_failed')
+  } finally {
+    discoverySubmitting.value = false
   }
 }
 
@@ -357,6 +396,7 @@ async function saveDraft(): Promise<void> {
 }
 
 async function saveDraftWithDiscovery(selections: DiscoverySelection): Promise<void> {
+  if (discovery.value?.ai_assisted === true && discovery.value.eval_gate_passed !== true) return
   const merged = mergeDiscoverySelections(editedNodes.value, editedRelationships.value, discovery.value, selections)
   editedNodes.value = merged.nodes
   editedRelationships.value = merged.relationships

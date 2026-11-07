@@ -33,6 +33,7 @@ vi.mock('vue-router', () => ({
 }))
 
 import SystemMapDetailView from '../views/SystemMapDetailView.vue'
+import DiscoveryConfigPanel from '../components/system-maps/SystemMapDiscoveryConfigPanel.vue'
 import { useSystemMapsStore } from '../stores/systemMaps'
 import enUS from '../locales/en-US.js'
 
@@ -588,6 +589,9 @@ describe('SystemMapDetailView authoring actions', () => {
 
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
     await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-discovery-submit"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
+    await flushPromises()
     expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
 
     wrapper.findComponent(DiscoveryStub).vm.$emit('save', { acceptedNodes: [0], acceptedEdges: [], rejectedNodes: [], rejectedEdges: [] })
@@ -603,6 +607,8 @@ describe('SystemMapDetailView authoring actions', () => {
     await flushPromises()
 
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('Could not discover system map')
 
@@ -621,10 +627,91 @@ describe('SystemMapDetailView authoring actions', () => {
     mockPost.mockResolvedValue({ data: { draft_map_id: 'map-1', draft_revision_id: 'rev-1', inferred_nodes: [], inferred_edges: [] } })
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
     await flushPromises()
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
+    await flushPromises()
     wrapper.findComponent(DiscoveryStub).vm.$emit('close')
     await flushPromises()
 
     expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(false)
+  })
+
+  it('passes AI selections into discovery and ignores close and re-entry while submitting', async () => {
+    seed(mockPost)
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    let resolveDiscover!: (value: unknown) => void
+    const pending = new Promise((resolve) => { resolveDiscover = resolve })
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/system-maps/discover') return pending
+      return Promise.resolve({ data: { id: 'rev-3', revision_number: 3, status: 'draft' } })
+    })
+
+    wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    const config = wrapper.findComponent(DiscoveryConfigPanel)
+    expect(config.exists()).toBe(true)
+
+    config.vm.$emit('submit', { modelBackendId: 'backend-1', modelBackendName: 'Primary', evalDefinitionId: 'eval-1', evalName: 'Judge', evalVersion: 2 })
+    await flushPromises()
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/discover', expect.objectContaining({
+      body: expect.objectContaining({ model_backend_id: 'backend-1', eval_definition_id: 'eval-1' }),
+    }))
+
+    config.vm.$emit('close')
+    config.vm.$emit('submit', { modelBackendId: 'backend-2', modelBackendName: 'Other' })
+    await flushPromises()
+    expect(wrapper.findComponent(DiscoveryConfigPanel).exists()).toBe(true)
+
+    resolveDiscover({ data: { draft_map_id: 'map-1', inferred_nodes: [], inferred_edges: [] } })
+    await flushPromises()
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
+    expect(wrapper.findComponent(DiscoveryConfigPanel).exists()).toBe(false)
+  })
+
+  it('derives the eval identity without a version when none is supplied', async () => {
+    seed(mockPost)
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/system-maps/discover') return Promise.resolve({ data: { draft_map_id: 'map-1', inferred_nodes: [], inferred_edges: [] } })
+      return Promise.resolve({ data: { id: 'rev-3', revision_number: 3, status: 'draft' } })
+    })
+
+    wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    wrapper.findComponent(DiscoveryConfigPanel).vm.$emit('submit', { evalDefinitionId: 'eval-1', evalName: 'Judge' })
+    await flushPromises()
+
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/discover', expect.objectContaining({
+      body: { name: expect.any(String), description: expect.any(String) },
+    }))
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
+  })
+
+  it('refuses to save AI suggestions until the eval gate passes', async () => {
+    seed(mockPost)
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/system-maps/discover') {
+        return Promise.resolve({ data: { draft_map_id: 'map-1', inferred_nodes: [], inferred_edges: [], ai_assisted: true, eval_gate_passed: false, eval_gate_verdict: 'blocked' } })
+      }
+      return Promise.resolve({ data: { id: 'rev-3', revision_number: 3, status: 'draft' } })
+    })
+
+    wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
+
+    mockPost.mockClear()
+    wrapper.findComponent(DiscoveryStub).vm.$emit('save', { acceptedNodes: [], acceptedEdges: [], rejectedNodes: [], rejectedEdges: [] })
+    await flushPromises()
+
+    expect(mockPost).not.toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions', expect.anything())
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
   })
 
   it('opens the discovery review panel for the dashboard deep link', async () => {
@@ -817,7 +904,7 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     mockPlanStore.devMode = true
     mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
     mockGet.mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
       return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
     })
   })
@@ -880,9 +967,12 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
     await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-discovery-submit"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
+    await flushPromises()
     expect(wrapper.text()).toContain('Discovery failed')
 
-    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    await wrapper.get('[data-testid="system-map-discovery-config-cancel"]').trigger('click')
     wrapper.findComponent(HeaderStub).vm.$emit('save')
     await flushPromises()
     expect(wrapper.text()).toContain('Could not save draft')
@@ -916,6 +1006,10 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     store.discovery = { inferred_nodes: [], inferred_edges: [] } as never
 
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(false)
+    store.activeRevision = { id: 'rev-1', revision_number: 1, status: 'draft' } as never
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
     await flushPromises()
     expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
 

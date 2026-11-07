@@ -1281,6 +1281,48 @@ elements:
       - testid: system-map-discovery-panel
         type: dialog
         dynamic_testid: false
+      - testid: system-map-discovery-config
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-discovery-config-backdrop
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-config-close
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-config-cancel
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-submit
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-mode-deterministic
+        type: input
+        dynamic_testid: false
+      - testid: system-map-discovery-mode-ai
+        type: input
+        dynamic_testid: false
+      - testid: system-map-ai-controls
+        type: element
+        dynamic_testid: false
+      - testid: system-map-discovery-backend
+        type: select
+        dynamic_testid: false
+      - testid: system-map-discovery-eval
+        type: select
+        dynamic_testid: false
+      - testid: system-map-discovery-provenance
+        type: element
+        dynamic_testid: false
+      - testid: system-map-discovery-eval-blocked
+        type: element
+        dynamic_testid: false
+      - testid: system-map-discovery-request-loading
+        type: element
+        dynamic_testid: false
+      - testid: system-map-discovery-request-error
+        type: element
+        dynamic_testid: false
       - testid: system-map-discovery-backdrop
         type: button
         dynamic_testid: false
