@@ -179,37 +179,37 @@ async def _bypass_capacity(mock_self, **kwargs):
 # ---------------------------------------------------------------------------
 
 
-def testretry_after_policy_stall_match():
+def test_retry_after_policy_stall_match():
     assert retry_after_policy({"on": ["stall"], "max_retries": 2}, "stalled", "executor_stalled") == 2
 
 
-def testretry_after_policy_stall_does_not_match_timeout():
+def test_retry_after_policy_stall_does_not_match_timeout():
     assert retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "node_timeout") is None
 
 
-def testretry_after_policy_timeout_match():
+def test_retry_after_policy_timeout_match():
     assert retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_timeout") == 1
 
 
-def testretry_after_policy_timeout_error_code_match():
+def test_retry_after_policy_timeout_error_code_match():
     assert retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "TimeoutError") == 1
 
 
-def testretry_after_policy_failure_match():
+def test_retry_after_policy_failure_match():
     assert retry_after_policy({"on": ["failure"], "max_retries": 1}, "failed", "some_other_error") == 1
 
 
-def testretry_after_policy_no_policy_returns_none():
+def test_retry_after_policy_no_policy_returns_none():
     assert retry_after_policy({}, "stalled", "executor_stalled") is None
     assert retry_after_policy(None, "failed", "boom") is None
 
 
-def testretry_after_policy_malformed_on_returns_none():
+def test_retry_after_policy_malformed_on_returns_none():
     assert retry_after_policy({"on": ["bogus"], "max_retries": 2}, "failed", "boom") is None
     assert retry_after_policy({"on": "stall", "max_retries": 2}, "stalled", "executor_stalled") is None
 
 
-def testretry_after_policy_zero_budget_returns_none():
+def test_retry_after_policy_zero_budget_returns_none():
     assert retry_after_policy({"on": ["failure"], "max_retries": 0}, "failed", "boom") is None
 
 
@@ -218,23 +218,23 @@ def testretry_after_policy_zero_budget_returns_none():
 # ---------------------------------------------------------------------------
 
 
-def testretry_after_policy_absent_on_matches_stall():
+def test_retry_after_policy_absent_on_matches_stall():
     assert retry_after_policy({"max_retries": 2}, "stalled", "executor_stalled") == 2
 
 
-def testretry_after_policy_absent_on_matches_timeout():
+def test_retry_after_policy_absent_on_matches_timeout():
     assert retry_after_policy({"max_retries": 3}, "failed", "node_timeout") == 3
 
 
-def testretry_after_policy_absent_on_matches_eval_failed():
+def test_retry_after_policy_absent_on_matches_eval_failed():
     assert retry_after_policy({"max_retries": 1}, "eval_failed", "eval_blocked") == 1
 
 
-def testretry_after_policy_absent_on_matches_failure():
+def test_retry_after_policy_absent_on_matches_failure():
     assert retry_after_policy({"max_retries": 5}, "failed", "some_other_error") == 5
 
 
-def testretry_after_policy_absent_on_excludes_hang_death():
+def test_retry_after_policy_absent_on_excludes_hang_death():
     # All-events coverage must stay surgical about the never-retryable
     # exclusions: a hang death (node_cancelled + "likely hung") is excluded
     # from "failure" retries regardless of coverage breadth.
@@ -242,7 +242,7 @@ def testretry_after_policy_absent_on_excludes_hang_death():
     assert retry_after_policy({"max_retries": 2}, "failed", "node_cancelled", hang_detail) is None
 
 
-def testretry_after_policy_never_retries_provider_refusals():
+def test_retry_after_policy_never_retries_provider_refusals():
     """FAR-2006: a 401/402 provider refusal is excluded from EVERY policy shape.
 
     A whole night ran at zero throughput because a 402 was retried three times
@@ -254,18 +254,18 @@ def testretry_after_policy_never_retries_provider_refusals():
         assert retry_after_policy({"max_retries": 3}, "failed", code) is None
 
 
-def testretry_after_policy_null_on_is_all_events():
+def test_retry_after_policy_null_on_is_all_events():
     # An explicitly-null `on` behaves like an absent key (defensive: the write
     # sites reject null, but legacy/hand-edited rows may carry it).
     assert retry_after_policy({"on": None, "max_retries": 2}, "stalled", "executor_stalled") == 2
     assert retry_after_policy({"on": None, "max_retries": 2}, "failed", "node_timeout") == 2
 
 
-def testretry_after_policy_absent_on_never_retries_script_mode_terminal_codes():
+def test_retry_after_policy_absent_on_never_retries_script_mode_terminal_codes():
     """FAR-649 (qa gate) — the script-mode exclusion TWIN for the all-events
     path: an ABSENT-`on` (all-events) retry_policy must NEVER retry script-mode
     terminal codes, exactly like the explicit-`on` ``failure`` policy pinned at
-    ``test_executor.py::testretry_after_policy_never_retries_script_mode_terminal_codes``.
+    ``test_executor.py::test_retry_after_policy_never_retries_script_mode_terminal_codes``.
 
     Once a script-mode node's process started (fencing lease claimed), any
     fault is exactly-once regardless of coverage breadth. This pins that the
@@ -291,28 +291,28 @@ def testretry_after_policy_absent_on_never_retries_script_mode_terminal_codes():
         assert retry_after_policy(null_on_policy, "failed", code) is None, code
 
 
-def testretry_after_policy_absent_on_zero_budget_returns_none():
+def test_retry_after_policy_absent_on_zero_budget_returns_none():
     assert retry_after_policy({"max_retries": 0}, "stalled", "executor_stalled") is None
 
 
-def testretry_after_policy_absent_on_malformed_budget_returns_none():
+def test_retry_after_policy_absent_on_malformed_budget_returns_none():
     assert retry_after_policy({"max_retries": "lots"}, "stalled", "executor_stalled") is None
     assert retry_after_policy({"max_retries": True}, "failed", "boom") is None
 
 
-def testretry_after_policy_explicit_empty_on_returns_none():
+def test_retry_after_policy_explicit_empty_on_returns_none():
     # An explicit `on: []` stays "no retry" (backward compatible) — it must NOT
     # be collapsed into the all-events default.
     assert retry_after_policy({"on": [], "max_retries": 2}, "stalled", "executor_stalled") is None
     assert retry_after_policy({"on": [], "max_retries": 2}, "failed", "node_timeout") is None
 
 
-def testretry_after_policy_failure_excludes_timeout_outcome():
+def test_retry_after_policy_failure_excludes_timeout_outcome():
     # A "failure"-only policy must not retry a node_timeout outcome.
     assert retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node_timeout") is None
 
 
-def testretry_after_policy_failure_excludes_hang_death():
+def test_retry_after_policy_failure_excludes_hang_death():
     # FAR-136 Gap 2 (prove-the-fix): a sandbox-agent hang death terminalizes as
     # error_code="node_cancelled" with "likely hung" in error_detail. A
     # "failure"-only policy must NOT re-dispatch it — each re-dispatch burns a
@@ -324,7 +324,7 @@ def testretry_after_policy_failure_excludes_hang_death():
     assert retry_after_policy({"on": ["failure"], "max_retries": 5}, "failed", "node_cancelled", hang_detail) is None
 
 
-def testretry_after_policy_failure_excludes_hang_death_dotted_code():
+def test_retry_after_policy_failure_excludes_hang_death_dotted_code():
     # The dotted alias (node.cancelled) behaves identically to the legacy code.
     assert (
         retry_after_policy(
@@ -337,7 +337,7 @@ def testretry_after_policy_failure_excludes_hang_death_dotted_code():
     )
 
 
-def testretry_after_policy_failure_retries_transient_node_cancelled():
+def test_retry_after_policy_failure_retries_transient_node_cancelled():
     # FAR-136 Gap 2 (both directions): a TRANSIENT node_cancelled (no "likely
     # hung" marker) stays retryable via the "failure" event — the exclusion
     # must stay surgical.
@@ -352,14 +352,14 @@ def testretry_after_policy_failure_retries_transient_node_cancelled():
     )
 
 
-def testretry_after_policy_failure_still_matches_with_detail_present():
+def test_retry_after_policy_failure_still_matches_with_detail_present():
     # A generic failure with an error_detail (no hang marker) still matches the
     # "failure" event — the new error_detail param must not change the
     # pre-existing generic-failure behaviour.
     assert retry_after_policy({"on": ["failure"], "max_retries": 2}, "failed", "boom", "some detail") == 2
 
 
-def testretry_after_policy_stall_error_code_on_failed_status():
+def test_retry_after_policy_stall_error_code_on_failed_status():
     # A stall surfaces as status "failed" with error_code "executor_stalled"
     # (the zombie watchdog path) — the "stall" event must still match it.
     assert retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "executor_stalled") == 2
@@ -370,18 +370,18 @@ def testretry_after_policy_stall_error_code_on_failed_status():
 # ---------------------------------------------------------------------------
 
 
-def testretry_after_policy_eval_failed_match():
+def test_retry_after_policy_eval_failed_match():
     # FAR-503: an eval-blocked run terminalizes as final_status "eval_failed"
     # with raw error_code "eval_blocked" — the new event re-dispatches it.
     assert retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "eval_failed", "eval_blocked") == 1
 
 
-def testretry_after_policy_eval_failed_dotted_code_match():
+def test_retry_after_policy_eval_failed_dotted_code_match():
     # The canonical dotted spelling (eval.blocked) behaves identically.
     assert retry_after_policy({"on": ["eval_failed"], "max_retries": 2}, "eval_failed", "eval.blocked") == 2
 
 
-def testretry_after_policy_eval_failed_stays_surgical():
+def test_retry_after_policy_eval_failed_stays_surgical():
     # The new event must not hijack the pre-existing events: a "eval_failed"-
     # only policy never retries a stall/timeout/generic-failure outcome, and a
     # "failure"-only policy never retries an eval-blocked run (eval_failed is a
@@ -392,14 +392,14 @@ def testretry_after_policy_eval_failed_stays_surgical():
     assert retry_after_policy({"on": ["failure"], "max_retries": 1}, "eval_failed", "eval_blocked") is None
 
 
-def testretry_after_policy_timeout_matches_node_deadline_exceeded():
+def test_retry_after_policy_timeout_matches_node_deadline_exceeded():
     # FAR-369: the absolute node-deadline watchdog terminalizes with
     # "node_deadline_exceeded" — a {on: ["timeout"]} policy must re-dispatch it
     # (the live gap: the deadline code was not in the timeout alias set).
     assert retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_deadline_exceeded") == 1
 
 
-def testretry_after_policy_timeout_matches_dotted_deadline_code():
+def test_retry_after_policy_timeout_matches_dotted_deadline_code():
     # The dotted registry spelling resolves identically through map_legacy_code.
     assert retry_after_policy({"on": ["timeout"], "max_retries": 2}, "failed", "node.deadline_exceeded") == 2
 

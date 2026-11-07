@@ -4289,7 +4289,7 @@ async def test_execute_returns_terminal_run_without_retry_task(terminal_status: 
 # ---------------------------------------------------------------------------
 
 
-def testretry_after_policy_never_retries_script_mode_terminal_codes():
+def test_retry_after_policy_never_retries_script_mode_terminal_codes():
     """A ``failure`` retry_policy must NEVER retry script-mode terminal codes.
 
     Once a script-mode node's process started (fencing lease claimed), any
@@ -4312,7 +4312,7 @@ def testretry_after_policy_never_retries_script_mode_terminal_codes():
         assert retry_after_policy(policy, "failed", code) is None, code
 
 
-def testretry_after_policy_still_retries_retryable_sandbox_failure():
+def test_retry_after_policy_still_retries_retryable_sandbox_failure():
     """A retryable sandbox-infra failure (pre-claim / LLM mode) still retries."""
     policy = {"on": ["failure"], "max_retries": 2}
     assert retry_after_policy(policy, "failed", "sandbox.no_output_json") == 2

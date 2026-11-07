@@ -13,6 +13,7 @@ SAQ re-raise) stays in ``executor.py`` and CALLS these pure functions.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 from typing import Any
@@ -547,7 +548,11 @@ async def maybe_retry_after_policy(
         return "none"
     # _retry_policy_applies guarantees a budget (not None) here; a defensive
     # narrowing keeps mypy strict-clean without introducing an ``assert``.
-    if retry_budget is None:
+    # ``retry_after_policy`` only yields a budget for a dict policy, so a None
+    # policy is already excluded by this same narrowing — folding it in keeps
+    # the type of ``pipeline_retry_policy`` narrowed for _redispatch_after_policy
+    # without an ``assert`` that would vanish under ``python -O``.
+    if retry_budget is None or pipeline_retry_policy is None:
         return "none"
     execution_attempt_count, current_claim_token, attempt_started_at = await read_retry_attempt_state_fn(org_id, run_id)
     superseded = claim_token is not None and current_claim_token is not None and current_claim_token != claim_token
@@ -590,8 +595,6 @@ async def maybe_retry_after_policy(
         script_retry_probe_ok,
         attempt_consumed_budget=attempt_consumed_budget,
     ):
-        # pipeline_retry_policy is not None here (checked by can_retry_after_policy)
-        assert pipeline_retry_policy is not None
         await _redispatch_after_policy(
             run_id=run_id,
             org_id=org_id,
@@ -713,7 +716,6 @@ async def _redispatch_after_policy(
         # FAR-2078: close the attempt that ended in this confirmed reset with
         # the outcome the reset just cleared from ``runs.error_code``.
         await record_attempt_reset_fn(run_id=run_id, org_id=org_id, error_code=error_code)
-    import asyncio
 
     await asyncio.sleep(effective_sleep)
     raise RunRetryPolicyError(final_status, retry_budget)
@@ -828,30 +830,6 @@ def _attempt_consumed_node_budget(elapsed_seconds: float | None, node_timeouts: 
     if budget_seconds <= 0:
         return False
     return elapsed_seconds >= budget_seconds - _NODE_BUDGET_RETRY_SLACK_SECONDS
-
-
-def _resolved_node_timeouts(graph_json: dict[str, Any] | None) -> dict[str, int]:
-    """Resolve each graph node's effective ``timeout_seconds`` (FAR-369).
-
-    The absolute node-deadline watchdog holds every node to its own hard
-    deadline, falling back to the pipeline-level default when a node does not
-    configure one.
-
-    Absent and explicitly-``null`` are the SAME state here: the API
-    ``PipelineGraphNode`` model defaults ``timeout_seconds`` to ``None`` and
-    serialises the key, so graphs authored through the API carry an explicit
-    ``"timeout_seconds": null``. Resolving that with ``dict.get(key, default)``
-    would return the persisted ``None`` (the key IS present) rather than the
-    default, and ``int(None)`` raises a TypeError that fails the run before any
-    node starts. Guard ``None`` explicitly so the default is always applied.
-    """
-    resolved: dict[str, int] = {}
-    for node in (graph_json or {}).get("nodes", []) or []:
-        if not isinstance(node, dict) or "id" not in node:
-            continue
-        configured = node.get("timeout_seconds")
-        resolved[str(node["id"])] = int(configured if configured is not None else 300)
-    return resolved
 
 
 def _graph_has_script_mode(graph_json: dict[str, Any] | None) -> bool:
@@ -1028,7 +1006,6 @@ __all__ = [
     "_non_retryable_failure_detail",
     "_publish_script_side_effect_unknown",
     "_redispatch_after_policy",
-    "_resolved_node_timeouts",
     "_sanitize_detail",
     "_stall_event_matches",
     "_timeout_event_matches",
