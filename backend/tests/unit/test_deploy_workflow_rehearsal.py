@@ -3866,10 +3866,13 @@ def _post_condition_env(tmp_path: Path, *, gh_body: str, gh_rc: int, git_rc: int
 
 
 def test_publish_release_assertion_is_the_last_failing_step_after_the_tag_push() -> None:
-    """The verification is after the tag push and is the last failing step.
+    """The verification must be after the tag push and be the last failing step.
 
-    A best-effort post-publication notification may follow it only when its
-    safety conditions keep it from masking a publication failure.
+    A best-effort post-publication notification (the website rebuild hook) may
+    follow it, but only because it cannot fail the job: it must not opt into
+    ``continue-on-error`` (semgrep-banned anyway), must never return non-zero,
+    and must not be ``always()``-guarded so it still skips when the assertion
+    fails. Anything that can fail must stay before the assertion.
     """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["publish-release"]["steps"]
