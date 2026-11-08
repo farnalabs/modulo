@@ -8600,6 +8600,15 @@ async def update_model_backend(
                 "field": "fallback_backend_ids",
                 "detail": "Supply fallback_backend_ids or clear_fallback_chain, not both",
             }
+        if default_params is not None and "base_url" in default_params:
+            return {
+                "error": "validation_error",
+                "field": "default_params.base_url",
+                "detail": (
+                    "Changing a model backend endpoint requires the explicit credential-rebinding setup flow; "
+                    "base_url cannot be changed through MCP"
+                ),
+            }
         if any(value is not None and not isinstance(value, str) for value in fallback_backend_ids or []):
             return {
                 "error": "validation_error",

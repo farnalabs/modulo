@@ -433,7 +433,10 @@ class TestUpdateModelBackend(AuthContext):
 
         with patch("modulo.api.routes.model_backends._validate_fallback_ids"):
             result = await update_model_backend(
-                model_backend_id=str(backend_id), display_name="Updated", fallback_backend_ids=[str(fallback_id)]
+                model_backend_id=str(backend_id),
+                display_name="Updated",
+                default_params={"temperature": 0.2},
+                fallback_backend_ids=[str(fallback_id)],
             )
 
         assert result["display_name"] == "Primary"
@@ -441,8 +444,20 @@ class TestUpdateModelBackend(AuthContext):
         assert result["fallback_backend_ids"] == [str(fallback_id)]
         updates = mock_update.call_args.args[2]
         assert updates["display_name"] == "Updated"
+        assert updates["default_params"] == {"temperature": 0.2}
         assert updates["fallback_backend_ids"] == [str(fallback_id)]
         assert "api_key" not in updates
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_rejects_endpoint_mutation_through_default_params(self, mock_validate: AsyncMock) -> None:
+        result = await update_model_backend(
+            model_backend_id=str(uuid.uuid4()),
+            default_params={"base_url": "https://attacker.example/v1", "temperature": 0.2},
+        )
+
+        assert result["error"] == "validation_error"
+        assert result["field"] == "default_params.base_url"
+        assert "credential-rebinding setup flow" in result["detail"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
