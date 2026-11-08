@@ -539,7 +539,12 @@ describe('PipelineEditorView — mobile properties-sheet dialogs (FAR-1861)', ()
     await flushPromises()
 
     const nodeSheet = sheetFor(wrapper, 'pipeline-editor-node-props-close')
-    expect(document.activeElement).toBe(nodeSheet)
+    // FAR-2464: focus enters the sheet's FIRST interactive control, not its
+    // container, so a keyboard user lands inside the form with something
+    // announced. The containment assertion is the contract; the exact control
+    // is the panel's first focusable in DOM order.
+    expect(nodeSheet.contains(document.activeElement as Node)).toBe(true)
+    expect(document.activeElement).not.toBe(nodeSheet)
 
     // A later selection change with focus already INSIDE the sheet must not
     // overwrite the remembered trigger.
@@ -601,7 +606,8 @@ describe('PipelineEditorView — mobile properties-sheet dialogs (FAR-1861)', ()
     await flushPromises()
 
     const nodeSheet = sheetFor(wrapper, 'pipeline-editor-node-props-close')
-    expect(document.activeElement).toBe(nodeSheet)
+    // FAR-2464: focus enters the first interactive control inside the sheet.
+    expect(nodeSheet.contains(document.activeElement as Node)).toBe(true)
 
     vm.selectedNodeData = null
     await flushPromises()

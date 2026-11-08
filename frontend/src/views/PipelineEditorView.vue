@@ -892,12 +892,16 @@
              `tabindex="-1"` makes it the focus-restore fallback for a properties
              sheet whose trigger (a VueFlow node/edge wrapper) is not focusable
              (FAR-1861). -->
+        <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- canvas keyboard region: focus owner for arrow navigation, nudge and the command palette -->
         <div
           v-show="!compareMode"
           ref="canvasRef"
           class="relative min-h-[8rem] flex-1"
-          tabindex="-1"
+          tabindex="0"
+          role="group"
+          :aria-label="$t('views.PipelineEditorView.canvas_keyboard_label')"
           data-testid="pipeline-editor-canvas"
+          @keydown="onCanvasKeydown"
         >
         <!-- Empty-state overlay on top of the canvas (latest mode only — its
              rename/archive/delete/add-node row is all write affordances, so a
@@ -931,6 +935,47 @@
             <button type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-show-me" @click="startEmptyStateWalkthrough">{{ $t('views.PipelineEditorView.empty_state_show_me') }}</button>
             <button type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-template" @click="openTemplateLibrary">{{ $t('views.PipelineEditorView.empty_state_start_from_template') }}</button>
           </div>
+        </div>
+        <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- palette keyboard region: Escape works from any palette control, including the option buttons -->
+        <div
+          v-if="canvasPaletteOpen"
+          class="absolute left-4 top-4 z-30 w-80 rounded-lg border border-border bg-card p-3 shadow-xl"
+          role="dialog"
+          aria-modal="false"
+          :aria-label="$t('views.PipelineEditorView.canvas_command_palette')"
+          data-testid="pipeline-editor-command-palette"
+          @keydown="onCanvasPaletteKeydown"
+        >
+          <div class="mb-2 flex items-center justify-between gap-2">
+            <h2 class="text-sm font-semibold">{{ $t('views.PipelineEditorView.canvas_command_palette') }}</h2>
+            <kbd class="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">{{ $t('views.PipelineEditorView.canvas_command_escape_key') }}</kbd>
+          </div>
+          <input
+            ref="canvasPaletteInputRef"
+            v-model="canvasPaletteQuery"
+            type="search"
+            class="mb-2 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+            :aria-label="$t('views.PipelineEditorView.canvas_command_search')"
+            :placeholder="$t('views.PipelineEditorView.canvas_command_search')"
+            data-testid="pipeline-editor-command-palette-input"
+          />
+          <ul role="listbox" class="max-h-56 overflow-y-auto" data-testid="pipeline-editor-command-palette-list">
+            <li v-for="(command, index) in filteredCanvasCommands" :key="command.id">
+              <button
+                type="button"
+                class="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                :class="{ 'bg-accent': index === canvasPaletteIndex }"
+                :aria-selected="index === canvasPaletteIndex"
+                role="option"
+                :data-testid="'pipeline-editor-command-option-' + command.id"
+                @click="runCanvasCommand(command.id)"
+              >
+                <span>{{ command.label }}</span>
+                <kbd class="text-[10px] text-muted-foreground">{{ command.shortcut }}</kbd>
+              </button>
+            </li>
+            <li v-if="filteredCanvasCommands.length === 0" class="px-2 py-4 text-center text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.canvas_command_no_results') }}</li>
+          </ul>
         </div>
         <!-- Run dialog modal -->
         <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- modal backdrop: needs keyboard Escape handler for accessible dismissal -->
@@ -1033,6 +1078,7 @@
         >
           <Background :gap="20" :size="1" />
           <output class="sr-only" aria-live="polite" data-testid="pipeline-editor-connection-announcement">{{ connectionAnnouncement }}</output>
+          <output class="sr-only" aria-live="polite" data-testid="pipeline-editor-canvas-announcement">{{ canvasAnnouncement }}</output>
           <FlowControls :show-interactive="false" />
           <template #node-default="nodeProps">
             <component
@@ -2191,7 +2237,7 @@ import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useDataFetch } from '../composables/useDataFetch'
-import { trapTabInElement } from '../composables/useFocusTrap'
+import { FOCUSABLE_SELECTOR, trapTabInElement } from '../composables/useFocusTrap'
 import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 
@@ -2303,6 +2349,36 @@ const singlePrPerRun = computed<boolean>({
   },
 })
 const selectedEdgeData = ref<any>(null)
+const canvasPaletteOpen = ref(false)
+const canvasPaletteQuery = ref('')
+const canvasPaletteIndex = ref(0)
+const canvasPaletteInputRef = ref<HTMLInputElement | null>(null)
+const keyboardConnectSourceId = ref<string | null>(null)
+// Only read actions survive in the historic (read-only) view: every write
+// command is a mutation of the live graph, which that view must never offer.
+const canvasCommands = computed(() => {
+  const writeCommands = [
+    { id: 'add-node', label: t('views.PipelineEditorView.canvas_command_add_node'), shortcut: 'A' },
+    { id: 'connect', label: t('views.PipelineEditorView.canvas_command_connect'), shortcut: 'E' },
+    { id: 'arrange', label: t('views.PipelineEditorView.canvas_command_arrange'), shortcut: '' },
+    { id: 'toggle-hitl', label: t('views.PipelineEditorView.canvas_command_toggle_hitl'), shortcut: '' },
+  ]
+  const readCommands = [
+    { id: 'fit', label: t('views.PipelineEditorView.canvas_command_fit'), shortcut: '' },
+    { id: 'timeline', label: t('views.PipelineEditorView.canvas_command_timeline'), shortcut: '' },
+  ]
+  return isViewing.value ? readCommands : [...writeCommands, ...readCommands]
+})
+const filteredCanvasCommands = computed(() => {
+  const query = canvasPaletteQuery.value.trim().toLowerCase()
+  return query ? canvasCommands.value.filter((command) => command.label.toLowerCase().includes(query)) : canvasCommands.value
+})
+// Filtering shrinks the list, so a selection made before typing can point at a
+// command that no longer exists (or at a different one). Reset the selection
+// whenever the query changes so Enter always runs the highlighted command.
+watch(canvasPaletteQuery, () => {
+  canvasPaletteIndex.value = 0
+})
 const showSaveAsDropdown = ref(false)
 const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
 const saveAsDropdownRef = ref<HTMLElement | null>(null)
@@ -2330,7 +2406,7 @@ function nodeComponent(nodeType: string) {
   return NODE_COMPONENTS[nodeType] ?? AgentNode
 }
 
-const { fitView, onPaneReady } = useVueFlow()
+const { fitView, onPaneReady, addEdges } = useVueFlow()
 
 // Vue Flow renders edge geometry from these presentation options; semantic
 // edge metadata lives on each edge's `data` and is never affected.
@@ -2406,6 +2482,7 @@ const lastGeneratedLayout = ref<Record<string, PositionSnapshot>>({})
 /** Provenance of each node's current position: 'user' for manual drags, 'generated' for layout. */
 const nodeProvenance = ref<ProvenanceMap>({})
 const connectionAnnouncement = ref('')
+const canvasAnnouncement = ref('')
 
 // Docked-toolbar styling: one height/radius/spacing per action class so the
 // menu bar reads as one consistent control set (presentation only).
@@ -4237,6 +4314,10 @@ function onNodeClick(event: any) {
   connectionAnnouncement.value = ''
   const node = event.node
   if (!node) return
+  if (keyboardConnectSourceId.value && keyboardConnectSourceId.value !== node.id && !isViewing.value) {
+    connectNodes(keyboardConnectSourceId.value, node.id)
+    keyboardConnectSourceId.value = null
+  }
   // FAR-1812: the inspector reads the graph the canvas is SHOWING — the
   // frozen snapshot while viewing, the live graph otherwise.
   const backendNode = inspectSourceNodes.value.find((n: any) => n.id === node.id)
@@ -4411,6 +4492,8 @@ async function saveEdgeConfig() {
 }
 
 function onPaneClick() {
+  canvasPaletteOpen.value = false
+  keyboardConnectSourceId.value = null
   selectedNodeData.value = null
   selectedEdgeData.value = null
   connectionAnnouncement.value = ''
@@ -4423,6 +4506,298 @@ function onPaneClick() {
   capabilityToolInput.value = ''
   capabilityContextInput.value = ''
   loadConnectorNodeFields(null)
+}
+
+// --- Canvas keyboard operation (FAR-2464) ---------------------------------
+// Keyboard equivalents for the canvas's mouse-only operations. Everything is
+// scoped to the canvas element (it is the focus owner), so a global shortcut
+// never fires while the user is typing in a toolbar input, the inspector or a
+// dialog. Historic (read-only) view keeps its existing semantics: the palette
+// only offers read actions (Fit view, Open version timeline), arrow keys move
+// focus only, and nudge/connect/add are early-returned.
+const NODE_NUDGE_STEP = 20
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tag = target.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+}
+
+function canvasNodeElement(id: string): HTMLElement | null {
+  const root = canvasRef.value
+  if (!root) return null
+  return Array.from(root.querySelectorAll<HTMLElement>('.vue-flow__node')).find(
+    (el) => el.getAttribute('data-id') === id,
+  ) ?? null
+}
+
+function focusedGraphNodeId(): string | null {
+  const active = document.activeElement as HTMLElement | null
+  return active?.closest<HTMLElement>('.vue-flow__node')?.getAttribute('data-id') ?? null
+}
+
+function focusGraphNode(id: string): void {
+  canvasNodeElement(id)?.focus({ preventScroll: true })
+}
+
+/** Nearest node in the pressed direction, by flow position (geometry only). */
+function nodeIdInDirection(fromId: string, key: string): string | null {
+  const nodes = displayNodes.value
+  const from = nodes.find((node: any) => node.id === fromId)
+  if (!from?.position) return null
+  const dx = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0
+  const dy = key === 'ArrowDown' ? 1 : key === 'ArrowUp' ? -1 : 0
+  let best: { id: string; distance: number } | null = null
+  for (const node of nodes as any[]) {
+    if (node.id === fromId || !node.position) continue
+    const nx = node.position.x - from.position.x
+    const ny = node.position.y - from.position.y
+    // Must make real progress along the pressed axis.
+    const along = nx * dx + ny * dy
+    if (along <= 0) continue
+    // Perpendicular offset is weighted so a straight-line neighbour wins.
+    const across = Math.abs(nx * dy) + Math.abs(ny * dx)
+    const distance = along + across * 2
+    if (!best || distance < best.distance) best = { id: node.id, distance }
+  }
+  return best?.id ?? null
+}
+
+function announceCanvas(message: string): void {
+  canvasAnnouncement.value = message
+}
+
+function startKeyboardConnect(): void {
+  if (isViewing.value) return
+  const sourceId = focusedGraphNodeId() ?? selectedNodeData.value?.id ?? null
+  if (!sourceId) {
+    announceCanvas(t('views.PipelineEditorView.canvas_connect_no_source'))
+    return
+  }
+  keyboardConnectSourceId.value = sourceId
+  announceCanvas(t('views.PipelineEditorView.canvas_connect_started'))
+}
+
+/** Create the edge through the same raw/flow model a mouse connection uses. */
+function connectNodes(sourceId: string, targetId: string): void {
+  if (isViewing.value || sourceId === targetId) return
+  const duplicate = rawEdges.value.some(
+    (edge: any) => edge.source_node_id === sourceId && edge.target_node_id === targetId,
+  )
+  if (duplicate) {
+    announceCanvas(t('views.PipelineEditorView.canvas_connect_duplicate'))
+    return
+  }
+  const id = `edge-${Date.now()}`
+  const edge = {
+    id,
+    source_node_id: sourceId,
+    target_node_id: targetId,
+    edge_type: 'normal',
+    condition_expression: null,
+    max_iterations: 0,
+    routing_label: '',
+    hitl_review_config: null,
+    source_port: 'out',
+    target_port: 'in',
+  }
+  rawEdges.value = [...rawEdges.value, edge]
+  addEdges({ source: sourceId, target: targetId })
+  // The flow store owns the canonical visual edge after addEdges; retain the
+  // backend metadata on the raw graph for the existing save path.
+  flowEdges.value = flowEdges.value.some((flowEdge: any) => flowEdge.source === sourceId && flowEdge.target === targetId)
+    ? flowEdges.value
+    : [...flowEdges.value, convertBackendEdge(edge, flowEdges.value.length)]
+  announceCanvas(t('views.PipelineEditorView.canvas_connect_done'))
+}
+
+/** Shift+Arrow keyboard nudge; a normal arrow moves focus between nodes. */
+function nudgeFocusedNode(key: string): void {
+  if (isViewing.value) return
+  const id = focusedGraphNodeId() ?? selectedNodeData.value?.id ?? null
+  if (!id) return
+  const dx = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0
+  const dy = key === 'ArrowDown' ? 1 : key === 'ArrowUp' ? -1 : 0
+  let movedAny = false
+  const nudge = (nodes: any[]): any[] =>
+    nodes.map((node) => {
+      if (node.id !== id || !node.position) return node
+      movedAny = true
+      return {
+        ...node,
+        position: {
+          x: node.position.x + dx * NODE_NUDGE_STEP,
+          y: node.position.y + dy * NODE_NUDGE_STEP,
+        },
+      }
+    })
+  rawNodes.value = nudge(rawNodes.value)
+  flowNodes.value = nudge(flowNodes.value)
+  if (!movedAny) return
+  layoutUserOwned.value = true
+  setDraftLayoutOwnership('user')
+  rebindSelectedNode()
+  announceCanvas(t('views.PipelineEditorView.canvas_node_nudged'))
+}
+
+function toggleSelectedEdgeHitl(): void {
+  if (isViewing.value) return
+  if (!selectedEdgeData.value) {
+    announceCanvas(t('views.PipelineEditorView.canvas_toggle_hitl_no_edge'))
+    return
+  }
+  edgeForm.hitl_enabled = !edgeForm.hitl_enabled
+  announceCanvas(
+    edgeForm.hitl_enabled
+      ? t('views.PipelineEditorView.canvas_toggle_hitl_on')
+      : t('views.PipelineEditorView.canvas_toggle_hitl_off'),
+  )
+}
+
+function openCanvasPalette(): void {
+  canvasPaletteOpen.value = true
+  canvasPaletteQuery.value = ''
+  canvasPaletteIndex.value = 0
+  void nextTick(() => canvasPaletteInputRef.value?.focus())
+}
+
+function closeCanvasPalette(): void {
+  canvasPaletteOpen.value = false
+  canvasRef.value?.focus({ preventScroll: true })
+}
+
+function runCanvasCommand(commandId: string): void {
+  canvasPaletteOpen.value = false
+  switch (commandId) {
+    case 'add-node':
+      addNode('agent')
+      break
+    case 'connect':
+      startKeyboardConnect()
+      break
+    case 'arrange':
+      void arrangeGraph()
+      announceCanvas(t('views.PipelineEditorView.canvas_arranged'))
+      break
+    case 'fit':
+      void fitView({ padding: 0.1 })
+      announceCanvas(t('views.PipelineEditorView.canvas_fit_done'))
+      break
+    case 'toggle-hitl':
+      toggleSelectedEdgeHitl()
+      break
+    case 'timeline':
+      openVersionTimeline()
+      break
+  }
+  canvasRef.value?.focus({ preventScroll: true })
+}
+
+function onCanvasPaletteKeydown(event: KeyboardEvent): void {
+  if (event.defaultPrevented) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeCanvasPalette()
+    return
+  }
+  const count = filteredCanvasCommands.value.length
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    canvasPaletteIndex.value = count === 0 ? 0 : (canvasPaletteIndex.value + 1) % count
+    return
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    canvasPaletteIndex.value = count === 0 ? 0 : (canvasPaletteIndex.value - 1 + count) % count
+    return
+  }
+  if (event.key === 'Enter') {
+    // A focused option button runs its command through its own click handler.
+    if ((event.target as HTMLElement | null)?.tagName === 'BUTTON') return
+    event.preventDefault()
+    const command = filteredCanvasCommands.value[canvasPaletteIndex.value]
+    if (command) runCanvasCommand(command.id)
+  }
+}
+
+/** Escape: cancel an in-progress keyboard connect, else clear the selection. */
+function handleCanvasEscape(event: KeyboardEvent): void {
+  if (keyboardConnectSourceId.value) {
+    keyboardConnectSourceId.value = null
+    announceCanvas(t('views.PipelineEditorView.canvas_connect_cancelled'))
+    return
+  }
+  if (selectedNodeData.value || selectedEdgeData.value) {
+    event.preventDefault()
+    onPaneClick()
+    canvasRef.value?.focus({ preventScroll: true })
+  }
+}
+
+/** Enter: complete a pending keyboard connect against the focused node. */
+function handleCanvasConnectConfirm(event: KeyboardEvent): void {
+  const sourceId = keyboardConnectSourceId.value
+  if (!sourceId) return
+  const targetId = focusedGraphNodeId()
+  if (!targetId) return
+  event.preventDefault()
+  connectNodes(sourceId, targetId)
+  keyboardConnectSourceId.value = null
+}
+
+/** Arrow keys: Shift nudges the focused node, otherwise move focus. */
+function handleCanvasArrow(event: KeyboardEvent): void {
+  event.preventDefault()
+  if (event.shiftKey) {
+    nudgeFocusedNode(event.key)
+    return
+  }
+  const currentId = focusedGraphNodeId() ?? selectedNodeData.value?.id ?? null
+  if (!currentId) {
+    const first = displayNodes.value[0]?.id
+    if (first) focusGraphNode(first)
+    return
+  }
+  const nextId = nodeIdInDirection(currentId, event.key)
+  if (nextId) focusGraphNode(nextId)
+}
+
+/**
+ * Canvas-scoped key handling. Deliberately ignores events originating in an
+ * editable control (the palette input has its own handler) so typing a node
+ * label can never trigger a shortcut.
+ */
+function onCanvasKeydown(event: KeyboardEvent): void {
+  if (canvasPaletteOpen.value || isTypingTarget(event.target)) return
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    event.stopPropagation()
+    openCanvasPalette()
+    return
+  }
+  // Modified key presses belong to the browser/OS (Ctrl+A, Cmd+E, ...), not the
+  // canvas shortcuts below.
+  if (event.ctrlKey || event.metaKey || event.altKey) return
+  switch (event.key) {
+    case 'Escape':
+      handleCanvasEscape(event)
+      return
+    case 'a':
+    case 'A':
+      event.preventDefault()
+      addNode('agent')
+      return
+    case 'e':
+    case 'E':
+      event.preventDefault()
+      startKeyboardConnect()
+      return
+    case 'Enter':
+      handleCanvasConnectConfirm(event)
+      return
+  }
+  if (event.key.startsWith('Arrow')) handleCanvasArrow(event)
 }
 
 // --- Editor viewport fit (FAR-1841 mobile, FAR-1851 desktop) --------------
@@ -4557,6 +4932,9 @@ const nodePanelRef = ref<HTMLElement | null>(null)
 const edgePanelRef = ref<HTMLElement | null>(null)
 // The element focus is returned to when the sheet closes — captured at open.
 let sheetReturnFocus: HTMLElement | null = null
+// FAR-2464: the graph node the sheet was opened from, so Escape/close returns
+// keyboard focus to that node rather than to the canvas container.
+let sheetReturnNodeId: string | null = null
 
 // Spread onto a properties aside: the mobile sheet is a labelled modal dialog;
 // the desktop docked panel gets no dialog attrs (and stays out of the tab
@@ -4599,8 +4977,18 @@ watch([selectedNodeData, selectedEdgeData], () => {
   if (!isMobileSheet.value) return
   const panel = activeSheetElement()
   if (!panel) {
-    sheetReturnFocus?.focus()
+    // FAR-2464: return focus to the graph node the sheet was opened from when
+    // the keyboard was driving the canvas — a canvas-node trigger is the
+    // desktop/mobile equivalent of the pointer trigger the sheet remembers.
+    const nodeId = sheetReturnNodeId
+    const nodeEl = nodeId ? canvasNodeElement(nodeId) : null
+    if (nodeEl?.isConnected) {
+      nodeEl.focus({ preventScroll: true })
+    } else {
+      sheetReturnFocus?.focus()
+    }
     sheetReturnFocus = null
+    sheetReturnNodeId = null
     return
   }
   // Focus already inside the sheet (e.g. the selection changed while it was
@@ -4612,7 +5000,12 @@ watch([selectedNodeData, selectedEdgeData], () => {
     // somewhere sensible when the sheet closes (FAR-1861).
     const active = document.activeElement as HTMLElement | null
     sheetReturnFocus = active && active !== document.body ? active : canvasRef.value
-    panel.focus()
+    sheetReturnNodeId = selectedNodeData.value?.id ?? null
+    // far-2464: the modal sheet's first interactive control is its focus entry
+    // point, so a keyboard user lands inside the form rather than on the
+    // dialog's own container with nothing announced.
+    const firstControl = panel.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+    ;(firstControl ?? panel).focus()
   }
 }, { flush: 'post' })
 
@@ -4679,6 +5072,7 @@ function addNode(nodeType: 'agent' | 'router' | 'hitl' | 'connector' = newNodeTy
     rawNode.connector_binding = { type: '', instance_id: '', operation: 'query' }
   }
   rawNodes.value = [...rawNodes.value, rawNode]
+  canvasAnnouncement.value = t('views.PipelineEditorView.canvas_node_added')
 }
 
 function openAgentPicker() {
