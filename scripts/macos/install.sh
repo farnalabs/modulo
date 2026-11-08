@@ -3,7 +3,11 @@
 # The app bundle owns the service contract; this script only verifies/copies it.
 set -euo pipefail
 
-DMG=${1:?usage: install.sh <Modulo-version-macos-{arm64,x86_64}.dmg>}
+DMG=${1:?"usage: install.sh <Modulo-version-macos-{arm64,x86_64}.dmg>"}
+# Root cause of the observed .dmg.dmg bug: the unquoted `:?` word above brace-expands
+# and bash appends the text after the brace group (`.dmg`) to the assigned value.
+# It is quoted now; the loop below is defence-in-depth for a genuinely double-extended
+# user-supplied path.
 # Defensive: normalize path by stripping any duplicate .dmg extension (guard against .dmg.dmg bug)
 while [[ "$DMG" == *.dmg.dmg ]]; do
   DMG="${DMG%.dmg}"

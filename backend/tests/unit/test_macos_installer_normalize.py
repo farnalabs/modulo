@@ -211,3 +211,24 @@ def test_macos_normalize_direct_dispatch_rejects_non_dry_run(tmp_path: Path) -> 
     )
     assert result.returncode != 0
     assert "unsupported manual dispatch mode" in result.stderr
+
+
+def test_install_sh_normalizes_duplicate_dmg_extension(tmp_path: Path) -> None:
+    """A double `.dmg.dmg` argument is stripped before the existence check.
+
+    The user-supplied path is the only boundary where a double extension can arrive,
+    so the guard lives in ``scripts/macos/install.sh``. Feeding a bogus
+    ``foo.dmg.dmg`` must normalize to ``foo.dmg`` in the not-found error - on the
+    old code the error names ``foo.dmg.dmg`` verbatim.
+    """
+    install_sh = REPO_ROOT / "scripts" / "macos" / "install.sh"
+    result = _run_bash(
+        f'bash "{install_sh}" "foo.dmg.dmg"',
+        cwd=tmp_path,
+        env=os.environ.copy(),
+    )
+
+    assert result.returncode != 0
+    assert "normalized duplicate .dmg extension -> foo.dmg" in result.stderr
+    assert "ERROR: DMG not found: foo.dmg" in result.stderr
+    assert "foo.dmg.dmg" not in result.stderr
