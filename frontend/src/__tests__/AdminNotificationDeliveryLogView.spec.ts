@@ -35,6 +35,14 @@ import AdminNotificationDeliveryLogView from '../views/AdminNotificationDelivery
 import AppSelect from '../components/shared/AppSelect.vue'
 import { api } from '../lib/api/client'
 
+/** The delivery-log GET calls only — excludes the available-events fetch. */
+function deliveryCalls(): Array<[string, Record<string, unknown>]> {
+  const getMock = api.GET as unknown as ReturnType<typeof vi.fn>
+  return getMock.mock.calls.filter(
+    (call: unknown[]) => call[0] === '/api/v1/admin/notifications/deliveries',
+  ) as Array<[string, Record<string, unknown>]>
+}
+
 describe('AdminNotificationDeliveryLogView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -56,6 +64,33 @@ describe('AdminNotificationDeliveryLogView', () => {
     await flushPromises()
     await nextTick()
     expect(wrapper.text()).toContain('No delivery logs found')
+    expect(wrapper.text()).toContain('No notification deliveries match the current filters')
+    // Target the empty-state CTA by testid: a bare `toContain('Reset')` also
+    // matches the filter-bar Reset button and would pass without the CTA.
+    const emptyReset = wrapper.find('[data-testid="admin-notification-log-empty-reset"]')
+    expect(emptyReset.exists()).toBe(true)
+    // The CTA needs its own accessible name, distinct from the filter-bar Reset.
+    expect(emptyReset.attributes('aria-label')).toBe('Reset all filters')
+  })
+
+  it('empty-state reset requests the default range', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 10, 4, 12, 0, 0))
+      const wrapper = mount(AdminNotificationDeliveryLogView)
+      await flushPromises()
+      await nextTick()
+      const emptyReset = wrapper.find('[data-testid="admin-notification-log-empty-reset"]')
+      await emptyReset.trigger('click')
+      await flushPromises()
+      expect(deliveryCalls()).toContainEqual([
+        '/api/v1/admin/notifications/deliveries',
+        { params: { query: { limit: 50, from: '2026-10-06', to: '2026-11-04' } } },
+      ])
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('renders filter controls', async () => {
@@ -67,6 +102,77 @@ describe('AdminNotificationDeliveryLogView', () => {
     expect(wrapper.find('[data-testid="admin-notification-log-date-to"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="admin-notification-log-apply"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="admin-notification-log-reset"]').exists()).toBe(true)
+    expect((wrapper.find('[data-testid="admin-notification-log-date-from"]').element as HTMLInputElement).value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect((wrapper.find('[data-testid="admin-notification-log-date-to"]').element as HTMLInputElement).value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  it('sends the last-30-days default range on first load', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 10, 4, 12, 0, 0))
+      const wrapper = mount(AdminNotificationDeliveryLogView)
+      await flushPromises()
+      await nextTick()
+      const calls = deliveryCalls()
+      expect(calls.length).toBeGreaterThan(0)
+      expect(calls[0][1]).toEqual({
+        params: { query: { limit: 50, from: '2026-10-06', to: '2026-11-04' } },
+      })
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reset restores the default range and clears the other filters', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 10, 4, 12, 0, 0))
+      const wrapper = mount(AdminNotificationDeliveryLogView)
+      await flushPromises()
+      await nextTick()
+      const vm = wrapper.vm as unknown as {
+        filterStatus: string
+        filterEventType: string
+        filterDateFrom: string
+        filterDateTo: string
+      }
+      vm.filterStatus = 'failed'
+      vm.filterEventType = 'run_failed'
+      vm.filterDateFrom = '2026-01-01'
+      vm.filterDateTo = '2026-01-31'
+
+      await wrapper.find('[data-testid="admin-notification-log-reset"]').trigger('click')
+      await flushPromises()
+
+      const calls = deliveryCalls()
+      expect(calls[calls.length - 1][1]).toEqual({
+        params: { query: { limit: 50, from: '2026-10-06', to: '2026-11-04' } },
+      })
+      expect(vm.filterStatus).toBe('__all__')
+      expect(vm.filterEventType).toBe('__all__')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('omits the date bounds when no date is selected', async () => {
+    const wrapper = mount(AdminNotificationDeliveryLogView)
+    await flushPromises()
+    await nextTick()
+    const vm = wrapper.vm as unknown as {
+      filterDateFrom: string
+      filterDateTo: string
+    }
+    vm.filterDateFrom = ''
+    vm.filterDateTo = ''
+
+    await wrapper.find('[data-testid="admin-notification-log-apply"]').trigger('click')
+    await flushPromises()
+
+    const calls = deliveryCalls()
+    expect(calls[calls.length - 1][1]).toEqual({ params: { query: { limit: 50 } } })
   })
 
   it('renders pagination controls when items exist', async () => {
@@ -98,6 +204,49 @@ describe('AdminNotificationDeliveryLogView', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="admin-notification-log-previous"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="admin-notification-log-next"]').exists()).toBe(true)
+  })
+
+  it('loads the next page and jumps to the dead-letter queue', async () => {
+    const deadLetteredEntry = {
+      id: '1',
+      event_type: 'run_failed',
+      status: 'dead_lettered',
+      attempt_count: 3,
+      response_code: 500,
+      last_error: 'Internal server error',
+      response_body: null,
+      endpoint_url: 'https://example.com/hook',
+      endpoint_id: 'ep-1',
+      created_at: '2025-06-30T12:00:00Z',
+    }
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
+      (url: string) => {
+        if (url === '/api/v1/admin/notifications/available-events') {
+          return Promise.resolve({ data: mockAvailableEvents, error: undefined })
+        }
+        return Promise.resolve({
+          data: { items: [deadLetteredEntry], total: 1, next_cursor: 'cursor-2' },
+          error: undefined,
+        })
+      },
+    )
+
+    const wrapper = mount(AdminNotificationDeliveryLogView)
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-notification-log-next"]').trigger('click')
+    await flushPromises()
+    expect(deliveryCalls().at(-1)![1]).toMatchObject({
+      params: { query: expect.objectContaining({ cursor: 'cursor-2' }) },
+    })
+
+    await wrapper.find('[data-testid="admin-notification-log-dlq-filter"]').trigger('click')
+    await flushPromises()
+    expect(deliveryCalls().at(-1)![1]).toMatchObject({
+      params: { query: expect.objectContaining({ status: 'dead_lettered' }) },
+    })
+    wrapper.unmount()
   })
 
   it('expands a delivery row via keyboard (Enter and Space) for a11y', async () => {

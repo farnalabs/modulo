@@ -48,7 +48,7 @@ workflow, the sandbox agent-loop interception bridge, run-termination
 compensation, and single-node self-correction. Built on the eval engine
 (`depends-on: feat-evals`).
 
-## Behaviours
+## Behaviors
 
 - [x] A guardrail is bound as an `EvalDefinition` with `eval_type="guardrail"`;
       detection is DETERMINISTIC and PURE – only the `regex` and `json_schema`
@@ -69,7 +69,7 @@ compensation, and single-node self-correction. Built on the eval engine
 - [x] Redaction is masks-only with a fixed mask token never derived from payload
       content; field paths are STATIC author config resolved with EXACT/ANCHOR
       key matching (substring matching is forbidden) and a built-in allowlist of
-      never-touch system fields is always honoured
+      never-touch system fields is always honored
 - [x] Config-as-code (`GuardrailConfigSet`, FAR-219 T3): a versioned YAML
       source-of-truth whose entries map 1:1 to the guardrail `EvalDefinition`
       rows, validated against the engine's own rules, hashed over a canonical
@@ -86,7 +86,7 @@ compensation, and single-node self-correction. Built on the eval engine
       payloads only (never raw config content); GET /drift is side-effect
       free so viewer-scoped callers cannot mutate the pin or generate audit
       rows by polling
-- [x] Creation-time materialisation (FAR-1593): a pipeline created AFTER an
+- [x] Creation-time materialization (FAR-1593): a pipeline created AFTER an
       apply/import inherits the applied org config in the SAME transaction:
       `db/crud/pipeline.py::create_pipeline` (the ORM chokepoint user-facing
       creation paths funnel through: REST, MCP, templates, onboarding, library
@@ -139,7 +139,7 @@ compensation, and single-node self-correction. Built on the eval engine
 - [x] Cross-org inheritance ships via the config-as-code import surface:
       `POST /api/v1/guardrails/config/import` (admin-gated like apply/reject)
       applies a config YAML – e.g. the unmasked elevated export
-      (`GET /elevated`) of ANOTHER organisation – directly as the org's APPLIED
+      (`GET /elevated`) of ANOTHER organization – directly as the org's APPLIED
       state in one step, without a propose/review round-trip (the source org
       already reviewed the policy). The transport is YAML-only so RLS isolation
       is preserved (no cross-org row is ever read); invalid configs fail 422, a
@@ -254,7 +254,7 @@ compensation, and single-node self-correction. Built on the eval engine
   `/api/v1/manifest`.
 
 - 2026-09-08: **product-map review pass** – added the FAR-664
-  newline-safe bridge handoff behaviour + citation: the loop-intercept bridge
+  newline-safe bridge handoff behavior + citation: the loop-intercept bridge
   receives the rendered agent command via a command file (`bash <file>` after
   `--`) instead of inline interpolation, so multi-line / post-heredoc
   statements can never escape guardrail interception; a command-file write
@@ -262,10 +262,10 @@ compensation, and single-node self-correction. Built on the eval engine
   Verified in `core/guardrails/loop_intercept.py` +
   `core/pipeline_engine/node_runner.py` and unit-covered in
   `tests/unit/pipeline_engine/test_node_runner_residual.py`.
-- 2026-08-30: **product-map review pass** – new behaviour
+- 2026-08-30: **product-map review pass** – new behavior
   tracker for the registered `feat-guardrails` manifest feature (route
   `/settings/guardrails`, previously absent from the feature graph and invisible
-  to Assistant's docs indexer). Behaviours verified against
+  to Assistant's docs indexer). Behaviors verified against
   `core/guardrails/*` (engine, config-as-code, loop-intercept, compensation,
   correction), `api/routes/guardrail_config.py`, the kill-switch + override +
   config unit/integration suites, and the `guardrails` / `guardrail_config` BDD

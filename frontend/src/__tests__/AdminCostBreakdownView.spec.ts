@@ -94,7 +94,7 @@ describe('AdminCostBreakdownView', () => {
     expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(4)
   })
 
-  it('uses the shared page rhythm and a spaced FeatureGate as the content stack (FAR-2364)', async () => {
+  it('uses the shared page rhythm and keeps Costs headings readable and spaced', async () => {
     const store = usePlanStore()
     store.$patch({ features: { admin_cost_breakdown: true } })
 
@@ -113,6 +113,28 @@ describe('AdminCostBreakdownView', () => {
     const gate = page.get('.page-wide > [data-testid="feature-gate"]')
     expect(gate.classes()).toContain('space-y-6')
     expect(gate.find('.space-y-6').exists()).toBe(false)
+
+    expect(page.get('h1[data-page-heading]').text()).toBe('Cost Breakdown')
+
+    const teamHeading = page.get('h2')
+    expect(teamHeading.text()).toContain('Per-Team Cost Breakdown')
+    const teamHeader = teamHeading.element.closest('.card-header')
+    expect(teamHeader).not.toBeNull()
+    // The per-team card uses the shared DataCard padding like the anomaly card
+    // below it; it no longer relies on one-off px-6/pt-6 header styling with an
+    // unpadded content area (FAR-2394).
+    expect(Array.from(teamHeader!.classList)).not.toEqual(expect.arrayContaining(['px-6', 'pt-6']))
+    const teamDescription = teamHeader!.querySelector('p')
+    expect(teamDescription?.textContent).toContain('Monthly spend, run count, and average cost per run')
+    expect(teamDescription?.parentElement).toBe(teamHeading.element.parentElement)
+    const anomalyHeader = page.findAll('.card-header')[1]
+    expect(anomalyHeader.classes()).not.toEqual(expect.arrayContaining(['px-6', 'pt-6']))
+
+    const teamCard = page.get('[data-testid="cost-team-table"]').element.closest('.card-base')
+    const anomalyCard = anomalyHeader.element.closest('.card-base')
+    expect(teamCard?.classList.contains('p-4')).toBe(true)
+    expect(teamCard?.classList.contains('p-0')).toBe(false)
+    expect(anomalyCard?.classList.contains('p-4')).toBe(true)
   })
 
   it('dismisses an anomaly via POST', async () => {
@@ -608,6 +630,25 @@ describe('AdminCostBreakdownView', () => {
     expect(alert.text()).toContain('Failed to dismiss anomaly')
   })
 
+  it('keeps ordinary Costs typography on the product font while technical values stay scoped', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    const page = wrapper.get('.page-wide')
+    expect(page.classes()).not.toContain('font-sans')
+    expect(page.get('h1[data-page-heading]').classes()).not.toContain('font-mono')
+    expect(page.find('.font-mono').exists()).toBe(false)
+  })
+
   it('uses the shared dashboard metric-label typography for the summary headings', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -697,9 +738,11 @@ describe('AdminCostBreakdownView', () => {
     expect(unattributed.exists()).toBe(true)
     expect(unattributed.text()).toContain('$5.50')
     expect(unattributed.text()).toContain('unassigned component spend')
-    // The per-team card is `padding="none"` so the table can run edge-to-edge;
-    // the disclosure line still carries the shared horizontal/bottom inset.
-    expect(unattributed.classes()).toEqual(expect.arrayContaining(['px-6', 'pb-6']))
+    // The per-team card uses the shared DataCard padding like the anomaly card
+    // below it, so the disclosure line needs no one-off inset (FAR-2394).
+    const teamCard = table.element.closest('.card-base')
+    expect(teamCard?.classList.contains('p-4')).toBe(true)
+    expect(unattributed.classes()).not.toEqual(expect.arrayContaining(['px-6', 'pb-6']))
     // legacy_total is NOT excluded from team rows (team-owned legacy spend is
     // written to the owner team's ledger row), so it must never be disclosed here.
     expect(unattributed.text()).not.toContain('99.99')

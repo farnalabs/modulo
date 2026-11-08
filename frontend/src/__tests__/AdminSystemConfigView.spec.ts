@@ -36,7 +36,7 @@ function mountView() {
         EmptyState: emptyStateStub,
         JsonViewer: jsonViewerStub,
         PageHeader: {
-          template: '<div><h1>{{ title }}</h1><p>{{ subtitle }}</p></div>',
+          template: '<div><h1>{{ title }}</h1><p>{{ subtitle }}</p><slot name="right" /></div>',
           props: ['title', 'subtitle'],
         },
       },

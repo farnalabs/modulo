@@ -68,6 +68,17 @@ _JS_SCHEMA: dict[str, Any] = {
     "required": ["name"],
 }
 
+# Tests that assert a specific detection OUTCOME drive detection through the
+# event loop's default executor under a per-guardrail latency budget. The
+# production default (2s) is a real-time guard; on a loaded parallel CI runner
+# (pytest-xdist + coverage instrumentation, 2 vCPUs) the executor round trip can
+# exceed it, and a block/redact guardrail then fails CLOSED as a mechanism error
+# (observed flake: `test_passing_payload_reports_not_blocked` got blocked=True).
+# Pin the maximum budget so scheduling jitter can never outrun the assertion.
+# The timeout/fail-closed contract has dedicated tests in
+# test_guardrails_timeout.py that set a tight budget deliberately.
+_TEST_GUARDRAIL_TIMEOUT_SECONDS = 30.0
+
 
 @dataclass
 class _GateRow:
@@ -310,6 +321,7 @@ class TestC5InterceptionPassNonRaising:
                 engine,
                 [d],
                 dict(_VIOLATION_PAYLOAD),
+                timeout_seconds=_TEST_GUARDRAIL_TIMEOUT_SECONDS,
             )
         )
         assert outcome.blocked is True
@@ -323,6 +335,7 @@ class TestC5InterceptionPassNonRaising:
                 engine,
                 [d],
                 dict(_CLEAN_PAYLOAD),
+                timeout_seconds=_TEST_GUARDRAIL_TIMEOUT_SECONDS,
             )
         )
         assert outcome.blocked is False
@@ -451,6 +464,7 @@ class TestF1RegexBlockGateEnforced:
                 engine,
                 [d],
                 dict(_REGEX_VIOLATION_PAYLOAD),
+                timeout_seconds=_TEST_GUARDRAIL_TIMEOUT_SECONDS,
             )
         )
         assert outcome.blocked is True

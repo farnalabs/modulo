@@ -9,20 +9,19 @@ from modulo.core.cron_helpers import compute_next_fire, compute_next_send, valid
 
 
 class TestValidateCronExpression:
-    def test_valid_standard_expression(self):
-        assert validate_cron_expression("*/5 * * * *") is None
-
-    def test_valid_hourly(self):
-        assert validate_cron_expression("0 * * * *") is None
-
-    def test_valid_daily(self):
-        assert validate_cron_expression("0 9 * * *") is None
-
-    def test_valid_complex(self):
-        assert validate_cron_expression("30 4,16 * * 1-5") is None
-
-    def test_valid_every_minute(self):
-        assert validate_cron_expression("* * * * *") is None
+    @pytest.mark.parametrize(
+        ("expression", "timezone"),
+        [
+            pytest.param("*/5 * * * *", "UTC", id="every-five-minutes"),
+            pytest.param("0 * * * *", "UTC", id="hourly"),
+            pytest.param("0 9 * * *", "UTC", id="daily"),
+            pytest.param("30 4,16 * * 1-5", "UTC", id="weekday-twice-daily"),
+            pytest.param("* * * * *", "UTC", id="every-minute"),
+            pytest.param("0 9 * * *", "America/New_York", id="timezone"),
+        ],
+    )
+    def test_valid_expression_returns_no_error(self, expression: str, timezone: str) -> None:
+        assert validate_cron_expression(expression, timezone) is None
 
     def test_invalid_expression_returns_error(self):
         # The exact message is croniter-version-sensitive, so only assert a
@@ -87,9 +86,28 @@ class TestComputeNextFire:
         assert next_fire > now
         assert next_fire.minute in (5, 10, 15)
 
-    def test_next_fire_without_after_defaults_to_now(self):
-        result = compute_next_fire("* * * * *")
-        assert result > datetime.datetime.now(datetime.UTC)
+    def test_next_fire_without_after_defaults_to_current_time(self, monkeypatch):
+        now = datetime.datetime(2026, 1, 1, 12, 0, 30, tzinfo=datetime.UTC)
+        captured = {}
+
+        class FrozenDateTime(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now if tz is None else now.astimezone(tz)
+
+        class FakeCron:
+            def get_next(self, _datetime_type):
+                return FrozenDateTime(2026, 1, 1, 12, 1, tzinfo=datetime.UTC)
+
+        def fake_croniter(_expression, base):
+            captured["base"] = base
+            return FakeCron()
+
+        monkeypatch.setattr("modulo.core.cron_helpers.datetime", FrozenDateTime)
+        monkeypatch.setattr("modulo.core.cron_helpers.croniter", fake_croniter)
+
+        assert compute_next_fire("* * * * *") == datetime.datetime(2026, 1, 1, 12, 1, tzinfo=datetime.UTC)
+        assert captured["base"] == now
 
     def test_naive_after_interpreted_as_utc(self):
         result = compute_next_fire("0 9 * * *", after=datetime.datetime(2026, 1, 1, 8, 0, 0))
@@ -181,9 +199,28 @@ class TestComputeNextSend:
         assert next_send.day == 2
         assert next_send.hour == 9
 
-    def test_next_send_without_after_defaults_to_now(self):
-        result = compute_next_send("* * * * *")
-        assert result > datetime.datetime.now(datetime.UTC)
+    def test_next_send_without_after_defaults_to_current_time(self, monkeypatch):
+        now = datetime.datetime(2026, 1, 1, 12, 0, 30, tzinfo=datetime.UTC)
+        captured = {}
+
+        class FrozenDateTime(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now if tz is None else now.astimezone(tz)
+
+        class FakeCron:
+            def get_next(self, _datetime_type):
+                return FrozenDateTime(2026, 1, 1, 12, 1, tzinfo=datetime.UTC)
+
+        def fake_croniter(_expression, base):
+            captured["base"] = base
+            return FakeCron()
+
+        monkeypatch.setattr("modulo.core.cron_helpers.datetime", FrozenDateTime)
+        monkeypatch.setattr("modulo.core.cron_helpers.croniter", fake_croniter)
+
+        assert compute_next_send("* * * * *") == datetime.datetime(2026, 1, 1, 12, 1, tzinfo=datetime.UTC)
+        assert captured["base"] == now
 
     def test_next_send_weekly_on_monday(self):
         now = datetime.datetime(2026, 1, 1, 8, 0, 0, tzinfo=datetime.UTC)

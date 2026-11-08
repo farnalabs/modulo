@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <em>Modulo is a self-hosted autonomous software factory: an Agentic Delivery Governance platform that runs governed, repeatable AI-assisted delivery pipelines entirely on your infrastructure. Air-gap capable, no third-party telemetry, any model (cloud or local), automated merge and release.</em>
+  <em>Modulo is a self-hosted Delivery Governance Platform. Govern the software development lifecycle as AI and automation take on more of the work — recording, evaluating, controlling, and improving automated work across your SDLC.</em>
 </p>
 
 <p align="center">
@@ -49,12 +49,11 @@
 
 ## What it is
 
-Modulo is a software factory you own and run. It turns AI agent runs into governed, repeatable delivery pipelines and connects atomic agents to external tools like GitHub, GitLab, and Slack, while keeping execution, approvals, audit data, and credentials under the operator's control.
+Modulo is a Delivery Governance Platform you own and run. It records, evaluates, controls, and improves automated work across the software development lifecycle — including code, dependencies and licensing, security, release, documentation and knowledge, evidence, and remediation — while keeping execution, approvals, audit data, and credentials under the operator's control.
 
-Agent governance, in practice, means you wire AI agents into your tools inside
-a visual pipeline where every run is audited and budgeted, and can be gated on
-human approval — so AI-assisted delivery is repeatable and auditable, not a
-one-off experiment.
+The operating loop is **record → evaluate → control → improve**: capture what automated work did, assess its outputs and evidence, apply gates and human decisions where needed, then use the results to improve the delivery system. Issue-to-PR is one governed workflow in that system, not the whole product. The platform is not generic workflow automation, primarily governance of agent internals, or a prescriptive software factory; software-factory language is only a supporting implementation frame.
+
+In the current product, you wire AI agents into your tools inside a visual pipeline where every run is audited and budgeted, and can be gated on human approval — so AI-assisted delivery is repeatable and auditable, not a one-off experiment.
 
 The detailed product intent and delivery status live in the product roadmap.
 Items described there may be planned or partially delivered; check the relevant
@@ -127,7 +126,7 @@ After the services become healthy, open <http://localhost:5173> and sign in
 with the local demo credentials `admin` / `admin`. These credentials and the
 Compose secrets are for local evaluation only.
 
-To prove the stack can actually store a credential and initialise the
+To prove the stack can actually store a credential and initialize the
 checkpointer — the two things a healthy-looking stack can still be broken at —
 run the smoke check:
 
@@ -168,10 +167,12 @@ with the [system requirements](docs/system-requirements.md), then follow the
 [deployment guide](docs/deployment.md). The [release process](docs/release-process.md)
 documents what must exist before the native path can become available.
 
-Native installation on macOS uses the supported, signed and notarized arm64
-`.dmg` for Apple Silicon only; x64/Rosetta is not supported (see the
-[system requirements](docs/system-requirements.md)). It is not installable
-today because no signed `bundle-v*` release is published yet.
+Native installation on macOS uses separate supported, signed and notarized
+`.dmg` artifacts for Apple Silicon (`macos-arm64`) and Intel (`macos-x86_64`);
+Rosetta is not required (see the [system requirements](docs/system-requirements.md)).
+The arm64 artifact is validated on `macos-15` and the x86_64 artifact on
+`macos-15-intel`. It is not installable today because no signed `bundle-v*`
+release is published yet.
 Native Windows installation is Beta scope, planned after Alpha: the native
 installer is still in progress and no signed Windows artifact is published yet.
 

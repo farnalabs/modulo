@@ -21,6 +21,8 @@ from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_FEATU
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     _require_internal_system_maps_access,
+    _require_published_system_maps_read,
+    _system_maps_internal_access,
     get_db_session,
     get_or_create_engine,
     get_or_create_session_factory,
@@ -60,18 +62,30 @@ from modulo.api.schemas.system_maps import (
     SystemMapRevisionRestoreAsNewResponse,
     SystemMapUpdate,
 )
-from modulo.api.team_scope import validate_owner_team_for_create
+from modulo.api.team_scope import evaluate_team_gate, validate_owner_team_for_create
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.permissions import SYSTEM_MAPS_ACCESS_PERMISSION
+from modulo.auth.permissions import SYSTEM_MAPS_ACCESS_PERMISSION, SYSTEM_MAPS_READ_PERMISSION
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from modulo.core.eval_engine.discovery_judge import build_discovery_model_judge_callable
+from modulo.core.eval_engine.typed_judge import JudgeOutcome
+from modulo.core.model_backend_hub import BackendNotFoundError, BackendUnavailableError, ModelBackendHub
+from modulo.core.secrets_backend import create_secrets_backend
 from modulo.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
+from modulo.core.system_maps_ai_discovery import (
+    PROMPT_VERSION,
+    RUBRIC_VERSION,
+    enhance_discovery_with_outcome,
+)
 from modulo.core.system_maps_discovery import (
     DiscoverySource,
     discover_draft,
 )
 from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.eval import Eval
+from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_folder import PipelineFolder
 from modulo.db.models.system_map import SystemMap, SystemMapRevision
@@ -81,6 +95,7 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
 _CODE_SYSTEM_MAPS_AUDIT_FAILED = "system_maps.audit_failed"
+_CODE_SYSTEM_MAPS_READ = SYSTEM_MAPS_READ_PERMISSION
 _CODE_SYSTEM_MAP_LIST = "system_map.list"
 _CODE_SYSTEM_MAP_CREATE = "system_map.create"
 _CODE_SYSTEM_MAP_UPDATE = "system_map.update"
@@ -139,10 +154,12 @@ _EP_DELETE_ATTRIBUTION_BINDING = "system_maps.delete_attribution_binding_endpoin
 _DESC_SYSTEM_MAP_ID = "System map ID"
 _DESC_REVISION_ID = "Revision ID"
 
-# The overview window: the trailing seven UTC days, half-open on both ends
-# (``[window_start, window_end)``). Named so the response, the repository call
-# and the tests cannot drift apart.
+# Allowed overview windows, expressed as trailing UTC days and half-open on both
+# ends (``[window_start, window_end)``). The frontend dashboard passes its selected
+# window through this query contract so the label and observed data agree.
 OVERVIEW_WINDOW_DAYS = 7
+OVERVIEW_WINDOW_MIN_DAYS = 1
+OVERVIEW_WINDOW_MAX_DAYS = 90
 
 # A node whose observed failure rate reaches this share of countable runs is
 # reported unhealthy; any lower non-zero rate is degraded.
@@ -150,11 +167,12 @@ _UNHEALTHY_FAILURE_RATE_THRESHOLD = 0.5
 
 _INTERNAL_SYSTEM_MAP_PERMISSION = SYSTEM_MAPS_ACCESS_PERMISSION
 _require_system_maps_feature = require_feature("system_maps")
+_require_system_maps_read_feature = require_feature("system_maps_read")
 
 _log = logging.getLogger(__name__)
 
 
-async def _get_repo() -> SystemMapRepository:
+async def _get_repo() -> SystemMapRepository:  # NOSONAR S7503 - async dependency factory seam
     """Get a SystemMapRepository instance with the shared session factory."""
 
     settings = get_settings()
@@ -167,6 +185,12 @@ async def _get_repo() -> SystemMapRepository:
 
     return SystemMapRepository(session_factory=session_generator)
 
+
+published_router = APIRouter(
+    prefix="/api/v1/system-maps",
+    tags=["system_maps"],
+    dependencies=[Depends(_require_published_system_maps_read), _require_system_maps_read_feature],
+)
 
 router = APIRouter(
     prefix="/api/v1/system-maps",
@@ -208,7 +232,7 @@ async def get_repo() -> SystemMapRepository:
 # ─── SystemMap CRUD ───
 
 
-@router.get("")
+@published_router.get("")
 @handle_db_errors(_EP_LIST_SYSTEM_MAPS)
 async def list_system_maps_endpoint(
     page: int = Query(default=1, ge=1),
@@ -217,7 +241,7 @@ async def list_system_maps_endpoint(
     owner_team_id: uuid.UUID | None = Query(default=None),
     visibility: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_LIST),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapListResponse:
     """List published maps for org (pagination, filtering by name/owner_team_id)."""
@@ -230,6 +254,7 @@ async def list_system_maps_endpoint(
             maps = await repository.list_maps_by_org(
                 session,
                 organisation_id=principal.organisation_id,
+                published_only=True,
                 visibility=visibility,
                 owner_team_id=owner_team_id,
                 name=name,
@@ -245,7 +270,7 @@ async def list_system_maps_endpoint(
                 .select_from(SystemMap)
                 .where(SystemMap.organisation_id == principal.organisation_id)
             )
-            count_stmt = count_stmt.where(SystemMap.deleted_at.is_(None))
+            count_stmt = count_stmt.where(SystemMap.deleted_at.is_(None), SystemMap.published_revision_id.is_not(None))
             if visibility:
                 count_stmt = count_stmt.where(SystemMap.visibility == visibility)
             if owner_team_id:
@@ -357,12 +382,12 @@ async def create_system_map_endpoint(
     return SystemMapResponse.model_validate(system_map)
 
 
-@router.get("/{map_id}")
+@published_router.get("/{map_id}")
 @handle_db_errors(_EP_GET_SYSTEM_MAP)
 async def get_system_map_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_LIST),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapResponse:
     """Get map with latest published revision summary."""
@@ -373,6 +398,8 @@ async def get_system_map_endpoint(
             system_map = await repository.get_map_by_id(
                 session, organisation_id=principal.organisation_id, map_id=map_id
             )
+            if system_map is not None and system_map.published_revision_id is None:
+                system_map = None
     except ProgrammingError as exc:
         _log.exception(_EP_GET_SYSTEM_MAP)
         raise HTTPException(
@@ -563,13 +590,13 @@ async def delete_system_map_endpoint(
 # ─── Version-aware Revision Endpoints (FAR-2288) ───
 
 
-@router.get("/{map_id}/revisions/by-time")
+@published_router.get("/{map_id}/revisions/by-time")
 @handle_db_errors(_EP_GET_REVISION_BY_TIME)
 async def get_revision_by_time_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     at: datetime = Query(..., description="ISO8601 timestamp to find the active revision at"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapRevisionByTimeResponse:
     """Get the revision active at a specific timestamp.
@@ -591,7 +618,7 @@ async def get_revision_by_time_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
             revision = await repository.get_revision_by_time(
-                session, organisation_id=principal.organisation_id, system_map_id=map_id, at=at
+                session, organisation_id=principal.organisation_id, system_map_id=map_id, at=at, published_only=True
             )
     except ProgrammingError as exc:
         _log.exception(_EP_GET_REVISION_BY_TIME)
@@ -629,12 +656,12 @@ async def get_revision_by_time_endpoint(
     )
 
 
-@router.get("/{map_id}/revisions/current")
+@published_router.get("/{map_id}/revisions/current")
 @handle_db_errors(_EP_GET_CURRENT_REVISION)
 async def get_current_revision_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapCurrentRevisionResponse:
     """Get the currently active (published) revision.
@@ -687,12 +714,12 @@ async def get_current_revision_endpoint(
     return SystemMapCurrentRevisionResponse(revision=SystemMapRevisionResponse.model_validate(revision))
 
 
-@router.get("/{map_id}/revisions/history")
+@published_router.get("/{map_id}/revisions/history")
 @handle_db_errors(_EP_GET_REVISION_HISTORY)
 async def get_revision_history_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapRevisionHistoryResponse:
     """List all revisions for a system map with their effective time ranges.
@@ -714,7 +741,7 @@ async def get_revision_history_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
             revisions = await repository.list_revisions_history(
-                session, organisation_id=principal.organisation_id, system_map_id=map_id
+                session, organisation_id=principal.organisation_id, system_map_id=map_id, published_only=True
             )
     except ProgrammingError as exc:
         _log.exception(_EP_GET_REVISION_HISTORY)
@@ -755,15 +782,16 @@ async def get_revision_history_endpoint(
     )
 
 
-@router.get("/{map_id}/revisions/{rev_id}")
+@published_router.get("/{map_id}/revisions/{rev_id}")
 @handle_db_errors(_EP_GET_SYSTEM_MAP_REVISION)
 async def get_system_map_revision_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     rev_id: uuid.UUID = Path(..., description=_DESC_REVISION_ID),
     include_graph: bool = Query(default=False, description="Include full graph (nodes, relationships, loop_configs)"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
+    internal_access: bool = Depends(_system_maps_internal_access),
 ) -> SystemMapRevisionResponse | SystemMapRevisionDetailResponse:
     """Get specific revision."""
     graph: dict[str, Any] | None = None
@@ -782,7 +810,9 @@ async def get_system_map_revision_endpoint(
             revision = await repository.get_revision_by_id(
                 session, organisation_id=principal.organisation_id, revision_id=rev_id
             )
-            if include_graph:
+            if revision is not None and revision.status == "draft" and not internal_access:
+                revision = None
+            if include_graph and revision is not None:
                 graph = await repository.get_full_revision_graph(
                     session, organisation_id=principal.organisation_id, revision_id=rev_id
                 )
@@ -1193,9 +1223,59 @@ async def archive_system_map_revision_endpoint(
     return SystemMapRevisionResponse.model_validate(revision)
 
 
-@router.post(
+async def _resolve_diff_target_revision(
+    repository: SystemMapRepository,
+    session: AsyncSession,
+    *,
+    organisation_id: uuid.UUID,
+    map_id: uuid.UUID,
+    against_revision_id: uuid.UUID | None,
+    internal_access: bool,
+) -> uuid.UUID:
+    """Resolve and authorize the revision a diff compares against (FAR-2363).
+
+    A viewer (``internal_access`` false) may only name or default to a
+    published/archived revision; a draft is a 404. Internal authors keep the
+    draft-aware default.
+    """
+    if against_revision_id is not None:
+        target_revision = await repository.get_revision_by_id(
+            session, organisation_id=organisation_id, revision_id=against_revision_id
+        )
+        if not target_revision or target_revision.system_map_id != map_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+        if not internal_access and target_revision.status == "draft":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+        return target_revision.id
+
+    if internal_access:
+        draft_revisions = await repository.list_revisions(
+            session,
+            organisation_id=organisation_id,
+            system_map_id=map_id,
+            status="draft",
+            limit=1,
+        )
+        if not draft_revisions:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No draft revision found to diff against; specify against_revision_id",
+            )
+        return draft_revisions[0].id
+
+    published_revision = await repository.get_published_revision(
+        session, organisation_id=organisation_id, system_map_id=map_id
+    )
+    if not published_revision:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No published revision found to diff against",
+        )
+    return published_revision.id
+
+
+@published_router.post(
     "/{map_id}/revisions/{rev_id}/diff",
-    response_model=SystemMapRevisionDiffResponse,
 )
 @handle_db_errors(_EP_DIFF_SYSTEM_MAP_REVISION)
 async def diff_system_map_revision_endpoint(
@@ -1205,8 +1285,14 @@ async def diff_system_map_revision_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_DIFF),
     repository: SystemMapRepository = Depends(get_repo),
+    internal_access: bool = Depends(_system_maps_internal_access),
 ) -> SystemMapRevisionDiffResponse:
-    """Diff a revision against another revision or the current draft."""
+    """Diff a revision against another revision or the current draft.
+
+    Viewers may only diff published/archived revisions: a draft base or target
+    is a 404, and the default target is the currently published revision rather
+    than the draft. Internal authors keep the draft-aware behaviour.
+    """
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1225,31 +1311,17 @@ async def diff_system_map_revision_endpoint(
             )
             if not base_revision or base_revision.system_map_id != map_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+            if not internal_access and base_revision.status == "draft":
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
 
-            # Determine target revision
-            target_revision_id = req.against_revision_id
-            if target_revision_id is None:
-                # Try to find the current draft revision
-                draft_revisions = await repository.list_revisions(
-                    session,
-                    organisation_id=principal.organisation_id,
-                    system_map_id=map_id,
-                    status="draft",
-                    limit=1,
-                )
-                if not draft_revisions:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail="No draft revision found to diff against; specify against_revision_id",
-                    )
-                target_revision_id = draft_revisions[0].id
-            else:
-                # Verify target revision exists and belongs to map
-                target_revision = await repository.get_revision_by_id(
-                    session, organisation_id=principal.organisation_id, revision_id=target_revision_id
-                )
-                if not target_revision or target_revision.system_map_id != map_id:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
+            target_revision_id = await _resolve_diff_target_revision(
+                repository,
+                session,
+                organisation_id=principal.organisation_id,
+                map_id=map_id,
+                against_revision_id=req.against_revision_id,
+                internal_access=internal_access,
+            )
 
             diff_result = await repository.diff_revisions(
                 session,
@@ -1286,7 +1358,6 @@ async def diff_system_map_revision_endpoint(
 
 @router.post(
     "/{map_id}/revisions/{rev_id}/restore-as-new",
-    response_model=SystemMapRevisionRestoreAsNewResponse,
     dependencies=[
         Depends(
             audited(
@@ -1480,19 +1551,28 @@ async def _resolve_overview_revision(
     map_id: uuid.UUID,
     revision_id: uuid.UUID | None,
     at: datetime | None,
+    internal_access: bool,
 ) -> SystemMapRevision:
     """Resolve which revision an overview request targets (FAR-2288)."""
     if revision_id:
         revision = await repository.get_revision_by_id(
             session, organisation_id=organisation_id, revision_id=revision_id
         )
+        if revision is not None and revision.status == "draft" and not internal_access:
+            revision = None
         if not revision or revision.system_map_id != map_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
         return revision
     if at:
         revision = await repository.get_revision_by_time(
-            session, organisation_id=organisation_id, system_map_id=map_id, at=at
+            session,
+            organisation_id=organisation_id,
+            system_map_id=map_id,
+            at=at,
+            published_only=not internal_access,
         )
+        if revision is not None and revision.status == "draft" and not internal_access:
+            revision = None
         if not revision:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1510,7 +1590,7 @@ async def _resolve_overview_revision(
     return revision
 
 
-@router.get("/{map_id}/overview")
+@published_router.get("/{map_id}/overview")
 @handle_db_errors(_EP_GET_SYSTEM_MAP_OVERVIEW)
 async def get_system_map_overview_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
@@ -1518,15 +1598,22 @@ async def get_system_map_overview_endpoint(
     at: datetime | None = Query(
         default=None, description="ISO8601 timestamp to get overview for the revision active at that time"
     ),
+    window_days: int = Query(
+        default=OVERVIEW_WINDOW_DAYS,
+        ge=OVERVIEW_WINDOW_MIN_DAYS,
+        le=OVERVIEW_WINDOW_MAX_DAYS,
+        description="Trailing UTC days included in the overview metrics",
+    ),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_OVERVIEW),
+    principal: TenantPrincipal = require_permission(SYSTEM_MAPS_READ_PERMISSION),
     repository: SystemMapRepository = Depends(get_repo),
+    internal_access: bool = Depends(_system_maps_internal_access),
 ) -> SystemMapOverviewResponse:
     """Aggregate read model with node health, loop configs, and bottleneck detection.
 
     Can optionally specify a revision_id or 'at' timestamp to get the overview
     for a specific historical revision (FAR-2288 version-aware read model).
-    Metrics cover the trailing seven UTC days.
+    Metrics cover the trailing `window_days` UTC days.
     """
     if revision_id and at:
         raise HTTPException(
@@ -1552,6 +1639,7 @@ async def get_system_map_overview_endpoint(
                 map_id=map_id,
                 revision_id=revision_id,
                 at=at,
+                internal_access=internal_access,
             )
 
             # Get full graph for the target revision
@@ -1565,7 +1653,7 @@ async def get_system_map_overview_endpoint(
             loop_configs = graph["loop_configs"]
 
             window_end = datetime.now(UTC)
-            window_start = window_end - timedelta(days=OVERVIEW_WINDOW_DAYS)
+            window_start = window_end - timedelta(days=window_days)
             pipeline_ids = {node.pipeline_id for node in nodes if node.pipeline_id is not None}
             metrics = await repository.get_overview_pipeline_metrics(
                 session,
@@ -1587,7 +1675,7 @@ async def get_system_map_overview_endpoint(
                 revision_id=target_revision.id,
                 revision_number=target_revision.revision_number,
                 generated_at=window_end,
-                window_days=OVERVIEW_WINDOW_DAYS,
+                window_days=window_days,
                 window_start=window_start,
                 window_end=window_end,
                 nodes=_build_overview_node_health(nodes, metrics),
@@ -2069,6 +2157,7 @@ async def delete_attribution_binding_endpoint(
 # ─── Discovery endpoint ───
 
 _CODE_SYSTEM_MAPS_DISCOVER = "system_maps.discover"
+_DISCOVERY_EVALUATOR_VERSION = "system-map-ai-discovery-evaluator-v1"
 
 
 def _fingerprint(draft: Any) -> str:
@@ -2086,6 +2175,49 @@ def _stage_type(node: dict[str, Any]) -> str:
     if node["node_type"] == "pipeline":
         return "manual" if node["config_json"].get("source_kind") == "trigger" else "modulo"
     return "placeholder"
+
+
+async def _resolve_discovery_eval(
+    session: AsyncSession,
+    *,
+    eval_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> EvalDefinition:
+    row = (
+        await session.execute(
+            select(Eval).where(
+                Eval.id == eval_id,
+                Eval.organisation_id == org_id,
+                Eval.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None or row.eval_type != EvalType.MODEL_JUDGE.value:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_eval_definition",
+                "message": "Eval gate must be an active org-owned model_judge definition",
+            },
+        )
+    config = dict(row.config_json or {})
+    if config.get("answer_contract") != "typed_questions":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_eval_definition", "message": "Eval gate must use the typed judge contract"},
+        )
+    return EvalDefinition(
+        id=row.id,
+        org_id=row.organisation_id,
+        pipeline_id=row.pipeline_id,
+        node_id=None,
+        name=row.name or "System Map discovery eval",
+        eval_type=EvalType.MODEL_JUDGE,
+        config=config,
+        failure_behaviour="block",
+        pass_threshold=float(row.pass_threshold) if row.pass_threshold is not None else None,
+        version=row.version,
+    )
 
 
 async def _persist_discovery_draft(
@@ -2119,9 +2251,198 @@ async def _persist_discovery_draft(
     return map_obj, revision_id, revision_number
 
 
+async def _authorise_discovery_backend(
+    session: AsyncSession,
+    *,
+    model_backend_id: uuid.UUID,
+    principal: TenantPrincipal,
+) -> list[ModelBackend]:
+    """Load the selected model backend and enforce org/team authorisation."""
+    backend_rows = list(
+        (
+            await session.execute(
+                select(ModelBackend).where(
+                    ModelBackend.organisation_id == principal.organisation_id,
+                    ModelBackend.id == model_backend_id,
+                    ModelBackend.status == "active",
+                    (ModelBackend.visibility == "org") | (ModelBackend.visibility.is_(None)),
+                )
+            )
+        ).scalars()
+    )
+    if not backend_rows:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "model_backend_unauthorised",
+                "message": "Selected model backend is not active and authorised for this organisation",
+            },
+        )
+    backend_scope = await evaluate_team_gate(
+        session,
+        owner_team_id=backend_rows[0].owner_team_id,
+        visibility=backend_rows[0].visibility,
+        account_id=principal.account_id,
+        org_role=principal.org_role,
+    )
+    if backend_scope is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "model_backend_unauthorised",
+                "message": "Selected model backend is not authorised for this caller",
+            },
+        )
+    return backend_rows
+
+
+async def _resolve_discovery_backend(hub: ModelBackendHub, model_backend_id: uuid.UUID) -> Any:
+    """Resolve the backend from the hub, mapping hub errors onto HTTP errors."""
+    try:
+        return await hub.get(model_backend_id)
+    except BackendNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "model_backend_unauthorised",
+                "message": "Selected model backend is not active and authorised for this organisation",
+            },
+        ) from exc
+    except BackendUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "model_backend_unavailable",
+                "message": "Selected model backend is unhealthy or unavailable",
+            },
+        ) from exc
+
+
+async def _evaluate_discovery_gate(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    hub: ModelBackendHub,
+    draft: Any,
+    model_backend_id: uuid.UUID,
+    eval_definition_id: uuid.UUID,
+) -> tuple[bool, str]:
+    """Run the configured model-judge eval gate over the enhanced draft."""
+    eval_def = await _resolve_discovery_eval(
+        session,
+        eval_id=eval_definition_id,
+        org_id=principal.organisation_id,
+    )
+    judge = build_discovery_model_judge_callable(hub, model_backend_id)
+    eval_result = await EvalEngine().evaluate_result_async(
+        {"candidate": {"nodes": list(draft.nodes), "relationships": list(draft.relationships)}},
+        eval_def,
+        model_judge_callable=judge,
+    )
+    passed = eval_result.outcome is JudgeOutcome.PASS
+    verdict = "pass" if passed else ("error" if eval_result.outcome is JudgeOutcome.ERROR else "fail")
+    if not passed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "eval_gate_failed",
+                "message": "AI-assisted discovery did not pass its evaluation gate",
+                "verdict": verdict,
+            },
+        )
+    return passed, verdict
+
+
+async def _run_ai_discovery(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    model_backend_id: uuid.UUID,
+    eval_definition_id: uuid.UUID | None,
+    draft: Any,
+    provenance: dict[str, Any],
+) -> tuple[Any, bool, bool | None, str]:
+    """Apply an authorised AI enhancement and optional eval gate to the draft.
+
+    An explicit AI request never silently degrades to a deterministic draft: a
+    provider that answers outside the AI contract is a refusal, not a success.
+    """
+    backend_rows = await _authorise_discovery_backend(
+        session,
+        model_backend_id=model_backend_id,
+        principal=principal,
+    )
+    secrets_backend = create_secrets_backend(
+        fernet_key=get_settings().fernet_key,
+        session=session,
+    )
+    hub = ModelBackendHub()
+    await hub.__aenter__()
+    try:
+        await hub.initialise(
+            backend_rows,
+            secrets_backend=secrets_backend,
+        )
+    except BaseException:
+        await hub.__aexit__(None, None, None)
+        raise
+    if model_backend_id not in hub.backend_ids:
+        await hub.__aexit__(None, None, None)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "model_backend_unavailable", "message": "Selected model backend is unavailable"},
+        )
+    try:
+        backend = await _resolve_discovery_backend(hub, model_backend_id)
+        candidate, ai_outcome = await enhance_discovery_with_outcome(
+            draft,
+            backend,
+            safe_additions=(),
+        )
+        if ai_outcome == "error":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "model_backend_unavailable",
+                    "message": "AI discovery backend invocation failed",
+                },
+            )
+        if ai_outcome != "accepted":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "model_backend_invalid_response",
+                    "message": "AI discovery backend returned no accepted enhancement",
+                },
+            )
+        provenance.update(
+            {
+                "mode": "ai_assisted",
+                "prompt_version": PROMPT_VERSION,
+                "rubric_version": RUBRIC_VERSION,
+                "selected_backend_id": str(model_backend_id),
+                "output_hash": _fingerprint(candidate),
+            }
+        )
+        eval_gate_passed: bool | None = None
+        eval_gate_verdict = "not_requested"
+        if eval_definition_id is not None:
+            eval_gate_passed, eval_gate_verdict = await _evaluate_discovery_gate(
+                session,
+                principal=principal,
+                hub=hub,
+                draft=candidate,
+                model_backend_id=model_backend_id,
+                eval_definition_id=eval_definition_id,
+            )
+            provenance["evaluator_version"] = _DISCOVERY_EVALUATOR_VERSION
+        return candidate, True, eval_gate_passed, eval_gate_verdict
+    finally:
+        await hub.__aexit__(None, None, None)
+
+
 @router.post(
     "/discover",
-    response_model=SystemMapDiscoveryReport,
     status_code=status.HTTP_201_CREATED,
     dependencies=[
         Depends(
@@ -2139,7 +2460,12 @@ async def discover_system_map(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("system_maps_access"),
 ) -> SystemMapDiscoveryReport:
-    """Inspect the organisation and persist an unpublished deterministic draft."""
+    """Inspect the organisation and persist an unpublished draft."""
+    if request.eval_definition_id is not None and request.model_backend_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_request", "message": "eval_definition_id requires model_backend_id"},
+        )
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
@@ -2214,9 +2540,32 @@ async def discover_system_map(
             *[DiscoverySource(kind="folder", identifier=str(folder.id), name=folder.name) for folder in folders],
         ]
         draft = discover_draft(sources)
+        deterministic_fingerprint = _fingerprint(draft)
+        ai_assisted = False
+        eval_gate_passed: bool | None = None
+        eval_gate_verdict = "not_requested"
+        provenance: dict[str, Any] = {
+            "mode": "deterministic",
+            "prompt_version": None,
+            "rubric_version": None,
+            "evaluator_version": None,
+            "selected_backend_id": None,
+            "input_hash": deterministic_fingerprint,
+            "output_hash": deterministic_fingerprint,
+        }
+        model_backend_id = request.model_backend_id
+        if model_backend_id is not None:
+            draft, ai_assisted, eval_gate_passed, eval_gate_verdict = await _run_ai_discovery(
+                session,
+                principal=principal,
+                model_backend_id=model_backend_id,
+                eval_definition_id=request.eval_definition_id,
+                draft=draft,
+                provenance=provenance,
+            )
         raw_content = {
-            "nodes": list(draft.nodes),
-            "relationships": list(draft.relationships),
+            "nodes": json.loads(json.dumps(list(draft.nodes), default=str)),
+            "relationships": json.loads(json.dumps(list(draft.relationships), default=str)),
             "stages": [
                 {
                     "id": node["node_key"],
@@ -2239,7 +2588,14 @@ async def discover_system_map(
             ],
             "notes": "System Maps discovery draft; inferred edges are suggestions and are not published.",
             "discovery_fingerprint": _fingerprint(draft),
-            "discovery": {"warnings": list(draft.warnings), "skipped": list(draft.skipped)},
+            "discovery": {
+                "warnings": list(draft.warnings),
+                "skipped": list(draft.skipped),
+                "ai_assisted": ai_assisted,
+                "eval_gate_passed": eval_gate_passed,
+                "eval_gate_verdict": eval_gate_verdict,
+                "provenance": provenance,
+            },
         }
         map_obj, revision_id, revision_number = await _persist_discovery_draft(
             session,
@@ -2264,4 +2620,8 @@ async def discover_system_map(
         draft_revision_id=revision_id,
         draft_revision_number=revision_number,
         published=False,
+        ai_assisted=ai_assisted,
+        eval_gate_passed=eval_gate_passed,
+        eval_gate_verdict=eval_gate_verdict,
+        provenance=provenance,
     )

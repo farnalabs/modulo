@@ -100,6 +100,31 @@ class TestEvalDefinitionJudgeDisplay:
         assert "legacy" in body["judge"]["display"]
 
 
+class TestEvalDefinitionGuardrailMasking:
+    def test_pre_version_raw_without_config_json_is_untouched(self) -> None:
+        from modulo.api.routes.evals import _eval_def_to_dict
+
+        row = _make_eval_def(
+            eval_type="guardrail",
+            config_json={"type": "regex", "pattern": r"AKIA[0-9A-Z]{16}"},
+            pre_version_raw={"other": "value"},
+        )
+
+        body = _eval_def_to_dict(row, mask_guardrail_internals=True)
+
+        assert body["config_json"]["pattern"] == "********"
+        assert body["pre_version_raw"] == {"other": "value"}
+
+    def test_non_guardrail_row_is_not_masked(self) -> None:
+        from modulo.api.routes.evals import _eval_def_to_dict
+
+        row = _make_eval_def(eval_type="regex", config_json={"pattern": r"\d+"})
+
+        body = _eval_def_to_dict(row, mask_guardrail_internals=True)
+
+        assert body["config_json"] == {"pattern": r"\d+"}
+
+
 def _make_eval_def(**overrides) -> MagicMock:
     m = MagicMock()
     m.id = overrides.get("id", _EVAL_DEF_ID)
@@ -173,6 +198,30 @@ def runner_client() -> Generator[TestClient, None, None]:
         organisation_id=_ORG_ID,
         account_id=_USER_ID,
         org_role="runner",
+    )
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_db_session] = override_session
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def viewer_client() -> Generator[TestClient, None, None]:
+    """Lowest role — ``eval.list`` is viewer-scoped so reads must mask guardrails."""
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="viewer",
     )
     mock_session = _make_mock_session()
 
@@ -453,6 +502,81 @@ class TestListEvalDefinitions:
         assert data["page"] == 1
         assert data["page_size"] == 20
 
+    def test_list_masks_guardrail_internals_for_viewer(self, viewer_client: TestClient) -> None:
+        """A viewer can list eval definitions but must never see a guardrail's
+        deny-rule internals — the regex ``pattern`` and ``redaction[].path`` are
+        masked, while the topology stays readable."""
+        guardrail = _make_eval_def(
+            eval_type="guardrail",
+            name="block_aws_keys",
+            config_json={
+                "type": "regex",
+                "action": "block",
+                "field": "payload.secret",
+                "pattern": r"AKIA[0-9A-Z]{16}",
+                "redaction": [{"path": "payload.secret", "mode": "transform"}],
+            },
+            pre_version_raw={
+                "config_json": {
+                    "type": "regex",
+                    "action": "block",
+                    "field": "payload.secret",
+                    "pattern": r"AKIA[0-9A-Z]{15}",
+                }
+            },
+        )
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_value=1),
+            _make_result(all_value=[guardrail]),
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = viewer_client.get(f"{self.URL}?eval_type=guardrail")
+        assert resp.status_code == 200
+        config = resp.json()["items"][0]["config_json"]
+        assert config["pattern"] == "********"
+        assert config["redaction"][0]["path"] == "********"
+        # Topology is preserved for the guardrail management view.
+        assert config["action"] == "block"
+        assert config["type"] == "regex"
+        assert config["field"] == "payload.secret"
+        # The pre-edit snapshot carries the same internals and is masked too.
+        assert resp.json()["items"][0]["pre_version_raw"]["config_json"]["pattern"] == "********"
+        assert "AKIA" not in resp.text
+
+    def test_list_keeps_guardrail_internals_for_admin(self, admin_client: TestClient) -> None:
+        """Admins are the elevated guardrail readers — the list stays unmasked."""
+        guardrail = _make_eval_def(
+            eval_type="guardrail",
+            name="block_aws_keys",
+            config_json={"type": "regex", "action": "block", "pattern": r"AKIA[0-9A-Z]{16}"},
+        )
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_value=1),
+            _make_result(all_value=[guardrail]),
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.get(f"{self.URL}?eval_type=guardrail")
+        assert resp.status_code == 200
+        assert resp.json()["items"][0]["config_json"]["pattern"] == r"AKIA[0-9A-Z]{16}"
+
     def test_list_empty(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
@@ -628,6 +752,36 @@ class TestGetEvalDefinition:
         resp = admin_client.get(f"{self.URL}/{_EVAL_DEF_ID}")
         assert resp.status_code == 200
         assert resp.json()["name"] == "My Eval"
+
+    def test_get_masks_guardrail_internals_for_viewer(self, viewer_client: TestClient) -> None:
+        guardrail = _make_eval_def(
+            eval_type="guardrail",
+            name="block_aws_keys",
+            config_json={
+                "type": "json_schema",
+                "action": "block",
+                "schema": {"type": "object", "properties": {"secret": {"type": "string"}}},
+            },
+        )
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=guardrail),
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = viewer_client.get(f"{self.URL}/{_EVAL_DEF_ID}")
+        assert resp.status_code == 200
+        config = resp.json()["config_json"]
+        assert config["schema"] == {"redacted": True}
+        assert config["type"] == "json_schema"
+        assert "secret" not in resp.text
 
     def test_get_not_found(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()

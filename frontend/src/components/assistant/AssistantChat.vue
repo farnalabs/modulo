@@ -456,7 +456,7 @@ function onInputKeydown(e: KeyboardEvent) {
 
   if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
     e.preventDefault()
-    handleSend()
+    void handleSend()
   }
 }
 
@@ -585,7 +585,7 @@ async function handleSend() {
   await store.sendMessage(text);
   if (store.activeSessionId) {
     try {
-      connectStream(store.activeSessionId, { excludeNavigationTools: !!props.assistantOnly });
+      await connectStream(store.activeSessionId, { excludeNavigationTools: !!props.assistantOnly });
     } catch (e) {
       console.error("Failed to start Assistant stream:", e);
     }
@@ -611,8 +611,12 @@ function syncHighlightScroll() {
   }
 }
 
-function copyMessage(text: string) {
-  navigator.clipboard.writeText(text).catch(() => {});
+async function copyMessage(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    // Clipboard failures are non-fatal: the message remains available in the chat.
+  }
 }
 
 function escapeHtml(text: string): string {

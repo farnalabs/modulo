@@ -44,17 +44,21 @@ status: covered
 
 # Declarative Configuration CLI (`modulo apply`)
 
-`modulo apply -f <config.yaml>` applies an organisation's schemas (+ versions),
+`modulo apply -f <config.yaml>` applies an organization's schemas (+ versions),
 model backends, pipelines and triggers to a live deployment from one YAML file
 (`api_version: modulo.dev/v1`), driven by `MODULO_URL` + `MODULO_API_KEY` (a
-bearer `mk_` org key). The reference routes are the product surfaces the CLI
-writes to (`/schemas`, `/admin/model-backends`, `/pipelines`,
-`/settings/triggers`); there is no dedicated CLI page in the nav. Built on the
+bearer `mk_` org key). The API routes the CLI writes to are `/api/v1/schemas`,
+`/api/v1/model-backends`, `/api/v1/pipelines`,
+`/api/v1/pipelines/{pipeline_id}/triggers` (create) and
+`/api/v1/triggers/{trigger_id}` (update); plan-time `credential_ref` validation
+also reads the org vault through the MCP `list_secrets` tool. The matching UI
+surfaces are `/admin/model-backends` and `/settings/triggers`; there is no
+dedicated CLI page in the nav. Built on the
 schemas, model-backends, pipelines and triggers features. For a copy-paste
 Terraform-style CI loop (plan on every pull request, apply on merge to `main`),
 see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-actions.md).
 
-## Behaviours
+## Behaviors
 
 - [x] `modulo apply -f <file>` loads single- or multi-document YAML
       (`api_version` `modulo.dev/v1` major-gated, minor suffixes merge
@@ -77,7 +81,7 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
 - [x] A model backend credential may instead be declared as
       `credential_ref: <key>` (FAR-1216): the declarative short form naming a
       bare org-vault key. Exactly one of `api_key` / `credential_ref` is
-      required; the CLI normalises `credential_ref` to the server's
+      required; the CLI normalizes `credential_ref` to the server's
       `secretref://<key>` token (one wire form, one server resolver, so there is
       no parallel mechanism), and the key is validated at PLAN time against the
       org vault so a missing key blocks the entity (in the plan's `blocked`
@@ -118,7 +122,7 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
       per-entity decisions `created` / `updated` / `unchanged` / `blocked`,
       hashed over canonical managed-field views (`api_key` excluded; trigger
       `config_json` compared on the desired key set with masked secrets
-      stripped symmetrically and `daily_spend_limit` quantised to the column's
+      stripped symmetrically and `daily_spend_limit` quantized to the column's
       4dp scale) – runtime state (`next_fire_at`, `streak_epoch`, ...) never
       produces drift (`backend/src/modulo/cli/apply/plan.py`,
       `test_apply_plan.py`)
@@ -239,17 +243,17 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
   `secretref://` is "blocked pending server-side resolution", which has been
   false since FAR-1640 (`core/secrets_backend/references.py` resolves a
   `secretref://<key>` token against the org vault server-side at write time).
-  Corrected both stale lines and added the new `credential_ref` behaviour
+  Corrected both stale lines and added the new `credential_ref` behavior
   (declarative bare-vault-key reference, mutually exclusive with `api_key`,
-  normalised to the server's `secretref://<key>` token, validated at plan time
+  normalized to the server's `secretref://<key>` token, validated at plan time
   so a missing key blocks the entity), including the plan-validation
-  `list_secrets` / `secret.manage` scope requirement and fail-closed behaviour.
+  `list_secrets` / `secret.manage` scope requirement and fail-closed behavior.
   Also registered `core/secrets_backend/references.py` and
   `test_apply_credential_ref.py` in the frontmatter surfaces.
 - 2026-10-07: **Improve Architecture product-map walk** – closed the untracked
   `feat-apply` sub-surface for FAR-1530: `modulo apply` gained declarative
   pipeline pausing (`run_enabled: false`) in PR #1367 but neither the manifest
-  `feat-apply` registry nor this tracker described it. Added the behaviour line
+  `feat-apply` registry nor this tracker described it. Added the behavior line
   to both layers, citing `cli/apply/models.py` (load-time rejection of `true`
   / `null`, `manages_run_enabled` gating, managed-view hash) and
   `cli/apply/pipeline_apply.py` (pause-after-write convergence, no
@@ -259,7 +263,7 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
   pipeline runtime limits (`node_timeout_seconds` / `max_duration_seconds`)
   on 2026-09-29 (PR #1105) but neither the manifest `feat-apply` registry nor
   this tracker described them, so the shipped surface was invisible to
-  Assistant's `search_documentation` indexer. Added the behaviour line to
+  Assistant's `search_documentation` indexer. Added the behavior line to
   both layers, citing `cli/apply/models.py` (validation + `managed_view` gating),
   `cli/apply/pipeline_apply.py` (create/PATCH payload) and
   `tests/unit/cli/test_apply_models.py` (round-trip, omit-vs-declare,
@@ -304,9 +308,9 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
   can no longer drift unguarded.
 
 - 2026-09-10: **product-map review pass** – added this
-  behaviour-tracker for the registered manifest feature `feat-apply`
+  behavior-tracker for the registered manifest feature `feat-apply`
   (FAR-681), which had `product_map` refs from four routes but no
   `docs/product-map/` entry, so the graph root's "all registered manifest
-  features have a tracker" promise was false. Behaviours verified against
+  features have a tracker" promise was false. Behaviors verified against
   `backend/src/modulo/cli/apply/*`, the `tests/unit/cli/test_apply_*` suites
   and `tests/unit/api/test_apply_api_key_auth.py`. Status: covered.

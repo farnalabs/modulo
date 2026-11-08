@@ -110,7 +110,7 @@ import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
-import { usePlanStore } from '../stores/planStore'
+import { usePlanStore, currentOrgId } from '../stores/planStore'
 import { api } from '../lib/api/client'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -133,7 +133,7 @@ const { t } = useI18n()
 
 const { loading, error: loadError, load: loadSettings } = useDataFetch(
   async () => {
-    const orgId = planStore.orgId
+    const orgId = getOrgId()
     if (!orgId) return { error: { detail: t('views.SettingsEmailView.organisation_id_not_available') } }
     const res = await api.GET('/api/v1/admin/org/{org_id}/email-settings', {
       params: { path: { org_id: orgId } },
@@ -166,7 +166,14 @@ const form = reactive<EmailForm>({
 })
 
 function getOrgId(): string | null {
-  return planStore.orgId
+  // FAR-2368: the target org is the one the caller is AUTHENTICATED as (the
+  // JWT `org_id` claim), never the licence's `org_id` (`planStore.orgId`,
+  // sourced from `license.org_id` in `GET /api/v1/plan`). The licence can name
+  // a different org — e.g. a deployment/instance licence — and every endpoint
+  // below authorises the caller against the org in the path
+  // (`require_target_org_role`), so passing the licence org made a legitimate
+  // org admin look like a non-member and returned 403.
+  return currentOrgId()
 }
 
 async function saveSettings() {
@@ -243,7 +250,7 @@ onMounted(async () => {
   const promise = planStore.fetchPlan()
   if (promise) await promise
   if (planStore.featureEnabled('email_config')) {
-    loadSettings()
+    void loadSettings()
   }
 })
 </script>

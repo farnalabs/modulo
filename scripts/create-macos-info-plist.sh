@@ -1,16 +1,21 @@
 #!/bin/sh
-# Write the native macOS app bundle metadata used by the arm64 installer.
+# Write the native macOS app bundle metadata used by the installer.
 # This helper only writes metadata; signing and notarization remain workflow steps.
 
 set -eu
 
-if [ "$#" -ne 2 ]; then
-    printf 'usage: %s <version> <output-path>\n' "$0" >&2
+if [ "$#" -ne 2 ] && [ "$#" -ne 3 ]; then
+    printf 'usage: %s <version> <output-path> [architecture]\n' "$0" >&2
     exit 2
 fi
 
 VERSION=$1
 OUTPUT_PATH=$2
+ARCHITECTURE=${3:-arm64}
+case "$ARCHITECTURE" in
+    arm64|x86_64) ;;
+    *) printf 'invalid macOS architecture: %s\n' "$ARCHITECTURE" >&2; exit 1 ;;
+esac
 
 case "$VERSION" in
     ''|*[!0-9.]*|*.*.*.*)
@@ -37,8 +42,10 @@ cat > "$OUTPUT_PATH" <<EOF
 <key>CFBundleName</key><string>Modulo</string>
 <key>CFBundleExecutable</key><string>modulo</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleIconFile</key><string>Modulo.icns</string>
+<key>CFBundleIconName</key><string>Modulo</string>
 <key>CFBundleShortVersionString</key><string>${VERSION}</string>
 <key>CFBundleVersion</key><string>${VERSION}</string>
 </dict></plist>
 EOF
-printf 'macOS arm64 metadata written to %s for version %s\n' "$OUTPUT_PATH" "$VERSION"
+printf 'macOS %s metadata written to %s for version %s\n' "$ARCHITECTURE" "$OUTPUT_PATH" "$VERSION"

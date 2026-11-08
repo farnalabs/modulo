@@ -88,7 +88,7 @@ jobs:
     # slots in (scripts/bundle-versions.env already carries the arm64 pins).
     name: Bundle linux-${{ matrix.arch }}
     needs: version-parity
-    # Ubuntu 22.04 (glibc 2.35) build baseline — see scripts/bundle-versions.env. Do NOT change without re-checking the glibc floor.
+    # Ubuntu 22.04 (glibc 2.35) build baseline -- see scripts/bundle-versions.env. Do NOT change without re-checking the glibc floor.
     runs-on: ubuntu-22.04
     # The caller supplies the workflow token, but this reusable job only checks
     # out the requested ref and uploads workflow artefacts. It never creates a
@@ -127,7 +127,9 @@ jobs:
             echo "PBS_TARBALL=${PBS_TARBALL}"
             echo "PBS_SHA256=${PBS_SHA256}"
             echo "PG_VERSION=${PG_VERSION}"
-            echo "PG_DEB_VERSION=${PG_DEB_VERSION}"
+            echo "PG_SOURCE_URL=${PG_SOURCE_URL}"
+            echo "PG_SOURCE_SHA256=${PG_SOURCE_SHA256}"
+            echo "PG_REQUIRED_EXTENSIONS=${PG_REQUIRED_EXTENSIONS}"
             echo "REDIS_VERSION=${REDIS_VERSION}"
             echo "BUNDLE_ROOT=modulo-${VERSION_NUM}-linux-${{ matrix.arch }}"
             echo "TARBALL_NAME=modulo-${VERSION_NUM}-linux-${{ matrix.arch }}.tar.gz"
@@ -141,38 +143,106 @@ jobs:
             "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/${PBS_TARBALL}"
           echo "${PBS_SHA256}  ${PBS_TARBALL}" | (cd downloads && sha256sum --check --strict -)
 
-      - name: Download and sha256-verify pinned PostgreSQL debs
+      - name: Install pinned PostgreSQL source-build dependencies
         run: |
           set -euo pipefail
-          source scripts/bundle-versions.env
-          case "$ARCH" in
-            amd64) PG_SRV_SHA="$PG_SERVER_AMD64_SHA256"; PG_CLI_SHA="$PG_CLIENT_AMD64_SHA256" ;;
-            arm64) PG_SRV_SHA="$PG_SERVER_ARM64_SHA256"; PG_CLI_SHA="$PG_CLIENT_ARM64_SHA256" ;;
-            *) echo "::error::unsupported arch: $ARCH"; exit 1 ;;
-          esac
+          # PostgreSQL is compiled only in this release workflow, never in the
+          # product runtime or customer installer. The explicit Jammy package
+          # list keeps the source build reproducible and documents why the
+          # configure flags below need no distro PostgreSQL package:
+          # build-essential = compiler/linker/make; flex+bison = parser tools;
+          # ca-certificates/curl/tar/gzip = verified source retrieval/extraction.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential \
+            bison \
+            ca-certificates \
+            curl \
+            flex \
+            gzip \
+            tar
 
+      - name: Download and sha256-verify pinned PostgreSQL source
+        run: |
+          set -euo pipefail
           mkdir -p downloads
+          curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/postgresql-${PG_VERSION}.tar.gz" "${PG_SOURCE_URL}"
+          echo "${PG_SOURCE_SHA256}  postgresql-${PG_VERSION}.tar.gz" | (cd downloads && sha256sum --check --strict -)
+          test -s "downloads/postgresql-${PG_VERSION}.tar.gz"
 
-          download_and_verify() {
-            local url="$1" name="$2" sha="$3"
-            curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/${name}" "$url"
-            echo "${sha}  ${name}" | (cd downloads && sha256sum --check --strict -)
+      - name: Verify PostgreSQL extension inventory before source build
+        run: |
+          set -euo pipefail
+          # Keep the supported inventory explicit. An empty inventory is valid,
+          # but any product/runtime requirement must be added deliberately before
+          # contrib is built or the release can pass.
+          required_extensions="${PG_REQUIRED_EXTENSIONS}"
+          extension_hits="$(mktemp)"
+          trap 'rm -f "$extension_hits"' EXIT
+          grep -RniE --include='*.py' --include='*.sql' \
+            -e 'CREATE[[:space:]]+EXTENSION' \
+            -e 'required_extensions?' \
+            -e 'extension_requirements?' \
+            backend/src/modulo > "$extension_hits" || true
+          if [ -s "$extension_hits" ]; then
+            while IFS= read -r hit; do
+              extension_name="$(printf '%s\n' "$hit" | sed -nE 's/.*CREATE[[:space:]]+EXTENSION([[:space:]]+IF[[:space:]]+NOT[[:space:]]+EXISTS)?[[:space:]]+([a-zA-Z0-9_]+).*/\2/p' | head -n1)"
+              if [ -z "$extension_name" ]; then
+                echo "::error::unclassified PostgreSQL extension requirement: $hit" >&2
+                exit 1
+              fi
+              case ",$required_extensions," in
+                *,"$extension_name",*) ;;
+                *) echo "::error::PostgreSQL extension $extension_name is required but not in PG_REQUIRED_EXTENSIONS" >&2; exit 1 ;;
+              esac
+            done < "$extension_hits"
+          fi
+          if [ -n "$required_extensions" ]; then
+            echo "PostgreSQL extension inventory: $required_extensions"
+          else
+            echo "PostgreSQL extension inventory is explicitly empty"
+          fi
+
+      - name: Build and sha256-verify PostgreSQL from pinned upstream source
+        run: |
+          set -euo pipefail
+          rm -rf pg-src pg-build "build/${BUNDLE_ROOT}/pg"
+          mkdir -p pg-src pg-build "build/${BUNDLE_ROOT}/pg"
+          tar -xzf "downloads/postgresql-${PG_VERSION}.tar.gz" -C pg-src --strip-components=1
+          test -x pg-src/configure
+          BUNDLE_PG_PREFIX="$PWD/build/${BUNDLE_ROOT}/pg"
+          (
+            cd pg-build
+            ../pg-src/configure \
+                --prefix="$BUNDLE_PG_PREFIX" \
+              --without-readline \
+              --without-zlib \
+              --without-icu \
+              --without-llvm
+            # No contrib build: the preceding inventory scan proves whether
+            # product/runtime SQL requires an extension.
+            make -j"$(nproc)"
+            make install
+          )
+          test -x "$BUNDLE_PG_PREFIX/bin/postgres"
+          test -x "$BUNDLE_PG_PREFIX/bin/initdb"
+          test -x "$BUNDLE_PG_PREFIX/bin/pg_dump"
+          [ -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki" ] || {
+            echo "::error::PostgreSQL runtime data file missing: ${BUNDLE_PG_PREFIX}/share/postgresql/postgres.bki" >&2
+            exit 1
           }
-
-          download_and_verify "${PG_POOL_BASE_URL}/postgresql-16_${PG_DEB_VERSION}_${ARCH}.deb" "postgresql-16.deb" "$PG_SRV_SHA"
-          download_and_verify "${PG_POOL_BASE_URL}/postgresql-client-16_${PG_DEB_VERSION}_${ARCH}.deb" "postgresql-client-16.deb" "$PG_CLI_SHA"
-
-          # Chain-of-custody assert: the deb's own Version field must equal the pin.
-          for spec in "postgresql-16.deb:${PG_DEB_VERSION}" "postgresql-client-16.deb:${PG_DEB_VERSION}"; do
-            deb="${spec%%:*}"
-            want="${spec#*:}"
-            got="$(dpkg-deb -f "downloads/${deb}" Version)"
-            got="${got#*:}"
-            if [ "$got" != "$want" ]; then
-              echo "::error::${deb} Version field is '${got}' but the pin is '${want}' -- refusing to ship a mismatched package"
-              exit 1
-            fi
-          done
+          [ -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets" ] || {
+            echo "::error::PostgreSQL runtime data directory missing: ${BUNDLE_PG_PREFIX}/share/postgresql/timezonesets" >&2
+            exit 1
+          }
+          test -z "${PG_REQUIRED_EXTENSIONS}"
+          test "$("$BUNDLE_PG_PREFIX/bin/pg_config" --version)" = "PostgreSQL ${PG_VERSION}"
+          sharedir="$("$BUNDLE_PG_PREFIX/bin/pg_config" --sharedir)"
+          test "$sharedir" = "$BUNDLE_PG_PREFIX/share/postgresql"
+          case "$sharedir" in
+            "$BUNDLE_PG_PREFIX"/*) : ;;
+            *) echo "::error::PostgreSQL sharedir escaped the bundle prefix: $sharedir" >&2; exit 1 ;;
+          esac
 
       - name: Build and sha256-verify Redis from pinned upstream source
         run: |
@@ -197,38 +267,117 @@ jobs:
           test -x build/redis-install/bin/redis-server
           test -x build/redis-install/bin/redis-cli
 
+      - name: Install patchelf (bundle RUNPATH tool)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends patchelf
+          patchelf --version
+
       - name: Assemble bundle layout
         run: |
           set -euo pipefail
+          # Keep this step fail-loud: the previous dry-run only reported exit 1,
+          # which hid whether layout, copy, pg_config, or patchelf failed.
+          rc=0
+          trap 'rc=$?; echo "::error::Assemble bundle layout failed at line ${LINENO}: ${BASH_COMMAND} (exit ${rc})" >&2; exit "$rc"' ERR
+          # shellcheck source=scripts/bundle-versions.env
           source scripts/bundle-versions.env
-          BUNDLE="build/${BUNDLE_ROOT}"
-          mkdir -p "$BUNDLE/runtime" "$BUNDLE/pg" "$BUNDLE/redis"
+          BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
+          # pg_config emits the absolute configure-time prefix, while the
+          # assembly paths above are intentionally relative to the checkout.
+          # Canonicalise both sides before comparing so this accepts the same
+          # bundle path in either spelling and still rejects symlink escapes.
+          mkdir -p "$BUNDLE/runtime" "$BUNDLE/pg" "$BUNDLE/redis" || {
+            echo "::error::mkdir failed for bundle layout: ${BUNDLE}/runtime ${BUNDLE}/pg ${BUNDLE}/redis" >&2
+            exit 1
+          }
+          BUNDLE_ROOT_ABS="$(realpath -e -- "$BUNDLE")"
+          echo "assemble: bundle=${BUNDLE_ROOT_ABS}"
 
           # CPython runtime (glibc build -- x86_64/aarch64-unknown-linux-gnu).
           # Strip the top-level `python/` dir so runtime/ IS the interpreter
           # tree: runtime/bin/python3.12, runtime/lib/...
-          tar -xzf "downloads/${PBS_TARBALL}" -C "$BUNDLE/runtime" --strip-components=1
+          pbs_archive="downloads/${PBS_TARBALL}"
+          [ -s "$pbs_archive" ] || { echo "::error::CPython archive missing or empty: ${pbs_archive}" >&2; exit 1; }
+          echo "assemble: extracting CPython archive ${pbs_archive}"
+          tar -xzf "$pbs_archive" -C "$BUNDLE/runtime" --strip-components=1 || {
+            echo "::error::tar extraction failed: archive=${pbs_archive} destination=${BUNDLE}/runtime" >&2
+            exit 1
+          }
+          [ -x "$BUNDLE/runtime/bin/python3" ] || { echo "::error::CPython extraction did not produce executable: ${BUNDLE}/runtime/bin/python3" >&2; exit 1; }
 
-          # PostgreSQL server + client (pg_dump/pg_isready/psql live in the
-          # client deb) into pg/bin + pg/share.
-          mkdir -p debx/pg-server debx/pg-client debx/redis-server debx/redis-tools
-          dpkg-deb -x downloads/postgresql-16.deb debx/pg-server
-          dpkg-deb -x downloads/postgresql-client-16.deb debx/pg-client
-          mkdir -p "$BUNDLE/pg/share"
-          cp -a debx/pg-server/usr/lib/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/"
-          cp -a debx/pg-client/usr/lib/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/"
-          cp -a debx/pg-server/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/"
-          cp -a debx/pg-client/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/"
+          # PostgreSQL server + client were compiled directly into the bundle
+          # prefix so pg_config --sharedir and runtime data remain relocatable.
+          for required in \
+            "$BUNDLE/pg/bin/postgres" \
+            "$BUNDLE/pg/bin/initdb" \
+            "$BUNDLE/pg/bin/pg_dump"; do
+            [ -x "$required" ] || { echo "::error::required PostgreSQL executable missing or not executable: ${required}" >&2; exit 1; }
+            echo "assemble: found PostgreSQL executable ${required}"
+          done
+          [ -f "$BUNDLE/pg/share/postgresql/postgres.bki" ] || { echo "::error::PostgreSQL runtime data file missing: ${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }
+          [ -d "$BUNDLE/pg/share/postgresql/timezonesets" ] || { echo "::error::PostgreSQL runtime data directory missing: ${BUNDLE}/pg/share/postgresql/timezonesets" >&2; exit 1; }
+          sharedir="$("$BUNDLE/pg/bin/pg_config" --sharedir)" || {
+             echo "::error::pg_config --sharedir failed: executable=${BUNDLE}/pg/bin/pg_config" >&2
+             exit 1
+           }
+          sharedir_abs="$(realpath -e -- "$sharedir")" || {
+             echo "::error::pg_config --sharedir does not resolve to an existing directory: ${sharedir}" >&2
+             exit 1
+           }
+          expected_sharedir_abs="$(realpath -e -- "$BUNDLE/pg/share/postgresql")" || {
+             echo "::error::bundled PostgreSQL sharedir is missing: ${BUNDLE}/pg/share/postgresql" >&2
+             exit 1
+           }
+          echo "assemble: pg_config sharedir=${sharedir} canonical=${sharedir_abs}"
+          [ "$sharedir_abs" = "$expected_sharedir_abs" ] || {
+             echo "::error::pg_config returned unexpected sharedir: expected=${expected_sharedir_abs} actual=${sharedir_abs} (raw=${sharedir})" >&2
+             exit 1
+           }
+          case "$sharedir_abs" in
+             "$BUNDLE_ROOT_ABS"/*) : ;;
+             *) echo "::error::bundled PostgreSQL sharedir escaped the bundle: ${sharedir_abs} (raw=${sharedir})" >&2; exit 1 ;;
+           esac
 
-          # Redis, compiled from source on this runner (see the build step above).
-          cp -a build/redis-install/bin/. "$BUNDLE/redis/"
-          test -x "$BUNDLE/redis/redis-server"
-          test -x "$BUNDLE/redis/redis-cli"
+           # Redis, compiled from source on this runner (see the build step above).
+           redis_bin_dir="build/redis-install/bin"
+           [ -d "$redis_bin_dir" ] || { echo "::error::Redis install directory missing: ${redis_bin_dir}" >&2; exit 1; }
+           [ -x "$redis_bin_dir/redis-server" ] || { echo "::error::Redis server missing or not executable: ${redis_bin_dir}/redis-server" >&2; exit 1; }
+           [ -x "$redis_bin_dir/redis-cli" ] || { echo "::error::Redis CLI missing or not executable: ${redis_bin_dir}/redis-cli" >&2; exit 1; }
+           echo "assemble: copying Redis binaries from ${redis_bin_dir}"
+           cp -a "$redis_bin_dir"/. "$BUNDLE/redis/" || { echo "::error::Redis copy failed: source=${redis_bin_dir} destination=${BUNDLE}/redis" >&2; exit 1; }
+           [ -x "$BUNDLE/redis/redis-server" ] || { echo "::error::Redis server copy missing: ${BUNDLE}/redis/redis-server" >&2; exit 1; }
+           [ -x "$BUNDLE/redis/redis-cli" ] || { echo "::error::Redis CLI copy missing: ${BUNDLE}/redis/redis-cli" >&2; exit 1; }
+           # Also copy redis binaries to pg/bin so the bundled-binaries verification finds them.
+           cp -a "$redis_bin_dir"/. "$BUNDLE/pg/bin/" || { echo "::error::Redis-to-PostgreSQL bin copy failed: source=${redis_bin_dir} destination=${BUNDLE}/pg/bin" >&2; exit 1; }
+           [ -x "$BUNDLE/pg/bin/redis-server" ] || { echo "::error::Redis server not present after PostgreSQL bin copy: ${BUNDLE}/pg/bin/redis-server" >&2; exit 1; }
+           [ -x "$BUNDLE/pg/bin/redis-cli" ] || { echo "::error::Redis CLI not present after PostgreSQL bin copy: ${BUNDLE}/pg/bin/redis-cli" >&2; exit 1; }
+           # PostgreSQL's source build installs libpq beside the server. Bake
+           # an $ORIGIN-relative RUNPATH into every bundled ELF so the loader
+           # finds pg/lib with no inherited environment at all; the launcher
+           # deliberately scrubs every LD_* variable at boot (ADR 031 Decision 2).
+           [ -f "${BUNDLE}/pg/lib/libpq.so.5" ] || { echo "::error::bundled libpq missing: ${BUNDLE}/pg/lib/libpq.so.5" >&2; exit 1; }
 
-          # Native bundle entrypoint. Keep this as a small POSIX wrapper so the
-          # shipped command uses the bundled CPython runtime and dependencies,
-          # while the implementation remains in modulo.cli.main.
-          cat > "$BUNDLE/launcher" <<'LAUNCHER'
+           patched=0
+           for binary in "${BUNDLE}"/pg/bin/*; do
+             [ -f "$binary" ] || continue
+             if readelf -h "$binary" >/dev/null 2>&1; then
+               echo "assemble: setting RUNPATH on ELF ${binary}"
+               patchelf --set-rpath "\$ORIGIN/../lib" "$binary" || {
+                 echo "::error::patchelf failed: command=patchelf --set-rpath \\$ORIGIN/../lib path=${binary}" >&2
+                 exit 1
+               }
+               patched=$((patched + 1))
+             fi
+           done
+           [ "$patched" -gt 0 ] || { echo "::error::no ELF files found to patch under ${BUNDLE}/pg/bin" >&2; exit 1; }
+           echo "assemble: patched ${patched} ELF files"
+
+           # Native bundle entrypoint. Keep this as a small POSIX wrapper so the
+           # shipped command uses the bundled CPython runtime and dependencies,
+           # while the implementation remains in modulo.cli.main.
+            cat > "$BUNDLE/launcher" <<'LAUNCHER'
           #!/bin/sh
           set -eu
 
@@ -247,8 +396,62 @@ jobs:
           LAUNCHER
           chmod 755 "$BUNDLE/launcher"
 
-          echo "${{ inputs.rc_tag }}" > "$BUNDLE/RC_TAG"
           echo "bundle-v${VERSION_NUM}" > "$BUNDLE/VERSION"
+          test -s "$BUNDLE/VERSION"
+          echo "assemble: bundle layout complete"
+          exit 0
+
+      - name: Scan shipped PostgreSQL ELF files for runtime path leakage
+        run: |
+          set -euo pipefail
+          BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
+          fail=0
+          checked=0
+          while IFS= read -r -d '' binary; do
+            checked=$((checked + 1))
+            if ! readelf -h "$binary" >/dev/null 2>&1; then
+              echo "::error::shipped service binary is not an ELF binary: $binary" >&2
+              fail=1
+              continue
+            fi
+
+            # PostgreSQL deliberately embeds configure-time prefix strings in
+            # pg_config_paths.h as relocation fallbacks. Those strings are not
+            # runtime loader inputs: relocation smoke below proves that the
+            # relative paths win after the tree moves. Inspect ELF dynamic
+            # metadata instead, where an absolute/non-$ORIGIN path is actually
+            # consumed by the loader.
+            while IFS= read -r runtime_path; do
+              case "$runtime_path" in
+                "\$ORIGIN"|"\$ORIGIN"/*) ;;
+                *)
+                  echo "::error::ELF has an absolute or non-origin RUNPATH/RPATH: $runtime_path ($binary)" >&2
+                  fail=1
+                  ;;
+              esac
+            done < <(
+              readelf -d "$binary" |
+                sed -nE '/\((RPATH|RUNPATH)\)/s/.*\[([^]]*)\].*/\1/p' |
+                tr ':' '\n'
+            )
+
+            while IFS= read -r dependency; do
+              case "$dependency" in
+                /*)
+                  echo "::error::ELF has an absolute dynamic dependency: $dependency ($binary)" >&2
+                  fail=1
+                  ;;
+                *)
+                  :
+                  ;;
+              esac
+            done < <(readelf -d "$binary" | sed -nE '/\(NEEDED\)/s/.*\[([^]]*)\].*/\1/p')
+          done < <(find "$BUNDLE/pg/bin" "$BUNDLE/redis" -type f -perm /111 -print0)
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no shipped executable ELF files found under pg/bin or redis" >&2
+            exit 1
+          fi
+          exit "$fail"
 
       - name: Assert bundled service binaries stay within the glibc 2.35 floor
         run: |
@@ -256,9 +459,11 @@ jobs:
           BUNDLE="build/${BUNDLE_ROOT}"
           floor="2.35"
           fail=0
+          checked=0
           check_binary() {
             local bin="$1"
             local max
+            checked=$((checked + 1))
             max="$(objdump -p "$bin" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -Vu | tail -n1)"
             if [ -z "$max" ]; then
               echo "::error::could not determine the glibc requirement of ${bin}" >&2
@@ -272,10 +477,13 @@ jobs:
               echo "ok: ${bin} max GLIBC_${max} (<= ${floor})"
             fi
           }
-          check_binary "$BUNDLE/redis/redis-server"
-          check_binary "$BUNDLE/redis/redis-cli"
-          check_binary "$BUNDLE/pg/bin/postgres"
-          check_binary "$BUNDLE/pg/bin/pg_dump"
+          while IFS= read -r -d '' binary; do
+            check_binary "$binary"
+          done < <(find "$BUNDLE/pg/bin" "$BUNDLE/redis" -type f -perm /111 -print0)
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no executable ELF files found for glibc validation" >&2
+            exit 1
+          fi
           exit "$fail"
 
       - name: Set up uv
@@ -313,7 +521,7 @@ jobs:
           BUNDLE="../build/${BUNDLE_ROOT}"
           mkdir -p "$BUNDLE/backend"
           cp -a src "$BUNDLE/backend/src"
-          cp pyproject.toml uv.lock "$BUNDLE/backend/"
+          cp pyproject.toml uv.lock alembic.ini "$BUNDLE/backend/"
           cp -a .venv "$BUNDLE/backend/.venv"
 
       - name: Smoke the bundled launcher
@@ -328,10 +536,52 @@ jobs:
           env -i HOME="$HOME" PATH="$BUNDLE/runtime/bin:$BUNDLE/pg/bin:$BUNDLE/redis" \
             "$BUNDLE/launcher" apply --help
 
+      - name: Assert bundled libpq is reachable and loaded from the bundle
+        run: |
+          set -euo pipefail
+          BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"
+          test -f "$BUNDLE/pg/lib/libpq.so.5"
+          checked=0
+          for binary in "$BUNDLE"/pg/bin/*; do
+            [ -f "$binary" ] || continue
+            if ! readelf -d "$binary" 2>/dev/null | grep -Fq 'libpq.so.5'; then
+              continue
+            fi
+            checked=$((checked + 1))
+            if ! readelf -d "$binary" | grep -Fq 'ORIGIN/../lib'; then
+              echo "::error::$(basename "$binary") does not carry RUNPATH \$ORIGIN/../lib; bundled libpq is unreachable at runtime" >&2
+              exit 1
+            fi
+            resolved="$(env -i PATH=/usr/bin:/bin ldd "$binary" | grep -F 'libpq.so.5 =>' | sed 's/.* => //; s/ .*//')"
+            if [ -z "$resolved" ] || [ "$(realpath "$resolved")" != "$(realpath "$BUNDLE/pg/lib/libpq.so.5")" ]; then
+              echo "::error::$(basename "$binary") resolves libpq outside the bundle: ${resolved:-<none>}" >&2
+              exit 1
+            fi
+          done
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no bundled binary links libpq.so.5 - cannot prove reachability" >&2
+            exit 1
+          fi
+
+          # Execute with the loader's library trace and pin the loaded libpq to
+          # the bundle. This is deliberately stronger than `ldd`: on a host
+          # that HAS libpq, a missing/incorrect RUNPATH would silently fall
+          # back to the system copy, so asserting the resolved path is inside
+          # the bundle is what catches the regression. On a libpq-less host an
+          # unreachable bundle fails the exec outright.
+          trace="$(env -i LD_DEBUG=libs "$BUNDLE/pg/bin/pg_dump" --version 2>&1 >/dev/null)"
+          if ! printf '%s\n' "$trace" | grep -Fq "$BUNDLE/pg/lib/libpq.so.5" \
+            && ! printf '%s\n' "$trace" | grep -Fq "$BUNDLE/pg/bin/../lib/libpq.so.5"; then
+            echo "::error::pg_dump did not load libpq from the bundle" >&2
+            printf '%s\n' "$trace" | head -50 >&2
+            exit 1
+          fi
+          echo "checked ${checked} binary/binaries; libpq loaded from $BUNDLE/pg/lib/libpq.so.5"
+
       - name: Set up Node + pnpm (pinned to match frontend/package.json)
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -371,7 +621,121 @@ jobs:
       # artifact (the tarball + the major bundled binaries' sha256+version) and
       # is signed with the ed25519 private key in the CI secret
       # BUNDLE_MANIFEST_SIGNING_KEY (hex).
+      - name: Smoke the final PostgreSQL tarball after relocation as an unprivileged user
+        run: |
+          set -euo pipefail
+          tarball="build/${TARBALL_NAME}"
+          original_bundle="$(cd "build/${BUNDLE_ROOT}" && pwd)"
+          smoke_root="$(mktemp -d)"
+          smoke_workspace="$smoke_root/workspace"
+          smoke_user="modulo-pg-smoke"
+          cleanup() {
+            status=$?
+            cleanup_rc=0
+            if [ -d "$smoke_root/original" ] && [ ! -e "$original_bundle" ]; then
+              if ! mv "$smoke_root/original" "$original_bundle"; then
+                echo "::error::failed to restore the original bundle after PostgreSQL relocation smoke" >&2
+                cleanup_rc=1
+              fi
+            fi
+            if [ -z "$smoke_root" ] || [ "$smoke_root" = "/" ]; then
+              echo "::error::refusing to remove an unsafe PostgreSQL relocation smoke root" >&2
+              cleanup_rc=1
+            elif ! sudo rm -rf -- "$smoke_root"; then
+              echo "::error::failed to remove PostgreSQL relocation smoke root: $smoke_root" >&2
+              cleanup_rc=1
+            fi
+            if id "$smoke_user" >/dev/null 2>&1; then
+              if ! sudo userdel "$smoke_user"; then
+                echo "::error::failed to delete PostgreSQL relocation smoke user: $smoke_user" >&2
+                cleanup_rc=1
+              fi
+            fi
+            if [ "$cleanup_rc" -ne 0 ]; then
+              exit "$cleanup_rc"
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin "$smoke_user"
+          mv "$original_bundle" "$smoke_root/original"
+
+          test ! -e "$original_bundle"
+          extract_root="$smoke_root/extracted"
+          mkdir -p "$extract_root"
+          tar -xzf "$tarball" -C "$extract_root"
+          smoke_bundle="$extract_root/$BUNDLE_ROOT"
+          smoke_home="$smoke_workspace/home"
+          smoke_data="$smoke_workspace/data"
+          smoke_socket="$smoke_workspace/socket"
+          smoke_dump_dir="$smoke_workspace/dump"
+          smoke_dump="$smoke_dump_dir/roundtrip.sql"
+          smoke_script="$smoke_root/run-smoke.sh"
+          mkdir -p "$smoke_root" "$smoke_workspace"
+
+          # The extracted bundle remains runner-owned: changing ownership of
+          # the release tree can traverse runner-created files such as
+          # backend/.venv and fails deterministically on GitHub-hosted runners.
+          # Grant the smoke user read/traverse access without making the release
+          # tree writable or recursively changing ownership. The extracted root
+          # and every directory/file below it may retain restrictive tar modes.
+          chmod 0755 "$smoke_root" "$extract_root"
+          chmod -R a+rX "$extract_root"
+          # The mutable workspace is created fresh by the runner and holds no
+          # runner-owned release files, so a single non-recursive ownership
+          # handoff lets the unprivileged smoke user create its own state
+          # directories. The extracted bundle above is never chowned.
+          sudo chown "$smoke_user" "$smoke_workspace"
+          sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"
+          cat > "$smoke_script" <<'SMOKE_EOF'
+
+          #!/usr/bin/env bash
+          set -eu
+          : "${SMOKE_BUNDLE:?SMOKE_BUNDLE is required}"
+          : "${PGDATA:?PGDATA is required}"
+          : "${SMOKE_SOCKET:?SMOKE_SOCKET is required}"
+          : "${SMOKE_DUMP:?SMOKE_DUMP is required}"
+          sharedir="$(pg_config --sharedir)"
+          sharedir_abs="$(realpath -e -- "$sharedir")"
+          smoke_bundle_abs="$(realpath -e -- "$SMOKE_BUNDLE")"
+          expected_sharedir_abs="$(realpath -e -- "$SMOKE_BUNDLE/pg/share/postgresql")"
+          test "$sharedir_abs" = "$expected_sharedir_abs"
+          case "$sharedir_abs" in "$smoke_bundle_abs"/*) : ;; *) exit 1 ;; esac
+          initdb --pgdata "$PGDATA" --username modulo --auth=trust --locale C
+          pg_ctl --pgdata "$PGDATA" --log "$PGDATA/postgres.log" \
+            --options="-k $SMOKE_SOCKET -p 55432" start -w
+          trap 'pg_ctl --pgdata "$PGDATA" stop -m fast -w' EXIT
+          psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname postgres \
+            --command "SELECT 1;"
+          psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname postgres \
+            --command "SET TIME ZONE 'America/New_York'; SELECT now() AT TIME ZONE 'UTC';"
+          createdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
+          psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip \
+            --command "CREATE TABLE proof(value integer); INSERT INTO proof VALUES (2192);"
+          pg_dump --format=custom --host "$SMOKE_SOCKET" --port 55432 --username modulo --file "$SMOKE_DUMP" roundtrip
+          dropdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
+          createdb --host "$SMOKE_SOCKET" --port 55432 --username modulo roundtrip
+          pg_restore --exit-on-error --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip "$SMOKE_DUMP"
+          test "$(psql --host "$SMOKE_SOCKET" --port 55432 --username modulo --dbname roundtrip --tuples-only --no-align --command "SELECT value FROM proof")" = "2192"
+          SMOKE_EOF
+          chmod 0755 "$smoke_script"
+          sudo -u "$smoke_user" env -i \
+            HOME="$smoke_home" \
+            PATH="$smoke_bundle/pg/bin:/usr/bin:/bin" \
+            PGDATA="$smoke_data" \
+            SMOKE_BUNDLE="$smoke_bundle" \
+            SMOKE_SOCKET="$smoke_socket" \
+            SMOKE_DUMP="$smoke_dump" \
+            bash "$smoke_script"
+
+          if grep -R -E '/(usr|opt|home)/[^ ]*(postgresql|pgsql)' "$smoke_data/postgres.log"; then
+            echo "::error::final PostgreSQL tarball smoke used a host PostgreSQL path" >&2
+            exit 1
+          fi
+          echo "final tarball PostgreSQL relocation smoke passed: initdb, postgres, psql, timezone, pg_dump/restore"
+
       - name: Generate and sign the SIGNED release manifest
+
         env:
           MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
         run: |

@@ -261,6 +261,24 @@ class TestVaultListingParser:
             executor_module._parse_vault_key_listing(envelope)
 
 
+def test_apply_executor_default_client_uses_pinned_sync_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def factory(url: str, **kwargs: object) -> httpx.Client:
+        captured["url"] = url
+        captured.update(kwargs)
+        return httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200)))
+
+    monkeypatch.setattr(executor_module, "pinned_http_client_sync", factory)
+    executor = ApplyExecutor("https://api.test", "key", timeout=12.0)
+    try:
+        assert captured["url"] == "https://api.test"
+        assert captured["timeout"] == 12.0
+        assert captured["connector_type"] == "apply"
+    finally:
+        executor.close()
+
+
 class TestListVaultKeys:
     @respx.mock
     def test_sends_jsonrpc_tools_call(self) -> None:

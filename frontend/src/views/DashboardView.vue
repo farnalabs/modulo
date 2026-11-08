@@ -42,6 +42,7 @@
       <ErrorAlert v-if="error" class="mb-4" :message="error" :on-retry="retryDashboard" />
       <DashboardSystemOverview
         v-if="systemMapsStore.accessLoaded && systemMapsStore.systemMapsEnabled"
+        :window-days="selectedWindow ?? 7"
         class="mb-4"
       />
       <!-- Row 1: Summary stat cards -->
@@ -85,7 +86,10 @@
                </span>
                <span class="text-xs text-muted-foreground">{{ summary.eval_pass_rate?.total_evals }} {{ $t('views.DashboardView.total_evals_all_time') }}</span>
              </div>
-              <Sparkline class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" unit="%" color="hsl(var(--primary-text))" :show-y-axis="true" />
+              <Sparkline v-if="hasEvalChartData" class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" unit="%" color="hsl(var(--primary-text))" :show-y-axis="true" />
+              <div v-else class="mt-2 flex h-12 items-center justify-center rounded-md border border-dashed border-border text-xs text-muted-foreground" aria-live="polite">
+                {{ $t('components.Sparkline.no_data') }}
+              </div>
            </div>
            <div v-else class="flex flex-col items-center justify-center gap-1 py-6 text-sm text-muted-foreground" aria-live="polite">
              <span class="font-semibold">{{ $t('common.na') }}</span>
@@ -121,6 +125,7 @@
             <tr class="border-b text-left text-muted-foreground">
               <th class="pb-2 font-medium">{{ $t('views.DashboardView.team') }}</th>
               <th class="pb-2 font-medium text-right">{{ $t('views.DashboardView.runs') }}</th>
+              <th class="pb-2 font-medium text-right">{{ $t('views.DashboardView.completed') }}</th>
               <th class="pb-2 font-medium text-right">{{ $t('views.DashboardView.running') }}</th>
               <th class="pb-2 font-medium text-right">{{ $t('views.DashboardView.failed') }}</th>
               <th class="pb-2 font-medium text-right">{{ $t('views.DashboardView.eval_pass') }}</th>
@@ -143,16 +148,17 @@
                 >{{ team.name }}</button>
               </td>
               <td class="py-2.5 text-right">{{ team.total_runs }}</td>
+              <td class="py-2.5 text-right text-success-text">{{ team.completed_runs ?? team.run_counts_by_status?.completed ?? 0 }}</td>
               <td class="py-2.5 text-right text-success-text">{{ team.run_counts_by_status?.running ?? 0 }}</td>
               <td class="py-2.5 text-right text-destructive">{{ team.run_counts_by_status?.failed ?? 0 }}</td>
-               <td class="py-2.5 text-right">{{ team.eval_pass_rate ? team.eval_pass_rate.pass_rate + '%' : $t('common.na') }}</td>
+                <td class="py-2.5 text-right">{{ team.eval_pass_rate?.total_evals ? team.eval_pass_rate.pass_rate + '%' : $t('common.na') }}</td>
               <td class="py-2.5 text-right">
                 <ChevronUp v-if="expandedTeam === team.id" class="h-3.5 w-3.5" aria-hidden="true" />
                 <ChevronDown v-else class="h-3.5 w-3.5" aria-hidden="true" />
               </td>
             </tr>
             <tr v-if="expandedTeam && expandedTeamData">
-              <td colspan="6" class="py-3 pl-6">
+              <td colspan="7" class="py-3 pl-6">
                 <div class="text-xs text-muted-foreground space-y-1">
                   <p>{{ $t('views.DashboardView.pipelines') }}: <span class="font-medium text-foreground">{{ expandedTeamData.active_pipelines }}</span></p>
                   <p>{{ $t('views.DashboardView.awaiting_human') }}: <span class="font-medium text-foreground">{{ expandedTeamData.run_counts_by_status.awaiting_human }}</span></p>
@@ -193,8 +199,8 @@
             <Sparkline class="h-16 w-full" :data="trendRejectionRate" :labels="trendLabels" unit="%" color="hsl(var(--destructive-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
         </div>
-        <div v-else class="flex items-center justify-center min-h-[200px]">
-          <p class="text-sm italic text-muted-foreground">{{ $t('views.DashboardView.no_data_trends') }}</p>
+        <div v-else class="flex flex-col items-center justify-center gap-1 py-6 text-sm text-muted-foreground" aria-live="polite">
+          <p class="italic">{{ $t('views.DashboardView.no_data_trends') }}</p>
         </div>
       </div>
       <!-- Recent runs list -->
@@ -309,6 +315,11 @@ const evalSparklineData = computed((): Array<number | null> => {
 })
 
 const lastEvalRates = computed(() => evalSparklineData.value.filter((r): r is number => r !== null && Number.isFinite(r)))
+
+// Sparkline only draws once it has two real observations. Keep the meaningful
+// summary value visible above that threshold, but avoid mounting the primitive
+// (and its full-width empty plot) when there is nothing to chart.
+const hasEvalChartData = computed(() => lastEvalRates.value.length >= 2)
 
 const evalTrend = computed(() => {
   const rates = lastEvalRates.value

@@ -76,8 +76,18 @@
       v-else-if="items.length === 0"
       data-testid="settings-notification-log-empty"
       :title="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found')"
-      :description="$t('views.AdminNotificationDeliveryLogView.try_adjusting_filters')"
-    />
+      :description="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_for_filters')"
+    >
+       <button
+         type="button"
+         data-testid="settings-notification-log-empty-reset"
+         :aria-label="$t('views.AdminNotificationDeliveryLogView.reset_all_filters')"
+         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+         @click="resetFilters"
+       >
+         {{ $t('views.AdminNotificationDeliveryLogView.reset') }}
+       </button>
+     </EmptyState>
 
     <template v-else>
       <DataCard variant="bordered" padding="none" elevation="sm" card-class="overflow-hidden">
@@ -151,6 +161,7 @@ import { api } from '../lib/api/client'
 import type { paths } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useCursorPageStack } from '../composables/useCursorPageStack'
+import { dateRangeQuery, defaultDateRange, formatDateLogTimestamp } from '../lib/formatDate'
 import PageHeader from '../components/shared/PageHeader.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -177,17 +188,17 @@ const {
 // refs. Declaring them after caused a TDZ ReferenceError on the initial fetch
 // (FAR-2173 — surfaced in production as "Cannot access 'Z' before
 // initialization" after minification, the same defect class as FAR-608).
+const initialDateRange = defaultDateRange()
 const filterStatus = ref('__all__')
-const filterDateFrom = ref('')
-const filterDateTo = ref('')
+const filterDateFrom = ref(initialDateRange.from)
+const filterDateTo = ref(initialDateRange.to)
 
 const { loading, error, data: responseData, load: loadDeliveries } = useDataFetch(
   async () => {
     const params: DeliveryLogQuery = { limit: 50 }
     if (currentCursor.value) params.cursor = currentCursor.value
     if (filterStatus.value !== '__all__') params.status = filterStatus.value
-    if (filterDateFrom.value) params.from = filterDateFrom.value
-    if (filterDateTo.value) params.to = filterDateTo.value
+    Object.assign(params, dateRangeQuery(filterDateFrom.value, filterDateTo.value))
     const res = await api.GET('/api/v1/admin/notifications/deliveries', {
       params: { query: params },
     })
@@ -202,14 +213,7 @@ const items = computed(() => responseData.value?.items ?? [])
 const total = computed(() => responseData.value?.total ?? 0)
 
 function formatTimestamp(ts: string | null): string {
-  if (!ts) return '—'
-  const d = new Date(ts)
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatDateLogTimestamp(ts)
 }
 
 function statusBadge(status: string): string {
@@ -232,14 +236,15 @@ function statusLabel(status: string): string {
 
 function applyFilters() {
   resetCursor()
-  loadDeliveries()
+  void loadDeliveries()
 }
 
 function resetFilters() {
+  const dateRange = defaultDateRange()
   filterStatus.value = '__all__'
-  filterDateFrom.value = ''
-  filterDateTo.value = ''
+  filterDateFrom.value = dateRange.from
+  filterDateTo.value = dateRange.to
   resetCursor()
-  loadDeliveries()
+  void loadDeliveries()
 }
 </script>

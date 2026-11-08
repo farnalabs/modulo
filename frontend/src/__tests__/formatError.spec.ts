@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, isFeatureRequiredProblem } from '../lib/api/formatError'
 
 function circular(): Record<string, unknown> {
   const obj: Record<string, unknown> = {}
@@ -50,5 +50,26 @@ describe('formatError', () => {
     expect(formatApiError(undefined)).toBe('Unknown error')
     expect(formatApiError(0)).toBe('Unknown error')
     expect(formatApiError(false)).toBe('Unknown error')
+  })
+})
+
+
+describe('isFeatureRequiredProblem', () => {
+  it('recognises the responded 402 status even when the error body is absent', () => {
+    expect(isFeatureRequiredProblem(undefined, { status: 402 })).toBe(true)
+  })
+
+  it('recognises a 402 carried on the error object', () => {
+    expect(isFeatureRequiredProblem({ status: 402 })).toBe(true)
+  })
+
+  it('recognises the RFC 9457 feature_required problem type without a status', () => {
+    expect(isFeatureRequiredProblem({ type: 'urn:problem:modulo:feature_required' })).toBe(true)
+  })
+
+  it('does not treat a genuine failure as an entitlement refusal', () => {
+    expect(isFeatureRequiredProblem({ status: 500, type: 'urn:problem:modulo:internal_error' }, { status: 500 })).toBe(false)
+    expect(isFeatureRequiredProblem(undefined)).toBe(false)
+    expect(isFeatureRequiredProblem('feature_required')).toBe(false)
   })
 })

@@ -784,8 +784,8 @@ function resetExport() {
 }
 
 planStore.fetchPlan()
-loadCommunityObjects()
-loadHitlReviewWindow()
-loadMcpAuthority()
-loadOrgFeatureFlags()
+void loadCommunityObjects()
+void loadHitlReviewWindow()
+void loadMcpAuthority()
+void loadOrgFeatureFlags()
 </script>

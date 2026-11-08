@@ -1,6 +1,6 @@
 {
     "name": "modulo-frontend",
-    "version": "0.3.324",
+    "version": "0.3.328",
     "private": true,
     "scripts": {
         "generate:api": "uv run --project ../backend --no-sync python ../scripts/run_generate_api_types.py",
@@ -98,5 +98,5 @@
         "vitest": "^4.0.0",
         "vue-tsc": "^3.3.7"
     },
-    "packageManager": "pnpm@11.28.10"
+    "packageManager": "pnpm@11.28.11"
 }

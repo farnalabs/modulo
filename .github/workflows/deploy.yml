@@ -512,7 +512,7 @@ jobs:
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -2395,7 +2395,7 @@ jobs:
           fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -2839,6 +2839,43 @@ jobs:
           fi
           exit 0
 
+      - name: Enter production sandbox drain
+        shell: bash
+        env:
+          MODULO_DEPLOY_DRAIN_TOKEN: ${{ secrets.MODULO_DEPLOY_DRAIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          # FAR-2382 bootstrap. The admission freeze is best-effort: it is only
+          # enforceable once BOTH the credential is provisioned AND the live
+          # build exposes POST /api/v1/deployment/drain. On the first deploy
+          # that ships this control neither is true (the live build predates
+          # the route), so a hard failure here deadlocks every production
+          # deploy forever (observed at 07fe115a). Degrade to the active-run
+          # wait gate below with a loud warning instead; genuine control
+          # failures still fail closed.
+          if [ -z "$MODULO_DEPLOY_DRAIN_TOKEN" ]; then
+            echo "::warning::MODULO_DEPLOY_DRAIN_TOKEN is not configured; skipping the sandbox admission freeze. Without the freeze the active-run wait gate below cannot converge, so it degrades to the legacy deploy path. Provision the secret on both the GitHub repo and the production app to enable the drain."
+            exit 0
+          fi
+          status=$(curl -sS --max-time 15 -o /tmp/deploy-drain-enter.json -w '%{http_code}' \
+            -X POST "https://app.modulo.run/api/v1/deployment/drain?active=true" \
+            -H "Authorization: Bearer $MODULO_DEPLOY_DRAIN_TOKEN" \
+            -H "Content-Type: application/json") || {
+            echo "::error::could not reach the deployment drain control; refusing production deploy."
+            exit 1
+          }
+          if [ "$status" = "404" ]; then
+            echo "::warning::the live production build has no deployment drain control yet (bootstrap deploy); skipping the sandbox admission freeze - without it the active-run wait gate cannot converge, so it degrades to the legacy deploy path."
+            exit 0
+          fi
+          if [ "$status" != "200" ]; then
+            echo "::error::deployment drain control returned HTTP ${status}; refusing production deploy."
+            cat /tmp/deploy-drain-enter.json 2>/dev/null || true
+            exit 1
+          fi
+          jq -e '.active == true' /tmp/deploy-drain-enter.json >/dev/null
+          echo "Production sandbox admission is frozen."
+
       - name: Pre-deploy migrations (one-off machine)
         id: pre-migrate
         shell: bash
@@ -3144,6 +3181,86 @@ jobs:
           echo "----- pre-migrate machine log (tail) -----"
           tail -100 /tmp/premigrate-failure.log || true
           echo "----- end pre-migrate machine log -----"
+          exit 1
+
+      - name: Wait for active sandbox runs to finish (production)
+        shell: bash
+        env:
+          WORKER_DRAIN_TIMEOUT_MINUTES: "60"
+          WORKER_DRAIN_POLL_SECONDS: "30"
+        run: |
+          set -euo pipefail
+          # A rolling Fly deploy SIGTERMs the old worker. Do not start that
+          # replacement while a sandbox-backed run is still executing: the
+          # existing FAR-1627 handoff deliberately terminalises runs after
+          # durable sandbox activity rather than re-executing side effects.
+          # This endpoint is unauthenticated specifically for CI/CD probes and
+          # reads through the BYPASSRLS system session, so the count is deployment-wide.
+          #
+          # The wait is only meaningful while the admission freeze is ACTIVE:
+          # when new sandbox runs are still being admitted the count can rise at
+          # any moment and a quiescent window can never form. Waiting anyway
+          # deadlocked production deploys for the full timeout (observed on
+          # 33306b9: MODULO_DEPLOY_DRAIN_TOKEN was unconfigured, so the freeze
+          # was skipped, and 60 minutes of continuous sandbox activity kept the
+          # count above zero). Degrade to the legacy deploy path with a loud
+          # warning when the freeze is not active; still fail closed when it is.
+          timeout_s=$((WORKER_DRAIN_TIMEOUT_MINUTES * 60))
+          deadline=$(( $(date +%s) + timeout_s ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            body=""
+            if body=$(curl -fsS --max-time 15 "https://app.modulo.run/api/v1/deployment" 2>/dev/null); then
+              drain_state=$(printf '%s' "$body" | jq -r '
+                if type != "object" then "ERROR"
+                elif (has("deployment_drain") | not) then "ABSENT"
+                elif (.deployment_drain == true) then "ACTIVE"
+                else "INACTIVE" end' 2>/dev/null) || drain_state="ERROR"
+              case "$drain_state" in
+                ABSENT)
+                  echo "::warning::the live production build does not report deployment_drain yet (bootstrap deploy); proceeding without the active-run wait gate."
+                  exit 0
+                  ;;
+                INACTIVE)
+                  echo "::warning::production sandbox admission is not frozen (deployment_drain=false), so new sandbox runs can start at any moment and the active-run count cannot converge. Skipping the active-run wait gate and proceeding with the deploy. Provision MODULO_DEPLOY_DRAIN_TOKEN on both the GitHub repo and the production app to enable the drain."
+                  exit 0
+                  ;;
+                *)
+                  # ACTIVE, or ERROR when the endpoint could not be classified:
+                  # fall through to the active-run probe and fail closed via its
+                  # own ERROR/deadline paths. Never degrade to the legacy path.
+                  ;;
+              esac
+              probe=$(printf '%s' "$body" | jq -r '
+                if type != "object" then "ERROR"
+                elif (has("active_sandbox_runs") | not) then "ABSENT"
+                elif (.active_sandbox_runs | type) != "number" then "ERROR"
+                else (.active_sandbox_runs | tostring) end' 2>/dev/null) || probe="ERROR"
+              case "$probe" in
+                ABSENT)
+                  # FAR-2382 bootstrap: the live build predates this field, so
+                  # active runs cannot be counted yet. This is the deploy that
+                  # ships the field; blocking forever would deadlock it. The
+                  # next deploy reports the count and waits normally.
+                  echo "::warning::the live production build does not report active_sandbox_runs yet (bootstrap deploy); proceeding without the active-run wait gate."
+                  exit 0
+                  ;;
+                ERROR)
+                  echo "::warning::deployment status returned no readable numeric active_sandbox_runs; refusing to deploy yet."
+                  ;;
+                *)
+                  echo "active sandbox runs: $probe"
+                  if [ "$probe" -eq 0 ]; then
+                    echo "No active sandbox runs remain; production worker replacement is safe."
+                    exit 0
+                  fi
+                  ;;
+              esac
+            else
+              echo "::warning::could not read production active-run status; refusing to deploy yet."
+            fi
+            sleep "$WORKER_DRAIN_POLL_SECONDS"
+          done
+          echo "::error::production still has active sandbox runs after ${WORKER_DRAIN_TIMEOUT_MINUTES} minutes; deploy was not started to avoid killing in-flight work."
           exit 1
 
       - name: Deploy to app-modulo
@@ -3543,6 +3660,39 @@ jobs:
           echo "::error::worker_health never passed within ${TIMEOUT_MIN} minutes - SAQ workers did not come up after deploy"
           exit 1
 
+      - name: Clear production sandbox drain
+        shell: bash
+        env:
+          MODULO_DEPLOY_DRAIN_TOKEN: ${{ secrets.MODULO_DEPLOY_DRAIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          # FAR-2382 bootstrap: nothing was engaged when the token is absent or
+          # the live build has no /drain route, so there is nothing to clear.
+          # Once a freeze IS engaged, a genuine clear failure must still fail
+          # closed and leave admission frozen for manual recovery.
+          if [ -z "$MODULO_DEPLOY_DRAIN_TOKEN" ]; then
+            echo "::warning::MODULO_DEPLOY_DRAIN_TOKEN is not configured; no admission freeze was engaged, so there is nothing to clear."
+            exit 0
+          fi
+          status=$(curl -sS --max-time 15 -o /tmp/deploy-drain-clear.json -w '%{http_code}' \
+            -X POST "https://app.modulo.run/api/v1/deployment/drain?active=false" \
+            -H "Authorization: Bearer $MODULO_DEPLOY_DRAIN_TOKEN" \
+            -H "Content-Type: application/json") || {
+            echo "::error::could not reach the deployment drain control to clear it; admission may still be frozen."
+            exit 1
+          }
+          if [ "$status" = "404" ]; then
+            echo "::warning::the live production build has no deployment drain control yet (bootstrap deploy); nothing to clear."
+            exit 0
+          fi
+          if [ "$status" != "200" ]; then
+            echo "::error::deployment drain clear returned HTTP ${status}; admission may still be frozen - clear it manually."
+            cat /tmp/deploy-drain-clear.json 2>/dev/null || true
+            exit 1
+          fi
+          jq -e '.active == false' /tmp/deploy-drain-clear.json >/dev/null
+          echo "Production sandbox admission restored."
+
       - name: Clean up stray machines (no process group)
         shell: bash
         env:
@@ -3708,7 +3858,7 @@ jobs:
           fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"

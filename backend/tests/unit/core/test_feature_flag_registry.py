@@ -578,7 +578,7 @@ class TestSystemMapsFlag:
         flag = registry.get_flag("system_maps")
         assert flag is not None, "system_maps must be registered in _KNOWN_FLAGS"
         assert flag.tier == "community"
-        assert flag.description == "Beta System Maps (Delivery System Maps)"
+        assert flag.description == "Beta System Maps authoring (internal operator surface)"
 
     def test_system_maps_in_default_off_flags(self) -> None:
         from modulo.core.feature_flags import DEFAULT_OFF_FLAGS, INTERNAL_FLAGS
@@ -636,6 +636,31 @@ class TestSystemMapsFlag:
             new=AsyncMock(return_value=True),
         ):
             assert await registry.resolve_flag("system_maps", org_id=uuid.uuid4()) is True
+
+    def test_system_maps_read_is_a_public_entitlement_sibling(self) -> None:
+        """FAR-2363: the viewer read model has its own non-internal flag.
+
+        ``system_maps`` stays internal/default-OFF for authoring; the published
+        read model is a separate community entitlement that is not filtered out
+        of customer-facing plan responses.
+        """
+        from modulo.core.feature_flags import (
+            DEFAULT_OFF_FLAGS,
+            INTERNAL_FLAGS,
+            CommunityTier,
+            effective_feature_flags,
+        )
+
+        registry = _make_default_off_registry()
+        read_flag = registry.get_flag("system_maps_read")
+        assert read_flag is not None, "system_maps_read must be registered in _KNOWN_FLAGS"
+        assert read_flag.tier == "community"
+        assert "system_maps_read" not in INTERNAL_FLAGS
+        assert "system_maps_read" not in DEFAULT_OFF_FLAGS
+
+        names = {f.name for f in effective_feature_flags(CommunityTier())}
+        assert "system_maps_read" in names
+        assert "system_maps" not in names
 
     def test_system_maps_filtered_from_effective_feature_flags(self) -> None:
         """system_maps must not appear in customer-facing plan responses."""

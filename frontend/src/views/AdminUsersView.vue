@@ -1,12 +1,13 @@
 <template>
   <FeatureGate feature-name="user_management" required-tier="community" show-disabled>
   <div class="page-wide">
-    <div class="flex items-center justify-between">
-      <PageHeader :title="$t('views.AdminUsersView.users_title')" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')" />
-      <Button class="border-primary/30" data-testid="admin-users-add-user" @click="openAddUser">
-        {{ $t('views.AdminUsersView.add_user') }}
-      </Button>
-    </div>
+    <PageHeader :title="$t('views.AdminUsersView.users_title')" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')">
+      <template #right>
+        <Button class="border-primary/30" data-testid="admin-users-add-user" @click="openAddUser">
+          {{ $t('views.AdminUsersView.add_user') }}
+        </Button>
+      </template>
+    </PageHeader>
 
     <!-- STATE-3 (ux-conformance): the column layout is known before the first
          row arrives, so the loading placeholder is a determinate table
@@ -547,7 +548,7 @@ const actionLoading = ref<Record<string, boolean>>({})
 let flashTimeout: ReturnType<typeof setTimeout> | null = null
 
 function initialOf(name: string): string {
-  return Array.from(name)[0]?.toLocaleUpperCase() ?? '?'
+  return Array.from(name).at(0)?.toLocaleUpperCase() ?? '?'
 }
 
 function showFlash(type: 'success' | 'error', text: string) {
@@ -662,7 +663,7 @@ function validateEmailAndName(): string {
   if (!email || !isValidEmail(email)) {
     return t('views.AdminUsersView.please_enter_a_valid_email_address')
   }
-  if (!display_name || !display_name.trim()) {
+  if (!display_name?.trim()) {
     return t('views.AdminUsersView.display_name_is_required')
   }
   return ''
@@ -702,7 +703,7 @@ async function createUser() {
     openCredentialDialog('created', email, password)
     resetNewUser()
     showFlash('success', t('views.AdminUsersView.user_created', { email }))
-    loadUsers()
+    void loadUsers()
   } catch (e: unknown) {
     createError.value = e instanceof Error ? e.message : t('views.AdminUsersView.failed_to_create_user')
   } finally {
@@ -727,7 +728,7 @@ async function sendInvite() {
     })
     showCreate.value = false
     resetNewUser()
-    loadInvitations()
+    void loadInvitations()
     await showCredential(
       'invite',
       data.invite_url,
@@ -760,7 +761,7 @@ async function revokeInvitation() {
     await httpDelete(`/api/v1/admin/users/invitations/${inv.id}`)
     showRevokeDialog.value = false
     showFlash('success', t('views.AdminUsersView.invitation_revoked', { email: inv.email }))
-    loadInvitations()
+    void loadInvitations()
   } catch (e) {
     showFlash('error', e instanceof Error ? e.message : t('views.AdminUsersView.failed_to_revoke_invitation'))
   } finally {

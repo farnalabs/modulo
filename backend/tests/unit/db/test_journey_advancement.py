@@ -59,6 +59,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import JourneyFact
 from modulo.db.models.run_node_outputs import RunNodeOutput
+from modulo.settings import get_settings, work_item_refs_cap
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -114,6 +115,30 @@ async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as s:
         yield s
+
+
+@pytest.fixture(autouse=True)
+def _isolate_settings_caches() -> Generator[None, None, None]:
+    """Clear the process-wide settings caches around every test in this module.
+
+    ``work_item_refs_cap`` and ``get_settings`` are ``lru_cache``d for the life
+    of the worker process. A test in another module that patches
+    ``modulo.settings.get_settings`` (e.g. with a ``MagicMock``) and then
+    exercises a refs path caches ``int(MagicMock()) == 1`` in
+    ``work_item_refs_cap``; that cached cap OUTLIVES the patch, so an unpinned
+    test co-located in the same xdist shard silently drops the agent ref it
+    expects to keep (observed on shard 1 of CI run 42315003224: four journey
+    tests failed with an effective cap of 1), and a non-default
+    ``MODULO_WORK_ITEM_REFS_CAP`` from another module can leak the same way.
+    Clearing both caches around each test makes this module independent of
+    xdist co-location, mirroring ``test_work_item_refs_slice2b.py``'s module
+    fixture.
+    """
+    work_item_refs_cap.cache_clear()
+    get_settings.cache_clear()
+    yield
+    work_item_refs_cap.cache_clear()
+    get_settings.cache_clear()
 
 
 async def _seed_stage(session: AsyncSession, *, pipeline_id: uuid.UUID = _MAP_PIPELINE) -> None:
@@ -768,17 +793,28 @@ def _patch_finalize_machinery(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("modulo.core.cost_controller.finalize.record_run_facts", _noop)
     monkeypatch.setattr("modulo.core.cost_controller.finalize._ledger_block", _noop)
     monkeypatch.setattr("modulo.core.cost_controller.finalize.load_live_components", _fake_components)
-    # ``finalize_cost`` calls ``get_settings()`` at argument-evaluation time for
-    # ``build_cost_breakdown(..., settings=...)`` — stub it so no real Settings
-    # (which requires env vars) is constructed.
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: MagicMock())
+    # ``finalize_cost`` resolves ``get_settings`` from ITS OWN module namespace
+    # (``from modulo.settings import get_settings``), so patch the name there —
+    # stubbing ``modulo.settings.get_settings`` does not reach it. The stub
+    # carries the default unified refs cap because ``work_item_refs_cap`` reads
+    # settings too; a bare ``MagicMock`` coerces to ``1`` (``int(MagicMock)``)
+    # and would shrink the cap, silently dropping refs the merge assertions
+    # keep. Patching the finalize-local name stubs
+    # ``build_cost_breakdown(..., settings=...)`` without touching the
+    # settings-module cache the refs cap reads.
+    stub_settings = MagicMock()
+    stub_settings.modulo_work_item_refs_cap = 100
+    monkeypatch.setattr("modulo.core.cost_controller.finalize.get_settings", lambda: stub_settings)
     monkeypatch.setattr(
         "modulo.core.cost_controller.finalize.build_telemetry",
         lambda _enriched, _components: ({}, {}),
     )
     monkeypatch.setattr(
         "modulo.core.cost_controller.finalize.build_cost_breakdown",
-        lambda _telemetry, _components, settings=None: ([], Decimal(0)),
+        lambda _telemetry, _components, settings=None, rejected_zero_nodes=None, rejection_reasons=None: (
+            [],
+            Decimal(0),
+        ),
     )
 
 

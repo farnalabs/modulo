@@ -69,7 +69,7 @@ round-trip. Read `auth_mode` + named fields from that dict:
 Credentials are never written to LangGraph state, checkpoint, OTel span, or log;
 error detail redacts secret values.
 
-## Behaviour
+## Behavior
 
 ### Verb-agnostic read/write mapping
 
@@ -93,7 +93,7 @@ than silently passing through.
 ### Retry
 
 Idempotent verbs (`GET`/`HEAD`) are retried up to 2 times (3 total attempts)
-with exponential backoff + jitter, honouring `Retry-After` and the retryable
+with exponential backoff + jitter, honoring `Retry-After` and the retryable
 status set (`429`, `500`, `502`, `503`, `504`: a narrow set, not every `5xx`;
 other server errors fail immediately). Mutating verbs are retried only when the
 operation declares an `idempotency_header`. Transport failures are retried for

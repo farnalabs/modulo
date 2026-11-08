@@ -9,10 +9,12 @@ Production deployment readiness checklist for the Modulo Alpha public launch. Ea
 - [ ] **PostgreSQL 16+** is provisioned and reachable
   - Connection string uses a least-privilege role (not superuser)
   - TLS enabled - `sslmode=require` (or `verify-full` + CA) in `DATABASE_URL`;
-    the setting is honoured end-to-end and `prefer`/`allow` are rejected at startup
+    the setting is honored end-to-end and `prefer`/`allow` are rejected at startup
 - [ ] **Redis 8+** is provisioned (required for every production deployment because SAQ handles dispatch and scheduling)
   - `protected-mode yes` with `requirepass`
   - TLS enabled if Redis is configured with `tls-port`
+  - Redis is reachable only from the application network; never publish port 6379 on a public interface or expose it through an unrestricted host port
+
 - [ ] **Docker images** are published to ghcr.io with anonymous pull enabled
   - `ghcr.io/farnalabs/modulo:<version>` (pin the version; see version pin table below)
   - `ghcr.io/farnalabs/modulo:latest` is available but **must not be used in production**
@@ -60,7 +62,7 @@ Production deployment readiness checklist for the Modulo Alpha public launch. Ea
 - [ ] **CORS** verified: no wildcard, correct origins, no trailing slashes
 - [ ] **CSRF protection** enabled on all state-changing endpoints
 - [ ] **Row-Level Security** is enabled on all tenant-scoped tables
-  - RLS test suite passes: `uv run pytest tests/unit/db/test_rls.py -v`
+  - RLS test suite passes (from `backend/`): `uv run pytest tests/unit/db/test_rls.py -v`
 - [ ] **Secrets** are injected via environment, not hardcoded in any file or committed to git
 - [ ] **Container images** have zero critical/high CVEs - scan the published image
   yourself (`trivy image ghcr.io/farnalabs/modulo:<version>`); CI does not scan built
@@ -130,7 +132,7 @@ See [`docs/deployment-security.md`](./deployment-security.md) for the full secur
 - [ ] **Rollback procedure** is documented and tested
 - [ ] **Alembic migration** SQL is previewed and reviewed
 - [ ] **Pre-upgrade backup** procedure is verified
-- [ ] **Zero-downtime** requirements are met (2+ backend replicas)
+- [ ] **Zero-downtime** requirements are met (Fly.io or Kubernetes with 2+ backend replicas; Docker Compose stops the old container first and incurs brief downtime)
 
 See [`docs/upgrade-process.md`](./upgrade-process.md) for full upgrade and rollback procedures.
 
@@ -153,10 +155,10 @@ See [`docs/upgrade-process.md`](./upgrade-process.md) for full upgrade and rollb
 
 ## 9. Testing
 
-- [ ] **All unit tests pass**: `uv run pytest tests/unit/ -v`
-- [ ] **All integration tests pass**: `uv run pytest tests/integration/ -v`
-- [ ] **All BDD scenarios pass**: `uv run pytest tests/bdd/ -v`
-- [ ] **RLS test suite passes**: `uv run pytest tests/unit/db/test_rls.py -v`
+- [ ] **All unit tests pass** (from `backend/`): `uv run pytest tests/unit/ -v`
+- [ ] **All integration tests pass** (from `backend/`): `uv run pytest tests/integration/ -v`
+- [ ] **All BDD scenarios pass** (from `backend/`): `uv run pytest tests/bdd/ -v`
+- [ ] **RLS test suite passes** (from `backend/`): `uv run pytest tests/unit/db/test_rls.py -v`
 - [ ] **Load tests** within baseline targets (see [`docs/performance.md`](./performance.md))
 - [ ] **Frontend builds without errors**: `pnpm run build` in `frontend/`
 - [ ] **TypeScript checks pass**: `vue-tsc --noEmit` in `frontend/`

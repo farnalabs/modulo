@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.dialects import postgresql
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
@@ -115,10 +116,12 @@ def test_list_deliveries_empty(client: TestClient) -> None:
         list_result.scalars.return_value = []
         count_result = MagicMock()
         count_result.scalar.return_value = 0
+        executed_queries: list[str] = []
 
         def execute_side_effect(*args: object, **kwargs: object) -> MagicMock:
-            sql = args[0] if args else kwargs.get("query", "")
-            if "count(" in str(sql).lower():
+            sql = str(args[0] if args else kwargs.get("query", ""))
+            executed_queries.append(sql)
+            if "count(" in sql.lower():
                 return count_result
             return list_result
 
@@ -260,8 +263,14 @@ def test_list_all_deliveries_global(client: TestClient) -> None:
 
 
 def test_list_all_deliveries_date_filter(client: TestClient) -> None:
-    import urllib.parse
+    """A bare ``to`` date must be inclusive of the whole day.
 
+    The bound is an EXCLUSIVE next-day timestamp (``created_at < date + 1 day``),
+    not ``created_at <= midnight``. This assertion fails without the end-of-day
+    fix: the old predicate compiled to ``created_at <= 2026-09-30 00:00:00+00:00``
+    and therefore excluded every delivery recorded during 2026-09-30 itself.
+    Both the list and the count path must apply the same bounds.
+    """
     with patch("modulo.api.routes.admin_notifications.set_rls_org"):
         session = _make_mock_session()
 
@@ -269,9 +278,20 @@ def test_list_all_deliveries_date_filter(client: TestClient) -> None:
         list_result.all.return_value = []
         count_result = MagicMock()
         count_result.scalar.return_value = 0
+        delivery_queries: list[str] = []
 
         def execute_side_effect(*args: object, **kwargs: object) -> MagicMock:
-            sql = str(args[0] if args else kwargs.get("query", ""))
+            statement = args[0] if args else kwargs.get("query", "")
+            sql = str(statement)
+            if "notification_delivery_log" in sql.lower():
+                delivery_queries.append(
+                    str(
+                        statement.compile(  # type: ignore[union-attr]
+                            dialect=postgresql.dialect(),
+                            compile_kwargs={"literal_binds": True},
+                        )
+                    )
+                )
             if "count(" in sql.lower():
                 return count_result
             return list_result
@@ -282,12 +302,42 @@ def test_list_all_deliveries_date_filter(client: TestClient) -> None:
             yield session
 
         client.app.dependency_overrides[get_db_session] = override_session
-        from_date = urllib.parse.quote((datetime.now(UTC) - timedelta(days=7)).isoformat())
-        to_date = urllib.parse.quote(datetime.now(UTC).isoformat())
-        resp = client.get(f"/api/v1/admin/notifications/deliveries?from={from_date}&to={to_date}")
+        resp = client.get("/api/v1/admin/notifications/deliveries?from=2026-09-01&to=2026-09-30")
         client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
     assert resp.status_code == 200
+    # One list query and one count query, each carrying both date bounds.
+    assert len(delivery_queries) == 2
+    for sql in delivery_queries:
+        assert "created_at >= '2026-09-01" in sql
+        # The upper bound is exclusive and lands on the NEXT day.
+        upper_clause = sql.split("created_at <", 1)[1]
+        assert "2026-10-01" in upper_clause
+        assert "created_at <= " not in sql
+
+
+def test_parse_delivery_date_normalises_naive_values_to_utc() -> None:
+    """An offset-less date/datetime is UTC, never host-local time."""
+    from modulo.api.routes.admin_notifications import _parse_delivery_date
+
+    assert _parse_delivery_date("2026-09-30", "to date") == datetime(2026, 9, 30, tzinfo=UTC)
+    assert _parse_delivery_date("2026-09-30T12:00:00", "to date") == datetime(2026, 9, 30, 12, tzinfo=UTC)
+    # An explicit offset is preserved rather than overwritten.
+    assert _parse_delivery_date("2026-09-30T12:00:00+02:00", "to date").utcoffset() == timedelta(hours=2)
+
+
+def test_parse_delivery_upper_bound_treats_bare_date_as_end_of_day() -> None:
+    """A bare ``to`` date becomes an exclusive next-day bound."""
+    from modulo.api.routes.admin_notifications import _parse_delivery_upper_bound
+
+    bound, inclusive = _parse_delivery_upper_bound("2026-09-30", "to date")
+    assert bound == datetime(2026, 10, 1, tzinfo=UTC)
+    assert inclusive is False
+
+    # An explicit timestamp keeps its exact instant and stays inclusive.
+    bound, inclusive = _parse_delivery_upper_bound("2026-09-30T12:00:00", "to date")
+    assert bound == datetime(2026, 9, 30, 12, tzinfo=UTC)
+    assert inclusive is True
 
 
 def test_list_all_deliveries_bad_date_returns_422(client: TestClient) -> None:

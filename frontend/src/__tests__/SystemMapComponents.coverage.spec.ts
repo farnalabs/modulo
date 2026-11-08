@@ -153,7 +153,7 @@ describe('SystemMapRevisionSidebar', () => {
       ],
     })
 
-    const buttons = wrapper.findAll('ol li > button')
+    const buttons = wrapper.findAll('ol li > button:not([data-testid="system-map-revision-restore"]):not([data-testid="system-map-revision-diff"])')
     expect(buttons.map((button) => button.attributes('data-testid'))).toEqual([
       'system-map-revision-3',
       'system-map-revision-2',
@@ -166,21 +166,26 @@ describe('SystemMapRevisionSidebar', () => {
     expect(wrapper.get('[data-testid="system-map-revision-2"]').classes()).toContain('border-primary')
   })
 
-  it('emits select, new-draft and discover events', async () => {
+  it('emits select, new-draft, restore and discover events', async () => {
     const wrapper = mountSidebar({
       mapId: 'map-1',
       activeRevisionId: 'rev-1',
-      activeMap: map(),
-      revisions: [revision()],
-    })
+      activeMap: map({ published_revision_id: 'rev-2' }),
+       revisions: [revision({ status: 'published' })],
+     })
 
-    await wrapper.get('[data-testid="system-map-revision-1"]').trigger('click')
-    await wrapper.get('[data-testid="system-map-new-draft"]').trigger('click')
-    await wrapper.get('[data-testid="system-map-sidebar-discover"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-revision-1"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-new-draft"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-revision-restore"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-revision-diff"]').trigger('click')
+     await wrapper.get('[data-testid="system-map-sidebar-discover"]').trigger('click')
 
-    expect(wrapper.emitted('select-revision')![0]).toEqual(['rev-1'])
-    expect(wrapper.emitted('new-draft')).toBeTruthy()
-    expect(wrapper.emitted('discover')).toBeTruthy()
+     expect(wrapper.emitted('select-revision')![0]).toEqual(['rev-1'])
+     expect(wrapper.emitted('new-draft')).toBeTruthy()
+     expect(wrapper.emitted('restore-revision')![0]).toEqual(['rev-1'])
+     expect(wrapper.emitted('diff-revision')![0]).toEqual(['rev-1'])
+     expect(wrapper.emitted('discover')).toBeTruthy()
+
   })
 
   it('emits current and by-time switching events', async () => {
@@ -209,6 +214,43 @@ describe('SystemMapRevisionSidebar', () => {
     expect(at).toMatch(/Z$/)
   })
 
+  it('filters drafts and authoring controls for a read-only viewer', () => {
+    const wrapper = mountSidebar({
+      mapId: 'map-1',
+      activeMap: map(),
+      readOnly: true,
+      revisions: [
+        revision({ id: 'rev-1', revision_number: 1, status: 'draft' }),
+        revision({ id: 'rev-2', revision_number: 2, status: 'published' }),
+      ],
+    })
+
+    expect(wrapper.find('[data-testid="system-map-revision-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-revision-2"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-map-new-draft"]').exists()).toBe(false)
+     expect(wrapper.find('[data-testid="system-map-sidebar-discover"]').exists()).toBe(false)
+     expect(wrapper.find('[data-testid="system-map-revision-restore"]').exists()).toBe(false)
+
+  })
+
+  it('keeps a draft revision and authoring controls for an operator', () => {
+    const wrapper = mountSidebar({
+      mapId: 'map-1',
+      activeMap: map(),
+      readOnly: false,
+      revisions: [
+        revision({ id: 'rev-1', revision_number: 1, status: 'draft' }),
+        revision({ id: 'rev-2', revision_number: 2, status: 'published' }),
+      ],
+    })
+
+    expect(wrapper.find('[data-testid="system-map-revision-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-map-new-draft"]').exists()).toBe(true)
+     expect(wrapper.find('[data-testid="system-map-sidebar-discover"]').exists()).toBe(true)
+     expect(wrapper.find('[data-testid="system-map-revision-restore"]').exists()).toBe(true)
+
+  })
+
   it('marks the currently published revision', () => {
     const wrapper = mountSidebar({
       mapId: 'map-1',
@@ -217,6 +259,18 @@ describe('SystemMapRevisionSidebar', () => {
     })
 
     expect(wrapper.get('[data-testid="system-map-revision-current-badge"]').text()).toContain('Current')
+  })
+
+  it('emits a diff request for a revision other than the published one', async () => {
+    const wrapper = mountSidebar({
+      mapId: 'map-1',
+      activeMap: map({ published_revision_id: 'rev-2' }),
+      revisions: [revision({ id: 'rev-1', revision_number: 1, status: 'published' })],
+    })
+
+    await wrapper.get('[data-testid="system-map-revision-diff"]').trigger('click')
+
+    expect(wrapper.emitted('diff-revision')![0]).toEqual(['rev-1'])
   })
 })
 
@@ -297,6 +351,97 @@ describe('SystemMapDiscoveryPanel coverage', () => {
 
     expect(wrapper.text()).toContain('No suggested nodes')
     expect(wrapper.text()).toContain('No suggested relationships')
+  })
+})
+
+describe('SystemMapDiscoveryPanel provenance', () => {
+  const discovery = {
+    sources_inspected: [],
+    node_count: 1,
+    edge_count: 0,
+    inferred_nodes: [{ node_key: 'pipeline:a', node_type: 'pipeline', display_name: 'Pipeline A', config_json: null }],
+    inferred_edges: [],
+    skipped: [],
+    warnings: [],
+    draft_map_id: 'map',
+    draft_revision_id: 'rev',
+    draft_revision_number: 1,
+    published: false,
+  }
+
+  function mountWith(overrides: Record<string, unknown>, props: Record<string, unknown> = {}) {
+    return mount(SystemMapDiscoveryPanel, {
+      props: { discovery: { ...discovery, ...overrides } as never, ...props },
+      global: { plugins: [i18n] },
+    })
+  }
+
+  it('shows AI provenance and blocks saving until the eval gate passes', () => {
+    const wrapper = mountWith(
+      {
+        ai_assisted: true,
+        eval_gate_passed: false,
+        eval_gate_verdict: 'fail',
+        provenance: {
+          selected_backend_id: 'backend-1',
+          prompt_version: 'p1',
+          rubric_version: 'r1',
+          evaluator_version: 'e1',
+          input_hash: 'in-hash',
+          output_hash: 'out-hash',
+        },
+      },
+      { backendNames: { 'backend-1': 'Primary Backend' }, evalIdentity: 'Judge (v3)' },
+    )
+
+    expect(wrapper.text()).toContain('AI-assisted')
+    expect(wrapper.text()).toContain('Primary Backend')
+    expect(wrapper.text()).toContain('Judge (v3)')
+    expect(wrapper.text()).toContain('p1')
+    expect(wrapper.text()).toContain('r1')
+    expect(wrapper.text()).toContain('e1')
+    expect(wrapper.text()).toContain('in-hash')
+    expect(wrapper.text()).toContain('out-hash')
+    expect(wrapper.text()).toContain('Blocked: the eval gate returned fail')
+    expect(wrapper.text()).toContain('Choose deterministic discovery explicitly')
+    expect(wrapper.find('[data-testid="system-map-discovery-eval-blocked"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="system-map-discovery-save"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="system-map-accept-node-pipeline:a"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('shows the passed gate and enables saving', () => {
+    const wrapper = mountWith(
+      { ai_assisted: true, eval_gate_passed: true, eval_gate_verdict: 'pass', provenance: { selected_backend_id: 'backend-1' } },
+      { backendNames: { 'backend-1': 'Primary Backend' }, evalIdentity: 'Judge (v3)' },
+    )
+
+    expect(wrapper.text()).toContain('Eval gate passed')
+    expect(wrapper.find('[data-testid="system-map-discovery-eval-blocked"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="system-map-discovery-save"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('falls back to unavailable when the provenance identity is missing', () => {
+    const wrapper = mountWith({ ai_assisted: true, eval_gate_passed: true, eval_gate_verdict: 'pass', provenance: {} })
+
+    expect(wrapper.text()).toContain('Unavailable')
+    expect(wrapper.text()).not.toContain('Prompt version')
+    expect(wrapper.text()).not.toContain('Output hash')
+  })
+
+  it('renders deterministic results without AI-only provenance and ignores a not-requested gate', () => {
+    const wrapper = mountWith({ eval_gate_verdict: 'not_requested' })
+
+    expect(wrapper.text()).toContain('Deterministic')
+    expect(wrapper.find('[data-testid="system-map-discovery-eval-blocked"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Blocked: the eval gate')
+    expect(wrapper.get('[data-testid="system-map-discovery-save"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('renders nothing but the shell when no discovery report is present', () => {
+    const wrapper = mount(SystemMapDiscoveryPanel, { props: { discovery: null }, global: { plugins: [i18n] } })
+
+    expect(wrapper.find('[data-testid="system-map-discovery-provenance"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="system-map-discovery-save"]').attributes('disabled')).toBeUndefined()
   })
 })
 

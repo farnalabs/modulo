@@ -257,12 +257,31 @@ describe('SsoProviderForm — callback URL', () => {
     expect(wrapper.find('[data-testid="sso-callback-url-copied"]').exists()).toBe(true)
   })
 
-  it('falls back to execCommand when the async clipboard API rejects', async () => {
+  it('falls back to ClipboardItem when the async clipboard API rejects', async () => {
     const writeText = vi.fn().mockRejectedValue(new Error('clipboard denied'))
+    const write = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', {
-      value: { writeText },
+      value: { writeText, write },
       configurable: true,
     })
+    class ClipboardItemMock {
+      constructor(public readonly items: Record<string, Blob>) {}
+    }
+    vi.stubGlobal('ClipboardItem', ClipboardItemMock)
+    const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+    const wrapper = mountForm(makeData(), { callbackUrl })
+    await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
+    await flushPromises()
+    expect(write).toHaveBeenCalledWith([expect.any(ClipboardItemMock)])
+    expect(wrapper.find('[data-testid="sso-callback-url-copied"]').exists()).toBe(true)
+  })
+
+  it('falls back to execCommand in a non-secure context', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+    })
+    vi.stubGlobal('ClipboardItem', undefined)
     const execCommand = vi.fn().mockReturnValue(true)
     Object.defineProperty(document, 'execCommand', {
       value: execCommand,
@@ -274,6 +293,79 @@ describe('SsoProviderForm — callback URL', () => {
     await flushPromises()
     expect(execCommand).toHaveBeenCalledWith('copy')
     expect(wrapper.find('[data-testid="sso-callback-url-copied"]').exists()).toBe(true)
+  })
+
+  it('surfaces failure feedback when every copy path fails', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard denied'))
+    const write = vi.fn().mockRejectedValue(new Error('clipboard denied'))
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText, write },
+      configurable: true,
+    })
+    class ClipboardItemMock {
+      constructor(public readonly items: Record<string, Blob>) {}
+    }
+    vi.stubGlobal('ClipboardItem', ClipboardItemMock)
+    const execCommand = vi.fn().mockReturnValue(false)
+    Object.defineProperty(document, 'execCommand', {
+      value: execCommand,
+      configurable: true,
+    })
+    const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+    const wrapper = mountForm(makeData(), { callbackUrl })
+    await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="sso-callback-url-copied"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sso-callback-url-copy-failed"]').exists()).toBe(true)
+  })
+
+  it('surfaces failure feedback when execCommand throws', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+    })
+    vi.stubGlobal('ClipboardItem', undefined)
+    const execCommand = vi.fn().mockImplementation(() => {
+      throw new Error('execCommand unsupported')
+    })
+    Object.defineProperty(document, 'execCommand', {
+      value: execCommand,
+      configurable: true,
+    })
+    const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+    const wrapper = mountForm(makeData(), { callbackUrl })
+    await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
+    await flushPromises()
+    expect(execCommand).toHaveBeenCalledWith('copy')
+    expect(wrapper.find('[data-testid="sso-callback-url-copied"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sso-callback-url-copy-failed"]').exists()).toBe(true)
+  })
+
+  it('clears the copy-failure feedback when the reset timer fires', async () => {
+    vi.useFakeTimers()
+    try {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: undefined,
+        configurable: true,
+      })
+      vi.stubGlobal('ClipboardItem', undefined)
+      const execCommand = vi.fn().mockReturnValue(false)
+      Object.defineProperty(document, 'execCommand', {
+        value: execCommand,
+        configurable: true,
+      })
+      const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+      const wrapper = mountForm(makeData(), { callbackUrl })
+      await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="sso-callback-url-copy-failed"]').exists()).toBe(true)
+      vi.advanceTimersByTime(2000)
+      await nextTick()
+      expect(wrapper.find('[data-testid="sso-callback-url-copy-failed"]').exists()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
   })
 
   it('clears the copy-success timer when the form unmounts', async () => {

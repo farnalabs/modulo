@@ -2150,7 +2150,7 @@ describe('SettingsMcpView', () => {
   it('hides the personal key scope when user-scoped keys are disabled', async () => {
     const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] }, false)
     const options = (wrapper.vm as any).createKeyScopeOptions
-    expect(options).toEqual([{ value: 'org', label: 'Organisation (machine identity)' }])
+    expect(options).toEqual([{ value: 'org', label: 'Organization (machine identity)' }])
   })
 
   it('offers the personal key scope when user-scoped keys are enabled', async () => {

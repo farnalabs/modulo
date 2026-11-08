@@ -432,7 +432,9 @@ describe('useSystemMapsStore overview', () => {
 
     expect(mockGet).toHaveBeenCalledWith(
       '/api/v1/system-maps/{map_id}/overview',
-      expect.objectContaining({ params: { path: { map_id: 'published-default' } } }),
+      expect.objectContaining({
+        params: { path: { map_id: 'published-default' }, query: { window_days: 7 } },
+      }),
     )
     expect(store.overview?.system_map_id).toBe('published-default')
     expect(store.overviewError).toBeNull()
@@ -613,13 +615,20 @@ describe('useSystemMapsStore overview', () => {
     expect(overviewInit.signal).toBeInstanceOf(AbortSignal)
   })
 
-  it('loads an overview for an explicit map id', async () => {
-    mockGet.mockResolvedValue({ data: overviewPayload({ system_map_id: 'map-x' }) })
+  it('loads an overview for an explicit map id with the selected window', async () => {
+    mockGet.mockResolvedValue({ data: overviewPayload({ system_map_id: 'map-x', window_days: 30 }) })
     const store = useSystemMapsStore()
 
-    await store.fetchOverview('map-x')
+    await store.fetchOverview('map-x', 30)
 
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/v1/system-maps/{map_id}/overview',
+      expect.objectContaining({
+        params: { path: { map_id: 'map-x' }, query: { window_days: 30 } },
+      }),
+    )
     expect(store.overview?.system_map_id).toBe('map-x')
+    expect(store.overview?.window_days).toBe(30)
     expect(store.overviewError).toBeNull()
     expect(store.overviewLoading).toBe(false)
   })
@@ -836,5 +845,73 @@ describe('useSystemMapsStore overview', () => {
     expect(store.overviewError).toBeNull()
     expect(store.overviewEmpty).toBe(false)
     expect(store.overviewLoading).toBe(false)
+  })
+})
+
+describe('useSystemMapsStore feature entitlement (402)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-1'))
+  })
+
+  it('settles the default overview to unavailable when the list is refused', async () => {
+    mockGet.mockResolvedValue({ error: { status: 402 }, data: undefined })
+
+    const store = useSystemMapsStore()
+    await store.fetchDefaultOverview()
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewEmpty).toBe(false)
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewUnavailable).toBe(true)
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('settles the overview to unavailable when the aggregate is refused', async () => {
+    mockGet.mockResolvedValue({ error: { type: 'urn:problem:modulo:feature_required' }, data: undefined })
+
+    const store = useSystemMapsStore()
+    await store.fetchOverview('map-x')
+
+    expect(store.overview).toBeNull()
+    expect(store.overviewEmpty).toBe(false)
+    expect(store.overviewError).toBeNull()
+    expect(store.overviewUnavailable).toBe(true)
+    expect(store.overviewLoading).toBe(false)
+  })
+
+  it('marks the store unavailable when loading a revision is refused', async () => {
+    mockGet.mockResolvedValue({ error: { status: 402 }, data: undefined, response: { status: 402 } })
+
+    const store = useSystemMapsStore()
+    await store.loadRevision('map-x', 'rev-1')
+
+    expect(store.unavailable).toBe(true)
+    expect(store.error).toBeNull()
+    expect(store.activeRevision).toBeNull()
+    expect(store.graph).toBeNull()
+  })
+
+  it('marks the store unavailable when loading the current revision is refused', async () => {
+    mockGet.mockResolvedValue({ error: { status: 402 }, data: undefined })
+
+    const store = useSystemMapsStore()
+    await store.loadCurrentRevision('map-x')
+
+    expect(store.unavailable).toBe(true)
+    expect(store.error).toBeNull()
+    expect(store.activeRevision).toBeNull()
+  })
+
+  it('marks the store unavailable when loading a revision by time is refused', async () => {
+    mockGet.mockResolvedValue({ error: { status: 402 }, data: undefined, response: { status: 402 } })
+
+    const store = useSystemMapsStore()
+    await store.loadRevisionByTime('map-x', '2026-01-01T00:00:00Z')
+
+    expect(store.unavailable).toBe(true)
+    expect(store.error).toBeNull()
+    expect(store.activeRevision).toBeNull()
   })
 })

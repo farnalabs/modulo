@@ -2,12 +2,13 @@
   <FeatureGate feature-name="plugin_management" required-tier="community" show-disabled>
 
     <div class="page-wide">
-    <header class="flex items-center justify-between">
-      <PageHeader title="Node Categories" subtitle="Manage categories for classifying nodes in pipelines" />
-      <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-node-categories-add" @click="openAddForm">
-        Add Category
-      </Button>
-    </header>
+    <PageHeader title="Node Categories" subtitle="Manage categories for classifying nodes in pipelines">
+      <template #right>
+        <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-node-categories-add" @click="openAddForm">
+          Add Category
+        </Button>
+      </template>
+    </PageHeader>
 
     <LoadingSpinner v-if="loading" />
 
@@ -172,12 +173,12 @@ function closeEditor() {
 
 function onCategoryCreated() {
   closeEditor()
-  loadCategories()
+  void loadCategories()
 }
 
 function onCategoryUpdated() {
   closeEditor()
-  loadCategories()
+  void loadCategories()
 }
 
 function confirmDelete(cat: NodeCategory) {

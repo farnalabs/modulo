@@ -876,6 +876,22 @@ describe('SettingsHitlReviewView', () => {
     expect(lastQuery?.status).toBe('approved')
   })
 
+  it('stacks review metadata below the primary row content on narrow screens', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const row = wrapper!.find('[data-testid="hitl-review-toggle-expand"]')
+    expect(row.classes()).toContain('flex-wrap')
+    expect(row.classes()).toContain('md:flex-nowrap')
+    expect(wrapper!.find('[data-testid="hitl-review-column-headers"]').classes()).toContain('md:flex')
+  })
+
   it('renders column headers above the gate rows (FAR-727)', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
@@ -2658,5 +2674,44 @@ describe('SettingsHitlReviewView — bulk claim empty envelope', () => {
     expect(outcomes.exists()).toBe(true)
     expect(outcomes.findAll('.font-mono')).toHaveLength(0)
     expect(wrapper.find('[data-testid="hitl-review-claim-failure-banner"]').exists()).toBe(false)
+  })
+})
+
+// ---- Auto-refresh interval reloads the gate list ----
+describe('SettingsHitlReviewView — auto-refresh', () => {
+  let wrapper: VueWrapper | null = null
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    resetHitlReviewState()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  it('reloads gates when the 30s auto-refresh interval fires', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const gateLoads = () =>
+      (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
+    const before = gateLoads()
+
+    await vi.advanceTimersByTimeAsync(30000)
+    await flushPromises()
+    await nextTick()
+
+    expect(gateLoads()).toBeGreaterThan(before)
   })
 })

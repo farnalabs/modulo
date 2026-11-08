@@ -1895,6 +1895,25 @@ def test_throttle_anchor_is_the_deploy_job_conclusion_not_the_run_conclusion() -
     assert not violations, "the throttle anchor is not a real-deploy signal:\n" + "\n".join(violations)
 
 
+def test_production_deploy_waits_for_active_sandbox_runs_before_fly_swap() -> None:
+    """The production worker is not replaced while sandbox work is active."""
+    production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
+    names = [step.get("name") for step in production_steps if isinstance(step, dict)]
+    assert "Wait for active sandbox runs to finish (production)" in names
+    wait_step = next(
+        step
+        for step in production_steps
+        if isinstance(step, dict) and step.get("name") == "Wait for active sandbox runs to finish (production)"
+    )
+    script = str(wait_step.get("run") or "")
+    deploy_index = names.index("Deploy to app-modulo")
+    wait_index = names.index("Wait for active sandbox runs to finish (production)")
+    assert wait_index < deploy_index
+    assert "/api/v1/deployment" in script
+    assert "active_sandbox_runs" in script
+    assert "exit 1" in script
+
+
 def test_production_deploy_still_verifies_the_shipped_sha() -> None:
     """A deploying run must still prove production serves what it shipped.
 
@@ -1913,6 +1932,109 @@ def test_production_deploy_still_verifies_the_shipped_sha() -> None:
     if "exit 1" not in run:
         violations.append("  a SHA mismatch no longer fails the step")
     assert not violations, "the production SHA verification was weakened:\n" + "\n".join(violations)
+
+
+def test_production_drain_clears_only_after_all_post_deploy_gates() -> None:
+    """A failed verification must leave admission frozen for manual recovery."""
+    production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
+    names = [step.get("name") for step in production_steps if isinstance(step, dict)]
+    required = [
+        "Post-deploy verify + auto-rollback (never leave prod down)",
+        "Check deployed SHA",
+        "Wait for worker liveness check (production)",
+        "Clear production sandbox drain",
+    ]
+    missing = [name for name in required if name not in names]
+    assert not missing, f"deploy.yml production drain validation steps missing: {missing}"
+    indices = [names.index(name) for name in required]
+    assert indices == sorted(indices), "production sandbox drain must clear after verify, SHA, and worker health"
+    clear_step = next(step for step in production_steps if step.get("name") == "Clear production sandbox drain")
+    assert "if" not in clear_step, "drain clear must use the default success gate, not always()/failure()"
+    for name in required[:3]:
+        step = next(step for step in production_steps if step.get("name") == name)
+        assert "if" not in step or "rolled_back == 'false'" in str(step.get("if")), (
+            f"{name} must remain gated against a rollback"
+        )
+
+
+def test_production_drain_bootstrap_does_not_deadlock_the_deploy() -> None:
+    """The drain control must tolerate the build that first ships it.
+
+    FAR-2382 made the production deploy depend on a secret and on a live
+    ``POST /api/v1/deployment/drain`` route. Neither exists on the build that
+    introduces the feature, so a hard failure there deadlocks every production
+    deploy (observed at 07fe115a: the drain step refused to deploy because the
+    token was unset, and the live build 404s the route). The control is a
+    best-effort admission freeze layered on the active-run wait gate, so a
+    missing credential or a 404 must degrade with a loud warning - while a
+    genuine control failure still fails closed.
+    """
+    production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
+
+    def _run(name: str) -> str:
+        step = next(s for s in production_steps if isinstance(s, dict) and s.get("name") == name)
+        return str(step.get("run") or "")
+
+    violations: list[str] = []
+
+    enter = _run("Enter production sandbox drain")
+    if "MODULO_DEPLOY_DRAIN_TOKEN is not configured" not in enter:
+        violations.append("  the enter step no longer names the missing-token bootstrap case")
+    if "::warning::" not in enter:
+        violations.append("  the enter step degrades silently (no ::warning::) when the freeze is unavailable")
+    if '= "404"' not in enter:
+        violations.append("  the enter step does not tolerate the live build lacking the drain route")
+    if "exit 1" not in enter:
+        violations.append("  the enter step no longer fails closed on a genuine control failure")
+
+    wait = _run("Wait for active sandbox runs to finish (production)")
+    if "ABSENT" not in wait:
+        violations.append("  the wait step does not distinguish the bootstrap (field-absent) case")
+    if "active_sandbox_runs" not in wait:
+        violations.append("  the wait step no longer reads active_sandbox_runs")
+    if "exit 1" not in wait:
+        violations.append("  the wait step no longer fails closed when active runs never drain")
+
+    clear = _run("Clear production sandbox drain")
+    if '= "404"' not in clear:
+        violations.append("  the clear step does not tolerate the live build lacking the drain route")
+    if "MODULO_DEPLOY_DRAIN_TOKEN is not configured" not in clear:
+        violations.append("  the clear step does not tolerate nothing being engaged without a token")
+    if "exit 1" not in clear:
+        violations.append("  the clear step no longer fails closed when a real freeze cannot be cleared")
+
+    assert not violations, "production drain bootstrap can deadlock the deploy again:\n" + "\n".join(violations)
+
+
+def test_production_active_run_wait_requires_an_active_admission_freeze() -> None:
+    """The active-run wait only converges while the admission freeze is active.
+
+    Waiting for ``active_sandbox_runs`` to reach zero is only meaningful when
+    new sandbox runs are blocked: with admission still open the count can rise
+    at any moment and a zero window may never appear. Observed on 33306b9: the
+    drain freeze was skipped because ``MODULO_DEPLOY_DRAIN_TOKEN`` was
+    unconfigured, yet the wait gate still ran for the full 60 minutes and
+    failed the production deploy while continuous sandbox activity kept the
+    count above zero. The gate must read the live ``deployment_drain`` flag and
+    degrade to the legacy deploy path with a loud warning when it is not
+    active, while still failing closed when a real freeze is active.
+    """
+    production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
+    wait = next(
+        str(step.get("run") or "")
+        for step in production_steps
+        if isinstance(step, dict) and step.get("name") == "Wait for active sandbox runs to finish (production)"
+    )
+    violations: list[str] = []
+    if "deployment_drain" not in wait:
+        violations.append("  the wait step no longer reads the live deployment_drain flag")
+    if "INACTIVE" not in wait:
+        violations.append("  the wait step does not distinguish the not-frozen case")
+    if "::warning::" not in wait:
+        violations.append("  the wait step degrades without a loud ::warning::")
+    if "exit 1" not in wait:
+        violations.append("  the wait step no longer fails closed when an active freeze never drains")
+    assert not violations, "the active-run wait can deadlock the production deploy again:\n" + "\n".join(violations)
 
 
 def test_deploy_consumers_classify_a_throttled_noop_by_the_deploy_job() -> None:

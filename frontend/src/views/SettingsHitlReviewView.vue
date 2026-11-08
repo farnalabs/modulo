@@ -221,7 +221,7 @@
            to match the shared DataTable thead. -->
       <div
         data-testid="hitl-review-column-headers"
-        class="flex items-center gap-4 px-4 pb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground"
+        class="hidden items-center gap-4 px-4 pb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground md:flex"
       >
         <label class="h-4 w-4 flex-shrink-0">
           <input
@@ -260,7 +260,7 @@
              nested-interactive violation, and the tight wrap also fails WCAG
              2.2 target-size (16px target / 16px safe space). -->
         <div
-          class="flex w-full items-center gap-4 p-4 text-left"
+          class="flex w-full items-start gap-3 p-4 text-left md:items-center md:gap-4"
           :class="{ 'border-b': expandedKey === expandKey(gate) }"
         >
           <label class="h-4 w-4 flex-shrink-0">
@@ -276,7 +276,7 @@
           <button
             type="button"
             data-testid="hitl-review-toggle-expand"
-            class="flex flex-1 items-center gap-4 text-left"
+            class="flex min-w-0 flex-1 flex-wrap items-start gap-x-3 gap-y-2 text-left md:flex-nowrap md:items-center md:gap-4"
             @click="toggleExpand(gate)"
           >
             <svg
@@ -291,28 +291,31 @@
             >
               <path d="m9 18 6-6-6-6" />
             </svg>
-            <div class="w-24 flex-shrink-0">
+            <div class="w-full flex-shrink-0 md:w-24">
               <span :class="statusBadgeClass(gateStatus(gate))">
                 {{ gateStatus(gate) }}
               </span>
             </div>
-            <div class="min-w-0 flex-[2]">
+            <div class="min-w-0 flex-1 md:flex-[2]">
               <p class="truncate text-sm font-medium" data-testid="hitl-review-pipeline-name">{{ pipelineDisplayName(gate) }}</p>
             </div>
-            <div class="min-w-0 flex-[2]">
+            <div class="min-w-0 flex-1 md:flex-[2]">
               <p class="truncate text-sm font-medium text-foreground" data-testid="hitl-review-node-name">
+
+
                 {{ gate.label || shortId(gate.review_id) }}
               </p>
               <p v-if="gateDescriptionSnippet(gate)" class="mt-0.5 truncate text-xs text-muted-foreground" data-testid="hitl-review-snippet">
                 {{ gateDescriptionSnippet(gate) }}
               </p>
             </div>
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-xs text-muted-foreground">
-                {{ gate.claimed_by ? (gate.claimed_by_name || gate.claimed_by) : $t('views.SettingsHitlReviewView.unassigned') }}
-              </p>
-            </div>
-            <span class="w-40 flex-shrink-0 text-right text-xs text-muted-foreground">
+             <div class="min-w-0 flex-1 md:flex-[1.25]">
+               <p class="truncate text-xs text-muted-foreground">
+                 {{ gate.claimed_by ? (gate.claimed_by_name || gate.claimed_by) : $t('views.SettingsHitlReviewView.unassigned') }}
+               </p>
+             </div>
+             <span class="w-full flex-shrink-0 text-left text-xs text-muted-foreground md:w-40 md:text-right">
+
               {{ formatDate(gate.claimed_at || gate.created_at || '') }}
             </span>
           </button>
@@ -499,7 +502,7 @@ const { load: loadPipelines, data: pipelines } = useDataFetch<PipelineItem[]>(
 function goToPage(target: number) {
   if (target < 1 || target > totalPages.value || target === page.value) return
   page.value = target
-  loadGates()
+  void loadGates()
 }
 
 const expandedKey = ref<string | null>(null)
@@ -908,7 +911,7 @@ function startAutoRefresh() {
   refreshTimer = setInterval(() => {
     if (disposed || refreshInFlight) return
     refreshInFlight = true
-    loadGates().finally(() => {
+    void loadGates().finally(() => {
       if (disposed) return
       refreshInFlight = false
       refreshCountdown.value = Math.floor(refreshInterval.value / 1000)

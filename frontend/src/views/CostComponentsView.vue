@@ -376,7 +376,7 @@ function openEdit(component: CostComponent) {
 }
 
 function onFallbackChange(value: unknown) {
-  form.value.rate_fallback = value ? String(value) : null
+  form.value.rate_fallback = typeof value === 'string' && value ? value : null
 }
 
 const showRateFallback = computed(() => {
@@ -498,7 +498,7 @@ function rowActions(component: CostComponent) {
 
 onMounted(() => {
   planStore.fetchPlan()
-  loadComponents()
-  loadCurrency()
+  void loadComponents()
+  void loadCurrency()
 })
 </script>

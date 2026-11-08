@@ -177,7 +177,7 @@ gateway outage distinct from a genuinely bad credential. Override
 An operator-supplied endpoint lives in the credential dict
 (`creds["base_url"]`), never in a model parameter (FAR-2046).
 `core/model_backend_hub/` exports `supports_custom_base_url(provider)` as the
-single source of truth for which providers honour one, and the API rejects a
+single source of truth for which providers honor one, and the API rejects a
 `base_url` for any other provider with
 `base_url_not_supported_for_provider` instead of storing a value it would
 ignore.
@@ -196,14 +196,14 @@ Where the value lands depends on the provider:
   `KeyError`.
 
 A `base_url` left in `default_params` is the pre-FAR-2046 location and is still
-honoured, but it is popped from the splat before construction so it can never
+honored, but it is popped from the splat before construction so it can never
 collide with an adapter's explicit endpoint argument.
 
 ## Configuration
 
 Model backends are configured via the ModelBackend entity in the database.
 Sensitive fields (API keys) are encrypted with Fernet and never stored in
-plaintext. The `ModelBackendHub` decrypts credentials at initialisation/load time; health checks do not re-decrypt.
+plaintext. The `ModelBackendHub` decrypts credentials at initialization/load time; health checks do not re-decrypt.
 
 ## Registration
 

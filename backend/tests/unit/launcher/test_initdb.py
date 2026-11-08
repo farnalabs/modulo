@@ -103,6 +103,7 @@ def test_initdb_argv_pins_every_argument(tmp_path: Path) -> None:
     assert "--locale" in argv
     # The Windows locale seam pins "C" (no POSIX C.UTF-8); see test_platform.py.
     assert ("C" if sys.platform == "win32" else INITDB_LOCALE) in argv
+    assert "-L" not in argv
     assert "--auth=scram-sha-256" in argv
     assert "--pwfile" in argv
     assert str(pwfile) in argv
@@ -114,6 +115,7 @@ def test_initdb_argv_uses_windows_locale_and_executable_seam(monkeypatch: pytest
     monkeypatch.setattr(sys, "platform", "win32")
     argv = initdb_argv(tmp_pgdata, tmp_path / "bin", BOOTSTRAP_USERNAME, pwfile)
     assert argv[argv.index("--locale") + 1] == "C"
+    assert "-L" not in argv
     assert argv[0].endswith("initdb.exe")
 
 

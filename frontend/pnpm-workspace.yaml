@@ -33,9 +33,9 @@ overrides:
   # openapi-typescript upgrades to @redocly/openapi-core 2.x (js-yaml ^5.2.2).
   "@redocly/openapi-core>js-yaml": "4.3.2"
   "postcss>nanoid": "^6.0.0"
-  rollup: "4.67.3"
-  "@tanstack/query-core": "5.105.0"
-  "@tanstack/vue-query": "5.105.0"
+  rollup: "4.68.0"
+  "@tanstack/query-core": "5.107.1"
+  "@tanstack/vue-query": "5.107.1"
   # GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404): zod <4.6.6 affected. Scoped to its
   # only consumer (mutation-server-protocol, dev-only Stryker toolchain) and
   # capped to the 4.x major. Remove once mutation-server-protocol ships zod
@@ -46,6 +46,11 @@ overrides:
   # Stryker toolchain) and capped to the ^3 major ajv declares; the fix floor
   # is 3.1.9. Remove once ajv ships a patched fast-uri.
   "ajv>fast-uri": ">=3.1.9 <4"
+  # GHSA-3g3m-2fjr-6pw4 (glob <14.0.2): affected versions vulnerable to ReDoS
+  # via specially crafted patterns. Affects js-beautify@2.0.3 (Stryker HTML
+  # reporter). Scoped to this dev-only chain; nothing in production bundle.
+  # Remove once js-beautify accepts glob >=14/15 natively.
+  "js-beautify>glob": ">=14.0.2"
 minimumReleaseAgeExclude:
   - '@rollup/rollup-android-arm-eabi@4.63.0'
   - '@rollup/rollup-android-arm64@4.63.0'
@@ -334,3 +339,45 @@ minimumReleaseAgeExclude:
   - 'eslint@10.14.0'
   - '@lucide/vue@1.66.0'
   - '@lucide/vue@1.67.0'
+  - '@lucide/vue@1.68.0'
+  - '@lucide/vue@1.69.0'
+  - '@lucide/vue@1.70.0'
+  - '@tanstack/query-core@5.106.0'
+  - '@tanstack/vue-query@5.106.0'
+  - '@datadog/browser-core@7.17.0'
+  - '@datadog/browser-logs@7.17.0'
+  - '@datadog/browser-rum-core@7.17.0'
+  - '@datadog/browser-rum@7.17.0'
+  - '@datadog/js-core@0.0.20'
+  - '@playwright/test@1.65.0'
+  - 'playwright-core@1.65.0'
+  - 'playwright@1.65.0'
+  - 'rollup@4.68.0'
+  - '@rollup/rollup-android-arm-eabi@4.68.0'
+  - '@rollup/rollup-android-arm64@4.68.0'
+  - '@rollup/rollup-android-x64@4.68.0'
+  - '@rollup/rollup-darwin-arm64@4.68.0'
+  - '@rollup/rollup-darwin-x64@4.68.0'
+  - '@rollup/rollup-freebsd-arm64@4.68.0'
+  - '@rollup/rollup-freebsd-x64@4.68.0'
+  - '@rollup/rollup-linux-arm-gnueabihf@4.68.0'
+  - '@rollup/rollup-linux-arm-musleabihf@4.68.0'
+  - '@rollup/rollup-linux-arm64-gnu@4.68.0'
+  - '@rollup/rollup-linux-arm64-musl@4.68.0'
+  - '@rollup/rollup-linux-loong64-gnu@4.68.0'
+  - '@rollup/rollup-linux-loong64-musl@4.68.0'
+  - '@rollup/rollup-linux-ppc64-gnu@4.68.0'
+  - '@rollup/rollup-linux-ppc64-musl@4.68.0'
+  - '@rollup/rollup-linux-riscv64-gnu@4.68.0'
+  - '@rollup/rollup-linux-riscv64-musl@4.68.0'
+  - '@rollup/rollup-linux-s390x-gnu@4.68.0'
+  - '@rollup/rollup-linux-x64-gnu@4.68.0'
+  - '@rollup/rollup-linux-x64-musl@4.68.0'
+  - '@rollup/rollup-openbsd-x64@4.68.0'
+  - '@rollup/rollup-openharmony-arm64@4.68.0'
+  - '@rollup/rollup-win32-arm64-msvc@4.68.0'
+  - '@rollup/rollup-win32-ia32-msvc@4.68.0'
+  - '@rollup/rollup-win32-x64-gnu@4.68.0'
+  - '@rollup/rollup-win32-x64-msvc@4.68.0'
+  - '@tanstack/query-core@5.107.1'
+  - '@tanstack/vue-query@5.107.1'

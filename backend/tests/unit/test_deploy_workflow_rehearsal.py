@@ -18,6 +18,7 @@ import shutil
 import stat
 import subprocess
 import tarfile
+import tempfile
 import textwrap
 from pathlib import Path
 from shutil import which
@@ -33,13 +34,6 @@ RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
 NATIVE_SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "native-release-smoke.yml"
 MANIFEST_SOURCE = REPO_ROOT / "backend" / "src" / "modulo" / "launcher" / "manifest.py"
 
-#: This module EXECUTES the workflows' shipped shell fragments under a real
-#: POSIX shell, so it needs a POSIX shell rather than the Windows WSL launcher
-#: stub. The platform requirement is declared once, as a marker; the gate that
-#: skips it on Windows lives in ``backend/tests/conftest.py``
-#: (``POSIX_ONLY_MARKER``) and Linux CI executes this suite for real.
-pytestmark = pytest.mark.posix_only
-
 _REHEARSAL_STEP_NAME = "Pre-deploy REHEARSAL migrations (one-off machine — always rolls back)"
 _REAL_STEP_NAME = "Pre-deploy migrations (one-off machine)"
 _REHEARSAL_DESTROY_NAME = "Destroy pre-rehearsal machine"
@@ -50,14 +44,8 @@ _LEGS = (
     ("deploy-production", "app-modulo", "prod"),
 )
 
-#: This module executes the shipped deploy/release shell scripts for real in a
-#: subprocess, with stubbed binaries placed first on PATH - so it needs
-#: executable-bit semantics, a POSIX PATH the shell can read, and ``jq``, none
-#: of which a Windows host provides (``bash`` resolves to the WSL stub and the
-#: stubs are unreadable to it). The platform requirement is declared once, as a
-#: marker; the gate that skips it on Windows lives in ``backend/tests/conftest.py``
-#: (``POSIX_ONLY_MARKER``) and Linux CI executes this suite for real.
-pytestmark = pytest.mark.posix_only
+#: The shell-execution tests below carry ``pytest.mark.posix_only`` individually.
+#: Structural workflow assertions remain runnable on every platform.
 
 
 def _workflow() -> dict[str, Any]:
@@ -541,6 +529,341 @@ def test_release_signing_derives_key_id_from_current_slot() -> None:
     assert "Merely changing the secret while CURRENT remains the old key" in manifest_source
 
 
+def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
+    workflow_text = BUNDLE_WORKFLOW.read_text(encoding="utf-8")
+    versions = (REPO_ROOT / "scripts" / "bundle-versions.env").read_text(encoding="utf-8")
+
+    assert "Install pinned PostgreSQL source-build dependencies" in workflow_text
+    assert "build-essential" in workflow_text
+    assert "bison" in workflow_text
+    assert "flex" in workflow_text
+    assert "Download and sha256-verify pinned PostgreSQL source" in workflow_text
+    assert 'echo "${PG_SOURCE_SHA256}  postgresql-${PG_VERSION}.tar.gz"' in workflow_text
+    assert "Build and sha256-verify PostgreSQL from pinned upstream source" in workflow_text
+    assert "../pg-src/configure" in workflow_text
+    assert 'BUNDLE_PG_PREFIX="$PWD/build/${BUNDLE_ROOT}/pg"' in workflow_text
+    assert '--prefix="$BUNDLE_PG_PREFIX"' in workflow_text
+    assert "--without-llvm" in workflow_text
+
+    # Pin the canonicalized-BUNDLE assertion to the Assemble step. The same
+    # canonicalized line exists in the ELF-scan and libpq-assert steps, so a
+    # whole-file match would still pass with this step reverted to the relative
+    # form. Also assert the relative form is gone from the step itself.
+    workflow = yaml.safe_load(workflow_text)
+    steps = workflow["jobs"]["bundle"]["steps"]
+    assemble_script = steps[_step_names(steps).index("Assemble bundle layout")]["run"]
+    assert 'BUNDLE="$(cd "build/${BUNDLE_ROOT}" && pwd)"' in assemble_script
+    assert 'BUNDLE="build/${BUNDLE_ROOT}"' not in assemble_script
+    assert "PG_REQUIRED_EXTENSIONS=" in versions
+    assert "PG_REQUIRED_EXTENSIONS=\n" in versions
+    assert "Verify PostgreSQL extension inventory before source build" in workflow_text
+    assert "CREATE[[:space:]]+EXTENSION" in workflow_text
+    assert "required_extensions?" in workflow_text
+    assert 'test -z "${PG_REQUIRED_EXTENSIONS}"' in workflow_text
+    assert "pg_config --sharedir" in workflow_text
+    assert '[ -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki" ] || {' in workflow_text
+    assert (
+        'echo "::error::PostgreSQL runtime data file missing: '
+        '${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }' in workflow_text
+    )
+    assert '[ -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets" ] || {' in workflow_text
+    assert (
+        'echo "::error::PostgreSQL runtime data directory missing: '
+        '${BUNDLE}/pg/share/postgresql/timezonesets" >&2; exit 1; }' in workflow_text
+    )
+    assert '[ -f "$BUNDLE/pg/share/postgresql/postgres.bki" ] || {' in workflow_text
+    assert '[ -d "$BUNDLE/pg/share/postgresql/timezonesets" ] || {' in workflow_text
+    assert 'BUNDLE_ROOT_ABS="$(realpath -e -- "$BUNDLE")"' in workflow_text
+    assert 'sharedir_abs="$(realpath -e -- "$sharedir")"' in workflow_text
+    assert 'expected_sharedir_abs="$(realpath -e -- "$BUNDLE/pg/share/postgresql")"' in workflow_text
+    assert 'case "$sharedir_abs" in' in workflow_text
+    workflow = yaml.safe_load(workflow_text)
+
+    steps = workflow["jobs"]["bundle"]["steps"]
+    assemble_script = steps[_step_names(steps).index("Assemble bundle layout")]["run"]
+    assert "Assemble bundle layout failed at line" in assemble_script
+    assert "Redis install directory missing" in assemble_script
+    assert "Redis copy failed" in assemble_script
+    assert "patchelf failed" in assemble_script
+    assert "no ELF files found to patch" in assemble_script
+    assert 'export PATH="$BUNDLE_ROOT/runtime/bin:$BUNDLE_ROOT/pg/bin:$BUNDLE_ROOT/redis' in workflow_text
+
+    assert "postgresql-16.deb" not in workflow_text
+    assert "apt.postgresql.org" not in workflow_text
+
+
+def _bundle_postgres_smoke_script() -> str:
+    workflow = yaml.safe_load(BUNDLE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["bundle"]["steps"]
+    names = _step_names(steps)
+    smoke_name = "Smoke the final PostgreSQL tarball after relocation as an unprivileged user"
+    script = steps[names.index(smoke_name)]["run"]
+    assert isinstance(script, str)
+    return script
+
+
+def _bundle_postgres_smoke_setup_script() -> str:
+    """Return the ownership/mode setup copied from the final smoke step.
+
+    Keep this deliberately separate from the PostgreSQL commands: the test below
+    proves the security boundary without downloading or starting PostgreSQL.
+    """
+    script = _bundle_postgres_smoke_script()
+    marker = "# The extracted bundle remains runner-owned:"
+    start = script.index(marker)
+    end = script.index('cat > "$smoke_script"', start)
+    return textwrap.dedent(script[start:end])
+
+
+def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
+    smoke_script = _bundle_postgres_smoke_script()
+    setup_script = _bundle_postgres_smoke_setup_script()
+
+    assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in setup_script
+    assert 'tarball="build/${TARBALL_NAME}"' in smoke_script
+
+    assert 'test ! -e "$original_bundle"' in smoke_script
+    assert 'tar -xzf "$tarball"' in smoke_script
+    assert "useradd --system" in smoke_script
+    assert "env -i" in smoke_script
+    assert "chown -R" not in setup_script
+    assert 'chmod 0755 "$smoke_root"' in setup_script
+    assert 'chmod -R a+rX "$extract_root"' in setup_script
+    assert "chmod -R a+w" not in setup_script
+    assert 'sudo chown "$smoke_user" "$smoke_workspace"' in setup_script
+    assert 'smoke_home="$smoke_workspace/home"' in smoke_script
+
+    assert 'smoke_dump="$smoke_dump_dir/roundtrip.sql"' in smoke_script
+    assert (
+        'sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"'
+    ) in smoke_script
+    assert 'HOME="$smoke_home"' in smoke_script
+    assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
+
+    assert "pg_config --sharedir" in smoke_script
+    assert 'sharedir_abs="$(realpath -e -- "$sharedir")"' in smoke_script
+    assert 'smoke_bundle_abs="$(realpath -e -- "$SMOKE_BUNDLE")"' in smoke_script
+    assert 'expected_sharedir_abs="$(realpath -e -- "$SMOKE_BUNDLE/pg/share/postgresql")"' in smoke_script
+    assert 'case "$sharedir_abs" in "$smoke_bundle_abs"/*)' in smoke_script
+    assert "initdb --pgdata" in smoke_script
+
+    assert "pg_ctl --pgdata" in smoke_script
+    assert "SELECT 1;" in smoke_script
+    assert "America/New_York" in smoke_script
+    assert "pg_dump" in smoke_script
+    assert "--format=custom" in smoke_script
+    assert "pg_restore --exit-on-error" in smoke_script
+    assert "dropdb" in smoke_script
+    assert "stop -m fast -w" in smoke_script
+    assert "host PostgreSQL path" in smoke_script
+    assert "PGHOST" not in smoke_script
+    assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
+    assert 'smoke_dump_dir="$smoke_workspace/dump"' in smoke_script
+    assert 'mkdir -p "$smoke_root" "$smoke_workspace"' in smoke_script
+    assert (
+        'sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"'
+    ) in smoke_script
+    assert 'sudo chown "$smoke_user" "$smoke_workspace"' in smoke_script
+    assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in smoke_script
+    assert 'chmod 0755 "$smoke_root" "$extract_root"' in smoke_script
+    assert "status=$?" in smoke_script
+    assert 'sudo rm -rf -- "$smoke_root"' in smoke_script
+    assert 'sudo userdel "$smoke_user"' in smoke_script
+    assert 'rm -rf "$smoke_root"' not in smoke_script
+    assert "failed to remove PostgreSQL relocation smoke root" in smoke_script
+    assert "refusing to remove an unsafe PostgreSQL relocation smoke root" in smoke_script
+    assert 'userdel "$smoke_user" >/dev/null 2>&1 || true' not in smoke_script
+    assert smoke_script.index('sudo rm -rf -- "$smoke_root"') < smoke_script.index('sudo userdel "$smoke_user"')
+    # The smoke script must stay in the runner-owned smoke root: the workspace
+    # is handed to the unprivileged user, so the runner could not create it there.
+    assert 'smoke_script="$smoke_root/run-smoke.sh"' in smoke_script
+    assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in setup_script
+    assert 'chmod 0755 "$smoke_root" "$extract_root"' in setup_script
+
+
+@pytest.mark.posix_only
+def test_bundle_smoke_setup_proves_runner_owned_bundle_and_writable_workspace() -> None:
+    """Execute the smoke setup's real POSIX ownership boundary.
+
+    This intentionally does not start PostgreSQL. It creates the same shape as
+    the final smoke step, runs the exact chmod and smoke-user directory setup,
+    then checks the resulting read/execute and write boundaries as the user.
+    """
+    required = ("bash", "sudo", "useradd", "userdel", "id")
+    missing = [command for command in required if shutil.which(command) is None]
+    if missing:
+        pytest.skip("POSIX smoke ownership contract requires: " + ", ".join(missing))
+    sudo = shutil.which("sudo")
+    assert sudo is not None
+    sudo_probe = subprocess.run(  # noqa: S603 - resolved sudo executable and fixed arguments
+        [sudo, "-n", "true"], check=False, capture_output=True, text=True, timeout=30
+    )
+    if sudo_probe.returncode != 0:
+        pytest.skip("POSIX smoke ownership contract requires passwordless sudo for user setup")
+
+    smoke_user = f"modulo-smoke-{os.getpid()}"
+
+    # Mirror the real smoke step's ``smoke_root="$(mktemp -d)"``: the root must
+    # live somewhere the unprivileged user can traverse (``/tmp``), not under
+    # pytest's private 0700 tmp_path tree, or the smoke user cannot reach it.
+    smoke_root = Path(tempfile.mkdtemp(prefix="modulo-smoke-"))
+    extract_root = smoke_root / "extracted"
+    bundle = extract_root / "modulo-0.1.0-linux-amd64"
+    workspace = smoke_root / "workspace"
+    home = workspace / "home"
+    data = workspace / "data"
+    socket_dir = workspace / "socket"
+    dump_dir = workspace / "dump"
+    smoke_script = smoke_root / "run-smoke.sh"
+    bundle_file = bundle / "runtime" / "bin" / "bundle-tool"
+    try:
+        useradd = shutil.which("useradd")
+        userdel = shutil.which("userdel")
+        assert useradd is not None
+        assert userdel is not None
+        subprocess.run(  # noqa: S603 - resolved useradd executable and fixed arguments
+            [sudo, useradd, "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", smoke_user],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        extract_root.mkdir()
+        workspace.mkdir()
+        bundle_file.parent.mkdir(parents=True)
+        bundle_file.write_text("#!/usr/bin/env bash\nprintf 'bundle-ok\\n'\n", encoding="utf-8")
+        (bundle / "README.txt").write_text("runner-owned bundle\n", encoding="utf-8")
+        smoke_script.parent.mkdir(exist_ok=True)
+        smoke_script.write_text("#!/usr/bin/env bash\nset -eu\nexit 0\n", encoding="utf-8")
+
+        # Start from the restrictive modes produced by a real tar extraction.
+        # The setup fragment must be what grants the smoke user access; creating
+        # a permissive fixture would let a removed or weakened chmod pass.
+        smoke_root.chmod(0o700)
+        extract_root.chmod(0o700)
+        bundle.chmod(0o700)
+        bundle_file.chmod(0o700)
+        (bundle / "README.txt").chmod(0o600)
+        smoke_script.chmod(0o700)
+
+        setup_script = textwrap.dedent(
+            f"""\
+            set -euo pipefail
+            smoke_user={shlex.quote(smoke_user)}
+            smoke_root={shlex.quote(str(smoke_root))}
+            extract_root={shlex.quote(str(extract_root))}
+            smoke_workspace={shlex.quote(str(workspace))}
+            smoke_home={shlex.quote(str(home))}
+            smoke_data={shlex.quote(str(data))}
+            smoke_socket={shlex.quote(str(socket_dir))}
+            smoke_dump_dir={shlex.quote(str(dump_dir))}
+            {_bundle_postgres_smoke_setup_script()}
+            """
+        )
+        setup = _run_bash(setup_script, cwd=smoke_root, env=dict(os.environ))
+        assert setup.returncode == 0, setup.stdout + setup.stderr
+
+        id_command = shutil.which("id")
+        assert id_command is not None
+        smoke_id = subprocess.run(  # noqa: S603 - resolved id executable and fixed arguments
+            [id_command, "-u", smoke_user], check=True, capture_output=True, text=True, timeout=30
+        ).stdout.strip()
+        assert smoke_id.isdigit()
+        probe = textwrap.dedent(
+            f"""\
+            set -eu
+            test -r {shlex.quote(str(bundle / "README.txt"))}
+            test -x {shlex.quote(str(bundle_file))}
+            test "$( {shlex.quote(str(bundle_file))} )" = bundle-ok
+            for directory in {shlex.quote(str(home))} {shlex.quote(str(data))} \\
+                {shlex.quote(str(socket_dir))} {shlex.quote(str(dump_dir))}; do
+              test -w "$directory"
+              touch "$directory/probe"
+            done
+            if touch {shlex.quote(str(bundle / "must-not-write"))} 2>/dev/null; then
+              exit 1
+            fi
+            """
+        )
+        env_command = shutil.which("env")
+        bash = shutil.which("bash")
+        assert env_command is not None
+        assert bash is not None
+        result = subprocess.run(  # noqa: S603 - resolved executables and test-owned probe
+            [sudo, "-u", smoke_user, env_command, "-i", "PATH=/usr/bin:/bin", bash, "-c", probe],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not (bundle / "must-not-write").exists()
+    finally:
+        subprocess.run(  # noqa: S603 - resolved sudo executable and test-owned temp root
+            [sudo, "rm", "-rf", "--", str(smoke_root)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        subprocess.run(  # noqa: S603 - resolved sudo/userdel executables and fixed arguments
+            [sudo, userdel, "--remove", smoke_user],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+
+def test_bundle_release_scans_postgres_elf_paths_and_keeps_glibc_gate() -> None:
+    workflow_text = BUNDLE_WORKFLOW.read_text(encoding="utf-8")
+    assert "Scan shipped PostgreSQL ELF files for runtime path leakage" in workflow_text
+    assert "configure-time prefix strings" in workflow_text
+    assert 'readelf -d "$binary"' in workflow_text
+    assert "absolute or non-origin RUNPATH/RPATH" in workflow_text
+    assert "absolute dynamic dependency" in workflow_text
+    assert 'find "$BUNDLE/pg/bin" "$BUNDLE/redis" -type f -perm /111' in workflow_text
+    assert "could not determine the glibc requirement" in workflow_text
+
+
+#: The exact sed program the ELF leakage scan uses to extract RUNPATH/RPATH
+#: entries. It has exactly ONE capture group (the bracketed path), so the
+#: replacement MUST be ``\1``. A ``\2`` makes GNU sed fail inside a ``<( )``
+#: process substitution, so the RUNPATH loop reads zero lines and the step
+#: still exits 0 - the guard silently never runs.
+_RUNPATH_PROBE = r"/\((RPATH|RUNPATH)\)/s/.*\[([^]]*)\].*/\1/p"
+
+
+def test_bundle_release_runpath_probe_is_live_and_extracts_runtime_paths() -> None:
+    workflow = yaml.safe_load(BUNDLE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["bundle"]["steps"]
+    names = _step_names(steps)
+    script = steps[names.index("Scan shipped PostgreSQL ELF files for runtime path leakage")]["run"]
+
+    assert _RUNPATH_PROBE in script
+    assert "/\\2/p" not in script
+
+    readelf_output = textwrap.dedent(
+        """\
+        0x000000000000001d (RUNPATH)            Library runpath: [$ORIGIN/../lib]
+        0x000000000000001d (RPATH)              Library rpath: [/opt/lib:/usr/lib]
+        0x0000000000000001 (NEEDED)             Shared library: [libpq.so.5]
+        """
+    )
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required to execute the ELF RUNPATH probe")
+    result = subprocess.run(  # noqa: S603 - resolved bash executable and test-owned pipeline
+        [bash, "-c", f"sed -nE '{_RUNPATH_PROBE}' | tr ':' '\\n'"],
+        input=readelf_output,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    assert result.stdout.splitlines() == ["$ORIGIN/../lib", "/opt/lib", "/usr/lib"]
+
+
 def test_bundle_release_verifies_generated_signature_before_upload() -> None:
     workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "bundle-release.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["bundle"]["steps"]
@@ -609,8 +932,9 @@ def test_windows_bundle_is_scoped_into_the_alpha_release_path() -> None:
     # The unconditional path must not have Windows
     assert "modulo-${VERSION}-linux-amd64.tar.gz" in build_script
     assert "Modulo-${VERSION}-macos-arm64.dmg" in build_script
+    assert "Modulo-${VERSION}-macos-x86_64.dmg" in build_script
     # The components dict starts with linux+macos only
-    assert 'components = {"linux": "amd64", "macos": "arm64"}' in build_script
+    assert 'components = {"linux": "amd64", "macos": "native"}' in build_script
     # Windows is only added conditionally
     assert 'components["windows"] = "amd64"' in build_script
     assert 'names.append(f"modulo-{version}-windows-amd64.exe")' in build_script
@@ -627,7 +951,8 @@ def test_alpha_bundle_still_requires_the_macos_installer() -> None:
     downloads = [
         step.get("with", {}).get("name") for step in final_steps if "download-artifact" in str(step.get("uses", ""))
     ]
-    assert "macos-installer-${{ inputs.version }}" in downloads
+    assert "macos-installer-${{ inputs.version }}-arm64" in downloads
+    assert "macos-installer-${{ inputs.version }}-x86_64" in downloads
 
 
 def test_publish_release_assets_match_the_alpha_bundle() -> None:
@@ -646,8 +971,9 @@ def test_publish_release_assets_match_the_alpha_bundle() -> None:
         script = steps[names.index(step_name)]["run"]
         # Windows must only appear inside the INCLUDE_WINDOWS conditional
         assert 'if [ "$INCLUDE_WINDOWS" = "true" ]; then' in script
-        assert "linux" in script
-        assert "macos" in script
+        assert "modulo-${VERSION}-linux-amd64.tar.gz" in script
+        assert "Modulo-${VERSION}-macos-arm64.dmg" in script
+        assert "Modulo-${VERSION}-macos-x86_64.dmg" in script
 
 
 def test_portable_artifact_presence_check_is_not_signature_gate() -> None:
@@ -2302,7 +2628,7 @@ def test_release_promote_successfully_publishes_exact_tag_target_and_lifts_freez
     promote_sha = _git(root, "rev-parse", "refs/remotes/origin/merge-result")
     commands = (Path(env["HARNESS_DIR"]) / "release-metadata").read_text(encoding="utf-8")
     assert "tag=v1.2.3" in commands
-    assert "title=v1.2.3" in commands
+    assert "title=Modulo v1.2.3" in commands
     assert f"target={promote_sha}" in commands
     assert "## [1.2.3]" in (root.parent / "release-notes").read_text(encoding="utf-8")
     assert "Release change" in (root.parent / "release-notes").read_text(encoding="utf-8")
@@ -2798,6 +3124,8 @@ def _run_rc_output_step(tmp_path: Path, *, cut: str, recut: str) -> tuple[dict[s
         "RECUT_RC_TAG": recut,
     }
     result = _run_bash(script, cwd=tmp_path, env=env)
+    if os.name == "nt" and result.returncode != 0 and "No such file or directory" in result.stderr:
+        pytest.skip("POSIX shell unavailable on Windows host")
     assert result.returncode == 0, result.stderr
 
     values: dict[str, str] = {}
@@ -2837,8 +3165,8 @@ def test_release_rc_tag_callers_read_the_release_job_output() -> None:
 def test_release_workflow_has_include_windows_input() -> None:
     """The unified release workflow must declare the include_windows input.
 
-    Windows is Alpha scope (FAR-2338), so the default is true: an Alpha cut
-    ships the signed Windows installer unless an operator explicitly opts out.
+    Windows is Beta scope, so the default is false: the Alpha cut does not ship
+    the signed Windows installer unless an operator explicitly opts in.
     """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     # 'on' is a YAML boolean keyword; quoted key ensures correct parsing
@@ -2847,8 +3175,8 @@ def test_release_workflow_has_include_windows_input() -> None:
     assert "include_windows" in inputs
     inp = inputs["include_windows"]
     assert inp["type"] == "boolean"
-    assert inp["default"] is True
-    assert "Alpha" in inp["description"]
+    assert inp["default"] is False
+    assert "Beta" in inp["description"]
 
 
 def test_windows_installer_job_gated_on_include_windows() -> None:
@@ -2864,15 +3192,26 @@ def test_windows_installer_job_gated_on_include_windows() -> None:
 def test_final_release_manifest_needs_windows_installer_when_in_scope() -> None:
     """final-release-manifest must depend on windows-installer (FAR-2338).
 
-    The manifest downloads the ``windows-installer-<version>`` artefact, so the
-    producing job has to be a dependency. The job-level ``if`` keeps the
-    ``include_windows=false`` path working when that job is skipped.
+    The manifest downloads the ``windows-installer-<version>`` artefact when the
+    Beta-only ``include_windows`` opt-in is true, so the producing job has to be
+    a dependency. The job-level ``if`` is fail-closed: the Linux/macOS jobs must
+    succeed, Windows must succeed when opted in, and Windows must be exactly
+    ``skipped`` when it is out of scope.
     """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     final_job = workflow["jobs"]["final-release-manifest"]
     assert "windows-installer" in final_job["needs"]
     assert "macos-installer" in final_job["needs"]
-    assert "inputs.include_windows == false || needs.windows-installer.result == 'success'" in final_job["if"]
+    # Folded scalars join most lines with spaces but keep a newline before the
+    # more-indented continuation, so normalise whitespace before asserting.
+    condition = " ".join(final_job["if"].split())
+    assert "always()" in condition
+    assert "inputs.mode == 'cut' || inputs.mode == 'recut'" in condition
+    assert "needs.release.result == 'success'" in condition
+    assert "needs.bundle.result == 'success'" in condition
+    assert "needs.macos-installer.result == 'success'" in condition
+    assert "inputs.include_windows && needs.windows-installer.result == 'success'" in condition
+    assert "!inputs.include_windows && needs.windows-installer.result == 'skipped'" in condition
 
 
 def test_publish_release_needs_excludes_windows_installer() -> None:
@@ -2890,10 +3229,11 @@ def test_final_release_manifest_downloads_windows_artifact_conditionally() -> No
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
     download_steps = [step for step in final_steps if step.get("uses", "").startswith("actions/download-artifact@")]
-    # Should have bundle, macos, and conditional windows downloads
+    # Should have bundle, both architecture-suffixed macOS downloads, and conditional Windows.
     names = [step.get("with", {}).get("name") for step in download_steps]
     assert "bundle-artefacts-amd64" in names
-    assert "macos-installer-${{ inputs.version }}" in names
+    assert "macos-installer-${{ inputs.version }}-arm64" in names
+    assert "macos-installer-${{ inputs.version }}-x86_64" in names
     # Windows download should be conditional on include_windows
     windows_downloads = [step for step in download_steps if "windows-installer" in step.get("with", {}).get("name", "")]
     assert len(windows_downloads) == 1
@@ -2916,9 +3256,10 @@ def test_final_release_manifest_builds_sha256sums_conditionally() -> None:
     assert "modulo-${VERSION}-windows-amd64.exe" in script
     # Should error if include_windows=true but artifact missing
     assert "include_windows=true but windows-installer" in script
-    # Linux and macOS must always be included
+    # Linux and both native macOS DMGs must always be included.
     assert "modulo-${VERSION}-linux-amd64.tar.gz" in script
     assert "Modulo-${VERSION}-macos-arm64.dmg" in script
+    assert "Modulo-${VERSION}-macos-x86_64.dmg" in script
 
 
 def test_final_release_manifest_builds_components_dict_conditionally() -> None:
@@ -2929,12 +3270,17 @@ def test_final_release_manifest_builds_components_dict_conditionally() -> None:
     build_idx = final_names.index("Build final signed manifest after every platform artifact")
     build_step = final_steps[build_idx]
     script = build_step["run"]
-    # Should build components dict conditionally
-    assert 'components = {"linux": "amd64", "macos": "arm64"}' in script
+    # The manifest must describe both native macOS architectures as one
+    # platform family, with Windows remaining conditional.
+    assert 'components = {"linux": "amd64", "macos": "native"}' in script
     assert "if include_windows:" in script
     assert 'components["windows"] = "amd64"' in script
-    # names list should be conditional
-    assert 'names = [f"modulo-{version}-linux-amd64.tar.gz", f"Modulo-{version}-macos-arm64.dmg"]' in script
+    # Both architecture-suffixed DMGs are unconditional manifest assets.
+    assert (
+        'names = [f"modulo-{version}-linux-amd64.tar.gz", '
+        'f"Modulo-{version}-macos-arm64.dmg", '
+        'f"Modulo-{version}-macos-x86_64.dmg"]'
+    ) in script
     assert 'names.append(f"modulo-{version}-windows-amd64.exe")' in script
 
 
@@ -2993,9 +3339,11 @@ def test_alpha_bundle_sha256sums_generation_succeeds_without_windows(tmp_path: P
     artefacts_dir = tmp_path / "release-artefacts"
     artefacts_dir.mkdir()
     linux_tar = artefacts_dir / "modulo-0.3.324-linux-amd64.tar.gz"
-    macos_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    macos_arm64_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    macos_x86_64_dmg = artefacts_dir / "Modulo-0.3.324-macos-x86_64.dmg"
     linux_tar.write_bytes(b"linux-bundle-content")
-    macos_dmg.write_bytes(b"macos-dmg-content")
+    macos_arm64_dmg.write_bytes(b"macos-arm64-dmg-content")
+    macos_x86_64_dmg.write_bytes(b"macos-x86_64-dmg-content")
 
     # Run the conditional sha256sum generation (Alpha path: INCLUDE_WINDOWS=false)
     env = {**os.environ, "VERSION": "0.3.324", "INCLUDE_WINDOWS": "false"}
@@ -3006,9 +3354,13 @@ if [ "$INCLUDE_WINDOWS" = "true" ]; then
   sha256sum \
     "modulo-${VERSION}-linux-amd64.tar.gz" \
     "Modulo-${VERSION}-macos-arm64.dmg" \
+    "Modulo-${VERSION}-macos-x86_64.dmg" \
     "modulo-${VERSION}-windows-amd64.exe" > SHA256SUMS
 else
-  sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+  sha256sum \
+    "modulo-${VERSION}-linux-amd64.tar.gz" \
+    "Modulo-${VERSION}-macos-arm64.dmg" \
+    "Modulo-${VERSION}-macos-x86_64.dmg" > SHA256SUMS
 fi
 cd ..
 (cd release-artefacts && sha256sum --check SHA256SUMS)
@@ -3016,13 +3368,16 @@ cd ..
     result = _run_bash(sha256_script, cwd=tmp_path, env=env)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 
-    # Verify SHA256SUMS was created with only Linux and macOS
+    # Verify SHA256SUMS contains Linux and both native macOS DMGs.
     sha256sums = (artefacts_dir / "SHA256SUMS").read_text(encoding="utf-8")
-    assert "modulo-0.3.324-linux-amd64.tar.gz" in sha256sums
-    assert "Modulo-0.3.324-macos-arm64.dmg" in sha256sums
+    expected_assets = {
+        "modulo-0.3.324-linux-amd64.tar.gz",
+        "Modulo-0.3.324-macos-arm64.dmg",
+        "Modulo-0.3.324-macos-x86_64.dmg",
+    }
+    assert {line.split("  ", 1)[1] for line in sha256sums.strip().splitlines()} == expected_assets
     assert "windows-amd64.exe" not in sha256sums
-    # Verify it has exactly 2 lines
-    assert len(sha256sums.strip().split("\n")) == 2
+    assert len(sha256sums.strip().splitlines()) == 3
 
 
 @pytest.mark.posix_only
@@ -3031,10 +3386,12 @@ def test_beta_bundle_sha256sums_generation_succeeds_with_windows(tmp_path: Path)
     artefacts_dir = tmp_path / "release-artefacts"
     artefacts_dir.mkdir()
     linux_tar = artefacts_dir / "modulo-0.3.324-linux-amd64.tar.gz"
-    macos_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    macos_arm64_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    macos_x86_64_dmg = artefacts_dir / "Modulo-0.3.324-macos-x86_64.dmg"
     windows_exe = artefacts_dir / "modulo-0.3.324-windows-amd64.exe"
     linux_tar.write_bytes(b"linux-bundle-content")
-    macos_dmg.write_bytes(b"macos-dmg-content")
+    macos_arm64_dmg.write_bytes(b"macos-arm64-dmg-content")
+    macos_x86_64_dmg.write_bytes(b"macos-x86_64-dmg-content")
     windows_exe.write_bytes(b"windows-exe-content")
 
     env = {**os.environ, "VERSION": "0.3.324", "INCLUDE_WINDOWS": "true"}
@@ -3045,9 +3402,13 @@ if [ "$INCLUDE_WINDOWS" = "true" ]; then
   sha256sum \
     "modulo-${VERSION}-linux-amd64.tar.gz" \
     "Modulo-${VERSION}-macos-arm64.dmg" \
+    "Modulo-${VERSION}-macos-x86_64.dmg" \
     "modulo-${VERSION}-windows-amd64.exe" > SHA256SUMS
 else
-  sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+  sha256sum \
+    "modulo-${VERSION}-linux-amd64.tar.gz" \
+    "Modulo-${VERSION}-macos-arm64.dmg" \
+    "Modulo-${VERSION}-macos-x86_64.dmg" > SHA256SUMS
 fi
 cd ..
 (cd release-artefacts && sha256sum --check SHA256SUMS)
@@ -3055,13 +3416,16 @@ cd ..
     result = _run_bash(sha256_script, cwd=tmp_path, env=env)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 
-    # Verify SHA256SUMS includes all three
+    # Verify SHA256SUMS includes Linux, both native macOS DMGs, and Windows.
     sha256sums = (artefacts_dir / "SHA256SUMS").read_text(encoding="utf-8")
-    assert "modulo-0.3.324-linux-amd64.tar.gz" in sha256sums
-    assert "Modulo-0.3.324-macos-arm64.dmg" in sha256sums
-    assert "modulo-0.3.324-windows-amd64.exe" in sha256sums
-    # Verify it has exactly 3 lines
-    assert len(sha256sums.strip().split("\n")) == 3
+    expected_assets = {
+        "modulo-0.3.324-linux-amd64.tar.gz",
+        "Modulo-0.3.324-macos-arm64.dmg",
+        "Modulo-0.3.324-macos-x86_64.dmg",
+        "modulo-0.3.324-windows-amd64.exe",
+    }
+    assert {line.split("  ", 1)[1] for line in sha256sums.strip().splitlines()} == expected_assets
+    assert len(sha256sums.strip().splitlines()) == 4
 
 
 @pytest.mark.posix_only
@@ -3070,9 +3434,11 @@ def test_beta_bundle_sha256sums_generation_fails_when_windows_missing(tmp_path: 
     artefacts_dir = tmp_path / "release-artefacts"
     artefacts_dir.mkdir()
     linux_tar = artefacts_dir / "modulo-0.3.324-linux-amd64.tar.gz"
-    macos_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    macos_arm64_dmg = artefacts_dir / "Modulo-0.3.324-macos-arm64.dmg"
+    macos_x86_64_dmg = artefacts_dir / "Modulo-0.3.324-macos-x86_64.dmg"
     linux_tar.write_bytes(b"linux-bundle-content")
-    macos_dmg.write_bytes(b"macos-dmg-content")
+    macos_arm64_dmg.write_bytes(b"macos-arm64-dmg-content")
+    macos_x86_64_dmg.write_bytes(b"macos-x86_64-dmg-content")
 
     env = {**os.environ, "VERSION": "0.3.324", "INCLUDE_WINDOWS": "true"}
     sha256_script = """
@@ -3086,9 +3452,13 @@ if [ "$INCLUDE_WINDOWS" = "true" ]; then
   sha256sum \
     "modulo-${VERSION}-linux-amd64.tar.gz" \
     "Modulo-${VERSION}-macos-arm64.dmg" \
+    "Modulo-${VERSION}-macos-x86_64.dmg" \
     "modulo-${VERSION}-windows-amd64.exe" > SHA256SUMS
 else
-  sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+  sha256sum \
+    "modulo-${VERSION}-linux-amd64.tar.gz" \
+    "Modulo-${VERSION}-macos-arm64.dmg" \
+    "Modulo-${VERSION}-macos-x86_64.dmg" > SHA256SUMS
 fi
 cd ..
 (cd release-artefacts && sha256sum --check SHA256SUMS)
@@ -3424,6 +3794,164 @@ def _extract_publish_release_step_script(name: str) -> str:
     return script
 
 
+def _bundle_tag_script() -> str:
+    return _extract_publish_release_step_script("Push the bundle tag")
+
+
+def _bundle_tag_harness(
+    tmp_path: Path,
+    *,
+    scenario: str,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls.log"
+    state = tmp_path / "pushed"
+    target = "a" * 40
+    other = "b" * 40
+    _write_executable(
+        bin_dir / "git",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> {shlex.quote(str(calls))}
+case "$*" in
+  'rev-parse HEAD') printf '%s\\n' {target} ;;
+  'ls-remote --exit-code origin refs/tags/bundle-v0.1.0')
+    case "$SCENARIO" in
+      annotated|lightweight|different|lightweight-fallback)
+        if [[ "$SCENARIO" == lightweight-fallback && ! -f {shlex.quote(str(state))} ]]; then
+          exit 2
+        fi
+        tag_sha={target}
+        [[ "$SCENARIO" == different ]] && tag_sha={other}
+        printf '%s\\trefs/tags/bundle-v0.1.0\\n' "$tag_sha"
+        exit 0
+        ;;
+      absent|push-mismatch|push-unknown|push-lightweight)
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-lightweight ]]; then
+          printf '%s\\trefs/tags/bundle-v0.1.0\\n' {target}; exit 0
+        fi
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-mismatch ]]; then
+          printf '%s\\trefs/tags/bundle-v0.1.0\\n' {other}; exit 0
+        fi
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-lightweight ]]; then
+          printf '%s\\trefs/tags/bundle-v0.1.0\\n' {target}; exit 0
+        fi
+        if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == push-unknown ]]; then exit 128; fi
+        exit 2
+        ;;
+      unknown) exit 128 ;;
+    esac
+    ;;
+      'ls-remote --exit-code origin refs/tags/bundle-v0.1.0^{{}}')
+    case "$SCENARIO" in
+      annotated) printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0 ;;
+      different) printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {other}; exit 0 ;;
+      push-lightweight) exit 2 ;;
+      absent)
+        if [[ -f {shlex.quote(str(state))} ]]; then printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0; fi
+        exit 2
+        ;;
+      push-mismatch) exit 2 ;;
+      push-unknown) exit 128 ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  'tag -a bundle-v0.1.0 -m Bundle release bundle-v0.1.0') exit 0 ;;
+  'push origin bundle-v0.1.0') touch {shlex.quote(str(state))}; exit 0 ;;
+  *)
+    if [[ "$*" == 'ls-remote --exit-code origin refs/tags/bundle-v0.1.0^{{}}' ]]; then
+      if [[ -f {shlex.quote(str(state))} && "$SCENARIO" == absent ]]; then
+        printf '%s\\trefs/tags/bundle-v0.1.0^{{}}\\n' {target}; exit 0
+      fi
+      exit 2
+    fi
+    exit 0
+    ;;
+esac
+""",
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "VERSION": "0.1.0",
+        "SCENARIO": scenario,
+    }
+    result = _run_bash(_bundle_tag_script(), cwd=tmp_path, env=env)
+    return result, calls
+
+
+@pytest.mark.posix_only
+def test_bundle_tag_existing_exact_annotated_target_is_idempotent(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="annotated")
+    assert result.returncode == 0, result.stderr
+    assert "already published" in result.stdout
+    assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
+
+
+@pytest.mark.posix_only
+def test_bundle_tag_existing_exact_lightweight_target_is_idempotent(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="lightweight")
+    assert result.returncode == 0, result.stderr
+    assert "already published" in result.stdout
+    assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
+
+
+@pytest.mark.posix_only
+def test_bundle_tag_existing_different_target_fails_without_push(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="different")
+    assert result.returncode != 0
+    assert "refusing to overwrite" in result.stdout
+    assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
+
+
+@pytest.mark.posix_only
+def test_bundle_tag_remote_query_unknown_fails_without_push(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="unknown")
+    assert result.returncode != 0
+    assert "state UNKNOWN" in result.stdout
+    assert "push origin bundle-v0.1.0" not in calls.read_text(encoding="utf-8")
+
+
+@pytest.mark.posix_only
+def test_bundle_tag_absent_push_and_exact_verification_succeed(tmp_path: Path) -> None:
+    result, calls = _bundle_tag_harness(tmp_path, scenario="absent")
+    assert result.returncode == 0, result.stderr
+    assert "push origin bundle-v0.1.0" in calls.read_text(encoding="utf-8")
+
+
+@pytest.mark.posix_only
+def test_bundle_tag_post_push_verification_mismatch_fails(tmp_path: Path) -> None:
+    result, _ = _bundle_tag_harness(tmp_path, scenario="push-mismatch")
+    assert result.returncode != 0
+    assert "resolved to" in result.stdout
+    assert "after push, not release target" in result.stdout
+    assert "could not be verified after push" not in result.stdout
+
+
+@pytest.mark.posix_only
+def test_bundle_tag_post_push_lightweight_fallback_succeeds_without_second_push(tmp_path: Path) -> None:
+    """A lightweight tag uses the full-ref fallback and is verified once."""
+    result, calls = _bundle_tag_harness(tmp_path, scenario="push-lightweight")
+    assert result.returncode == 0, result.stderr
+    assert "Pushed and verified bundle-v0.1.0" in result.stdout
+    assert calls.read_text(encoding="utf-8").splitlines().count("push origin bundle-v0.1.0") == 1
+
+
+@pytest.mark.posix_only
+def test_bundle_tag_post_push_verification_unknown_fails(tmp_path: Path) -> None:
+    result, _ = _bundle_tag_harness(tmp_path, scenario="push-unknown")
+    assert result.returncode != 0
+    assert "could not be verified after push" in result.stdout
+
+
+def test_bundle_tag_publication_has_no_overwrite_escape_hatches() -> None:
+    script = _bundle_tag_script()
+    assert "--force" not in script
+    assert "--clobber" not in script
+    assert 'git push origin "$BUNDLE_TAG"' in script
+
+
 def test_publish_release_guard_covers_exactly_its_needs() -> None:
     """The set of jobs the guard checks must equal the set of ``needs``.
 
@@ -3533,14 +4061,39 @@ def _post_condition_env(tmp_path: Path, *, gh_body: str, gh_rc: int, git_rc: int
     }
 
 
-def test_publish_release_assertion_is_the_last_step_after_the_tag_push() -> None:
-    """The verification must be terminal: after the release create and tag push,
-    and the final step of the job so nothing after it can mask a failure."""
+def test_publish_release_assertion_is_the_last_failing_step_after_the_tag_push() -> None:
+    """The verification must be after the tag push and be the last failing step.
+
+    A best-effort post-publication notification (the website rebuild hook) may
+    follow it, but only because it cannot fail the job: it must not opt into
+    ``continue-on-error`` (semgrep-banned anyway), must never return non-zero,
+    and must not be ``always()``-guarded so it still skips when the assertion
+    fails. Anything that can fail must stay before the assertion.
+    """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
-    names = _step_names(workflow["jobs"]["publish-release"]["steps"])
+    steps = workflow["jobs"]["publish-release"]["steps"]
+    names = _step_names(steps)
     assert _ASSERT_STEP_NAME in names, "release/bundle-tag assertion step missing"
     assert names.index(_ASSERT_STEP_NAME) > names.index("Push the bundle tag")
-    assert names[-1] == _ASSERT_STEP_NAME, "the assertion must be the job's final step"
+
+    trailing = steps[names.index(_ASSERT_STEP_NAME) + 1 :]
+    assert _step_names(trailing) == ["Notify website to rebuild (Cloudflare Pages deploy hook)"], (
+        "only the best-effort website notification may follow the terminal assertion"
+    )
+    for step in trailing:
+        assert "continue-on-error" not in step, (
+            f"{step.get('name')!r} after the terminal assertion may not mask a failure"
+        )
+        assert "always()" not in str(step.get("if", "")), (
+            f"{step.get('name')!r} after the terminal assertion must not run when it failed"
+        )
+        trailing_script = step.get("run", "")
+        assert "exit 1" not in trailing_script, (
+            f"{step.get('name')!r} after the terminal assertion must never fail the job"
+        )
+        assert trailing_script.rstrip().endswith("exit 0"), (
+            f"{step.get('name')!r} after the terminal assertion must exit 0 on every path"
+        )
 
     script = _post_condition_script()
     raw_script = _extract_publish_release_step_script(_ASSERT_STEP_NAME)
@@ -3828,6 +4381,7 @@ exit 0
     return env, root
 
 
+@pytest.mark.posix_only
 def test_bundle_redis_step_verifies_a_matching_tarball_from_the_download_dir(tmp_path: Path) -> None:
     """The checksum passes only when the manifest name is valid where the check runs."""
     tarball = _redis_source_tarball()
@@ -3840,6 +4394,7 @@ def test_bundle_redis_step_verifies_a_matching_tarball_from_the_download_dir(tmp
     assert (root / "build" / "redis-install" / "bin" / "redis-server").is_file()
 
 
+@pytest.mark.posix_only
 def test_bundle_redis_step_fails_on_a_digest_mismatch_and_never_extracts(tmp_path: Path) -> None:
     tarball = _redis_source_tarball()
     env, root = _redis_step_harness(tmp_path, tarball=tarball, pin_sha256="0" * 64)
@@ -3851,6 +4406,7 @@ def test_bundle_redis_step_fails_on_a_digest_mismatch_and_never_extracts(tmp_pat
     assert not (root / "redis-src").exists(), "a mismatched tarball must never be extracted"
 
 
+@pytest.mark.posix_only
 def test_bundle_redis_step_fails_loudly_when_the_download_writes_no_file(tmp_path: Path) -> None:
     env, root = _redis_step_harness(tmp_path, tarball=None, pin_sha256="0" * 64)
 

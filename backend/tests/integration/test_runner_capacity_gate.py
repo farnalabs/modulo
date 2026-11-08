@@ -977,14 +977,12 @@ async def test_sweep_fresh_heartbeat_nodeless_zombie_keeps_marker(
     assert row["status"] == "running", "a recoverable run must never be terminalised by the sweep"
 
 
-async def test_gate_flag_off_population_and_tombstone_are_pre_d8(
+async def test_gate_flag_off_population_matches_live_running_markers(
     db_engine: AsyncEngine,
     migrated_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """F6: flag OFF keeps the pre-D8 behaviour EXACTLY — the count population
-    is ACTIVE_RUN_STATUSES (an awaiting_human run WITH a marker still counts
-    and can deny a dispatch) and the HITL tombstone never fires."""
+    """F6: flag OFF uses the same live-running population as deployment drain."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=False)
 
@@ -1003,8 +1001,9 @@ async def test_gate_flag_off_population_and_tombstone_are_pre_d8(
         marker=build_dispatch_marker("k", "e2b"),
         claim_token=claim,
     )
+    live = await _seed_run(db_engine, org_id, pipe, snap, marker=build_dispatch_marker("live", "e2b"))
 
-    # Pre-D8 population: the awaiting_human marker COUNTS → cap 1 is saturated.
+    # Flag-off still counts only a running row with a live marker.
     other = await _seed_run(db_engine, org_id, pipe, snap)
     with pytest.raises(RunnerCapacityDeniedError, match="at capacity"):
         await acquire_runner_dispatch_slot(
@@ -1024,6 +1023,8 @@ async def test_gate_flag_off_population_and_tombstone_are_pre_d8(
     row = await _run_row(db_engine, org_id, parked)
     assert row["marker"] is not None
     assert json.loads(row["marker"])["state"] == "dispatching", "flag-off must not write the tombstone"
+    live_row = await _run_row(db_engine, org_id, live)
+    assert json.loads(live_row["marker"])["state"] == "dispatching"
 
 
 async def test_count_tombstone_exclusion_matches_state_field_precisely(

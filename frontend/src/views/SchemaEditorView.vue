@@ -206,8 +206,8 @@ function selectSchema(id: string) {
   schemaVersion.value = '1.0.0'
   fields.value = []
 
-  loadLatestVersion(id)
-  loadVersions(id)
+  void loadLatestVersion(id)
+  void loadVersions(id)
 }
 
 function createNewSchema() {
@@ -237,8 +237,8 @@ async function loadLatestVersion(schemaId: string) {
       params: { path: { schema_id: schemaId }, query: { page: 1, page_size: 1 } },
     })
     if (error) return
-    if (data.items && data.items.length > 0) {
-      const latest = data.items[0]
+    const latest = data.items?.at(0)
+    if (latest) {
       schemaVersion.value = latest.version
       fields.value = parseDefinitionToFields(latest.definition_json)
     }
@@ -424,7 +424,7 @@ async function saveSchema() {
   }
 }
 
-async function restoreVersion(version: SchemaVersion) {
+function restoreVersion(version: SchemaVersion) {
   schemaVersion.value = version.version
   fields.value = parseDefinitionToFields(version.definition_json)
 }
@@ -444,7 +444,7 @@ watch(() => route.params.id, (newId) => {
 })
 
 onMounted(() => {
-  loadSchemas()
+  void loadSchemas()
   const id = route.params.id
   if (id && typeof id === 'string') {
     selectSchema(id)

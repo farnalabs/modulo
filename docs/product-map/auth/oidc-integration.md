@@ -22,7 +22,7 @@ OpenID Connect upstream integration: discovery-document fetch, JWKS retrieval an
 caching, and signature verification of the provider-issued `id_token`, wired into
 the SSO callback flow (`feat-sso`).
 
-## Behaviours
+## Behaviors
 
 - [x] Provider `jwks_uri` is discovered from the OpenID Connect discovery document
 - [x] JWKS is fetched over HTTPS and cached in-memory with a 1-hour TTL
@@ -54,5 +54,5 @@ the SSO callback flow (`feat-sso`).
 
 - 2026-08-25: **product-map review pass** - entry added to close the
   dangling `depends-on: feat-core-oidc-integration` edge in `auth/sso-provider-ui.md`.
-  Behaviours re-verified against `auth/oidc_verify.py`, `sso_oidc.feature`, and unit
+  Behaviors re-verified against `auth/oidc_verify.py`, `sso_oidc.feature`, and unit
   tests. Status: covered.

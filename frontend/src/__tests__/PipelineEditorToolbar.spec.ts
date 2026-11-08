@@ -61,8 +61,9 @@ import PipelineEditorView from '../views/PipelineEditorView.vue'
 
 const seededFlowNodes = [{ id: 'node-1', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Agent Node', description: '' } }]
 
-function mountEditor() {
+function mountEditor(attachTo?: HTMLElement) {
   return mount(PipelineEditorView, {
+    ...(attachTo ? { attachTo } : {}),
     global: {
       plugins: [createPinia()],
       stubs: {
@@ -172,16 +173,158 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     // covers the canvas or node details.
     expect(toolbar.classes()).not.toContain('absolute')
 
+    expect(toolbar.attributes('role')).toBeUndefined()
+    expect(toolbar.attributes('aria-label')).toBe('Pipeline editor actions')
     for (const group of ['identity', 'file', 'run', 'settings', 'canvas']) {
-      expect(
-        wrapper.find(`[data-testid="pipeline-editor-toolbar-group-${group}"]`).exists(),
-        `toolbar group ${group}`,
-      ).toBe(true)
+      const groupElement = wrapper.find(`[data-testid="pipeline-editor-toolbar-group-${group}"]`)
+      expect(groupElement.exists(), `toolbar group ${group}`).toBe(true)
+      expect(groupElement.attributes('role')).toBe('group')
+      expect(groupElement.attributes('aria-label')).toBeTruthy()
     }
+    expect(wrapper.find('[data-testid="pipeline-editor-settings-toggle"]').exists()).toBe(true)
 
     const fitButton = wrapper.find('[data-testid="pipeline-editor-fit-view"]')
     expect(fitButton.exists()).toBe(true)
     expect(fitButton.text()).toContain('Fit to View')
+
+    // FAR-2410: the explicit layout action lives in the editable canvas group.
+    const arrangeButton = wrapper.find('[data-testid="pipeline-editor-arrange-graph"]')
+    expect(arrangeButton.exists()).toBe(true)
+    expect(arrangeButton.text()).toContain('Arrange graph')
+    // No layout action has run yet, so the one-step undo stays unmounted.
+    expect(wrapper.find('[data-testid="pipeline-editor-undo-arrange"]').exists()).toBe(false)
+  })
+
+  it('progressively discloses secondary settings on narrow layouts', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus')
+
+    const settings = wrapper.find('[data-testid="pipeline-editor-toolbar-group-settings"]')
+    const toggle = wrapper.find('[data-testid="pipeline-editor-settings-toggle"]')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    const controls = settings.find('#pipeline-editor-settings-controls')
+    expect(controls.classes()).toContain('max-md:hidden')
+
+    toggle.element.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    await nextTick()
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(controls.classes()).not.toContain('max-md:hidden')
+    expect(document.activeElement).not.toBe(wrapper.find('[data-testid="pipeline-editor-archive"]').element)
+
+    ;(wrapper.vm as any).closeSettingsDisclosure()
+    await nextTick()
+    ;(wrapper.vm as any).toggleSettingsDisclosure(new MouseEvent('click', { detail: 0 }))
+    await nextTick()
+    await vi.waitFor(() => expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true }))
+    expect(focusSpy.mock.instances.some((element) => (element as HTMLElement).dataset.testid === 'pipeline-editor-archive')).toBe(true)
+
+    ;(wrapper.vm as any).toggleSettingsDisclosure(new MouseEvent('click', { detail: 0 }))
+    await nextTick()
+    ;(wrapper.vm as any).onSettingsControlsKeydown(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await nextTick()
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    expect(focusSpy).toHaveBeenCalled()
+    focusSpy.mockRestore()
+  })
+
+  it('falls back to the controls container and ignores non-Escape keys in the settings disclosure', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus')
+
+    // An archived pipeline renders the unarchive button instead of the archive
+    // button that carries firstSettingsControlRef, so the disclosure falls back
+    // to querying the controls container for the first focusable element.
+    ;(wrapper.vm as any).pipeline = { id: 'test-pipeline-id', name: 'Archived Pipeline', archived_at: '2026-01-01T00:00:00Z' }
+    await nextTick()
+
+    ;(wrapper.vm as any).toggleSettingsDisclosure(new MouseEvent('click', { detail: 0 }))
+    await nextTick()
+    await vi.waitFor(() => expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true }))
+    expect(focusSpy.mock.instances.some((element) => (element as HTMLElement).dataset.testid === 'pipeline-editor-unarchive')).toBe(true)
+
+    // Only Escape closes the disclosure; other keys leave it open.
+    ;(wrapper.vm as any).onSettingsControlsKeydown(new KeyboardEvent('keydown', { key: 'Tab' }))
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-settings-toggle"]').attributes('aria-expanded')).toBe('true')
+    focusSpy.mockRestore()
+  })
+
+  it('keeps the settings disclosure open when Escape closes a nested retry-policy panel', async () => {
+    // attachTo is required: the nested panel's Escape handler is a document-level
+    // listener, so the keydown must bubble to the real document.
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    // Mobile-style disclosure is open, and the retry-policy panel (a descendant
+    // <dialog open>) is also open.
+    vm.toggleSettingsDisclosure(new MouseEvent('click', { detail: 0 }))
+    await nextTick()
+    const settingsToggle = wrapper.find('[data-testid="pipeline-editor-settings-toggle"]')
+    expect(settingsToggle.attributes('aria-expanded')).toBe('true')
+
+    vm.toggleRetryPolicy()
+    await nextTick()
+    const panel = wrapper.find('[data-testid="pipeline-editor-retry-policy-panel"]')
+    expect(panel.exists()).toBe(true)
+
+    // Escape originates inside the nested dialog: it must close the panel and
+    // return focus to the panel toggle, NOT collapse the settings disclosure or
+    // steal focus back to the settings toggle.
+    panel.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-retry-policy-panel"]').exists()).toBe(false)
+    expect(settingsToggle.attributes('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(wrapper.find('[data-testid="pipeline-editor-retry-policy-toggle"]').element)
+    wrapper.unmount()
+  })
+
+  it('keeps the settings disclosure open when Escape closes a nested autonomy panel', async () => {
+    const wrapper = mountEditor(document.body)
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    vm.toggleSettingsDisclosure(new MouseEvent('click', { detail: 0 }))
+    await nextTick()
+    const settingsToggle = wrapper.find('[data-testid="pipeline-editor-settings-toggle"]')
+    expect(settingsToggle.attributes('aria-expanded')).toBe('true')
+
+    vm.toggleAutonomyPanel()
+    await nextTick()
+    const panel = wrapper.find('[data-testid="pipeline-editor-autonomy-panel-dialog"]')
+    expect(panel.exists()).toBe(true)
+
+    panel.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-autonomy-panel-dialog"]').exists()).toBe(false)
+    expect(settingsToggle.attributes('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(wrapper.find('[data-testid="pipeline-editor-autonomy-panel-toggle"]').element)
+    wrapper.unmount()
+  })
+
+  it('surfaces an Arrange graph fit failure without breaking the layout action', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'a', node_type: 'agent', label: 'A', position: { x: 9, y: 9 } }]
+    vm.flowNodes = [{ id: 'a', type: 'agent', position: { x: 9, y: 9 }, data: { label: 'A' } }]
+    vm.rawEdges = []
+
+    fitViewSpy.mockRejectedValueOnce(new Error('viewport missing'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vm.arrangeGraph()
+    await flushPromises()
+
+    expect(vm.rawNodes[0].position).toEqual({ x: 0, y: 0 })
+    expect(warn).toHaveBeenCalledWith(
+      '[PipelineEditorView] Arrange graph fitView failed',
+      expect.any(Error),
+    )
+    warn.mockRestore()
   })
 
   it('sizes the toolbar node-type Select to the uniform h-7 row height', async () => {

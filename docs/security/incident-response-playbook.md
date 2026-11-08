@@ -106,7 +106,7 @@ Medium / Low incident detected
   rotation, offset by 1 week.
 - **Security lead:** Tier 2 escalation. Not on pager rotation – available
   during business hours + call-out for Critical.
-- **CTO / head of engineering:** Tier 3 escalation. Authorises public
+- **CTO / head of engineering:** Tier 3 escalation. Authorizes public
   disclosure, legal notifications, and business-continuity decisions.
 
 ### 2.5 Out-of-Hours Protocol
@@ -124,12 +124,12 @@ Medium / Low incident detected
 
 ### 3.1 Preparation
 
-**Audit-log access prerequisite.** Recording is not licence-gated: the
+**Audit-log access prerequisite.** Recording is not license-gated: the
 append-only, hash-chained audit trail is written on every tier. Reading it
 through the product is Team-tier: the browse, verify, export and scan routes all
 need the `audit_viewer` feature plus the `audit.manage` permission, and answer
 402 on an unlicensed Community install. The steps below that read or export the
-audit log therefore assume a Team licence. On a Community install the events are
+audit log therefore assume a Team license. On a Community install the events are
 still recorded and hash-chained in the operator's database, but there is no
 product route to browse, verify or export them; preserve the database snapshot
 instead.
@@ -544,8 +544,8 @@ Each action item must include:
 After the post-mortem is approved:
 
 1. **Add to product map** – If the incident reveals an undocumented edge case or
-   missing behaviour, add it to the relevant product map entry under "Known Gaps"
-   or as a new behaviour checkbox.
+   missing behavior, add it to the relevant product map entry under "Known Gaps"
+   or as a new behavior checkbox.
 2. **Update AGENTS.md** – If the incident pattern is likely to recur (e.g.,
    missing RLS on a new table), add a prevention rule to `Repos/devtools/AGENTS.md`
    or the most specific subdirectory AGENTS.md.
@@ -689,4 +689,4 @@ Conduct a tabletop exercise quarterly:
 | Backup & restore | `docs/operations/backup.md` |
 | Self-hosted admin operations | `docs/operations/self-hosted-admin.md` |
 | Network egress audit | `docs/operations/network-egress.md` |
-| Product map (behaviour tracking) | `docs/product-map/` |
+| Product map (behavior tracking) | `docs/product-map/` |

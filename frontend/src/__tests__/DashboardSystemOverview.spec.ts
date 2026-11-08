@@ -1,17 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 
 const mockGet = vi.hoisted(() => vi.fn())
 const mockPush = vi.hoisted(() => vi.fn())
+const mockPlanStore = vi.hoisted(() => ({
+  loaded: true,
+  currentTier: 'community',
+  devMode: true,
+  userPermissions: ['system_maps_access', 'system.config.manage'],
+  fetchPlan: vi.fn(),
+  fetchPermissions: vi.fn(),
+}))
+const mockIsOperator = vi.hoisted(() => ({ value: true }))
+const mockIsSystemAdmin = vi.hoisted(() => ({ value: false }))
 
 vi.mock('../lib/api/client', () => ({
   api: { GET: mockGet },
   getAccessToken: () => 'test-token',
 }))
-vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: mockPush }),
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: mockPush }) }))
+vi.mock('../stores/planStore', () => ({ usePlanStore: () => mockPlanStore }))
+vi.mock('../composables/useCurrentUser', () => ({
+  useCurrentUser: () => ({ isOperator: mockIsOperator, isSystemAdmin: mockIsSystemAdmin }),
 }))
 
 import enUS from '../locales/en-US.js'
@@ -83,90 +95,159 @@ describe('DashboardSystemOverview', () => {
     vi.restoreAllMocks()
     mockGet.mockReset()
     mockPush.mockReset()
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
   })
 
-  it('loads discovery and then the default overview on mount', async () => {
+  it('loads discovery and the selected default overview window on mount', async () => {
     const { fetchDiscovery, fetchDefaultOverview } = mountOverview()
     await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(1))
 
     expect(fetchDiscovery).toHaveBeenCalledTimes(1)
+    expect(fetchDefaultOverview).toHaveBeenCalledWith(7)
     expect(fetchDiscovery.mock.invocationCallOrder[0]).toBeLessThan(
       fetchDefaultOverview.mock.invocationCallOrder[0],
     )
   })
 
-  it('runs discovery from the card and opens the discovered draft for review', async () => {
+  it('passes a non-default selected window to the overview store', async () => {
+    setActivePinia(createPinia())
+    const store = useSystemMapsStore()
+    vi.spyOn(store, 'fetchDiscovery').mockResolvedValue()
+    const fetchDefaultOverview = vi.spyOn(store, 'fetchDefaultOverview').mockResolvedValue()
+
+    mount(DashboardSystemOverview, { props: { windowDays: 30 }, global: { plugins: [i18n] } })
+    await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledTimes(1))
+
+    expect(fetchDefaultOverview).toHaveBeenCalledWith(30)
+  })
+
+  it('refetches the overview when the selected window changes after mount', async () => {
+    setActivePinia(createPinia())
+    const store = useSystemMapsStore()
+    const fetchDiscovery = vi.spyOn(store, 'fetchDiscovery').mockResolvedValue()
+    const fetchDefaultOverview = vi.spyOn(store, 'fetchDefaultOverview').mockResolvedValue()
+    const wrapper = mount(DashboardSystemOverview, { props: { windowDays: 7 }, global: { plugins: [i18n] } })
+    await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledWith(7))
+
+    await wrapper.setProps({ windowDays: 30 })
+
+    await vi.waitFor(() => expect(fetchDefaultOverview).toHaveBeenCalledWith(30))
+    expect(fetchDefaultOverview).toHaveBeenCalledTimes(2)
+    expect(fetchDiscovery).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows discovery only after confirmed internal authoring access loads', async () => {
     const { wrapper, store } = mountOverview()
+
+    expect(wrapper.find('[data-testid="dashboard-system-discover"]').exists()).toBe(false)
+    store.accessLoaded = true
+    store.systemMapsEnabled = true
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.get('[data-testid="dashboard-system-discover"]').text()).toContain('Discover My System')
+  })
+
+  it('does not present discovery for published-read viewers', async () => {
+    const { wrapper, store } = mountOverview()
+    mockPlanStore.userPermissions = ['system_maps.read']
+    mockIsOperator.value = false
+    store.accessLoaded = true
+    store.systemMapsEnabled = true
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-testid="dashboard-system-discover"]').exists()).toBe(false)
+  })
+
+  it('does not present discovery while access is loading or failed', async () => {
+    const { wrapper, store } = mountOverview()
+    store.accessLoaded = false
+    store.systemMapsEnabled = true
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="dashboard-system-discover"]').exists()).toBe(false)
+
+    store.accessLoaded = true
+    store.error = 'access failed'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="dashboard-system-discover"]').exists()).toBe(false)
+  })
+
+  it('discovers and routes to the created draft for internal operators', async () => {
+    const { wrapper, store } = mountOverview()
+    store.accessLoaded = true
+    store.systemMapsEnabled = true
     const discover = vi.spyOn(store, 'discover').mockResolvedValue({ draft_map_id: 'map-9' } as never)
     mockPush.mockResolvedValue(undefined)
+    await wrapper.vm.$nextTick()
 
-    const button = wrapper.get('[data-testid="dashboard-system-discover"]')
-    expect(button.attributes('disabled')).toBeUndefined()
-    await button.trigger('click')
-    await flushPromises()
+    await wrapper.get('[data-testid="dashboard-system-discover"]').trigger('click')
 
     expect(discover).toHaveBeenCalledTimes(1)
     expect(mockPush).toHaveBeenCalledWith('/system-maps/map-9?discovery=1')
-    expect(wrapper.get('[data-testid="system-map-draft-review"]').text()).toContain('unpublished draft')
   })
 
-  it('surfaces a discovery failure and leaves the control enabled for a retry', async () => {
+  it('surfaces a discovery failure inline and re-enables the button', async () => {
     const { wrapper, store } = mountOverview()
-    vi.spyOn(store, 'discover').mockRejectedValue(new Error('inventory unavailable'))
-    mockPush.mockResolvedValue(undefined)
+    store.accessLoaded = true
+    store.systemMapsEnabled = true
+    const discover = vi.spyOn(store, 'discover').mockRejectedValue(new Error('discovery failed'))
+    await wrapper.vm.$nextTick()
 
     await wrapper.get('[data-testid="dashboard-system-discover"]').trigger('click')
-    await flushPromises()
 
-    expect(wrapper.get('[role="alert"]').text()).toContain('inventory unavailable')
-    expect(wrapper.get('[data-testid="dashboard-system-discover"]').attributes('disabled')).toBeUndefined()
-    expect(mockPush).not.toHaveBeenCalled()
-  })
-
-  it('falls back to the localized message when discovery rejects with a non-Error value', async () => {
-    const { wrapper, store } = mountOverview()
-    vi.spyOn(store, 'discover').mockRejectedValue('inventory unavailable')
-    mockPush.mockResolvedValue(undefined)
-
-    await wrapper.get('[data-testid="dashboard-system-discover"]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.get('[role="alert"]').text()).toContain(
-      'Could not discover your system. Try again from System Maps.',
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="dashboard-system-discover-error"]').exists()).toBe(true),
     )
+    expect(wrapper.get('[data-testid="dashboard-system-discover-error"]').text()).toContain(
+      'Could not discover your system',
+    )
+    expect(discover).toHaveBeenCalledTimes(1)
+    // The button is usable again so the operator can retry.
+    expect(wrapper.get('[data-testid="dashboard-system-discover"]').attributes('disabled')).toBeUndefined()
+    // A failed discovery must not navigate away from the dashboard.
     expect(mockPush).not.toHaveBeenCalled()
   })
 
-  it('clears a discovery failure when the operator dismisses it', async () => {
+  it('dismisses the inline discovery error on request', async () => {
     const { wrapper, store } = mountOverview()
-    vi.spyOn(store, 'discover').mockRejectedValue(new Error('inventory unavailable'))
-    mockPush.mockResolvedValue(undefined)
+    store.accessLoaded = true
+    store.systemMapsEnabled = true
+    vi.spyOn(store, 'discover').mockRejectedValue(new Error('discovery failed'))
+    await wrapper.vm.$nextTick()
 
     await wrapper.get('[data-testid="dashboard-system-discover"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="dashboard-system-discover-error"]').exists()).toBe(true),
+    )
 
     await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
 
-    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dashboard-system-discover-error"]').exists()).toBe(false)
   })
 
-  it('ignores a second click while a discovery request is already in flight', async () => {
+  it('ignores a second discovery click while the first is still in flight', async () => {
     const { wrapper, store } = mountOverview()
-    let resolveDiscover: (value: never) => void = () => {}
+    store.accessLoaded = true
+    store.systemMapsEnabled = true
+    let resolveDiscover: (value: unknown) => void = () => {}
     const discover = vi.spyOn(store, 'discover').mockReturnValue(
-      new Promise((resolve) => { resolveDiscover = resolve as (value: never) => void }) as never,
+      new Promise((resolve) => {
+        resolveDiscover = resolve
+      }) as never,
     )
     mockPush.mockResolvedValue(undefined)
+    await wrapper.vm.$nextTick()
 
     const button = wrapper.get('[data-testid="dashboard-system-discover"]')
-    await button.trigger('click')
-    button.element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    resolveDiscover({ draft_map_id: 'map-9' } as never)
-    await flushPromises()
+    // Both clicks dispatch synchronously, before the first click's load state
+    // has re-rendered — the guard must reject the duplicate.
+    await Promise.all([button.trigger('click'), button.trigger('click')])
 
     expect(discover).toHaveBeenCalledTimes(1)
-    expect(mockPush).toHaveBeenCalledWith('/system-maps/map-9?discovery=1')
+
+    resolveDiscover({ draft_map_id: 'map-1' })
+    await vi.waitFor(() => expect(mockPush).toHaveBeenCalledWith('/system-maps/map-1?discovery=1'))
   })
 
   it('renders observed metrics with interpolated window, rates and localized health', async () => {
@@ -181,15 +262,55 @@ describe('DashboardSystemOverview', () => {
       'Observed over the last 7 days',
     )
     const nodes = wrapper.findAll('[data-testid="system-map-node"]')
-    expect(nodes).toHaveLength(2)
+    expect(nodes).toHaveLength(1)
     expect(nodes[0].text()).toContain('Degraded')
     expect(nodes[0].text()).toContain('34%')
     expect(nodes[0].text()).toContain('50%')
     expect(nodes[0].text()).toContain('Build')
-    // Unobserved values stay n/a rather than being rendered as zero.
-    expect(nodes[1].text()).toContain('Unknown')
-    expect(nodes[1].text()).toContain('n/a')
+    // Nodes with no observed metrics are omitted instead of presenting a grid of
+    // unknown values; the card shows an explicit empty state when all are absent.
     expect(wrapper.find('[data-testid="system-map-draft-review"]').exists()).toBe(false)
+  })
+
+  it('renders n/a for an observed node whose individual metrics are absent', async () => {
+    const { wrapper, store } = mountOverview()
+    store.overview = {
+      ...overview,
+      nodes: [
+        {
+          ...overview.nodes[0],
+          node_key: 'node-unmeasured',
+          display_name: 'Healthy but unmeasured',
+          health: 'healthy',
+          queue_depth: null,
+          throughput_per_min: null,
+          failure_rate: null,
+          telemetry_coverage: null,
+        },
+      ],
+    } as never
+    store.overviewLoading = false
+    store.overviewError = null
+    store.overviewEmpty = false
+    await wrapper.vm.$nextTick()
+
+    const node = wrapper.get('[data-testid="system-map-node"]')
+    expect(node.text()).toContain('Healthy but unmeasured')
+    // Each absent metric renders the shared n/a fallback rather than a blank grid.
+    expect(node.text().match(/n\/a/g)).toHaveLength(4)
+  })
+
+  it('shows the no-observed empty state when every node has no measured activity', async () => {
+    const { wrapper, store } = mountOverview()
+    store.overview = { ...overview, nodes: [overview.nodes[1]] } as never
+    store.overviewLoading = false
+    store.overviewError = null
+    store.overviewEmpty = false
+    await wrapper.vm.$nextTick()
+
+    const empty = wrapper.get('[data-testid="system-map-overview-empty"]')
+    expect(empty.text()).toContain('No observed activity yet')
+    expect(wrapper.find('[data-testid="system-map-overview-metrics"]').exists()).toBe(false)
   })
 
   it('renders the loading state first', async () => {
@@ -212,6 +333,18 @@ describe('DashboardSystemOverview', () => {
     expect(error.attributes('aria-live')).toBe('assertive')
     // The shared ErrorAlert carries the retry affordance into this view.
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-map-overview-empty"]').exists()).toBe(false)
+  })
+
+  it('renders the unavailable state without a retry on a 402 feature_required', async () => {
+    const { wrapper, store } = mountOverview()
+    store.overviewLoading = false
+    store.overviewUnavailable = true
+    await wrapper.vm.$nextTick()
+
+    const unavailable = wrapper.get('[data-testid="system-map-overview-error"]')
+    expect(unavailable.text()).toContain('System Maps is not available on your plan')
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-overview-empty"]').exists()).toBe(false)
   })
 
@@ -275,6 +408,18 @@ describe('DashboardSystemOverview', () => {
     expect(empty.classes()).toContain('card')
     expect(wrapper.find('[data-testid="system-map-overview-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-overview-metrics"]').exists()).toBe(false)
+  })
+
+  it('persists the collapse state and exposes the button state', async () => {
+    localStorage.removeItem('dashboard-system-overview-collapsed')
+    const { wrapper } = mountOverview()
+    const toggle = wrapper.get('[data-testid="system-map-overview-toggle"]')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+
+    await toggle.trigger('click')
+
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    expect(localStorage.getItem('dashboard-system-overview-collapsed')).toBe('true')
   })
 
   it('renders through the shared SectionCard without a live region', () => {

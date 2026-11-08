@@ -62,14 +62,14 @@ refusing to create new runs once usage reaches `DB_CAPACITY_HARD_STOP_PCT`.
 
 `DB_CAPACITY_SOURCE` selects the detection strategy:
 
-| Value | Behaviour |
+| Value | Behavior |
 |-------|-----------|
 | `auto` (default) | Tries `env`, then `filesystem`, then `platform`; uses the first source that resolves |
-| `env` | Uses `DB_CAPACITY_BYTES` only. The pre-auto-detection behaviour, kept as an escape hatch |
+| `env` | Uses `DB_CAPACITY_BYTES` only. The pre-auto-detection behavior, kept as an escape hatch |
 | `filesystem` | Measures the filesystem at `DB_CAPACITY_PATH` only |
 | `disabled` | Resolves nothing at all, even when `DB_CAPACITY_BYTES` is set |
 
-An unrecognised value falls back to `auto`.
+An unrecognized value falls back to `auto`.
 
 - **`env`** uses `DB_CAPACITY_BYTES` as the capacity and the measured database size as
   the numerator.
@@ -99,7 +99,7 @@ Today one provider is implemented - **Fly** (the Machines API volumes endpoint,
 
 - `DB_CAPACITY_PLATFORM_PROVIDER` selects the probe. `auto` (the default) builds it
   when its config is complete and is a no-op otherwise; `fly` is the same, stated
-  explicitly; `none` disables it. An unrecognised value disables it (with a warning)
+  explicitly; `none` disables it. An unrecognized value disables it (with a warning)
   rather than guessing a provider.
 - `DB_CAPACITY_FLY_APP` (required) names the **Fly app whose volume holds the Postgres
   data directory** - not the app serving the UI. `DB_CAPACITY_FLY_VOLUME` is optional;
@@ -130,7 +130,7 @@ arms the hard-stop. The check is scoped to **auto-detected** sources only - an e
 `DB_CAPACITY_BYTES` (`env`) is the operator asserting the capacity and is never
 second-guessed, so a deliberately-small override still enforces.
 
-#### Failure behaviour
+#### Failure behavior
 
 Detection failure never **raises** - every failure fails open - but it does not always
 leave the monitor inert, because the two failure kinds differ:
@@ -177,7 +177,7 @@ See [`docs/deployment-security.md`](./deployment-security.md) for key rotation p
 Declarative `modulo apply` configs reference these vault entries by key rather
 than embedding a value: `credential_ref: <key>` (or `api_key: secretref://<key>`)
 is resolved through the `MODULO_SECRETS_BACKEND` above, under the calling
-organisation's context. A `credential_ref` that names no vault entry fails the
+organization's context. A `credential_ref` that names no vault entry fails the
 plan; a `secretref://` that cannot be resolved fails the apply (typed 422).
 See [`docs/product-map/configure/apply.md`](./product-map/configure/apply.md).
 
@@ -187,8 +187,8 @@ See [`docs/product-map/configure/apply.md`](./product-map/configure/apply.md).
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODULO_LICENSE_KEY` | No | – | Base64-encoded, Ed25519-signed JSON payload enabling Team-tier features. Verified against the configured trust anchor (`MODULO_LICENSE_PUBLIC_KEY`). Outside debug, configuring a licence key while only the built-in development key is available fails startup closed instead of silently running on Community. |
-| `MODULO_LICENSE_PUBLIC_KEY` | No | built-in development key | Ed25519 public key (hex, 64 chars) that verifies the licence signature – the production trust anchor. The default is the **development** keypair's public half, shipped so local and debug instances can exercise licensing; it is only trusted in debug and cannot verify a Farnalabs-issued production licence. Set it to the public key Farnalabs issued with your licence. |
+| `MODULO_LICENSE_KEY` | No | – | Base64-encoded, Ed25519-signed JSON payload enabling Team-tier features. Verified against the configured trust anchor (`MODULO_LICENSE_PUBLIC_KEY`). Outside debug, configuring a license key while only the built-in development key is available fails startup closed instead of silently running on Community. |
+| `MODULO_LICENSE_PUBLIC_KEY` | No | built-in development key | Ed25519 public key (hex, 64 chars) that verifies the license signature – the production trust anchor. The default is the **development** keypair's public half, shipped so local and debug instances can exercise licensing; it is only trusted in debug and cannot verify a Farnalabs-issued production license. Set it to the public key Farnalabs issued with your license. |
 | `MODULO_LICENSE_PRIVATE_KEY` | No | – | Ed25519 private key (hex) used to SIGN team license keys issued via the admin license-issue endpoint and Stripe purchase fulfilment. Empty disables issuance (signing fails closed). |
 
 ---
@@ -196,7 +196,7 @@ See [`docs/product-map/configure/apply.md`](./product-map/configure/apply.md).
 ## Evidence Signing
 
 Signs the offline-verifiable evidence export: an Ed25519 signature over the
-canonical manifest, so a third party holding only the artefact and the
+canonical manifest, so a third party holding only the artifact and the
 pre-published public key can verify authorship and re-derive the embedded
 audit chain without contacting Modulo. See
 [`docs/offline-verifiable-evidence.md`](./offline-verifiable-evidence.md).
@@ -229,7 +229,7 @@ events) issues exactly one license.
 
 ## Demo Mode
 
-Optional visitor demo experience (FAR-535): navigating to `/demo` logs the visitor in as a known read-only demo user in a dedicated `Demo` organisation with benign sample data. All three variables must be set, otherwise the endpoint answers 404 and nothing is seeded.
+Optional visitor demo experience (FAR-535): navigating to `/demo` logs the visitor in as a known read-only demo user in a dedicated `Demo` organization with benign sample data. All three variables must be set, otherwise the endpoint answers 404 and nothing is seeded.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -238,9 +238,9 @@ Optional visitor demo experience (FAR-535): navigating to `/demo` logs the visit
 | `MODULO_DEMO_PASSWORD` | Yes (for demo) | – | Password of the demo user. The seed re-stamps the stored hash to match on every boot, so rotating the secret takes effect on restart. |
 | `MODULO_DEMO_TOKEN_MINUTES` | No | `120` | Demo access-token TTL in minutes. The demo session carries no refresh token and dies with this token. |
 
-Point `MODULO_DEMO_USER` at a **dedicated** account: if it names an existing account, boot re-stamps that account's password to the demo password. Regardless, the demo endpoint only ever mints a session scoped to the `demo` organisation with the `viewer` role; an authenticating account without a viewer membership in the demo org (e.g. a privileged account) answers the same 404 as the kill switch.
+Point `MODULO_DEMO_USER` at a **dedicated** account: if it names an existing account, boot re-stamps that account's password to the demo password. Regardless, the demo endpoint only ever mints a session scoped to the `demo` organization with the `viewer` role; an authenticating account without a viewer membership in the demo org (e.g. a privileged account) answers the same 404 as the kill switch.
 
-The demo user gets a `viewer`-role membership (read-only; `is_system_admin` is forced off) and the seed is idempotent: it creates the `demo` organisation, the user, and benign sample data at boot, or immediately via `python -m modulo.db.seed_demo`: five schemas, six agents, four pipelines with editor-valid graphs (UUID node ids, first-class edges), including the Demo Governance Pipeline (Implement → PR risk level → Human review when risk > 0.50 → Open PR, with a conditional edge straight to Open PR when risk ≤ 0.50); twenty synthetic runs carrying per-node execution traces and costs, three triggers (including "Ticket ready" on the governance pipeline) and other benign sample data. Lifecycle Maps are internal-only and withdrawn from Alpha; they are not ordinary demo data and are not part of the public demo seed. Every boot converges existing demo rows to the current seed, so an upgrade repairs demo data seeded by an older release. Rate limiting: 10 requests/hour per IP on the demo endpoint.
+The demo user gets a `viewer`-role membership (read-only; `is_system_admin` is forced off) and the seed is idempotent: it creates the `demo` organization, the user, and benign sample data at boot, or immediately via `python -m modulo.db.seed_demo`: five schemas, six agents, four pipelines with editor-valid graphs (UUID node ids, first-class edges), including the Demo Governance Pipeline (Implement → PR risk level → Human review when risk > 0.50 → Open PR, with a conditional edge straight to Open PR when risk ≤ 0.50); twenty synthetic runs carrying per-node execution traces and costs, three triggers (including "Ticket ready" on the governance pipeline), a published default System Map ("Demo Delivery System") with pipeline-backed nodes, intake and improvement loops, and other benign sample data. Lifecycle Maps are internal-only and withdrawn from Alpha; they are not ordinary demo data and are not part of the public demo seed. Every boot converges existing demo rows to the current seed, so an upgrade repairs demo data seeded by an older release. Rate limiting: 10 requests/hour per IP on the demo endpoint.
 
 ---
 
@@ -366,11 +366,11 @@ Client sync for the hosted community library of pipeline primitives.
 | `SAQ_RUN_RETRIES` | No | `5` | SAQ retries per run job – `N` is N total attempts (N-1 retries) |
 | `SAQ_RETRY_DELAY` | No | `60` | Fixed retry delay in seconds (`retry_backoff=False`) |
 | `SAQ_RUN_TIMEOUT` | No | `7200` | Per-run execution ceiling; the job must reach a terminal state within this budget (seconds) |
-| `SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES` | No | unset (derived: `max(SAQ_RUN_TIMEOUT // 60, 120) + 15`, i.e. 135 at the shipped 7200s) | Age bound (minutes) past `runs.started_at` at which a `dispatcher='saq'` run with ZERO node progress is terminalised `executor_stalled` - shared by `dispatcher_reconcile`'s age-bound nodeless router / mid-graph gate and the independent `stale_run_recovery` zero-progress branch (FAR-1715). Unset keeps the historical derivation (default behaviour unchanged). An explicit pin is validated at Settings load against the worst-case legitimate window of every consumer (the `SAQ_SETUP_GRACE_SECONDS` + max-node-timeout pre-node window, and the mid-graph gate's max-legitimate-run-duration floor) and is refused at load if too low |
+| `SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES` | No | unset (derived: `max(SAQ_RUN_TIMEOUT // 60, 120) + 15`, i.e. 135 at the shipped 7200s) | Age bound (minutes) past `runs.started_at` at which a `dispatcher='saq'` run with ZERO node progress is terminalized `executor_stalled` - shared by `dispatcher_reconcile`'s age-bound nodeless router / mid-graph gate and the independent `stale_run_recovery` zero-progress branch (FAR-1715). Unset keeps the historical derivation (default behavior unchanged). An explicit pin is validated at Settings load against the worst-case legitimate window of every consumer (the `SAQ_SETUP_GRACE_SECONDS` + max-node-timeout pre-node window, and the mid-graph gate's max-legitimate-run-duration floor) and is refused at load if too low |
 | `SAQ_RUN_CLAIM_CAP` | No | `20` | Per-claim cap on SAQ claim attempts for `dispatcher='saq'` runs |
 | `SAQ_SETUP_GRACE_SECONDS` | No | `600` | Zombie-run protection: a run must dispatch at least one node within this window or the watchdog fails it |
 | `NODELESS_IN_FLIGHT_FLOOR_SECONDS` | No | unset (derived: `SAQ_SETUP_GRACE_SECONDS + 3300`, i.e. 3900s at the shipped defaults) | How long a LIVE `sandbox_dispatch_state` marker shields a run from the nodeless backstop, measured from the per-attempt anchor `max(runs.started_at, runs.dispatched_at)`. Unset keeps the derivation, so raising `SAQ_SETUP_GRACE_SECONDS` widens the floor with it. An explicit value (min 60) must still cover grace + the max node timeout or Settings refuses to load - a shorter floor would let the backstop claim a live attempt |
-| `NODE_STARTED_STALE_SECONDS` | No | `7200` | Marker-age bound for reclaiming a node-STARTED (`dispatch_phase='first_node_dispatched'`) `running` run: once its dispatch marker is older than this AND its `heartbeat_at` has gone stale, the run is terminalised `failed` / `worker_lost` and never re-dispatched, freeing the leaked runner slot. Both conditions are required, so a live long-running node is never reclaimed. Min 1, max 604800, and a pin below `SAQ_SETUP_GRACE_SECONDS` + 3300 is refused at load because it would kill a live node mid-execution |
+| `NODE_STARTED_STALE_SECONDS` | No | `7200` | Marker-age bound for reclaiming a node-STARTED (`dispatch_phase='first_node_dispatched'`) `running` run: once its dispatch marker is older than this AND its `heartbeat_at` has gone stale, the run is terminalized `failed` / `worker_lost` and never re-dispatched, freeing the leaked runner slot. Both conditions are required, so a live long-running node is never reclaimed. Min 1, max 604800, and a pin below `SAQ_SETUP_GRACE_SECONDS` + 3300 is refused at load because it would kill a live node mid-execution |
 | `SAQ_CLAIMED_NODELESS_MINUTES` | No | `35` | Secondary zombie net: a run still `running` with a fresh heartbeat but zero checkpoints after this many minutes is failed. Reduced from `45` by FAR-199 (bounds wedged-fleet accumulation). This value is the **floor** only: each pipeline's effective window is derived from its longest node `timeout_seconds` as `ceil(max_node_timeout / 60) + 5` minutes, clamped to `[SAQ_CLAIMED_NODELESS_MINUTES, 1440]` (FAR-1740), so a pipeline whose max node timeout is 3300s gets a 60-minute window and a slow-but-healthy first node is never false-failed |
 | `SAQ_NODELESS_EARLY_DETECT_MINUTES` | No | `15` | Early re-dispatch window (minutes) for a claimed-but-nodeless run whose heartbeat is still fresh: catches a wedged executor before the full nodeless window elapses (min 5, max 120). Effective only when it is **below** the effective nodeless window (see `SAQ_CLAIMED_NODELESS_MINUTES`); at or above that value the early-detect branch is disabled with a load-time warning and the run waits the full window. FAR-1740: the branch is also disabled for any pipeline whose derived window was widened above the `SAQ_CLAIMED_NODELESS_MINUTES` floor, since a node may still be legitimately running inside the early window. Zero nodes have executed, so nothing double-executes |
 | `SAQ_JOB_HEARTBEAT` | No | `300` | SAQ job heartbeat knob (per-job `heartbeat`) |
@@ -392,10 +392,10 @@ Client sync for the hosted community library of pipeline primitives.
 | `HEARTBEAT_STALE_RETRY_BUDGET` | No | `3` | Heartbeat-stale auto-retry budget for the slot-reconcile sweep: a `running` run swept as heartbeat-stale is reset to `pending` for re-dispatch while its `claim_count` is ≤ this budget; only a claim beyond it terminal-fails (raised 1 → 3 by FAR-812 to absorb a transient dispatch wobble in a zero-node run) |
 | `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` | No | `3600` | Max age (seconds) for pending runs before trigger backpressure kicks in |
 | `DISPATCHER_RECONCILE_BUDGET_SECONDS` | No | `95` | Per-tick time budget (seconds) for the dispatcher reconcile loop (min 10, max 119) |
-| `DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS` | No | `30` | Per-organisation time bound (seconds) inside the dispatcher reconcile loop (min 1, max 119): each org's reconcile pass is bounded by this many seconds, clamped to the tick's remaining budget minus a 15s tail reserve for facts/sweeps. There are two distinct expiry paths. **Row-loop deferral** (FAR-1643, the expected path): once less than an adaptive margin - `min(5s, max(0.25s, slice/2))`, so a 1s slice still leaves room for a row - remains, the per-row loop stops STARTING rows, counts the unstarted rows in the distinct `row_loop_time_deferred` tick counter, and returns normally; the rows and terminalizers already repaired COMMIT, the remainder drains on the next 60s tick, and the tick stays `ok`. **Hard backstop**: the caller's `asyncio.timeout` still fires when a SINGLE row overruns the slice on its own - the org's transaction rolls back, a truthful `status='timeout'` / `org_timeouts` marker names the org, and the tick continues with the remaining orgs |
+| `DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS` | No | `30` | Per-organization time bound (seconds) inside the dispatcher reconcile loop (min 1, max 119): each org's reconcile pass is bounded by this many seconds, clamped to the tick's remaining budget minus a 15s tail reserve for facts/sweeps. There are two distinct expiry paths. **Row-loop deferral** (FAR-1643, the expected path): once less than an adaptive margin - `min(5s, max(0.25s, slice/2))`, so a 1s slice still leaves room for a row - remains, the per-row loop stops STARTING rows, counts the unstarted rows in the distinct `row_loop_time_deferred` tick counter, and returns normally; the rows and terminalizers already repaired COMMIT, the remainder drains on the next 60s tick, and the tick stays `ok`. **Hard backstop**: the caller's `asyncio.timeout` still fires when a SINGLE row overruns the slice on its own - the org's transaction rolls back, a truthful `status='timeout'` / `org_timeouts` marker names the org, and the tick continues with the remaining orgs |
 | `DISPATCHER_RECONCILE_TERMINALIZE_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile terminalizer SQL (min 1, max 1000) |
 | `DISPATCHER_RECONCILE_FACTS_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile daily-facts compensator SQL (min 1, max 1000) |
-| `DISPATCHER_RECONCILE_MAX_ROWS_PER_TICK` | No | `500` | Cross-org row budget per reconcile tick (min 50, max 10000): the TOTAL rows processed across all orgs (terminalisers + the reconcile scan) so one tick always finishes inside `DISPATCHER_RECONCILE_BUDGET_SECONDS`; overflow drains on subsequent ticks |
+| `DISPATCHER_RECONCILE_MAX_ROWS_PER_TICK` | No | `500` | Cross-org row budget per reconcile tick (min 50, max 10000): the TOTAL rows processed across all orgs (terminalizers + the reconcile scan) so one tick always finishes inside `DISPATCHER_RECONCILE_BUDGET_SECONDS`; overflow drains on subsequent ticks |
 | `DISPATCHER_RECONCILE_NODE_OUTPUT_PROGRESS_SECONDS` | No | `900` | Recency window (min 60, max 86400) in which a `run_node_outputs` write counts as live progress for the mid-graph age gate (FAR-2122): a node output inside this window is durable evidence the executor is still advancing, so the age gate does not stamp the run `no_progress`. Bound as a parameter into the age-gate SQL, not a literal, and threaded through the reconcile tuning |
 | `HITL_PARK_GRACE_SECONDS` | No | `86400` | Park-on-expiry grace (min 60, max 604800): seconds after the HITL review deadline before the run moves `awaiting_human` → `hitl_parked` (non-terminal, releases pipeline capacity; the gate stays open and claimable, park is not decide). Since FAR-1257 the park sweep anchors on the review deadline (`hitl_claims.terminalize_at`) plus one full park-grace window, floored at a 300s margin, so the terminalizing (cancel) sweep always acts first; legacy unstamped rows keep the `expires_at + grace` arithmetic |
 
@@ -432,7 +432,7 @@ mutation transaction, including the clone's separate-connection step-(a)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MUTATION_ROW_LOCK_TIMEOUT_MS` | No | `5000` | Lock timeout in milliseconds bounding row-lock waits, applied transaction-scoped (`SET LOCAL lock_timeout`) inside each transaction before its first lock - so it also bounds every SUBSEQUENT lock wait that transaction takes. Two consumers. **Pipeline mutation (REST)**: the whole pipeline-mutation transaction (graph save, update, delete, clone, folder move, node conversion), not only the mutation row lock - including the edge/index and FK locks of the graph write itself, and the per-organisation `audit_chain_heads` row lock taken by `append_audit_event` (contended by any concurrent audit append in the same org, not just by another pipeline mutation). Any of those waits expiring raises SQLSTATE 55P03, which degrades to HTTP 409 `Timed out waiting for a lock on this resource; another change is in progress. Re-issue the request once the other change completes.` - the mutation did NOT apply and is safe to re-issue - rather than an unbounded pooled-connection wait. **Dispatch path (FAR-1584)**: every write the dispatcher makes on the hot `runs` row (`dispatched_at`, `dispatcher='saq'` + `saq_job_id`, `enqueue_failed_at`, and the admission transaction's organisation-capacity demote) waits at most this long instead of silently past the Fly HAProxy 30-minute session window (FAR-1524). Each 55P03 is logged as a warning - never an error response - and the outcome is the one its row state makes truthful: the `dispatched_at` write and the admission transaction roll back to `pending` + `dispatched_at IS NULL`, outcome `deferred`, so `dispatcher_reconcile` re-dispatches the run on its next tick; the `dispatcher='saq'` + `saq_job_id` record fires only AFTER the job is already on the queue, so the bookkeeping is skipped, outcome stays `enqueued`, and reconcile's zombie branch re-covers the row (the atomic claim keeps execution at-most-once); the `enqueue_failed_at` marker reports an enqueue that really did fail, so outcome stays `enqueue_failed` with or without the marker (an unmarked row matches the zombie branch, a marked one the heartbeat-gated branch - re-dispatched either way). Postgres only: the bound is dialect-gated and a no-op on sqlite/mariadb/mysql. Min 100, max 30000 (30 s - still 60x below the HAProxy window). |
+| `MUTATION_ROW_LOCK_TIMEOUT_MS` | No | `5000` | Lock timeout in milliseconds bounding row-lock waits, applied transaction-scoped (`SET LOCAL lock_timeout`) inside each transaction before its first lock - so it also bounds every SUBSEQUENT lock wait that transaction takes. Two consumers. **Pipeline mutation (REST)**: the whole pipeline-mutation transaction (graph save, update, delete, clone, folder move, node conversion), not only the mutation row lock - including the edge/index and FK locks of the graph write itself, and the per-organization `audit_chain_heads` row lock taken by `append_audit_event` (contended by any concurrent audit append in the same org, not just by another pipeline mutation). Any of those waits expiring raises SQLSTATE 55P03, which degrades to HTTP 409 `Timed out waiting for a lock on this resource; another change is in progress. Re-issue the request once the other change completes.` - the mutation did NOT apply and is safe to re-issue - rather than an unbounded pooled-connection wait. **Dispatch path (FAR-1584)**: every write the dispatcher makes on the hot `runs` row (`dispatched_at`, `dispatcher='saq'` + `saq_job_id`, `enqueue_failed_at`, and the admission transaction's organization-capacity demote) waits at most this long instead of silently past the Fly HAProxy 30-minute session window (FAR-1524). Each 55P03 is logged as a warning - never an error response - and the outcome is the one its row state makes truthful: the `dispatched_at` write and the admission transaction roll back to `pending` + `dispatched_at IS NULL`, outcome `deferred`, so `dispatcher_reconcile` re-dispatches the run on its next tick; the `dispatcher='saq'` + `saq_job_id` record fires only AFTER the job is already on the queue, so the bookkeeping is skipped, outcome stays `enqueued`, and reconcile's zombie branch re-covers the row (the atomic claim keeps execution at-most-once); the `enqueue_failed_at` marker reports an enqueue that really did fail, so outcome stays `enqueue_failed` with or without the marker (an unmarked row matches the zombie branch, a marked one the heartbeat-gated branch - re-dispatched either way). Postgres only: the bound is dialect-gated and a no-op on sqlite/mariadb/mysql. Min 100, max 30000 (30 s - still 60x below the HAProxy window). |
 
 ---
 
@@ -525,8 +525,8 @@ LOAD.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODULO_WORK_ITEM_REFS_CAP` | No | `100` | Unified cap (clamped to `[1, 100000]`) on work-item references carried through the refs pipeline: self-report normalisation, the finalise merge, and node-input injection all read this one value. When more refs are supplied, drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. A pipeline declaring `work_item_refs_required: true` in its `run_context_defaults` refuses a delivery that supplied no refs: HTTP 422 with a `work_item_refs_required` error on the MCP and webhook paths, and a 422 with a prose detail (`This pipeline requires work_item_refs but none were supplied`) on the REST path. |
-| `MODULO_AGENT_MINT_BUDGET_LIMIT` | No | `500` | Maximum agent-sourced work items that may mint journey rows per organisation in one rolling budget window. Read per call, so a change applies without a restart. Only consulted when the org setting `work_item_agent_minting_enabled` is on. Malformed or out-of-range values fall back to the default; the budget guard itself fails open (an error allows the mint and logs) so a cost cap never blocks run finalisation. |
+| `MODULO_WORK_ITEM_REFS_CAP` | No | `100` | Unified cap (clamped to `[1, 100000]`) on work-item references carried through the refs pipeline: self-report normalization, the finalize merge, and node-input injection all read this one value. When more refs are supplied, drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. A pipeline declaring `work_item_refs_required: true` in its `run_context_defaults` refuses a delivery that supplied no refs: HTTP 422 with a `work_item_refs_required` error on the MCP and webhook paths, and a 422 with a prose detail (`This pipeline requires work_item_refs but none were supplied`) on the REST path. |
+| `MODULO_AGENT_MINT_BUDGET_LIMIT` | No | `500` | Maximum agent-sourced work items that may mint journey rows per organization in one rolling budget window. Read per call, so a change applies without a restart. Only consulted when the org setting `work_item_agent_minting_enabled` is on. Malformed or out-of-range values fall back to the default; the budget guard itself fails open (an error allows the mint and logs) so a cost cap never blocks run finalization. |
 | `MODULO_AGENT_MINT_BUDGET_WINDOW_MINUTES` | No | `60` | Length in minutes of the rolling agent-mint budget window. Read per call alongside `MODULO_AGENT_MINT_BUDGET_LIMIT`; malformed or out-of-range values fall back to the default. |
 
 ---
@@ -539,15 +539,15 @@ LOAD.
 | `MODULO_AGENT_FAILURE_ELEVATION_ENABLED` | No | `true` | When a sandbox node reports agent_status=failed, terminalize the run as failed |
 | `MODULO_IDEMPOTENCY_GATE_ENABLED` | No | `true` | Enable sandbox idempotency gate (re-run skip for single sandbox nodes) |
 | `MODULO_CONNECTOR_WRITE_GATE_ENABLED` | No | `false` | Enable connector-write idempotency gate (skip byte-identical re-executed writes) |
-| `MODULO_SEED_DEMO_ORGS` | No | `false` | Seed demo organisations with signed licenses on boot (gated framework) |
+| `MODULO_SEED_DEMO_ORGS` | No | `false` | Seed demo organizations with signed licenses on boot (gated framework) |
 | `MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL` | No | `""` | Endpoint URL for opt-in aggregate product analytics. Empty disables. |
 | `MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET` | No | `""` | Instance secret for HMAC signing product analytics. Empty disables. |
-| `MODULO_PRODUCT_ANALYTICS_ENABLED` | No | unset | Explicit instance-level product-analytics switch (`1`/`true`/`yes` = ON; `false`/`0`/`no` = OFF; a set-but-blank value reads OFF). `core/product_analytics/consent.resolve_instance_analytics_switch` resolves it in this order, first match wins: (1) the stored `system_config.product_analytics_enabled` value, written or cleared by a system admin via `PUT /api/v1/product-analytics/instance-switch` (or the switch on `/admin/product-analytics`); (2) this variable, honoured only when no stored value exists; (3) the installed licence's `product_analytics_required` claim, which sets the default ON; (4) otherwise OFF. An explicit operator value always wins – including OFF over a licence that requires analytics – because the licence claim is a partner expectation (a contractual default), never a control. `GET /api/v1/product-analytics/transparency` reports the effective switch and its source (`operator` / `environment` / `licence` / `default`), so an operator can always see why analytics is on and turn it off. Analytics never changes an organisation's plan or tier. `MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL` and `MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET` are the transport settings alongside this switch: either being empty disables delivery. |
+| `MODULO_PRODUCT_ANALYTICS_ENABLED` | No | unset | Explicit instance-level product-analytics switch (`1`/`true`/`yes` = ON; `false`/`0`/`no` = OFF; a set-but-blank value reads OFF). `core/product_analytics/consent.resolve_instance_analytics_switch` resolves it in this order, first match wins: (1) the stored `system_config.product_analytics_enabled` value, written or cleared by a system admin via `PUT /api/v1/product-analytics/instance-switch` (or the switch on `/admin/product-analytics`); (2) this variable, honored only when no stored value exists; (3) the installed license's `product_analytics_required` claim, which sets the default ON; (4) otherwise OFF. An explicit operator value always wins – including OFF over a license that requires analytics – because the license claim is a partner expectation (a contractual default), never a control. `GET /api/v1/product-analytics/transparency` reports the effective switch and its source (`operator` / `environment` / `licence` / `default`), so an operator can always see why analytics is on and turn it off. Analytics never changes an organization's plan or tier. `MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL` and `MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET` are the transport settings alongside this switch: either being empty disables delivery. |
 | `MODULO_MONITOR_DOMAINS` | No | `""` | Space-separated CSP connect-src expressions (e.g. custom Grafana Faro collectors) |
 | `MODULO_ARTIFACTS_ENABLED` | No | `true` | Enable pipeline artifact storage |
 | `MODULO_ARTIFACTS_DIR` | No | `""` | Base directory for artifact files. Empty defaults to `<backend>/.data/artifacts` resolved by the store factory. |
-| `MODULO_WORKSPACE_INPUTS_ENABLED` | No | `false` | Managed workspace inputs (MWI) kill-switch. When OFF (default), a `sandbox_agent` node that declares `workspace_inputs` short-circuits with `sandbox.workspace_inputs_disabled` and provisions nothing; existing sandbox behaviour is unchanged. Operators enable it explicitly once MWI is ready for production use |
-| `MODULO_MULTI_ORG_ENABLED` | No | `false` | Multi-organisation mode. OFF (the single-org default for self-hosted, ADR 005) blocks org creation, rejects org-slug login and makes the login-context endpoint always report single-org. ON enables multi-org behaviour and the org-slug login path. A multi-org deployment also refuses a globally scoped secrets backend (e.g. Vault) for credential references rather than risk a cross-org read |
+| `MODULO_WORKSPACE_INPUTS_ENABLED` | No | `false` | Managed workspace inputs (MWI) kill-switch. When OFF (default), a `sandbox_agent` node that declares `workspace_inputs` short-circuits with `sandbox.workspace_inputs_disabled` and provisions nothing; existing sandbox behavior is unchanged. Operators enable it explicitly once MWI is ready for production use |
+| `MODULO_MULTI_ORG_ENABLED` | No | `false` | Multi-organization mode. OFF (the single-org default for self-hosted, ADR 005) blocks org creation, rejects org-slug login and makes the login-context endpoint always report single-org. ON enables multi-org behavior and the org-slug login path. A multi-org deployment also refuses a globally scoped secrets backend (e.g. Vault) for credential references rather than risk a cross-org read |
 | `MODULO_SCHEMA_VALIDATOR_MODE` | No | `lenient` | Schema-validator strictness, one of `lenient` or `strict`; any other value resolves to `lenient`. Read directly from the environment as a **first-boot seed only**: once the effective setting exists in the DB (per-org `settings_json`, then the instance-wide `system_config` row) that value wins. See [`docs/configuration-precedence.md`](./configuration-precedence.md) |
 
 ---
@@ -606,9 +606,9 @@ bounded index scan rather than a scan of `runs`.
 
 ---
 
-## Organisation Settings (`settings_json`)
+## Organization Settings (`settings_json`)
 
-Per-organisation configuration is stored in the `settings_json` column of the
+Per-organization configuration is stored in the `settings_json` column of the
 `organisations` table (not environment variables). Configured by an org admin
 via the admin API. Unknown/absent keys default to safe values.
 
@@ -616,8 +616,8 @@ via the admin API. Unknown/absent keys default to safe values.
 |-----|------|---------|-------------|
 | `sandbox_concurrency_limit` | `int` (0–100) or `null` | `4` when the key is absent | Max concurrently `running` sandbox-agent runs for the org across all pipelines. An absent key resolves to the Docker-tier default of `4`, not unlimited; only an explicit `null` means unlimited. `0` is meaningful (deny-all), so the clamp range is `[0, 100]`. Runs beyond the cap stay `pending` with `error_code='org_capacity_limited'` and are retried by the background accelerator. Managed via `GET`/`PUT /api/v1/admin/org/sandbox-concurrency`. |
 | `run_concurrency_limit` | `int` (1–100) or `null` | `null` (unlimited) | Max concurrently executing/claimed runs for the org across ALL pipelines (sandbox-agent and otherwise). Runs dispatched while the org is at this cap are deferred back to `pending` with `error_code='org_capacity_limited'` and retried by the background accelerator. Independent of `sandbox_concurrency_limit` – both are org-wide caps, and both produce the same `org_capacity_limited` marker on deferred runs. Managed via `GET`/`PUT /api/v1/admin/org/run-concurrency`. |
-| `work_item_agent_minting_enabled` | `bool` | `false` (fail-closed) | Allow agent-sourced work-item refs to mint journey rows at run finalise. When off, agent refs are only confirmed against existing journey rows and never mint; a missing row is counted as a suppressed mint. When on, a missing row mints with `provenance='agent'` while the per-org budget (`MODULO_AGENT_MINT_BUDGET_LIMIT` / `MODULO_AGENT_MINT_BUDGET_WINDOW_MINUTES`) allows it. Any read error resolves to off. Managed via `GET`/`PUT /api/v1/admin/org/work-item-agent-minting`. |
-| `hitl_review_window_seconds` | `int` (60–604800) or `null` | `null` (instance default) | Org default HITL review window: how long a fired review may sit unclaimed/undecided before the run is terminalised `cancelled` / `hitl_review_expired`. A pipeline-level `hitl_review_window_seconds` wins over this; `null` clears the key and inherits the instance default. The terminaliser itself has no per-org opt-out and no "0 = disabled". Managed via `GET`/`PUT /api/v1/admin/org/hitl-review-window`, where an omitted field is a 422 and only an explicit `null` clears the org default |
+| `work_item_agent_minting_enabled` | `bool` | `false` (fail-closed) | Allow agent-sourced work-item refs to mint journey rows at run finalize. When off, agent refs are only confirmed against existing journey rows and never mint; a missing row is counted as a suppressed mint. When on, a missing row mints with `provenance='agent'` while the per-org budget (`MODULO_AGENT_MINT_BUDGET_LIMIT` / `MODULO_AGENT_MINT_BUDGET_WINDOW_MINUTES`) allows it. Any read error resolves to off. Managed via `GET`/`PUT /api/v1/admin/org/work-item-agent-minting`. |
+| `hitl_review_window_seconds` | `int` (60–604800) or `null` | `null` (instance default) | Org default HITL review window: how long a fired review may sit unclaimed/undecided before the run is terminalized `cancelled` / `hitl_review_expired`. A pipeline-level `hitl_review_window_seconds` wins over this; `null` clears the key and inherits the instance default. The terminalizer itself has no per-org opt-out and no "0 = disabled". Managed via `GET`/`PUT /api/v1/admin/org/hitl-review-window`, where an omitted field is a 422 and only an explicit `null` clears the org default |
 
 ---
 
@@ -741,7 +741,7 @@ Secrets backend selection: `MODULO_SECRETS_BACKEND` (default: `fernet`, options:
 
 ## Outbound Egress Guard (SSRF)
 
-Every outbound URL Modulo is given by a user or an organisation is validated
+Every outbound URL Modulo is given by a user or an organization is validated
 before a request is made: notification webhooks, SSO test connections,
 observability and error-forwarder tests, all `base_url`-bearing connectors, and
 the OpenAI-compatible model backends. Private, loopback, link-local,
@@ -752,7 +752,7 @@ cloud-metadata and CGNAT destinations are refused by default.
 | `SSRF_ALLOW_PRIVATE_RANGES` | No | – | Comma-separated CIDRs to permit as outbound targets, e.g. `127.0.0.0/8,::1/128,10.0.0.0/8` |
 | `SSRF_DNS_TIMEOUT` | No | `10` | DNS resolution timeout in seconds; a hung resolver fails closed |
 | `SSRF_RESOLVE_TTL` | No | `300` | Seconds before the pinned transport re-resolves a host, so a decommissioned or changed IP self-heals |
-| `SSRF_TRUST_PROXY` | No | `false` | Honour `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` in the pinned transport. Only enable when the proxy is the trusted egress boundary: the proxy re-resolves the target server-side, which defeats IP pinning |
+| `SSRF_TRUST_PROXY` | No | `false` | Honor `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` in the pinned transport. Only enable when the proxy is the trusted egress boundary: the proxy re-resolves the target server-side, which defeats IP pinning |
 
 Link-local (`169.254.0.0/16`, `fe80::/10`), multicast, IPv6 site-local and the
 cloud-metadata ranges are a **non-negotiable floor**: no allowlist entry can

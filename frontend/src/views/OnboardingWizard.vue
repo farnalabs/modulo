@@ -572,7 +572,7 @@ const filteredLibraryItems = computed(() => {
   }
   if (librarySearch.value) {
     const q = librarySearch.value.toLowerCase()
-    items = items.filter(i => i.name.toLowerCase().includes(q) || (i.description && i.description.toLowerCase().includes(q)))
+    items = items.filter(i => i.name.toLowerCase().includes(q) || i.description?.toLowerCase().includes(q))
   }
   return items
 })
@@ -856,17 +856,17 @@ watch(() => wizardState.pipelineDescription, () => {
 
 watch(currentStep, (step) => {
   if (step === 1 && connectors.value.length === 0 && !loadingConnectors.value) {
-    loadConnectors()
+    void loadConnectors()
   }
   if (step === 4 && libraryItems.value.length === 0 && !loadingLibrary.value) {
-    loadLibrary()
+    void loadLibrary()
   }
   if (step === 6 && !telemetryLoading.value) {
-    loadTelemetryStatus()
+    void loadTelemetryStatus()
   }
 })
 
 onMounted(() => {
-  loadConnectors()
+  void loadConnectors()
 })
 </script>

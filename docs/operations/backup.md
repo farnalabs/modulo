@@ -8,7 +8,7 @@ OpenSSL.
 
 ## Prerequisites
 
-- Python 3.12+
+- Python 3.12-3.14 (the Docker images build on 3.14)
 - `uv` (package manager)
 - `pg_dump` >= 16 (Postgres client)
 - `pg_restore` >= 16 (Postgres client, restore only)
@@ -159,9 +159,9 @@ A schema change is a migration event. Take a dump before running
 `alembic upgrade heads`, so a bad upgrade has a recovery point that does not
 depend on the migration itself.
 
-### Which tool, which artefact
+### Which tool, which artifact
 
-This page documents two backup tools. They produce different artefacts and are
+This page documents two backup tools. They produce different artifacts and are
 **not interchangeable in either direction**:
 
 | Tool | Produces | Restored by | Encrypted |
@@ -287,13 +287,13 @@ throwaway Postgres 16 it:
 
 1. runs `alembic upgrade heads` from an empty database and asserts the recorded
    revision is head;
-2. seeds an organisation, account, membership, pipeline, snapshot and run
+2. seeds an organization, account, membership, pipeline, snapshot and run
    through the ORM;
 3. creates the LangGraph checkpoint tables exactly as app startup does and seeds
    one row in each of `checkpoints`, `checkpoint_blobs` and `checkpoint_writes`,
    so the checkpoint exports and restore path are not exercised on empty
    tables;
-4. runs `modulo backup` and asserts all six artefacts were produced and that
+4. runs `modulo backup` and asserts all six artifacts were produced and that
    `database.sql` is non-empty;
 5. runs `modulo restore` into a second, empty database and asserts the seeded
    rows and all three checkpoint rows are intact;
@@ -344,7 +344,7 @@ Let Docker assign the host port and give the container a unique name: a fixed
 run leaves both held.
 
 `--database-url` overrides `$DATABASE_URL`. `--keep-databases` leaves the two
-scratch databases and the backup artefacts behind for inspection. If `pg_dump`
+scratch databases and the backup artifacts behind for inspection. If `pg_dump`
 or `psql` is missing from `PATH` the script exits non-zero naming the missing
 tool; if `SECRET_KEY` or `FERNET_KEY` is unset it prints a notice and generates
 a throwaway value for that run rather than requiring deployment secrets.

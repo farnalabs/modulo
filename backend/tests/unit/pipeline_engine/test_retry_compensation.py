@@ -595,13 +595,13 @@ def test_resolve_backoff_schedule_default_schedule_value_matches_executor_defaul
     """The fail-open defaults ARE the hardcoded executor schedule: pinning the
     jitter seam, the resolved deterministic component reproduces the legacy
     exponential exactly."""
-    from modulo.core.pipeline_engine import executor as executor_module
+    from modulo.core.pipeline_engine import retry_policy as retry_policy_module
 
-    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: 0.0)
+    monkeypatch.setattr(retry_policy_module.random, "uniform", lambda a, b: 0.0)
     for attempt in (1, 2, 3, 4, 5):
         _present, delay, mult, _reason = rc.resolve_backoff_schedule({"backoff_schedule": {"delay_seconds": 0}})
         assert (delay, mult) == (45.0, 2.0)
-        assert executor_module._retry_backoff_seconds(attempt, base=delay, multiplier=mult) == min(
+        assert retry_policy_module.retry_backoff_seconds(attempt, base=delay, multiplier=mult) == min(
             45.0 * 2.0 ** (attempt - 1), 300.0
         )
 

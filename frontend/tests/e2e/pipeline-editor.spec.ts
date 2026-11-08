@@ -52,6 +52,20 @@ async function mockEditorWithNode(page: Page) {
   })
 }
 
+// FAR-2419: below the md breakpoint the toolbar's settings group collapses
+// behind a "Settings" disclosure — its controls carry `max-md:hidden` until the
+// toggle is activated. Mobile specs that reach into that group (or that need
+// the toolbar's naturally tall, always-expanded layout the pre-redesign specs
+// were written against) must open the disclosure first. At >= md the toggle is
+// hidden and the controls are already visible, so this is a no-op there.
+async function openMobileToolbarSettings(page: Page) {
+  const toggle = page.getByTestId('pipeline-editor-settings-toggle')
+  if (!(await toggle.isVisible())) return
+  if ((await toggle.getAttribute('aria-expanded')) === 'true') return
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
+
 test.describe('Pipeline Editor', { tag: '@regression' }, () => {
   // Local runs need a generous timeout: the first SPA bundle compile on the
   // dev server (plus Vue Flow) can exceed the 30s default before any
@@ -93,6 +107,7 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
     await expect(page.getByTestId('pipeline-editor-run')).toBeVisible()
     // Canvas tools group
     await expect(page.getByTestId('pipeline-editor-add-node')).toBeVisible()
+    await expect(page.getByTestId('pipeline-editor-arrange-graph')).toBeVisible()
     await expect(page.getByTestId('pipeline-editor-fit-view')).toBeVisible()
 
     // The Vue Flow canvas area renders (empty graph → empty-state overlay hint)
@@ -127,6 +142,39 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
     }).toBeGreaterThan(0)
     await expect(page.getByTestId('pipeline-editor-save-error')).toHaveCount(0)
     await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible()
+  })
+
+  test('renders directional edge arrowheads for a connected graph', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await page.route(`**/api/v1/pipelines/${PIPELINE_ID}`, (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(PIPELINE) })
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    })
+    await page.route(`**/api/v1/pipelines/${PIPELINE_ID}/graph`, (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          nodes: [
+            { id: 'node-a', node_type: 'agent', label: 'Plan', position: { x: 0, y: 0 } },
+            { id: 'node-b', node_type: 'hitl', label: 'Review', position: { x: 240, y: 0 } },
+          ],
+          edges: [{ id: 'edge-a-b', source_node_id: 'node-a', target_node_id: 'node-b', edge_type: 'normal' }],
+        }),
+      })
+    })
+
+    await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
+
+    await expect(page.locator('.vue-flow').first()).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    await expect(page.getByTestId('pipeline-editor-arrange-graph')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    const edgePath = page.locator('.vue-flow__edge-path').first()
+    await expect(edgePath).toHaveAttribute('marker-end', /url\(['"]?#.+\)/)
+    // Direction must not depend on colour: the arrow marker exists even for a
+    // normal (non-loop, non-LLM) edge.
+    await expect(page.getByTestId('pipeline-node-hitl')).toBeVisible()
   })
 
   test('renders graph nodes from the pipeline graph', { tag: '@regression' }, async ({ page, env }) => {
@@ -279,12 +327,18 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     // scroll to reach it (FAR-1861). The fix clips the root and makes the
     // editor's content column the scroll container, so both the toolbar and the
     // canvas stay reachable without ever scrolling the page.
+    //
+    // FAR-2419 collapses the settings group behind a disclosure below md. Open
+    // it first: the always-expanded toolbar is the tall state this invariant
+    // describes, and 307px of mocked chrome is only under its min-content
+    // height once the settings controls are shown.
     await loginAsAdmin(page, env)
     await mockEditorWithNode(page)
     await page.setViewportSize({ width: 640, height: 360 })
 
     await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
     await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
+    await openMobileToolbarSettings(page)
     const flow = page.locator('.vue-flow').first()
     await expect(flow).toHaveCount(1, { timeout: EDITOR_READY_TIMEOUT })
 
@@ -425,6 +479,9 @@ test.describe('Pipeline Editor mobile', { tag: '@regression' }, () => {
     await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
     await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
     await enterSubFitBand(page)
+    // FAR-2419: the retry-policy trigger lives inside the settings group, which
+    // is collapsed behind the mobile disclosure below md.
+    await openMobileToolbarSettings(page)
 
     await page.getByTestId('pipeline-editor-retry-policy-toggle').click()
     const panel = page.getByTestId('pipeline-editor-retry-policy-panel')

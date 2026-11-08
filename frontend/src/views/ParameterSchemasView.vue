@@ -1,15 +1,16 @@
 <template>
   <div class="page-wide">
     <template v-if="!editorOpen">
-      <header class="flex items-center justify-between">
-        <PageHeader
-          :title="$t('views.ParameterSchemasView.title')"
-          :subtitle="$t('views.ParameterSchemasView.subtitle')"
-        />
-        <Button data-testid="paramschema-new" @click="startNewSchema">
-          {{ $t('views.ParameterSchemasView.new_schema') }}
-        </Button>
-      </header>
+      <PageHeader
+        :title="$t('views.ParameterSchemasView.title')"
+        :subtitle="$t('views.ParameterSchemasView.subtitle')"
+      >
+        <template #right>
+          <Button data-testid="paramschema-new" @click="startNewSchema">
+            {{ $t('views.ParameterSchemasView.new_schema') }}
+          </Button>
+        </template>
+      </PageHeader>
 
       <TableSkeleton
         v-if="loading"
@@ -1143,8 +1144,8 @@ async function loadReferences() {
 }
 
 watch(activeEditorTab, (tab) => {
-  if (tab === 'sets') loadSets()
-  if (tab === 'references') loadReferences()
+  if (tab === 'sets') void loadSets()
+  if (tab === 'references') void loadReferences()
 })
 
 // Validate
@@ -1172,7 +1173,7 @@ async function doValidate() {
     }
     // A 2xx body can still be a failed validation — honour data.valid.
     const result = resp.data as { valid?: boolean; errors?: unknown[] } | undefined
-    if (result && result.valid === false) {
+    if (result?.valid === false) {
       validateResult.value = { valid: false, errors: result.errors ?? [] }
     } else {
       validateResult.value = { valid: true }
@@ -1208,5 +1209,5 @@ async function loadPickers() {
     console.warn('Failed to load picker data', e)
   }
 }
-loadPickers()
+void loadPickers()
 </script>

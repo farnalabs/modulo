@@ -131,6 +131,17 @@ describe('AdminErrorsView', () => {
     wrapper.unmount()
   })
 
+  it('does not render a redundant one-tab navigation control (FAR-2394)', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('.page-tabs-wrapper').exists()).toBe(false)
+    expect(wrapper.findAll('.page-tab')).toHaveLength(0)
+    expect(wrapper.text()).toContain('Error Dashboard')
+    wrapper.unmount()
+  })
+
   it('renders the scheduler-starvation banner when the starvation endpoint reports starved pipelines', async () => {
     getMock.mockImplementation(async (path: string) => {
       if (path === '/api/v1/errors/scheduler-starvation') {
@@ -307,7 +318,8 @@ describe('AdminErrorsView', () => {
     await nextTick()
     expect(routerMocks.push).not.toHaveBeenCalled()
 
-    const row = wrapper.find('tbody tr')
+    const row = wrapper.find('[data-testid="admin-errors-row"]')
+    expect(row.exists()).toBe(true)
     await row.trigger('click')
     expect(routerMocks.push).toHaveBeenCalledTimes(1)
     expect(routerMocks.push).toHaveBeenCalledWith('/admin/errors/eg-long-1')

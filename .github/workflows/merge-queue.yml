@@ -345,7 +345,7 @@ jobs:
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -677,23 +677,26 @@ jobs:
           # so it can never reason about a different commit than the one that
           # produced the no-op. Exit statuses are captured explicitly because this
           # step runs under `bash -e` (`git diff --quiet` exits 1 for "differs").
-           classify_duplicate() {
+          emit_status() {
+            printf '%s\t%s\n' "$1" "$2"
+          }
+          classify_duplicate() {
              local num="${1}"
              local ref="pr-${num}" base diff_rc plus cherry_out
              local keep_status=keep
              local -a paths=()
 
             if ! git rev-parse --verify --quiet "refs/heads/${ref}" >/dev/null; then
-              printf '%s\t%s\n' "$keep_status" "the PR head ref ${ref} is not available locally, so its content could not be compared with main"
+              emit_status "$keep_status" "the PR head ref ${ref} is not available locally, so its content could not be compared with main"
               return 0
             fi
             base=$(git rev-parse --verify --quiet origin/main || git rev-parse --verify --quiet main || true)
             if [ -z "${base}" ]; then
-              printf '%s\t%s\n' "$keep_status" "neither origin/main nor main is available to compare the PR against"
+              emit_status "$keep_status" "neither origin/main nor main is available to compare the PR against"
               return 0
             fi
             if ! git merge-base "${base}" "${ref}" >/dev/null 2>&1; then
-              printf '%s\t%s\n' "$keep_status" "the PR head shares no merge base with main, so its content could not be compared"
+              emit_status "$keep_status" "the PR head shares no merge base with main, so its content could not be compared"
               return 0
             fi
             # (1) Empty diff at the merge base: the PR contributes nothing at all.
@@ -705,7 +708,7 @@ jobs:
               return 0
             fi
             if [ "${diff_rc}" -ne 1 ]; then
-              printf '%s\t%s\n' "$keep_status" "comparing the PR against main failed (git diff exited ${diff_rc})"
+              emit_status "$keep_status" "comparing the PR against main failed (git diff exited ${diff_rc})"
               return 0
             fi
             # (2) Every path the PR touches already matches main byte for byte.
@@ -723,7 +726,7 @@ jobs:
             # (3) Commits not in main by id, but each with a patch-equivalent
             # commit upstream. Any '+' means real content main does not have.
             if ! cherry_out=$(git cherry "${base}" "${ref}" 2>/dev/null); then
-              printf '%s\t%s\n' "$keep_status" "git cherry could not be computed against main"
+              emit_status "$keep_status" "git cherry could not be computed against main"
               return 0
             fi
             if [ -z "${cherry_out}" ]; then
@@ -731,7 +734,7 @@ jobs:
                 printf 'close\t%s\n' "the PR head is already an ancestor of main"
                 return 0
               fi
-              printf '%s\t%s\n' "$keep_status" "git cherry lists no commits ahead of main, which is ambiguous rather than proof"
+              emit_status "$keep_status" "git cherry lists no commits ahead of main, which is ambiguous rather than proof"
               return 0
             fi
             plus=$(printf '%s\n' "${cherry_out}" | grep -c '^+' || true)
@@ -739,7 +742,7 @@ jobs:
               printf 'close\t%s\n' "every commit on the PR is already upstream by patch-id"
               return 0
             fi
-            printf '%s\t%s\n' "$keep_status" "${plus} commit(s) on the PR are not upstream (git cherry marks them '+'), so the no-op does not prove the changes are on main"
+            emit_status "$keep_status" "${plus} commit(s) on the PR are not upstream (git cherry marks them '+'), so the no-op does not prove the changes are on main"
             return 0
           }
 
@@ -2014,11 +2017,39 @@ jobs:
       # separate 'Capture frontend failures' step — which, being `if:
       # failure()`, used to append "Frontend checks failed" even when the
       # BACKEND step was the one that failed and frontend never ran.
+      #
+      # FAR-2369 — optional LIGHT validation for the merge batch (DEFAULT OFF).
+      # Every PR in the batch already ran the full backend unit suite
+      # (`uv run ... pytest tests/unit/`) and the frontend unit suite
+      # (`pnpm run test:unit`) on its OWN branch before it was approved, so
+      # re-running both here against the combined branch is largely duplicated
+      # work. When the repository variable MERGE_QUEUE_LIGHT_VALIDATION is set to
+      # `true`, this step SKIPS exactly those two suites and still runs every
+      # other gate: frontend lint, frontend type-check, frontend build, the
+      # backend lint tools (ruff check / mypy / bandit / ruff format), the
+      # `uv lock --check` lockfile-freshness step and the migration-heads gate.
+      #
+      # Trade-off (why this is opt-in, not the default): the batch re-run is the
+      # only place that catches a SEMANTIC conflict between two individually
+      # green PRs — each passes its own suite, but the combination breaks a unit
+      # test. With light validation on, such a conflict is no longer caught at
+      # batch time and would only surface on main. The default is OFF, so
+      # behaviour is unchanged until an operator deliberately accepts that risk.
+      #
+      # To enable: set the repository variable MERGE_QUEUE_LIGHT_VALIDATION=true
+      # (Settings -> Secrets and variables -> Actions -> Variables). Unset or any
+      # other value keeps the full validation. The guard is written
+      # `[ "${MERGE_QUEUE_LIGHT_VALIDATION:-false}" != "true" ]` so an unset
+      # variable always executes the guarded command.
       - name: Backend lint + tests and frontend checks (concurrent)
         # remaining_count is set by the heads check: if EVERY PR in the batch was
         # dropped as a migration-head offender the branch is just main, so the
         # ~20-minute combined validation has nothing new to prove and is skipped.
         if: steps.merge.outputs.merged_count != '0' && steps.migration_heads.outputs.remaining_count != '0'
+        env:
+          # FAR-2369: default OFF — full backend + frontend unit suites run
+          # unless this is explicitly set to 'true'.
+          MERGE_QUEUE_LIGHT_VALIDATION: ${{ vars.MERGE_QUEUE_LIGHT_VALIDATION || 'false' }}
         shell: bash
         run: |
           # --- Frontend checks: background subshell (was a separate sequential step) ---
@@ -2031,7 +2062,9 @@ jobs:
             pnpm install --frozen-lockfile --ignore-scripts
             pnpm run lint --quiet
             pnpm run type-check
-            pnpm run test:unit
+            # FAR-2369: skippable only under light validation (default OFF); an
+            # unset variable falls back to 'false', so the suite still runs.
+            if [ "${MERGE_QUEUE_LIGHT_VALIDATION:-false}" != "true" ]; then pnpm run test:unit; fi
             pnpm run build
           ) &
           FRONTEND_PID=$!
@@ -2053,7 +2086,12 @@ jobs:
           # description is written (the old script's `TEST_EXIT=$?` line was
           # unreachable on a pytest failure for that reason).
           set +e
-          uv run --no-build --no-sync pytest tests/unit/ -n 2 -x -q --timeout=120 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+          # FAR-2369: skippable only under light validation (default OFF). The
+          # suite runs unchanged when the variable is unset/anything-but-'true',
+          # and TEST_EXIT still captures its exit code exactly as before.
+          if [ "${MERGE_QUEUE_LIGHT_VALIDATION:-false}" != "true" ]; then
+            uv run --no-build --no-sync pytest tests/unit/ -n 2 -x -q --timeout=120 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+          fi
           TEST_EXIT=$?
           set -e
 
@@ -2813,7 +2851,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          case "$CHAIN_DEPTH" in ''|*[!0-9]*) CHAIN_DEPTH=0 ;; esac
+          case "$CHAIN_DEPTH" in
+            ''|*[!0-9]*) CHAIN_DEPTH=0 ;;
+            *) ;;
+          esac
 
           # --- CI-stall detection (FAR-1099) ---
           # For each pending PR, check whether its CI workflow run has concluded.
@@ -2867,6 +2908,8 @@ jobs:
               if [ -z "$CI_SINCE" ]; then
                 echo "  PR #$PR_NUM: no CI run found — skipping stall check"
                 continue
+              else
+                :
               fi
               CI_EPOCH=$(date -u -d "$CI_SINCE" +%s 2>/dev/null || echo "$NOW")
               AGE_S=$((NOW - CI_EPOCH))

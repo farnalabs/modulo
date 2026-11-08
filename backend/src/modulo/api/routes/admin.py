@@ -2703,14 +2703,13 @@ async def admin_billing_overview(
         )
     ],
     status_code=status.HTTP_403_FORBIDDEN,
-    response_model=None,
     responses={
         status.HTTP_403_FORBIDDEN: {
             "description": "Active-organisation deletion is refused; use the system-admin route.",
         }
     },
 )
-async def request_org_deletion(
+def request_org_deletion(
     _current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
 ) -> None:
     """Refuse self-service deletion of the caller's own organisation.
@@ -2735,14 +2734,13 @@ class ConfirmDeletionRequest(BaseModel):
     "/org/deletion-confirm",
     dependencies=[Depends(audited("api_access_post", "organisation", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_403_FORBIDDEN,
-    response_model=None,
     responses={
         status.HTTP_403_FORBIDDEN: {
             "description": "Active-organisation deletion is refused; use the system-admin route.",
         }
     },
 )
-async def confirm_org_deletion(
+def confirm_org_deletion(
     _req: ConfirmDeletionRequest,
     _current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
 ) -> None:
@@ -2857,14 +2855,13 @@ async def export_org_data(
     "/org",
     dependencies=[Depends(audited("api_access_delete", "organisation", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_403_FORBIDDEN,
-    response_model=None,
     responses={
         status.HTTP_403_FORBIDDEN: {
             "description": "Active-organisation deletion is refused; use the system-admin route.",
         }
     },
 )
-async def delete_org_immediate(
+def delete_org_immediate(
     _current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
 ) -> None:
     """Refuse immediate deletion of the caller's own organisation.
@@ -4782,7 +4779,7 @@ class TelemetryStatusResponse(BaseModel):
 
 @router.get("/telemetry")
 @handle_db_errors("admin.get_telemetry_status")
-async def get_telemetry_status(
+async def get_telemetry_status(  # NOSONAR S7503 - FastAPI decorator seam
     _current_user: Annotated[AuthenticatedPrincipal, require_system_permission("system.config.manage")],
 ) -> TelemetryStatusResponse:
     """Return the current telemetry opt-in status."""
@@ -4796,7 +4793,7 @@ async def get_telemetry_status(
     dependencies=[Depends(audited("telemetry_status_updated", "organisation", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("admin.set_telemetry_status")
-async def set_telemetry_status(
+async def set_telemetry_status(  # NOSONAR S7503 - FastAPI decorator seam
     req: TelemetryToggleRequest,
     current_user: Annotated[AuthenticatedPrincipal, require_system_permission("system.config.manage")],
 ) -> TelemetryStatusResponse:

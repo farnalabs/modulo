@@ -61,7 +61,30 @@ describe('SettingsNotificationLogView', () => {
     const wrapper = mount(SettingsNotificationLogView)
     await flushPromises()
     expect(wrapper.text()).toContain('No delivery logs found')
-    expect(wrapper.text()).toContain('Try adjusting your filters')
+    expect(wrapper.text()).toContain('No notification deliveries match the current filters')
+    // Target the empty-state CTA by testid: a bare `toContain('Reset')` also
+    // matches the filter-bar Reset button and would pass without the CTA.
+    const emptyReset = wrapper.find('[data-testid="settings-notification-log-empty-reset"]')
+    expect(emptyReset.exists()).toBe(true)
+    expect(emptyReset.attributes('aria-label')).toBe('Reset all filters')
+  })
+
+  it('empty-state reset requests the default range', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 10, 4, 12, 0, 0))
+      const wrapper = mount(SettingsNotificationLogView)
+      await flushPromises()
+      const emptyReset = wrapper.find('[data-testid="settings-notification-log-empty-reset"]')
+      await emptyReset.trigger('click')
+      await flushPromises()
+      expect(getMock).toHaveBeenLastCalledWith('/api/v1/admin/notifications/deliveries', {
+        params: { query: { limit: 50, from: '2026-10-06', to: '2026-11-04' } },
+      })
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('shows loading skeleton while fetching', async () => {
@@ -84,8 +107,77 @@ describe('SettingsNotificationLogView', () => {
     expect(getMock).toHaveBeenCalledTimes(1)
     expect(getMock).toHaveBeenCalledWith(
       '/api/v1/admin/notifications/deliveries',
-      expect.objectContaining({ params: { query: { limit: 50 } } }),
+      expect.objectContaining({
+        params: {
+          query: {
+            limit: 50,
+            from: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+            to: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+          },
+        },
+      }),
     )
+  })
+
+  it('sends the last-30-days default range on first load', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 10, 4, 12, 0, 0))
+      const wrapper = mount(SettingsNotificationLogView)
+      await flushPromises()
+      expect(getMock).toHaveBeenCalledWith('/api/v1/admin/notifications/deliveries', {
+        params: { query: { limit: 50, from: '2026-10-06', to: '2026-11-04' } },
+      })
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reset restores the default range and clears the status filter', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 10, 4, 12, 0, 0))
+      const wrapper = mount(SettingsNotificationLogView)
+      await flushPromises()
+      const vm = wrapper.vm as unknown as {
+        filterStatus: string
+        filterDateFrom: string
+        filterDateTo: string
+      }
+      vm.filterStatus = 'failed'
+      vm.filterDateFrom = '2026-01-01'
+      vm.filterDateTo = '2026-01-31'
+
+      await wrapper.find('[data-testid="settings-notification-log-reset"]').trigger('click')
+      await flushPromises()
+
+      expect(getMock).toHaveBeenLastCalledWith('/api/v1/admin/notifications/deliveries', {
+        params: { query: { limit: 50, from: '2026-10-06', to: '2026-11-04' } },
+      })
+      expect(vm.filterStatus).toBe('__all__')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('omits the date bounds when no date is selected', async () => {
+    const wrapper = mount(SettingsNotificationLogView)
+    await flushPromises()
+    const vm = wrapper.vm as unknown as {
+      filterDateFrom: string
+      filterDateTo: string
+    }
+    vm.filterDateFrom = ''
+    vm.filterDateTo = ''
+
+    await wrapper.find('[data-testid="settings-notification-log-apply"]').trigger('click')
+    await flushPromises()
+
+    expect(getMock).toHaveBeenLastCalledWith('/api/v1/admin/notifications/deliveries', {
+      params: { query: { limit: 50 } },
+    })
   })
 
   it('sends the selected filters through the real fetcher', async () => {
@@ -409,6 +501,21 @@ describe('SettingsNotificationLogView', () => {
     expect(wrapper.text()).toContain('\u2014')
   })
 
+  it('formatTimestamp returns dash for invalid dates', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        items: [makeDelivery({ created_at: 'not-a-date' })],
+        total: 1,
+        next_cursor: null,
+      },
+      error: undefined,
+    })
+    const wrapper = mount(SettingsNotificationLogView)
+    await flushPromises()
+    expect(wrapper.text()).toContain('\u2014')
+    expect(wrapper.text()).not.toContain('Invalid Date')
+  })
+
   it('formatTimestamp formats valid date', async () => {
     // nosemgrep: new-date-without-guard
     const date = new Date('2026-09-15T10:30:00Z')
@@ -519,7 +626,8 @@ describe('SettingsNotificationLogView', () => {
     const dateTo = wrapper.find('[data-testid="settings-notification-log-date-to"]')
     expect(dateFrom.exists()).toBe(true)
     expect(dateTo.exists()).toBe(true)
-    expect((dateFrom.element as HTMLInputElement).value).toBe('')
-    expect((dateTo.element as HTMLInputElement).value).toBe('')
+    expect((dateFrom.element as HTMLInputElement).value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect((dateTo.element as HTMLInputElement).value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect((dateFrom.element as HTMLInputElement).value).not.toBe((dateTo.element as HTMLInputElement).value)
   })
 })

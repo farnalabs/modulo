@@ -1619,7 +1619,7 @@ def test_viewer_reviews_unfenced_status_still_carries_account_team_scope(
 
 
 def _candidate_session(row: tuple[str, str | None] | None) -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock())
     result = MagicMock()
     result.first.return_value = row
     session.execute = AsyncMock(return_value=result)

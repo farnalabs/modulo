@@ -44,6 +44,7 @@ from modulo.core import dispatch
 from modulo.core import pipeline_execution as pe
 from modulo.core.pipeline_engine import PipelineExecutor
 from modulo.core.pipeline_engine import executor as ex
+from modulo.core.pipeline_engine import retry_policy as retry_policy_module
 from modulo.core.pipeline_engine import watchdog_retry as wr
 from modulo.core.pipeline_engine.error_codes import (
     _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
@@ -512,10 +513,10 @@ async def test_policy_redispatch_logs_when_the_reset_times_out(
     with (
         patch("modulo.settings.get_settings", return_value=SimpleNamespace(saq_retry_delay=0)),
         patch("asyncio.sleep", AsyncMock()),
-        caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"),
+        caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.retry_policy"),
         pytest.raises(ex.RunRetryPolicyError),
     ):
-        await executor._redispatch_after_policy(
+        await retry_policy_module._redispatch_after_policy(
             run_id=uuid.uuid4(),
             org_id=ORG,
             final_status="failed",
@@ -525,6 +526,9 @@ async def test_policy_redispatch_logs_when_the_reset_times_out(
             pipeline_retry_policy=_POLICY,
             model_backend_hub=None,
             connector_hub=None,
+            fenced_pending_reset_fn=executor._fenced_pending_reset,
+            cleanup_run_resources_fn=executor._cleanup_run_resources,
+            record_attempt_reset_fn=AsyncMock(),
         )
 
     assert any("retry_policy_reset_timed_out" in message for message in caplog.messages)

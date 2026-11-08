@@ -339,7 +339,7 @@ function validateBaseUrl(baseUrl: string, t: TranslateFn): string {
 }
 
 function validateMethod(method: string, t: TranslateFn): string {
-  const normalisedMethod = `${method || ''}`.toUpperCase()
+  const normalisedMethod = String(method || '').toUpperCase()
   if (normalisedMethod && !METHOD_OPTIONS.includes(normalisedMethod)) {
     return t('connectors.rest.method_invalid', { method: normalisedMethod, options: METHOD_OPTIONS.join(', ') })
   }

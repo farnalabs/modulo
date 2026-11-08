@@ -76,7 +76,7 @@ egress is unrestricted by design. A per-profile opt-in sets
 **Accepted gap: no bounded egress in the Docker tier.** There is no egress
 allowlist in this tier (T1, and T2b – the Docker/self-hosted tiers). This
 is a DECISION, not an omission: a vendor-built egress gateway (an nftables
-or proxy middlebox owning enforcement) would be the same criticised shape
+or proxy middlebox owning enforcement) would be the same criticized shape
 as the socket proxy – a bespoke module owning a control the operator
 should own. The bounded answer for self-hosted compute is the Kubernetes
 tier (T3, in the model above): run Modulo's runner on your cluster and

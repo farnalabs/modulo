@@ -30,7 +30,8 @@ trap 'rm -f "$JAR"' EXIT
 
 # Read one cookie value from the Netscape-format cookie jar curl writes.
 cookie_value() {
-  awk -v name="$1" '$6 == name { print $7 }' "$JAR" | tail -n 1
+  local name="$1"
+  awk -v name="$name" '$6 == name { value = $7 } END { print value }' "$JAR"
 }
 
 echo "=== Login ==="

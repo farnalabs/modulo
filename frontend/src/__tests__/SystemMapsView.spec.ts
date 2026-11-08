@@ -282,6 +282,109 @@ describe('SystemMapsView', () => {
     expect(mockDelete).toHaveBeenCalledWith('/api/v1/system-maps/{map_id}', { params: { path: { map_id: 'map-1' } } })
   })
 
+  it('runs discovery from the System Maps page and opens the draft for review', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve(listResponse([map()]))
+    })
+    const store = useSystemMapsStore()
+    const discover = vi.spyOn(store, 'discover').mockResolvedValue({ draft_map_id: 'map-9' } as never)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const button = wrapper.get('[data-testid="system-maps-discover"]')
+    expect(button.text()).toContain('Discover My System')
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(discover).toHaveBeenCalledTimes(1)
+    expect(mockPush).toHaveBeenCalledWith('/system-maps/map-9?discovery=1')
+  })
+
+  it('disables the discovery action while in flight and ignores a repeat click', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve(listResponse([map()]))
+    })
+    const store = useSystemMapsStore()
+    let resolveDiscover: (value: never) => void = () => {}
+    const discover = vi.spyOn(store, 'discover').mockReturnValue(
+      new Promise((resolve) => { resolveDiscover = resolve as (value: never) => void }) as never,
+    )
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const button = wrapper.get('[data-testid="system-maps-discover"]')
+    await button.trigger('click')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(button.text()).toContain('Discovering')
+
+    button.element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    resolveDiscover({ draft_map_id: 'map-9' } as never)
+    await flushPromises()
+
+    expect(discover).toHaveBeenCalledTimes(1)
+    expect(mockPush).toHaveBeenCalledWith('/system-maps/map-9?discovery=1')
+  })
+
+  it('surfaces a discovery failure on the page and clears it on dismiss', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve(listResponse([map()]))
+    })
+    const store = useSystemMapsStore()
+    vi.spyOn(store, 'discover').mockRejectedValue(new Error('inventory unavailable'))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="system-maps-discover"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('inventory unavailable')
+    expect(wrapper.get('[data-testid="system-maps-discover"]').attributes('disabled')).toBeUndefined()
+    expect(mockPush).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    expect(wrapper.find('[data-testid="error-alert-dismiss"]').exists()).toBe(false)
+  })
+
+  it('uses the localized fallback for a non-Error discovery rejection', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve(listResponse([map()]))
+    })
+    const store = useSystemMapsStore()
+    vi.spyOn(store, 'discover').mockRejectedValue('offline')
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="system-maps-discover"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Could not discover your system.')
+    expect(mockPush).not.toHaveBeenCalled()
+  })
+
+  it('gives the create map form and controls the full dialog width', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve(listResponse([map()]))
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="system-maps-create"]').trigger('click')
+
+    expect(wrapper.get('form').classes()).toContain('w-full')
+    expect(wrapper.get('[data-testid="system-map-create-name"]').classes()).toContain('w-full')
+    expect(wrapper.get('[data-testid="system-map-create-description"]').classes()).toContain('w-full')
+  })
+
   it('creates a map from the dialog and ignores an empty name', async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
@@ -439,6 +542,96 @@ describe('SystemMapsView fallback branches', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Discover')
+  })
+
+
+  it('renders a viewer read-only list without authoring controls', async () => {
+    mockIsOperator.value = false
+    mockPlanStore.devMode = false
+    mockPlanStore.userPermissions = ['system_maps.read']
+    mockGet.mockImplementation(() => Promise.resolve(listResponse([map()])))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(mockGet).not.toHaveBeenCalledWith('/api/v1/admin/feature-flags')
+    expect(wrapper.find('[data-testid="system-maps-create"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-maps-discover"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-maps-read-only"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Map one')
+    expect(wrapper.find('[data-testid="system-map-action-map-1"]').exists()).toBe(false)
+  })
+
+  it('renders the unavailable state without a retry on a 402 feature_required', async () => {
+    mockIsOperator.value = false
+    mockPlanStore.devMode = false
+    mockPlanStore.userPermissions = ['system_maps.read']
+    mockGet.mockResolvedValue({
+      error: {
+        type: 'urn:problem:modulo:feature_required',
+        status: 402,
+        detail: 'system_maps_read is not enabled for this organisation',
+      },
+      response: { status: 402 },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('System Maps is not available on your plan')
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-maps-loading"]').exists()).toBe(false)
+  })
+
+  it('keeps the retryable error state for a genuine server failure', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve({ error: { detail: 'down' }, response: { status: 500 } })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('System Maps is not available on your plan')
+  })
+
+  it('keeps the operator action menu for an authoring operator', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve(listResponse([map()]))
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="system-maps-create"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="system-maps-read-only"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="system-map-action-map-1"]').trigger('click')
+    expect((wrapper.findComponent(MenuStub).props('model') as unknown[]).length).toBe(5)
+  })
+
+  it('narrows an open action menu to view-only when authoring access is lost', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve(flagsResponse())
+      return Promise.resolve(listResponse([map()]))
+    })
+    const store = useSystemMapsStore()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="system-map-action-map-1"]').trigger('click')
+    expect((wrapper.findComponent(MenuStub).props('model') as unknown[]).length).toBe(5)
+
+    // The entitlement can be revoked while the menu is open; the reactive
+    // menu must then expose only the read action and never a mutation.
+    store.systemMapsEnabled = false
+    await wrapper.vm.$nextTick()
+
+    const model = wrapper.findComponent(MenuStub).props('model') as Array<{ label: string }>
+    expect(model).toHaveLength(1)
+    expect(model[0].label).toBe('View')
   })
 
   it('uses the localized delete fallback for a non-Error rejection', async () => {

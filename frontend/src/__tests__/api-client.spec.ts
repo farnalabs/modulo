@@ -94,4 +94,17 @@ describe('api client withAuth (non-retryable verbs)', () => {
     expect(mockedAttemptTokenRefresh).toHaveBeenCalledTimes(1)
     expect(mockedClearAccessToken).not.toHaveBeenCalled()
   })
+
+  it('preserves HeadersInit values while injecting the access token', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200))
+
+    await api.GET('/api/v1/widgets' as never, {
+      headers: [['X-Request-Id', 'request-1']],
+    } as never)
+
+    const request = (fetchMock.mock.calls[0] as unknown as [Request, RequestInit | undefined])[0]
+    const headers = new Headers(request.headers)
+    expect(headers.get('authorization')).toBe('Bearer token-1')
+    expect(headers.get('x-request-id')).toBe('request-1')
+  })
 })

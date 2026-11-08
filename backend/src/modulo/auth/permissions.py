@@ -54,6 +54,7 @@ def authz_enforce_enabled() -> bool:
 # Single source of truth for the System Maps grant name. REST and MCP gates
 # import this rather than re-declaring the literal.
 SYSTEM_MAPS_ACCESS_PERMISSION = "system_maps_access"
+SYSTEM_MAPS_READ_PERMISSION = "system_maps.read"
 
 PERMISSIONS: dict[str, str] = {
     # pipelines
@@ -110,6 +111,7 @@ PERMISSIONS: dict[str, str] = {
     "model_backend.list.in_dev": "operator",
     "library.search.in_dev": "operator",
     SYSTEM_MAPS_ACCESS_PERMISSION: "operator",
+    SYSTEM_MAPS_READ_PERMISSION: "viewer",
     # system_maps
     "system_map.list": "viewer",
     "system_map.create": "operator",
@@ -215,7 +217,10 @@ PERMISSIONS: dict[str, str] = {
     "library.search": "viewer",
     "library.write": "operator",
     # evals
-    "eval.list": "runner",
+    # Eval definitions and results are read-only governance records. Viewer access
+    # is intentionally narrower than the runner's execution permissions; the
+    # write operations below remain operator-scoped.
+    "eval.list": "viewer",
     "eval.run": "operator",
     "eval.definition.create": "operator",
     "eval.definition.update": "operator",

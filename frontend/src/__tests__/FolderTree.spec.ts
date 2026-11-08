@@ -424,7 +424,7 @@ describe('FolderTree delete flow', () => {
     const deleteBtn = wrapper.findAll('button').find(b => b.attributes('aria-label') === 'Delete Folder')
     await deleteBtn!.trigger('click')
     const dialog = wrapper.find('[data-testid="dialog-stub"]')
-    expect(dialog.text()).toContain('Pipelines will be moved to Uncategorised')
+    expect(dialog.text()).toContain('Pipelines will be moved to Uncategorized')
   })
 
   it('shows a delete error inline and keeps the dialog open', async () => {

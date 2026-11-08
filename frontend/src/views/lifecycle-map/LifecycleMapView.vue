@@ -452,16 +452,16 @@ function loadSavedPositions(): void {
   }
 }
 
-async function persistPositions(positions: Record<string, { x: number; y: number }>): Promise<void> {
+function persistPositions(positions: Record<string, { x: number; y: number }>): void {
   if (statusTimeout) { clearTimeout(statusTimeout); statusTimeout = null }
   if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null }
   // Abort any in-flight save from a previous debounce cycle.
   if (saveAbortController) { saveAbortController.abort(); saveAbortController = null }
-  saveTimeout = setTimeout(async () => {
+  saveTimeout = setTimeout(() => { void (async () => {
     saveStatus.value = 'saving'
     // Build the version-update payload: current stages with updated x/y, current edges.
     const map = mapData.value
-    const versionId = map?.versions?.[0]?.id
+    const versionId = map?.versions?.at(0)?.id
     if (!map || !mapId.value || !versionId) {
       saveStatus.value = 'error'
       statusTimeout = setTimeout(() => { saveStatus.value = 'idle' }, 3000)
@@ -524,7 +524,7 @@ async function persistPositions(positions: Record<string, { x: number; y: number
     } finally {
       if (saveAbortController === controller) saveAbortController = null
     }
-  }, 500)
+    })() }, 500)
 }
 
 function handlePositionsChanged(positions: Record<string, { x: number; y: number }>): void {
@@ -753,7 +753,7 @@ onMounted(async () => {
     await planStore.fetchPlan()
   }
   if (journeysVisible.value) {
-    loadJourneys()
+    void loadJourneys()
   }
 })
 
@@ -769,7 +769,7 @@ watch(selectedVersion, () => {
 // is idempotent and guards against concurrency.
 watch(journeysEnabled, (enabled) => {
   if (enabled && showWorkItems.value && mapId.value) {
-    loadJourneys()
+    void loadJourneys()
   }
 })
 
@@ -777,7 +777,7 @@ watch(journeysEnabled, (enabled) => {
 // filters); unchecking only hides the UI, it never refetches.
 watch(showWorkItems, (checked) => {
   if (checked && journeysEnabled.value && mapId.value) {
-    loadJourneys()
+    void loadJourneys()
   }
 })
 
@@ -787,7 +787,7 @@ watch(
   () => [store.journeysFilters.period, store.journeysFilters.status] as const,
   () => {
     if (journeysVisible.value && mapId.value) {
-      loadJourneys()
+      void loadJourneys()
     }
   },
 )

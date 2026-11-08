@@ -69,28 +69,28 @@ type AnyClientMethod = (
   init?: never,
 ) => Promise<{ data?: unknown; error?: unknown; response?: Response }>
 
+type RequestOptions = Record<string, unknown> & { headers?: HeadersInit }
+
 type CallableMethod = (
   url: string,
-  init?: Record<string, unknown>,
+  init?: RequestOptions,
 ) => Promise<{ data?: unknown; error?: unknown; response?: Response }>
+
+function mergeHeaders(requestHeaders?: HeadersInit): Headers {
+  const headers = new Headers(getAuthHeaders())
+  new Headers(requestHeaders).forEach((value, key) => headers.set(key, value))
+  return headers
+}
 
 function withAuth<M extends AnyClientMethod>(fn: M, retryable: boolean): M {
   const call = fn as unknown as CallableMethod
-  const wrapped = (async (url: string, options?: Record<string, unknown>) => {
-    const optionsRecord = (options ?? {}) as Record<string, unknown>
-    const headers: Record<string, unknown> = {
-      ...getAuthHeaders(),
-      ...(optionsRecord.headers as Record<string, unknown> | undefined),
-    }
-    let resp = await call(url, { ...optionsRecord, headers })
+  const wrapped = (async (url: string, options?: RequestOptions) => {
+    const optionsRecord = options ?? {}
+    let resp = await call(url, { ...optionsRecord, headers: mergeHeaders(optionsRecord.headers) })
     if (resp.response?.status === 401) {
       const refreshed = await attemptTokenRefresh()
       if (refreshed && retryable) {
-        const newHeaders: Record<string, unknown> = {
-          ...getAuthHeaders(),
-          ...(optionsRecord.headers as Record<string, unknown> | undefined),
-        }
-        resp = await call(url, { ...optionsRecord, headers: newHeaders })
+        resp = await call(url, { ...optionsRecord, headers: mergeHeaders(optionsRecord.headers) })
       }
       if (!refreshed || (retryable && resp.response?.status === 401)) {
         clearAccessToken()

@@ -757,6 +757,13 @@ describe('AdminAuditView — summarize branches', () => {
     expect(wrapper.text()).toContain('"My Pipeline"')
   })
 
+  it('stringifies a non-string name in the named heuristic fallback', async () => {
+    mockAuditGet([auditEvent('evt-objname', { event_type: 'pipeline.created', resource_type: 'pipeline', payload_json: { name: { id: 'nested' } } })])
+    const wrapper = await mountLoaded()
+    expect(wrapper.text()).toContain('Created pipeline')
+    expect(wrapper.text()).toContain('{"id":"nested"}')
+  })
+
   it('falls back to heuristic with no name or display_name', async () => {
     mockAuditGet([auditEvent('evt-noname', { event_type: 'user.created', resource_type: 'user', payload_json: {} })])
     const wrapper = await mountLoaded()
@@ -1225,7 +1232,7 @@ describe('AdminAuditView — system ledger (system admin)', () => {
     await wrapper.find('[data-testid="admin-audit-tab-system"]').trigger('click')
     await nextTick()
 
-    expect(wrapper.text()).toContain('No organisation lifecycle records found')
+    expect(wrapper.text()).toContain('No organization lifecycle records found')
     expect(wrapper.findAll('[data-testid^="admin-audit-system-event-row-"]')).toHaveLength(0)
   })
 
@@ -1243,7 +1250,7 @@ describe('AdminAuditView — system ledger (system admin)', () => {
     await wrapper.find('[data-testid="admin-audit-tab-system"]').trigger('click')
     await nextTick()
 
-    expect(wrapper.text()).toContain('Failed to load organisation lifecycle records')
+    expect(wrapper.text()).toContain('Failed to load organization lifecycle records')
     expect(wrapper.text()).toContain('ledger down')
     expect(wrapper.findAll('button').filter(b => b.text() === 'Retry')).toHaveLength(1)
   })
@@ -1367,7 +1374,7 @@ describe('AdminAuditView — system ledger interaction branches', () => {
     })
     const wrapper = await mountSystem()
 
-    expect(wrapper.text()).toContain('No organisation lifecycle records found')
+    expect(wrapper.text()).toContain('No organization lifecycle records found')
   })
 
   it('catches a thrown ledger request and surfaces the failure', async () => {

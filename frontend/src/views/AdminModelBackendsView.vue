@@ -1,12 +1,13 @@
 <template>
   <FeatureGate feature-name="model_backend_management" required-tier="community" show-disabled>
     <div class="page-wide">
-      <header class="flex items-center justify-between">
-        <PageHeader :title="$t('views.AdminModelBackendsView.model_backends')" :subtitle="$t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials')" />
-        <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-model-backends-add" @click="openAddForm">
-          {{ $t('views.AdminModelBackendsView.add_model_backend') }}
-        </Button>
-      </header>
+      <PageHeader :title="$t('views.AdminModelBackendsView.model_backends')" :subtitle="$t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials')">
+        <template #right>
+          <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-model-backends-add" @click="openAddForm">
+            {{ $t('views.AdminModelBackendsView.add_model_backend') }}
+          </Button>
+        </template>
+      </PageHeader>
 
       <TableSkeleton
         v-if="loading"
@@ -620,14 +621,14 @@ function isNonCanonicalIpLiteral(host: string): boolean {
 
 function rawHostFromUrl(value: string): string {
   // Callers enforce the "://" form before this runs, so the authority exists.
-  const authority = value.slice(value.indexOf('://') + 3).split(/[/?#]/)[0]
+  const authority = value.slice(value.indexOf('://') + 3).split(/[/?#]/).at(0)!
   // slice(lastIndexOf+1) drops any userinfo and is the whole authority when
   // there is no '@' (lastIndexOf returns -1).
   const withoutUserinfo = authority.slice(authority.lastIndexOf('@') + 1)
   if (withoutUserinfo.startsWith('[')) {
     return withoutUserinfo.slice(0, withoutUserinfo.indexOf(']') + 1)
   }
-  return withoutUserinfo.split(':')[0]
+  return withoutUserinfo.split(':').at(0)!
 }
 
 function isMetadataHost(host: string): boolean {
@@ -638,10 +639,10 @@ function isMetadataHost(host: string): boolean {
   // IPv4-mapped IPv6 in hex form ([::ffff:a9fe:a9fe] normalises here). The URL
   // parser canonicalises IPv6 to hex, so a dotted mapped form never reaches
   // this function and does not need a separate prefix check.
-  const mapped = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(normalized)
   if (mapped) {
-    const high = Number.parseInt(mapped[1], 16)
-    const low = Number.parseInt(mapped[2], 16)
+    const high = Number.parseInt(mapped.at(1)!, 16)
+    const low = Number.parseInt(mapped.at(2)!, 16)
     const ipv4 = `${(high >> 8) & 255}.${high & 255}.${(low >> 8) & 255}.${low & 255}`
     if (ipv4.startsWith(linkLocalIpv4Prefix) || ipv4 === cloudMetadataIpv4) return true
   }
@@ -771,7 +772,7 @@ function toggleRefsExpand(backendId: string, event: Event) {
   if (refsState[backendId]) return
   const state = reactive<RefsPanelState>({ loading: true, error: null, data: null })
   refsState[backendId] = state
-  fetchPipelineRefs(backendId, 1, state)
+  void fetchPipelineRefs(backendId, 1, state)
 }
 
 async function fetchPipelineRefs(backendId: string, page: number, state: RefsPanelState) {
@@ -795,12 +796,12 @@ async function fetchPipelineRefs(backendId: string, page: number, state: RefsPan
 
 function retryRefs(backendId: string) {
   const state = refsState[backendId]
-  if (state) fetchPipelineRefs(backendId, 1, state)
+  if (state) void fetchPipelineRefs(backendId, 1, state)
 }
 
 function pageRefs(backendId: string, page: number) {
   const state = refsState[backendId]
-  if (state) fetchPipelineRefs(backendId, page, state)
+  if (state) void fetchPipelineRefs(backendId, page, state)
 }
 
 function refsPage(backendId: string): number {
@@ -980,7 +981,7 @@ async function createBackend() {
     } else if (data) {
       track(ANALYTICS_EVENTS.MODEL_BACKEND_ADDED, { model_backend_id: data.id })
       closeForm()
-      loadBackends()
+      void loadBackends()
     }
   } catch (e: unknown) {
     formError.value = formatApiError(e)
@@ -1004,7 +1005,7 @@ async function updateBackend() {
       formError.value = formatApiError(err)
     } else if (data) {
       closeEditForm()
-      loadBackends()
+      void loadBackends()
     }
   } catch (e: unknown) {
     formError.value = formatApiError(e)
@@ -1032,7 +1033,7 @@ async function deleteBackend() {
       deleteError.value = formatApiError(err)
     } else if (response.status === 204 || response.ok) {
       deleteConfirmBackendId.value = null
-      loadBackends()
+      void loadBackends()
     }
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)

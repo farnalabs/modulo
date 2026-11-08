@@ -924,10 +924,10 @@ async function revokeKey() {
 }
 
 function copyServerUrl() {
-  copyToClipboard(mcpUrl.value || 'http://localhost:8000', 'server-url')
+  void copyToClipboard(mcpUrl.value || 'http://localhost:8000', 'server-url')
 }
 function copySnippet() {
-  copyToClipboard(mcpConfigSnippet.value, 'mcp-snippet')
+  void copyToClipboard(mcpConfigSnippet.value, 'mcp-snippet')
 }
 
 async function copyToClipboard(text: string, field: string) {

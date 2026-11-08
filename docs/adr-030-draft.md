@@ -220,5 +220,5 @@ keys re-read as 'org', silent widening on rollback is PINNED as accepted
   short-lived; does not cover scheduled long-lived agents.
 - **JSONB per-key spans of Account.preferences writers** (migration to
   `jsonb_set`-style Merkle updates): no schema migration needed once the
-  row lock serialises the blob; 0129's NUL-byte hazard argues against any
+  row lock serializes the blob; 0129's NUL-byte hazard argues against any
   unnecessary change to that column's writer set.

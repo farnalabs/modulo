@@ -53,14 +53,11 @@
 
     <!-- SSO Preset selector (OIDC only) -->
     <div v-if="data.provider_type === 'oidc' && presets.length > 0">
-      <span class="mb-1 block text-sm font-medium" id="sso-preset-heading">
-        {{ $t('components.SsoProviderForm.sso_preset') }}
-      </span>
-      <div
-        class="grid grid-cols-2 gap-2 sm:grid-cols-3"
-        role="group"
-        aria-labelledby="sso-preset-heading"
-      >
+      <fieldset class="border-0 p-0">
+        <legend class="mb-1 block text-sm font-medium">
+          {{ $t('components.SsoProviderForm.sso_preset') }}
+        </legend>
+        <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
         <button
           v-for="p in presets"
           :key="p.id"
@@ -78,7 +75,8 @@
           <SsoBrandMark :preset="p.id" />
           {{ p.label }}
         </button>
-      </div>
+        </div>
+      </fieldset>
     </div>
 
     <!-- Name -->
@@ -271,6 +269,9 @@
       <output v-if="copySuccess" class="ml-2 text-xs text-primary-text" aria-live="polite" data-testid="sso-callback-url-copied">
         {{ $t('components.SsoProviderForm.copied') }}
       </output>
+      <span v-if="copyFailed" role="status" class="ml-2 text-xs text-destructive" data-testid="sso-callback-url-copy-failed">
+        {{ $t('components.SsoProviderForm.copy_failed') }}
+      </span>
     </div>
 
     <!-- Provisioning mode -->
@@ -693,12 +694,14 @@ const derivedScopes = computed(() => {
 
 // Copy to clipboard
 const copySuccess = ref(false)
+const copyFailed = ref(false)
 let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
 function scheduleCopyReset() {
   if (copyResetTimer) clearTimeout(copyResetTimer)
   copyResetTimer = setTimeout(() => {
     copySuccess.value = false
+    copyFailed.value = false
   }, 2000)
 }
 
@@ -706,23 +709,57 @@ onBeforeUnmount(() => {
   if (copyResetTimer) clearTimeout(copyResetTimer)
 })
 
+// Last-resort copy path for non-secure contexts, where navigator.clipboard and
+// ClipboardItem are unavailable. Returns whether the copy succeeded; the caller
+// surfaces the failure when it does not.
+function copyWithExecCommand(text: string): boolean {
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    return document.execCommand('copy') // NOSONAR: required in non-secure contexts, where the async Clipboard API is unavailable.
+  } catch {
+    return false
+  } finally {
+    textarea.remove()
+  }
+}
+
 async function copyCallbackUrl() {
   if (!props.callbackUrl) return
+  copyFailed.value = false
   try {
     await navigator.clipboard.writeText(props.callbackUrl)
     copySuccess.value = true
     scheduleCopyReset()
+    return
   } catch {
-    // Fallback for non-secure contexts
-    const textarea = document.createElement('textarea')
-    textarea.value = props.callbackUrl
-    document.body.appendChild(textarea)
-    textarea.select()
-    document.execCommand('copy')
-    textarea.remove()
+    // Fall through to the ClipboardItem fallback.
+  }
+  // Fallback for browsers that reject writeText but still expose the
+  // supported ClipboardItem API.
+  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+    try {
+      const blob = new Blob([props.callbackUrl], { type: 'text/plain' })
+      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })])
+      copySuccess.value = true
+      scheduleCopyReset()
+      return
+    } catch {
+      // Fall through to the execCommand last resort.
+    }
+  }
+  if (copyWithExecCommand(props.callbackUrl)) {
     copySuccess.value = true
     scheduleCopyReset()
+    return
   }
+  copyFailed.value = true
+  scheduleCopyReset()
 }
 
 function onPresetChange(presetId: string) {

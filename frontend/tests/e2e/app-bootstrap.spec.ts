@@ -18,7 +18,9 @@ test.describe('App Bootstrap', () => {
     await page.goto('/login')
 
     await expect(page.locator('h1')).toBeVisible()
-    await expect(page.locator('text=Agent governance for your agentic SDLC')).toBeVisible()
+    await expect(
+      page.locator('text=Govern the software development lifecycle as AI and automation take on more of the work.'),
+    ).toBeVisible()
     await expect(page.locator('button[type="submit"]')).toContainText('Sign in')
   })
 })

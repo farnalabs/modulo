@@ -427,7 +427,16 @@
       <!-- Custom item template: PrimeVue's default menuitem renders no `title`,
            so a DISABLED item (Resume while the spend circuit breaker is tripped)
            would give the user no reason for the block. Binding `item.tooltip` to
-           the native title keeps the hover explanation on the disabled row. -->
+           the native title keeps the hover explanation on the disabled row.
+
+           The item root MUST stay an `<a>`. PrimeVue 4.5.5's `Menu.onEnterKey`
+           activates the keyboard-focused item by locating
+           `a[data-pc-section="itemlink"]` inside the focused `li` and clicking
+           it; when no such anchor exists it falls back to clicking the `li`,
+           whose click handler lives on the descendant itemContent div (events
+           never propagate downward), so Enter/Space silently no-ops. A
+           `<button>` therefore kills the menu's list-focus -> arrows -> Enter
+           keyboard model - do not "modernise" this element to a button. -->
       <Menu ref="actionMenuRef" :key="actionMenuKey" :model="actionMenuItems" popup>
         <template #item="{ item, label, props }">
           <a v-bind="props.action" :title="item.tooltip">
@@ -588,13 +597,13 @@ function getPipelineTrigger(pipelineId: string): string | undefined {
 }
 
 watch(allPipelines, () => {
-  loadTriggers()
-  loadLastRunDates()
+  void loadTriggers()
+  void loadLastRunDates()
 }, { immediate: true })
 
 watch(selectedFolderId, () => {
-  loadTriggers()
-  loadLastRunDates()
+  void loadTriggers()
+  void loadLastRunDates()
 })
 const totalPipelineCount = ref(0)
 const folderPipelineCounts = computed(() => {
@@ -668,14 +677,14 @@ function onPipelineDragStart(pipeline: PipelineItem, event: DragEvent) {
 function onTableFolderDrop(folderId: string, event: DragEvent) {
   const pipelineId = event.dataTransfer?.getData('text/plain')
   if (pipelineId) {
-    onMovePipeline({ pipelineId, folderId })
+    void onMovePipeline({ pipelineId, folderId })
   }
 }
 
 function onPipelineDrop(targetPipeline: PipelineItem, event: DragEvent) {
   const pipelineId = event.dataTransfer?.getData('text/plain')
   if (pipelineId && pipelineId !== targetPipeline.id) {
-    onMovePipeline({ pipelineId, folderId: targetPipeline.folder_id ?? null })
+    void onMovePipeline({ pipelineId, folderId: targetPipeline.folder_id ?? null })
   }
 }
 
@@ -692,9 +701,9 @@ async function onMovePipeline(ev: { pipelineId: string; folderId: string | null 
 
 function onSelectFolder(folderId: string | null) {
   selectedFolderId.value = folderId
-  loadPipelines()
-  loadFolders()
-  loadTotalCount()
+  void loadPipelines()
+  void loadFolders()
+  void loadTotalCount()
 }
 
 // Move to folder state
@@ -1071,8 +1080,8 @@ async function handleDelete() {
   }
 }
 
-onMounted(async () => {
-  loadFolders()
-  loadTotalCount()
+onMounted(() => {
+  void loadFolders()
+  void loadTotalCount()
 })
 </script>

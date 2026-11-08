@@ -27,7 +27,7 @@ run-time.
 | `name` | String(255) | Unique within org |
 | `description` | String(2000) | Optional |
 | `abstract_name` | String(255) | Optional namespaced reference |
-| `collection_install_id` | UUID | Owning collection install (nullable; denormalised provenance column, no FK constraint) |
+| `collection_install_id` | UUID | Owning collection install (nullable; denormalized provenance column, no FK constraint) |
 | `account_id` | UUID FK → accounts | Owning account |
 | `folder_id` | UUID FK → schema_folders | Optional parent folder |
 | `deprecated` | Boolean | Default false |
@@ -92,7 +92,7 @@ dispatch to the model backend. Profiles are set per-node or per-agent; when
 both are present, the node-level profile wins. Absent on both defaults to
 `verbatim`.
 
-| Profile | Behaviour |
+| Profile | Behavior |
 |---------|-----------|
 | `verbatim` | Identity. The schema is passed to the provider unchanged. |
 | `provider-strict` | Strips JSON Schema keywords the target provider does not support in strict mode. Keywords are stripped per-provider (OpenAI, Anthropic, Google, DeepSeek each have their own unsupported set). Advisory keywords (`default`, `examples`, `title`, `description`, `format`) are always stripped for the strictest common denominator. Structural keywords (`type`, `properties`, `required`, `items`, `anyOf`, `oneOf`, `allOf`, `not`, `if/then/else`, `enum`, `const`, `$ref`, `$defs`) are never stripped. |
@@ -143,7 +143,7 @@ advisory-only stripping.
 
 Modulo validates node output against the assigned schema using
 [jsonschema](https://python-jsonschema.readthedocs.io/) Draft 2020-12. Two
-validator modes control behaviour on validation failure.
+validator modes control behavior on validation failure.
 
 ### Lenient mode (default)
 
@@ -219,7 +219,7 @@ schemas/
     output.active.json        Rendered output schema (sanitised)
 ```
 
-- **Canonical** files carry the raw, sanitised schema (free-text keywords
+- **Canonical** files carry the raw, sanitized schema (free-text keywords
   stripped, `default` preserved).
 - **Active** files carry the rendered form. When the profile is `verbatim`,
   active equals canonical. When the profile is `provider-strict`, active is
@@ -227,9 +227,9 @@ schemas/
   the `$ref`-inlined form (top-level `$defs`/`definitions` removed, no keyword
   stripping).
 
-### Sanitisation rules
+### Sanitization rules
 
-Before writing, every schema is sanitised:
+Before writing, every schema is sanitized:
 
 - **Stripped at every level:** `description`, `title`, `examples`
 - **Never stripped:** `default` (functional keyword)

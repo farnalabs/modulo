@@ -3374,7 +3374,7 @@ async def _resolve_connector_write_outcome(
     )
 
 
-async def _stamp_connector_write_delivered(
+async def _stamp_connector_write_delivered(  # NOSONAR S1172 - result preserves connector hook contract
     session_factory: Callable[..., Any] | None,
     *,
     run_id: str,
@@ -13029,19 +13029,21 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 or "Sandbox attempt cancelled before a terminal node envelope was produced "
                 "(node-deadline watchdog, run cancel, or worker shutdown)"
             )
+            if _cancel_sentinel_hit:
+                _cancel_summary = (
+                    "Sandbox agent cancelled after delivery sentinel observed — "
+                    "delivery_done retained (idempotency gate)"
+                )
+            elif _cancel_pr_url:
+                _cancel_summary = (
+                    "Sandbox agent cancelled after a PR url was observed — pr_url retained as non-gating evidence"
+                )
+            else:
+                _cancel_summary = "Sandbox agent cancelled — triage evidence retained (FAR-704)"
             _cancel_marker: dict[str, Any] = {
                 "_modulo_marker": True,
                 "status": "failed",
-                "summary": (
-                    "Sandbox agent cancelled after delivery sentinel observed — "
-                    "delivery_done retained (idempotency gate)"
-                    if _cancel_sentinel_hit
-                    else (
-                        "Sandbox agent cancelled after a PR url was observed — pr_url retained as non-gating evidence"
-                        if _cancel_pr_url
-                        else "Sandbox agent cancelled — triage evidence retained (FAR-704)"
-                    )
-                ),
+                "summary": _cancel_summary,
                 "raw_output": _redact_raw_output(_drained_tail)[:_stdout_cap],
                 "parse_error": "",
                 "pr_url": _cancel_pr_url,

@@ -510,29 +510,40 @@ class TestFencedResetIsIdempotencyGated:
     def test_every_fenced_reset_call_site_is_behind_an_idempotency_gate(self) -> None:
         """Pin the production call sites AND their safety premise.
 
-        ``_fenced_pending_reset`` is awaited exactly four times: three in the
-        executor and once in ``watchdog_retry``. Three are node-started-capable
-        and are gated on graph idempotency — the in-execute transient requeue
-        behind ``_can_fenced_requeue``, the retry_policy re-dispatch behind
-        ``_retry_policy_applies``, and ``watchdog_retry`` behind its
-        ``not graph_idempotent`` stand-down. The fourth (FAR-2076) is the
-        admission-time deferral: it runs BEFORE the graph streams (zero nodes
-        have executed), so a re-dispatch cannot repeat a side effect and no
-        idempotency gate is required. A new ungated call site that CAN follow
-        node execution — or a removed gate — breaks these assertions, and the
-        functional watchdog test below breaks when its own gate stops working.
+        ``_fenced_pending_reset`` is awaited exactly three times directly: twice
+        in the executor and once in ``watchdog_retry``. A fourth production
+        reset runs in ``retry_policy._redispatch_after_policy`` through the
+        ``fenced_pending_reset_fn`` callback the executor binds to its own
+        method (FAR-2407 moved the retry helpers out of ``executor.py``). Three
+        of the four are node-started-capable and are gated on graph idempotency
+        — the in-execute transient requeue behind ``_can_fenced_requeue``, the
+        retry_policy re-dispatch behind ``retry_policy_applies``, and
+        ``watchdog_retry`` behind its ``not graph_idempotent`` stand-down. The
+        fourth (FAR-2076) is the admission-time deferral: it runs BEFORE the
+        graph streams (zero nodes have executed), so a re-dispatch cannot
+        repeat a side effect and no idempotency gate is required. A new ungated
+        call site that CAN follow node execution — or a removed gate — breaks
+        these assertions, and the functional watchdog test below breaks when
+        its own gate stops working.
         """
-        from modulo.core.pipeline_engine import executor, watchdog_retry
+        from modulo.core.pipeline_engine import executor, retry_policy, watchdog_retry
 
         exec_src = Path(executor.__file__).read_text(encoding="utf-8")
+        rp_src = Path(retry_policy.__file__).read_text(encoding="utf-8")
         wr_src = Path(watchdog_retry.__file__).read_text(encoding="utf-8")
 
-        assert exec_src.count("await self._fenced_pending_reset(") == 3
+        assert exec_src.count("await self._fenced_pending_reset(") == 2
+        assert rp_src.count("await fenced_pending_reset_fn(") == 1
         assert wr_src.count("await executor._fenced_pending_reset(") == 1
+        # The retry_policy call site is only reachable through the executor's
+        # own method — pin the callback wiring so the extracted helper cannot
+        # silently reset through a different (or ungated) path.
+        assert "fenced_pending_reset_fn=self._fenced_pending_reset" in exec_src
         # Gate 1 — in-execute transient requeue (the call sits inside this if).
         assert "if _can_fenced_requeue(" in exec_src
-        # Gate 2 — the retry_policy re-dispatch path.
-        assert "if not _retry_policy_applies(" in exec_src
+        # Gate 2 — the retry_policy re-dispatch path (helpers now live in
+        # ``retry_policy.py``, which gates before it can reach the callback).
+        assert "if not retry_policy_applies(" in rp_src
         # Gate 3 — the watchdog hook's stand-down.
         assert "if is_correction_run or not graph_idempotent:" in wr_src
         # Premise 4 — the admission-time deferral is PRE-NODE: it lives in the

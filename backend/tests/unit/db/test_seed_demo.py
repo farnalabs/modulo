@@ -44,6 +44,8 @@ from modulo.db.models.base import Base
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.evidence import Evidence
+from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
@@ -68,14 +70,16 @@ from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
+from modulo.db.models.variant_group import VariantGroup
 from modulo.db.rls import set_rls_org
-from modulo.db.seed_demo import seed_demo, seed_demo_runtime
+from modulo.db.seed_demo import _demo_eval_result_cutoff, seed_demo, seed_demo_runtime
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import Settings
 
 _VALID_32 = "a" * 32
 _DEMO_EMAIL = "demo@modulo.run"
 _DEMO_PASSWORD = "demo-passphrase-123"
+_DEMO_FIXTURE_NOW = datetime(2026, 11, 6, 23, 59, tzinfo=UTC)
 
 # Tables required by the seed incl. FK dependencies. Scoped create_all because
 # unrelated models use Postgres-only column types SQLite cannot render.
@@ -116,6 +120,10 @@ _SEED_TABLES = {
     # needs the audit chain tables too.
     "audit_events",
     "audit_chain_heads",
+    # FAR-2059: read-only demo surfaces.
+    "variant_groups",
+    "feedback_records",
+    "evidence",
 }
 
 
@@ -150,6 +158,7 @@ async def session(engine) -> AsyncGenerator[AsyncSession, None]:
 
 async def _run_seed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> str | None:
     monkeypatch.setattr(seed_demo_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(seed_demo_module, "_demo_fixture_now", lambda: _DEMO_FIXTURE_NOW)
     # Reads between seeds autobegin an implicit transaction on the shared
     # session; end it so the explicit seed transaction can start cleanly.
     if session.in_transaction():
@@ -203,7 +212,7 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert await _count(session, Team) == 3
     assert await _count(session, TeamMembership) == 3
     assert await _count(session, Eval) == 2
-    assert await _count(session, EvalResult) == 11
+    assert await _count(session, EvalResult) == 5
     # FAR-977: 2 agents; FAR-1248: + Implementer, PR Risk Scorer, PR Opener,
     # Docs Maintainer (every seeded agent node binds an agent).
     assert await _count(session, Agent) == 6
@@ -214,6 +223,9 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert await _count(session, ModelBackend) == 2
     assert await _count(session, ConnectorInstance) == 2
     assert await _count(session, TriggerEvent) == 3
+    assert await _count(session, VariantGroup) == 1
+    assert await _count(session, FeedbackRecord) == 1
+    assert await _count(session, Evidence) == 1
 
     claims = list((await session.execute(select(HitlClaim))).scalars())
     assert {claim.decision for claim in claims} == {None, "approved", "rejected"}
@@ -280,6 +292,14 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     )
 
 
+def test_demo_eval_result_cutoff_matches_dashboard_rolling_window() -> None:
+    now = datetime(2026, 11, 6, 15, 30, tzinfo=UTC)
+
+    assert _demo_eval_result_cutoff(now) == now - timedelta(days=3)
+    midnight_cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=3)
+    assert _demo_eval_result_cutoff(now) > midnight_cutoff
+
+
 async def test_seed_demo_eval_results_anchor_to_most_recent_runs(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -302,12 +322,50 @@ async def test_seed_demo_eval_results_anchor_to_most_recent_runs(
         )
         return set(result.scalars())
 
-    # PR Review Triage has 9 runs; only the newest 6 (_DEMO_EVAL_RESULT_RUN_LIMIT)
-    # receive a result.  An ascending slice would pick {3, 4, 6, 7, 10, 13}.
-    assert await eval_run_numbers("Review completeness") == {20, 19, 16, 13, 10, 7}
-    # The governance pipeline has 5 runs — fewer than the limit — so all of them
-    # are evaluated.
-    assert await eval_run_numbers("PR risk quality") == {1, 2, 9, 12, 17}
+    # Results are selected by the current three-day fixture window, not by run
+    # number: PR Review has the day-1/day-2 samples, while governance has today's
+    # two samples. Older historical runs stay available as run history but do not
+    # make the dashboard's rolling eval card appear current.
+    assert await eval_run_numbers("Review completeness") == {3, 4, 6}
+    assert await eval_run_numbers("PR risk quality") == {1, 2}
+
+
+async def test_seed_converges_demo_eval_results_to_current_fixture_time(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refreshing an existing demo result keeps it inside the live rolling window."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    result = (await session.execute(select(EvalResult).order_by(EvalResult.id))).scalars().first()
+    assert result is not None
+    result.evaluated_at = _DEMO_FIXTURE_NOW - timedelta(days=30)
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    refreshed = (await session.execute(select(EvalResult).where(EvalResult.id == result.id))).scalar_one()
+    run = (await session.execute(select(Run).where(Run.id == refreshed.run_id))).scalar_one()
+    expected = run.completed_at or run.started_at
+    assert expected is not None
+    assert refreshed.evaluated_at == expected
+
+
+async def test_seed_preserves_non_demo_eval_result_provenance(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refreshing a non-seed result must not rewrite its timestamp or provenance."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    result = (await session.execute(select(EvalResult).order_by(EvalResult.id))).scalars().first()
+    assert result is not None
+    original_time = _DEMO_FIXTURE_NOW - timedelta(days=30)
+    result.evaluated_at = original_time
+    result.judge_result_json = {"source": "provider", "sample": False}
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    preserved = (await session.execute(select(EvalResult).where(EvalResult.id == result.id))).scalar_one()
+    assert preserved.evaluated_at == original_time
+    assert preserved.judge_result_json == {"source": "provider", "sample": False}
 
 
 async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -330,6 +388,9 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "model_backends": await _count(session, ModelBackend),
         "connectors": await _count(session, ConnectorInstance),
         "trigger_events": await _count(session, TriggerEvent),
+        "variant_groups": await _count(session, VariantGroup),
+        "feedback_records": await _count(session, FeedbackRecord),
+        "evidence": await _count(session, Evidence),
         "run_daily_facts": await _count(session, RunDailyFact),
     }
 
@@ -353,6 +414,9 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "model_backends": await _count(session, ModelBackend),
         "connectors": await _count(session, ConnectorInstance),
         "trigger_events": await _count(session, TriggerEvent),
+        "variant_groups": await _count(session, VariantGroup),
+        "feedback_records": await _count(session, FeedbackRecord),
+        "evidence": await _count(session, Evidence),
         "run_daily_facts": await _count(session, RunDailyFact),
     }
     assert counts_second == counts_first
@@ -370,6 +434,9 @@ async def test_seed_fixture_ids_are_deterministic_and_org_scoped(
     backends = list((await session.execute(select(ModelBackend).order_by(ModelBackend.name))).scalars())
     connectors = list((await session.execute(select(ConnectorInstance).order_by(ConnectorInstance.name))).scalars())
     notifications = list((await session.execute(select(Notification).order_by(Notification.category))).scalars())
+    variants = list((await session.execute(select(VariantGroup))).scalars())
+    feedback = list((await session.execute(select(FeedbackRecord))).scalars())
+    evidence = list((await session.execute(select(Evidence))).scalars())
 
     assert [row.id for row in backends] == [
         seed_demo_module.demo_fixture_id(org.id, f"model-backend:{row.name}") for row in backends
@@ -380,9 +447,51 @@ async def test_seed_fixture_ids_are_deterministic_and_org_scoped(
     assert [row.id for row in notifications] == [
         seed_demo_module.demo_fixture_id(org.id, f"notification:{row.category}") for row in notifications
     ]
+    assert [row.id for row in variants] == [
+        seed_demo_module.demo_fixture_id(org.id, "variant-group:demo-review-strategies")
+    ]
+    assert [row.id for row in feedback] == [seed_demo_module.demo_fixture_id(org.id, "feedback:demo-review-1")]
+    assert [row.id for row in evidence] == [seed_demo_module.demo_fixture_id(org.id, "evidence:risk.demo_review_score")]
     assert seed_demo_module.demo_fixture_id(org.id, "model-backend:Demo Stub Fast") != seed_demo_module.demo_fixture_id(
         uuid.uuid4(), "model-backend:Demo Stub Fast"
     )
+
+
+async def test_seed_readonly_surfaces_variant_group_exists_without_runs(session: AsyncSession) -> None:
+    """The variant group is runs-independent: the no-runs early return still
+    persists it, while the run-anchored feedback/evidence fixtures are skipped."""
+    account = Account(
+        email="empty@example.com",
+        display_name="Empty",
+        password_hash=hash_password("empty-passphrase-123"),
+        auth_provider="local",
+        active=True,
+    )
+    org = Organisation(name="Empty", slug="empty", settings_json={})
+    session.add_all([account, org])
+    await session.flush()
+    pipeline = Pipeline(
+        organisation_id=org.id,
+        name=seed_demo_module.DEMO_PIPELINE_NAME,
+        account_id=account.id,
+        visibility="org",
+    )
+    session.add(pipeline)
+    await session.commit()
+
+    async with session.begin():
+        await seed_demo_module._seed_demo_readonly_surfaces(
+            session,
+            org,
+            account,
+            {seed_demo_module.DEMO_PIPELINE_NAME: (pipeline, None)},
+        )
+
+    variant = (await session.execute(select(VariantGroup))).scalar_one()
+    assert variant.name == "Demo review strategies"
+    assert variant.pipeline_id == pipeline.id
+    assert await _count(session, FeedbackRecord) == 0
+    assert await _count(session, Evidence) == 0
 
 
 @pytest.mark.parametrize(
@@ -932,6 +1041,9 @@ async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(
         pytest.param(ModelBackend, ModelBackend, id="model-backend"),
         pytest.param(ConnectorInstance, ConnectorInstance, id="connector-instance"),
         pytest.param(Notification, Notification, id="notification"),
+        pytest.param(VariantGroup, VariantGroup, id="variant-group"),
+        pytest.param(FeedbackRecord, FeedbackRecord, id="feedback-record"),
+        pytest.param(Evidence, Evidence, id="evidence"),
     ],
 )
 async def test_seed_sample_data_inserts_recover_after_conflict(
@@ -980,6 +1092,9 @@ async def test_seed_sample_data_inserts_recover_after_conflict(
         pytest.param(ModelBackend, id="model-backend"),
         pytest.param(ConnectorInstance, id="connector-instance"),
         pytest.param(Notification, id="notification"),
+        pytest.param(VariantGroup, id="variant-group"),
+        pytest.param(FeedbackRecord, id="feedback-record"),
+        pytest.param(Evidence, id="evidence"),
     ],
 )
 async def test_seed_reraises_when_recovery_finds_no_winner(
@@ -1669,10 +1784,16 @@ async def test_seed_converges_daily_fact(
     await _run_seed(session, monkeypatch, _demo_settings())
     run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
     fact = (await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == run.id))).scalar_one()
+    fact.run_date = fact.run_date - timedelta(days=7)
+    fact.pipeline_id = None
+    fact.pipeline_name = "stale pipeline"
     fact.status = "failed"
     fact.trigger_type = "manual"
     fact.total_tokens = 0
     fact.total_cost_usd = Decimal(0)
+    fact.duration_ms = None
+    fact.started_at = fact.started_at - timedelta(days=7)
+    fact.completed_at = fact.completed_at - timedelta(days=7)
     await session.commit()
 
     with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
@@ -1685,6 +1806,13 @@ async def test_seed_converges_daily_fact(
     assert converged.trigger_type == run.trigger_type
     assert converged.total_tokens == run.total_tokens
     assert converged.total_cost_usd == run.total_cost_usd
+    assert converged.run_date == run.started_at.date()
+    assert converged.pipeline_id == run.pipeline_id
+    pipeline = (await session.execute(select(Pipeline).where(Pipeline.id == run.pipeline_id))).scalar_one()
+    assert converged.pipeline_name == pipeline.name
+    assert converged.duration_ms == int((run.completed_at - run.started_at).total_seconds() * 1000)
+    assert converged.started_at.replace(tzinfo=None) == run.started_at.replace(tzinfo=None)
+    assert converged.completed_at.replace(tzinfo=None) == run.completed_at.replace(tzinfo=None)
     assert any(record.getMessage() == "demo_seed.daily_fact_converged" for record in caplog.records)
 
 

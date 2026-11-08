@@ -2,16 +2,16 @@
 
 Welcome to Modulo. Get a local Modulo stack running in under 10 minutes, then run your first pipeline.
 
-Modulo is a self-hosted Agentic Delivery Governance platform: an autonomous software factory you run on your own infrastructure, building governed, repeatable AI-assisted software delivery pipelines. There is no hosted SaaS version yet. See [`docs/system-requirements.md`](./system-requirements.md) for supported platforms and minimum resource requirements.
+Modulo is a self-hosted Delivery Governance Platform. Govern the software development lifecycle as AI and automation take on more of the work: record automated work, evaluate its outputs and evidence, control what proceeds, and improve the delivery system. The local stack currently demonstrates governed, repeatable AI-assisted software delivery pipelines; there is no hosted SaaS version yet. See [`docs/system-requirements.md`](./system-requirements.md) for supported platforms and minimum resource requirements.
 
 ## Prerequisites
 
 | Dependency | Version | Required For |
 |---|---|---|
 | **Docker Desktop** | 24+ | PostgreSQL 16 + Redis 8 (local dev) |
-| **Python** | 3.12+ | Backend runtime |
+| **Python** | 3.12-3.14 | Backend runtime (the Docker images build on 3.14) |
 | **`uv`** | 0.11.13 | Python package manager ([install](https://docs.astral.sh/uv/getting-started/installation/)); this is the exact version the Docker images pin |
-| **Node.js** | 20+ | Frontend development (optional). CI pins Node 22; install `pnpm` (the repo pins `pnpm@11.28.10`) rather than npm |
+| **Node.js** | 20+ | Frontend development (optional). CI pins Node 22; install `pnpm` (the repo pins `pnpm@11.28.11`) rather than npm |
 
 ## 1. Start infrastructure
 
@@ -39,7 +39,26 @@ This starts:
 
 If `FERNET_KEY` is unset, `docker compose up` fails immediately with
 `required variable FERNET_KEY is missing a value` and the generation command –
-that is the intended behaviour, not a bug.
+that is the intended behavior, not a bug.
+
+### Optional host-local Ollama or other model backend
+
+The compose files keep SSRF protection enabled by default. If a model backend
+runs on the Docker host, first confirm the address that `host.docker.internal`
+resolves to from a container, then allowlist only that private CIDR in the root
+`.env` file alongside `FERNET_KEY`:
+
+```dotenv
+# Example only: use the CIDR containing the address resolved in your Docker setup.
+SSRF_ALLOW_PRIVATE_RANGES=192.168.65.0/24
+```
+
+The setting is passed to the API and both SAQ workers, so model-backend
+validation and pipeline execution use the same policy. It is an opt-in
+cluster-wide exception: do not use `0.0.0.0/0`, and do not disable SSRF
+validation. Keep the value unset when no host-local/private model endpoint is
+needed. For a host-run backend rather than the compose API, export the same
+variable in the backend process environment before starting it.
 
 ## 2. Set up the backend
 
@@ -96,7 +115,7 @@ SAQ_AUTH_USERNAME=admin SAQ_AUTH_PASSWORD=admin uv run python -m modulo.core.saq
 
 Notes:
 - `python -m saq` takes the **settings module** as its only positional arg; there is no `worker` subcommand in the pinned SAQ version (`saq==0.26.5` in `backend/pyproject.toml`).
-- A local Redis is required (`REDIS_URL`, e.g. `redis://localhost:6380/0` from the compose `redis-local` service).
+- A local Redis is required (`REDIS_URL`, e.g. `redis://localhost:6380/0` from the compose `redis-local` service). The compose mapping is loopback-only; do not publish Redis on `0.0.0.0` or expose port 6379 beyond the local machine.
 - `MODULO_SYSTEM_DATABASE_URL` (set in the step-2 `.env`) is what lets the system worker run its cross-org crons. Without it, `dispatcher_reconcile` never runs and `/healthz/ready` stays `503`.
 - The compose stack (`docker-compose.local.yml`) ships `saq-runner` + `saq-system` services that launch both workers; `saq-system` is **required** for local cron/triggers to fire.
 
@@ -145,7 +164,7 @@ A failure names its own fix. The two signatures it catches:
 
 | Failed step | What it means |
 |---|---|
-| `readiness checkpointer 'degraded'` | `startup.checkpointer_init_failed` – the checkpointer could not initialise, so `checkpoints` / `checkpoint_migrations` were never created |
+| `readiness checkpointer 'degraded'` | `startup.checkpointer_init_failed` – the checkpointer could not initialize, so `checkpoints` / `checkpoint_migrations` were never created |
 | `creating a model backend returned HTTP 500` | `ValueError: FernetSecretsBackend: invalid fernet_key` – the key only passed the `Settings` length check, not Fernet's shape check |
 
 Both mean no credential has ever been stored successfully, so the fix is to

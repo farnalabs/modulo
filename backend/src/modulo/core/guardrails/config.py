@@ -30,6 +30,7 @@ Constraints honoured here (mirroring the engine):
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import uuid
@@ -263,6 +264,42 @@ def mask_config_set(config_set: GuardrailConfigSet) -> GuardrailConfigSet:
         redaction = [rule.model_copy(update={"path": REDACTED_MASK}) for rule in item.redaction]
         masked_items.append(item.model_copy(update={"detection": detection, "redaction": redaction}))
     return config_set.model_copy(update={"guardrails": masked_items})
+
+
+def mask_engine_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return a masked copy of a guardrail row's engine ``config_json``.
+
+    The config-as-code read masks via :func:`mask_config_set`, but the
+    ``eval_type='guardrail'`` rows read through ``GET /evals`` carry the
+    FLATTENED engine form (:func:`to_eval_config`), so they need the same
+    treatment applied directly to that dict. Preserves the topology (action,
+    interception point, capabilities, knobs, field, detection type) while
+    replacing the deny-rule internals — the regex ``pattern``, JSON ``schema``,
+    and every ``redaction[].path`` — with :data:`REDACTED_MASK`.
+
+    Handles both the flattened layout and the documented ``detection``
+    envelope (either can be persisted on a row). A non-mapping/absent section
+    is left untouched so the read surface never raises on a malformed legacy
+    row.
+    """
+    masked = copy.deepcopy(config)
+
+    def _mask_detection(target: dict[str, Any]) -> None:
+        if "pattern" in target:
+            target["pattern"] = REDACTED_MASK
+        if target.get("schema") is not None:
+            target["schema"] = {"redacted": True}
+
+    _mask_detection(masked)
+    envelope = masked.get("detection")
+    if isinstance(envelope, dict):
+        _mask_detection(envelope)
+    redaction = masked.get("redaction")
+    if isinstance(redaction, list):
+        masked["redaction"] = [
+            {**rule, "path": REDACTED_MASK} if isinstance(rule, dict) else rule for rule in redaction
+        ]
+    return masked
 
 
 # ---------------------------------------------------------------------------
@@ -633,6 +670,7 @@ __all__ = [
     "hash_guardrail_item",
     "load_config_set",
     "mask_config_set",
+    "mask_engine_config",
     "to_eval_config",
     "utc_now_iso",
     "validate_config_set",

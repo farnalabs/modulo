@@ -136,7 +136,7 @@ In `backend/src/modulo/core/eval_engine/__init__.py` or graph validator: add a w
 
 ## Test Plan
 
-The test `tests/architecture/test_reviewer_independence.py` asserts:
+The test `backend/tests/architecture/test_reviewer_independence.py` asserts:
 
 1. PR Reviewer pipeline uses `modulo-reviewbot` identity (not `farnalabs`)
 2. Review-type nodes in pipeline configs use separate sandbox/credentials from authoring nodes

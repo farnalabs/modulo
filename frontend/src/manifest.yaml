@@ -441,12 +441,16 @@ routes:
         type: form_page
         <<: *community
         deprecated: false
+        elements:
+          - settings-triggers-details-dialog
 
     /settings/guardrails:
         name: settings-guardrails
         breadcrumb: Guardrails
         parent: /
         product_map: [feat-guardrails]
+
+
         sidebar_group: configure
         sidebar_order: 5
         type: form_page
@@ -951,10 +955,10 @@ routes:
         type: list_page
         pattern: /system-maps
         exact: true
-        visibility: private_preview
+        visibility: public
         <<: *community
-        required_roles: [operator, admin]
-        required_permissions: [system_maps_access]
+        required_roles: [viewer, operator, admin]
+        required_permissions: [system_maps.read]
         deprecated: false
 
     /system-maps/:id:
@@ -968,10 +972,10 @@ routes:
         pattern: /system-maps/:id
         dynamic_params:
           - id
-        visibility: private_preview
+        visibility: public
         <<: *community
-        required_roles: [operator, admin]
-        required_permissions: [system_maps_access]
+        required_roles: [viewer, operator, admin]
+        required_permissions: [system_maps.read]
         deprecated: false
 
     /admin/runners/profiles:
@@ -1072,6 +1076,18 @@ elements:
       - testid: dashboard-system-overview
         type: element
         dynamic_testid: false
+      - testid: system-map-overview-toggle
+        type: button
+        dynamic_testid: false
+      - testid: system-map-overview-content
+        type: element
+        dynamic_testid: false
+      - testid: dashboard-system-discover
+        type: button
+        dynamic_testid: false
+      - testid: dashboard-system-discover-error
+        type: element
+        dynamic_testid: false
       - testid: system-map-overview-loading
         type: element
         dynamic_testid: false
@@ -1085,12 +1101,6 @@ elements:
         type: element
         dynamic_testid: false
       - testid: system-map-node
-        type: element
-        dynamic_testid: false
-      - testid: dashboard-system-discover
-        type: button
-        dynamic_testid: false
-      - testid: system-map-draft-review
         type: element
         dynamic_testid: false
       - testid: dashboard-recent-runs
@@ -1158,6 +1168,9 @@ elements:
       - testid: system-maps-create
         type: button
         dynamic_testid: false
+      - testid: system-maps-discover
+        type: button
+        dynamic_testid: false
       - testid: system-map-create-dialog
         type: dialog
         dynamic_testid: false
@@ -1183,6 +1196,9 @@ elements:
         type: button
         dynamic_testid: false
       - testid: system-maps-loading
+        type: element
+        dynamic_testid: false
+      - testid: system-maps-read-only
         type: element
         dynamic_testid: false
       - testid: page-header-right
@@ -1250,8 +1266,62 @@ elements:
       - testid: system-map-revision-current-badge
         type: element
         dynamic_testid: false
+      - testid: system-map-revision-restore
+        type: button
+        dynamic_testid: false
+      - testid: system-map-revision-diff
+        type: button
+        dynamic_testid: false
+      - testid: system-map-revision-diff-result
+        type: element
+        dynamic_testid: false
+      - testid: system-map-revision-diff-dismiss
+        type: button
+        dynamic_testid: false
       - testid: system-map-discovery-panel
         type: dialog
+        dynamic_testid: false
+      - testid: system-map-discovery-config
+        type: dialog
+        dynamic_testid: false
+      - testid: system-map-discovery-config-backdrop
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-config-close
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-config-cancel
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-submit
+        type: button
+        dynamic_testid: false
+      - testid: system-map-discovery-mode-deterministic
+        type: input
+        dynamic_testid: false
+      - testid: system-map-discovery-mode-ai
+        type: input
+        dynamic_testid: false
+      - testid: system-map-ai-controls
+        type: element
+        dynamic_testid: false
+      - testid: system-map-discovery-backend
+        type: select
+        dynamic_testid: false
+      - testid: system-map-discovery-eval
+        type: select
+        dynamic_testid: false
+      - testid: system-map-discovery-provenance
+        type: element
+        dynamic_testid: false
+      - testid: system-map-discovery-eval-blocked
+        type: element
+        dynamic_testid: false
+      - testid: system-map-discovery-request-loading
+        type: element
+        dynamic_testid: false
+      - testid: system-map-discovery-request-error
+        type: element
         dynamic_testid: false
       - testid: system-map-discovery-backdrop
         type: button
@@ -1278,6 +1348,33 @@ elements:
         type: button
         dynamic_testid: false
       - testid: system-map-relationships
+        type: element
+        dynamic_testid: false
+      - testid: system-map-attribution-bindings-panel
+        type: element
+        dynamic_testid: false
+      - testid: system-map-attribution-bindings
+        type: element
+        dynamic_testid: false
+      - testid: system-map-binding-kind
+        type: select
+        dynamic_testid: false
+      - testid: system-map-binding-node
+        type: select
+        dynamic_testid: false
+      - testid: system-map-binding-pipeline
+        type: select
+        dynamic_testid: false
+      - testid: system-map-binding-trigger
+        type: select
+        dynamic_testid: false
+      - testid: system-map-binding-create
+        type: button
+        dynamic_testid: false
+      - testid: system-map-binding-list
+        type: element
+        dynamic_testid: false
+      - testid: system-map-binding-empty
         type: element
         dynamic_testid: false
       - testid: error-alert-retry
@@ -1359,6 +1456,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/audit:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-audit-verify-chain
         type: button
         dynamic_testid: false
@@ -1465,6 +1565,9 @@ elements:
         type: button
         dynamic_testid: false
     /admin/connectors:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-connectors-add
         type: button
         dynamic_testid: false
@@ -1653,6 +1756,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/costs/components:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: cost-components-add
         type: button
         dynamic_testid: false
@@ -1880,11 +1986,17 @@ elements:
         type: element
         dynamic_testid: false
     /admin/errors/:id:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-error-detail-acknowledge
         type: button
         dynamic_testid: false
       - testid: admin-error-detail-archive
         type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-assign-admin-help
+        type: element
         dynamic_testid: false
       - testid: admin-error-detail-assignee
         type: select
@@ -1912,6 +2024,9 @@ elements:
         dynamic_testid: false
       - testid: admin-error-detail-resolve
         type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-status-admin-help
+        type: element
         dynamic_testid: false
       - testid: admin-error-detail-toggle-context
         type: button
@@ -2038,6 +2153,9 @@ elements:
         type: link
         dynamic_testid: false
     /admin/model-backends:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-model-backends-add
         type: button
         dynamic_testid: false
@@ -2217,6 +2335,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/node-categories:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-node-categories-add
         type: button
         dynamic_testid: false
@@ -2271,6 +2392,9 @@ elements:
         dynamic_testid: false
       - testid: admin-notification-log-empty
         type: element
+        dynamic_testid: false
+      - testid: admin-notification-log-empty-reset
+        type: button
         dynamic_testid: false
       - testid: admin-notification-log-retry
         type: button
@@ -2467,6 +2591,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/parameter-schemas:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: paramschema-new
         type: button
         dynamic_testid: false
@@ -2540,6 +2667,9 @@ elements:
         type: button
         dynamic_testid: false
     /admin/plugins:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-plugins-refresh
         type: button
         dynamic_testid: false
@@ -2850,7 +2980,13 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
+      - testid: settings-monitor-permission-denied
+        type: element
+        dynamic_testid: false
     /admin/users:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-users-add-user
         type: button
         dynamic_testid: false
@@ -3091,6 +3227,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/evidence-redaction:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-evidence-redaction-add
         type: button
         dynamic_testid: false
@@ -4588,6 +4727,9 @@ elements:
       - testid: pipeline-editor-toolbar-group-settings
         type: element
         dynamic_testid: false
+      - testid: pipeline-editor-settings-toggle
+        type: button
+        dynamic_testid: false
       - testid: pipeline-editor-archive
         type: button
         dynamic_testid: false
@@ -4618,8 +4760,23 @@ elements:
       - testid: pipeline-editor-add-node
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-arrange-graph
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-undo-arrange
+        type: button
+        dynamic_testid: false
       - testid: pipeline-editor-fit-view
         type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-connection-announcement
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-router
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-hitl
+        type: element
         dynamic_testid: false
       - testid: pipeline-editor-root
         type: element
@@ -5457,6 +5614,9 @@ elements:
       - testid: diff-compare-btn
         type: button
         dynamic_testid: false
+      - testid: diff-recent-runs-empty
+        type: element
+        dynamic_testid: false
       - testid: diff-identical-banner
         type: element
         dynamic_testid: false
@@ -5537,6 +5697,9 @@ elements:
         type: element
         dynamic_testid: false
     /schemas/editor/:id:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -5665,6 +5828,9 @@ elements:
         type: button
         dynamic_testid: false
     /settings/guardrails:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: settings-guardrails-create
         type: button
         dynamic_testid: false
@@ -5720,6 +5886,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/system/config:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: admin-system-config-refresh
         type: button
         dynamic_testid: false
@@ -6356,6 +6525,9 @@ elements:
         type: element
         dynamic_testid: false
     /settings/assistant:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: assistant-user-skills-add
         type: button
         dynamic_testid: false
@@ -6418,6 +6590,9 @@ elements:
         type: element
         dynamic_testid: false
     /settings/sso:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -6461,6 +6636,9 @@ elements:
         type: button
         dynamic_testid: false
       - testid: sso-callback-url-copied
+        type: element
+        dynamic_testid: false
+      - testid: sso-callback-url-copy-failed
         type: element
         dynamic_testid: false
       - testid: sso-tenant-domain
@@ -6512,6 +6690,9 @@ elements:
         type: button
         dynamic_testid: false
     /settings/teams:
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -6636,6 +6817,12 @@ elements:
         type: button
         dynamic_testid: false
     /settings/triggers:
+      - testid: settings-triggers-details-dialog
+        type: element
+        dynamic_testid: false
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -7150,12 +7337,13 @@ features:
             - "No pre-flight / predictive run-cost ESTIMATE — spend limits and ceilings are enforced reactively at run finalization; there is no 'this run will cost ≈X' projection before dispatch"
             - "Cost-probe ledger self-healing (core/cost_controller/probe.py) tracks run-total vs breakdown consistency as an operational probe, not a surfaced admin report"
     feat-dashboard:
-        description: Home dashboard, metrics overview, and trend series
+        description: Delivery governance dashboard, metrics overview, and trend series
         status: covered
         behaviours:
             - "[x] The dashboard renders token spend, eval rate, and run activity widgets"
             - "[x] Dashboard metrics are scoped to the caller's organisation with per-team breakdown"
             - "[x] The rolling-window timespan toggle (24h/3d/7d/30d/90d + All time, default 3d, persisted in localStorage — FAR-92/FAR-115) scopes the stat cards to the selected window with per-metric trend arrows comparing it to the immediately-preceding equal-length window, value+arrow from the same source (run_daily_facts for counts/status/tokens/success/duration, the org-level org_daily_run_counts ledger row team_id IS NULL for spend, eval_results for pass rate); delta_pct is null with no prior baseline; when the analytics_page flag is off the toggle is hidden and GET /dashboard/summary keeps the legacy all-time shape (days ignored, no period block) with the summary cache keyed dashboard:summary:{org_id}:{days}:{flag} (backend/src/modulo/api/routes/dashboard.py, frontend/src/views/DashboardView.vue)"
+            - "[x] The dashboard System Overview follows the selected time window, can be collapsed with its state persisted in localStorage, and replaces entirely unobserved node grids with an explicit empty state; Team Breakdown includes completed runs and shows eval pass rate only when eval observations exist (frontend/src/views/DashboardView.vue, frontend/src/components/dashboard/DashboardSystemOverview.vue)"
     feat-evidence:
         description: Evidence dashboard with a server-side field-level redaction boundary
         status: covered
@@ -7695,19 +7883,20 @@ features:
         description: Bounded visual authoring of delivery system maps
         status: partial
         behaviours:
-            - "[x] System Maps list page (/system-maps) with create, view, edit, delete, discover actions"
+            - "[x] System Maps list page (/system-maps) with published viewer read access and operator-only create, edit, delete, and discover actions"
             - "[x] Map detail page (/system-maps/:id) with bounded visual graph editor for the backend node/relationship vocabularies, connected edges, endpoint selection, and drag/keyboard repositioning"
             - "[x] Version-aware revision read model ships (FAR-2288): GET /api/v1/system-maps/{map_id}/revisions/current, /revisions/by-time?at=<ISO8601> and /revisions/history resolve the revision active at a point in time (including superseded revisions after a re-publish), and /overview accepts revision_id or at to report metrics against that revision's window, all behind the same internal access gate and tenant/RLS isolation (backend/src/modulo/api/routes/system_maps.py, test_system_maps_version_aware.py, test_system_map_repository.py)"
-            - "[x] Revision history sidebar with current/historical revision switching (FAR-2288 follow-up): the sidebar offers a View current action backed by GET /revisions/current and a datetime picker that resolves GET /revisions/by-time?at=<ISO8601> (the local datetime is converted to an absolute instant client-side), the matched revision's graph then loads through the shared per-revision read path and is highlighted as the active revision, the currently published revision is badged Current, and the 404 that GET /revisions/by-time raises for an unmatched timestamp is mapped onto a distinct \"No revision was active at that time\" error instead of silently leaving the previous revision on screen (frontend/src/components/system-maps/SystemMapRevisionSidebar.vue, frontend/src/views/SystemMapDetailView.vue, frontend/src/stores/systemMaps.ts; SystemMapComponents.coverage.spec.ts, SystemMapDetailView.spec.ts, systemMapsStoreCrud.spec.ts)"
+            - "[x] Revision history sidebar with current/historical revision switching (FAR-2288 follow-up): the sidebar reads GET /revisions/history on map load so every published, draft and archived revision appears, offers a View current action backed by GET /revisions/current and a datetime picker that resolves GET /revisions/by-time?at=<ISO8601> (the local datetime is converted to an absolute instant client-side), the matched revision's graph then loads through the shared per-revision read path and is highlighted as the active revision, the currently published revision is badged Current, and the 404 that GET /revisions/by-time raises for an unmatched timestamp is mapped onto a distinct \"No revision was active at that time\" error instead of silently leaving the previous revision on screen (frontend/src/components/system-maps/SystemMapRevisionSidebar.vue, frontend/src/views/SystemMapDetailView.vue, frontend/src/stores/systemMaps.ts; SystemMapComponents.coverage.spec.ts, SystemMapDetailView.spec.ts, systemMapsStoreCrud.spec.ts)"
             - "[x] Draft revision creation and save with node/relationship/loop-config payload"
             - "[x] Publish revision (validation + status change to published)"
             - "[x] Archive revision (status change to archived)"
             - "[x] Discover My System integration (POST /api/v1/system-maps/discover) with accept/reject review panel that applies accepted nodes/relationships to the draft (FAR-2288): the System Maps list runs discovery and opens the resulting draft, the detail view runs discovery and opens the review panel, and the dashboard System Overview card runs the same discovery before deep-linking to the draft with ?discovery=1 so the review panel opens on arrival (frontend/src/views/SystemMapsView.vue, SystemMapDetailView.vue, components/dashboard/DashboardSystemOverview.vue, components/system-maps/SystemMapDiscoveryPanel.vue, stores/systemMaps.ts)"
             - "[x] MCP exposes System Maps discovery (FAR-2288): discover_system_map is gated by the same internal System Maps access predicate, reuses the REST discovery handler in a fresh session, and returns the discovery report or a branchable error code (backend/src/modulo/api/mcp_server.py, backend/src/modulo/core/mcp/scope_validator.py, backend/tests/unit/mcp/test_mcp_system_map_discovery.py)"
             - "[ ] MCP authoring, publish, diff, restore and overview tools are not exposed: discovery is the only System Maps capability available to MCP callers (backend/src/modulo/api/mcp_server.py)"
+            - "[x] Operators can compare a historical revision with the published revision from the revision sidebar; the view calls POST /api/v1/system-maps/{map_id}/revisions/{rev_id}/diff and renders changed node, relationship, loop-config, and content counts (frontend/src/components/system-maps/SystemMapRevisionSidebar.vue, frontend/src/views/SystemMapDetailView.vue, frontend/src/stores/systemMaps.ts)"
             - "[ ] Re-scan existing organisation resources into existing draft with added/removed/ambiguous diff and operator edit preservation (deferred: discovery can be re-run and an unchanged inventory resolves to the same revision identity, but there is no re-scan-into-existing-draft endpoint reporting an added/removed/ambiguous diff while preserving operator edits)"
             - "[x] No auto-publish — operator must explicitly publish"
-            - "[x] Access gated by system_maps feature + developer mode + operator/admin + system_maps_access permission"
+            - "[x] Published reads are gated by system_maps_read + system_maps.read; authoring, discovery, publish, archive, restore, apply, loop dispatch and MCP discovery remain gated by system_maps + developer mode + operator/admin + system_maps_access"
             - "[x] i18n keys and product-map test IDs registered"
             - "[x] Accessibility: STATE-1/2/6, A11Y-1/2/4, I18N-1, TYPE-1, VIS-4"
         deferrals:

@@ -1,5 +1,6 @@
 """Unit tests for GitHubTicketTracker connector."""
 
+import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -305,3 +306,123 @@ class TestWrite:
 class TestConnectorType:
     def test_returns_github(self, tracker: GitHubTicketTracker) -> None:
         assert tracker.connector_type.value == "github"
+
+
+class TestHealthCheckCancelledError:
+    @patch("httpx.AsyncClient")
+    async def test_health_check_reraises_cancelled_error(
+        self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.get.side_effect = asyncio.CancelledError()
+
+        with pytest.raises(asyncio.CancelledError):
+            await tracker.health_check()
+
+
+class TestCreateTicketBranches:
+    @patch("httpx.AsyncClient")
+    async def test_create_ticket_with_description(
+        self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.post.return_value = _response(201, json=_make_mock_issue())
+
+        ticket = await tracker.create_ticket("Fix login bug", description="SSO broken")
+
+        assert ticket.title == "Fix login bug"
+        mock_client.post.assert_called_once()
+        call_kwargs = mock_client.post.call_args[1]
+        assert call_kwargs["json"]["body"] == "SSO broken"
+
+    @patch("httpx.AsyncClient")
+    async def test_create_ticket_with_labels(self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.post.return_value = _response(201, json=_make_mock_issue())
+
+        ticket = await tracker.create_ticket("Fix login bug", labels=["bug", "urgent"])
+
+        assert ticket.title == "Fix login bug"
+        mock_client.post.assert_called_once()
+        call_kwargs = mock_client.post.call_args[1]
+        assert call_kwargs["json"]["labels"] == ["bug", "urgent"]
+
+    @patch("httpx.AsyncClient")
+    async def test_create_ticket_with_description_and_labels(
+        self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.post.return_value = _response(201, json=_make_mock_issue())
+
+        ticket = await tracker.create_ticket("Fix login bug", description="SSO broken", labels=["bug"])
+
+        assert ticket.title == "Fix login bug"
+        mock_client.post.assert_called_once()
+        call_kwargs = mock_client.post.call_args[1]
+        assert call_kwargs["json"]["body"] == "SSO broken"
+        assert call_kwargs["json"]["labels"] == ["bug"]
+
+
+class TestUpdateTicketBranches:
+    @patch("httpx.AsyncClient")
+    async def test_update_ticket_status(self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.patch.return_value = _response(200, json=_make_mock_issue({"closed_at": "2025-01-17T08:00:00Z"}))
+
+        ticket = await tracker.update_ticket("42", status="closed")
+
+        assert ticket.status == "closed"
+        mock_client.patch.assert_called_once()
+        call_kwargs = mock_client.patch.call_args[1]
+        assert call_kwargs["json"]["state"] == "closed"
+
+    @patch("httpx.AsyncClient")
+    async def test_update_ticket_labels(self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.patch.return_value = _response(200, json=_make_mock_issue())
+
+        await tracker.update_ticket("42", labels=["bug", "fixed"])
+
+        mock_client.patch.assert_called_once()
+        call_kwargs = mock_client.patch.call_args[1]
+        assert call_kwargs["json"]["labels"] == ["bug", "fixed"]
+
+    @patch("httpx.AsyncClient")
+    async def test_update_ticket_title(self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.patch.return_value = _response(200, json=_make_mock_issue({"title": "Updated title"}))
+
+        ticket = await tracker.update_ticket("42", title="Updated title")
+
+        assert ticket.title == "Updated title"
+        mock_client.patch.assert_called_once()
+        call_kwargs = mock_client.patch.call_args[1]
+        assert call_kwargs["json"]["title"] == "Updated title"
+
+    @patch("httpx.AsyncClient")
+    async def test_update_ticket_status_labels_title(
+        self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.patch.return_value = _response(
+            200,
+            json=_make_mock_issue({"closed_at": "2025-01-17T08:00:00Z", "title": "Updated title"}),
+        )
+
+        ticket = await tracker.update_ticket("42", status="closed", labels=["fixed"], title="Updated title")
+
+        assert ticket.status == "closed"
+        assert ticket.title == "Updated title"
+        mock_client.patch.assert_called_once()
+        call_kwargs = mock_client.patch.call_args[1]
+        assert call_kwargs["json"]["state"] == "closed"
+        assert call_kwargs["json"]["labels"] == ["fixed"]
+        assert call_kwargs["json"]["title"] == "Updated title"

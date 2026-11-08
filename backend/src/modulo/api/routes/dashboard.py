@@ -44,7 +44,7 @@ from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, SUCCESS_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -417,15 +417,21 @@ async def _load_team_metrics(
     for team in teams:
         tid = str(team.id)
         run_data = team_run_data.get(tid, {})
-        team_total = sum(run_data.get(s, 0) for s in _TRACKED_STATUSES)
+        completed = sum(run_data.get(s, 0) for s in SUCCESS_STATUSES)
+        idle = sum(run_data.get(s, 0) for s in _IDLE_STATUSES)
+        team_total = sum(run_data.values())
         team_statuses = {s: run_data.get(s, 0) for s in _TRACKED_STATUSES}
-        team_statuses["idle"] = sum(run_data.get(s, 0) for s in _IDLE_STATUSES)
+        team_statuses["completed"] = completed
+        team_statuses["idle"] = idle
+        for status in ACTIVE_RUN_STATUSES | TERMINAL_STATUSES:
+            team_statuses.setdefault(status, run_data.get(status, 0))
 
         team_metrics.append(
             {
                 "id": tid,
                 "name": team.name,
                 "total_runs": team_total,
+                "completed_runs": completed,
                 "active_pipelines": team_pipeline_data.get(tid, 0),
                 "run_counts_by_status": team_statuses,
             }

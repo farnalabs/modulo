@@ -348,7 +348,6 @@ def test_apply_one_system_map_create() -> None:
         executor,
         entity,
         "created",
-        report=report,
         current_system_maps=current_system_maps,
         map_ids=map_ids,
     )
@@ -375,7 +374,6 @@ def test_apply_one_system_map_create_with_revision() -> None:
         executor,
         entity,
         "created",
-        report=report,
         current_system_maps=current_system_maps,
         map_ids=map_ids,
     )
@@ -403,7 +401,6 @@ def test_apply_one_system_map_update() -> None:
         executor,
         entity,
         "updated",
-        report=report,
         current_system_maps=current_system_maps,
         map_ids=map_ids,
     )

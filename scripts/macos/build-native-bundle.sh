@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
-# Build the genuine arm64 macOS bundle. Every input is downloaded from an
+# Build a genuine native macOS bundle. Every input is downloaded from an
 # upstream source and verified before it is compiled or copied into the app.
 #
 # The Python runtime is the pinned python-build-standalone CPython distribution,
-# not a CPython source build. It is trusted here as a native arm64 runtime input;
-# the workflow proves its architecture, version, and linkage before packaging.
+# not a CPython source build. The third argument selects the native architecture
+# (arm64 or x86_64); arm64 remains the default for existing callers.
 set -euo pipefail
 
 VERSION=${1:?version required}
 BUILD_ROOT=${2:?build root required}
+MACOS_ARCH=${3:-arm64}
+case "${MACOS_ARCH}" in
+  arm64) PBS_ARCH=aarch64; PBS_MACHO_ARCH=arm64 ;;
+  x86_64) PBS_ARCH=x86_64; PBS_MACHO_ARCH=x86_64 ;;
+  *) echo "unsupported macOS architecture: ${MACOS_ARCH}" >&2; exit 2 ;;
+esac
 ROOT_DIR="$(cd -- "$(dirname -- "$0")/../.." && pwd)"
 APP_NAME="Modulo-${VERSION}.app"
 APP_ROOT="${BUILD_ROOT}/${APP_NAME}"
@@ -16,10 +22,37 @@ BUNDLE_ROOT="${APP_ROOT}/Contents/Resources/bundle"
 DOWNLOADS="${BUILD_ROOT}/downloads"
 mkdir -p "${DOWNLOADS}" "${BUNDLE_ROOT}" "${APP_ROOT}/Contents/MacOS" "${APP_ROOT}/Contents/Resources"
 
+# Render the checked-in brand mark into the native icon format before signing.
+# qlmanage is part of macOS and preserves the SVG's existing Modulo mark without
+# introducing a second logo source. iconutil then embeds the complete @1x/@2x
+# icon family in Contents/Resources, where Finder and LaunchServices read it.
+ICON_SOURCE="${ROOT_DIR}/scripts/macos/assets/Modulo.svg"
+ICONSET_DIR="${BUILD_ROOT}/Modulo.iconset"
+[[ -s "${ICON_SOURCE}" ]]
+rm -rf "${ICONSET_DIR}"
+mkdir -p "${ICONSET_DIR}"
+qlmanage -t -s 1024 -o "${BUILD_ROOT}" "${ICON_SOURCE}" >/dev/null
+ICON_RENDERED="${BUILD_ROOT}/Modulo.svg.png"
+[[ -s "${ICON_RENDERED}" ]]
+sips -z 16 16 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_16x16.png" >/dev/null
+sips -z 32 32 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_16x16@2x.png" >/dev/null
+sips -z 128 128 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_128x128.png" >/dev/null
+sips -z 256 256 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_128x128@2x.png" >/dev/null
+sips -z 256 256 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_256x256.png" >/dev/null
+sips -z 512 512 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_256x256@2x.png" >/dev/null
+sips -z 512 512 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_512x512.png" >/dev/null
+sips -z 1024 1024 "${ICON_RENDERED}" --out "${ICONSET_DIR}/icon_512x512@2x.png" >/dev/null
+iconutil --convert icns --output "${APP_ROOT}/Contents/Resources/Modulo.icns" "${ICONSET_DIR}"
+[[ -s "${APP_ROOT}/Contents/Resources/Modulo.icns" ]]
+
 PBS_RELEASE=20260901
 PBS_VERSION=3.12.14
-PBS_TARBALL="cpython-${PBS_VERSION}+${PBS_RELEASE}-aarch64-apple-darwin-install_only.tar.gz"
-PBS_SHA256="3ee3ee547cedfeb7c2b16b2b7156039f7b470bb8f857e226fd3d2eb11db83c76"
+PBS_TARBALL="cpython-${PBS_VERSION}+${PBS_RELEASE}-${PBS_ARCH}-apple-darwin-install_only.tar.gz"
+if [[ "${MACOS_ARCH}" == arm64 ]]; then
+  PBS_SHA256="3ee3ee547cedfeb7c2b16b2b7156039f7b470bb8f857e226fd3d2eb11db83c76"
+else
+  PBS_SHA256="2e31b23f3f1319f707d0e620b48847a0046577541d357276821f9f1b5492e0ba"
+fi
 PG_VERSION=16.15
 PG_SHA256="4f200ca23dfb120ff9838f13ce06014aad1d3c432d16ee9f93ab2000c0eeef7b"
 REDIS_VERSION=8.0.2
@@ -27,7 +60,7 @@ REDIS_SHA256="caf3c0069f06fc84c5153bd2a348b204c578de80490c73857bee01d9b5d7401f"
 
 # A placeholder digest is a deliberate build-stop, never a release path.
 case "${PBS_SHA256}" in
-  REPLACE_*|'' ) echo "::error::python-build-standalone macOS arm64 SHA-256 has not been provisioned" >&2; exit 1 ;;
+  REPLACE_*|'' ) echo "::error::python-build-standalone macOS ${MACOS_ARCH} SHA-256 has not been provisioned" >&2; exit 1 ;;
   * ) ;;
 esac
 
@@ -44,7 +77,7 @@ download_verify "https://github.com/redis/redis/archive/refs/tags/${REDIS_VERSIO
 tar -xzf "${DOWNLOADS}/${PBS_TARBALL}" -C "${BUNDLE_ROOT}"
 mv "${BUNDLE_ROOT}/python" "${BUNDLE_ROOT}/runtime"
 # Verify the trusted runtime input before it becomes part of the release bundle.
-file "${BUNDLE_ROOT}/runtime/bin/python3" | grep -E 'Mach-O 64-bit executable arm64' >/dev/null
+file "${BUNDLE_ROOT}/runtime/bin/python3" | grep -E "Mach-O 64-bit executable ${PBS_MACHO_ARCH}" >/dev/null
 otool -L "${BUNDLE_ROOT}/runtime/bin/python3" | grep -q '/usr/lib/libSystem.B.dylib'
 "${BUNDLE_ROOT}/runtime/bin/python3" --version | grep -Fqx "Python ${PBS_VERSION}"
 
@@ -88,8 +121,8 @@ cp -a "${ROOT_DIR}/frontend/dist/." "${BUNDLE_ROOT}/frontend-dist/"
 mkdir -p "${BUNDLE_ROOT}/backend"
 cp -a "${ROOT_DIR}/backend/src" "${BUNDLE_ROOT}/backend/src"
 cp "${ROOT_DIR}/backend/alembic.ini" "${ROOT_DIR}/backend/pyproject.toml" "${ROOT_DIR}/backend/uv.lock" "${BUNDLE_ROOT}/backend/"
-test -f "${BUNDLE_ROOT}/backend/alembic.ini"
-test -d "${BUNDLE_ROOT}/backend/src/modulo/db/migrations"
+[[ -f "${BUNDLE_ROOT}/backend/alembic.ini" ]]
+[[ -d "${BUNDLE_ROOT}/backend/src/modulo/db/migrations" ]]
 # Keep Alembic's config beside the bundled backend source. The app starts from
 # launchd's data directory, so the relative script_location in alembic.ini must
 # be resolved from this installed bundle rather than the build checkout.
@@ -223,7 +256,7 @@ chmod 755 "${APP_ROOT}/Contents/MacOS/modulo"
 # scripts/ owns the Info.plist contents (the gate0 filter watches it too).
 (
   cd "${APP_ROOT}/Contents"
-  "${ROOT_DIR}/scripts/create-macos-info-plist.sh" "${VERSION}" "Info.plist"
+  "${ROOT_DIR}/scripts/create-macos-info-plist.sh" "${VERSION}" "Info.plist" "${MACOS_ARCH}"
 )
 
 echo "${VERSION}" > "${BUNDLE_ROOT}/VERSION"

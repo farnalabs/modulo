@@ -33,6 +33,7 @@ vi.mock('vue-router', () => ({
 }))
 
 import SystemMapDetailView from '../views/SystemMapDetailView.vue'
+import DiscoveryConfigPanel from '../components/system-maps/SystemMapDiscoveryConfigPanel.vue'
 import { useSystemMapsStore } from '../stores/systemMaps'
 import enUS from '../locales/en-US.js'
 
@@ -60,6 +61,10 @@ describe('SystemMapDetailView load failures', () => {
     mockRoute.params = { id: 'map-1' }
     mockRoute.query = {}
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
   })
 
   it('offers an inline retry that re-runs the failed load', async () => {
@@ -67,6 +72,12 @@ describe('SystemMapDetailView load failures', () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') {
         return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      if (path === '/api/v1/system-maps/{map_id}/revisions/history') {
+        return Promise.resolve({ data: { system_map_id: 'map-1', revisions: [] } })
+      }
+      if (path === '/api/v1/system-maps/{map_id}/attribution-bindings') {
+        return Promise.resolve({ data: [] })
       }
       mapCalls += 1
       if (mapCalls === 1) return Promise.resolve({ error: { detail: 'map unavailable' } })
@@ -86,12 +97,50 @@ describe('SystemMapDetailView load failures', () => {
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(true)
   })
+
+  it('renders the unavailable state without a retry on a 402 feature_required', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      return Promise.resolve({
+        error: {
+          type: 'urn:problem:modulo:feature_required',
+          status: 402,
+          detail: 'system_maps_read is not enabled for this organisation',
+        },
+        response: { status: 402 },
+      })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('This system map is not available on your plan')
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(false)
+  })
+
+  it('keeps the retryable error state for a genuine server failure', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+      }
+      return Promise.resolve({ error: { detail: 'down' }, response: { status: 500 } })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('This system map is not available on your plan')
+  })
 })
 
 describe('SystemMapDetailView authoring actions', () => {
   const HeaderStub = {
     name: 'HeaderBar',
-    props: ['map', 'revision', 'saving'],
+    props: ['map', 'revision', 'saving', 'readOnly'],
     emits: ['toggle-sidebar', 'save', 'publish', 'archive', 'discover'],
     template: '<div data-testid="header-stub" />',
   }
@@ -103,8 +152,8 @@ describe('SystemMapDetailView authoring actions', () => {
   }
   const RevisionStub = {
     name: 'RevisionSidebar',
-    props: ['mapId', 'revisions', 'activeRevisionId', 'activeMap'],
-    emits: ['select-revision', 'select-current', 'select-by-time', 'new-draft', 'discover'],
+    props: ['mapId', 'revisions', 'activeRevisionId', 'activeMap', 'readOnly'],
+    emits: ['select-revision', 'select-current', 'select-by-time', 'new-draft', 'restore-revision', 'diff-revision', 'discover'],
     template: '<div data-testid="revision-stub" />',
   }
   const DiscoveryStub = {
@@ -112,6 +161,11 @@ describe('SystemMapDetailView authoring actions', () => {
     props: ['discovery'],
     emits: ['close', 'save'],
     template: '<div data-testid="discovery-stub" />',
+  }
+  const AttributionStub = {
+    name: 'SystemMapAttributionBindings',
+    props: ['nodes', 'bindings', 'readOnly', 'createHandler', 'deleteHandler'],
+    template: '<div data-testid="attribution-stub" />',
   }
 
   function mountWithStubs() {
@@ -124,6 +178,7 @@ describe('SystemMapDetailView authoring actions', () => {
           GraphEditor: GraphStub,
           RevisionSidebar: RevisionStub,
           DiscoveryPanel: DiscoveryStub,
+          SystemMapAttributionBindings: AttributionStub,
         },
       },
     })
@@ -150,6 +205,10 @@ describe('SystemMapDetailView authoring actions', () => {
     mockRoute.query = {}
     if (mockPost) mockPost.mockReset()
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
       if (path === '/api/v1/system-maps/{map_id}/revisions/{rev_id}') return Promise.resolve({ data: { revision: { id: 'rev-2', revision_number: 2, status: 'draft' }, nodes: [], relationships: [] } })
@@ -389,6 +448,135 @@ describe('SystemMapDetailView authoring actions', () => {
     expect(wrapper.text()).toContain('Could not save draft revision')
   })
 
+  it('restores a historical revision as a new draft from the sidebar', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+    const restore = vi.spyOn(store, 'restoreRevisionAsNew').mockResolvedValue({ id: 'rev-3', revision_number: 3, status: 'draft' } as never)
+
+    wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-2')
+    await flushPromises()
+
+    expect(restore).toHaveBeenCalledWith('map-1', 'rev-2')
+    expect(wrapper.text()).not.toContain('Could not restore revision')
+  })
+
+  it('reports restore failures and falls back for non-Error rejections', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+    const restore = vi.spyOn(store, 'restoreRevisionAsNew')
+
+    restore.mockRejectedValueOnce(new Error('Could not restore revision'))
+    wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not restore revision')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    restore.mockRejectedValueOnce('offline')
+    wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not restore revision')
+  })
+
+  it('diffs a revision against the published revision and renders the change counts', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    store.activeMap = { id: 'map-1', name: 'Map one', published_revision_id: 'rev-1' } as never
+    await flushPromises()
+    const diff = vi.spyOn(store, 'diffRevision').mockResolvedValue({
+      base_revision_id: 'rev-2',
+      base_revision_number: 2,
+      target_revision_id: 'rev-1',
+      target_revision_number: 1,
+      nodes_added: ['node-a'],
+      nodes_removed: [],
+      content_json_changed: true,
+    } as never)
+
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+
+    expect(diff).toHaveBeenCalledWith('map-1', 'rev-2', 'rev-1')
+    const panel = wrapper.get('[data-testid="system-map-revision-diff-result"]')
+    expect(panel.text()).toContain('Nodes added: 1')
+    expect(panel.text()).not.toContain('Nodes removed')
+    expect(panel.text()).toContain('Content changed')
+
+    await panel.get('[data-testid="system-map-revision-diff-dismiss"]').trigger('click')
+    expect(wrapper.find('[data-testid="system-map-revision-diff-result"]').exists()).toBe(false)
+  })
+
+  it('clears a rendered diff when switching revisions or time', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    store.activeMap = { id: 'map-1', name: 'Map one', published_revision_id: 'rev-1' } as never
+    await flushPromises()
+    vi.spyOn(store, 'diffRevision').mockResolvedValue({
+      base_revision_id: 'rev-2',
+      base_revision_number: 2,
+      target_revision_id: 'rev-1',
+      target_revision_number: 1,
+      nodes_added: ['node-a'],
+    } as never)
+
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-revision-diff-result"]').exists()).toBe(true)
+
+    wrapper.findComponent(RevisionStub).vm.$emit('select-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-revision-diff-result"]').exists()).toBe(false)
+
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-revision-diff-result"]').exists()).toBe(true)
+
+    wrapper.findComponent(RevisionStub).vm.$emit('select-by-time', '2026-01-15T10:30:00Z')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-revision-diff-result"]').exists()).toBe(false)
+  })
+
+  it('skips diffing when the map has no published revision or is not loaded', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    const diff = vi.spyOn(store, 'diffRevision')
+
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+    expect(diff).not.toHaveBeenCalled()
+
+    store.activeMap = null
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+    expect(diff).not.toHaveBeenCalled()
+  })
+
+  it('reports diff failures and falls back for non-Error rejections', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    store.activeMap = { id: 'map-1', name: 'Map one', published_revision_id: 'rev-1' } as never
+    await flushPromises()
+    const diff = vi.spyOn(store, 'diffRevision')
+
+    diff.mockRejectedValueOnce(new Error('Could not compare revisions'))
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not compare revisions')
+
+    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    diff.mockRejectedValueOnce('offline')
+    wrapper.findComponent(RevisionStub).vm.$emit('diff-revision', 'rev-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Could not compare revisions')
+  })
+
   it('runs discovery, opens the review panel and saves selections', async () => {
     seed(mockPost)
     const report = { draft_map_id: 'map-1', draft_revision_id: 'rev-1', inferred_nodes: [{ node_key: 'agent-1', node_type: 'agent', display_name: 'Agent' }], inferred_edges: [] }
@@ -400,6 +588,9 @@ describe('SystemMapDetailView authoring actions', () => {
     await flushPromises()
 
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-discovery-submit"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
     await flushPromises()
     expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
 
@@ -416,6 +607,8 @@ describe('SystemMapDetailView authoring actions', () => {
     await flushPromises()
 
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('Could not discover system map')
 
@@ -434,10 +627,91 @@ describe('SystemMapDetailView authoring actions', () => {
     mockPost.mockResolvedValue({ data: { draft_map_id: 'map-1', draft_revision_id: 'rev-1', inferred_nodes: [], inferred_edges: [] } })
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
     await flushPromises()
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
+    await flushPromises()
     wrapper.findComponent(DiscoveryStub).vm.$emit('close')
     await flushPromises()
 
     expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(false)
+  })
+
+  it('passes AI selections into discovery and ignores close and re-entry while submitting', async () => {
+    seed(mockPost)
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    let resolveDiscover!: (value: unknown) => void
+    const pending = new Promise((resolve) => { resolveDiscover = resolve })
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/system-maps/discover') return pending
+      return Promise.resolve({ data: { id: 'rev-3', revision_number: 3, status: 'draft' } })
+    })
+
+    wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    const config = wrapper.findComponent(DiscoveryConfigPanel)
+    expect(config.exists()).toBe(true)
+
+    config.vm.$emit('submit', { modelBackendId: 'backend-1', modelBackendName: 'Primary', evalDefinitionId: 'eval-1', evalName: 'Judge', evalVersion: 2 })
+    await flushPromises()
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/discover', expect.objectContaining({
+      body: expect.objectContaining({ model_backend_id: 'backend-1', eval_definition_id: 'eval-1' }),
+    }))
+
+    config.vm.$emit('close')
+    config.vm.$emit('submit', { modelBackendId: 'backend-2', modelBackendName: 'Other' })
+    await flushPromises()
+    expect(wrapper.findComponent(DiscoveryConfigPanel).exists()).toBe(true)
+
+    resolveDiscover({ data: { draft_map_id: 'map-1', inferred_nodes: [], inferred_edges: [] } })
+    await flushPromises()
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
+    expect(wrapper.findComponent(DiscoveryConfigPanel).exists()).toBe(false)
+  })
+
+  it('derives the eval identity without a version when none is supplied', async () => {
+    seed(mockPost)
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/system-maps/discover') return Promise.resolve({ data: { draft_map_id: 'map-1', inferred_nodes: [], inferred_edges: [] } })
+      return Promise.resolve({ data: { id: 'rev-3', revision_number: 3, status: 'draft' } })
+    })
+
+    wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    wrapper.findComponent(DiscoveryConfigPanel).vm.$emit('submit', { evalDefinitionId: 'eval-1', evalName: 'Judge' })
+    await flushPromises()
+
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/system-maps/discover', expect.objectContaining({
+      body: { name: expect.any(String), description: expect.any(String) },
+    }))
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
+  })
+
+  it('refuses to save AI suggestions until the eval gate passes', async () => {
+    seed(mockPost)
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/system-maps/discover') {
+        return Promise.resolve({ data: { draft_map_id: 'map-1', inferred_nodes: [], inferred_edges: [], ai_assisted: true, eval_gate_passed: false, eval_gate_verdict: 'blocked' } })
+      }
+      return Promise.resolve({ data: { id: 'rev-3', revision_number: 3, status: 'draft' } })
+    })
+
+    wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
+
+    mockPost.mockClear()
+    wrapper.findComponent(DiscoveryStub).vm.$emit('save', { acceptedNodes: [], acceptedEdges: [], rejectedNodes: [], rejectedEdges: [] })
+    await flushPromises()
+
+    expect(mockPost).not.toHaveBeenCalledWith('/api/v1/system-maps/{map_id}/revisions', expect.anything())
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
   })
 
   it('opens the discovery review panel for the dashboard deep link', async () => {
@@ -461,12 +735,152 @@ describe('SystemMapDetailView authoring actions', () => {
 
     expect(wrapper.findComponent(GraphStub).props('readOnly')).toBe(true)
   })
+
+  it('renders the published detail read-only for a viewer', async () => {
+    mockIsOperator.value = false
+    mockPlanStore.devMode = false
+    mockPlanStore.userPermissions = ['system_maps.read']
+    mockGet.mockImplementation(() =>
+      Promise.resolve({ data: { id: 'map-1', name: 'Demo Delivery System', published_revision_id: 'rev-1' } }),
+    )
+
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+    store.graph = { revision: { id: 'rev-1', revision_number: 1, status: 'published' }, nodes: [], relationships: [], loop_configs: [] } as never
+    await flushPromises()
+
+    expect(mockGet).not.toHaveBeenCalledWith('/api/v1/admin/feature-flags')
+    expect(wrapper.findComponent(HeaderStub).props('readOnly')).toBe(true)
+    expect(wrapper.findComponent(GraphStub).props('readOnly')).toBe(true)
+    expect(wrapper.findComponent(RevisionStub).props('readOnly')).toBe(true)
+  })
+
+  it('keeps the operator authoring view editable', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = useSystemMapsStore()
+    store.graph = { revision: { id: 'rev-1', revision_number: 1, status: 'draft' }, nodes: [], relationships: [], loop_configs: [] } as never
+    await flushPromises()
+
+    expect(wrapper.findComponent(HeaderStub).props('readOnly')).toBe(false)
+    expect(wrapper.findComponent(GraphStub).props('readOnly')).toBe(false)
+    expect(wrapper.findComponent(RevisionStub).props('readOnly')).toBe(false)
+  })
+
+  it('loads attribution bindings for the active map and reports load failures', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/attribution-bindings') return Promise.resolve({ data: [{ id: 'binding-1' }] })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/history') return Promise.resolve({ data: { system_map_id: 'map-1', revisions: [] } })
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    })
+
+    mountWithStubs()
+    await flushPromises()
+
+    expect(useSystemMapsStore().attributionBindings).toHaveLength(1)
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/attribution-bindings') return Promise.resolve({ error: { detail: 'bindings down' } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/history') return Promise.resolve({ data: { system_map_id: 'map-1', revisions: [] } })
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    })
+
+    const failing = mountWithStubs()
+    await flushPromises()
+    expect(failing.text()).toContain('bindings down')
+  })
+
+  it('uses the localized fallback when attribution binding loading rejects with a non-Error', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/system-maps/{map_id}/revisions/history') return Promise.resolve({ data: { system_map_id: 'map-1', revisions: [] } })
+      return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
+    })
+    const store = useSystemMapsStore()
+    vi.spyOn(store, 'loadAttributionBindings').mockRejectedValue('offline')
+
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Could not load attribution bindings')
+  })
+
+  it('creates and deletes attribution bindings from the panel', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+
+    const create = vi.spyOn(store, 'createAttributionBinding').mockResolvedValue({ id: 'binding-2' } as never)
+    const remove = vi.spyOn(store, 'deleteAttributionBinding').mockResolvedValue(undefined)
+    const attribution = wrapper.findComponent(AttributionStub)
+    const createHandler = attribution.props('createHandler') as (binding: unknown) => Promise<void>
+    const deleteHandler = attribution.props('deleteHandler') as (bindingId: string) => Promise<void>
+
+    await createHandler({ node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: 'trig-1', binding_kind: 'trigger' })
+    await flushPromises()
+    expect(create).toHaveBeenCalledWith('map-1', { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: 'trig-1', binding_kind: 'trigger' })
+
+    await deleteHandler('binding-2')
+    await flushPromises()
+    expect(remove).toHaveBeenCalledWith('map-1', 'binding-2')
+  })
+
+  it('ignores attribution binding actions when no map is loaded', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+
+    const create = vi.spyOn(store, 'createAttributionBinding')
+    const remove = vi.spyOn(store, 'deleteAttributionBinding')
+    const attribution = wrapper.findComponent(AttributionStub)
+    const createHandler = attribution.props('createHandler') as (binding: unknown) => Promise<void>
+    const deleteHandler = attribution.props('deleteHandler') as (bindingId: string) => Promise<void>
+    store.activeMap = null
+
+    await createHandler({ node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: 'trig-1', binding_kind: 'trigger' })
+    await deleteHandler('binding-2')
+    await flushPromises()
+
+    expect(create).not.toHaveBeenCalled()
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it('propagates attribution binding action failures to the panel handler', async () => {
+    const wrapper = mountWithStubs()
+    await flushPromises()
+    const store = seed(mockPost)
+    await flushPromises()
+
+    const create = vi.spyOn(store, 'createAttributionBinding')
+    const remove = vi.spyOn(store, 'deleteAttributionBinding')
+    const attribution = wrapper.findComponent(AttributionStub)
+    const createHandler = attribution.props('createHandler') as (binding: unknown) => Promise<void>
+    const deleteHandler = attribution.props('deleteHandler') as (bindingId: string) => Promise<void>
+    const payload = { node_key: 'pipeline-1', pipeline_id: 'pipe-1', trigger_id: 'trig-1', binding_kind: 'trigger' }
+
+    create.mockRejectedValueOnce(new Error('create exploded'))
+    await expect(createHandler(payload)).rejects.toThrow('create exploded')
+
+    create.mockRejectedValueOnce('offline')
+    await expect(createHandler(payload)).rejects.toBe('offline')
+
+    remove.mockRejectedValueOnce(new Error('delete exploded'))
+    await expect(deleteHandler('binding-2')).rejects.toThrow('delete exploded')
+
+    remove.mockRejectedValueOnce('offline')
+    await expect(deleteHandler('binding-2')).rejects.toBe('offline')
+  })
 })
 
 describe('SystemMapDetailView guards and non-Error failures', () => {
   const HeaderStub = { name: 'HeaderBar', emits: ['toggle-sidebar', 'save', 'publish', 'archive', 'discover'], template: '<div />' }
   const GraphStub = { name: 'GraphEditor', emits: ['nodes-change', 'relationships-change'], template: '<div />' }
-  const RevisionStub = { name: 'RevisionSidebar', emits: ['select-revision', 'new-draft', 'discover'], template: '<div />' }
+  const RevisionStub = { name: 'RevisionSidebar', emits: ['select-revision', 'new-draft', 'restore-revision', 'discover'], template: '<div />' }
   const DiscoveryStub = { name: 'DiscoveryPanel', emits: ['close', 'save'], template: '<div />' }
 
   function mountWithStubs() {
@@ -485,8 +899,12 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     mockRoute.params = { id: 'map-1' }
     mockRoute.query = {}
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
     mockGet.mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] } })
+      if (path === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
       return Promise.resolve({ data: { id: 'map-1', name: 'Map one', published_revision_id: null } })
     })
   })
@@ -510,6 +928,7 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
 
     wrapper.findComponent(RevisionStub).vm.$emit('select-revision', 'rev-1')
     wrapper.findComponent(RevisionStub).vm.$emit('new-draft')
+    wrapper.findComponent(RevisionStub).vm.$emit('restore-revision', 'rev-1')
     wrapper.findComponent(RevisionStub).vm.$emit('discover')
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
     wrapper.findComponent(HeaderStub).vm.$emit('save')
@@ -548,9 +967,12 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
     await flushPromises()
+    expect(wrapper.find('[data-testid="system-map-discovery-submit"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
+    await flushPromises()
     expect(wrapper.text()).toContain('Discovery failed')
 
-    await wrapper.get('[data-testid="error-alert-dismiss"]').trigger('click')
+    await wrapper.get('[data-testid="system-map-discovery-config-cancel"]').trigger('click')
     wrapper.findComponent(HeaderStub).vm.$emit('save')
     await flushPromises()
     expect(wrapper.text()).toContain('Could not save draft')
@@ -566,6 +988,17 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     expect(wrapper.text()).toContain('Could not archive revision')
   })
 
+  it('uses the localized fallback when revision history loading rejects with a non-Error', async () => {
+    const store = useSystemMapsStore()
+    vi.spyOn(store, 'loadRevisionHistory').mockRejectedValue('offline')
+
+    const wrapper = mountWithStubs()
+    await flushPromises()
+
+    expect(store.activeMap?.id).toBe('map-1')
+    expect(wrapper.text()).toContain('Could not load revision history')
+  })
+
   it('keeps the discovery panel open when applying selections fails to save', async () => {
     const { wrapper, store } = await mountedWithMap()
     vi.spyOn(store, 'discover').mockResolvedValue({ draft_map_id: 'map-1', inferred_nodes: [], inferred_edges: [] } as never)
@@ -573,6 +1006,10 @@ describe('SystemMapDetailView guards and non-Error failures', () => {
     store.discovery = { inferred_nodes: [], inferred_edges: [] } as never
 
     wrapper.findComponent(HeaderStub).vm.$emit('discover')
+    await flushPromises()
+    expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(false)
+    store.activeRevision = { id: 'rev-1', revision_number: 1, status: 'draft' } as never
+    await wrapper.get('[data-testid="system-map-discovery-submit"]').trigger('click')
     await flushPromises()
     expect(wrapper.findComponent(DiscoveryStub).exists()).toBe(true)
 
@@ -592,6 +1029,10 @@ describe('SystemMapDetailView loading and graph state lifecycle (STATE-1 / STATE
     setActivePinia(createPinia())
     mockGet.mockReset()
     mockGetAccessToken.mockReturnValue('header.eyJzdWIiOiJvcGVyYXRvci0xIn0.signature')
+    mockIsOperator.value = true
+    mockIsSystemAdmin.value = false
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
   })
 
   it('renders loading state while store.loading is true and does not render empty state', async () => {
@@ -727,4 +1168,5 @@ describe('SystemMapDetailView loading and graph state lifecycle (STATE-1 / STATE
     expect(wrapper.find('[data-testid="system-map-detail-loading"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="system-map-empty-state"]').exists()).toBe(true)
   })
+
 })

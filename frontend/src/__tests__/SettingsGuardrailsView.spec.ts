@@ -89,7 +89,7 @@ function mountView(token: string, overrides: { list?: unknown; killSwitch?: unkn
         SelectItem: true,
         SelectValue: true,
         LoadingSpinner: { template: '<div />' },
-        PageHeader: { template: '<div />' },
+        PageHeader: { template: '<div><slot name="right" /></div>' },
       },
     },
   })

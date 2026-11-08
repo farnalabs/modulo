@@ -2,7 +2,7 @@
 
 This guide covers observability for schema enforcement: the enforcement
 endpoints, the enforcement data model, SQL queries for analytics, and the
-cleanup/retention behaviour for schema files.
+cleanup/retention behavior for schema files.
 
 ## Endpoints
 
@@ -75,7 +75,7 @@ The per-record fields:
 GET /api/v1/runs/schema-enforcement/flip-guard
 ```
 
-Examines ALL enforcement records for the caller's organisation and returns
+Examines ALL enforcement records for the caller's organization and returns
 the guard's advisory verdict on whether switching from lenient to strict
 mode is safe.
 
@@ -93,7 +93,7 @@ mode is safe.
 |-------|-------------|
 | `safe_to_flip` | `true` when zero lenient-mode warnings exist. |
 | `lenient_warning_count` | Number of `LENIENT_VALIDATION_BYPASSED` records that would become hard failures in strict mode. |
-| `total_records` | Total enforcement records examined across the organisation. |
+| `total_records` | Total enforcement records examined across the organization. |
 | `affected_outcomes` | Distinct outcome types from lenient-mode warnings. |
 | `advisory` | Human-readable explanation of the verdict. |
 
@@ -161,7 +161,7 @@ WHERE run_id = :run_id
 ORDER BY node_id, attempt_key;
 ```
 
-### Organisation-wide wasted-attempt rate
+### Organization-wide wasted-attempt rate
 
 ```sql
 SELECT
@@ -204,7 +204,7 @@ ORDER BY attempts DESC;
 Schema files are written into the sandbox filesystem at run start, before
 the node dispatches to the model backend. See
 [Schema Reference: On-disk sandbox contract](../schema-reference.md#on-disk-sandbox-contract)
-for the file layout and sanitisation rules.
+for the file layout and sanitization rules.
 
 ### Cleanup / retention
 

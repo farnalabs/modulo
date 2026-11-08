@@ -1,7 +1,7 @@
 # Security questionnaire answer bank
 
 Answers to the standard security questionnaire for a **self-hosted** Modulo
-deployment. Every answer cites the artefact or document that supports it, so
+deployment. Every answer cites the artifact or document that supports it, so
 no answer is an unsupported claim.
 
 **Rules for using this bank**
@@ -50,12 +50,12 @@ Evidence: `docs/operations/network-egress.md`; `docs/security/secret-management.
 
 **Q: How is Modulo licensed?**
 
-A: BUSL-1.1 (source-available, not OSI open source). The licence restricts
+A: BUSL-1.1 (source-available, not OSI open source). The license restricts
 offering Modulo, or any modified version or derivative work you create, to
 third parties as a paid hosted or managed service providing substantially the
 same functionality as Modulo.
 
-Evidence: `backend/pyproject.toml` (project licence); repository `LICENSE`.
+Evidence: `backend/pyproject.toml` (project license); repository `LICENSE`.
 
 ## 2. Data flows
 
@@ -63,7 +63,7 @@ Evidence: `backend/pyproject.toml` (project licence); repository `LICENSE`.
 
 A: Pipeline definitions and their immutable snapshots; run inputs, outputs and
 node telemetry; audit events; HITL decisions; evaluation results; connector and
-model credentials (encrypted); organisation, team and user records.
+model credentials (encrypted); organization, team and user records.
 
 Evidence: `docs/architecture.md` ("Database Schema", "Key Components");
 `docs/product-map/` feature entries.
@@ -140,13 +140,13 @@ Evidence: `docs/product-map/auth/oidc-integration.md`;
 ("Authentication & Authorization"); the `sso` and `scim` feature flags in
 `backend/src/modulo/core/feature_flags.py`; `backend/src/modulo/auth/scim_auth.py`.
 
-**Q: How is authorisation enforced?**
+**Q: How is authorization enforced?**
 
 A: A central permission registry maps every authenticated REST route that reads
-or mutates organisation data, and every MCP tool, to a minimum organisation role
+or mutates organization data, and every MCP tool, to a minimum organization role
 (viewer, runner, operator, admin). An unknown or misspelt permission key fails
 closed at import. Tenant isolation is enforced by PostgreSQL row-level security
-keyed to the principal's organisation.
+keyed to the principal's organization.
 
 Two scoping notes. First, the routes that carry no permission key are deliberate
 and named: the pre-authentication entry points (local login, OIDC/SAML callback
@@ -154,7 +154,7 @@ and metadata) and `GET /api/v1/deployment` run before a principal exists, and
 `GET /api/v1/auth/me` and `GET /api/v1/auth/csrf-token` are authenticated but
 self-scoped - they return only the caller's own identity, or a CSRF token, and
 read no other party's data. Second, team RBAC is a **Team-tier** feature
-(`team_rbac`); the four-level organisation role hierarchy and row-level security
+(`team_rbac`); the four-level organization role hierarchy and row-level security
 themselves are always active.
 
 Evidence: `backend/src/modulo/auth/permissions.py`; `docs/architecture.md`
@@ -162,8 +162,8 @@ Evidence: `backend/src/modulo/auth/permissions.py`; `docs/architecture.md`
 
 **Q: Who can change a feature flag?**
 
-A: Two levels, and the boundary is fail-closed. An organisation admin may set
-the low-sensitivity community-tier flags that govern their own organisation's
+A: Two levels, and the boundary is fail-closed. An organization admin may set
+the low-sensitivity community-tier flags that govern their own organization's
 usage (for example saved views, dashboard charts, the webhook notification log
 and API-key grant-sets) through
 `GET/PUT/DELETE /api/v1/admin/org/feature-flags`, gated by
@@ -227,7 +227,7 @@ recorded on the run. A human-in-the-loop gate marked `human_only` - the default
 for every gate - interrupts the run until a decision is recorded, and it does so
 at **every** autonomy level: `human_only` overrides autonomy. The normal
 possession and claim-token requirements remain. A browser session may decide a
-`human_only` gate; when an organisation admin explicitly enables the default-OFF,
+`human_only` gate; when an organization admin explicitly enables the default-OFF,
 org-scoped `mcp_human_linked_hitl_authority` override, an eligible
 consent-derived, human-linked OAuth credential or a verified user-scoped,
 human-linked API key may also act when its grant set covers the action. Org-,
@@ -267,7 +267,7 @@ events, recorded on every tier and read at `GET /api/v1/admin/audit` (Team-tier
 
 A: A hash-chained, append-only audit trail records every governance-relevant
 action with actor, resource, payload and outcome. **Recording is not
-licence-gated**: the append-only triggers and hash chaining are always active,
+license-gated**: the append-only triggers and hash chaining are always active,
 so a Community deployment records the trail too. **Reading it through the
 product is Team-tier**: browsing the trail, verifying the chain in place
 (`GET /api/v1/admin/audit/verify`, which checks up to 10,000 events per call and
@@ -310,7 +310,7 @@ A: A documented dependency policy defines severity service levels and the
 scanning gates. `pip-audit` (backend) and `pnpm audit` (frontend) run in CI; a
 CycloneDX SBOM is generated for every release from the pinned dependency set.
 The `Release: Unified Pipeline` workflow owns publication of the release
-artefact and SBOM; stable publication occurs in its `promote` mode after RC
+artifact and SBOM; stable publication occurs in its `promote` mode after RC
 validation.
 
 Evidence: `docs/security/dependency-policy.md`;
@@ -417,7 +417,7 @@ Evidence: `docs/deployment-security.md` (�6.3 Log Retention);
 **Q: Can we delete our data?**
 
 A: Yes - runs and evidence can be purged under the configured retention
-controls, and an organisation can be deleted through the admin surface. Run
+controls, and an organization can be deleted through the admin surface. Run
 purge is the Team-tier `admin_run_retention` feature; evidence purge is
 admin-permission only. Audit events are append-only by design; their integrity
 is what makes the audit trail evidence, so a request to delete audit events
@@ -464,7 +464,7 @@ Evidence: `docs/upgrade-process.md`; `docs/operations/backup.md`.
 **Q: Do you hold SOC 2 / ISO 27001 / ISO 42001 certification?**
 
 A: No. This is a deliberate decision: for a self-hosted product the customer's
-auditor audits the customer's instance, so the useful artefact is a mapping
+auditor audits the customer's instance, so the useful artifact is a mapping
 from the instance's evidence to the clauses being tested, not our certificate.
 That mapping ships in the product and the per-instance evidence index is
 generated from it.

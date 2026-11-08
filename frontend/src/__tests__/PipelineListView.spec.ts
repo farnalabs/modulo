@@ -851,6 +851,68 @@ describe('PipelineListView', () => {
     expect(patchMock).toHaveBeenCalled()
   })
 
+  it('drops a pipeline onto another pipeline row to move it, and ignores a self-drop', async () => {
+    mockResponses['/api/v1/pipeline-folders'] = [
+      { id: 'f1', organisation_id: 'org1', name: 'Folder One', parent_id: null, sort_order: 0 },
+      { id: 'f2', organisation_id: 'org1', name: 'Folder Two', parent_id: null, sort_order: 1 },
+    ]
+    localStorage.setItem('modulo.pipelines.expandedFolders', JSON.stringify(['f1', 'f2']))
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [
+        { id: 'p1', organisation_id: 'org1', name: 'Dragged', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: 'f1' },
+        { id: 'p2', organisation_id: 'org1', name: 'Target', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: 'f2' },
+        { id: 'p3', organisation_id: 'org1', name: 'Rootless', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: null },
+      ],
+      total: 3,
+      page: 1,
+      page_size: 100,
+    }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const dataTransfer = {
+      store: { 'text/plain': 'p1' } as Record<string, string>,
+      setData(k: string, v: string) { this.store[k] = v },
+      getData(k: string) { return this.store[k] },
+      effectAllowed: '',
+    }
+    const dispatchDrop = (row: ReturnType<typeof wrapper.find>) => {
+      const drop = new Event('drop') as unknown as DragEvent
+      ;(drop as unknown as { dataTransfer: unknown }).dataTransfer = dataTransfer
+      row.element.dispatchEvent(drop)
+    }
+
+    // A drop carrying no pipeline id is a no-op (left operand short-circuits).
+    const emptyTransfer = { getData: () => '', setData: () => {}, effectAllowed: '' }
+    const emptyDrop = new Event('drop') as unknown as DragEvent
+    ;(emptyDrop as unknown as { dataTransfer: unknown }).dataTransfer = emptyTransfer
+    wrapper.find('[data-testid="pipeline-tree-row-p2"]').element.dispatchEvent(emptyDrop)
+    await flushPromises()
+    expect(patchMock).not.toHaveBeenCalled()
+
+    // Dropping onto itself is a no-op: the handler's guard must skip the move.
+    dispatchDrop(wrapper.find('[data-testid="pipeline-tree-row-p1"]'))
+    await flushPromises()
+    expect(patchMock).not.toHaveBeenCalled()
+
+    // Dropping onto a pipeline with no folder moves it back to the root.
+    dispatchDrop(wrapper.find('[data-testid="pipeline-tree-row-p3"]'))
+    await flushPromises()
+    expect(patchMock).toHaveBeenCalled()
+
+    // Dropping onto a different pipeline row moves it into that row's folder.
+    patchMock.mockClear()
+    dispatchDrop(wrapper.find('[data-testid="pipeline-tree-row-p2"]'))
+    await flushPromises()
+    expect(patchMock).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('renames a pipeline via the action menu and persists the new name', async () => {
     const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Old Name', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
     mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
@@ -972,6 +1034,67 @@ describe('PipelineListView', () => {
     const blocked = vm.actionMenuItems.find(i => i.label === 'Resume')
     expect(blocked?.disabled).toBe(true)
     expect(blocked?.tooltip).toBeTruthy()
+  })
+
+  // A11Y-3 (PR #2905 review): the action-menu item root must stay an <a>.
+  // PrimeVue 4.5.5's Menu.onEnterKey activates the focused item by finding
+  // `a[data-pc-section="itemlink"]` inside the focused `li` and clicking it;
+  // with a <button> that selector misses and the fallback click lands on the
+  // `li`, so list-focus -> ArrowDown -> Enter never runs the command. The
+  // stub renders the `item` slot exactly as PrimeVue's Menuitem does, so a
+  // future tag swap fails here rather than only in a real browser.
+  it('renders action menu items as the anchor PrimeVue keyboard activation requires', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Anchor Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: true }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: {
+        plugins: [router],
+        stubs: {
+          ErrorAlert: true,
+          FolderTree: true,
+          Menu: {
+            props: ['model', 'popup'],
+            template: `<div><template v-for="item in model" :key="item.label"><slot name="item" :item="item" :label="item.label" :props="{ action: { tabindex: -1, 'data-pc-section': 'itemlink' }, label: {} }" /></template></div>`,
+            methods: { toggle: () => false },
+          },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void }
+    vm.openActionMenu({} as MouseEvent, pipeline)
+    await nextTick()
+
+    const itemLink = wrapper.find('[data-pc-section="itemlink"]')
+    expect(itemLink.exists()).toBe(true)
+    expect(itemLink.element.tagName).toBe('A')
+    wrapper.unmount()
+  })
+
+  // The wide pipeline table scrolls horizontally, so the scroll viewport must
+  // be keyboard-reachable (WCAG 2.1.1; axe `scrollable-region-focusable`) and
+  // announced by its sr-only scroll instruction. Web:S6845 is scoped-ignored
+  // for this file because the rule does not model scrollable containers.
+  it('keeps the table scroll region keyboard-focusable and described', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Scroll Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: true }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const scrollRegion = wrapper.find('[aria-describedby="pipeline-list-table-scroll-instructions"]')
+    expect(scrollRegion.exists()).toBe(true)
+    expect(scrollRegion.attributes('tabindex')).toBe('0')
+    expect(wrapper.find('#pipeline-list-table-scroll-instructions').exists()).toBe(true)
+    wrapper.unmount()
   })
 
   // FAR-1530: the badge help is reason-aware - a breaker trip is NOT

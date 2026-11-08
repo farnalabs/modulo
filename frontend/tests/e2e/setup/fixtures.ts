@@ -1,12 +1,78 @@
+import { spawn, type ChildProcess } from 'node:child_process'
+import { resolve } from 'node:path'
 import { test as base, expect, type Page } from '@playwright/test'
 import { startCoverage, stopCoverage } from './coverage'
-import { getTestEnv, type TestEnv } from './env'
+import { getLocalE2eBaseUrl, getTestEnv, type TestEnv } from './env'
 import { loginThroughUi } from './login'
 import { installTeamTierNavigationGuard } from './target-tier'
 
-export const test = base.extend<{ env: TestEnv }>({
+type SsoBackendProcess = { stop: () => Promise<void> }
+
+async function waitForPort(port: number, child: ChildProcess): Promise<void> {
+  const deadline = Date.now() + 15_000
+  let lastProbeError: unknown
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`[sso-fixture] backend exited before readiness (code ${child.exitCode})`)
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(500) })
+      if (response.status < 500) return
+    } catch (err) {
+      // The backend is still booting; the deadline bounds this polling loop.
+      // Retain the probe error so a readiness timeout reports the real cause.
+      lastProbeError = err
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error(
+    `[sso-fixture] backend did not become ready on port ${port} within 15000ms (last probe error: ${String(lastProbeError)})`,
+    { cause: lastProbeError },
+  )
+}
+
+async function startLocalSsoBackend(): Promise<SsoBackendProcess> {
+  const port = Number.parseInt(process.env.E2E_SSO_BACKEND_PORT ?? '8000', 10)
+  const child = spawn('uv', [
+    'run', '--project', '.', '--no-sync', 'python', 'tests/e2e/sso_fixture.py',
+    '--port', String(port), '--frontend-url', getLocalE2eBaseUrl(),
+  ], {
+    cwd: resolve(process.cwd(), '..', 'backend'),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      DATABASE_URL: 'sqlite+aiosqlite:///./sso-e2e-fixture.db',
+      SECRET_KEY: 'sso-e2e-secret-key-012345678901234567890123',
+      FERNET_KEY: 'sso-e2e-fernet-key-012345678901234567890123',
+      MODULO_PUBLIC_URL: `http://127.0.0.1:${port}`,
+      MODULO_FRONTEND_URL: getLocalE2eBaseUrl(),
+      MODULO_MULTI_ORG_ENABLED: 'false',
+      MODULO_AUTH_RATE_LIMIT_ENABLED: 'false',
+      MODULO_REDIS_URL: 'redis://127.0.0.1:0/0',
+      MODULO_DB: 'sqlite',
+    },
+  })
+  child.stdout?.on('data', (chunk) => process.stderr.write(`[sso-fixture] ${chunk}`))
+  child.stderr?.on('data', (chunk) => process.stderr.write(`[sso-fixture] ${chunk}`))
+  await waitForPort(port, child)
+  return {
+    stop: async () => {
+      if (child.exitCode !== null) return
+      child.kill('SIGTERM')
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => { child.kill('SIGKILL'); resolve() }, 3000)
+        child.once('exit', () => { clearTimeout(timer); resolve() })
+      })
+    },
+  }
+}
+
+export const test = base.extend<{ env: TestEnv; localSsoBackend: SsoBackendProcess }>({
   env: async ({}, use) => {
     await use(getTestEnv())
+  },
+  localSsoBackend: async ({ env }, use) => {
+    if (env.name !== 'local') return await use({ stop: async () => {} })
+    const backend = await startLocalSsoBackend()
+    try { await use(backend) } finally { await backend.stop() }
   },
   page: async ({ page, env }, use, testInfo) => {
     // Staging is the CI-only Community-tier E2E environment; a team-tier page
@@ -87,6 +153,14 @@ export async function setupLocalMockApi(page: Page) {
         body: JSON.stringify({ access_token: MOCK_ACCESS_TOKEN, refresh_token: MOCK_REFRESH_TOKEN, token_type: 'bearer' }),
       })
     }
+    // Leave the real SSO login/callback legs to the test's deterministic IdP
+    // seam (backend/tests/e2e/sso_fixture.py) instead of letting this general
+    // local mock swallow those requests.
+    if (
+      url.includes('/api/v1/auth/oidc/') ||
+      url.includes('/api/v1/auth/login-context') ||
+      url.includes('/api/v1/auth/sso/providers')
+    ) return route.fallback()
     if (url.includes('/api/v1/me/settings')) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ locale: 'en-US' }) })
     }

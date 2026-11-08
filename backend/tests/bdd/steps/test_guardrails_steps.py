@@ -44,6 +44,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
+from modulo.db.models.system_config import SystemConfig
 from modulo.db.models.team import Team
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -242,6 +243,7 @@ _TABLES: list[Table] = cast(
         AuditChainHead.__table__,
         EnvironmentProfile.__table__,
         RunNodeOutput.__table__,
+        SystemConfig.__table__,
     ],
 )
 

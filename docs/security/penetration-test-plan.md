@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document owner | Security Team |
-| Applies to | Modulo (self-hosted Agentic Delivery Governance platform and autonomous software factory) |
+| Applies to | Modulo (self-hosted Delivery Governance Platform for governing automated work across the software development lifecycle) |
 | Classification | Internal (Confidential) |
 | Version | 1.0 |
 | Last updated | 2026-06-28 |
@@ -21,7 +21,7 @@ This document defines the methodology, schedule, scope, and reporting framework 
 | Component | Details | Target Environment |
 |---|---|---|
 | **Backend API** | FastAPI REST endpoints (all routes under `/api/v1/`, `/auth/`, `/mcp/`, `/ws/`) | `app.modulo.run` (staging & production) |
-| **MCP Server** | JSON-RPC over SSE for agent tool invocation, including tool authorisation, scope enforcement, and input validation | MCP endpoint on `app.modulo.run` |
+| **MCP Server** | JSON-RPC over SSE for agent tool invocation, including tool authorization, scope enforcement, and input validation | MCP endpoint on `app.modulo.run` |
 | **WebSocket Gateway** | Real-time agent session streaming, HITL approval channels, eval result streaming | `wss://app.modulo.run/ws/` |
 | **Frontend SPA** | Vue 3 single-page application (all routes), including OIDC redirect flows, session handling, and CSRF token management | `app.modulo.run` |
 | **SSO Flows** | OIDC (Google, GitHub, Azure AD) and SAML (Okta, OneLogin): handshake, callback handling, token exchange, session creation | `app.modulo.run/auth/` |
@@ -30,8 +30,8 @@ This document defines the methodology, schedule, scope, and reporting framework 
 | **Agent Execution Sandbox** | MCP tool execution isolation, prompt injection guards, sensitive data masking, checkpoint encryption | Sandbox Workers on Cloudflare |
 
 > **Reference deployment.** The targets above name the reference instance
-> (`app.modulo.run`, the `farnalabs` GitHub organisation and the published image
-> `ghcr.io/farnalabs/modulo`). Substitute your own host, organisation and
+> (`app.modulo.run`, the `farnalabs` GitHub organization and the published image
+> `ghcr.io/farnalabs/modulo`). Substitute your own host, organization and
 > registry prefix when applying this plan to a different deployment.
 
 ### 1.3 Out of Scope
@@ -73,10 +73,10 @@ Full external penetration tests are conducted **quarterly** (every 3 months). A 
 
 ### 2.3 Rules of Engagement
 
-- Testing is limited to `app.modulo.run`, `*.modulo.run`, and the Modulo GitHub organisation
+- Testing is limited to `app.modulo.run`, `*.modulo.run`, and the Modulo GitHub organization
 - No denial-of-service attacks against production without 48-hour written approval
 - No exfiltration of production customer data beyond what is minimally necessary to demonstrate a finding
-- All testing must use a dedicated test organisation/tenant with synthetic data
+- All testing must use a dedicated test organization/tenant with synthetic data
 - The testing team must provide a list of source IPs in advance for log correlation
 - A communication channel (Signal or Slack) must be established with the on-call engineer before testing begins
 - If a critical vulnerability is discovered, testing pauses and the on-call engineer is notified immediately
@@ -131,7 +131,7 @@ Testing follows the **OWASP Web Security Testing Guide (WSTG) v5.0** with additi
 - **Team isolation**: Cross-tenant data access via team ID enumeration, project ID guessing
 - **Privilege escalation**: Role-based access control bypass (user -> admin, operator -> admin)
 - **IDOR**: Insecure direct object reference in all CRUD endpoints (`/projects/{id}`, `/agents/{id}`, `/tasks/{id}`)
-- **MCP scope bypass**: Agent attempting to call tools outside its authorised scope
+- **MCP scope bypass**: Agent attempting to call tools outside its authorized scope
 - **HITL bypass**: Human-in-the-loop approval gate bypass via concurrent session manipulation or approval token replay
 - **Eval gate bypass**: Evaluation gate circumvention by direct API call or altering eval state
 
@@ -180,7 +180,7 @@ Testing follows the **OWASP Web Security Testing Guide (WSTG) v5.0** with additi
 ### 3.10 API & MCP-Specific Testing
 
 - **Authentication bypass**: Calling MCP endpoints without a valid session token
-- **Tool authorisation bypass**: Invoking MCP tools outside the agent's declared scope
+- **Tool authorization bypass**: Invoking MCP tools outside the agent's declared scope
 - **SSE validation**: Event stream injection, connection hijacking, message ordering manipulation
 - **JSON-RPC validation**: Method enumeration, parameter injection, batch request abuse
 - **Rate limiting**: API endpoint throttling bypass via header manipulation or distributed attacks

@@ -107,7 +107,7 @@ describe('AdminModelBackendsView — list', () => {
     expect(wrapper.text()).toContain('claude-sonnet')
     expect(wrapper.text()).toContain('Configured')
     expect(wrapper.text()).toContain('Missing')
-    expect(wrapper.text()).toContain('Organisation')
+    expect(wrapper.text()).toContain('Organization')
     expect(wrapper.text()).toContain('Private')
     expect(wrapper.text()).not.toContain('private')
   })
@@ -1131,5 +1131,22 @@ describe('AdminModelBackendsView — tier grouping', () => {
     expect(wrapper.text()).toContain('mb-preview')
     // in_dev rows belong to neither group and are intentionally not rendered.
     expect(wrapper.text()).not.toContain('mb-indev')
+  })
+})
+
+describe('AdminModelBackendsView — refs panel guards', () => {
+  it('retryRefs and pageRefs ignore an unknown backend id', () => {
+    const wrapper = mountView()
+    const vm = wrapper.vm as unknown as {
+      retryRefs: (backendId: string) => void
+      pageRefs: (backendId: string, page: number) => void
+    }
+
+    // A stale/unknown id has no refs state: both helpers must be safe no-ops.
+    expect(() => {
+      vm.retryRefs('missing-backend')
+      vm.pageRefs('missing-backend', 2)
+    }).not.toThrow()
+    wrapper.unmount()
   })
 })

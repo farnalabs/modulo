@@ -26,6 +26,7 @@ export function createSyncAdapter(store: SyncableStore) {
 export function useDirtyTracker() {
   const dirtyIds = ref(new Set<string>())
 
+  /* v8 ignore next 3: Vite only injects import.meta.hot during HMR. */
   if (import.meta.hot) {
     import.meta.hot.dispose(() => {
       dirtyIds.value.clear()

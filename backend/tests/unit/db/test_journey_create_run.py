@@ -28,8 +28,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import Table, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.core.exceptions import TriggersPausedError
 from modulo.core.trigger_engine import TriggerEngine, _apply_payload_mapping
 from modulo.db.crud.run import _floor_work_item_id, create_run
 from modulo.db.crud.variant_group import run_variant_weighted
@@ -41,6 +43,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.system_config import SystemConfig
 from modulo.db.models.team import Team
 from modulo.db.models.variant_group import VariantGroup
 
@@ -62,6 +65,7 @@ _TABLES: list[Table] = cast(
         Journey.__table__,
         VariantGroup.__table__,
         Eval.__table__,
+        SystemConfig.__table__,
     ],
 )
 
@@ -90,6 +94,25 @@ async def _seed_org(session: AsyncSession, org_id: uuid.UUID = _ORG) -> None:
 
 async def _seed_team(session: AsyncSession, team_id: uuid.UUID = _TEAM) -> None:
     session.add(Team(id=team_id, organisation_id=_ORG, name="team-a", account_id=_ORG))
+    await session.flush()
+
+
+async def _seed_snapshot_graph(session: AsyncSession, graph: dict[str, Any]) -> None:
+    session.add(
+        PipelineSnapshot(
+            id=_SNAPSHOT,
+            organisation_id=_ORG,
+            pipeline_id=_PIPELINE,
+            snapshot_version=1,
+            graph_json=graph,
+            connector_bindings_json=[],
+            schema_pins_json=[],
+            prompt_pins_json=[],
+            model_backend_pins_json=[],
+            config_json={},
+            run_context_defaults={},
+        )
+    )
     await session.flush()
 
 
@@ -138,6 +161,47 @@ async def _journey_for(session: AsyncSession, kind: str, ref: str, org_id: uuid.
             )
         )
     ).scalar_one_or_none()
+
+
+class TestDeploymentDrainAdmission:
+    async def test_active_drain_refuses_sandbox_graph(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_pipeline(session, owner_team_id=None)
+        await _seed_snapshot_graph(session, {"nodes": [{"id": "sandbox", "node_type": "sandbox_agent"}], "edges": []})
+        session.add(SystemConfig(key="deployment_drain", value={"active": True}))
+        await session.flush()
+        with pytest.raises(TriggersPausedError):
+            await _create(session)
+
+    async def test_active_drain_admits_non_sandbox_graph(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_pipeline(session, owner_team_id=None)
+        await _seed_snapshot_graph(session, {"nodes": [{"id": "agent", "node_type": "agent"}], "edges": []})
+        session.add(SystemConfig(key="deployment_drain", value={"active": True}))
+        await session.flush()
+        run = await _create(session)
+        assert run.status == "pending"
+
+    async def test_drain_flag_read_failure_propagates(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A read failure of the drain flag must propagate (fail closed), never
+        silently admit a sandbox run while a drain may be active."""
+        await _seed_org(session)
+        await _seed_pipeline(session, owner_team_id=None)
+        await _seed_snapshot_graph(session, {"nodes": [], "edges": []})
+
+        original_execute = session.execute
+
+        async def _flaky_execute(statement: Any, *args: Any, **kwargs: Any) -> Any:
+            if "system_config" in str(statement).lower():
+                raise SQLAlchemyError("system_config unavailable")
+            return await original_execute(statement, *args, **kwargs)
+
+        monkeypatch.setattr(session, "execute", _flaky_execute)
+
+        with pytest.raises(SQLAlchemyError):
+            await _create(session)
 
 
 class TestReservedKeyStripBeforeHash:

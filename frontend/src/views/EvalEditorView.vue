@@ -1251,7 +1251,7 @@ function restoreDeterministicDraft(type: DeterministicType): string {
 }
 
 function onMechanismChange(value: unknown): void {
-  const mechanism = String(value)
+  const mechanism = typeof value === 'string' ? value : ''
   const typed = mechanism === 'typed_questions'
   if (typed === isTyped.value) return
   if (typed) {
@@ -1264,7 +1264,7 @@ function onMechanismChange(value: unknown): void {
 }
 
 function onDeterministicTypeChange(value: unknown): void {
-  const next = String(value) as DeterministicType
+  const next = typeof value === 'string' ? value as DeterministicType : '' as DeterministicType
   if (!DETERMINISTIC_TYPES.has(next)) return
   if (next === deterministicType.value) return
   rememberDeterministicDraft()
@@ -1274,7 +1274,7 @@ function onDeterministicTypeChange(value: unknown): void {
 }
 
 function setQuestionType(question: QuestionDraft, value: unknown): void {
-  const next = String(value) as QuestionType
+  const next = typeof value === 'string' ? value as QuestionType : '' as QuestionType
   if (next !== 'noul' && next !== 'choice' && next !== 'score') return
   question.type = next
   seedAnswerSpace(question)
@@ -1557,7 +1557,7 @@ function handleEvalWriteError(error: unknown): void {
     typeof (error as { code?: unknown } | null)?.code === 'string'
       ? (error as { code: string }).code
       : null
-  if (code && code.startsWith('judge_')) {
+  if (code?.startsWith('judge_')) {
     serverConfigError.value = { code, message: formatApiError(error) }
     formError.value = null
     return
@@ -1740,7 +1740,7 @@ async function startEdit(ev: EvalDefinition) {
     typedDraft.value = createDefaultDraft()
   }
   // Fetch gate state for this eval (§3.2 — switching evals re-populates)
-  fetchPolicyGate(ev.id)
+  void fetchPolicyGate(ev.id)
 }
 
 function confirmDelete(id: string) {
@@ -1876,11 +1876,11 @@ function requestToggleGate() {
   if (!policyGate.exists || gateToggleBusy.value) return
   // Enabling: toggle immediately. Disabling a block gate: confirm first.
   if (!policyGate.enabled) {
-    doToggleGate(true)
+    void doToggleGate(true)
   } else if (policyGate.action === 'block') {
     gateToggleConfirming.value = true
   } else {
-    doToggleGate(false)
+    void doToggleGate(false)
   }
 }
 
@@ -1910,7 +1910,7 @@ async function doToggleGate(enabled: boolean) {
 
 function confirmToggleGate() {
   gateToggleConfirming.value = false
-  doToggleGate(false)
+  void doToggleGate(false)
 }
 
 function cancelToggleGate() {
@@ -1969,9 +1969,9 @@ async function retryPolicyGate() {
 
 onMounted(() => {
   planStore.fetchPlan()
-  loadAll()
+  void loadAll()
   // The typed builder's backing axis needs the org's model backends. A failure
   // is non-fatal: the select stays empty and shows an inline message.
-  loadModelBackends()
+  void loadModelBackends()
 })
 </script>

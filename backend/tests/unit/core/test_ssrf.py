@@ -1137,6 +1137,249 @@ def test_loudness_guard_raises_when_pin_dropped() -> None:
         transport._enforce_pin_live()
 
 
+def test_sync_pinned_transport_rejects_unpinned_host(caplog: pytest.LogCaptureFixture) -> None:
+    transport = ssrf.PinnedHTTPTransport({"safe.example": "8.8.8.8"})
+    with caplog.at_level(logging.WARNING), pytest.raises(ssrf.UnpinnedHostError):
+        transport._pool._network_backend.connect_tcp("other.example", 443, timeout=1.0)
+    assert any("ssrf.reject_unpinned_host" in record.message for record in caplog.records)
+
+
+def test_sync_pinned_transport_honks_on_proxy_trust_with_env(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.local:8080")
+    with caplog.at_level(logging.WARNING):
+        ssrf.PinnedHTTPTransport({"safe.example": "8.8.8.8"}, trust_env=True)
+    assert any("ssrf.pinned_transport_proxy_env" in record.message for record in caplog.records)
+
+
+def test_sync_pinned_client_rejects_private_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: ["127.0.0.1"])
+    with pytest.raises(ValueError, match="private/internal"):
+        ssrf.pinned_http_client_sync("https://unsafe.example")
+
+
+def test_sync_pinned_transport_fails_over_and_reresolves(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync parity: stale pins fail over through a fresh, validated resolution."""
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: ["8.8.8.8"])
+    transport = ssrf.PinnedHTTPTransport({"heal.example": ["1.1.1.1"]})
+    backend = transport._pool._network_backend
+    attempted: list[str] = []
+
+    def fake_connect(
+        ip: str,
+        _port: int,
+        *,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: object = None,
+    ) -> object:
+        attempted.append(ip)
+        if ip == "1.1.1.1":
+            raise httpcore.ConnectError("decommissioned")
+        return _CONNECT_OK
+
+    backend._connect_to_ip = fake_connect  # type: ignore[method-assign]
+    assert backend.connect_tcp("heal.example", 443) is _CONNECT_OK
+    assert attempted == ["1.1.1.1", "8.8.8.8"]
+    assert backend._pinned_hosts == {"heal.example": ("8.8.8.8",)}
+
+
+def test_sync_pinned_transport_forwards_allow_networks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync parity: the pinned sync transport carries the caller's allow-list.
+
+    The async twin forwards ``allow_networks`` into its transport. If the sync
+    factory drops it, the backend re-validates a TTL re-resolution against an
+    empty allow-list and rejects a fresh address the caller explicitly allowed.
+    """
+    resolutions = iter([["10.0.0.5"], ["10.0.0.6"]])
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: next(resolutions))
+    transport = ssrf.pinned_http_transport_sync(
+        "http://tenant.example/",
+        allow_networks=["10.0.0.0/8"],
+        resolve_ttl_seconds=1,
+    )
+    backend = transport._pin_backend
+    assert backend._allow_networks == ssrf.normalize_allow_networks(["10.0.0.0/8"])
+    assert backend._allow_networks
+    backend._resolved_at["tenant.example"] = time.time() - 5
+    attempted: list[str] = []
+
+    def fake_connect(
+        ip: str,
+        _port: int,
+        *,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: object = None,
+    ) -> object:
+        attempted.append(ip)
+        return _CONNECT_OK
+
+    backend._connect_to_ip = fake_connect  # type: ignore[method-assign]
+    assert backend.connect_tcp("tenant.example", 443) is _CONNECT_OK
+    assert attempted == ["10.0.0.6"]
+    assert backend._pinned_hosts == {"tenant.example": ("10.0.0.6",)}
+
+
+def test_sync_pinned_client_uses_pinned_path_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real sync client request must reach the configured pinned address."""
+    server, port = _start_http_server()
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: ["127.0.0.1"])
+    try:
+        client = ssrf.pinned_http_client_sync(f"http://sync.example:{port}/", allow_networks=["127.0.0.0/8"])
+        try:
+            response = client.get(f"http://sync.example:{port}/")
+            assert response.status_code == 200
+            assert response.text == "pinned-ok"
+            transport = client._transport
+            backend = transport._pool._network_backend
+            assert isinstance(backend, ssrf._PinnedSyncNetworkBackend)
+            assert backend.connect_calls == 1
+        finally:
+            client.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_sync_loudness_guard_raises_when_pin_dropped() -> None:
+    """Sync parity: the loudness guard fires when the pin was silently dropped."""
+    transport = ssrf.PinnedHTTPTransport({"x.example": "8.8.8.8"}, loudness_guard=True)
+    assert transport._pin_backend.connect_calls == 0
+    with pytest.raises(ssrf.PinDroppedError):
+        transport._enforce_pin_live()
+
+
+def test_sync_loudness_guard_passes_after_real_connect() -> None:
+    """Sync parity: after a real request the pin is proven live and the guard passes."""
+    server, port = _start_http_server()
+    try:
+        transport = ssrf.PinnedHTTPTransport({"live.example": "127.0.0.1"}, loudness_guard=True)
+        client = httpx.Client(transport=transport)
+        try:
+            response = client.get(f"http://live.example:{port}/")
+            assert response.status_code == 200
+        finally:
+            client.close()
+        transport._enforce_pin_live()  # no raise
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_sync_stale_ip_re_resolves_on_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync parity: a stale pinned IP self-heals on TTL expiry."""
+    seen: list[str] = []
+
+    def fake_resolve(host: str) -> list[str]:
+        seen.append(host)
+        return ["8.8.8.8", "9.9.9.9"]
+
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", fake_resolve)
+    transport = ssrf.PinnedHTTPTransport({"stale.example": ["1.1.1.1"]}, resolve_ttl_seconds=1)
+    backend = transport._pool._network_backend
+    backend._resolved_at["stale.example"] = time.time() - 5
+    attempted: list[str] = []
+
+    def fake_connect(
+        ip: str,
+        _port: int,
+        *,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: object = None,
+    ) -> object:
+        attempted.append(ip)
+        return _CONNECT_OK
+
+    backend._connect_to_ip = fake_connect  # type: ignore[method-assign]
+    assert backend.connect_tcp("stale.example", 443) is _CONNECT_OK
+    assert seen == ["stale.example"]
+    assert backend._pinned_hosts == {"stale.example": ("8.8.8.8", "9.9.9.9")}
+    assert attempted == ["8.8.8.8"]
+
+
+def test_sync_ttl_zero_skips_re_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync parity: TTL disabled keeps the existing pinned set even if stale."""
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: ["8.8.8.8"])
+    transport = ssrf.PinnedHTTPTransport({"static.example": ["1.1.1.1"]}, resolve_ttl_seconds=0)
+    backend = transport._pool._network_backend
+    backend._resolved_at["static.example"] = time.time() - 999
+    attempted: list[str] = []
+
+    def fake_connect(
+        ip: str,
+        _port: int,
+        *,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: object = None,
+    ) -> object:
+        attempted.append(ip)
+        return _CONNECT_OK
+
+    backend._connect_to_ip = fake_connect  # type: ignore[method-assign]
+    assert backend.connect_tcp("static.example", 443) is _CONNECT_OK
+    assert attempted == ["1.1.1.1"]
+
+
+def test_sync_connect_failure_without_reresolve_reraises() -> None:
+    """Sync parity: with re-resolution disabled the connect failure propagates."""
+    transport = ssrf.PinnedHTTPTransport({"heal.example": ["1.1.1.1"]}, re_resolve=False)
+    backend = transport._pool._network_backend
+    attempted: list[str] = []
+
+    def fake_connect(
+        ip: str,
+        _port: int,
+        *,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: object = None,
+    ) -> object:
+        attempted.append(ip)
+        raise httpcore.ConnectError("decommissioned")
+
+    backend._connect_to_ip = fake_connect  # type: ignore[method-assign]
+    with pytest.raises(httpcore.ConnectError):
+        backend.connect_tcp("heal.example", 443)
+    assert attempted == ["1.1.1.1"]
+
+
+def test_sync_empty_pin_set_raises_runtime_error() -> None:
+    """An empty pin set exhausts failover with no recorded exception."""
+    transport = ssrf.PinnedHTTPTransport({"empty.example": []}, re_resolve=False, connector_type="")
+    backend = transport._pool._network_backend
+    assert backend._connector_type
+    with pytest.raises(RuntimeError, match="no recorded exception"):
+        backend.connect_tcp("empty.example", 443)
+
+
+def test_sync_pinned_client_rejects_transport_kwarg() -> None:
+    """A caller-supplied transport would bypass pinning, so it is rejected."""
+    with pytest.raises(ValueError, match="must not be passed"):
+        ssrf.pinned_http_client_sync(
+            "https://safe.example",
+            transport=httpx.MockTransport(lambda _: httpx.Response(200)),
+        )
+
+
+def test_sync_pinned_client_honours_explicit_trust_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit trust_env and custom limits are forwarded to the client/transport."""
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: ["8.8.8.8"])
+    client = ssrf.pinned_http_client_sync(
+        "https://safe.example",
+        trust_env=False,
+        limits=httpx.Limits(max_connections=5),
+    )
+    try:
+        assert client.trust_env is False
+    finally:
+        client.close()
+
+
 async def test_loudness_guard_passes_after_real_connect() -> None:
     """(e) After a real request the pin is proven live and the guard passes."""
     server, port = _start_http_server()

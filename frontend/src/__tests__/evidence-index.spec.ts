@@ -142,7 +142,7 @@ describe('EvidenceIndexView', () => {
     expect(wrapper.text()).toContain('2026.02')
     expect(wrapper.text()).toContain('audit-events-new.ndjson')
     expect(wrapper.text()).toContain('5')
-    expect(wrapper.text()).toContain('1 artefact type is missing from the index.')
+    expect(wrapper.text()).toContain('1 artifact type is missing from the index.')
   })
 
   it('keeps the last-known-good index visible when a refresh fails', async () => {
@@ -167,9 +167,9 @@ describe('EvidenceIndexView', () => {
     await settle()
 
     expect(wrapper.find('[data-testid="evidence-index-loading"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('No indexed artefacts')
-    expect(wrapper.text()).toContain('This instance has not produced any evidence artefacts yet.')
-    expect(wrapper.text()).toContain('2 artefact types are missing from the index.')
+    expect(wrapper.text()).toContain('No indexed artifacts')
+    expect(wrapper.text()).toContain('This instance has not produced any evidence artifacts yet.')
+    expect(wrapper.text()).toContain('2 artifact types are missing from the index.')
     expect(wrapper.find('table').exists()).toBe(false)
   })
 

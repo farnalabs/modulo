@@ -36,14 +36,14 @@ status: partial
 # Product Analytics
 
 Product usage and adoption analytics for system administrators on
-`/admin/product-analytics`. The instance reports anonymised/consented usage metrics to
+`/admin/product-analytics`. The instance reports anonymized/consented usage metrics to
 the vendor via an HMAC-signed ingest endpoint; an instance identity and a transparency
 surface keep collection explicit. The instance switch is operator-controlled, with a
-licence-derived default: a licence carrying `product_analytics_required` turns the
+license-derived default: a license carrying `product_analytics_required` turns the
 default ON, but an explicit operator value always wins. Analytics never changes an
-organisation's plan or tier.
+organization's plan or tier.
 
-## Behaviours
+## Behaviors
 
 - [x] Usage metrics are collected and dumped per reporting window under explicit
       consent (`core/product_analytics/consent.py`, `metrics_dump.py`,
@@ -65,16 +65,16 @@ organisation's plan or tier.
       `consent.is_instance_analytics_enabled`, `core/product_analytics/consent.py`;
       the transparency endpoint now delegates to the same helper, so the reported
       switch and the dump gate cannot disagree)
-- [x] The instance switch is operator-writable and licence-defaulted
+- [x] The instance switch is operator-writable and license-defaulted
       (FAR-2063): a system admin writes/clears
       `system_config["product_analytics_enabled"]` through
       `PUT /api/v1/product-analytics/instance-switch` (audited in the
       org-independent system ledger) or the switch control on the admin page.
       `consent.resolve_instance_analytics_switch` applies the precedence:
-      stored operator value -> `MODULO_PRODUCT_ANALYTICS_ENABLED` (honoured
-      only when no stored value exists) -> the licence's
+      stored operator value -> `MODULO_PRODUCT_ANALYTICS_ENABLED` (honored
+      only when no stored value exists) -> the license's
       `product_analytics_required` claim (default ON) -> OFF. An explicit
-      operator value always wins, including OFF over a licence, and the
+      operator value always wins, including OFF over a license, and the
       transparency surface reports the resolved value plus its source
       (`instance_switch_source`: `operator` / `environment` / `licence` /
       `default`), so an operator can always see why analytics is on and turn
@@ -84,12 +84,12 @@ organisation's plan or tier.
       `tests/unit/product_analytics/test_license_enforcement.py`,
       `tests/unit/api/routes/test_product_analytics_transparency.py`,
       `frontend/src/views/AdminProductAnalyticsView.vue`)
-- [x] Analytics never degrades an organisation's plan or tier. A partner
-      licence carrying `product_analytics_required` *expects* analytics to be
+- [x] Analytics never degrades an organization's plan or tier. A partner
+      license carrying `product_analytics_required` *expects* analytics to be
       on, but that expectation is contractual, not a software control: the
       claim only supplies the switch DEFAULT, the operator's explicit value
       still wins (including OFF), and the dump loop collects consenting orgs
-      with no licence/tier inspection
+      with no license/tier inspection
       (`core/product_analytics/metrics_dump.py` `_get_consenting_orgs`,
       `tests/unit/product_analytics/test_metrics_dump.py`
       `TestGetConsentingOrgsIsConsentOnly`). The former "degrade to Community"
@@ -101,11 +101,11 @@ organisation's plan or tier.
       `instance_enabled` / `instance_switch_source` / `licence_requires_analytics`
       via `consent.resolve_instance_analytics_switch` (fail-closed coercion - a
       stored `"false"` is OFF - with the `MODULO_PRODUCT_ANALYTICS_ENABLED` env
-      fallback and the licence-derived default), `last_successful_dump_at` /
+      fallback and the license-derived default), `last_successful_dump_at` /
       `dump_count_total` from the keys the
       metrics dump writes (`constants.DUMP_WATERMARK_KEY`,
       `metrics_dump.DUMP_COUNT_KEY`), and `consent_level` from the caller's
-      organisation `settings_json` (read through `consent.org_consent_level`)
+      organization `settings_json` (read through `consent.org_consent_level`)
       - the per-org value is the PREFERRED source; when the caller org cannot be
       resolved the endpoint reports an instance-level aggregate
       (`_instance_consent_level`: `all` if any active org has opted in, else
@@ -125,7 +125,7 @@ organisation's plan or tier.
 - [x] The event-ingest endpoint `POST /api/v1/metrics/events` stages consent-gated
       curated frontend events into `metrics_staging`: an org-scoped insert with
       `UNIQUE(organisation_id, event_id)` dedup (`ON CONFLICT DO NOTHING`), an
-      `api_error` daily cap, route-template sanitisation so raw paths never reach
+      `api_error` daily cap, route-template sanitization so raw paths never reach
       the table, and event-specific payload validation that retains only bounded
       opaque UUID identifiers or bounded scalar API-error fields; unknown, nested,
       oversized, malformed, and PII-shaped values are dropped before staging. It
@@ -155,7 +155,7 @@ organisation's plan or tier.
       transaction (`api/routes/product_analytics.py`)
       (`tests/unit/product_analytics/test_metrics_staging_consumer.py`,
       `test_routes.py`)
-- [x] The frontend event-capture composable is initialised in the app root
+- [x] The frontend event-capture composable is initialized in the app root
       (FAR-1718): `App.vue` calls `initProductAnalytics` with
       `productAnalyticsStore.isOptedIn` as the live consent function, and
       curated `track()` call sites ship with pipeline create / run start,
@@ -168,17 +168,17 @@ organisation's plan or tier.
 
 ## Consent scoping (FAR-1635)
 
-Decision: the transparency endpoint reports consent **per organisation, with an
+Decision: the transparency endpoint reports consent **per organization, with an
 instance fallback** - "per org preferable, per instance acceptable". This is
 intentional, not an open question:
 
 - **Per-org is primary.** `consent_level` / `egress_allowed` read the caller's own
-  organisation `settings_json`, so a system admin sees their org's real posture.
+  organization `settings_json`, so a system admin sees their org's real posture.
   On a single-org (self-hosted) instance this _is_ the instance posture.
 - **Instance fallback when the caller org is unknown.** When the caller has no
   `organisation_id`, or the org row cannot be found, the endpoint reports an
   instance-level aggregate (`_instance_consent_level`): `all` if at least one
-  active organisation has opted in, else `off`. It no longer hardcodes `off`.
+  active organization has opted in, else `off`. It no longer hardcodes `off`.
 - The aggregate and the daily dump share ONE consent predicate
   (`consent.org_consent_level` / `consent.is_org_consenting`), which both
   `_instance_consent_level` and `metrics_dump._get_consenting_orgs` call, so the
@@ -209,7 +209,7 @@ intentional, not an open question:
 
 ## QA History
 - 2026-10-27: **FAR-2179 - drop the inert kill-switch row; document the switch**.
-  FAR-2063 retired the licence-enforcement kill switch in code but left any
+  FAR-2063 retired the license-enforcement kill switch in code but left any
   pre-existing `system_config.product_analytics_license_enforcement_kill_switch`
   row behind, where it reads as a live setting. Migration
   `0336_drop_analytics_kill_switch_row` deletes it if present (existence-gated,
@@ -217,30 +217,30 @@ intentional, not an open question:
   absent; absence is also the older image's "enforcement enabled" default, so a
   rollback is safe. Documentation audit against
   `consent.resolve_instance_analytics_switch`: the configuration reference now
-  states the full resolution order (stored value -> env var -> licence default ->
-  OFF), that the licence claim is a partner expectation rather than a control,
+  states the full resolution order (stored value -> env var -> license default ->
+  OFF), that the license claim is a partner expectation rather than a control,
   that the transparency endpoint reports the effective value and its source, and
   that the endpoint/secret transport variables sit alongside it. The admin UI
   already told the operator their choice always wins, including OFF over a
-  licence that requires analytics.
-- 2026-10-26: **FAR-2063 - instance switch write path + licence-derived default**.
+  license that requires analytics.
+- 2026-10-26: **FAR-2063 - instance switch write path + license-derived default**.
   The master switch had no writer (`product_analytics_enabled` was read in
-  several places and written by nothing) and the licence "enforcement" was
+  several places and written by nothing) and the license "enforcement" was
   dead code: `_get_consenting_orgs` dropped every non-consenting org before the
   `should_degrade_to_community` branch, which required exactly such an org, so
   the branch was unreachable - and its test mocked the predicate to True, so CI
   asserted a path that could not execute. Settled design: the switch is
-  operator-writable and licence-defaulted, and analytics never degrades a tier.
+  operator-writable and license-defaulted, and analytics never degrades a tier.
   Added `PUT /api/v1/product-analytics/instance-switch` (system admin, audited
   in the system ledger) and the switch UI on the admin page; added
-  `consent.resolve_instance_analytics_switch` (operator -> env -> licence ->
+  `consent.resolve_instance_analytics_switch` (operator -> env -> license ->
   OFF); deleted `license_enforcement.py`, the kill switch, the carve-out helper
   and the unreachable dump branch; replaced the mocked-predicate test with real
   precedence tests plus a real-path proof that the dump never runs when the
   effective switch is OFF. Documented `MODULO_PRODUCT_ANALYTICS_ENABLED` in the
   configuration reference.
 - 2026-10-19: **Improve Architecture product-map walk** - fixed MAJOR
-  (behaviour-adversarial / Lens 9 List B - *listed but vacuously covered*): the
+  (behavior-adversarial / Lens 9 List B - *listed but vacuously covered*): the
   frontend event-capture composable generated `event_id` from a module-scoped
   counter that restarted at `1` on every page load (and was independent per
   tab), while the ingest route dedups on `UNIQUE(organisation_id, event_id)`
@@ -252,12 +252,12 @@ intentional, not an open question:
   (random UUID, falling back to CSPRNG bytes and only then to a
   timestamp/random suffix) plus the monotonic counter,
   so reloads and concurrent tabs cannot collide; the regression test
-  re-initialises the module and proves the new session's ID differs from the
+  re-initializes the module and proves the new session's ID differs from the
   first (`frontend/src/composables/useProductAnalytics.ts`,
   `frontend/src/__tests__/composables/useProductAnalytics.spec.ts`).
 - 2026-10-12: **Improve Architecture product-map walk** - wired the partner
   `product_analytics_required` carve-out into the daily metrics dump (the dump
-  half of the license-gating behaviour): `metrics_dump` now reads
+  half of the license-gating behavior): `metrics_dump` now reads
   `is_enforcement_active` once per run and `_get_consenting_orgs` drops orgs
   where `should_degrade_to_community` fires, in the same system session (one
   transaction, not two back-to-back sessions). Fixed the 10-test breakage the
@@ -267,7 +267,7 @@ intentional, not an open question:
   (degraded-consenting excluded, non-degraded kept, enforcement-off short
   circuit). The request-time route half (`resolve_plan_context` /
   `require_feature` degrading the effective plan) is still open and stays
-  tracked as the remaining unchecked behaviour.
+  tracked as the remaining unchecked behavior.
 - 2026-10-12: **FAR-1717 + FAR-1718 (staging consumer + capture init)** - closed
   both unwired halves of the frontend ingest path. Backend: `_build_payload`
   now folds `metrics_staging` into the payload (`_aggregate_staged_events` →
@@ -280,7 +280,7 @@ intentional, not an open question:
   Postgres requires IMMUTABLE index predicates); the admin PUT and the consent
   decline path purge the org's staged rows in the same transaction, replacing
   the "will be implemented in FAR-355" docstring on the level-update route.
-  Frontend: `App.vue` initialises `initProductAnalytics` with the store's live
+  Frontend: `App.vue` initializes `initProductAnalytics` with the store's live
   `isOptedIn` as the consent function, curated `track()` call sites landed in
   the same change (so captured events have a consumer), and the non-existent
   `page_view` Redis-counter docstring claim was dropped. Evidence: the new
@@ -313,7 +313,7 @@ intentional, not an open question:
   no settings" stays per-org `off` and only a genuinely unresolvable org takes
   the instance fallback. Documented the decision (was an undecided Known Gap) and
   added tests for both paths; the fallback tests fail against the previous
-  hardcoded-`off` behaviour.
+  hardcoded-`off` behavior.
 - 2026-10-10: **deliver/pa-transparency** - closed the transparency "phantom
   keys" gap: the endpoint read five `system_config` keys that no feature wrote, so
   `/admin/product-analytics` always rendered defaults. It now sources every field
@@ -337,13 +337,13 @@ intentional, not an open question:
   (the previous dump tests seeded a date-only string the writer never produces, which
   is why CI stayed green). Also documented the MAJOR transparency-writer gap above.
   Pre-PR QA gate (same day): removed the now-dead re-parse in `_resolve_start_date`
-  (normalisation is owned by `_get_consenting_orgs`), pinned `_parse_iso_date`'s
+  (normalization is owned by `_get_consenting_orgs`), pinned `_parse_iso_date`'s
   fail-hard contract with negative tests, and aligned `_check_instance_switch` with
   `consent.is_instance_analytics_enabled` - a stored string `"false"` previously read
   as truthy and ran the dump while the consent surface reported the switch OFF
-  (fail-open), and the `MODULO_PRODUCT_ANALYTICS_ENABLED` fallback the surface honours
+  (fail-open), and the `MODULO_PRODUCT_ANALYTICS_ENABLED` fallback the surface honors
   was ignored. Corrected the Known-Gaps key count (five, not four) and the
-  license/plan-gating behaviour claim (module has no production call site).
+  license/plan-gating behavior claim (module has no production call site).
 - 2026-10-03: **Improve Architecture product-map walk** - closed the CISO
   data-residency persona gap (`personas/marcus-ciso.feature`, pinned
   `@awaiting-implementation` since 2026-08): the scenario now executes against
@@ -359,8 +359,8 @@ intentional, not an open question:
   read. The pin was removed from `PINNED_AWAITING_IMPLEMENTATION` and the
   scenario now executes in CI; unit coverage added in
   `tests/unit/api/routes/test_product_analytics_transparency.py`
-  (`TestEgressPosture`, matrix-parametrised over both axes). The `feat-product-analytics`
-  manifest registry gained the shipped egress-posture behaviour line; the tracker
+  (`TestEgressPosture`, matrix-parametrized over both axes). The `feat-product-analytics`
+  manifest registry gained the shipped egress-posture behavior line; the tracker
   `bdd:` citations now include the persona journey.
 - 2026-09-29: **Improve Architecture product-map walk** - reconciled the
   tracker frontmatter `status:` with the manifest `feat-product-analytics`
@@ -391,14 +391,14 @@ intentional, not an open question:
 - 2026-09-11: **product-map review pass** - registered the
   consent prompt surface (`product-analytics/ProductAnalyticsConsentPrompt.vue`
   static testid `product-analytics-consent-prompt`) in the `/admin/product-analytics`
-  manifest `elements:` inventory - the prompt renders organisation-wide via
+  manifest `elements:` inventory - the prompt renders organization-wide via
   `AppLayout.vue` (alongside the page's existing `consent-level` indicator) but
   had no product-map home. `test_mapped_route_elements_cover_owning_view_testids`
   now maps the route to its page view + the prompt component, so the consent
   surface cannot drift invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-08-27: **product-map review pass** - added this behaviour-tracker
+- 2026-08-27: **product-map review pass** - added this behavior-tracker
   for the registered manifest feature `feat-product-analytics`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/product_analytics*.py`,
+  `docs/product-map/` entry. Behaviors verified against `api/routes/product_analytics*.py`,
   `core/product_analytics/*` and the product-analytics unit/BDD/integration suites
   (`tests/integration/test_metrics_ingest.py`, `test_product_analytics_identity.py`).
   Status: covered.

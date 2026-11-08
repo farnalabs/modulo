@@ -230,6 +230,7 @@ import DataCard from '../components/ui/DataCard.vue'
 import { shortId } from '../utils/format'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
+import { formatDateLogTimestamp } from '../lib/formatDate'
 
 const {
   cursor: currentCursor,
@@ -311,14 +312,7 @@ const capacityTrendLabel = computed(() => {
 })
 
 function formatTimestamp(ts: string | null | undefined): string {
-  if (!ts) return '—'
-  const d = new Date(ts)
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatDateLogTimestamp(ts)
 }
 
 function typeBadge(type: string): string {
@@ -352,13 +346,13 @@ function resultBadge(result: string): string {
 
 function applyFilters() {
   resetCursor()
-  loadEvents()
+  void loadEvents()
 }
 
 function resetFilters() {
   filterTriggerType.value = '__all__'
   filterResult.value = '__all__'
   resetCursor()
-  loadEvents()
+  void loadEvents()
 }
 </script>

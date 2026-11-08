@@ -1,6 +1,6 @@
 # Architecture Guide
 
-Modulo is a self-hosted Agentic Delivery Governance platform: an autonomous software factory you own and run on your own infrastructure. It builds governed, repeatable AI-assisted software delivery pipelines, and its pipeline engine applies graph engineering to compose agents, connectors, gates, and humans into an explicit graph. This document covers the system architecture, tech stack, key components, data flow, database schema, authentication, and deployment.
+Modulo is a self-hosted Delivery Governance Platform: govern the software development lifecycle as AI and automation take on more of the work. Its operating loop is **record → evaluate → control → improve**: capture automated work, assess outputs and evidence, control progression through gates and human decisions, and improve the delivery system from observed results. The current implementation demonstrates this through governed, repeatable AI-assisted software delivery pipelines; its pipeline engine applies graph engineering to compose agents, connectors, gates, and humans into an explicit graph. Issue-to-PR is one governed workflow, not the whole product. This document covers the system architecture, tech stack, key components, data flow, database schema, authentication, and deployment.
 
 ## System overview
 
@@ -47,7 +47,7 @@ Modulo is a self-hosted Agentic Delivery Governance platform: an autonomous soft
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| **Backend** | Python 3.12+ | Runtime |
+| **Backend** | Python 3.12-3.14 | Runtime (the Docker images build on 3.14) |
 | **API framework** | FastAPI | REST + WebSocket + MCP server |
 | **Graph execution** | LangGraph (StateGraph) | Pipeline agent orchestration |
 | **ORM** | SQLAlchemy 2.0 (async) | Database access |
@@ -83,11 +83,70 @@ Includes:
 Built on LangGraph's `StateGraph` with `dict[str, Any]` state. Each pipeline snapshot compiles to a StateGraph at run-start. Node types: `agent`, `sandbox_agent`, `manual` (human output), `composite` (expand-only), `router` (ordered JMESPath rules + `default`, lowers to the conditional-edge compile path, FAR-402 P1), `hitl` (human-in-the-loop gate that compiles to the existing synthetic-gate path, FAR-402 P1), `join` (fan-in for scatter/gather patterns), `dispatch` (fires a CI-runner operation through a connector binding, FAR-1141), and `connector` (an API-authorable node type whose whole job is its `connector_binding`: the binding is routed to the bound connector by `make_connector_fn`, FAR-2089). Edges carry HITL gate config, rejection routing, or a `loop`/`conditional`/`normal`/`reject` edge type.
 
 Key design:
-- Compiled graphs cached by `(pipeline_id, snapshot_id)` with LRU eviction
+- Compiled graphs cached by `(pipeline_id, snapshot_id, node_timeout_seconds, struct_hash)` with LRU eviction (see [Graph Cache Strategy](#graph-cache-strategy))
 - `run_context` and `artifact` are sibling keys in state – context-setter-only write enforcement
 - Human/manual nodes produce `interrupt()` in LangGraph
 - `@cancellable_node` decorator wraps every node for graceful cancellation and per-node timeouts (`asyncio.wait_for`)
 - Pipeline nesting max depth: 3 levels
+
+#### Pipeline Executor Patterns
+
+The `PipelineExecutor` (`backend/src/modulo/core/pipeline_engine/executor.py`) orchestrates a single run end-to-end. It implements several cross-cutting patterns:
+
+**Capacity Gates (admission control)**
+- Per-pipeline: `max_concurrent_runs` counted over `running`/`claimed`/`unknown` runs (excludes `awaiting_human`/`hitl_parked`)
+- Per-org sandbox: `sandbox_concurrency_limit` for `sandbox_agent` nodes
+- Per-org run: `run_concurrency_limit` counted over active run statuses
+- A capacity-deferred run stays `pending` with `pipeline_capacity` or `org_capacity_limited` marker and is re-dispatched when a slot frees
+- Reconciliation sweeps (cron) terminalize stale `running` runs and clear leaked slots
+
+**Retry Policy (FAR-402 P5)**
+- Pipeline-level `retry_policy` defines `max_retries` and `on` events: `stall`, `timeout`, `failure`, `eval_failed`
+- Per-node `retry` blocks override the pipeline default
+- Retry re-executes the WHOLE run (fenced pending-reset + backoff + SAQ job re-dispatch)
+- Over-budget guard refuses retry when the attempt already consumed the graph's node-budget allowance
+- Never-retryable codes: script-mode terminal codes (side-effect safety), provider billing faults (401/402)
+
+**Terminalization & Error Codes**
+- Canonical dotted error codes (`agent.failed`, `node.timeout`, `node.deadline_exceeded`, `eval.blocked`, `harness.idempotency_gate`, `sandbox.tier_refused`)
+- Legacy aliases mapped via shared `map_legacy_code` table so dotted and legacy spellings behave identically
+- Agent failure elevation (A1): self-reported agent failure elevates to `agent.failed` (feature-flagged)
+- Session-lost classification: envelope retained text surfaces classified to provider codes (e.g., `model.insufficient_funds` for HTTP 402) rather than masked as retryable `sandbox.no_output_json`
+
+**Idempotency Gate (FAR-228)**
+- Guard A (early skip): node output carries `output_json.idempotency_gate` → skip re-firing `agent_signal` triggers
+- Guard B (retry suppression): run markers carry `delivery_done` → suppress transient node failure retry
+- Fenced by claim token so a superseded executor cannot stamp a successor's run
+
+See [Run admission and healing](#run-admission-and-healing-far-604) for capacity gate details and reconciliation sweeps.
+
+#### Graph Cache Strategy
+
+The `graph_cache` module (`backend/src/modulo/core/pipeline_engine/graph_cache.py`) provides an in-memory LRU cache for compiled LangGraph `StateGraph` objects.
+
+**Cache Key**
+`(pipeline_id, snapshot_id, pipeline_node_timeout_seconds, graph_struct_hash)`
+
+- `pipeline_id` + `snapshot_id`: identifies the frozen pipeline definition
+- `pipeline_node_timeout_seconds`: the pipeline-level timeout is baked into every node with a null timeout; keying on it means a PATCH to `node_timeout_seconds` takes effect immediately
+- `graph_struct_hash`: deterministic hash of the graph's port topology (FAR-416/F1) + pipeline retry policy + node-scoped eval definitions (FAR-502); forces recompile when ports, node types, retry policy, or eval definitions change
+
+**Compilation Pipeline**
+1. `_assemble_nodes`: builds raw node functions, computes DAG ancestor sets (FAR-795), wraps each with the retry/compensation wrapper (FAR-402 P5)
+2. `_assemble_edges`: compiles edges via dispatch precedence (Router > HITL node > loop > LLM routing > conditional > normal), inserts HITL gate nodes, loop counter nodes, routers
+3. Entry point: first node not in `target_ids` (no incoming forwarding edges)
+
+**Eviction**
+- True LRU via `OrderedDict` (max 256 entries)
+- Per-key `threading.Lock` prevents double compilation if factory becomes async
+- `evict(pipeline_id, snapshot_id)` removes all variants for a snapshot pair
+
+**Cache-Consistent Derived Data**
+- Port topology hash (`compute_port_topology_hash`) and eval defs hash (`compute_eval_defs_hash`) are pure functions of `graph_json` - identical for every compile of the same snapshot
+- DAG ancestor sets (`_compute_dag_ancestor_ids`) derived from forwarding edges only (reject edges excluded)
+- Node type map for HITL gate eval path (source node's CONTRACT output, not merged state)
+
+See `backend/src/modulo/core/pipeline_engine/graph_cache.py` for implementation.
 
 ### Eval Engine (`modulo/core/eval_engine/`)
 
@@ -102,7 +161,7 @@ Post-node automated quality checks. Runs before any HITL gate check on the same 
 | `guardrail` | Deterministic data-safety check on the input payload (not routed through `EvalEngine`) |
 | `human_set` | Registered, versioned, human-authored assertion set (the trustworthy correctness path) |
 
-Each eval has a pass threshold and failure behaviour: `warn` (soft – run continues) or `block` (hard – run fails at this node). Eval results feed into the Feedback System.
+Each eval has a pass threshold and failure behavior: `warn` (soft – run continues) or `block` (hard – run fails at this node). Eval results feed into the Feedback System.
 
 **Reviewer Independence Note (FAR-2031):** `model_judge` evals may share a model backend with the node under evaluation – the `ModelBackendHub` decrypts credentials once per run and the same backend ID can be referenced by both the node and its eval. This is acceptable because `model_judge` is explicitly a soft-signal eval (default `failure_behaviour: "warn"`), the evaluated content is wrapped with a guard instruction and delimiters to prevent prompt injection, and `human_set` evals provide the trustworthy correctness path. For correctness-critical gates, use `human_set` evals.
 
@@ -116,9 +175,9 @@ Features:
 - Claim expiry background job (default: 60s interval, Postgres advisory lock for single-worker execution)
 - `manual` node type – same as HITL but human provides full output
 - `hitl` node type (FAR-402 P1) – a draggable human-in-the-loop gate; compiles to the same synthetic-gate path as a legacy edge-level HITL gate. `manual` remains the non-gating human-output step.
-- Review window (FAR-1257) and approaching-deadline warning (FAR-1270) – the effective window is resolved ONCE at gate fire (pipeline override > org default > `HITL_CLAIM_TTL_SECONDS` + `HITL_REVIEW_CANCEL_GRACE_SECONDS`, clamped to 60s..7d) and stamped as `hitl_claims.terminalize_at`; the dispatcher-reconcile terminaliser cancels the run at that deadline, and a fire-once `hitl_deadline_warning` cron emails the gate-fire recipients at the halfway lead so a human can act first. Both mechanisms are described under "Run admission and healing" below.
+- Review window (FAR-1257) and approaching-deadline warning (FAR-1270) – the effective window is resolved ONCE at gate fire (pipeline override > org default > `HITL_CLAIM_TTL_SECONDS` + `HITL_REVIEW_CANCEL_GRACE_SECONDS`, clamped to 60s..7d) and stamped as `hitl_claims.terminalize_at`; the dispatcher-reconcile terminalizer cancels the run at that deadline, and a fire-once `hitl_deadline_warning` cron emails the gate-fire recipients at the halfway lead so a human can act first. Both mechanisms are described under "Run admission and healing" below.
 
-**Decision-payload contract (normative, FAR-541):** every resume decision is a dict `{"action": <verdict>, "review_id": <the identity it resolves>}` plus any per-action members (`output`, `modified_output`, `reason`, `notes`). `HITLManager._decide` is the single stamp authority: it stamps a payload that lacks `review_id` with the claim row's gate id and refuses (422) a payload stamped for a *different* gate; call-site stamps (API routes, MCP) remain because they feed the direct `executor.resume` injection that bypasses `_decide`. A decision is honoured ONLY by the gate/node its stamp names: every consumer verifies the stamp against its own identity and fails closed on a missing/foreign stamp (re-interrupt, never resume):
+**Decision-payload contract (normative, FAR-541):** every resume decision is a dict `{"action": <verdict>, "review_id": <the identity it resolves>}` plus any per-action members (`output`, `modified_output`, `reason`, `notes`). `HITLManager._decide` is the single stamp authority: it stamps a payload that lacks `review_id` with the claim row's gate id and refuses (422) a payload stamped for a *different* gate; call-site stamps (API routes, MCP) remain because they feed the direct `executor.resume` injection that bypasses `_decide`. A decision is honored ONLY by the gate/node its stamp names: every consumer verifies the stamp against its own identity and fails closed on a missing/foreign stamp (re-interrupt, never resume):
 
 | Writer | Stamp (`review_id`) | Consumer | Recognized actions |
 |---|---|---|---|
@@ -129,7 +188,7 @@ Features:
 
 Interrupt payloads carry the same identity: the gate node interrupts with its `review_id`, a manual node with `review_id: <node_id>`, a conformance block with the block's guardrail gate id. The executor keys the pending `hitl_claims` row on that `review_id` verbatim. The dispatcher reconcile resumes an `awaiting_human`/`claimed` run ONLY per this scoping matrix: claimed-undecided, skip (under the `uq_hitl_claims_run_gate` `UNIQUE (run_id, review_id)` constraint a claimed-undecided row and a committed decision for the same gate cannot coexist; crash recovery for claimed runs routes through the no-undecided-rows branch once the decision commits); unclaimed undecided row, conservative skip; no undecided rows, crash-recovery resume when the decision's stamp routes it to a consumer that accepts it. `hitl_review_*`/guardrail identities accept only the verdict actions; MANUAL-node identities also accept a committed `manual_output` with its `output` (legacy pre-stamping rows are stranded by design, at most the 2026-09-02 incident cohort; ops remedy is a manual DB stamp or ticket, no backfill migration). Recover-node refuses HITL gate targets (422), gate decisions must go through approve/reject; user node ids squatting the reserved `hitl_review_` prefix are rejected at graph-validation time.
 
-**Gate coalescing (FAR-604 D4):** when a run reaches a HITL gate and an OPEN gate (undecided + unclaimed, same gate id) already covers the same work item on ANOTHER run of the pipeline, matched via the webhook coalesce key stamped on `runs.input_payload`, the gate is NOT raised twice. If the entity SHA (`runs.input_hash`) is unchanged, the duplicate run is terminalised `failed`/`executor_superseded` and the existing gate decides for the work item (the model does not support multiple runs per gate, `uq_hitl_claims_run_gate`, so reuse means skipping the duplicate gate). If the SHA changed, the old gate is auto-closed with a system-committed `rejected` decision (loudly audited as `hitl.gate_superseded`) and the old run, if parked, un-parks so the committed-decision resume machinery routes it through the gate's reject route when one is configured. With no reject route (and no explicit `on_reject: proceed`) the old run now ENDS `rejected` with `error_code=hitl.superseded` (FAR-1487, labelled "Superseded by a newer version" and never counted as a human reject), while the new run raises fresh. Claimed gates are never superseded (a human holding the claim is mid-review; the claim TTL + a later raise close the loop).
+**Gate coalescing (FAR-604 D4):** when a run reaches a HITL gate and an OPEN gate (undecided + unclaimed, same gate id) already covers the same work item on ANOTHER run of the pipeline, matched via the webhook coalesce key stamped on `runs.input_payload`, the gate is NOT raised twice. If the entity SHA (`runs.input_hash`) is unchanged, the duplicate run is terminalized `failed`/`executor_superseded` and the existing gate decides for the work item (the model does not support multiple runs per gate, `uq_hitl_claims_run_gate`, so reuse means skipping the duplicate gate). If the SHA changed, the old gate is auto-closed with a system-committed `rejected` decision (loudly audited as `hitl.gate_superseded`) and the old run, if parked, un-parks so the committed-decision resume machinery routes it through the gate's reject route when one is configured. With no reject route (and no explicit `on_reject: proceed`) the old run now ENDS `rejected` with `error_code=hitl.superseded` (FAR-1487, labelled "Superseded by a newer version" and never counted as a human reject), while the new run raises fresh. Claimed gates are never superseded (a human holding the claim is mid-review; the claim TTL + a later raise close the loop).
 
 ### Connector Hub (`modulo/connectors/`)
 
@@ -154,6 +213,7 @@ Abstraction over external tool integrations. Each connector has a concrete `Conn
 | `MondayConnector` | `issue-tracker` | create/search/update items |
 | `ShortcutConnector` | `issue-tracker` | create/search/update stories |
 | `YouTrackConnector` | `issue-tracker` | create/search/update issues |
+| `PlaneConnector` | `issue-tracker` | create/search/update work items |
 | `NotionConnector` | `documentation` | read/write pages and databases |
 | `ConfluenceConnector` | `documentation` | read/write pages |
 | `DropboxPaperConnector` | `documentation` | read/write pages |
@@ -177,7 +237,47 @@ Abstraction over external tool integrations. Each connector has a concrete `Conn
 | `AzureKeyVaultConnector` | `secrets` | read secrets |
 | `SharePointConnector` | `documentation` | read/write files and pages |
 | `CodeClimateConnector` | `quality` | query code quality metrics |
-| *(40 concrete connectors; 43 `ConnectorType` enum members including the provider-dispatched `ci-runner` / `ticket-tracker` families and `custom`; see `modulo/connectors/`)* | | |
+
+There are 41 concrete connectors; the `ConnectorType` enum has 43 members, including the provider-dispatched `ci-runner` / `ticket-tracker` families and `custom`. See `modulo/connectors/`.
+
+#### SSRF-safe Outbound Egress Guard
+
+The `ssrf` module (`backend/src/modulo/core/ssrf.py`) provides the shared SSRF (Server-Side Request Forgery) protection for every outbound network hop in Modulo. It is used by notification endpoints, SSO test connections, observability test paths, error forwarders, every `base_url`-bearing connector, and OpenAI-compatible model backends.
+
+**Threat Model**
+- Blocks private/link-local/cloud-metadata/CGNAT ranges via DNS resolution
+- Loopback is blocked by default but allowlistable via `SSRF_ALLOW_PRIVATE_RANGES` (cluster-wide CIDR list)
+- Link-local (`169.254.0.0/16`), multicast, CGNAT (`100.64.0.0/10`), benchmarking (`198.18.0.0/15`), current-network (`0.0.0.0/8`), and cloud-metadata endpoints (AWS IMDS `169.254.169.254`, Aliyun `100.100.100.200`, AWS IMDS IPv6 `fd00:ec2::254`) are **non-negotiable** - no allowlist can open them
+- IPv6 site-local (`fec0::/10`) and multicast (`ff00::/8`) are also non-negotiable
+
+**Two Validation Paths**
+1. **Validate-then-connect** (`validate_outbound_url` / `validate_outbound_url_async`): resolves hostname, verifies all resolved addresses are non-internal, returns. Does NOT pin the address - a hostname under attacker DNS control can resolve to public at validation time and internal at connect time (DNS rebinding). This matches pre-existing connector/model-backend call sites.
+2. **Pinned transport** (`pinned_async_client` / `pinned_async_client_sync`): resolves and validates once, then forces the TCP connection to the validated address set while keeping the **original hostname for TLS SNI and certificate verification**. This closes the DNS-rebinding window. Preferred for new call sites that own their client construction.
+
+**Pinned Transport Behaviour**
+- Pins the **full validated IP set** (not just `ips[0]`), fails over/round-robins across it on connect
+- Re-resolves after `resolve_ttl_seconds` (default 300s, configurable via `SSRF_RESOLVE_TTL`) or when every pinned address fails to connect - self-heals decommissioned/stale IPs
+- Re-resolved set containing a private/internal address is refused fail-closed
+- Loudness guard (`PinDroppedError`) proves the pin backend was consulted; if httpcore stops routing the private `_pool._network_backend` attribute, the failure is loud, not silent
+
+**Allowlist Semantics**
+- `SSRF_ALLOW_PRIVATE_RANGES`: cluster-wide env var, comma-separated CIDRs (e.g., `127.0.0.0/8,::1/128` for dual-stack loopback)
+- **Dual-stack loopback needs BOTH entries**: `localhost` resolves to `127.0.0.1` AND `::1`; validation fails closed if ANY resolved address is blocked
+- Tenant-scoped `allow_networks` parameter layers on top of the global floor for a single connector/model backend
+- The allowlist is consulted AFTER the non-negotiable floor - it can never weaken link-local/multicast/metadata blocks
+
+**Proxy Trust**
+- `SSRF_TRUST_PROXY` (default `false`): when `true`, honours `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` env vars
+- Enabling proxy trust means the proxy re-resolves the target server-side; the pin map sees only the proxy host, so pinning is effectively bypassed
+- Warning logged when proxy env vars are present and `trust_env=true`
+
+**Known Residual Risks (FAR-526C)**
+The `no-raw-httpx-client` semgrep rule forbids `httpx.AsyncClient`/`httpx.Client` construction outside `ssrf.py` and the REST connector's pinned transport seam. Explicitly OUT OF SCOPE (known residual):
+- SDK-internal clients (`langchain_openai`, `anthropic`, `openai` SDKs) - mitigated by injecting pinned client where SDK supports it
+- Core support modules building their own client (`core/notifier`, `core/error_tracking/**`, `core/watchdog/worker_liveness`, `core/reports/scheduler`) - multi-host, pending per-call-site pin
+- `cli/apply` - sync executor, no sync pinned factory exists; target is single operator-configured `MODULO_URL`
+
+**Configuration Reference** - see `docs/configuration-reference.md` "Outbound Egress Guard (SSRF)" for all environment variables.
 
 #### Integration Validation Levels (FAR-935)
 
@@ -234,13 +334,13 @@ Accepts manual, webhook, cron, polling, and agent_signal trigger types. Creates 
 
 ### Audit Logger (`modulo/core/audit_logger/`)
 
-Immutable event recording for all state-changing actions. Written in alpha; viewer/export is team-gated. All events carry `organisation_id`, `actor_id`, `action`, `resource_type`, `resource_id`, and `timestamp`. An export can be emitted as **offline-verifiable evidence**: an Ed25519-signed canonical manifest over the exported files and the re-derived chain result, publishable with the org's verification key and checkable with only the artefact + key; see [`docs/offline-verifiable-evidence.md`](offline-verifiable-evidence.md).
+Immutable event recording for all state-changing actions. Written in alpha; viewer/export is team-gated. All events carry `organisation_id`, `actor_id`, `action`, `resource_type`, `resource_id`, and `timestamp`. An export can be emitted as **offline-verifiable evidence**: an Ed25519-signed canonical manifest over the exported files and the re-derived chain result, publishable with the org's verification key and checkable with only the artifact + key; see [`docs/offline-verifiable-evidence.md`](offline-verifiable-evidence.md).
 
 ### Compliance Control Mapping (`modulo/compliance/`)
 
 Maps Modulo's controls and evidence to the frameworks buyers actually test - SOC 2 Trust Services Criteria (CC6, CC7, CC8 plus the evidence layer), ISO/IEC 42001 clauses touching change approval, oversight and traceability, and the EU AI Act obligations that apply to a system changing software under human oversight. The mapping content is versioned YAML shipped in the product (`backend/src/modulo/compliance/mappings/`, `pack_version` + a deterministic content hash), not a website document, so it moves with the release it describes. Coverage is attributed per row and per framework (`satisfied` / `supported` / `customer-responsibility` / `gap`) and every row states the provenance of its evidence (`observed` / `derived` / `customer-supplied`); the loader rejects a pack that claims everything, presents a customer control as Modulo's, or drops a required SOC 2 clause.
 
-`GET /api/v1/compliance/evidence-index` (permission `compliance.evidence_index.read`, admin) generates the per-instance evidence index: the audit chain, run snapshots, HITL decisions (including human-only approvals), eval results, autonomy promotions and demotions, the release SBOM and the build identity - each keyed to the mapping rows it satisfies, each with its identifiers, location and provenance. A mapped artefact with no records is reported `absent` with a reason and named in `missing_artifact_types`; it is never omitted. The index records the pack version and content hash that produced it. See [`docs/security/compliance-control-mapping.md`](security/compliance-control-mapping.md).
+`GET /api/v1/compliance/evidence-index` (permission `compliance.evidence_index.read`, admin) generates the per-instance evidence index: the audit chain, run snapshots, HITL decisions (including human-only approvals), eval results, autonomy promotions and demotions, the release SBOM and the build identity - each keyed to the mapping rows it satisfies, each with its identifiers, location and provenance. A mapped artifact with no records is reported `absent` with a reason and named in `missing_artifact_types`; it is never omitted. The index records the pack version and content hash that produced it. See [`docs/security/compliance-control-mapping.md`](security/compliance-control-mapping.md).
 
 ### Notification System (`modulo/core/notifier/`)
 
@@ -282,7 +382,7 @@ Manages the local and community library of reusable primitives (agents, schemas,
 
 #### Git-sourced content refs (FAR-220)
 
-A `sandbox_agent` node's content fields (`agent_prompt`, each `agent_commands` item, and `script_command`) may reference a file tracked in a git repository instead of inlining the content (the "checkout-and-execute" / "fetch-and-render" pattern, productised):
+A `sandbox_agent` node's content fields (`agent_prompt`, each `agent_commands` item, and `script_command`) may reference a file tracked in a git repository instead of inlining the content (the "checkout-and-execute" / "fetch-and-render" pattern, productized):
 
 ```
 git+<repo-url>[@<ref>]#<path>
@@ -302,11 +402,11 @@ Lifecycle (the shared parse/resolve/pin helpers live in `modulo/core/pipeline_en
 
 ## Feature Flags
 
-Feature flags are declared once in `_KNOWN_FLAGS` (`core/feature_flags.py`). The DB seed catalog (`core/seed_data/catalog.py`) derives from it automatically. Flags gate behaviour behind tier thresholds and per-org overrides.
+Feature flags are declared once in `_KNOWN_FLAGS` (`core/feature_flags.py`). The DB seed catalog (`core/seed_data/catalog.py`) derives from it automatically. Flags gate behavior behind tier thresholds and per-org overrides.
 
-**Policy:** A feature flag is permitted only if BOTH the enabled state AND the disabled state are safe AND CI-tested in both states. If the "off" state breaks behaviour (the feature cannot function without the flag), delete the flag and hardcode the behaviour. Flags that fail-closed silently are worse than no flag at all.
+**Policy:** A feature flag is permitted only if BOTH the enabled state AND the disabled state are safe AND CI-tested in both states. If the "off" state breaks behavior (the feature cannot function without the flag), delete the flag and hardcode the behavior. Flags that fail-closed silently are worse than no flag at all.
 
-**Two-level settability (FAR-2302).** Each flag carries `org_admin_settable: bool = False` and the default is fail-closed. Only a flag that explicitly opts in may be set by an organisation admin for their own organisation, through `GET/PUT/DELETE /api/v1/admin/org/feature-flags[/{flag_name}]` (`org.feature_flags.manage`, `admin`, non-delegable). `FeatureFlagRegistry` keeps the classification when it loads the DB catalog, so a catalog-only flag is system-administrator-only by default. Every other flag – the instance-wide feature-flags page (`system.config.manage`) is the only surface – is a system administrator's to set. The org surface also refuses team-tier flags regardless of the classification (a team flag needs a licence), and excludes `mcp_human_linked_hitl_authority`, which has its own dedicated org control at `/api/v1/admin/org/mcp-human-linked-hitl-authority`, so there is exactly one UI per flag. The curated community-tier opt-ins are the low-sensitivity usage flags (`user_scoped_mcp_keys`, `api_key_grants`, `webhook_notification_log`, `dashboard_charts`, `library_collection`, `autonomy_gating`, `analytics_page`). A future sensitive org-scoped flag – community-library access, telemetry/metrics export, or anything that widens an auth or data-egress boundary – must default to system-administrator-only (`org_admin_settable=False`) and be opened only by a deliberate, reviewed change.
+**Two-level settability (FAR-2302).** Each flag carries `org_admin_settable: bool = False` and the default is fail-closed. Only a flag that explicitly opts in may be set by an organization admin for their own organization, through `GET/PUT/DELETE /api/v1/admin/org/feature-flags[/{flag_name}]` (`org.feature_flags.manage`, `admin`, non-delegable). `FeatureFlagRegistry` keeps the classification when it loads the DB catalog, so a catalog-only flag is system-administrator-only by default. Every other flag – the instance-wide feature-flags page (`system.config.manage`) is the only surface – is a system administrator's to set. The org surface also refuses team-tier flags regardless of the classification (a team flag needs a license), and excludes `mcp_human_linked_hitl_authority`, which has its own dedicated org control at `/api/v1/admin/org/mcp-human-linked-hitl-authority`, so there is exactly one UI per flag. The curated community-tier opt-ins are the low-sensitivity usage flags (`user_scoped_mcp_keys`, `api_key_grants`, `webhook_notification_log`, `dashboard_charts`, `library_collection`, `autonomy_gating`, `analytics_page`). A future sensitive org-scoped flag – community-library access, telemetry/metrics export, or anything that widens an auth or data-egress boundary – must default to system-administrator-only (`org_admin_settable=False`) and be opened only by a deliberate, reviewed change.
 
 The reference-integrity guard test (`tests/architecture/test_feature_flag_reference_integrity.py`) enforces this: every flag name referenced by a gate must exist in `_KNOWN_FLAGS` (no phantoms), and every flag in `_KNOWN_FLAGS` must have at least one external reference (no orphans).
 
@@ -325,7 +425,7 @@ The reference-integrity guard test (`tests/architecture/test_feature_flag_refere
    snapshot. A snapshot also carries a `release_channel` (`none` | `stable` |
    `canary`); a trigger bound to a `stable`/`canary` channel resolves to the
    latest snapshot of that channel (`TriggerEngine.resolve_snapshot_id_for_trigger`),
-   while an unbound trigger pins the live graph (current behaviour).
+   while an unbound trigger pins the live graph (current behavior).
    `diff_snapshots` surfaces port-signature deltas + a deterministic downstream
    impact oracle (`compute_port_change_impact`), and a save-time check
    (`check_port_change_breaking`) flags port changes that would drop/alter data
@@ -340,7 +440,7 @@ The reference-integrity guard test (`tests/architecture/test_feature_flag_refere
    d. The LLM is called through the model backend
    e. Output is validated against the output Schema
    f. EvalEngine runs configured evals (model_judge, regex, json_schema, custom_function, human_set)
-   g. If eval fails with `block` behaviour, run enters `failed` state
+   g. If eval fails with `block` behavior, run enters `failed` state
    h. If the outgoing edge has a HITL gate, `interrupt()` pauses the run
 
 5. **HITL** – A human claims the gate (atomic DB lock), inspects context, and approves or rejects. Approval continues to the next node; rejection routes to the reject-target node when a reject route is configured (`reject_target` or a reject edge) or produces a FeedbackRecord, and with no reject route it ENDS the run with the terminal `rejected` status (FAR-1487; not `failed`, not `cancelled`). The disposition is `route` (a reject destination exists), `terminate` (the default) or `proceed` (an explicit `on_reject: proceed` on the gate continues down the approve path, as before); an automated `correction_target` wins over terminating, and the reviewer briefing states the consequence in all three cases.
@@ -363,14 +463,18 @@ frees; `pipeline.max_concurrent_runs` must be >= 1 (create/update reject 0 and
 negatives; 0 would silently wedge admission forever; pausing admission is the
 org triggers pause). Several independent mechanisms keep those gates healthy:
 
-- **Slot reconciliation sweep:** a system cron (every 5 min) terminalises
+- **Slot reconciliation sweep:** a system cron (every 5 min) terminalizes
   `running` runs whose heartbeat is stale past `SLOT_RECONCILE_STALE_SECONDS`
   (default 30 min) with the `worker_lost` error code, force-releasing the
   pipeline slots a crashed worker leaked. Journeys and daily facts advance for
   each released run.
-- **Worker-shutdown handoff (FAR-1627):** a deploy SIGTERMs the SAQ runs
-  worker while agent runs are mid-execution. Instead of leaving those runs
-  `running` until the 30-minute heartbeat TTL above detects the loss (and
+- **Worker-shutdown handoff (FAR-1627):** the production deploy path waits for
+  active sandbox-backed runs to reach zero before starting the Fly worker
+  replacement. This prevents the normal deploy from SIGTERMing a run that has
+  already created a sandbox. The worker still has a shutdown handoff for hard
+  restarts, crashes, and races: a worker can be SIGTERMed while agent runs are
+  mid-execution. Instead of leaving those runs `running` until the 30-minute
+  heartbeat TTL above detects the loss (and
   misattributes it to the dispatch path), the worker's SAQ `shutdown` hook
   processes every run it still owns the moment shutdown begins, and each run
   takes one of two paths. If a re-run is safe – a pre-node run (zero nodes
@@ -407,7 +511,7 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   data fails OPEN (the retry is allowed, as before). The worker-shutdown
   handback and the nodeless-zombie re-dispatch do not consume node budget and
   are unaffected.
-- **HITL review-window terminaliser (FAR-648, FAR-1257):** a sweep wired into
+- **HITL review-window terminalizer (FAR-648, FAR-1257):** a sweep wired into
   `dispatcher_reconcile` (every 60s) cancels an `awaiting_human` run whose open
   gate is still UNCLAIMED and UNDECIDED past the resolved review window:
   `cancelled` / `hitl_review_expired`, which releases the org concurrency slot
@@ -424,7 +528,7 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   `hitl_deadline_warning` SAQ cron (every 60s) emails the same recipients the
   gate-fire alert uses while an unclaimed, undecided gate is still inside its
   lead band, `min(max(window / 2, 60s), window, 3600s)` before the deadline, so
-  someone can approve/reject BEFORE the terminaliser cancels. At most ONE
+  someone can approve/reject BEFORE the terminalizer cancels. At most ONE
   warning per gate (Redis `SET NX` fire-once marker, in-process backstop when
   Redis is down), skipped when the gate is already claimed or decided, already
   past its deadline, covered by a claimed open sibling gate, or has no opted-in
@@ -434,9 +538,9 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   `hitl_parked` (a non-terminal status that holds no pipeline capacity). The
   deadline is `HITL_PARK_GRACE_SECONDS` (default 24h) after expiry for legacy
   unstamped rows, but since FAR-1257 the sweep anchors on the review deadline
-  (`terminalize_at` + a positive margin), so the terminaliser above always acts
+  (`terminalize_at` + a positive margin), so the terminalizer above always acts
   first and parking is unreachable for the unclaimed-expired class at stamped
-  rows (a parked run still holds the org slot, which is why the terminaliser
+  rows (a parked run still holds the org slot, which is why the terminalizer
   exists). The STATUS itself is the parked signal the HITL UI reads to show
   "expired, parked". Park is not decide: the gate row stays OPEN AND CLAIMABLE
   (a claim takes a fresh TTL), and the moment a decision commits
@@ -457,7 +561,7 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   Replays never coalesce.
 - **CI-failure coalesce (Branch Fixer deduplication, FAR-1034):**
 
-  > This section reflects the behaviour on the `dist/conflict-dispatch-dedupe` branch (PR #2186); it merges after that PR.
+  > This section reflects the behavior on the `dist/conflict-dispatch-dedupe` branch (PR #2186); it merges after that PR.
 
   **Purpose.** Prevent duplicate Branch Fixer dispatches for the same failing PR at the same head SHA. The canonical payload-hash deduplication (`webhook_dedup_hashes`) cannot suppress these deliveries, for two different reasons per sender:
 
@@ -519,7 +623,7 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   be refused until FAR-1355's progress-based detection replaces it.
 - **Legacy stale-run sweep:** pending runs past the never-dispatched window
   (`SAQ_NEVER_DISPATCHED_WINDOW`) and legacy non-SAQ `running` rows with 5+
-  claims (`worker_lost`) are terminalised or re-dispatched as before. There is
+  claims (`worker_lost`) are terminalized or re-dispatched as before. There is
   no instance-wide queued TTL: one TTL per state class, so capacity-marked
   rows are bounded only by the pipeline's `queue_timeout_seconds` (above),
   while never-dispatched and enqueue-failed rows keep their own windows.
@@ -557,7 +661,7 @@ hiccup must never become a dispatch outage.
   so a re-dispatch of a run still carrying a fence-carrying stale marker
   cannot self-block. Flag OFF: the pre-D8 population exactly
   (`ACTIVE_RUN_STATUSES`, no tombstone exclusion) -- the flag-off window is the
-  pre-D8 behaviour, not a hybrid.
+  pre-D8 behavior, not a hybrid.
 - **Tier attribution:** the gate's marker write carries `"provider"`
   (`runner_docker` | `e2b` | `local`) + `"written_at"`. Legacy tier-less
   markers count as Docker-tier (fail-safe) and age out via the sweep.
@@ -566,7 +670,7 @@ hiccup must never become a dispatch outage.
   Docker-tier default 4 gates Docker+Local dispatches only (e2b carries its
   own platform-side quota and is neither counted into that bucket nor denied
   by it); an explicit value gates ALL runner dispatches; an explicit `null` is
-  no gate; `0` is deny-all. Flag OFF keeps the pre-D8 behaviour exactly: the
+  no gate; `0` is deny-all. Flag OFF keeps the pre-D8 behavior exactly: the
   pre-D8 count population above (no advisory lock, no lock_timeout,
   `enforced_cap` semantics; absent key = no gate), the legacy
   `_uuid_to_lock_keys` keyspace on the resume path, and NO HITL tombstone.
@@ -584,7 +688,7 @@ hiccup must never become a dispatch outage.
   markers on genuinely terminal runs and markers stale beyond 25h
   (`RUNNER_MARKER_STALE_SECONDS`; marker `written_at`, legacy tier-less
   fall back to `runs.updated_at`); a stale clear on a non-terminal RUNNING run
-  also terminalises the run (`worker_lost`; the slot is reclaimed by killing
+  also terminalizes the run (`worker_lost`; the slot is reclaimed by killing
   the zombie, so no running-without-marker-without-workspace state can be
   minted) unless the row itself is FRESH (a freshly-resumed long-parked run:
   only the stale marker is cleared, never a live attempt); every
@@ -617,13 +721,13 @@ hiccup must never become a dispatch outage.
 
 ### Work-item refs → Lifecycle Map journeys (FAR-794)
 
-Every run records the work items it serves as canonical refs (`kind` + `ref`, e.g. `linear`/`FAR-123`, `github`/`owner/repo#123`) in `runs.work_item_refs`, anchored to deterministic `journeys` rows (`uuid5(org:kind:ref)`, derivable at create and finalise time, no mint races). The refs travel through ONE reserved input-payload key, `_work_item_refs`: reserved (a trigger `payload_mapping` can never target it and a context-setter node may never write it) but EXEMPT from the create-time reserved-key strip so refs survive the coalesce identity: the engine re-stamps the stored value with canonicalised entries before hashing, so a forged key cannot escalate provenance.
+Every run records the work items it serves as canonical refs (`kind` + `ref`, e.g. `linear`/`FAR-123`, `github`/`owner/repo#123`) in `runs.work_item_refs`, anchored to deterministic `journeys` rows (`uuid5(org:kind:ref)`, derivable at create and finalize time, no mint races). The refs travel through ONE reserved input-payload key, `_work_item_refs`: reserved (a trigger `payload_mapping` can never target it and a context-setter node may never write it) but EXEMPT from the create-time reserved-key strip so refs survive the coalesce identity: the engine re-stamps the stored value with canonicalized entries before hashing, so a forged key cannot escalate provenance.
 
-Provenance is ENGINE-ASSIGNED per supply channel; the wire `source` value is never trusted. `caller` for authenticated channels (manual REST/MCP triggers, operator reruns), `derived` for extraction-driven channels (webhook, cron, polling, agent_signal, replay), `agent` for a node's own emission. The legacy `reported` alias was dropped (FAR-795): the persisted vocabulary is exactly `caller` / `derived` / `agent`, migration 0222 rewrote stored rows to `agent`, and any entry still declaring `source: reported` (e.g. an old snapshot or replay payload) is rejected/dropped by the validator. ONE shape validator (`modulo.db.lifecycle_refs.validate_ref_entry`) owns kind/ref canonicalisation, the source vocabulary, and status (`done`/`attempted`) for every surface.
+Provenance is ENGINE-ASSIGNED per supply channel; the wire `source` value is never trusted. `caller` for authenticated channels (manual REST/MCP triggers, operator reruns), `derived` for extraction-driven channels (webhook, cron, polling, agent_signal, replay), `agent` for a node's own emission. The legacy `reported` alias was dropped (FAR-795): the persisted vocabulary is exactly `caller` / `derived` / `agent`, migration 0222 rewrote stored rows to `agent`, and any entry still declaring `source: reported` (e.g. an old snapshot or replay payload) is rejected/dropped by the validator. ONE shape validator (`modulo.db.lifecycle_refs.validate_ref_entry`) owns kind/ref canonicalization, the source vocabulary, and status (`done`/`attempted`) for every surface.
 
-Minting is owned by provenance: `caller`/`derived` refs mint journey rows at run creation and again at terminal finalise via a rank-guarded upsert (`agent(0) < derived(1) < caller(2)`: provenance only ever upgrades, never downgrades; `first_seen_source` is immutable after mint; `latest_*`/`run_count` stay owned by the finalise evidence CAS). `agent`-sourced refs are collected and stored on the run. With the org setting `work_item_agent_minting_enabled` off (the default), they are only confirmed against EXISTING journey rows (advisory, match-only) and never mint. With it on, a missing journey row mints an `agent`-provenance row subject to the per-org rolling budget (`MODULO_AGENT_MINT_BUDGET_LIMIT`, default 500 per `MODULO_AGENT_MINT_BUDGET_WINDOW_MINUTES`, default 60); a dismissed tombstone still suppresses the mint, and an existing row only receives a rank-0 no-op write, so agent provenance can never upgrade or downgrade it. Suppressed agent mints are counted. Coalesced deliveries merge refs into the surviving run with the same rank-guarded union and re-mint newly-seen entries.
+Minting is owned by provenance: `caller`/`derived` refs mint journey rows at run creation and again at terminal finalize via a rank-guarded upsert (`agent(0) < derived(1) < caller(2)`: provenance only ever upgrades, never downgrades; `first_seen_source` is immutable after mint; `latest_*`/`run_count` stay owned by the finalize evidence CAS). `agent`-sourced refs are collected and stored on the run. With the org setting `work_item_agent_minting_enabled` off (the default), they are only confirmed against EXISTING journey rows (advisory, match-only) and never mint. With it on, a missing journey row mints an `agent`-provenance row subject to the per-org rolling budget (`MODULO_AGENT_MINT_BUDGET_LIMIT`, default 500 per `MODULO_AGENT_MINT_BUDGET_WINDOW_MINUTES`, default 60); a dismissed tombstone still suppresses the mint, and an existing row only receives a rank-0 no-op write, so agent provenance can never upgrade or downgrade it. Suppressed agent mints are counted. Coalesced deliveries merge refs into the surviving run with the same rank-guarded union and re-mint newly-seen entries.
 
-Completeness over precision: the unified cap (`modulo_work_item_refs_cap`, env `MODULO_WORK_ITEM_REFS_CAP`, default 100, clamped to [1, 100000]) bounds self-report normalisation, the finalise merge, and node-input injection with one value; cap drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. Pipelines declaring `work_item_refs_required: true` in `run_context_defaults` refuse a delivery that supplied no refs: HTTP 422 with a `work_item_refs_required` error on the MCP and webhook paths, and a 422 whose detail is prose on the REST path (reject-and-retry for webhooks, not acked-as-accepted).
+Completeness over precision: the unified cap (`modulo_work_item_refs_cap`, env `MODULO_WORK_ITEM_REFS_CAP`, default 100, clamped to [1, 100000]) bounds self-report normalization, the finalize merge, and node-input injection with one value; cap drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. Pipelines declaring `work_item_refs_required: true` in `run_context_defaults` refuse a delivery that supplied no refs: HTTP 422 with a `work_item_refs_required` error on the MCP and webhook paths, and a 422 whose detail is prose on the REST path (reject-and-retry for webhooks, not acked-as-accepted).
 
 Nodes opt in to reading the run's refs by declaring a `work_item_refs` input property in the node's `input_schema_json`: the create-time refs are injected read-only as a `{{ work_item_refs }}` template variable at node start (a read failure degrades to fewer refs, never a failed node). Journeys carry `provenance` + `first_seen_source` columns (migration 0220; `runs.work_item_refs` containment is served by the existing partial GIN index) and the refs pipeline emits OTel counters (`modulo_work_item_refs_by_source_total`, `..._unknown_source_total`, `..._shadow_strip_hits_total`, `..._malformed_total`, `..._cap_dropped_total`).
 
@@ -760,7 +864,7 @@ rejection never discloses a cross-org service account).
 
 **Grant-sets on API keys (FAR-1477, ADR 058; flag `api_key_grants`, default OFF).**
 `org_api_keys.grants` is a nullable, space-joined list of `PERMISSIONS` keys,
-tri-state: `NULL` = legacy role-bundle behaviour (unchanged), empty = explicit
+tri-state: `NULL` = legacy role-bundle behavior (unchanged), empty = explicit
 deny-all, a list = the exact set. Enforcement is
 `effective = grants ∩ bundle(live_role)` on both the REST resolver
 (`_assert_tenant_permission`) and the MCP chokepoint (`resolve_tool_access`);
@@ -823,7 +927,7 @@ All tenant isolation is at the database layer via `SET LOCAL app.organisation_id
 
 Soft-deleted rows (models inheriting `SoftDeleteMixin`) are **automatically excluded** from every ORM SELECT via a global `do_orm_execute` listener registered at startup (`modulo.db.soft_delete`). The listener injects `WHERE deleted_at IS NULL` through `with_loader_criteria`, so new read paths automatically exclude soft-deleted rows without requiring an explicit hand-written predicate.
 
-**Every model with a `deleted_at` column MUST inherit `SoftDeleteMixin`.** This is enforced by the architecture test `tests/architecture/test_soft_delete_mixin_coverage.py`, which enumerates all registered mappers and fails CI if any model declares `deleted_at` without the mixin. The mixin provides the column definition (`DateTime(timezone=True), nullable=True, default=None`), so normalised models remove their locally-declared `deleted_at` to avoid duplication.
+**Every model with a `deleted_at` column MUST inherit `SoftDeleteMixin`.** This is enforced by the architecture test `tests/architecture/test_soft_delete_mixin_coverage.py`, which enumerates all registered mappers and fails CI if any model declares `deleted_at` without the mixin. The mixin provides the column definition (`DateTime(timezone=True), nullable=True, default=None`), so normalized models remove their locally-declared `deleted_at` to avoid duplication.
 
 **Opt-out convention:** Legitimate read paths that must see soft-deleted rows (restore flows, historical lookups, purge operations, version resolution) opt out per-statement:
 
@@ -868,7 +972,7 @@ See ADR 038 (rbac-security-boundary) for the full decision.
 
 ### Folder Security Model (ADR 038)
 
-`PipelineFolder` is **organisation-scoped only**: it has no `owner_team_id`, no `visibility`, and no security cascade. Pipeline ownership is explicit on the pipeline itself (`Pipeline.owner_team_id`), not inherited from a folder. Folders are a UI organisation concept, not a security boundary.
+`PipelineFolder` is **organization-scoped only**: it has no `owner_team_id`, no `visibility`, and no security cascade. Pipeline ownership is explicit on the pipeline itself (`Pipeline.owner_team_id`), not inherited from a folder. Folders are a UI organization concept, not a security boundary.
 
 This is an explicit decision: any future proposal to add folder-level security (inherited ownership, visibility cascading, team-scoped folder access) must address ADR 038's rationale for rejecting folders-as-security. See ADR 038 for the full reasoning.
 
@@ -885,14 +989,17 @@ Hardcoded sliding-window rules enforced by `RateLimitMiddleware` (see `backend/s
 
 | Path prefix | Limit | Window |
 |-------------|-------|--------|
+| `/api/v1/auth/demo` (demo auto-login) | 10 per IP | 1 hour |
 | `/api/v1/runs` | 60 | 60s |
 | `/api/v1/triggers` | 100 | 60s |
 | `/api/v1/errors/ingest` | 10 | 60s |
 | HITL review actions (`/api/v1/runs/{run_id}/hitl/{review_id}/{action}` and `/api/v1/runs/{run_id}/manual/{review_id}/submit`, POST) | 20 per user (aggregate) | 60s |
 | `/mcp` | 200 | 60s |
-| Auth endpoints (`/api/v1/auth/`) | 10 attempts | 60s (configurable via `MODULO_AUTH_MAX_ATTEMPTS`) |
+| Auth endpoints (`/api/v1/auth/`) | 10 attempts | 60s (configurable via `MODULO_AUTH_MAX_ATTEMPTS` and `MODULO_AUTH_WINDOW_SECONDS`) |
 
-Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory no-op when Redis is unavailable. Auth rate limiter requires Redis and is disabled without it.
+Pre-auth anonymous GETs have their own enumeration-defence rules (FAR-856 / FAR-1978 / FAR-2059), all 60/min per IP: `/api/v1/auth/login-context`, `/api/v1/auth/org-login/`, `/api/v1/auth/sso/providers`, `/api/v1/auth/oidc/` and `/api/v1/auth/saml/`. The demo auto-login rule is declared first so no later prefix can shadow it.
+
+Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). When Redis is unavailable the registry is a no-op limiter that allows every request, except the demo rule, which falls back to a process-local token-bucket floor (10/hour) that survives both a missing Redis and a runtime registry failure. Auth rate limiting requires Redis and is disabled without it (`MODULO_AUTH_RATE_LIMIT_ENABLED`). Separate application-level limits use a per-process `TokenBucketRegistry` (the MCP `trigger_pipeline` 60/min and HITL-decision limits, and the guardrail-override limit).
 
 The HITL budget is AGGREGATE per identity (JWT user, API-key prefix, or IP) across runs, gates, review actions, AND both surfaces; the bucket key normalizes the whole variable tail (FAR-611), so rotating gates, runs, or actions cannot dodge the 20/min cap (the 2026-09-05 bulk-approve sweep spread 22 decisions across per-gate buckets and was never throttled). The manual-output submit route (`/runs/{run_id}/manual/{review_id}/submit`, an approve-capability HITL surface whose path has no `/hitl/` segment, shares the SAME aggregate bucket, so a sweep alternating `/hitl/` review actions and `/manual/` submits exhausts one budget. MCP review actions sit behind the general `/mcp` 200/min rule rather than the HITL rule; they are machine-surface, human_only gates are already denied there, and tightening the MCP budget is follow-up work if MCP-side sweeps ever warrant it.
 
@@ -1037,4 +1144,4 @@ mutation-testing (`mutmut`) `source_paths` alongside `core/license.py` and
 
 ### Frontend API-path guard
 
-`backend/tests/architecture/test_frontend_api_paths_resolve.py` extracts every `/api/` string and template literal from `frontend/src` product code, normalises it (`${expr}` and `:param` → `{param}`, query/fragment stripped), and asserts it resolves (RFC 6570 segment semantics) against the `paths` keys of the generated OpenAPI schema (`frontend/src/lib/api/schema.ts`). A literal that resolves to no schema path fails CI with its `file:line`, unless it is listed in that test's `ALLOWLIST` with a reason. This catches frontend calls to endpoints that were renamed or removed on the backend, which unit tests cannot see because they mock the HTTP layer.
+`backend/tests/architecture/test_frontend_api_paths_resolve.py` extracts every `/api/` string and template literal from `frontend/src` product code, normalizes it (`${expr}` and `:param` → `{param}`, query/fragment stripped), and asserts it resolves (RFC 6570 segment semantics) against the `paths` keys of the generated OpenAPI schema (`frontend/src/lib/api/schema.ts`). A literal that resolves to no schema path fails CI with its `file:line`, unless it is listed in that test's `ALLOWLIST` with a reason. This catches frontend calls to endpoints that were renamed or removed on the backend, which unit tests cannot see because they mock the HTTP layer.

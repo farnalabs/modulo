@@ -2355,6 +2355,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/deployment/drain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Deployment Drain
+         * @description Enter or leave the deploy drain; workflow failures must fail closed.
+         */
+        post: operations["set_deployment_drain_api_v1_deployment_drain_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/costs": {
         parameters: {
             query?: never;
@@ -7322,6 +7342,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Diff System Map Revision Endpoint
+         * @description Diff a revision against another revision or the current draft.
+         *
+         *     Viewers may only diff published/archived revisions: a draft base or target
+         *     is a 404, and the default target is the currently published revision rather
+         *     than the draft. Internal authors keep the draft-aware behaviour.
+         */
+        post: operations["diff_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__diff_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/{map_id}/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get System Map Overview Endpoint
+         * @description Aggregate read model with node health, loop configs, and bottleneck detection.
+         *
+         *     Can optionally specify a revision_id or 'at' timestamp to get the overview
+         *     for a specific historical revision (FAR-2288 version-aware read model).
+         *     Metrics cover the trailing `window_days` UTC days.
+         */
+        get: operations["get_system_map_overview_endpoint_api_v1_system_maps__map_id__overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system-maps/{map_id}/revisions": {
         parameters: {
             query?: never;
@@ -7382,26 +7450,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/system-maps/{map_id}/revisions/{rev_id}/diff": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Diff System Map Revision Endpoint
-         * @description Diff a revision against another revision or the current draft.
-         */
-        post: operations["diff_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__diff_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/system-maps/{map_id}/revisions/{rev_id}/restore-as-new": {
         parameters: {
             query?: never;
@@ -7416,30 +7464,6 @@ export interface paths {
          * @description Create a new draft revision from a published/archived revision.
          */
         post: operations["restore_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__restore_as_new_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/system-maps/{map_id}/overview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get System Map Overview Endpoint
-         * @description Aggregate read model with node health, loop configs, and bottleneck detection.
-         *
-         *     Can optionally specify a revision_id or 'at' timestamp to get the overview
-         *     for a specific historical revision (FAR-2288 version-aware read model).
-         *     Metrics cover the trailing seven UTC days.
-         */
-        get: operations["get_system_map_overview_endpoint_api_v1_system_maps__map_id__overview_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7501,7 +7525,7 @@ export interface paths {
         put?: never;
         /**
          * Discover System Map
-         * @description Inspect the organisation and persist an unpublished deterministic draft.
+         * @description Inspect the organisation and persist an unpublished draft.
          */
         post: operations["discover_system_map_api_v1_system_maps_discover_post"];
         delete?: never;
@@ -22379,6 +22403,27 @@ export interface components {
         SystemMapCurrentRevisionResponse: {
             revision: components["schemas"]["SystemMapRevisionResponse"];
         };
+        /** SystemMapDiscoveryProvenance */
+        SystemMapDiscoveryProvenance: {
+            /**
+             * Mode
+             * @default deterministic
+             * @enum {string}
+             */
+            mode: "deterministic" | "ai_assisted" | "deterministic_fallback";
+            /** Prompt Version */
+            prompt_version?: string | null;
+            /** Rubric Version */
+            rubric_version?: string | null;
+            /** Evaluator Version */
+            evaluator_version?: string | null;
+            /** Selected Backend Id */
+            selected_backend_id?: string | null;
+            /** Input Hash */
+            input_hash?: string | null;
+            /** Output Hash */
+            output_hash?: string | null;
+        };
         /** SystemMapDiscoveryReport */
         SystemMapDiscoveryReport: {
             /** Sources Inspected */
@@ -22416,6 +22461,22 @@ export interface components {
              * @default false
              */
             published: boolean;
+            /**
+             * Ai Assisted
+             * @description Whether AI enhancement was accepted
+             */
+            ai_assisted?: boolean | null;
+            /**
+             * Eval Gate Passed
+             * @description Whether the optional eval gate passed
+             */
+            eval_gate_passed?: boolean | null;
+            /**
+             * Eval Gate Verdict
+             * @description The optional eval gate outcome
+             */
+            eval_gate_verdict?: ("not_requested" | "pass" | "fail" | "error") | null;
+            provenance?: components["schemas"]["SystemMapDiscoveryProvenance"];
         };
         /** SystemMapDiscoveryRequest */
         SystemMapDiscoveryRequest: {
@@ -22426,6 +22487,10 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
+            /** Model Backend Id */
+            model_backend_id?: string | null;
+            /** Eval Definition Id */
+            eval_definition_id?: string | null;
         };
         /** SystemMapDiscoverySkipped */
         SystemMapDiscoverySkipped: {
@@ -28803,6 +28868,41 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    set_deployment_drain_api_v1_deployment_drain_post: {
+        parameters: {
+            query: {
+                active: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
                 };
             };
         };
@@ -39390,6 +39490,86 @@ export interface operations {
             };
         };
     };
+    diff_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__diff_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+                /** @description Revision ID */
+                rev_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SystemMapRevisionDiffRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapRevisionDiffResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_system_map_overview_endpoint_api_v1_system_maps__map_id__overview_get: {
+        parameters: {
+            query?: {
+                /** @description Specific revision ID to get overview for */
+                revision_id?: string | null;
+                /** @description ISO8601 timestamp to get overview for the revision active at that time */
+                at?: string | null;
+                /** @description Trailing UTC days included in the overview metrics */
+                window_days?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description System map ID */
+                map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapOverviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     create_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions_post: {
         parameters: {
             query?: {
@@ -39500,46 +39680,6 @@ export interface operations {
             };
         };
     };
-    diff_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__diff_post: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                /** @description System map ID */
-                map_id: string;
-                /** @description Revision ID */
-                rev_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["SystemMapRevisionDiffRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SystemMapRevisionDiffResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProblemDetail"];
-                };
-            };
-        };
-    };
     restore_system_map_revision_endpoint_api_v1_system_maps__map_id__revisions__rev_id__restore_as_new_post: {
         parameters: {
             query?: {
@@ -39567,44 +39707,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemMapRevisionRestoreAsNewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProblemDetail"];
-                };
-            };
-        };
-    };
-    get_system_map_overview_endpoint_api_v1_system_maps__map_id__overview_get: {
-        parameters: {
-            query?: {
-                /** @description Specific revision ID to get overview for */
-                revision_id?: string | null;
-                /** @description ISO8601 timestamp to get overview for the revision active at that time */
-                at?: string | null;
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                /** @description System map ID */
-                map_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SystemMapOverviewResponse"];
                 };
             };
             /** @description Validation Error */

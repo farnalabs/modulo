@@ -39,10 +39,10 @@ name: "Release: Unified Pipeline"
         required: false
         default: false
       include_windows:
-        description: "Include the signed Windows native installer in the release (Alpha scope)"
+        description: "Beta scope: opt in to the signed Windows native installer in the release (Beta-only, not part of Alpha)"
         type: boolean
         required: false
-        default: true
+        default: false
 
 concurrency:
   group: release-unified-${{ github.ref }}
@@ -85,6 +85,7 @@ jobs:
           RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_FREEZE: ${{ inputs.freeze }}
+          INCLUDE_WINDOWS: ${{ inputs.include_windows }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -95,10 +96,15 @@ jobs:
           if [ "${RELEASE_FREEZE}" = "true" ]; then
             freeze_arg="--freeze"
           fi
+          windows_arg=""
+          if [ "${INCLUDE_WINDOWS}" = "true" ]; then
+            windows_arg="--include-windows"
+          fi
           uv run --no-project --no-build python scripts/run_release_preflight.py \
             --mode "${RELEASE_MODE}" \
             --version "${RELEASE_VERSION}" \
-            $freeze_arg
+            $freeze_arg \
+            $windows_arg
 
   # ---------------------------------------------------------------------------
   # Dry-run rehearsal
@@ -593,14 +599,18 @@ jobs:
           POLL_INTERVAL_SECONDS="${SCHEMA_GATE_POLL_INTERVAL_SECONDS:-30}"
           MAX_WAIT_SECONDS="${SCHEMA_GATE_MAX_WAIT_SECONDS:-3600}"
           require_positive_integer() {
-            case "$2" in
+            local name="$1"
+            local value="$2"
+            case "$value" in
               ''|*[!0-9]*)
-                echo "::error::$1 must be a positive integer, got '$2'."
+                echo "::error::$name must be a positive integer, got '$value'."
                 exit 1
                 ;;
+              *)
+                ;;
             esac
-            if [ "$2" -lt 1 ]; then
-              echo "::error::$1 must be a positive integer, got '$2'."
+            if [ "$value" -lt 1 ]; then
+              echo "::error::$name must be a positive integer, got '$value'."
               exit 1
             fi
           }
@@ -1465,14 +1475,15 @@ jobs:
             --from "$PREV" --to "$GA_TAG" \
             --version "$VERSION" --output CHANGELOG.md > "$NOTES_FILE"
 
+          RELEASE_TITLE="Modulo ${GA_TAG}"
           if gh release view "$GA_TAG" >/dev/null 2>&1; then
-            gh release edit "$GA_TAG" --target "$MERGED_SHA" --title "$GA_TAG" --notes-file "$NOTES_FILE"
-            echo "GitHub Release updated for ${GA_TAG}."
+            gh release edit "$GA_TAG" --target "$MERGED_SHA" --title "$RELEASE_TITLE" --notes-file "$NOTES_FILE"
+            echo "GitHub Release updated for ${GA_TAG} with title ${RELEASE_TITLE}."
           else
-            gh release create "$GA_TAG" --target "$MERGED_SHA" --title "$GA_TAG" --notes-file "$NOTES_FILE"
+            gh release create "$GA_TAG" --target "$MERGED_SHA" --title "$RELEASE_TITLE" --notes-file "$NOTES_FILE"
 
-             echo "GitHub Release created for ${GA_TAG}."
-           fi
+            echo "GitHub Release created for ${GA_TAG} with title ${RELEASE_TITLE}."
+          fi
 
       - name: Re-establish release freeze after failed GA publication
         if: inputs.mode == 'promote' && failure()
@@ -1625,9 +1636,13 @@ jobs:
   # Build macOS installer (cut and recut)
   # ---------------------------------------------------------------------------
   macos-installer:
-    name: Build and notarize macOS installer
+    name: Build and notarize macOS ${{ matrix.architecture }} installer
     needs: [release, bundle]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [arm64, x86_64]
     # macOS currently declares only contents: read. The structural test derives
     # this from the called workflow and forces a caller update if macOS ever
     # adds an attest/OIDC job that requires a stronger permission.
@@ -1639,21 +1654,35 @@ jobs:
       rc_tag: ${{ needs.release.outputs.rc_tag }}
       ref: ${{ needs.release.outputs.rc_tag }}
       mode: ${{ inputs.mode }}
+      architecture: ${{ matrix.architecture }}
     secrets: inherit
 
 
   # ---------------------------------------------------------------------------
   # Final cross-platform manifest (cut and recut)
   #
-  # Windows is Alpha scope (FAR-2338): the signed Windows installer is a
-  # dependency of the manifest so its artefact exists before the download step
-  # runs. When include_windows=false the installer job is skipped and the
-  # manifest proceeds without it, exactly as it did for the Linux+macOS scope.
+  # Windows is Beta scope (FAR-2338) and a Beta-only opt-in: the signed Windows
+  # installer is a dependency of the manifest when include_windows=true, so its
+  # artefact exists before the download step runs. When include_windows=false
+  # (the default), the installer job is skipped and the manifest proceeds with
+  # the Alpha Linux+macOS scope.
   # ---------------------------------------------------------------------------
   final-release-manifest:
     name: Generate final release manifest
     needs: [release, bundle, macos-installer, windows-installer]
-    if: (inputs.mode == 'cut' || inputs.mode == 'recut') && (inputs.include_windows == false || needs.windows-installer.result == 'success')
+    # `windows-installer` is intentionally skipped on the default Alpha path.
+    # `always()` makes that skipped need visible to this condition, while every
+    # required job remains explicitly fail-closed: release, bundle and macOS
+    # must succeed, and Windows must succeed when opted in (or be skipped when
+    # it is intentionally out of scope).
+    if: >-
+      always() &&
+      (inputs.mode == 'cut' || inputs.mode == 'recut') &&
+      needs.release.result == 'success' &&
+      needs.bundle.result == 'success' &&
+      needs.macos-installer.result == 'success' &&
+      ((inputs.include_windows && needs.windows-installer.result == 'success') ||
+       (!inputs.include_windows && needs.windows-installer.result == 'skipped'))
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
     permissions:
@@ -1669,7 +1698,11 @@ jobs:
           path: release-artefacts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: macos-installer-${{ inputs.version }}
+          name: macos-installer-${{ inputs.version }}-arm64
+          path: release-artefacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-installer-${{ inputs.version }}-x86_64
           path: release-artefacts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: inputs.include_windows
@@ -1710,10 +1743,11 @@ jobs:
             --output-dir release-artefacts
           test -s "release-artefacts/modulo-${VERSION}-compose.tar.gz"
           tar -tzf "release-artefacts/modulo-${VERSION}-compose.tar.gz"
-      # Windows is Alpha scope (FAR-2338): the signed installer is included in
-      # SHA256SUMS and the manifest `names`/`components` when include_windows is
-      # true (the default). The Linux and macOS artefacts are always required;
-      # the Windows entry is only added when it is in scope.
+      # Windows is Beta scope (FAR-2338) and included only via the Beta-only
+      # opt-in: the signed installer is included in SHA256SUMS and the manifest
+      # `names`/`components` only when include_windows is explicitly true. The
+      # Linux and macOS artefacts are always required; the Windows entry is
+      # added only for the Beta opt-in path.
       - name: Build final signed manifest after every platform artifact
         env:
           MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
@@ -1728,9 +1762,9 @@ jobs:
               echo "::error::include_windows=true but windows-installer-${VERSION} artifact is missing"
               exit 1
             fi
-            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "modulo-${VERSION}-windows-amd64.exe" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
+            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "Modulo-${VERSION}-macos-x86_64.dmg" "modulo-${VERSION}-windows-amd64.exe" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
           else
-            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
+            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "Modulo-${VERSION}-macos-x86_64.dmg" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
           fi
           cd ..
           uv run --no-project --no-sync --no-build python - <<'PY'
@@ -1741,8 +1775,8 @@ jobs:
           root = Path("release-artefacts")
           version = os.environ["VERSION"]
           include_windows = os.environ["INCLUDE_WINDOWS"] == "true"
-          names = [f"modulo-{version}-linux-amd64.tar.gz", f"Modulo-{version}-macos-arm64.dmg"]
-          components = {"linux": "amd64", "macos": "arm64"}
+          names = [f"modulo-{version}-linux-amd64.tar.gz", f"Modulo-{version}-macos-arm64.dmg", f"Modulo-{version}-macos-x86_64.dmg"]
+          components = {"linux": "amd64", "macos": "native"}
           if include_windows:
             names.append(f"modulo-{version}-windows-amd64.exe")
             components["windows"] = "amd64"
@@ -1788,12 +1822,12 @@ jobs:
     name: Create GitHub Release
     needs: [release, final-release-manifest, attest-artefacts, macos-installer]
     # Do not publish until the final signed manifest covers the macOS DMG and the
-    # signed Windows installer. Windows is Alpha scope (FAR-2338):
-    # windows-installer is a need of final-release-manifest when
-    # include_windows=true (the default), and that job only runs once the
-    # installer reports success - so a failed Windows build fails the release
-    # rather than publishing without it. When include_windows=false the installer
-    # job is skipped and the manifest covers Linux + macOS only.
+    # signed Windows installer. Windows is Beta scope (FAR-2338) and a Beta-only
+    # opt-in: windows-installer is a need of final-release-manifest when
+    # include_windows=true, and that job only runs once the installer reports
+    # success - so an explicitly opted-in Windows build fails the release rather
+    # than publishing without it. When include_windows=false (the default), the
+    # installer job is skipped and the manifest covers the Alpha Linux+macOS scope.
     # GitHub skipped Create GitHub Release while every direct need reported
     # success (run 41786063745), so this job must run and report for itself when
     # a need did not succeed. It deliberately does NOT use always(): that would
@@ -1848,9 +1882,13 @@ jobs:
           INCLUDE_WINDOWS: ${{ inputs.include_windows }}
         run: |
           set -euo pipefail
+          # Both native macOS installers are mandatory publication inputs. Keep
+          # this inventory explicit so publication cannot succeed with only the
+          # Apple Silicon DMG present.
           for artifact in \
             "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz" \
             "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg" \
+            "release-artefacts/Modulo-${VERSION}-macos-x86_64.dmg" \
             "release-artefacts/modulo-${VERSION}-compose.tar.gz" \
             release-artefacts/SHA256SUMS \
             release-artefacts/RELEASE_MANIFEST.json \
@@ -1862,9 +1900,9 @@ jobs:
           fi
           (cd release-artefacts && sha256sum --check SHA256SUMS)
           if [ "$INCLUDE_WINDOWS" = "true" ]; then
-            echo "Final signed manifest and SHA256SUMS cover Linux amd64, macOS arm64, Windows amd64 artifacts and the self-hosted compose bundle."
+             echo "Final signed manifest and SHA256SUMS cover Linux amd64, macOS arm64 and x86_64, Windows amd64 artifacts and the self-hosted compose bundle."
           else
-            echo "Final signed manifest and SHA256SUMS cover Linux amd64 and macOS arm64 artifacts and the self-hosted compose bundle."
+             echo "Final signed manifest and SHA256SUMS cover Linux amd64, macOS arm64 and x86_64 artifacts and the self-hosted compose bundle."
           fi
 
       - name: Set up Python 3.12 for OpenAPI dump
@@ -1960,14 +1998,17 @@ jobs:
             --output CHANGELOG.md > "$NOTES_FILE"
 
           ASSETS=(
-            "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz"
-            "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg"
-            "release-artefacts/modulo-${VERSION}-compose.tar.gz"
+              "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz"
+             "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg"
+             "release-artefacts/Modulo-${VERSION}-macos-x86_64.dmg"
+             "release-artefacts/modulo-${VERSION}-compose.tar.gz"
             "release-artefacts/SHA256SUMS"
             "release-artefacts/RELEASE_MANIFEST.json"
             "release-artefacts/RELEASE_MANIFEST.json.sig"
             "release-artefacts/openapi.json"
           )
+          # RELEASE_MANIFEST.json + .sig are required by native-release-smoke.yml
+          # (canary workflow) which verifies the signed manifest against the tarball.
           if [ "$INCLUDE_WINDOWS" = "true" ]; then
             ASSETS+=("release-artefacts/modulo-${VERSION}-windows-amd64.exe")
           fi
@@ -1982,12 +2023,14 @@ jobs:
           # invalidates every verify-against-the-manifest already downloaded.
           # An existing release gets an upload (which fails loudly on an
           # existing asset); a new one is created with its assets atomically.
+          RELEASE_TITLE="Modulo ${RC_TAG}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "::warning::release ${TAG} already exists - uploading assets without clobbering"
+            gh release edit "$TAG" --title "$RELEASE_TITLE"
             gh release upload "$TAG" "${ASSETS[@]}"
           else
             gh release create "$TAG" \
-              --title "$TAG" \
+              --title "$RELEASE_TITLE" \
               --notes-file "$NOTES_FILE" \
               "${ASSETS[@]}"
           fi
@@ -2001,13 +2044,68 @@ jobs:
         run: |
           set -euo pipefail
           BUNDLE_TAG="bundle-v${VERSION}"
-          if git rev-parse -q --verify "refs/tags/${BUNDLE_TAG}" >/dev/null 2>&1; then
-            echo "::error::${BUNDLE_TAG} already exists - refusing to overwrite a published bundle tag."
+          RELEASE_SHA="$(git rev-parse HEAD)"
+
+          # gh release create publishes the tag itself. Treat an existing remote
+          # tag as success only when it resolves to this exact release checkout;
+          # never overwrite a published tag or collapse an unknown query failure
+          # into "absent".
+          # The peel/rc-2 discrimination below is mirrored by the post-push
+          # verification at the end of this step; keep the two in sync.
+          remote_tag_line=""
+          tag_rc=0
+          remote_tag_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}")" || tag_rc=$?
+          case "$tag_rc" in
+            0)
+              remote_tag_sha=""
+              peeled_line=""
+              peeled_rc=0
+              peeled_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}^{}")" || peeled_rc=$?
+              case "$peeled_rc" in
+                0) remote_tag_sha="${peeled_line%%$'\t'*}" ;;
+                2) remote_tag_sha="${remote_tag_line%%$'\t'*}" ;;
+                *)
+                  echo "::error::${BUNDLE_TAG} exists, but its peeled SHA could not be confirmed (git ls-remote exit ${peeled_rc}) - refusing to publish."
+                  exit 1
+                  ;;
+              esac
+              if [ "$remote_tag_sha" = "$RELEASE_SHA" ]; then
+                echo "${BUNDLE_TAG} already published by the release step at ${RELEASE_SHA}; nothing to push."
+                exit 0
+              fi
+              echo "::error::${BUNDLE_TAG} already exists and points at ${remote_tag_sha}, not release target ${RELEASE_SHA} - refusing to overwrite."
+              exit 1
+              ;;
+            2)
+              git tag -a "$BUNDLE_TAG" -m "Bundle release $BUNDLE_TAG"
+              git push origin "$BUNDLE_TAG"
+              ;;
+            *)
+              echo "::error::Could not query remote tag ${BUNDLE_TAG} (git ls-remote exit ${tag_rc}) - state UNKNOWN, refusing to publish."
+              exit 1
+              ;;
+          esac
+
+          verified_line=""
+          verify_rc=0
+          verified_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}^{}")" || verify_rc=$?
+          if [ "$verify_rc" -eq 2 ]; then
+            # A lightweight tag has no peeled ref, so re-query the full ref and
+            # use that query's rc as the verification result.
+            fallback_rc=0
+            verified_line="$(git ls-remote --exit-code origin "refs/tags/${BUNDLE_TAG}")" || fallback_rc=$?
+            verify_rc="$fallback_rc"
+          fi
+          if [ "$verify_rc" -ne 0 ]; then
+            echo "::error::${BUNDLE_TAG} could not be verified after push (git ls-remote exit ${verify_rc})."
             exit 1
           fi
-          git tag -a "$BUNDLE_TAG" -m "Bundle release $BUNDLE_TAG"
-          git push origin "$BUNDLE_TAG"
-          echo "Pushed $BUNDLE_TAG at $(git rev-parse --short HEAD)"
+          verified_sha="${verified_line%%$'\t'*}"
+          if [ "$verified_sha" != "$RELEASE_SHA" ]; then
+            echo "::error::${BUNDLE_TAG} resolved to ${verified_sha} after push, not release target ${RELEASE_SHA}."
+            exit 1
+          fi
+          echo "Pushed and verified $BUNDLE_TAG at $RELEASE_SHA"
 
       - name: Assert the release and bundle tag exist
         # Terminal post-condition for the "concluded success having done
@@ -2066,6 +2164,45 @@ jobs:
             exit 1
           fi
           echo "Publication verified: GitHub Release 'bundle-v${VERSION}' and bundle tag '${BUNDLE_TAG}' both exist."
+
+      - name: Notify website to rebuild (Cloudflare Pages deploy hook)
+        # Optional. The marketing website reads the latest GitHub Release at
+        # build time (version + installer links), so it must rebuild once a new
+        # release is public. This step is last: it runs only if every earlier
+        # step of this job succeeded, i.e. the release was created and its assets
+        # uploaded. This job only runs for mode cut/recut (dry-run and promote
+        # never reach it) and the release it creates is a normal, non-prerelease
+        # GitHub Release. Set the repository secret WEBSITE_DEPLOY_HOOK_URL to a
+        # Cloudflare Pages deploy hook URL to enable it; unset means skip.
+        # Rotate by creating a new hook in Cloudflare Pages, updating the secret,
+        # then deleting the old hook. See docs/release-process.md.
+        # It must never fail a release. `continue-on-error` is banned by
+        # .semgrep/continue-on-error-in-ci.yaml, so every command below is
+        # individually best-effort and the script reports a non-fatal outcome
+        # explicitly (::notice:: / ::warning::) before exiting 0 on every path.
+        if: ${{ success() }}
+        env:
+          WEBSITE_DEPLOY_HOOK_URL: ${{ secrets.WEBSITE_DEPLOY_HOOK_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBSITE_DEPLOY_HOOK_URL:-}" ]; then
+            echo "::notice::WEBSITE_DEPLOY_HOOK_URL is not configured - skipping the website rebuild hook."
+            exit 0
+          fi
+          echo "::add-mask::${WEBSITE_DEPLOY_HOOK_URL}"
+          for attempt in 1 2 3; do
+            if curl --fail --silent --show-error --max-time 30 -X POST "$WEBSITE_DEPLOY_HOOK_URL" >/dev/null; then
+              echo "Website rebuild hook triggered (attempt ${attempt})."
+              exit 0
+            fi
+            echo "Website rebuild hook attempt ${attempt} failed."
+            if [ "$attempt" -lt 3 ]; then
+              sleep 5
+            fi
+          done
+          echo "::warning::Website rebuild hook failed after 3 attempts - the release is unaffected; trigger the website deploy manually."
+          exit 0
 
   # ---------------------------------------------------------------------------
   # Final GA compose asset (promote only)
@@ -2357,11 +2494,18 @@ jobs:
           name: final-release-artefacts-${{ inputs.version }}
           path: release-artefacts
 
-      - name: Download the macOS installer artefact
+      - name: Download the macOS arm64 installer artefact
         if: inputs.mode == 'cut' || inputs.mode == 'recut'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: macos-installer-${{ inputs.version }}
+          name: macos-installer-${{ inputs.version }}-arm64
+          path: release-artefacts
+
+      - name: Download the macOS x86_64 installer artefact
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-installer-${{ inputs.version }}-x86_64
           path: release-artefacts
 
       - name: Download the Windows installer artefact
@@ -2378,9 +2522,12 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          DMG="release-artefacts/Modulo-${VERSION}-macos-arm64.dmg"
-          test -s "$DMG"
-          printf 'Attestation subject: %s\n' "$DMG"
+           for DMG in \
+             "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg" \
+             "release-artefacts/Modulo-${VERSION}-macos-x86_64.dmg"; do
+             test -s "$DMG"
+             printf 'Attestation subject: %s\n' "$DMG"
+           done
 
       - name: Assert the exact Windows exe is present
         if: (inputs.mode == 'cut' || inputs.mode == 'recut') && inputs.include_windows

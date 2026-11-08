@@ -40,7 +40,7 @@ const tableActionsStub = {
 }
 
 const pageHeaderStub = {
-  template: '<div><h1>{{ title }}</h1></div>',
+  template: '<div><h1>{{ title }}</h1><slot name="right" /></div>',
   props: ['title', 'subtitle'],
 }
 
@@ -235,6 +235,36 @@ describe('AdminNodeCategoriesView', () => {
 
     expect(wrapper.text()).toContain('Edit Node Category')
     expect(wrapper.find('[data-testid="node-category-editor"]').exists()).toBe(true)
+  })
+
+  it('reloads categories when the add editor emits saved', async () => {
+    const wrapper = mountView([])
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-node-categories-add"]').trigger('click')
+    await nextTick()
+    mockGet.mockClear()
+
+    wrapper.findComponent(nodeCategoryEditorStub).vm.$emit('saved')
+    await flushPromises()
+
+    expect(mockGet).toHaveBeenCalled()
+  })
+
+  it('reloads categories when the edit editor emits saved', async () => {
+    const wrapper = mountView([makeCategory({ id: 'cat-edit' })])
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="action-edit"]').trigger('click')
+    await nextTick()
+    mockGet.mockClear()
+
+    wrapper.findComponent(nodeCategoryEditorStub).vm.$emit('saved')
+    await flushPromises()
+
+    expect(mockGet).toHaveBeenCalled()
   })
 
   // ─── Delete flow ──────────────────────────────────────────────────────

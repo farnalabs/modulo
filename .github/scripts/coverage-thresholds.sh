@@ -70,7 +70,7 @@ case "$MODE" in
     ;;
 esac
 
-if [ "$MODE" = "combine" ]; then
+if [[ "$MODE" = "combine" ]]; then
   echo "::group::Combining unit coverage shards"
   # Each shard names its own data file (COVERAGE_FILE=.coverage.unit-<n>), and
   # [tool.coverage.run] parallel = true additionally suffix-tags any data file a
@@ -94,11 +94,11 @@ fi
 COV_ARGS=(--cov=src/modulo)
 SHARD_ARGS=()
 
-if [ "$MODE" = "shard" ]; then
+if [[ "$MODE" = "shard" ]]; then
   SHARD="${COVERAGE_SHARD:?COVERAGE_SHARD must be set in shard mode (e.g. 1/3)}"
   GROUP="${SHARD%%/*}"
   TOTAL="${SHARD##*/}"
-  if ! [[ "$GROUP" =~ ^[0-9]+$ && "$TOTAL" =~ ^[0-9]+$ ]] || [ "$GROUP" -lt 1 ] || [ "$GROUP" -gt "$TOTAL" ]; then
+  if ! [[ "$GROUP" =~ ^[0-9]+$ && "$TOTAL" =~ ^[0-9]+$ ]] || [[ "$GROUP" -lt 1 ]] || [[ "$GROUP" -gt "$TOTAL" ]]; then
     echo "coverage-thresholds.sh: COVERAGE_SHARD must be '<group>/<total>' with 1 <= group <= total (got '$SHARD')" >&2
     exit 2
   fi
@@ -111,7 +111,7 @@ if [ "$MODE" = "shard" ]; then
   INDEX=0
   while IFS= read -r test_file; do
     INDEX=$((INDEX + 1))
-    if [ $(((INDEX - 1) % TOTAL + 1)) -ne "$GROUP" ]; then
+    if [[ $(((INDEX - 1) % TOTAL + 1)) -ne "$GROUP" ]]; then
       SHARD_ARGS+=("--ignore=${test_file}")
     fi
   done < <(find tests/unit -type f -name 'test_*.py' | LC_ALL=C sort)
@@ -131,7 +131,7 @@ echo "::group::Running unit tests (overall coverage threshold: 89%)"
 uv run --no-sync --frozen pytest tests/unit/ -n "$PARALLELISM" "${COV_ARGS[@]}" -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings ${SHARD_ARGS[@]+"${SHARD_ARGS[@]}"}
 echo "::endgroup::"
 
-if [ "$MODE" = "run" ]; then
+if [[ "$MODE" = "run" ]]; then
   # pytest-cov normally leaves ONE data file (it merges xdist workers itself),
   # so there is usually nothing to combine here. If the [tool.coverage.run]
   # parallel setting is ever honoured instead, the run leaves suffixed files and
@@ -152,7 +152,7 @@ if [ "$MODE" = "run" ]; then
   # test passed.) Both thresholds - the 89 whole-suite floor and these
   # 93/91/95 per-module floors - stay exactly as they are in `run`/`combine`.
   check_module_thresholds
-elif [ "$MODE" = "shard" ]; then
+elif [[ "$MODE" = "shard" ]]; then
   # No threshold is enforced in shard mode, at any level: pytest ran with
   # --cov-fail-under=0 (so [tool.coverage.report] fail_under can never fire)
   # and the per-module floors are deliberately skipped. A shard's only job is

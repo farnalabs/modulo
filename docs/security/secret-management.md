@@ -26,7 +26,6 @@ The following must never appear in the repository:
 - `SECRET_KEY`: JWT signing key
 - `FERNET_KEY`: Fernet encryption key
 - `DATABASE_URL`: database connection string with credentials
-- `MODULO_DB`: database type indicator
 - Any `MODULO_*_KEY`: API keys for integrations
 - `.env` files: environment variable dumps
 - Service account keys or tokens
@@ -108,7 +107,7 @@ Add the file path to the `[allowlist]` section in `.gitleaks.toml` at the reposi
 [allowlist]
 paths = [
     "tests/",
-    "docs/examples/",
+    "docs/api/examples/",
 ]
 ```
 

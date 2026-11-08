@@ -1,15 +1,16 @@
 # System Requirements
 
-Supported platforms, minimum resources, and database backends for running Modulo in production. Modulo v1 supports Linux hosts and the native macOS arm64 single-install artifact.
+Supported platforms, minimum resources, and database backends for running Modulo in production. Modulo v1 supports Linux hosts and native macOS arm64 and x86_64 single-install artifacts.
 
 ---
 
 ## Supported Platforms
 
-Modulo v1 targets Linux hosts and Apple Silicon macOS for the native single-install
-artifact. Windows native support is Alpha scope: the native installer (delivered by
-FAR-2337 / FAR-2338) is built, signed and attested by the unified release pipeline on
-a `cut`/`recut` release, alongside the Linux bundle and the macOS `.dmg`. Its
+Modulo v1 targets Linux hosts and native macOS for the native single-install
+artifact. Windows native support is Beta scope, opt-in only: the native installer (delivered
+by FAR-2337 / FAR-2338) is built, signed and attested by the unified release pipeline
+on a `cut`/`recut` release only when the Beta-only `include_windows` input is enabled,
+alongside the Linux bundle and the macOS `.dmg`. Its
 publication depends on a release running (no signed Windows installer is published
 yet), and end-to-end validation on the real Windows installer host is still
 outstanding under FAR-2250.
@@ -23,30 +24,33 @@ below).
 | Server host platform | v1 status |
 |----------------------|-----------|
 | **Linux** | Supported (native single-install and container paths) |
-| **macOS arm64** | Supported native single-install host (signed/notarized `.dmg`, macos-15 validation) |
-| **Windows** | Alpha scope: native installer built, signed (Azure Trusted Signing) and attested by the release pipeline (FAR-2337 / FAR-2338). Publication depends on a release run (no signed installer published yet); real-host validation (FAR-2250) is outstanding |
+| **macOS arm64** | Supported native single-install host (`Modulo-<version>-macos-arm64.dmg`, signed/notarized, macos-15 validation; Rosetta not required) |
+| **macOS x86_64 (Intel)** | Supported native single-install host (`Modulo-<version>-macos-x86_64.dmg`, signed/notarized, macos-15-intel validation; Rosetta not required) |
+| **Windows** | Beta scope, opt-in only: native installer built, signed (Azure Trusted Signing) and attested by the release pipeline when the Beta-only `include_windows` input is enabled (FAR-2337 / FAR-2338). Publication depends on a release run (no signed installer published yet); real-host validation (FAR-2250) is outstanding |
 
 Docker Desktop (see Development / Evaluation below) is a developer
 convenience on macOS and Windows: it runs the Linux containers inside a Linux
 VM, so the deployed stack is still Linux. It is not a supported production
 host.
 
-macOS arm64 is a native release target. The signed and notarized `.dmg` is built
-on `macos-15` with the pinned native runtime and is validated separately from the
-Linux bundle. It requires Apple Silicon; x64/Rosetta is not supported. The
+macOS arm64 and x86_64 are native release targets. Separate signed and notarized
+`.dmg` artifacts are built on `macos-15` and `macos-15-intel` with pinned native
+runtimes and validated separately from the Linux bundle. Intel Macs use the x86_64
+artifact; Apple Silicon Macs use arm64. Rosetta is not required. The
 macOS installer's trust boundary is Apple Developer ID signing/notarization and
 stapling, verified with `codesign`, `spctl` and `hdiutil verify`; it does not
 consume the Linux signed release manifest.
 
-Windows native support is in Alpha scope. The native Windows installer is delivered
-by FAR-2337 / FAR-2338 (see
+Windows native support is in Beta scope and is opt-in only. The native Windows
+installer is delivered by FAR-2337 / FAR-2338 (see
 [`deploy/windows/BUNDLE-BUILD.md`](../deploy/windows/BUNDLE-BUILD.md)): the release
 pipeline builds the native payload (`windows-artifacts.yml`), compiles the Inno
 Setup installer (`windows-installer.yml`), signs it with Azure Trusted Signing,
 and attaches a build provenance attestation. Signing and attestation happen on
 `cut` and `recut` only; `dry-run` compiles the installer contract and skips them.
 `release-unified.yml` includes the installer in `SHA256SUMS` and the signed release
-manifest when `include_windows` is enabled (the default). Because publication depends
+manifest only when the Beta-only `include_windows` input is explicitly enabled (it
+defaults to false). Because publication depends
 on a release running, no signed Windows installer is published yet, and end-to-end
 validation on the real installer host (FAR-2250) is still outstanding. Until the
 installer is published and that validation is recorded, a Windows-hosted deployment
@@ -70,7 +74,7 @@ Windows binaries.
 The native installer (`scripts/install.sh`) distributes a self-contained
 bundle: the backend, a bundled CPython runtime, PostgreSQL 16, Redis 8, and
 the built SPA, laid out under `~/.local/opt/modulo/`. The table below is
-the honest v1 envelope (ADR 031; recentre on what `bundle-v*` artifacts
+the honest v1 envelope (ADR 031; recenter on what `bundle-v*` artifacts
 actually ship - do not widen these rows until the packaging tickets land):
 
 | OS | glibc | Status |
@@ -78,8 +82,9 @@ actually ship - do not widen these rows until the packaging tickets land):
 | Ubuntu 22.04 LTS+ | 2.35+ | Supported |
 | Debian 12+ | 2.36+ | Supported |
 | Ubuntu 20.04 and earlier | 2.31 and below | Not supported (below the bundled service-binary floor) |
-| macOS arm64 | Apple Silicon | Supported native `.dmg`; x64/Rosetta is not supported |
-| Windows | - | Alpha scope; native installer built, signed and attested by the release pipeline (FAR-2337 / FAR-2338), published only by a release run (no installer published yet); real-host validation outstanding (FAR-2250) |
+| macOS arm64 | Apple Silicon | Supported native `Modulo-<version>-macos-arm64.dmg`; Rosetta not required |
+| macOS x86_64 | Intel | Supported native `Modulo-<version>-macos-x86_64.dmg`; Rosetta not required |
+| Windows | - | Beta scope, opt-in only; native installer built, signed and attested by the release pipeline when the Beta-only `include_windows` input is enabled (FAR-2337 / FAR-2338), published only by a release run (no installer published yet); real-host validation outstanding (FAR-2250) |
 
 The hard requirement is **glibc 2.35 or newer**. The bundle is assembled on an
 Ubuntu 22.04 (jammy) build baseline: the bundled PostgreSQL 16 binaries come
@@ -97,7 +102,8 @@ supported native-install targets.
 |--------------|--------|
 | linux-amd64 (x86_64) | Supported |
 | linux-arm64 | Planned (pins exist; no artifact published yet) |
-| macOS arm64 | Supported native artifact; Apple Silicon only |
+| macOS arm64 | Supported native artifact; Apple Silicon (`Modulo-<version>-macos-arm64.dmg`) |
+| macOS x86_64 | Supported native artifact; Intel (`Modulo-<version>-macos-x86_64.dmg`) |
 
 `linux-arm64` is not installable yet: the bundle build matrix carries only
 `amd64`, so no `linux-arm64` tarball is published even though the arm64 pins
@@ -129,7 +135,7 @@ grows with run history.
 | RAM | 4 GB | 8 GB |
 | Disk | 10 GB SSD | 20 GB SSD |
 | Docker | Docker Desktop 24+ | Docker Desktop 24+ |
-| Python | 3.12+ | 3.12+ |
+| Python | 3.12-3.14 | 3.12-3.14 |
 
 ### Single-Server Production (Docker Compose)
 
@@ -176,7 +182,7 @@ Treat the two MySQL-family rows as configuration surface only.
 - **Extensions**: none required; `gen_random_uuid()` is built into PostgreSQL 16+ (core since PG 13)
 - **Connection**: Async via `asyncpg` driver
 - **TLS**: `sslmode=require` (or stronger) recommended for production; the
-  `sslmode` in the database URL is honoured. Accepted values: `disable`,
+  `sslmode` in the database URL is honored. Accepted values: `disable`,
   `require`, `verify-ca`, `verify-full`; `prefer`/`allow` are rejected at
   startup (they silently downgrade to plaintext). No `sslmode` = plaintext.
 - **Schema**: Alembic-managed migrations run on startup
@@ -202,9 +208,9 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 |---------|---------|----------|---------|
 | PostgreSQL | 16+ | **Yes** (production) | Primary data store |
 | Redis | 8+ | **Yes** (production) | SAQ task queue, rate limiting, event broker |
-| Python | 3.12+ | Yes | Application runtime |
+| Python | 3.12-3.14 | Yes | Application runtime (`requires-python = ">=3.12,<3.15"`; the Docker images build on 3.14) |
 | `uv` | 0.11.13 | Yes | Python package manager (exact pin in `backend/Dockerfile` and `deploy/docker/Dockerfile.all-in-one`) |
-| Node.js | 20+ | For frontend dev | Frontend build toolchain; CI pins Node 22. Use `pnpm` (the repo pins `pnpm@11.28.10` via `packageManager`), not npm |
+| Node.js | 20+ | For frontend dev | Frontend build toolchain; CI pins Node 22. Use `pnpm` (the repo pins `pnpm@11.28.11` via `packageManager`), not npm |
 | Docker | 24+ | For Docker Compose | Container runtime |
 
 ### Redis Requirement Table

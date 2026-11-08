@@ -2,9 +2,9 @@
   <FeatureGate feature-name="audit_viewer" required-tier="team" show-disabled>
 
     <div class="page-wide">
-    <header class="flex items-center justify-between">
-      <PageHeader :title="$t('views.AdminAuditView.audit_log')" :subtitle="$t('views.AdminAuditView.tamper_evident_event_trail')" />
-      <div v-if="auditSource === 'org'" class="flex items-center gap-2">
+    <PageHeader :title="$t('views.AdminAuditView.audit_log')" :subtitle="$t('views.AdminAuditView.tamper_evident_event_trail')">
+      <template v-if="auditSource === 'org'" #right>
+      <div class="flex items-center gap-2">
         <button
           type="button"
           :disabled="verifying"
@@ -33,7 +33,8 @@
           {{ exportingJsonl ? $t('views.AdminAuditView.exporting') : $t('views.AdminAuditView.export_jsonl') }}
         </button>
       </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <div
       v-if="isSystemAdmin"
@@ -695,7 +696,7 @@ const chainResult = ref<{ valid: boolean; checked_events?: number; error?: strin
 function formatActor(event: AuditEvent): string {
   // Prefer the semantic actor label the backend composed at emit time
   // (trigger identity / "system"); fall back to the user id rendering.
-  const label = (event.payload_json ?? {})['actor']
+  const label = (event.payload_json as Record<string, unknown> | null | undefined)?.actor
   if (typeof label === 'string' && label.length > 0) return label
   if (!event.actor_user_id) return '—'
   return 'usr_' + shortId(event.actor_user_id).replace('#', '')
@@ -733,11 +734,11 @@ function summarize(event: Summarisable): string {
   // Prefer the descriptive summary the backend composed at emit time (part of
   // the hash-chained payload); the heuristic below is the legacy fallback for
   // events written before summaries existed.
-  const provided = (event.payload_json ?? {})['summary']
+  const provided = event.payload_json?.summary
   if (typeof provided === 'string' && provided.length > 0) return provided
 
   const et = event.event_type
-  const action = et.includes('.') ? et.split('.')[1] : et
+  const action = et.includes('.') ? et.split('.').at(1)! : et
   const resource = event.resource_type ?? 'resource'
 
   const p = event.payload_json ?? {}
@@ -747,11 +748,12 @@ function summarize(event: Summarisable): string {
   // catalogue like every other string in the view rather than being
   // concatenated in English here.
   const capitalisedAction = action.charAt(0).toUpperCase() + action.slice(1)
+  const nameText = typeof name === 'string' ? name : JSON.stringify(name)
   return name
     ? t('views.AdminAuditView.summary_fallback_named', {
         action: capitalisedAction,
         resource,
-        name: String(name),
+        name: nameText,
       })
     : t('views.AdminAuditView.summary_fallback', {
         action: capitalisedAction,
@@ -782,7 +784,7 @@ function buildQuery() {
 
 function applyAutoFilters() {
   resetPager()
-  loadEvents()
+  void loadEvents()
 }
 
 // Auto-apply on dropdown/select filter changes (immediate)
@@ -815,7 +817,7 @@ function resetFilters() {
   filterDateTo.value = ''
   filterTargetType.value = '__all__'
   resetPager()
-  loadEvents()
+  void loadEvents()
 }
 
 function buildSystemQuery() {
@@ -850,7 +852,7 @@ async function loadSystemEvents() {
 
 function applySystemFilters() {
   systemPage.value = 1
-  loadSystemEvents()
+  void loadSystemEvents()
 }
 
 function resetSystemFilters() {
@@ -859,13 +861,13 @@ function resetSystemFilters() {
   systemFilterDateFrom.value = ''
   systemFilterDateTo.value = ''
   systemPage.value = 1
-  loadSystemEvents()
+  void loadSystemEvents()
 }
 
 function goSystemPage(page: number) {
   if (page < 1) return
   systemPage.value = page
-  loadSystemEvents()
+  void loadSystemEvents()
 }
 
 function toggleSystemExpand(id: string) {
@@ -882,7 +884,7 @@ function toggleSystemExpand(id: string) {
 // filters apply immediately on the dropdown/date controls and debounced on the
 // free-text fields, mirroring the organisation trail above.
 watch(auditSource, (source) => {
-  if (source === 'system') loadSystemEvents()
+  if (source === 'system') void loadSystemEvents()
 })
 
 let systemDebounce: ReturnType<typeof setTimeout> | null = null
@@ -910,8 +912,8 @@ function setExportError(message: string, format: 'csv' | 'jsonl') {
     message,
     retry: () => {
       exportFailure.value = null
-      if (format === 'csv') exportCsv()
-      else exportJsonl()
+      if (format === 'csv') void exportCsv()
+      else void exportJsonl()
     },
   }
 }

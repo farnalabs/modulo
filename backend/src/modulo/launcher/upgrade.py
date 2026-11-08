@@ -890,8 +890,11 @@ def fetch_release_assets(
 
 def _checksum_artifact(bundle_dir: Path, name: str) -> Path:
     """Validate a SHA256SUMS name without following untrusted path components."""
-    path = Path(name)
-    raw_components = name.split("/")
+    # Native bundle checksum generators prefix every path with ./; remove
+    # exactly one leading prefix before applying the path-safety validation.
+    canonical_name = name.removeprefix("./")
+    path = Path(canonical_name)
+    raw_components = canonical_name.split("/")
     if (
         path.is_absolute()
         or PureWindowsPath(name).is_absolute()

@@ -45,7 +45,7 @@ retention management. Admin surfaces for introspecting and overriding deployment
 config, managing rate-limit rules, scanning/deleting orphaned entities, and
 purging old run data.
 
-## Behaviours
+## Behaviors
 
 - [x] GET/PUT `/api/v1/admin/runtime-config` lists known config keys with
       current/default/env/override values and drift detection; override and
@@ -73,9 +73,9 @@ purging old run data.
       cleanup candidates, so unbounded editor graph-save history is bounded.
       Never surfaced: run / rollback / initial snapshots, the pipeline's latest
       snapshot, release-channel-tagged snapshots (any `channel` other than
-      `none`), trigger-pinned snapshots (matched on the canonicalised
+      `none`), trigger-pinned snapshots (matched on the canonicalized
       `config_json.snapshot_id`), and variant-referenced snapshots
-      (canonicalised `variant_groups.variants[].snapshot_id`); a
+      (canonicalized `variant_groups.variants[].snapshot_id`); a
       run-referenced edit snapshot fails loudly on delete through the
       `ondelete=RESTRICT` FK rather than being silently removed
       (`backend/src/modulo/core/housekeeping.py`,
@@ -104,7 +104,7 @@ purging old run data.
       consumer must check for the final sentinel before treating the file as a
       complete record, and a schema-mapping consumer must skip it rather than
       read it as a run record. The in-product download
-      (`AdminRunRetentionView.vue`) honours it, and the sentinel resolves all
+      (`AdminRunRetentionView.vue`) honors it, and the sentinel resolves all
       three shapes its fetch can see: a complete body downloads cleanly; a
       clean-but-short body still downloads, with a non-blocking
       `role="status"` warning that the export may be incomplete (this is the
@@ -144,14 +144,14 @@ purging old run data.
   `edit_snapshot_retention` housekeeping category that shipped without a
   product-map home: the per-pipeline newest-200 edit-snapshot sweep (with its
   channel / trigger-pin / variant-pin exclusions and the `ondelete=RESTRICT`
-  run-reference behaviour) is now a behaviour line with code and test
+  run-reference behavior) is now a behavior line with code and test
   citations, and `core/housekeeping.py` plus the three FAR-1815 test modules
   were added to the frontmatter.
 - 2026-09-26: **Improve Architecture product-map walk** - tracked the
   FAR-1102 decision-record housekeeping block surface that shipped without a
   product-map home: the typed `blocked_by: policy_gate_decisions` response on
   the REST + MCP housekeeping delete paths (with the shared
-  `is_policy_gate_decision_fk_error` classification) is now a behaviour line
+  `is_policy_gate_decision_fk_error` classification) is now a behavior line
   with unit-test citations.
 - 2026-09-14: **product-map review pass** - closed the "no BDD for
   rate-limit middleware integration with specific endpoint types" gap: wired
@@ -161,7 +161,7 @@ purging old run data.
   runtime rule update) and dropped the file from the tracked orphaned-BDD debt list
   (`_ORPHANED_BDD_FEATURES`). Two auth brute-force scenarios that duplicated
   `auth_brute_force.feature` were removed from the draft (that coverage already
-  executes in `steps/test_auth_rate_limiting.py`). Rate-limit middleware behaviour is
+  executes in `steps/test_auth_rate_limiting.py`). Rate-limit middleware behavior is
   no longer unit-tested only.
 - 2026-09-12: **product-map review pass** - registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
@@ -197,7 +197,7 @@ purging old run data.
   `db-capacity-banner`, `db-capacity-usage`, `db-capacity-run-retention-link`,
   `db-capacity-housekeeping-link`) on the `/admin/housekeeping` and
   `/admin/run-retention` manifest `elements:` inventories - the banner renders
-  organisation-wide via `AppLayout.vue` and its links land on those two pages,
+  organization-wide via `AppLayout.vue` and its links land on those two pages,
   but its surface had no product-map home.
   `test_mapped_route_elements_cover_owning_view_testids` now maps both routes to
   their page views + `DbCapacityBanner.vue`, so the capacity banner cannot ship
@@ -212,7 +212,7 @@ purging old run data.
   the layout + tab + status-strip owning views so the surface can no longer ship
   invisible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-07: **product-map review pass** - added this
-  behaviour-tracker for `feat-runtime`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against the runtime config,
+  behavior-tracker for `feat-runtime`, which previously had no
+  `docs/product-map/` entry. Behaviors verified against the runtime config,
   rate-limit, housekeeping, and run-retention routes and their test suites.
   Status: covered.

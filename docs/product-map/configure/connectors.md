@@ -81,7 +81,7 @@ third-party services (GitHub, Jira, Slack, Linear, and 30+ others). Supports
 REST integration with declarative endpoints, auth credential profiles, fan-out,
 and per-destination rate limiting.
 
-## Behaviours
+## Behaviors
 
 - [x] A REST connector is creatable with a declarative endpoint (base_url + path
       + method) and auth credential profile (bearer / api_key / basic);
@@ -141,7 +141,7 @@ and per-destination rate limiting.
 - [x] The Jenkins connector is BDD-exercised against the real
       `JenkinsConnector` (respx-mocked Jenkins REST API): token validation via
       `/api/json` (200 => healthy, 401 => unhealthy), triggering a build
-      (plain + parameterised via `buildWithParameters`), getting build status /
+      (plain + parameterized via `buildWithParameters`), getting build status /
       listing recent builds / fetching console logs
       (`jenkins.feature`, `steps/test_jenkins_connector.py`)
 - [x] The TeamCity connector is BDD-exercised against the real
@@ -270,7 +270,7 @@ and per-destination rate limiting.
       CLAIM is a binding REQUEST, so it keeps its qualifier (`github.read` binds
       to the github surface specifically). `ConnectorACL` builds its restricted
       set through `canonical_capability_set` (the connector hub passes the
-      instance's own `connector_type_id`) and canonicalises the requested
+      instance's own `connector_type_id`) and canonicalizes the requested
       operation through `canonical_capability`, so `check("read")` grants a
       stored same-type `["github.read"]` in the hub exactly as the conformance
       reader certifies `read`;
@@ -289,7 +289,7 @@ and per-destination rate limiting.
       team-private connector (`visibility: team`) is only usable by a
       pipeline owned by the SAME team - a different team's pipeline or an
       org pipeline is refused - and an org-visibility connector
-      (`visibility: org`) is SHARED ACROSS THE ORGANISATION: it binds to ANY
+      (`visibility: org`) is SHARED ACROSS THE ORGANIZATION: it binds to ANY
       pipeline, including one owned by a team, and never produces a
       mismatch. (FAR-1618 removed the reverse direction FAR-1515 had added -
       a TEAM pipeline pinning an org connector, mirrored at run time by the
@@ -359,9 +359,9 @@ and per-destination rate limiting.
   the vocabulary helpers (`qualified_capability` / `canonical_capability` /
   `canonical_capability_set`) shipped with NO coverage in either product-map
   layer - the manifest `feat-connectors` registry had the FAR-1564
-  `unrestricted_allowed_operations` semantics but not the canonicalisation that
+  `unrestricted_allowed_operations` semantics but not the canonicalization that
   keeps enforcement and certification in step, and this tracker named neither.
-  Added the checked behaviour line (ONE shared stdlib-only vocabulary in
+  Added the checked behavior line (ONE shared stdlib-only vocabulary in
   `connectors/base.py`, the grant-vs-claim asymmetry, `None`/malformed handling)
   plus the `connectors/base.py` / `core/guardrails/conformance.py` code and
   `test_acl.py` / `test_guardrail_conformance_midrun.py` unit-test citations.
@@ -372,7 +372,7 @@ and per-destination rate limiting.
   the 409 `connector_team_mismatch` refusal, the reverse org-only direction, the
   team-blind (FAR-1515 CRITICAL 1) read that makes an unresolvable binding fail
   closed, and the every-write-path coverage were invisible to Assistant's docs
-  indexer and to the graph. Added the checked behaviour line plus the
+  indexer and to the graph. Added the checked behavior line plus the
   `core/team_visibility.py` / `db/crud/team_scope.py` code and unit/integration
   test citations; the model-backend mirror is tracked under `feat-model-backends`.
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
@@ -380,7 +380,7 @@ and per-destination rate limiting.
   deny-all, merged in PR #1399): the operation-scope semantics shipped with NO
   coverage in either product-map layer. The manifest `feat-connectors` registry
   had no scope-semantics line and this tracker none either, after the FAR-935
-  validation-level additions. Added the checked behaviour line (the shared
+  validation-level additions. Added the checked behavior line (the shared
   `unrestricted_allowed_operations` predicate, `None` ↔ `[]`, fail-closed
   malformed, no deny-all) plus the connector/graph-validator/conformance code
   and unit-test citations.
@@ -456,7 +456,7 @@ and per-destination rate limiting.
   (mirroring the unit suites): `steps/test_circleci_connector.py` (5 scenarios
   – `/me` health 200/401, trigger pipeline on a branch, get pipeline status,
   list recent runs, workflow+job logs), `steps/test_jenkins_connector.py`
-  (7 scenarios – `/api/json` health 200/401, plain + parameterised build
+  (7 scenarios – `/api/json` health 200/401, plain + parameterized build
   trigger, build status, list builds, console logs),
   `steps/test_teamcity_connector.py` (6 scenarios – query projects /
   buildTypes / agents, trigger build, create build type, fail closed on an
@@ -555,7 +555,7 @@ and per-destination rate limiting.
   Generic REST connector form shipped on the page was previously invisible to
   Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-07: **product-map review pass** – added this
-  behaviour-tracker for `feat-connectors`, which previously had behaviours only
-  in `manifest.yaml` inline. Behaviours verified against `routes/connectors.py`,
+  behavior-tracker for `feat-connectors`, which previously had behaviors only
+  in `manifest.yaml` inline. Behaviors verified against `routes/connectors.py`,
   `connector_hub/`, `connectors/rest/`, and the connector unit+BDD suites.
   Status: covered.

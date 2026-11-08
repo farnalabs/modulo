@@ -18,15 +18,28 @@
           @select-revision="selectRevision"
           @select-current="selectCurrentRevision"
           @select-by-time="selectRevisionByTime"
+          :read-only="readOnly"
           @new-draft="createNewDraft"
+          @restore-revision="restoreRevision"
+          @diff-revision="diffRevision"
           @discover="runDiscovery"
+
         />
       </div>
 
       <!-- Main Editor Area -->
       <main class="flex-1 flex flex-col min-w-0 overflow-hidden relative">
+        <!-- 402 feature_required is an entitlement answer, not a failed load:
+             no retry affordance, and an honest unavailable message. -->
+        <div
+          v-if="unavailable"
+          class="m-3 rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground"
+          aria-live="polite"
+        >
+          {{ $t('views.SystemMapDetailView.unavailable') }}
+        </div>
         <ErrorAlert
-          v-if="loadError"
+          v-else-if="loadError"
           :message="loadError"
           :on-retry="loadData"
           class="m-3"
@@ -38,6 +51,20 @@
           :dismiss-label="$t('common.dismiss')"
           class="m-3"
         />
+        <div v-if="diffResult" class="m-3 rounded-lg border bg-card p-3 text-sm" data-testid="system-map-revision-diff-result">
+          <div class="flex items-center justify-between gap-2">
+            <h2 class="font-semibold">{{ $t('views.SystemMapDetailView.diff') }}</h2>
+            <button type="button" class="rounded border px-2 py-1 text-xs" data-testid="system-map-revision-diff-dismiss" @click="diffResult = null">{{ $t('common.dismiss') }}</button>
+          </div>
+          <p class="mt-1 text-xs text-muted-foreground">
+            {{ $t('views.SystemMapDetailView.revision', { number: diffResult.base_revision_number }) }} →
+            {{ $t('views.SystemMapDetailView.revision', { number: diffResult.target_revision_number }) }}
+          </p>
+          <ul class="mt-2 grid gap-1 text-xs sm:grid-cols-2">
+            <li v-for="item in diffSummaryItems" :key="item.at(0)!">{{ $t(`views.SystemMapDetailView.diff_fields.${item.at(0)!}`) }}: {{ item.at(1)! }}</li>
+            <li v-if="diffResult.content_json_changed">{{ $t('views.SystemMapDetailView.diff_content_changed') }}</li>
+          </ul>
+        </div>
 
         <HeaderBar
           :map="activeMap"
@@ -47,6 +74,7 @@
           @save="saveDraft"
           @publish="publishRevision"
           @archive="archiveRevision"
+          :read-only="readOnly"
           @discover="runDiscovery"
           data-testid="system-map-detail-header"
         />
@@ -84,7 +112,7 @@
               data-testid="system-map-graph-canvas"
             />
 
-            <div v-else-if="!loadError" class="flex items-center justify-center h-full text-muted-foreground" data-testid="system-map-empty-state">
+            <div v-else-if="!loadError && !unavailable" class="flex items-center justify-center h-full text-muted-foreground" data-testid="system-map-empty-state">
               <div class="text-center">
                 <p class="text-lg">{{ $t('views.SystemMapDetailView.no_graph') }}</p>
                 <p class="text-sm mt-2">{{ $t('views.SystemMapDetailView.no_graph_hint') }}</p>
@@ -93,14 +121,36 @@
           </div>
 
           <!-- Discovery Review Panel (slide-over) -->
-          <DiscoveryPanel
-            v-if="discoveryOpen"
-            :discovery="discovery"
-            @close="discoveryOpen = false"
-            @save="saveDraftWithDiscovery"
-            data-testid="system-map-discovery-panel"
-          />
+           <DiscoveryPanel
+             v-if="discoveryOpen"
+              :discovery="discovery"
+              :backend-names="discoveryBackendNames"
+               :eval-identity="discoveryEvalIdentity"
+
+              @close="discoveryOpen = false"
+             @save="saveDraftWithDiscovery"
+             data-testid="system-map-discovery-panel"
+           />
+            <DiscoveryConfigPanel
+              v-if="discoveryConfigOpen"
+              :can-use-ai="aiAuthoringAvailable"
+              :submitting="discoverySubmitting"
+              :submit-error="discoverySubmitError"
+              @close="closeDiscoveryConfig"
+              @submit="startDiscovery"
+              data-testid="system-map-discovery-config"
+            />
         </div>
+
+        <SystemMapAttributionBindings
+          v-if="activeMap && graph"
+          :nodes="graph.nodes"
+          :bindings="store.attributionBindings"
+          :read-only="readOnly"
+          :create-handler="createAttributionBinding"
+          :delete-handler="deleteAttributionBinding"
+          data-testid="system-map-attribution-bindings-panel"
+        />
       </main>
     </div>
   </div>
@@ -111,13 +161,15 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSystemMapsStore, NODE_TYPES, RELATIONSHIP_TYPES } from '../stores/systemMaps'
-import type { DiscoverySelection, SystemMapNode, SystemMapRelationship } from '../stores/systemMaps'
+import type { AttributionBindingCreate, DiscoverySelection, SystemMapNode, SystemMapRelationship, SystemMapRevisionDiff } from '../stores/systemMaps'
 import BackLink from '../components/BackLink.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import HeaderBar from '../components/system-maps/SystemMapHeaderBar.vue'
 import GraphEditor from '../components/system-maps/SystemMapGraphEditor.vue'
 import RevisionSidebar from '../components/system-maps/SystemMapRevisionSidebar.vue'
 import DiscoveryPanel from '../components/system-maps/SystemMapDiscoveryPanel.vue'
+import DiscoveryConfigPanel from '../components/system-maps/SystemMapDiscoveryConfigPanel.vue'
+import SystemMapAttributionBindings from '../components/system-maps/SystemMapAttributionBindings.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import { mergeDiscoverySelections } from '../components/system-maps/discoveryMerge'
 
@@ -132,21 +184,36 @@ const graph = computed(() => store.graph)
 const revisions = computed(() => store.revisions)
 const discovery = computed(() => store.discovery)
 const loadError = computed(() => store.error)
+const unavailable = computed(() => store.unavailable)
 const loading = computed(() => store.loading)
 
 const showSidebar = ref(true)
 const discoveryOpen = ref(false)
+const discoveryConfigOpen = ref(false)
 const saving = ref(false)
 const actionError = ref<string | null>(null)
+const diffResult = ref<SystemMapRevisionDiff | null>(null)
 const editedNodes = ref<SystemMapNode[]>([])
 const editedRelationships = ref<SystemMapRelationship[]>([])
 
 const nodeTypes = NODE_TYPES
 const relationshipTypes = RELATIONSHIP_TYPES
 
+const DIFF_FIELDS = ['nodes_added', 'nodes_removed', 'nodes_modified', 'relationships_added', 'relationships_removed', 'relationships_modified', 'loop_configs_added', 'loop_configs_removed', 'loop_configs_modified'] as const
+
+const diffSummaryItems = computed<Array<[string, number]>>(() => {
+  const diff = diffResult.value as SystemMapRevisionDiff
+  return DIFF_FIELDS.map((field) => [field, diff[field]?.length ?? 0] as [string, number]).filter(([, count]) => count !== 0)
+})
+
 const isPublished = computed(() => activeRevision.value?.status === 'published')
 const isArchived = computed(() => activeRevision.value?.status === 'archived')
-const readOnly = computed(() => isPublished.value || isArchived.value)
+const readOnly = computed(() => !store.hasAccess || isPublished.value || isArchived.value)
+const aiAuthoringAvailable = computed(() => store.accessLoaded && !store.error && store.hasAccess)
+const discoverySubmitting = ref(false)
+const discoverySubmitError = ref<string | null>(null)
+const discoveryBackendNames = ref<Record<string, string>>({})
+const discoveryEvalIdentity = ref<string | undefined>(undefined)
 
 watch(graph, (value) => {
   editedNodes.value = (value?.nodes ?? []).map((node) => ({ ...node, config_json: { ...node.config_json } }))
@@ -181,13 +248,36 @@ function relationshipPayload(relationships: SystemMapRelationship[]) {
 
 async function loadData(): Promise<void> {
   actionError.value = null
+  diffResult.value = null
   await store.fetchAccess()
   await store.loadMap(mapId.value)
+  if (!activeMap.value) return
+  try {
+    await store.loadAttributionBindings(mapId.value)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.load_attribution_bindings')
+  }
+  try {
+    await store.loadRevisionHistory(mapId.value)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.load_revision_history')
+  }
+}
+
+async function diffRevision(revisionId: string): Promise<void> {
+  if (!activeMap.value || !activeMap.value.published_revision_id) return
+  actionError.value = null
+  try {
+    diffResult.value = await store.diffRevision(activeMap.value.id, revisionId, activeMap.value.published_revision_id)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.diff_revision')
+  }
 }
 
 async function selectRevision(revisionId: string): Promise<void> {
   if (!activeMap.value) return
   actionError.value = null
+  diffResult.value = null
   try {
     await store.loadRevision(activeMap.value.id, revisionId)
   } catch (err) {
@@ -198,6 +288,7 @@ async function selectRevision(revisionId: string): Promise<void> {
 async function selectCurrentRevision(): Promise<void> {
   if (!activeMap.value) return
   actionError.value = null
+  diffResult.value = null
   try {
     await store.loadCurrentRevision(activeMap.value.id)
   } catch (err) {
@@ -208,6 +299,7 @@ async function selectCurrentRevision(): Promise<void> {
 async function selectRevisionByTime(at: string): Promise<void> {
   if (!activeMap.value) return
   actionError.value = null
+  diffResult.value = null
   try {
     await store.loadRevisionByTime(activeMap.value.id, at)
   } catch (err) {
@@ -233,14 +325,47 @@ async function createNewDraft(): Promise<void> {
   }
 }
 
-async function runDiscovery(): Promise<void> {
+async function restoreRevision(revisionId: string): Promise<void> {
   if (!activeMap.value) return
+  saving.value = true
   actionError.value = null
   try {
-    await store.discover(`Discovered ${activeMap.value.name}`, `Discovery at ${new Date().toISOString()}`)
+    await store.restoreRevisionAsNew(activeMap.value.id, revisionId)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.restore_revision')
+  } finally {
+    saving.value = false
+  }
+}
+
+function runDiscovery(): void {
+  if (!activeMap.value || readOnly.value || !store.accessLoaded || store.error) return
+  discoverySubmitError.value = null
+  discoveryConfigOpen.value = true
+}
+
+function closeDiscoveryConfig(): void {
+  if (!discoverySubmitting.value) discoveryConfigOpen.value = false
+}
+
+async function startDiscovery(options?: { modelBackendId?: string; evalDefinitionId?: string; modelBackendName?: string; evalName?: string; evalVersion?: number }): Promise<void> {
+  if (!activeMap.value || discoverySubmitting.value) return
+  if (options?.modelBackendId && options.modelBackendName) discoveryBackendNames.value = { [options.modelBackendId]: options.modelBackendName }
+  if (options?.evalDefinitionId && options.evalName) {
+    const versionSuffix = options.evalVersion == null ? '' : ` (v${options.evalVersion})`
+    discoveryEvalIdentity.value = `${options.evalName}${versionSuffix}`
+  }
+  discoverySubmitting.value = true
+  discoverySubmitError.value = null
+  actionError.value = null
+  try {
+    await store.discover(`Discovered ${activeMap.value.name}`, `Discovery at ${new Date().toISOString()}`, options)
+    discoveryConfigOpen.value = false
     discoveryOpen.value = true
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.discovery_failed')
+    discoverySubmitError.value = err instanceof Error ? err.message : t('systemMaps.errors.discovery_failed')
+  } finally {
+    discoverySubmitting.value = false
   }
 }
 
@@ -271,6 +396,7 @@ async function saveDraft(): Promise<void> {
 }
 
 async function saveDraftWithDiscovery(selections: DiscoverySelection): Promise<void> {
+  if (discovery.value?.ai_assisted === true && discovery.value.eval_gate_passed !== true) return
   const merged = mergeDiscoverySelections(editedNodes.value, editedRelationships.value, discovery.value, selections)
   editedNodes.value = merged.nodes
   editedRelationships.value = merged.relationships
@@ -297,6 +423,16 @@ async function archiveRevision(): Promise<void> {
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('systemMaps.errors.archive_revision')
   }
+}
+
+async function createAttributionBinding(binding: AttributionBindingCreate): Promise<void> {
+  if (!activeMap.value) return
+  await store.createAttributionBinding(activeMap.value.id, binding)
+}
+
+async function deleteAttributionBinding(bindingId: string): Promise<void> {
+  if (!activeMap.value) return
+  await store.deleteAttributionBinding(activeMap.value.id, bindingId)
 }
 
 async function loadAndOpenDiscovery(): Promise<void> {

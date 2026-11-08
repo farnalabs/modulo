@@ -12,9 +12,14 @@ same; this page says where each lives and what wins over what.
 On a native install, the launcher composes the bundled-service config
 from two credential-free/0600 inputs in the data dir (state.json holds
 ports; secrets.json holds generated passwords) and pins the composed
-values as a 0600 dotenv file (`config.env`) inside the data dir. The only
-composed keys today are `DATABASE_URL`, `DATABASE_ADMIN_URL` (same URL
-promoted), `REDIS_URL`, and `MODULO_SYSTEM_DATABASE_URL`.
+values as a 0600 dotenv file (`config.env`) inside the data dir.
+`compose_config` emits six keys today: `DATABASE_URL`, `DATABASE_ADMIN_URL`
+(the same URL promoted), `REDIS_URL`, `MODULO_SYSTEM_DATABASE_URL`, plus
+`SECRET_KEY` and `FERNET_KEY`, which are derived from the state HMAC key in
+`secrets.json` with domain separation. The direct `Settings(**source())` path
+(`LauncherConfigSource`) resolves only the three URL fields in
+`_COMPOSED_FIELDS`; `SECRET_KEY` and `FERNET_KEY` reach `Settings` through the
+pinned `config.env`, which carries all six keys.
 
 Implementation: `backend/src/modulo/launcher/config_source.py`
 (`compose_config`, `write_pinned_env_file`). The pin lands through

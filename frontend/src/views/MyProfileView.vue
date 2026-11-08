@@ -360,9 +360,9 @@ async function saveHitlEmailPrefs() {
 }
 
 onMounted(() => {
-  loadProfile()
-  loadMyTeams()
-  loadHitlPipelines()
-  loadHitlEmailPrefs()
+  void loadProfile()
+  void loadMyTeams()
+  void loadHitlPipelines()
+  void loadHitlEmailPrefs()
 })
 </script>

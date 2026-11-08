@@ -246,7 +246,11 @@ def _replace_seeds(text: str, seeds: list[str]) -> tuple[str, int]:
     return output, count
 
 
-_EXPORT_PREFIX = re.compile(r"^(?P<indent>\s*)(?:export\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_.\-]*)\s*=\s*(?P<value>.*)$")
+_EXPORT_PREFIX_PATTERN = (
+    r"^(?P<indent>\s*)(?:export\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_.\-]*)"
+    r"\s*=\s*(?P<value>[^\n]*)$"
+)
+_EXPORT_PREFIX = re.compile(_EXPORT_PREFIX_PATTERN)
 _REDACTION_MARKERS = frozenset({REDACTED, SENSITIVE_VALUE_MASK, "", '""', "''"})
 
 
@@ -312,9 +316,7 @@ _ASSET_EXTENSIONS: tuple[str, ...] = (
 #: a whole URL, because a credential in a URL path must still be caught.
 _HASHED_ASSET_NAME = re.compile(
     r"(?<![A-Za-z0-9_\-])"
-    r"[A-Za-z0-9_]{1,80}"
-    r"(?:[.\-][A-Za-z0-9_]{1,80})*"
-    r"-[A-Za-z0-9_\-]{8,}"
+    r"[A-Za-z0-9_][A-Za-z0-9_.\-]{0,160}-[A-Za-z0-9_\-]{8,}"
     r"(?:\.[A-Za-z0-9]{1,12})?"
     r"\.(?:" + "|".join(_ASSET_EXTENSIONS) + r")"
     r"(?![A-Za-z0-9_\-])"

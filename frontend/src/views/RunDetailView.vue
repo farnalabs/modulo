@@ -1399,7 +1399,7 @@ function toggleNodeLogs(name: string) {
   else s.add(name)
   // FAR-582: fetch artifacts when opening the logs panel for the first time
   if (s.has(name) && !nodeArtifactMap.value[name] && !nodeArtifactFetched.value.has(name)) {
-    fetchNodeArtifacts(name)
+    void fetchNodeArtifacts(name)
   }
 }
 
@@ -1441,7 +1441,7 @@ async function fetchNodeArtifacts(nodeName: string) {
 function retryNodeArtifacts(nodeName: string) {
   nodeArtifactError.value[nodeName] = false
   nodeArtifactFetched.value.delete(nodeName)
-  fetchNodeArtifacts(nodeName)
+  void fetchNodeArtifacts(nodeName)
 }
 
 function artifactDownloadUrl(
@@ -1537,7 +1537,7 @@ function explicitGithubRefUrl(ref: string, kind: string): string | null {
 // context's PR number). Mirrors getPrUrl's context branch.
 function contextGithubPrUrl(item: WorkItemRef): string | null {
   const ctx = prContext.value
-  if (!ctx || !ctx.fullName) return null
+  if (!ctx?.fullName) return null
   const refId = githubRefId(item)
   const refIsNumber = /^\d+$/.test(refId)
   const ctxNumber = /^\d+$/.test(ctx.number) ? ctx.number : ''
@@ -1567,7 +1567,7 @@ const prContext = computed<{ fullName: string; number: string; title: string | n
   const fullName = typeof repo?.full_name === 'string' ? repo.full_name.trim() : ''
   if (!fullName) return null
   const rawNumber = pr?.number
-  const number = rawNumber == null ? '' : String(rawNumber).trim()
+  const number = rawNumber == null ? '' : typeof rawNumber === 'string' || typeof rawNumber === 'number' ? String(rawNumber).trim() : ''
   const title = typeof pr?.title === 'string' && pr.title.trim() ? pr.title.trim() : null
   return { fullName, number, title }
 })
@@ -1580,7 +1580,7 @@ function githubWorkItemBadgeLabel(item: WorkItemRef): string {
 function prTitle(item: WorkItemRef): string | null {
   if (normalizeGithubKind(item.kind) !== 'github_pr') return null
   const ctx = prContext.value
-  if (ctx && ctx.title && ctx.number) {
+  if (ctx?.title && ctx.number) {
     const refId = githubRefId(item)
     const mismatch = Boolean(refId) && /^\d+$/.test(refId) && refId !== ctx.number
     if (!mismatch) return ctx.title
@@ -1607,11 +1607,11 @@ let prEnrichmentRequested = false
 function prEnrichmentKey(item: WorkItemRef): string | null {
   if (normalizeGithubKind(item.kind) !== 'github_pr') return null
   const ref = (item.ref || '').trim()
-  const match = ref.match(/^([^/\s#]+\/[^/\s#]+)#(\d+)$/)
+  const match = /^([^/\s#]+\/[^/\s#]+)#(\d+)$/.exec(ref)
   if (match) return `${match[1]}#${match[2]}`
   const refId = githubRefId(item)
   const ctx = prContext.value
-  if (ctx && ctx.fullName) {
+  if (ctx?.fullName) {
     if (/^\d+$/.test(refId)) {
       // Mirrors getPrUrl: a mismatched bare number links/enriches nothing.
       if (!ctx.number || ctx.number === refId) return `${ctx.fullName}#${refId}`
@@ -1706,7 +1706,8 @@ async function revealPrompt(nodeName: string) {
       if (typeof err === 'object' && err !== null && 'name' in err && (err as Record<string, unknown>).name === 'AbortError') throw err
       revealedPrompts.value = { ...revealedPrompts.value, [nodeName]: null }
       const detail = (err as Record<string, unknown>)?.detail
-      error.value = `${t('views.RunDetailView.prompt_reveal_error')} ${detail ? String(detail) : ''}`
+      const detailText = typeof detail === 'string' ? detail : detail == null ? '' : JSON.stringify(detail)
+      error.value = `${t('views.RunDetailView.prompt_reveal_error')} ${detailText}`
       return
     }
     const d = data as components['schemas']['PromptRevealResponse']
@@ -1846,7 +1847,7 @@ const failingNodeName = computed<string | null>(() => {
     if (status === 'failed') return name
   }
   const liveFailed = Object.entries(liveNodeStates.value).find(([, state]) => state === 'failed')
-  return liveFailed ? liveFailed[0] : null
+  return liveFailed?.at(0) ?? null
 })
 
 /** Payload for the Analyze button — null until the run detail has loaded. */
@@ -2049,7 +2050,7 @@ function breakdownBasisLine(entry: CostBreakdownEntry): string {
   const parts = Object.entries(basis)
     .filter(([k]) => k !== 'raw_reported' && k !== 'per_node_raw')
     .slice(0, 6)
-    .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+    .map(([k, v]) => `${k}=${typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}`)
   return parts.length > 0 ? parts.join(', ') : '—'
 }
 
@@ -2706,7 +2707,7 @@ async function fetchRunData(runId: string) {
     if (runData) {
       run.value = runData as unknown as RunResponse
       if (isHitlActionableStatus(run.value.status)) {
-        fetchHitlReviews(runId)
+        void fetchHitlReviews(runId)
       }
     }
     const { data: ioData } = await api.GET('/api/v1/runs/{run_id}/io', {
@@ -2803,7 +2804,7 @@ const { loading, error, load: loadRun } = useDataFetch<RunFetchResult>(
       if (runData) {
         run.value = runData as unknown as RunResponse
         if (isHitlActionableStatus(run.value.status)) {
-          fetchHitlReviews(runId)
+          void fetchHitlReviews(runId)
         }
       }
       if (ioData) runIO.value = ioData as unknown as RunIOResponse
@@ -2828,5 +2829,5 @@ onUnmounted(() => {
   }
 })
 
-loadCurrency()
+void loadCurrency()
 </script>

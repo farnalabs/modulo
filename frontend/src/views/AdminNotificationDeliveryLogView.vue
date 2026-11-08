@@ -139,8 +139,18 @@
       v-else-if="items.length === 0"
       data-testid="admin-notification-log-empty"
       :title="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found')"
-      :description="$t('views.AdminNotificationDeliveryLogView.try_adjusting_filters')"
-    />
+      :description="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_for_filters')"
+    >
+       <button
+         type="button"
+         data-testid="admin-notification-log-empty-reset"
+         :aria-label="$t('views.AdminNotificationDeliveryLogView.reset_all_filters')"
+         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+         @click="resetFilters"
+       >
+         {{ $t('views.AdminNotificationDeliveryLogView.reset') }}
+       </button>
+     </EmptyState>
 
     <template v-else>
       <div class="table-wrapper">
@@ -295,6 +305,7 @@ import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
+import { dateRangeQuery, defaultDateRange } from '../lib/formatDate'
 import type { components, paths } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -317,10 +328,11 @@ interface DeliveryLogPage {
 type DeliveryLogQuery = NonNullable<paths['/api/v1/admin/notifications/deliveries']['get']>['parameters']['query']
 
 const cursor = ref<string | null>(null)
+const initialDateRange = defaultDateRange()
 const filterStatus = ref('__all__')
 const filterEventType = ref('__all__')
-const filterDateFrom = ref('')
-const filterDateTo = ref('')
+const filterDateFrom = ref(initialDateRange.from)
+const filterDateTo = ref(initialDateRange.to)
 
 const { data: deliveriesData, loading, error, load: loadDeliveries } = useDataFetch<DeliveryLogPage>(
   async () => {
@@ -328,8 +340,7 @@ const { data: deliveriesData, loading, error, load: loadDeliveries } = useDataFe
     if (cursor.value) params.cursor = cursor.value
     if (filterStatus.value !== '__all__') params.status = filterStatus.value
     if (filterEventType.value !== '__all__') params.event_type = filterEventType.value
-    if (filterDateFrom.value) params.from = filterDateFrom.value
-    if (filterDateTo.value) params.to = filterDateTo.value
+    Object.assign(params, dateRangeQuery(filterDateFrom.value, filterDateTo.value))
     const response = await api.GET('/api/v1/admin/notifications/deliveries', { params: { query: params } })
     return { data: response.data as unknown as DeliveryLogPage | undefined, error: response.error }
   },
@@ -418,23 +429,24 @@ function goToPage(c: string | null) {
   if (!c) return
   cursor.value = c
   retrySuccessMessage.value = null
-  loadDeliveries()
+  void loadDeliveries()
 }
 
 function applyFilters() {
   cursor.value = null
   retrySuccessMessage.value = null
-  loadDeliveries()
+  void loadDeliveries()
 }
 
 function resetFilters() {
+  const dateRange = defaultDateRange()
   filterStatus.value = '__all__'
   filterEventType.value = '__all__'
-  filterDateFrom.value = ''
-  filterDateTo.value = ''
+  filterDateFrom.value = dateRange.from
+  filterDateTo.value = dateRange.to
   cursor.value = null
   retrySuccessMessage.value = null
-  loadDeliveries()
+  void loadDeliveries()
 }
 
 function showDeadLettered() {
@@ -444,7 +456,7 @@ function showDeadLettered() {
   filterDateTo.value = ''
   cursor.value = null
   retrySuccessMessage.value = null
-  loadDeliveries()
+  void loadDeliveries()
 }
 
 async function retryDelivery(entry: DeliveryLogEntry) {

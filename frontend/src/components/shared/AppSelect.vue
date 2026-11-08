@@ -269,7 +269,7 @@ function findConsumerLabel(controlId: string | undefined): HTMLLabelElement | nu
   const escaped =
     typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
       ? CSS.escape(controlId)
-      : controlId.replace(/["\\]/g, '\\$&')
+      : controlId.replace(/["\\]/g, String.raw`\$&`)
   return document.querySelector<HTMLLabelElement>(`label[for="${escaped}"]`)
 }
 

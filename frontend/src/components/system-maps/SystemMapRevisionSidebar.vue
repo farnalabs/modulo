@@ -5,8 +5,8 @@
       <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.SystemMapDetailView.revision_history_hint') }}</p>
     </div>
     <div class="flex gap-2 border-b p-3">
-      <button type="button" class="flex-1 rounded border px-2 py-1.5 text-xs" @click="$emit('new-draft')" data-testid="system-map-new-draft">{{ $t('views.SystemMapDetailView.new_draft') }}</button>
-      <button type="button" class="flex-1 rounded border px-2 py-1.5 text-xs" @click="$emit('discover')" data-testid="system-map-sidebar-discover">{{ $t('views.SystemMapDetailView.discover') }}</button>
+      <button v-if="!props.readOnly" type="button" class="flex-1 rounded border px-2 py-1.5 text-xs" @click="$emit('new-draft')" data-testid="system-map-new-draft">{{ $t('views.SystemMapDetailView.new_draft') }}</button>
+      <button v-if="!props.readOnly" type="button" class="flex-1 rounded border px-2 py-1.5 text-xs" @click="$emit('discover')" data-testid="system-map-sidebar-discover">{{ $t('views.SystemMapDetailView.discover') }}</button>
     </div>
     <div class="space-y-2 border-b p-3">
       <button type="button" class="w-full rounded border px-2 py-1.5 text-xs" @click="$emit('select-current')" data-testid="system-map-revision-current">{{ $t('views.SystemMapDetailView.view_current') }}</button>
@@ -27,8 +27,23 @@
               </span>
             </div>
             <div class="mt-1 text-xs text-muted-foreground">{{ formatDate(revision.created_at) }}</div>
-            <div v-if="revision.published_at" class="mt-1 text-[10px] text-muted-foreground">{{ $t('views.SystemMapDetailView.effective_from') }}: {{ formatDate(revision.published_at) }}</div>
-          </button>
+             <div v-if="revision.published_at" class="mt-1 text-[10px] text-muted-foreground">{{ $t('views.SystemMapDetailView.effective_from') }}: {{ formatDate(revision.published_at) }}</div>
+           </button>
+           <button
+             v-if="!props.readOnly && revision.status !== 'draft'"
+             type="button"
+             class="mt-1 w-full rounded border px-2 py-1 text-xs"
+             @click="$emit('restore-revision', revision.id)"
+             data-testid="system-map-revision-restore"
+           >{{ $t('views.SystemMapDetailView.restore_as_new') }}</button>
+           <button
+             v-if="activeMap?.published_revision_id && revision.id !== activeMap.published_revision_id"
+             type="button"
+             class="mt-1 w-full rounded border px-2 py-1 text-xs"
+             @click="$emit('diff-revision', revision.id)"
+             data-testid="system-map-revision-diff"
+           >{{ $t('views.SystemMapDetailView.diff') }}</button>
+
         </li>
       </ol>
       <p v-else class="text-sm text-muted-foreground">{{ $t('views.SystemMapDetailView.no_revisions') }}</p>
@@ -38,9 +53,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { SystemMap, SystemMapRevision } from '../../stores/systemMaps'
-const props = defineProps<{ mapId: string; revisions: SystemMapRevision[]; activeRevisionId?: string; activeMap: SystemMap | null; dataTestId?: string }>()
-const emit = defineEmits<{ (e: 'select-revision', revisionId: string): void; (e: 'select-current'): void; (e: 'select-by-time', at: string): void; (e: 'new-draft'): void; (e: 'discover'): void }>()
-const sortedRevisions = computed(() => [...props.revisions].sort((a, b) => b.revision_number - a.revision_number))
+const props = defineProps<{ mapId: string; revisions: SystemMapRevision[]; activeRevisionId?: string; activeMap: SystemMap | null; readOnly?: boolean; dataTestId?: string }>()
+const emit = defineEmits<{ (e: 'select-revision', revisionId: string): void; (e: 'select-current'): void; (e: 'select-by-time', at: string): void; (e: 'new-draft'): void; (e: 'discover'): void; (e: 'restore-revision', revisionId: string): void; (e: 'diff-revision', revisionId: string): void }>()
+const sortedRevisions = computed(() => [...props.revisions].filter((revision) => props.readOnly ? revision.status !== 'draft' : true).sort((a, b) => b.revision_number - a.revision_number))
 const atValue = ref('')
 // datetime-local carries no timezone; convert it to an absolute instant here so
 // the backend's effective_from <= at < effective_to comparison is unambiguous.
@@ -52,5 +67,9 @@ const atIso = computed(() => {
 function emitByTime(): void { if (atIso.value) emit('select-by-time', atIso.value) }
 function formatDate(value: string): string { return new Date(value).toLocaleString() }
 function isCurrentRevision(revision: SystemMapRevision): boolean { return props.activeMap?.published_revision_id === revision.id }
-function statusClass(status: string): string { return status === 'published' ? 'bg-success/10 text-success-text' : status === 'archived' ? 'bg-muted text-muted-foreground' : 'bg-warning/10 text-warning-text' }
+function statusClass(status: string): string {
+  if (status === 'published') return 'bg-success/10 text-success-text'
+  if (status === 'archived') return 'bg-muted text-muted-foreground'
+  return 'bg-warning/10 text-warning-text'
+}
 </script>

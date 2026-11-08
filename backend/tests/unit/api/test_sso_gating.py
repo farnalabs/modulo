@@ -157,7 +157,13 @@ class TestAdminSsoGating:
     def test_list_providers_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
         resp = client_no_sso.get("/api/v1/admin/sso/providers")
         assert resp.status_code == 402
-        assert "not available on your plan" in resp.text.lower()
+        body = resp.json()
+        assert body["status"] == 402
+        assert body["type"] == "urn:problem:modulo:feature_required"
+        assert body["instance"] == "sso"
+        assert body["detail"] == (
+            "sso is not available on your plan — it requires a Team licence installed at system or organisation scope"
+        )
 
     def test_list_providers_succeeds_when_enabled(self, client_with_sso: TestClient) -> None:
         mock_provider = MagicMock()
@@ -546,7 +552,14 @@ class TestSsoAuthGating:
         finally:
             app.dependency_overrides.clear()
         assert resp.status_code == 402, resp.text
-        assert "system or organisation scope" in resp.text
+        body = resp.json()
+        assert body["status"] == 402
+        assert body["type"] == "urn:problem:modulo:feature_required"
+        assert body["instance"] == "sso"
+        assert body["detail"] == (
+            "sso is not enabled for this organisation — the feature is switched off, not restricted by your licence"
+        )
+        assert "Team licence" not in body["detail"]
 
     # ── FAR-2059/2060: discovery visibility ────────────────────────────────
 

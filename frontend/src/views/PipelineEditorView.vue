@@ -75,9 +75,9 @@
              `shrink-0`: when the content column is shorter than the wrapped
              toolbar, the toolbar must keep its min-content height (scroll the
              column to reach it) rather than being squeezed. -->
-        <div class="flex shrink-0 flex-wrap items-start gap-x-2 gap-y-2 border-b bg-card px-3 py-2 md:items-center" data-testid="pipeline-editor-toolbar">
+          <div class="flex shrink-0 flex-wrap items-start gap-x-2 gap-y-2 border-b bg-card px-3 py-2 md:items-center" :aria-label="$t('views.PipelineEditorView.pipeline_editor_toolbar')" data-testid="pipeline-editor-toolbar">
           <!-- Group: identity -->
-          <div class="flex min-w-0 items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-identity">
+          <div class="flex min-w-0 items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_identity')" data-testid="pipeline-editor-toolbar-group-identity">
             <h2 class="truncate text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
             <button v-if="!isViewing" type="button" :class="btnToolbarIcon" :aria-label="$t('views.PipelineEditorView.rename_pipeline')" :title="$t('views.PipelineEditorView.rename_pipeline')" data-testid="pipeline-editor-rename" @click="openRenameDialog">
               <PencilIcon class="h-3 w-3" aria-hidden="true" />
@@ -119,7 +119,7 @@
           </div>
           <span :class="groupDividerClass" />
           <!-- Group: graph file actions -->
-          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-file">
+          <div class="flex items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_primary_actions')" data-testid="pipeline-editor-toolbar-group-file">
             <button v-if="!isViewing" type="button" :class="btnToolbarSecondary" :disabled="savingGraph" data-testid="pipeline-editor-save" @click="saveGraph">
               <LoaderCircleIcon v-if="savingGraph" class="h-3 w-3 animate-spin" aria-hidden="true" />
               {{ savingGraph ? $t('views.PipelineEditorView.saving_graph') : $t('views.PipelineEditorView.save') }}
@@ -172,7 +172,7 @@
           <template v-if="!isViewing">
             <span :class="groupDividerClass" />
             <!-- Group: run -->
-            <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-run">
+            <div class="flex items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_run_actions')" data-testid="pipeline-editor-toolbar-group-run">
               <button type="button" :class="btnToolbarPrimary" :disabled="running || flowNodes.length === 0" :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''" ref="runDialogTriggerRef"
                 data-testid="pipeline-editor-run" @click="openRunDialog">
                 <PlayIcon class="h-3 w-3" aria-hidden="true" />
@@ -184,8 +184,28 @@
           <template v-if="!isViewing">
           <span :class="groupDividerClass" />
           <!-- Group: pipeline settings -->
-          <div class="flex w-full flex-wrap items-center gap-1.5 md:w-auto" data-testid="pipeline-editor-toolbar-group-settings">
-            <button v-if="!pipeline?.archived_at" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+          <div class="flex w-full flex-wrap items-center gap-1.5 rounded-md border border-border/70 bg-muted/20 p-1.5 md:w-auto" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_settings')" data-testid="pipeline-editor-toolbar-group-settings">
+            <span class="sr-only">{{ $t('views.PipelineEditorView.toolbar_settings') }}</span>
+            <button
+              ref="settingsToggleRef"
+              type="button"
+              :class="[btnToolbarSecondary, 'md:hidden']"
+              :aria-expanded="settingsOpen"
+              :aria-controls="pipelineEditorSettingsControlsId"
+              data-testid="pipeline-editor-settings-toggle"
+              @click="toggleSettingsDisclosure($event)"
+              @keydown.escape.prevent="closeSettingsDisclosure"
+            >
+              {{ $t('views.PipelineEditorView.toolbar_settings_toggle') }}
+            </button>
+            <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- settings controls: Escape collapses the disclosure, except while a nested panel dialog owns the keypress -->
+            <div
+              :id="pipelineEditorSettingsControlsId"
+              ref="settingsControlsRef"
+              :class="['flex flex-wrap items-center gap-1.5', { 'max-md:hidden': !settingsOpen }]"
+              @keydown.escape="onSettingsControlsKeydown"
+            >
+            <button v-if="!pipeline?.archived_at" ref="firstSettingsControlRef" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
             <!-- FAR-1530: per-pipeline Paused execution state. Paused is a
                  visible state, not an archived one - the pipeline stays in the
@@ -648,11 +668,12 @@
                 </div>
               </dialog>
             </div>
+            </div>
           </div>
           </template>
           <span :class="groupDividerClass" />
           <!-- Group: canvas tools -->
-          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-canvas">
+          <div class="flex items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_canvas_actions')" data-testid="pipeline-editor-toolbar-group-canvas">
             <template v-if="!isViewing">
               <Select
                 v-model="newNodeType"
@@ -674,6 +695,27 @@
               >
                 <PlusIcon class="h-3 w-3" aria-hidden="true" />
                 {{ $t('views.PipelineEditorView.add_node') }}
+              </button>
+              <button
+                type="button"
+                :class="btnToolbarSecondary"
+                :disabled="flowNodes.length === 0"
+                :title="$t('views.PipelineEditorView.arrange_graph_hint')"
+                data-testid="pipeline-editor-arrange-graph"
+                @click="arrangeGraph"
+              >
+                <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h6M4 12h10M4 18h6" /><path d="M16 4l4 2-4 2M16 16l4 2-4 2" /></svg>
+                {{ $t('views.PipelineEditorView.arrange_graph') }}
+              </button>
+              <button
+                v-if="arrangeUndo"
+                type="button"
+                :class="btnToolbarSecondary"
+                :title="$t('views.PipelineEditorView.undo_arrange_hint')"
+                data-testid="pipeline-editor-undo-arrange"
+                @click="undoArrangeGraph"
+              >
+                {{ $t('views.PipelineEditorView.undo_arrange') }}
               </button>
             </template>
             <button
@@ -961,19 +1003,23 @@
           v-model:nodes="displayNodes"
           v-model:edges="displayEdges"
           :node-types="nodeTypes"
-          :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: CANVAS_EDGE_STROKE } }"
+          :default-edge-options="defaultEdgeOptions"
           :fit-view-on-init="false"
           :source-position="Position.Right"
           :target-position="Position.Left"
           :nodes-draggable="!isViewing"
           :nodes-connectable="!isViewing"
+          :nodes-focusable="true"
+          :edges-focusable="true"
           :edges-updatable="!isViewing"
           :delete-key-code="isViewing ? null : undefined"
           @node-click="onNodeClick"
           @edge-click="onEdgeClick"
           @pane-click="onPaneClick"
+          @node-drag-stop="onNodeDragStop"
         >
           <Background :gap="20" :size="1" />
+          <output class="sr-only" aria-live="polite" data-testid="pipeline-editor-connection-announcement">{{ connectionAnnouncement }}</output>
           <FlowControls :show-interactive="false" />
           <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning-text">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
@@ -984,12 +1030,22 @@
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                     <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
                   </div></template>
-          <template #node-router="nodeProps"><div class="rounded-lg border-2 border-indigo-500/60 bg-indigo-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-indigo-600 dark:text-indigo-300">{{ $t('views.PipelineEditorView.node_router_badge') }}</div>
+          <!-- Router/HITL cards carry a non-colour affordance too: a dashed
+               border + branch glyph and a double border + gate glyph. The
+               badges already name the kind, so the shape survives greyscale
+               and colour-vision differences. -->
+          <template #node-router="nodeProps"><div class="rounded-lg rounded-r-3xl border-2 border-dashed border-indigo-500/60 bg-indigo-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-router">
+                    <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-indigo-600 dark:text-indigo-300">
+                      <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="18" r="2" /><path d="M6 8v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8M12 13v3" /></svg>
+                      {{ $t('views.PipelineEditorView.node_router_badge') }}
+                    </div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_router_label') }}</div>
                   </div></template>
-          <template #node-hitl="nodeProps"><div class="rounded-lg border-2 border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</div>
+          <template #node-hitl="nodeProps"><div class="rounded-lg border-4 border-double border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-hitl">
+                    <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">
+                      <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 10-4-2.5-7-5.5-7-10V6z" /><path d="M9 12l2 2 4-4" /></svg>
+                      {{ $t('views.PipelineEditorView.node_hitl_badge') }}
+                    </div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
                   </div></template>
           <!-- FAR-1141: dispatch nodes render with their own badge/colour.
@@ -2095,7 +2151,7 @@ import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } 
 import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
-import { VueFlow, useVueFlow, Position } from '@vue-flow/core'
+import { VueFlow, useVueFlow, MarkerType, Position } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
@@ -2129,6 +2185,7 @@ import { formatDateShort } from '../lib/formatDate'
 import { formatCompactDuration, worstCaseForEvent, type WorstCase } from '../lib/worstCase'
 import { withTimeout } from '../lib/requestTimeout'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'
+import { layoutNodes } from '../utils/graph-layout'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
 import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
@@ -2184,7 +2241,7 @@ const rawEdges = ref<any[]>([])
 const flowNodes = ref<any[]>([])
 const flowEdges = ref<any[]>([])
 
-const selectedNodeData = ref<any | null>(null)
+const selectedNodeData = ref<any>(null)
 // FAR-1273: explicit one-PR-per-run guard flag for sandbox_agent nodes. The
 // raw node value may be absent on legacy graphs, so the getter normalises to a
 // boolean for the checkbox while the setter writes the field back onto the raw
@@ -2196,13 +2253,80 @@ const singlePrPerRun = computed<boolean>({
     if (selectedNodeData.value) selectedNodeData.value.single_pr_per_run = value
   },
 })
-const selectedEdgeData = ref<any | null>(null)
+const selectedEdgeData = ref<any>(null)
 const showSaveAsDropdown = ref(false)
 const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
 const saveAsDropdownRef = ref<HTMLElement | null>(null)
 const saveAsDropdownStyle = ref<Record<string, string>>({})
 const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch', connector: 'connector' }
 const { fitView, onPaneReady } = useVueFlow()
+
+// Vue Flow renders edge geometry from these presentation options; semantic
+// edge metadata lives on each edge's `data` and is never affected.
+const defaultEdgeOptions = {
+  type: 'smoothstep',
+  animated: false,
+  style: { stroke: CANVAS_EDGE_STROKE },
+  markerEnd: {
+    type: MarkerType.ArrowClosed,
+    width: 16,
+    height: 16,
+    color: CANVAS_EDGE_STROKE,
+  },
+}
+
+// Layout ownership is frontend provenance (FAR-2420), not inferred from
+// coordinates. The graph API still has no ownership field, so this small map is
+// persisted in localStorage per pipeline: a manual drag records `user`, while
+// Arrange records `generated`. The entry is deliberately absent for legacy
+// graphs; those retain the FAR-2410 non-zero-position heuristic until the user
+// or Arrange establishes explicit provenance. This keeps finite {x: 0, y: 0}
+// positions authoritative once they have an ownership record without mutating
+// historic snapshot data.
+type LayoutOwnership = 'user' | 'generated'
+const LAYOUT_OWNERSHIP_STORAGE_KEY = 'modulo.pipeline.layoutOwnership'
+function readLayoutOwnership(): Record<string, LayoutOwnership> {
+  if (typeof localStorage === 'undefined') return {}
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LAYOUT_OWNERSHIP_STORAGE_KEY) ?? '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, LayoutOwnership] =>
+        entry[1] === 'user' || entry[1] === 'generated',
+      ),
+    )
+  } catch {
+    return {}
+  }
+}
+function persistLayoutOwnership(pipelineId: string, ownership: LayoutOwnership): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    const stored = readLayoutOwnership()
+    stored[pipelineId] = ownership
+    localStorage.setItem(LAYOUT_OWNERSHIP_STORAGE_KEY, JSON.stringify(stored))
+  } catch {
+    // Layout persistence is an enhancement; the in-memory map remains authoritative.
+  }
+}
+// These maps are component-local caches only. Never read ownership once at
+// module initialisation: two mounted editors (or two tabs) can otherwise keep
+// disagreeing about the persisted provenance.
+const layoutOwnershipPipelines = new Map<string, LayoutOwnership>()
+// Kept as a compatibility/readability map for existing editor logic and tests.
+const userOwnedLayoutPipelines = new Map<string, boolean>()
+const layoutUserOwned = ref(false)
+const draftLayoutOwnership = ref<LayoutOwnership | undefined>(undefined)
+interface PositionSnapshot { x: number; y: number }
+interface ArrangeUndoSnapshot {
+  raw: Record<string, PositionSnapshot>
+  flow: Record<string, PositionSnapshot>
+  userOwned: boolean
+  ownership: LayoutOwnership | undefined
+}
+
+const arrangeUndo = ref<ArrangeUndoSnapshot | null>(null)
+const connectionAnnouncement = ref('')
 
 // Docked-toolbar styling: one height/radius/spacing per action class so the
 // menu bar reads as one consistent control set (presentation only).
@@ -2275,6 +2399,48 @@ const showAgentPicker = ref(false)
 const showRevertDialog = ref(false)
 const showSaveAsComposite = ref(false)
 const showVersionTimeline = ref(false)
+const settingsOpen = ref(false)
+const settingsToggleRef = ref<HTMLButtonElement | null>(null)
+const settingsControlsRef = ref<HTMLElement | null>(null)
+const firstSettingsControlRef = ref<HTMLButtonElement | null>(null)
+const pipelineEditorSettingsControlsId = 'pipeline-editor-settings-controls'
+
+function focusFirstSettingsControl() {
+  nextTick(() => {
+    const firstControl = firstSettingsControlRef.value ?? settingsControlsRef.value?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])')
+    firstControl?.focus({ preventScroll: true })
+  })
+}
+
+function toggleSettingsDisclosure(event: MouseEvent) {
+  if (settingsOpen.value) {
+    closeSettingsDisclosure()
+    return
+  }
+  settingsOpen.value = true
+  // A keyboard activation produces a click with detail 0. Pointer users keep
+  // their pointer focus; only keyboard users are moved into the revealed form.
+  if (event.detail === 0) focusFirstSettingsControl()
+}
+
+function closeSettingsDisclosure() {
+  if (!settingsOpen.value) return
+  settingsOpen.value = false
+  settingsToggleRef.value?.focus()
+}
+
+function onSettingsControlsKeydown(event: KeyboardEvent) {
+  // A nested retry-policy / autonomy panel is a descendant <dialog open> with
+  // its own document-level Escape handler. That handler closes the panel and
+  // restores focus to the panel toggle; without this guard the same keypress
+  // also collapses the settings disclosure and steals focus back to the
+  // settings toggle (nested Escape double-close).
+  if (event.target instanceof Element && event.target.closest('dialog[open]')) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeSettingsDisclosure()
+  }
+}
 const pickerAgentId = ref<string>('__all__')
 const pickerConnectorId = ref<string>('__all__')
 const revertSnapshotId = ref<string>('__all__')
@@ -3267,7 +3433,7 @@ function doesNodeHaveCapabilityScope(node: any): boolean {
     .some((arr) => Array.isArray(arr) && arr.length > 0)
 }
 
-function nodeAgent(node: any): any | undefined {
+function nodeAgent(node: any): any {
   return agents.value.find((a: any) => a.id === node?.agent_id)
 }
 
@@ -3351,7 +3517,7 @@ const paramSets = ref<any[]>([])
 const selectedNodeParamSetId = ref<string | undefined>(undefined)
 const selectedNodeOverrides = ref<Record<string, any>>({})
 
-function agentParamSchema(agentId: string): any | undefined {
+function agentParamSchema(agentId: string): any {
   const agent = agents.value.find((a: any) => a.id === agentId)
   if (!agent?.parameter_schema_id) return undefined
   return paramSchemas.value.find((ps: any) => ps.id === agent.parameter_schema_id)
@@ -3369,7 +3535,7 @@ const availableParamSets = computed(() => {
 
 const paramSetOverridesKeys = computed(() => Object.keys(selectedNodeOverrides.value))
 
-function paramDefByKey(key: string): any | undefined {
+function paramDefByKey(key: string): any {
   const schema = agentParamSchema(selectedNodeData.value?.agent_id)
   return schema?.parameters?.find((p: any) => p.name === key)
 }
@@ -3469,13 +3635,17 @@ function convertBackendNode(n: any): any {
 function convertBackendEdge(e: any, i: number): any {
   const isLoop = e.edge_type === 'loop'
   const isLlm = e.edge_type === 'llm'
+  let stroke: string
   let style: Record<string, string>
   if (isLoop) {
-    style = { stroke: '#3b82f6', strokeDasharray: '5,5' }
+    stroke = '#3b82f6'
+    style = { stroke, strokeDasharray: '5,5' }
   } else if (isLlm) {
-    style = { stroke: '#8b5cf6' }
+    stroke = '#8b5cf6'
+    style = { stroke }
   } else {
-    style = { stroke: CANVAS_EDGE_STROKE }
+    stroke = CANVAS_EDGE_STROKE
+    style = { stroke }
   }
   return {
     id: e.id || `edge-${i}`,
@@ -3484,6 +3654,15 @@ function convertBackendEdge(e: any, i: number): any {
     type: 'smoothstep',
     animated: isLoop,
     style,
+    // Direction is conveyed by geometry (a closed arrowhead), not colour
+    // alone, so loop / LLM / normal edges all remain readable without relying
+    // on their tint. Edge semantics stay in `data`.
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      width: 16,
+      height: 16,
+      color: stroke,
+    },
     data: {
       hitl_review_config: e.hitl_review_config || null,
       edge_type: e.edge_type || 'normal',
@@ -3494,7 +3673,197 @@ function convertBackendEdge(e: any, i: number): any {
   }
 }
 
-async function loadGraph() {
+function cacheLayoutOwnership(ownership: LayoutOwnership | undefined): void {
+  if (ownership) {
+    layoutOwnershipPipelines.set(pipelineId, ownership)
+    userOwnedLayoutPipelines.set(pipelineId, ownership === 'user')
+  } else {
+    layoutOwnershipPipelines.delete(pipelineId)
+    userOwnedLayoutPipelines.delete(pipelineId)
+  }
+}
+
+function refreshPersistedLayoutOwnership(): LayoutOwnership | undefined {
+  const persisted = readLayoutOwnership()[pipelineId]
+  cacheLayoutOwnership(persisted)
+  return persisted
+}
+
+function setDraftLayoutOwnership(ownership: LayoutOwnership | undefined): void {
+  draftLayoutOwnership.value = ownership
+  cacheLayoutOwnership(ownership)
+}
+
+function commitLayoutOwnership(ownershipOverride?: LayoutOwnership): void {
+  const ownership = ownershipOverride ?? draftLayoutOwnership.value
+  if (!ownership) return
+  persistLayoutOwnership(pipelineId, ownership)
+  cacheLayoutOwnership(ownership)
+}
+
+function getLayoutOwnership(): LayoutOwnership | undefined {
+  if (draftLayoutOwnership.value) return draftLayoutOwnership.value
+  // A fresh storage read is authoritative: refreshPersistedLayoutOwnership
+  // syncs both compatibility caches and returns the persisted value. The old
+  // fallbacks here were unreachable because the refresh clears the caches when
+  // storage has no entry, so they could never return anything but undefined.
+  return refreshPersistedLayoutOwnership()
+}
+
+function handleLayoutOwnershipStorage(event: StorageEvent): void {
+  if (event.key !== LAYOUT_OWNERSHIP_STORAGE_KEY) return
+  // Do not overwrite an in-progress local draft. The existing dirty guard keeps
+  // a second tab from silently replacing unsaved graph edits; the next reload
+  // will read this newer persisted ownership deterministically.
+  if (isGraphDirty.value || draftLayoutOwnership.value !== undefined) return
+  const persisted = refreshPersistedLayoutOwnership()
+  draftLayoutOwnership.value = persisted
+  layoutUserOwned.value = persisted === 'user'
+}
+
+function snapshotPositions(nodes: any[]): Record<string, PositionSnapshot> {
+  const snapshot: Record<string, PositionSnapshot> = {}
+  for (const node of nodes) {
+    if (node?.id && node.position) {
+      snapshot[node.id] = { x: node.position.x, y: node.position.y }
+    }
+  }
+  return snapshot
+}
+
+function restorePositions(
+  nodes: any[],
+  snapshot: Record<string, PositionSnapshot>,
+): any[] {
+  return nodes.map((node) => {
+    const position = snapshot[node.id]
+    return position ? { ...node, position: { ...position } } : node
+  })
+}
+
+/** True when the graph already carries a meaningful saved arrangement. */
+function hasPlacedPositions(nodes: any[]): boolean {
+  return nodes.some((node) => {
+    const x = Number(node?.position?.x)
+    const y = Number(node?.position?.y)
+    return Number.isFinite(x) && Number.isFinite(y) && (x !== 0 || y !== 0)
+  })
+}
+
+function computeGraphLayout(): Record<string, PositionSnapshot> {
+  const laidOut = layoutNodes(
+    rawNodes.value.map((node: any) => ({
+      id: node.id,
+      node_type: node.node_type,
+      label: node.label,
+      width: node.width,
+      height: node.height,
+    })),
+    rawEdges.value.map((edge: any) => ({
+      source: edge.source_node_id,
+      target: edge.target_node_id,
+      edge_type: edge.edge_type,
+    })),
+  )
+  return Object.fromEntries(laidOut.map((node) => [node.id, { ...node.position }]))
+}
+
+/** Keep the inspector bound to the raw node after immutable position updates. */
+function rebindSelectedNode(): void {
+  const selected = selectedNodeData.value
+  if (!selected) return
+  const replacement = rawNodes.value.find((node: any) => node.id === selected.id)
+  if (replacement) selectedNodeData.value = replacement
+}
+
+/** Position-only update: every non-position node field is preserved. */
+function applyGraphPositions(positions: Record<string, PositionSnapshot>): void {
+  const apply = (nodes: any[]): any[] =>
+    nodes.map((node) => {
+      const position = positions[node.id]
+      return position ? { ...node, position: { ...position } } : node
+    })
+  rawNodes.value = apply(rawNodes.value)
+  flowNodes.value = apply(flowNodes.value)
+  rebindSelectedNode()
+}
+
+/**
+ * Generated layout is the default for a new/unplaced graph. Saved positions
+ * are authoritative: an already-placed graph is never silently re-laid out.
+ * `layoutOwnershipPipelines` carries explicit provenance across reloads. Legacy
+ * graphs without an entry retain the non-zero-position fallback for compatibility.
+ */
+function applyGeneratedLayoutIfUnplaced(): void {
+  if (rawNodes.value.length === 0) return
+  const ownership = getLayoutOwnership()
+  if (ownership === 'user' || ownership === 'generated') {
+    // An explicit provenance record makes even finite all-zero coordinates
+    // authoritative. Never infer that a persisted generated graph is unplaced.
+    layoutUserOwned.value = ownership === 'user'
+    return
+  }
+  if (hasPlacedPositions(rawNodes.value)) {
+    layoutUserOwned.value = true
+    return
+  }
+  applyGraphPositions(computeGraphLayout())
+  layoutUserOwned.value = false
+  setDraftLayoutOwnership('generated')
+}
+
+/** Explicit Arrange graph: replace the arrangement and restore generated ownership. */
+function arrangeGraph(): void {
+  if (isViewing.value || rawNodes.value.length === 0) return
+  const undo: ArrangeUndoSnapshot = {
+    raw: snapshotPositions(rawNodes.value),
+    flow: snapshotPositions(flowNodes.value),
+    userOwned: layoutUserOwned.value,
+    ownership: getLayoutOwnership(),
+  }
+  applyGraphPositions(computeGraphLayout())
+  arrangeUndo.value = undo
+  layoutUserOwned.value = false
+  setDraftLayoutOwnership('generated')
+  void nextTick().then(() =>
+    fitView({ padding: 0.1 }).catch((error) => {
+      console.warn('[PipelineEditorView] Arrange graph fitView failed', error)
+    }),
+  )
+}
+
+/** One-step local undo for the last Arrange graph action. */
+function undoArrangeGraph(): void {
+  if (isViewing.value || !arrangeUndo.value) return
+  const undo = arrangeUndo.value
+  rawNodes.value = restorePositions(rawNodes.value, undo.raw)
+  flowNodes.value = restorePositions(flowNodes.value, undo.flow)
+  layoutUserOwned.value = undo.userOwned
+  setDraftLayoutOwnership(undo.ownership)
+  arrangeUndo.value = null
+}
+
+/** Copy Vue Flow's live drag positions into the graph payload. */
+function syncNodePositionsFromFlow(): void {
+  if (isViewing.value) return
+  const flowById = new Map(flowNodes.value.map((node: any) => [node.id, node]))
+  rawNodes.value = rawNodes.value.map((node: any) => {
+    const flowNode = flowById.get(node.id)
+    if (!flowNode?.position) return node
+    return { ...node, position: { x: flowNode.position.x, y: flowNode.position.y } }
+  })
+  rebindSelectedNode()
+}
+
+function onNodeDragStop(): void {
+  if (isViewing.value) return
+  syncNodePositionsFromFlow()
+  layoutUserOwned.value = true
+  setDraftLayoutOwnership('user')
+  arrangeUndo.value = null
+}
+
+async function loadGraph(preserveDraftOwnership = false): Promise<boolean> {
   pageError.value = null
   try {
     const { data, error: graphError } = await withTimeout((signal) => api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
@@ -3503,7 +3872,7 @@ async function loadGraph() {
     }))
     if (graphError) {
       pageError.value = t('views.PipelineEditorView.failed_to_load_graph', { error: formatApiError(graphError) })
-      return
+      return false
     }
     const result = data as any
     if (!result) {
@@ -3512,17 +3881,26 @@ async function loadGraph() {
       flowNodes.value = []
       flowEdges.value = []
       graphBaseline.value = graphFingerprint()
-      return
+      if (!preserveDraftOwnership) draftLayoutOwnership.value = refreshPersistedLayoutOwnership()
+      return true
     }
     rawNodes.value = result.nodes || []
     rawEdges.value = result.edges || []
     flowNodes.value = rawNodes.value.map(convertBackendNode)
     flowEdges.value = rawEdges.value.map(convertBackendEdge)
+    // Ownership is read only after the backend graph has arrived. This avoids
+    // applying a stale module-level snapshot to a reload/remount.
+    if (!preserveDraftOwnership) draftLayoutOwnership.value = refreshPersistedLayoutOwnership()
+    // FAR-2410: only an unplaced graph receives generated positions; saved
+    // arrangements are authoritative and are never silently replaced.
+    applyGeneratedLayoutIfUnplaced()
     // FAR-1812: every load (and therefore every successful save, which
     // round-trips through loadGraph) re-baselines the dirty check.
     graphBaseline.value = graphFingerprint()
+    return true
   } catch (e: unknown) {
     pageError.value = t('views.PipelineEditorView.failed_to_load_graph', { error: formatApiError(e) })
+    return false
   }
 }
 
@@ -3639,6 +4017,7 @@ async function loadCurrentVersionSnapshot() {
 
 function onNodeClick(event: any) {
   selectedEdgeData.value = null
+  connectionAnnouncement.value = ''
   const node = event.node
   if (!node) return
   // FAR-1812: the inspector reads the graph the canvas is SHOWING — the
@@ -3654,7 +4033,7 @@ function onNodeClick(event: any) {
   if (backendNode?.parameter_set_id) {
     selectedNodeParamSetId.value = backendNode.parameter_set_id
     selectedNodeOverrides.value = { ...backendNode.parameter_overrides }
-    loadParamSets()
+    void loadParamSets()
   } else {
     selectedNodeParamSetId.value = undefined
     selectedNodeOverrides.value = {}
@@ -3669,6 +4048,13 @@ function onEdgeClick(event: any) {
   if (backendEdge) {
     selectedEdgeData.value = backendEdge
     populateEdgeForm(backendEdge)
+    const labelFor = (id: string): string =>
+      inspectSourceNodes.value.find((node: any) => node.id === id)?.label || id
+    connectionAnnouncement.value = t('views.PipelineEditorView.connection_selected', {
+      source: labelFor(backendEdge.source_node_id),
+      target: labelFor(backendEdge.target_node_id),
+      type: backendEdge.edge_type || 'normal',
+    })
   }
 }
 
@@ -3809,6 +4195,7 @@ async function saveEdgeConfig() {
 function onPaneClick() {
   selectedNodeData.value = null
   selectedEdgeData.value = null
+  connectionAnnouncement.value = ''
   showSaveAsDropdown.value = false
   selectedNodeParamSetId.value = undefined
   selectedNodeOverrides.value = {}
@@ -4013,10 +4400,12 @@ watch([selectedNodeData, selectedEdgeData], () => {
 onMounted(() => {
   refitEditorFit()
   window.addEventListener('resize', scheduleEditorRefit)
+  window.addEventListener('storage', handleLayoutOwnershipStorage)
   setupEditorFitObserver(editorRootRef.value)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', scheduleEditorRefit)
+  window.removeEventListener('storage', handleLayoutOwnershipStorage)
   editorFitObserver?.disconnect()
   if (refitFrame) window.cancelAnimationFrame(refitFrame)
 })
@@ -4618,7 +5007,7 @@ function nodeCommandFields(n: any): {
     return {}
   }
   const rows = (Array.isArray(n.agent_commands) ? n.agent_commands : [])
-    .map((c: unknown) => (typeof c === 'string' ? c : String(c ?? '')))
+    .map((c: unknown) => (typeof c === 'string' ? c : c == null ? '' : JSON.stringify(c)))
     .filter((c: string) => c.trim() !== '')
   if (rows.length === 0) {
     return { agent_commands: null, commands_concatenation_string: null }
@@ -4673,6 +5062,7 @@ async function saveGraph() {
   if (isViewing.value) return
   savingGraph.value = true
   saveGraphError.value = null
+  const ownershipToCommit = draftLayoutOwnership.value
   try {
     // Sync current param set + overrides into selected node data
     if (selectedNodeData.value) {
@@ -4681,7 +5071,7 @@ async function saveGraph() {
         ? { ...selectedNodeOverrides.value }
         : null
     }
-    await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
+    const saveResponse = await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
       body: {
         nodes: rawNodes.value.map(buildNodePayload),
@@ -4700,8 +5090,16 @@ async function saveGraph() {
       },
       signal,
     }))
-    // Reload graph to sync flowNodes with saved state
-    await loadGraph()
+    // openapi-fetch returns HTTP failures in `error` without rejecting. Treat
+    // those responses like transport failures so local ownership is committed
+    // only after the server has accepted the graph.
+    throwOnError(saveResponse)
+    // The server write is the commit point for ownership. Keep the local draft
+    // until the PUT succeeds; a failed PUT never changes the persisted cache.
+    if (ownershipToCommit) commitLayoutOwnership(ownershipToCommit)
+    // Reload graph to sync flowNodes with saved state. Preserve the ownership
+    // just committed even though this read starts from the backend graph.
+    await loadGraph(true)
   } catch (e: unknown) {
     saveGraphError.value = formatApiError(e)
   } finally {
@@ -4808,7 +5206,7 @@ const pipelineLoadError = ref<string | null>(null)
 // ---------------------------------------------------------------------------
 
 function readQueryValue(value: unknown): string | null {
-  const raw = Array.isArray(value) ? value[0] : value
+  const raw = Array.isArray(value) ? value.at(0) : value
   return typeof raw === 'string' && raw.length > 0 ? raw : null
 }
 
@@ -4827,7 +5225,7 @@ const compareParam = computed(() => readQueryValue(route.query.compare))
 
 // The latest saved version (the snapshot list is version-DESCENDING and
 // loadCatalog filters version 0) — the default "compare against" target.
-const latestSnapshotId = computed<string | null>(() => snapshots.value[0]?.id ?? null)
+const latestSnapshotId = computed<string | null>(() => snapshots.value.at(0)?.id ?? null)
 
 /** `?version=<n>`: the positive integer, -1 when malformed, null when absent. */
 const requestedVersion = computed(() => {
@@ -4906,8 +5304,8 @@ async function findSnapshotIdByVersion(version: number): Promise<string | null> 
   if (onFirst) return onFirst.id
   if (pageOne.items.length === 0) return null // no snapshots at all
   // Sorted version-DESC: page 1 spans [newest … oldest-on-page-1].
-  if (version > pageOne.items[0].snapshot_version) return null // newer than the newest
-  if (version >= pageOne.items[pageOne.items.length - 1].snapshot_version) {
+  if (version > pageOne.items.at(0)!.snapshot_version) return null // newer than the newest
+  if (version >= pageOne.items.at(-1)!.snapshot_version) {
     return null // inside page 1's range, not present — absent
   }
   // Below page 1: binary search the remaining pages by the range each spans.
@@ -4933,11 +5331,11 @@ async function findSnapshotIdByVersion(version: number): Promise<string | null> 
     }
     const hit = find(page.items)
     if (hit) return hit.id
-    if (version > page.items[0].snapshot_version) {
+    if (version > page.items.at(0)!.snapshot_version) {
       hi = mid - 1 // belongs above this page
       continue
     }
-    if (version < page.items[page.items.length - 1].snapshot_version) {
+    if (version < page.items.at(-1)!.snapshot_version) {
       lo = mid + 1 // belongs below this page
       continue
     }
@@ -5402,7 +5800,7 @@ async function loadRestoreDiff(): Promise<void> {
   // config. Without it (or when the target IS the current snapshot) there is
   // nothing to compare — but that outcome must still be stated explicitly
   // (C2), never left as an empty box.
-  const latest = snapshots.value[0]?.id as string | undefined
+  const latest = snapshots.value.at(0)?.id as string | undefined
   if (!target || !latest) {
     restoreDiffNoBaseline.value = true
     return
@@ -5592,6 +5990,28 @@ const { loading, load: reloadPage } = useDataFetch<null>(
 .toolbar-select :deep(.p-select-label) {
   padding: 0 0.5rem;
   font-size: 0.75rem;
+}
+
+/* FAR-2410: direction and selection are visible without colour: thicker
+   stroke + focus ring on the focused/selected edge, and a visible keyboard
+   focus ring on canvas nodes. Edge semantics stay untouched. */
+:deep(.vue-flow__edge.selected .vue-flow__edge-path),
+:deep(.vue-flow__edge:focus-visible .vue-flow__edge-path),
+:deep(.vue-flow__edge:hover .vue-flow__edge-path) {
+  stroke-width: 2.75;
+}
+
+:deep(.vue-flow__edge:focus-visible),
+:deep(.vue-flow__edge.selected) {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+:deep(.vue-flow__node:focus-visible) {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 3px;
+  border-radius: 8px;
 }
 
 @media (max-width: 767px) {

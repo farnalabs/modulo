@@ -103,7 +103,7 @@ zero-node run sitting in `running` for an hour is **not** a diagnosis of a
 55-minute cap being ignored - no such cap applies to it. A node-STARTED run
 whose executor dies mid-dispatch is the same ~135-minute bound (FAR-1803,
 above): held and counted as `node_started_executor_lost` from the first
-stale-heartbeat tick, terminalised `no_progress` at the bound.
+stale-heartbeat tick, terminalized `no_progress` at the bound.
 
 ## 4. Timestamp semantics: `started_at` vs `dispatch_phase_entered_at`
 

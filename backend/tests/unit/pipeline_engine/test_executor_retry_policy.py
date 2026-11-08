@@ -1,6 +1,6 @@
-"""Unit tests for the pipeline retry_policy decision logic in the executor.
+"""Unit tests for the pipeline retry_policy decision logic.
 
-The primary contract is ``_retry_after_policy`` — the pure decision function
+The primary contract is ``retry_after_policy`` — the pure decision function
 that maps a terminal (final_status, error_code) outcome to a retry budget.
 These tests assert the matching rules directly; the execute() integration path
 (reset-to-pending + re-raise) is covered by the executor's fenced-retry tests.
@@ -9,6 +9,7 @@ These tests assert the matching rules directly; the execute() integration path
 from __future__ import annotations
 
 import logging
+import random
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import ExitStack, asynccontextmanager, contextmanager
@@ -19,19 +20,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine import executor as executor_module
+from modulo.core.pipeline_engine import retry_policy as retry_policy_module
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
+    _graph_is_idempotent,
+)
+from modulo.core.pipeline_engine.retry_policy import (
+    _RETRY_BACKOFF_BASE_SECONDS,
+    _RETRY_BACKOFF_CAP_SECONDS,
+    _RETRY_BACKOFF_DEFAULT_MULTIPLIER,
     RunRetryPolicyError,
     _attempt_consumed_node_budget,
     _attempt_elapsed_seconds,
     _attempt_started_at,
-    _can_retry_after_policy,
-    _graph_is_idempotent,
-    _retry_after_policy,
-    _retry_backoff_seconds,
     _stall_event_matches,
     _timeout_event_matches,
+    can_retry_after_policy,
+    retry_after_policy,
+    retry_backoff_seconds,
 )
 
 
@@ -169,42 +175,42 @@ async def _bypass_capacity(mock_self, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# _retry_after_policy — pure decision logic (the extensible matching contract)
+# retry_after_policy — pure decision logic (the extensible matching contract)
 # ---------------------------------------------------------------------------
 
 
 def test_retry_after_policy_stall_match():
-    assert _retry_after_policy({"on": ["stall"], "max_retries": 2}, "stalled", "executor_stalled") == 2
+    assert retry_after_policy({"on": ["stall"], "max_retries": 2}, "stalled", "executor_stalled") == 2
 
 
 def test_retry_after_policy_stall_does_not_match_timeout():
-    assert _retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "node_timeout") is None
+    assert retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "node_timeout") is None
 
 
 def test_retry_after_policy_timeout_match():
-    assert _retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_timeout") == 1
+    assert retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_timeout") == 1
 
 
 def test_retry_after_policy_timeout_error_code_match():
-    assert _retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "TimeoutError") == 1
+    assert retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "TimeoutError") == 1
 
 
 def test_retry_after_policy_failure_match():
-    assert _retry_after_policy({"on": ["failure"], "max_retries": 1}, "failed", "some_other_error") == 1
+    assert retry_after_policy({"on": ["failure"], "max_retries": 1}, "failed", "some_other_error") == 1
 
 
 def test_retry_after_policy_no_policy_returns_none():
-    assert _retry_after_policy({}, "stalled", "executor_stalled") is None
-    assert _retry_after_policy(None, "failed", "boom") is None
+    assert retry_after_policy({}, "stalled", "executor_stalled") is None
+    assert retry_after_policy(None, "failed", "boom") is None
 
 
 def test_retry_after_policy_malformed_on_returns_none():
-    assert _retry_after_policy({"on": ["bogus"], "max_retries": 2}, "failed", "boom") is None
-    assert _retry_after_policy({"on": "stall", "max_retries": 2}, "stalled", "executor_stalled") is None
+    assert retry_after_policy({"on": ["bogus"], "max_retries": 2}, "failed", "boom") is None
+    assert retry_after_policy({"on": "stall", "max_retries": 2}, "stalled", "executor_stalled") is None
 
 
 def test_retry_after_policy_zero_budget_returns_none():
-    assert _retry_after_policy({"on": ["failure"], "max_retries": 0}, "failed", "boom") is None
+    assert retry_after_policy({"on": ["failure"], "max_retries": 0}, "failed", "boom") is None
 
 
 # ---------------------------------------------------------------------------
@@ -213,19 +219,19 @@ def test_retry_after_policy_zero_budget_returns_none():
 
 
 def test_retry_after_policy_absent_on_matches_stall():
-    assert _retry_after_policy({"max_retries": 2}, "stalled", "executor_stalled") == 2
+    assert retry_after_policy({"max_retries": 2}, "stalled", "executor_stalled") == 2
 
 
 def test_retry_after_policy_absent_on_matches_timeout():
-    assert _retry_after_policy({"max_retries": 3}, "failed", "node_timeout") == 3
+    assert retry_after_policy({"max_retries": 3}, "failed", "node_timeout") == 3
 
 
 def test_retry_after_policy_absent_on_matches_eval_failed():
-    assert _retry_after_policy({"max_retries": 1}, "eval_failed", "eval_blocked") == 1
+    assert retry_after_policy({"max_retries": 1}, "eval_failed", "eval_blocked") == 1
 
 
 def test_retry_after_policy_absent_on_matches_failure():
-    assert _retry_after_policy({"max_retries": 5}, "failed", "some_other_error") == 5
+    assert retry_after_policy({"max_retries": 5}, "failed", "some_other_error") == 5
 
 
 def test_retry_after_policy_absent_on_excludes_hang_death():
@@ -233,7 +239,7 @@ def test_retry_after_policy_absent_on_excludes_hang_death():
     # exclusions: a hang death (node_cancelled + "likely hung") is excluded
     # from "failure" retries regardless of coverage breadth.
     hang_detail = "the agent likely hung before writing any result"
-    assert _retry_after_policy({"max_retries": 2}, "failed", "node_cancelled", hang_detail) is None
+    assert retry_after_policy({"max_retries": 2}, "failed", "node_cancelled", hang_detail) is None
 
 
 def test_retry_after_policy_never_retries_provider_refusals():
@@ -243,16 +249,16 @@ def test_retry_after_policy_never_retries_provider_refusals():
     per run; the retry_policy must not re-enable that waste.
     """
     for code in ("provider.authentication", "provider.billing"):
-        assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", code) is None
+        assert retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", code) is None
         # Absent `on` (all events) coverage is equally excluded.
-        assert _retry_after_policy({"max_retries": 3}, "failed", code) is None
+        assert retry_after_policy({"max_retries": 3}, "failed", code) is None
 
 
 def test_retry_after_policy_null_on_is_all_events():
     # An explicitly-null `on` behaves like an absent key (defensive: the write
     # sites reject null, but legacy/hand-edited rows may carry it).
-    assert _retry_after_policy({"on": None, "max_retries": 2}, "stalled", "executor_stalled") == 2
-    assert _retry_after_policy({"on": None, "max_retries": 2}, "failed", "node_timeout") == 2
+    assert retry_after_policy({"on": None, "max_retries": 2}, "stalled", "executor_stalled") == 2
+    assert retry_after_policy({"on": None, "max_retries": 2}, "failed", "node_timeout") == 2
 
 
 def test_retry_after_policy_absent_on_never_retries_script_mode_terminal_codes():
@@ -278,32 +284,32 @@ def test_retry_after_policy_absent_on_never_retries_script_mode_terminal_codes()
         "script.schema_failed",
         "script.no_output",
     ):
-        assert _retry_after_policy(all_events_policy, "failed", code) is None, code
+        assert retry_after_policy(all_events_policy, "failed", code) is None, code
     # The explicitly-null spelling resolves through the same all-events path.
     null_on_policy = {"on": None, "max_retries": 3}
     for code in ("script.failed", "script.side_effect_unknown", "ScriptFailedError"):
-        assert _retry_after_policy(null_on_policy, "failed", code) is None, code
+        assert retry_after_policy(null_on_policy, "failed", code) is None, code
 
 
 def test_retry_after_policy_absent_on_zero_budget_returns_none():
-    assert _retry_after_policy({"max_retries": 0}, "stalled", "executor_stalled") is None
+    assert retry_after_policy({"max_retries": 0}, "stalled", "executor_stalled") is None
 
 
 def test_retry_after_policy_absent_on_malformed_budget_returns_none():
-    assert _retry_after_policy({"max_retries": "lots"}, "stalled", "executor_stalled") is None
-    assert _retry_after_policy({"max_retries": True}, "failed", "boom") is None
+    assert retry_after_policy({"max_retries": "lots"}, "stalled", "executor_stalled") is None
+    assert retry_after_policy({"max_retries": True}, "failed", "boom") is None
 
 
 def test_retry_after_policy_explicit_empty_on_returns_none():
     # An explicit `on: []` stays "no retry" (backward compatible) — it must NOT
     # be collapsed into the all-events default.
-    assert _retry_after_policy({"on": [], "max_retries": 2}, "stalled", "executor_stalled") is None
-    assert _retry_after_policy({"on": [], "max_retries": 2}, "failed", "node_timeout") is None
+    assert retry_after_policy({"on": [], "max_retries": 2}, "stalled", "executor_stalled") is None
+    assert retry_after_policy({"on": [], "max_retries": 2}, "failed", "node_timeout") is None
 
 
 def test_retry_after_policy_failure_excludes_timeout_outcome():
     # A "failure"-only policy must not retry a node_timeout outcome.
-    assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node_timeout") is None
+    assert retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node_timeout") is None
 
 
 def test_retry_after_policy_failure_excludes_hang_death():
@@ -315,13 +321,13 @@ def test_retry_after_policy_failure_excludes_hang_death():
         "Sandbox agent command produced no output within 1200s. No stdout/stderr "
         "was captured — the agent likely hung before writing any result."
     )
-    assert _retry_after_policy({"on": ["failure"], "max_retries": 5}, "failed", "node_cancelled", hang_detail) is None
+    assert retry_after_policy({"on": ["failure"], "max_retries": 5}, "failed", "node_cancelled", hang_detail) is None
 
 
 def test_retry_after_policy_failure_excludes_hang_death_dotted_code():
     # The dotted alias (node.cancelled) behaves identically to the legacy code.
     assert (
-        _retry_after_policy(
+        retry_after_policy(
             {"on": ["failure"], "max_retries": 5},
             "failed",
             "node.cancelled",
@@ -336,7 +342,7 @@ def test_retry_after_policy_failure_retries_transient_node_cancelled():
     # hung" marker) stays retryable via the "failure" event — the exclusion
     # must stay surgical.
     assert (
-        _retry_after_policy(
+        retry_after_policy(
             {"on": ["failure"], "max_retries": 3},
             "failed",
             "node_cancelled",
@@ -350,13 +356,13 @@ def test_retry_after_policy_failure_still_matches_with_detail_present():
     # A generic failure with an error_detail (no hang marker) still matches the
     # "failure" event — the new error_detail param must not change the
     # pre-existing generic-failure behaviour.
-    assert _retry_after_policy({"on": ["failure"], "max_retries": 2}, "failed", "boom", "some detail") == 2
+    assert retry_after_policy({"on": ["failure"], "max_retries": 2}, "failed", "boom", "some detail") == 2
 
 
 def test_retry_after_policy_stall_error_code_on_failed_status():
     # A stall surfaces as status "failed" with error_code "executor_stalled"
     # (the zombie watchdog path) — the "stall" event must still match it.
-    assert _retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "executor_stalled") == 2
+    assert retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "executor_stalled") == 2
 
 
 # ---------------------------------------------------------------------------
@@ -367,12 +373,12 @@ def test_retry_after_policy_stall_error_code_on_failed_status():
 def test_retry_after_policy_eval_failed_match():
     # FAR-503: an eval-blocked run terminalizes as final_status "eval_failed"
     # with raw error_code "eval_blocked" — the new event re-dispatches it.
-    assert _retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "eval_failed", "eval_blocked") == 1
+    assert retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "eval_failed", "eval_blocked") == 1
 
 
 def test_retry_after_policy_eval_failed_dotted_code_match():
     # The canonical dotted spelling (eval.blocked) behaves identically.
-    assert _retry_after_policy({"on": ["eval_failed"], "max_retries": 2}, "eval_failed", "eval.blocked") == 2
+    assert retry_after_policy({"on": ["eval_failed"], "max_retries": 2}, "eval_failed", "eval.blocked") == 2
 
 
 def test_retry_after_policy_eval_failed_stays_surgical():
@@ -380,22 +386,22 @@ def test_retry_after_policy_eval_failed_stays_surgical():
     # only policy never retries a stall/timeout/generic-failure outcome, and a
     # "failure"-only policy never retries an eval-blocked run (eval_failed is a
     # distinct terminal status, not a generic failure).
-    assert _retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "failed", "boom") is None
-    assert _retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "failed", "node_timeout") is None
-    assert _retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "stalled", "executor_stalled") is None
-    assert _retry_after_policy({"on": ["failure"], "max_retries": 1}, "eval_failed", "eval_blocked") is None
+    assert retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "failed", "boom") is None
+    assert retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "failed", "node_timeout") is None
+    assert retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "stalled", "executor_stalled") is None
+    assert retry_after_policy({"on": ["failure"], "max_retries": 1}, "eval_failed", "eval_blocked") is None
 
 
 def test_retry_after_policy_timeout_matches_node_deadline_exceeded():
     # FAR-369: the absolute node-deadline watchdog terminalizes with
     # "node_deadline_exceeded" — a {on: ["timeout"]} policy must re-dispatch it
     # (the live gap: the deadline code was not in the timeout alias set).
-    assert _retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_deadline_exceeded") == 1
+    assert retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_deadline_exceeded") == 1
 
 
 def test_retry_after_policy_timeout_matches_dotted_deadline_code():
     # The dotted registry spelling resolves identically through map_legacy_code.
-    assert _retry_after_policy({"on": ["timeout"], "max_retries": 2}, "failed", "node.deadline_exceeded") == 2
+    assert retry_after_policy({"on": ["timeout"], "max_retries": 2}, "failed", "node.deadline_exceeded") == 2
 
 
 # ---------------------------------------------------------------------------
@@ -948,7 +954,7 @@ async def test_execute_retry_policy_node_deadline_exceeded_redispatches_under_ti
     alias chain a deadline outcome produces (``node_deadline_exceeded`` ->
     ``map_legacy_code`` -> ``node.deadline_exceeded`` -> timeout event). NOTE:
     the watchdog itself currently terminal-fails the run directly and bypasses
-    this decision (see the known-limitation note on ``_retry_after_policy``) —
+    this decision (see the known-limitation note on ``retry_after_policy``) —
     this test pins the alias chain, not the watchdog wiring."""
 
     class _NodeDeadlineExceededError(Exception):
@@ -1047,41 +1053,41 @@ async def test_execute_retry_policy_eval_failed_with_delivery_marker_guard_a_com
 def test_retry_backoff_schedule_grows_with_attempt(monkeypatch):
     """The deterministic schedule (jitter pinned to 0) grows with attempt_n."""
     # Pin jitter to 0 so the pure exponential schedule is exact.
-    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: 0.0)
-    base = executor_module._RETRY_BACKOFF_BASE_SECONDS
-    cap = executor_module._RETRY_BACKOFF_CAP_SECONDS
+    monkeypatch.setattr(random, "uniform", lambda a, b: 0.0)
+    base = _RETRY_BACKOFF_BASE_SECONDS
+    cap = _RETRY_BACKOFF_CAP_SECONDS
     # base=45: 45, 90, 180, 300(capped), 300, ...
     expected = [45.0, 90.0, 180.0, 300.0, 300.0, 300.0, 300.0]
     for attempt_n, exp in enumerate(expected, start=1):
-        assert _retry_backoff_seconds(attempt_n, base=base, cap=cap) == exp
+        assert retry_backoff_seconds(attempt_n, base=base, cap=cap) == exp
 
 
 def test_retry_backoff_never_exceeds_cap(monkeypatch):
     """Even with max jitter the delay never exceeds the cap."""
     # Pin jitter to its max (b == the upper bound of uniform's range).
-    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: b)
-    cap = executor_module._RETRY_BACKOFF_CAP_SECONDS
+    monkeypatch.setattr(random, "uniform", lambda a, b: b)
+    cap = _RETRY_BACKOFF_CAP_SECONDS
     for attempt_n in range(1, 30):
-        assert _retry_backoff_seconds(attempt_n, cap=cap) <= cap
+        assert retry_backoff_seconds(attempt_n, cap=cap) <= cap
 
 
 def test_retry_backoff_jitter_spreads_schedule(monkeypatch):
     """Jitter spreads the schedule between the exponential value and the
     jittered ceiling, while never exceeding the cap."""
-    cap = executor_module._RETRY_BACKOFF_CAP_SECONDS
-    base = executor_module._RETRY_BACKOFF_BASE_SECONDS
+    cap = _RETRY_BACKOFF_CAP_SECONDS
+    base = _RETRY_BACKOFF_BASE_SECONDS
     # Deterministic jitter sweep: uniform(a, b) returns a fixed fraction of b.
     for fraction in (0.0, 0.5, 1.0):
-        monkeypatch.setattr(executor_module.random, "uniform", lambda a, b, f=fraction: b * f)
-        delay = _retry_backoff_seconds(1, base=base, cap=cap)
+        monkeypatch.setattr(random, "uniform", lambda a, b, f=fraction: b * f)
+        delay = retry_backoff_seconds(1, base=base, cap=cap)
         # attempt 1 exponential = base (45), jitter up to fraction*base*0.25.
         assert base <= delay <= cap
     # With jitter enabled the delay for attempt 1 differs from the pure
     # exponential (the spread is real, not a no-op).
-    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: b)
-    with_jitter = _retry_backoff_seconds(1, base=base, cap=cap)
-    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: 0.0)
-    without_jitter = _retry_backoff_seconds(1, base=base, cap=cap)
+    monkeypatch.setattr(random, "uniform", lambda a, b: b)
+    with_jitter = retry_backoff_seconds(1, base=base, cap=cap)
+    monkeypatch.setattr(random, "uniform", lambda a, b: 0.0)
+    without_jitter = retry_backoff_seconds(1, base=base, cap=cap)
     assert with_jitter > without_jitter
     assert with_jitter <= cap
 
@@ -1093,13 +1099,13 @@ def test_retry_backoff_bounded_by_max_retries():
     from modulo.core.retry_budget import RETRY_POLICY_MAX_RETRIES
 
     max_retries = RETRY_POLICY_MAX_RETRIES  # 5
-    cap = executor_module._RETRY_BACKOFF_CAP_SECONDS
+    cap = _RETRY_BACKOFF_CAP_SECONDS
     for attempt_n in range(1, max_retries + 1):
-        delay = _retry_backoff_seconds(attempt_n, cap=cap)
+        delay = retry_backoff_seconds(attempt_n, cap=cap)
         assert delay <= cap
     # Attempts beyond the budget remain bounded by the cap.
     for attempt_n in range(max_retries + 1, max_retries + 10):
-        assert _retry_backoff_seconds(attempt_n, cap=cap) <= cap
+        assert retry_backoff_seconds(attempt_n, cap=cap) <= cap
 
 
 async def test_execute_retry_policy_applies_backoff_delay():
@@ -1128,7 +1134,7 @@ async def test_execute_retry_policy_applies_backoff_delay():
     sleep_mock.assert_awaited_once()
     delay = sleep_mock.await_args.args[0]
     assert delay > 0
-    assert delay <= executor_module._RETRY_BACKOFF_CAP_SECONDS
+    assert delay <= _RETRY_BACKOFF_CAP_SECONDS
     # The fenced pending-reset still fired before the re-raise.
     reset_stmt = next(s for s in statements if "status='pending'" in s)
     assert "claim_token=:tok" in reset_stmt
@@ -1144,7 +1150,7 @@ async def test_execute_retry_policy_hang_death_terminal_no_redispatch():
     RunRetryPolicyError, no fenced pending-reset, no backoff sleep).
 
     This proves the hang exclusion is wired at the execute() call site — that
-    ``error_detail`` is actually passed into ``_retry_after_policy``. A
+    ``error_detail`` is actually passed into ``retry_after_policy``. A
     regression that dropped ``error_detail`` at the call site would keep the
     pure-function hang tests green while real hang deaths resumed retrying."""
     from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
@@ -1239,45 +1245,45 @@ async def test_execute_retry_policy_never_redispatch_correction_run():
 
 def test_retry_backoff_multiplier_default_matches_legacy_doubling(monkeypatch):
     """multiplier defaults to 2.0: present-with-defaults == absent == today."""
-    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: 0.0)
+    monkeypatch.setattr(random, "uniform", lambda a, b: 0.0)
     for attempt in range(1, 7):
-        assert _retry_backoff_seconds(attempt) == _retry_backoff_seconds(attempt, multiplier=2.0)
-        assert _retry_backoff_seconds(attempt) == min(45.0 * 2.0 ** (attempt - 1), 300.0)
+        assert retry_backoff_seconds(attempt) == retry_backoff_seconds(attempt, multiplier=2.0)
+        assert retry_backoff_seconds(attempt) == min(45.0 * 2.0 ** (attempt - 1), 300.0)
 
 
 def test_retry_backoff_multiplier_fixed_and_growth_tables(monkeypatch):
-    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: 0.0)
+    monkeypatch.setattr(random, "uniform", lambda a, b: 0.0)
     # multiplier 1.0 = FIXED delay (no growth).
-    assert [_retry_backoff_seconds(n, base=30, multiplier=1.0) for n in range(1, 6)] == [30.0] * 5
+    assert [retry_backoff_seconds(n, base=30, multiplier=1.0) for n in range(1, 6)] == [30.0] * 5
     # multiplier 3.0 grows x3 per attempt until the cap.
-    assert [_retry_backoff_seconds(n, base=10, multiplier=3.0) for n in range(1, 5)] == [10.0, 30.0, 90.0, 270.0]
+    assert [retry_backoff_seconds(n, base=10, multiplier=3.0) for n in range(1, 5)] == [10.0, 30.0, 90.0, 270.0]
 
 
 def test_retry_backoff_cap_clamps_computed_value(monkeypatch):
     """The 300s cap clamps the COMPUTED value: delay=300 x M=10 pins at 300
     from attempt 1 — the cap is code-held, not user-configurable."""
-    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: 0.0)
+    monkeypatch.setattr(random, "uniform", lambda a, b: 0.0)
     for n in range(1, 8):
-        assert _retry_backoff_seconds(n, base=300, multiplier=10.0) == 300.0
+        assert retry_backoff_seconds(n, base=300, multiplier=10.0) == 300.0
 
 
 def test_retry_backoff_jitter_bounds_via_pinned_seam(monkeypatch):
     """Pinned random.uniform seam: max jitter = +25% of the pre-jitter value,
     total never exceeds the cap."""
-    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: b)
-    assert _retry_backoff_seconds(1, base=45) == 45.0 * 1.25  # 56.25
-    assert _retry_backoff_seconds(2, base=45) == 90.0 * 1.25  # 112.5
+    monkeypatch.setattr(random, "uniform", lambda a, b: b)
+    assert retry_backoff_seconds(1, base=45) == 45.0 * 1.25  # 56.25
+    assert retry_backoff_seconds(2, base=45) == 90.0 * 1.25  # 112.5
 
 
 def test_retry_backoff_jitter_dead_zone_at_cap(monkeypatch):
     """Computed >= cap clamps to EXACTLY cap with ZERO jitter spread —
     reachable at attempt 1 with delay_seconds=300 (dead zone called out in
     ADR 028's fleet math)."""
-    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: b)
-    assert _retry_backoff_seconds(1, base=300) == 300.0
-    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: 0.0)
-    assert _retry_backoff_seconds(1, base=300) == 300.0
-    assert _retry_backoff_seconds(1, base=300) == _retry_backoff_seconds(1, base=300, jitter_fraction=0.0)
+    monkeypatch.setattr(random, "uniform", lambda a, b: b)
+    assert retry_backoff_seconds(1, base=300) == 300.0
+    monkeypatch.setattr(random, "uniform", lambda a, b: 0.0)
+    assert retry_backoff_seconds(1, base=300) == 300.0
+    assert retry_backoff_seconds(1, base=300) == retry_backoff_seconds(1, base=300, jitter_fraction=0.0)
 
 
 def test_retry_backoff_cap_constants_pinned():
@@ -1286,7 +1292,7 @@ def test_retry_backoff_cap_constants_pinned():
     from modulo.core.pipeline_engine import retry_compensation as rc_mod
     from modulo.core.pipeline_engine import runtime_retry as rr_mod
 
-    assert executor_module._RETRY_BACKOFF_CAP_SECONDS == 300.0
+    assert _RETRY_BACKOFF_CAP_SECONDS == 300.0
     assert rc_mod.RETRY_BACKOFF_CAP_SECONDS == 300.0
     assert rr_mod._BACKOFF_CAP_SECONDS == 300.0
     # The new schedule cap mirrors the same 300s code-held bound.
@@ -1305,12 +1311,12 @@ def test_retry_backoff_defaults_single_sourced_from_retry_compensation():
 
     from modulo.core.pipeline_engine import retry_compensation as rc
 
-    assert executor_module._RETRY_BACKOFF_BASE_SECONDS == rc.RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS
+    assert _RETRY_BACKOFF_BASE_SECONDS == rc.RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS
     assert rc.RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS == 45.0
-    assert executor_module._RETRY_BACKOFF_DEFAULT_MULTIPLIER == rc.RETRY_SCHEDULE_DEFAULT_MULTIPLIER
+    assert _RETRY_BACKOFF_DEFAULT_MULTIPLIER == rc.RETRY_SCHEDULE_DEFAULT_MULTIPLIER
     assert rc.RETRY_SCHEDULE_DEFAULT_MULTIPLIER == 2.0
     # The live parameter defaults reference the rc constants directly.
-    sig = inspect.signature(executor_module._retry_backoff_seconds)
+    sig = inspect.signature(retry_policy_module.retry_backoff_seconds)
     assert sig.parameters["base"].default == rc.RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS
     assert sig.parameters["multiplier"].default == rc.RETRY_SCHEDULE_DEFAULT_MULTIPLIER
 
@@ -1369,7 +1375,7 @@ async def test_execute_retry_policy_schedule_fail_open_end_to_end():
     with ExitStack() as stack:
         mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
         stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
-        stack.enter_context(patch.object(executor_module.random, "uniform", lambda a, b: 0.0))
+        stack.enter_context(patch.object(random, "uniform", lambda a, b: 0.0))
         executor = PipelineExecutor(MagicMock())
         with _capture_executor_logs(_logging.WARNING) as records, pytest.raises(RunRetryPolicyError):
             await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
@@ -1403,7 +1409,7 @@ async def test_execute_retry_policy_resolver_defect_cannot_strand_a_reset():
         stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_engine.retry_compensation.resolve_backoff_schedule",
+                "modulo.core.pipeline_engine.retry_policy.resolve_backoff_schedule",
                 side_effect=RuntimeError("resolver defect"),
             )
         )
@@ -1417,7 +1423,7 @@ async def test_execute_retry_policy_resolver_defect_cannot_strand_a_reset():
 
 async def test_execute_retry_policy_eval_failed_with_schedule_same_path():
     """eval_failed re-dispatch honours backoff_schedule via the SAME
-    _maybe_retry_after_policy call site (FAR-503 event + FAR-525 pacing)."""
+    _mayberetry_after_policy call site (FAR-503 event + FAR-525 pacing)."""
     run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
     snapshot = _make_snapshot()
     statements: list[str] = []
@@ -1466,8 +1472,8 @@ async def test_execute_retry_policy_counter_emitted_on_confirmed_reset():
     with ExitStack() as stack:
         _enter_execute_patches(stack, factory, run, compiled, registry, settings)
         stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
-        stack.enter_context(patch.object(executor_module, "_get_otel_meter", return_value=fake_meter))
-        stack.enter_context(patch.object(executor_module.random, "uniform", lambda a, b: 0.0))
+        stack.enter_context(patch.object(retry_policy_module, "_get_otel_meter", return_value=fake_meter))
+        stack.enter_context(patch.object(random, "uniform", lambda a, b: 0.0))
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RunRetryPolicyError):
             await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
@@ -1498,7 +1504,7 @@ async def test_execute_retry_policy_no_counter_on_fence_lost():
     with ExitStack() as stack:
         _enter_execute_patches(stack, factory, run, compiled, registry, settings)
         stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
-        stack.enter_context(patch.object(executor_module, "_get_otel_meter", return_value=fake_meter))
+        stack.enter_context(patch.object(retry_policy_module, "_get_otel_meter", return_value=fake_meter))
         stack.enter_context(patch.object(PipelineExecutor, "_fenced_pending_reset", new=AsyncMock(return_value=0)))
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RunRetryPolicyError):
@@ -1524,7 +1530,7 @@ async def test_execute_retry_policy_counter_no_op_without_meter_provider():
     with ExitStack() as stack:
         _enter_execute_patches(stack, factory, run, compiled, registry, settings)
         stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
-        stack.enter_context(patch.object(executor_module, "_get_otel_meter", return_value=None))
+        stack.enter_context(patch.object(retry_policy_module, "_get_otel_meter", return_value=None))
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RunRetryPolicyError):
             await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
@@ -1550,7 +1556,7 @@ async def test_execute_retry_policy_counter_never_blocks_the_reraise():
     with ExitStack() as stack:
         _enter_execute_patches(stack, factory, run, compiled, registry, settings)
         stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
-        stack.enter_context(patch.object(executor_module, "_get_otel_meter", return_value=boom_meter))
+        stack.enter_context(patch.object(retry_policy_module, "_get_otel_meter", return_value=boom_meter))
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RunRetryPolicyError):
             await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
@@ -1663,25 +1669,34 @@ async def test_run_start_valid_schedule_no_schedule_warning():
 
 @contextmanager
 def _capture_executor_logs(level: int):
-    """Capture executor log RECORDS (incl. `extra` attrs) without caplog."""
+    """Capture executor + extracted retry-policy log RECORDS (incl. `extra`)."""
     import logging as _logging
 
-    logger = _logging.getLogger("modulo.core.pipeline_engine.executor")
+    loggers = [
+        _logging.getLogger("modulo.core.pipeline_engine.executor"),
+        _logging.getLogger("modulo.core.pipeline_engine.retry_policy"),
+    ]
     records: list = []
 
     class _Handler(_logging.Handler):
         def emit(self, record):
             records.append(record)
 
-    handler = _Handler(level=level)
-    old_level = logger.level
-    logger.addHandler(handler)
-    logger.setLevel(level)
+    handlers = []
+    old_levels = []
+    for logger in loggers:
+        handler = _Handler(level=level)
+        handlers.append((logger, handler))
+        old_levels.append((logger, logger.level))
+        logger.addHandler(handler)
+        logger.setLevel(level)
     try:
         yield records
     finally:
-        logger.removeHandler(handler)
-        logger.setLevel(old_level)
+        for logger, handler in handlers:
+            logger.removeHandler(handler)
+        for logger, old_level in old_levels:
+            logger.setLevel(old_level)
 
 
 # ---------------------------------------------------------------------------
@@ -1702,7 +1717,7 @@ def test_watchdog_deadline_code_maps_to_timeout_match():
     mapped = map_legacy_code("node_deadline_exceeded")
     assert mapped == "node.deadline_exceeded"
     assert _timeout_event_matches({"timeout"}, "node_deadline_exceeded", mapped) is True
-    assert _retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_deadline_exceeded") == 1
+    assert retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_deadline_exceeded") == 1
 
 
 def test_watchdog_stalled_code_maps_to_stall_match():
@@ -1715,7 +1730,7 @@ def test_watchdog_stalled_code_maps_to_stall_match():
     mapped = map_legacy_code("executor_stalled")
     assert mapped == "agent.stall"
     assert _stall_event_matches({"stall"}, "stalled", "executor_stalled", mapped) is True
-    assert _retry_after_policy({"on": ["stall"], "max_retries": 1}, "stalled", "executor_stalled") == 1
+    assert retry_after_policy({"on": ["stall"], "max_retries": 1}, "stalled", "executor_stalled") == 1
 
 
 def test_watchdog_codes_never_match_uncorrelated_events():
@@ -1724,10 +1739,10 @@ def test_watchdog_codes_never_match_uncorrelated_events():
     policy does not retry a zombie stall, and a FAILURE-only policy does not
     retry a deadline kill (the deadline code is a timeout outcome — raw and
     dotted spellings, qa fix 2)."""
-    assert _retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "node_deadline_exceeded") is None
-    assert _retry_after_policy({"on": ["timeout"], "max_retries": 2}, "stalled", "executor_stalled") is None
-    assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node_deadline_exceeded") is None
-    assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node.deadline_exceeded") is None
+    assert retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "node_deadline_exceeded") is None
+    assert retry_after_policy({"on": ["timeout"], "max_retries": 2}, "stalled", "executor_stalled") is None
+    assert retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node_deadline_exceeded") is None
+    assert retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node.deadline_exceeded") is None
 
 
 # ---------------------------------------------------------------------------
@@ -1801,17 +1816,17 @@ def test_attempt_consumed_node_budget_ignores_non_positive_budgets() -> None:
     assert _attempt_consumed_node_budget(3300.0, [0, -1]) is False
 
 
-def test_can_retry_after_policy_refuses_an_exhausted_budget() -> None:
-    assert _can_retry_after_policy(1, 2, False, True, attempt_consumed_budget=True) is False
+def testcan_retry_after_policy_refuses_an_exhausted_budget() -> None:
+    assert can_retry_after_policy(1, 2, False, True, attempt_consumed_budget=True) is False
 
 
-def test_can_retry_after_policy_allows_a_non_exhausted_budget() -> None:
-    assert _can_retry_after_policy(1, 2, False, True, attempt_consumed_budget=False) is True
+def testcan_retry_after_policy_allows_a_non_exhausted_budget() -> None:
+    assert can_retry_after_policy(1, 2, False, True, attempt_consumed_budget=False) is True
 
 
-def test_can_retry_after_policy_defaults_to_the_untaught_caller() -> None:
+def testcan_retry_after_policy_defaults_to_the_untaught_caller() -> None:
     # Every caller that has not been taught the guard keeps today's behaviour.
-    assert _can_retry_after_policy(1, 2, False, True) is True
+    assert can_retry_after_policy(1, 2, False, True) is True
 
 
 def test_attempt_started_at_uses_started_at_for_the_first_attempt() -> None:
@@ -1854,25 +1869,29 @@ def test_attempt_started_at_ignores_a_non_datetime_value() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _drive_maybe_retry_after_policy(*, elapsed_seconds: float) -> AsyncMock:
+async def _drive_mayberetry_after_policy(*, elapsed_seconds: float) -> str:
     """Call the in-execute retry decision with a real attempt-start timestamp.
 
     ``_redispatch_after_policy`` is the ``NoReturn`` re-raise seam in
     production, so its double raises ``RunRetryPolicyError`` too: a caller that
-    reaches the re-dispatch never returns normally. Returns the double so a
-    refused retry can assert it was never awaited.
+    reaches the re-dispatch never returns normally. Returns the decision string
+    on the refused path ("none"); the re-dispatched path raises
+    ``RunRetryPolicyError`` out of the seam.
     """
+    from modulo.core.pipeline_engine.retry_policy import maybe_retry_after_policy
+
+    run_id = uuid.uuid4()
+    org_id = uuid.uuid4()
     executor = PipelineExecutor(MagicMock())
     executor._claim_token = "tok-claim-abc"
     executor._node_timeouts = {"node-a": 3300}
-    executor._read_retry_attempt_state = AsyncMock(
-        return_value=(1, "tok-claim-abc", datetime.now(UTC) - timedelta(seconds=elapsed_seconds))
-    )
+
     redispatch = AsyncMock(side_effect=RunRetryPolicyError("failed", 2))
-    with patch.object(PipelineExecutor, "_redispatch_after_policy", new=redispatch):
-        await executor._maybe_retry_after_policy(
-            run_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
+
+    with patch("modulo.core.pipeline_engine.retry_policy._redispatch_after_policy", new=redispatch):
+        return await maybe_retry_after_policy(
+            run_id=run_id,
+            org_id=org_id,
             pipeline_retry_policy={"on": ["timeout"], "max_retries": 2},
             final_status="failed",
             error_code="node_deadline_exceeded",
@@ -1883,11 +1902,21 @@ async def _drive_maybe_retry_after_policy(*, elapsed_seconds: float) -> AsyncMoc
             model_backend_hub=None,
             connector_hub=None,
             broker=MagicMock(),
+            session_factory=executor._session_factory,
+            claim_token=executor._claim_token,
+            fenced_pending_reset_fn=executor._fenced_pending_reset,
+            cleanup_run_resources_fn=executor._cleanup_run_resources,
+            record_attempt_reset_fn=executor._record_attempt_reset,
+            probe_script_lease_fn=executor._probe_script_lease,
+            read_retry_attempt_state_fn=AsyncMock(
+                return_value=(1, "tok-claim-abc", datetime.now(UTC) - timedelta(seconds=elapsed_seconds))
+            ),
+            graph_has_script_mode_fn=lambda gj: False,
+            node_timeouts=executor._node_timeouts.values(),
         )
-    return redispatch
 
 
-async def test_maybe_retry_after_policy_refuses_an_over_budget_attempt(
+async def test_mayberetry_after_policy_refuses_an_over_budget_attempt(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """FAR-2025 prove-the-fix: an attempt that spent the whole node budget does
@@ -1895,18 +1924,137 @@ async def test_maybe_retry_after_policy_refuses_an_over_budget_attempt(
     why (the run is terminalised by the caller, so this warning is the only
     trace of the suppressed retry)."""
     with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.executor"):
-        redispatch = await _drive_maybe_retry_after_policy(elapsed_seconds=3300.0)
+        decision = await _drive_mayberetry_after_policy(elapsed_seconds=3300.0)
 
-    redispatch.assert_not_awaited()
+    assert decision == "none"
     assert "pipeline.retry_policy_budget_exhausted" in caplog.text
 
 
-async def test_maybe_retry_after_policy_still_redispatches_a_fast_failure() -> None:
+async def test_mayberetry_after_policy_still_redispatches_a_fast_failure() -> None:
     """FAR-2025 false-positive guard on the in-execute path: the identical call
     with a 60 s attempt keeps its retry, so the refusal above is attributable to
     the budget check and nothing else."""
     with pytest.raises(RunRetryPolicyError) as exc_info:
-        await _drive_maybe_retry_after_policy(elapsed_seconds=60.0)
+        await _drive_mayberetry_after_policy(elapsed_seconds=60.0)
 
     assert exc_info.value.status == "failed"
     assert exc_info.value.max_retries == 2
+
+
+# ---------------------------------------------------------------------------
+# FAR-296 Phase 2 — script-mode lease-probe wiring on the in-execute path.
+#
+# ``maybe_retry_after_policy`` probes the script lease before ANY requeue of a
+# script-mode run, and terminal-fails with ``script.side_effect_unknown`` when
+# the probe reports a possible live process. These drive that branch directly
+# so the probe call, the terminal-fail publish and the decision string are
+# pinned (the execute()-level tests feed non-script graphs, so this arm was
+# otherwise unexercised).
+# ---------------------------------------------------------------------------
+
+
+def _maybe_retry_kwargs(
+    *,
+    broker: Any | None = None,
+    probe_script_lease_fn: Any,
+    graph_has_script_mode_fn: Any,
+) -> dict[str, Any]:
+    """Required-argument set for ``maybe_retry_after_policy`` in the probe tests."""
+    return {
+        "run_id": uuid.uuid4(),
+        "org_id": uuid.uuid4(),
+        "pipeline_retry_policy": {"on": ["timeout"], "max_retries": 2},
+        "final_status": "failed",
+        "error_code": "node_deadline_exceeded",
+        "error_detail": None,
+        "is_correction_run": False,
+        "graph_idempotent": True,
+        "graph_json": {"nodes": [{"id": "node-a", "mode": "script"}], "edges": []},
+        "model_backend_hub": None,
+        "connector_hub": None,
+        "broker": broker if broker is not None else MagicMock(),
+        "session_factory": MagicMock(),
+        "claim_token": "tok-claim-abc",
+        "fenced_pending_reset_fn": AsyncMock(return_value=1),
+        "cleanup_run_resources_fn": AsyncMock(),
+        "record_attempt_reset_fn": AsyncMock(),
+        "probe_script_lease_fn": probe_script_lease_fn,
+        "read_retry_attempt_state_fn": AsyncMock(return_value=(1, "tok-claim-abc", datetime.now(UTC))),
+        "graph_has_script_mode_fn": graph_has_script_mode_fn,
+        "node_timeouts": {"node-a": 3300}.values(),
+    }
+
+
+async def test_mayberetry_after_policy_probes_the_script_lease_before_requeue() -> None:
+    """A script-mode graph's retry is gated on the lease probe: the probe runs
+    with the run's identity BEFORE the re-dispatch seam is reached."""
+    from modulo.core.pipeline_engine.retry_policy import maybe_retry_after_policy
+
+    probe = AsyncMock(return_value=True)
+    redispatch = AsyncMock(side_effect=RunRetryPolicyError("failed", 2))
+    kwargs = _maybe_retry_kwargs(
+        probe_script_lease_fn=probe,
+        graph_has_script_mode_fn=lambda graph_json: True,
+    )
+
+    with (
+        patch("modulo.core.pipeline_engine.retry_policy._redispatch_after_policy", new=redispatch),
+        pytest.raises(RunRetryPolicyError),
+    ):
+        await maybe_retry_after_policy(**kwargs)
+
+    probe.assert_awaited_once_with(run_id=kwargs["run_id"], org_id=kwargs["org_id"])
+    redispatch.assert_awaited_once()
+
+
+async def test_mayberetry_after_policy_terminal_fails_when_the_script_probe_blocks() -> None:
+    """A blocked lease probe refuses the requeue and terminal-fails the run with
+    ``script.side_effect_unknown`` (never retried) so it cannot silently loop or
+    stay stuck in ``running``."""
+    from modulo.core.pipeline_engine.retry_policy import maybe_retry_after_policy
+
+    broker = MagicMock()
+    probe = AsyncMock(return_value=False)
+    redispatch = AsyncMock(side_effect=RunRetryPolicyError("failed", 2))
+    kwargs = _maybe_retry_kwargs(
+        broker=broker,
+        probe_script_lease_fn=probe,
+        graph_has_script_mode_fn=lambda graph_json: True,
+    )
+
+    with patch("modulo.core.pipeline_engine.retry_policy._redispatch_after_policy", new=redispatch):
+        decision = await maybe_retry_after_policy(**kwargs)
+
+    assert decision == "side_effect_unknown"
+    redispatch.assert_not_awaited()
+    channel, payload = broker.publish.call_args.args
+    assert channel == "run_failed"
+    assert payload["error"] == "script.side_effect_unknown"
+    assert "needs human review" in payload["detail"]
+
+
+async def test_mayberetry_after_policy_returns_none_when_the_budget_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive narrowing: ``retry_policy_applies`` returning True while the
+    computed budget or policy is None is a no-op, never a re-dispatch."""
+    from modulo.core.pipeline_engine import retry_policy as rp
+
+    monkeypatch.setattr(rp, "retry_policy_applies", lambda *args, **kwargs: True)
+
+    monkeypatch.setattr(rp, "retry_after_policy", lambda *args, **kwargs: None)
+    kwargs = _maybe_retry_kwargs(
+        probe_script_lease_fn=AsyncMock(return_value=True),
+        graph_has_script_mode_fn=lambda graph_json: False,
+    )
+    assert await rp.maybe_retry_after_policy(**kwargs) == "none"
+
+    monkeypatch.setattr(rp, "retry_after_policy", lambda *args, **kwargs: 1)
+    kwargs["pipeline_retry_policy"] = None
+    assert await rp.maybe_retry_after_policy(**kwargs) == "none"
+
+
+def test_attempt_elapsed_seconds_returns_none_for_a_non_datetime_start() -> None:
+    """A driver handing back a non-datetime must fail open (None), never raise —
+    the retry decision may not be why a run cannot terminalise."""
+    assert _attempt_elapsed_seconds("2026-10-20T12:00:00Z") is None

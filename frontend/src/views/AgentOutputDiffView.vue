@@ -9,74 +9,87 @@
           <div v-for="n in 3" :key="n" class="h-9 animate-pulse rounded-lg bg-muted" />
         </div>
       </div>
-      <div v-else class="flex flex-wrap items-end gap-4 rounded-lg border bg-card p-6">
-        <div class="flex flex-col gap-1.5">
-          <label for="agentoutputdiffview-field-run-a" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a') }}</label>
-          <div class="flex gap-2">
-            <Select
-  :aria-label="$t('views.AgentOutputDiffView.select_run_a')"
-  v-model="runIdA"
-  :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
-  data-testid="diff-recent-runs-a"
-  class="w-72"
-  :options="recentRunOptions"
-  option-label="label"
-  option-value="value"
->
-  <template #option="{ option }">
-    <span :data-value="option.value">{{ option.label }}</span>
-  </template>
-</Select>
-            <input :aria-label="$t('views.AgentOutputDiffView.paste_run_id')"
-              v-model="runIdA"
-              id="agentoutputdiffview-field-run-a"
-              data-testid="diff-run-id-a"
-              type="text"
-              :placeholder="$t('views.AgentOutputDiffView.paste_run_id')"
-              class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
+      <div v-else class="rounded-lg border bg-card p-6">
+        <div class="flex flex-col items-stretch gap-4 sm:flex-row sm:flex-wrap sm:items-end">
+          <div class="flex min-w-0 flex-1 flex-col gap-1.5">
+            <label for="agentoutputdiffview-field-run-a" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a') }}</label>
+            <div class="flex min-w-0 flex-col gap-2 sm:flex-row">
+              <Select
+                :aria-label="$t('views.AgentOutputDiffView.select_run_a')"
+                v-model="runIdA"
+                :placeholder="$t('views.AgentOutputDiffView.select_recent_run')"
+                :disabled="recentRuns.length === 0"
+                data-testid="diff-recent-runs-a"
+                class="w-full sm:w-52"
+                :options="recentRunOptions"
+                option-label="label"
+                option-value="value"
+              >
+                <template #option="{ option }">
+                  <span :data-value="option.value">{{ option.label }}</span>
+                </template>
+              </Select>
+              <input
+                :aria-label="$t('views.AgentOutputDiffView.paste_run_id')"
+                v-model="runIdA"
+                id="agentoutputdiffview-field-run-a"
+                data-testid="diff-run-id-a"
+                type="text"
+                :placeholder="$t('views.AgentOutputDiffView.paste_run_id')"
+                class="w-full min-w-0 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-48"
+              />
+            </div>
           </div>
-        </div>
-        <label for="agentoutputdiffview-field-1" class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.node_id') }}</span>
-          <input id="agentoutputdiffview-field-1"
-            v-model="nodeId"
-            data-testid="diff-node-id"
-            type="text"
-            :placeholder="$t('views.AgentOutputDiffView.node_id_placeholder')"
-            class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
-        </label>
-        <div class="flex flex-col gap-1.5">
-          <label for="agentoutputdiffview-field-run-b" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b') }}</label>
-          <div class="flex gap-2">
-            <Select
-  :aria-label="$t('views.AgentOutputDiffView.select_run_b')"
-  v-model="runIdB"
-  :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
-  data-testid="diff-recent-runs-b"
-  class="w-72"
-  :options="recentRunOptions"
-  option-label="label"
-  option-value="value"
->
-  <template #option="{ option }">
-    <span :data-value="option.value">{{ option.label }}</span>
-  </template>
-</Select>
-            <input :aria-label="$t('views.AgentOutputDiffView.paste_run_id')"
-              v-model="runIdB"
-              id="agentoutputdiffview-field-run-b"
-              data-testid="diff-run-id-b"
+          <label for="agentoutputdiffview-field-1" class="flex min-w-0 flex-1 flex-col gap-1.5">
+            <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.node_id') }}</span>
+            <input
+              id="agentoutputdiffview-field-1"
+              v-model="nodeId"
+              data-testid="diff-node-id"
               type="text"
-              :placeholder="$t('views.AgentOutputDiffView.paste_run_id')"
-              class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              :placeholder="$t('views.AgentOutputDiffView.node_id_placeholder')"
+              class="w-full min-w-0 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-48"
             />
+          </label>
+          <div class="flex min-w-0 flex-1 flex-col gap-1.5">
+            <label for="agentoutputdiffview-field-run-b" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b') }}</label>
+            <div class="flex min-w-0 flex-col gap-2 sm:flex-row">
+              <Select
+                :aria-label="$t('views.AgentOutputDiffView.select_run_b')"
+                v-model="runIdB"
+                :placeholder="$t('views.AgentOutputDiffView.select_recent_run')"
+                :disabled="recentRuns.length === 0"
+                data-testid="diff-recent-runs-b"
+                class="w-full sm:w-52"
+                :options="recentRunOptions"
+                option-label="label"
+                option-value="value"
+              >
+                <template #option="{ option }">
+                  <span :data-value="option.value">{{ option.label }}</span>
+                </template>
+              </Select>
+              <input
+                :aria-label="$t('views.AgentOutputDiffView.paste_run_id')"
+                v-model="runIdB"
+                id="agentoutputdiffview-field-run-b"
+                data-testid="diff-run-id-b"
+                type="text"
+                :placeholder="$t('views.AgentOutputDiffView.paste_run_id')"
+                class="w-full min-w-0 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-48"
+              />
+            </div>
           </div>
+          <Button :disabled="!canCompare || loading" :loading="loading" data-testid="diff-compare-btn" class="w-full px-5 py-2 sm:w-auto" @click="handleCompare">
+            {{ $t('views.AgentOutputDiffView.compare') }}
+          </Button>
         </div>
-        <Button :disabled="!canCompare || loading" :loading="loading" data-testid="diff-compare-btn" class="px-5 py-2" @click="handleCompare">
-          {{ $t('views.AgentOutputDiffView.compare') }}
-        </Button>
+        <div v-if="runsError" class="mt-4">
+          <ErrorAlert :message="runsErrorMessage" :on-retry="loadRuns" />
+        </div>
+        <p v-else-if="!loadingRuns && recentRuns.length === 0" aria-live="polite" class="mt-4 text-sm text-muted-foreground" data-testid="diff-recent-runs-empty">
+          {{ $t('views.AgentOutputDiffView.no_eligible_runs') }}
+        </p>
       </div>
 
       <div v-if="loading" class="rounded-lg border bg-card p-6" data-testid="diff-comparing">
@@ -198,14 +211,19 @@ interface RecentRun {
 }
 
 const { get: getUntyped } = useApi()
-const { loading: loadingRuns, data: summaryResp } = useDataFetch(
-  async () => ({ data: await getUntyped<{ recent_runs: RecentRun[] }>('/api/v1/admin/dashboard/summary') }),
+// `runsError` is the summary fetch's own failure channel: a failed fetch must
+// render a retryable error, never the "no recent runs" empty state.
+const { loading: loadingRuns, error: runsError, data: summaryResp, load: loadRuns } = useDataFetch(
+  async () => ({ data: await getUntyped<{ recent_runs: RecentRun[] }>('/api/v1/dashboard/summary') }),
   { immediate: true },
 )
 
 const recentRuns = computed<RecentRun[]>(() => summaryResp.value?.recent_runs ?? [])
 
 const { t } = useI18n()
+const runsErrorMessage = computed(() =>
+  `${t('views.AgentOutputDiffView.recent_runs_load_failed')} ${runsError.value}`,
+)
 const recentRunOptions = computed(() =>
   recentRuns.value.map(run => ({
     value: run.id,

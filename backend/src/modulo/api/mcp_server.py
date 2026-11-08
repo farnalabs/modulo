@@ -28,7 +28,7 @@ import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from datetime import date as _date
 from decimal import Decimal
 from typing import Any, NamedTuple, ParamSpec, cast
@@ -2391,7 +2391,10 @@ def _parse_iso8601_param(value: str | None, field: str) -> tuple[datetime | None
     if value is None:
         return None, None
     try:
-        return datetime.fromisoformat(value), None
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed, None
     except ValueError:
         return None, {
             "error": "validation_failed",
@@ -7643,6 +7646,92 @@ async def _resume_run_after_mcp_approval(
     return {"status": "approved", "review_id": review_id, "run_id": str(run_id)}
 
 
+def _mcp_resume_expected_claim_status(run: Any) -> str:
+    """Map a run's post-decision status to the executor's expected claim status.
+
+    ``hitl_parked`` is the pre-resume status the REST approve path expects;
+    every other status passes through unchanged. Extracted from
+    ``_review_hitl_impl`` to keep its cognitive complexity within S3776.
+    """
+    status = getattr(run, "status", "awaiting_human")
+    return "awaiting_human" if status == "hitl_parked" else status
+
+
+async def _resume_missing_claim_token_response(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    decision: dict[str, Any],
+) -> dict[str, Any]:
+    """Report an approval whose resume claim fence could not be established.
+
+    Extracted from ``_review_hitl_impl`` (FAR-2328) to keep that function's
+    cognitive complexity within the S3776 bound.
+    """
+    try:
+        recoverable = await _run_is_f6a_reconcile_candidate(
+            engine=get_or_create_engine(get_settings()),
+            org_id=org_id,
+            run_id=run_id,
+        )
+    except SQLAlchemyError:
+        recoverable = False
+        _log.exception(
+            "mcp.review_hitl.approve_resume_missing_claim_token_reconcile_check_failed",
+            extra={"run_id": str(run_id)},
+        )
+    _log.log(
+        logging.INFO if recoverable else logging.ERROR,
+        "mcp.review_hitl.approve_resume_missing_claim_token",
+        extra={"run_id": str(run_id), "reconcile_recoverable": recoverable},
+    )
+    recovery_detail = (
+        "The reconciliation sweep will retry the resume."
+        if recoverable
+        else ("Automatic recovery could not restore the run for reconciliation; operator intervention is required.")
+    )
+    return {
+        **decision,
+        "run_id": str(run_id),
+        "resume_status": "failed",
+        "reconcile_status": "queued" if recoverable else "failed",
+        "detail": ("Approval recorded, but the resume claim fence could not be established; " + recovery_detail),
+    }
+
+
+async def _resume_after_mcp_approval_decision(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    review_id: str,
+    resume_data: dict[str, Any],
+    run: Any,
+    decision: dict[str, Any],
+) -> dict[str, Any]:
+    """Resume a just-approved run inline (FAR-2328) after its decision commits.
+
+    Extracted from ``_review_hitl_impl`` to keep that function's cognitive
+    complexity within the S3776 bound. Callers MUST invoke this only after the
+    decision transaction has committed — ``executor.resume`` uses its own
+    connection and would otherwise read the pre-commit ``awaiting_human`` row.
+    """
+    resume_claim_token = getattr(run, "claim_token", None)
+    if not isinstance(resume_claim_token, str) or not resume_claim_token:
+        return await _resume_missing_claim_token_response(
+            org_id=org_id,
+            run_id=run_id,
+            decision=decision,
+        )
+    return await _resume_run_after_mcp_approval(
+        org_id=org_id,
+        run_id=run_id,
+        review_id=review_id,
+        resume_data=resume_data,
+        claim_token=resume_claim_token,
+        expected_claim_status=_mcp_resume_expected_claim_status(run),
+    )
+
+
 def _hitl_error_response(exc: BaseException, run_id: str, review_id: str) -> dict[str, Any]:
     if isinstance(exc, GateNotFoundError):
         return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
@@ -7773,53 +7862,13 @@ async def _review_hitl_impl(
     # ``approve_review`` gets by awaiting ``_run_hitl_manager`` (which owns its
     # own ``session.begin()``) before calling ``executor.resume``.
     if action == "approve" and decision.get("status") == "approved":
-        resume_claim_token = getattr(run, "claim_token", None)
-        if not isinstance(resume_claim_token, str) or not resume_claim_token:
-            try:
-                recoverable = await _run_is_f6a_reconcile_candidate(
-                    engine=get_or_create_engine(get_settings()),
-                    org_id=org_id,
-                    run_id=rid,
-                )
-            except SQLAlchemyError:
-                recoverable = False
-                _log.exception(
-                    "mcp.review_hitl.approve_resume_missing_claim_token_reconcile_check_failed",
-                    extra={"run_id": str(rid)},
-                )
-            _log.log(
-                logging.INFO if recoverable else logging.ERROR,
-                "mcp.review_hitl.approve_resume_missing_claim_token",
-                extra={"run_id": str(rid), "reconcile_recoverable": recoverable},
-            )
-            recovery_detail = (
-                "The reconciliation sweep will retry the resume."
-                if recoverable
-                else (
-                    "Automatic recovery could not restore the run for reconciliation; "
-                    "operator intervention is required."
-                )
-            )
-            return {
-                **decision,
-                "run_id": str(rid),
-                "resume_status": "failed",
-                "reconcile_status": "queued" if recoverable else "failed",
-                "detail": (
-                    "Approval recorded, but the resume claim fence could not be established; " + recovery_detail
-                ),
-            }
-        return await _resume_run_after_mcp_approval(
+        return await _resume_after_mcp_approval_decision(
             org_id=org_id,
             run_id=rid,
             review_id=review_id,
             resume_data=resume_payload,
-            claim_token=resume_claim_token,
-            expected_claim_status=(
-                "awaiting_human"
-                if getattr(run, "status", "awaiting_human") == "hitl_parked"
-                else getattr(run, "status", "awaiting_human")
-            ),
+            run=run,
+            decision=decision,
         )
     return decision
 
@@ -10996,10 +11045,33 @@ _SYSTEM_MAPS_HTTP_ERROR_CODES: dict[int, str] = {
 }
 
 
+_SYSTEM_MAPS_AI_ERROR_CODES = frozenset(
+    {"model_backend_unauthorised", "eval_definition_unauthorised", "eval_gate_failed"}
+)
+
+
 def _system_maps_http_error_payload(exc: StarletteHTTPException) -> dict[str, Any]:
-    """Render a System Maps route refusal as the MCP tool-error envelope."""
+    """Render a System Maps route refusal as the MCP tool-error envelope.
+
+    AI discovery uses a small, explicitly allow-listed structured-detail
+    vocabulary. Other System Maps errors retain the generic transport mapping;
+    in particular, arbitrary route detail dictionaries are never exposed.
+    """
     code = _SYSTEM_MAPS_HTTP_ERROR_CODES.get(exc.status_code, "server_error")
-    detail = exc.detail if isinstance(exc.detail, str) else _MSG_UNEXPECTED_ERROR
+    route_detail = exc.detail
+    if isinstance(route_detail, dict):
+        ai_detail: dict[str, Any] = route_detail
+        ai_code = ai_detail.get("code")
+        verdict = ai_detail.get("verdict")
+        if ai_code in _SYSTEM_MAPS_AI_ERROR_CODES:
+            payload: dict[str, Any] = {
+                "error": ai_code,
+                "detail": ai_detail.get("message", _MSG_UNEXPECTED_ERROR),
+            }
+            if ai_code == "eval_gate_failed" and verdict in {"fail", "error"}:
+                payload["verdict"] = verdict
+            return payload
+    detail = route_detail if isinstance(route_detail, str) else _MSG_UNEXPECTED_ERROR
     return _tool_error(detail, code=code)
 
 
@@ -11047,6 +11119,8 @@ async def _system_maps_discovery_session() -> AsyncGenerator[AsyncSession, None]
 async def discover_system_map(
     name: str = "Discovered System Map",
     description: str | None = None,
+    model_backend_id: uuid.UUID | None = None,
+    eval_definition_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Trigger System Maps discovery over MCP (FAR-2288).
 
@@ -11090,7 +11164,12 @@ async def discover_system_map(
         from modulo.api.schemas.system_maps import SystemMapDiscoveryRequest
 
         try:
-            discovery_request = SystemMapDiscoveryRequest(name=name, description=description)
+            discovery_request = SystemMapDiscoveryRequest(
+                name=name,
+                description=description,
+                model_backend_id=model_backend_id,
+                eval_definition_id=eval_definition_id,
+            )
         except _PydanticValidationError as exc:
             return {
                 "error": "validation_failed",
@@ -11238,6 +11317,7 @@ def _notification_delivery_filters(
     endpoint_uid: uuid.UUID | None,
     from_dt: datetime | None,
     to_dt: datetime | None,
+    date_to_is_bare: bool = False,
     cursor_dt: datetime | None = None,
 ) -> list[Any]:
     """Build the shared WHERE clauses for the delivery-list and count queries."""
@@ -11253,7 +11333,10 @@ def _notification_delivery_filters(
     if from_dt:
         clauses.append(NotificationDeliveryLog.created_at >= from_dt)
     if to_dt:
-        clauses.append(NotificationDeliveryLog.created_at <= to_dt)
+        if date_to_is_bare:
+            clauses.append(NotificationDeliveryLog.created_at < to_dt + timedelta(days=1))
+        else:
+            clauses.append(NotificationDeliveryLog.created_at <= to_dt)
     if cursor_dt:
         clauses.append(NotificationDeliveryLog.created_at < cursor_dt)
     return clauses
@@ -11319,6 +11402,7 @@ async def list_notification_deliveries(
         to_dt, to_err = _parse_iso8601_param(date_to, "date_to")
         if to_err:
             return to_err
+        date_to_is_bare = date_to is not None and len(date_to) == 10 and date_to[4] == "-" and date_to[7] == "-"
         cursor_dt, cursor_err = _parse_iso8601_param(cursor, "cursor")
         if cursor_err:
             return cursor_err
@@ -11355,6 +11439,7 @@ async def list_notification_deliveries(
                         endpoint_uid=endpoint_uid,
                         from_dt=from_dt,
                         to_dt=to_dt,
+                        date_to_is_bare=date_to_is_bare,
                         cursor_dt=cursor_dt,
                     ),
                 )
@@ -11372,6 +11457,7 @@ async def list_notification_deliveries(
                     endpoint_uid=endpoint_uid,
                     from_dt=from_dt,
                     to_dt=to_dt,
+                    date_to_is_bare=date_to_is_bare,
                 ),
             )
             total = (await s.execute(count_query)).scalar() or 0

@@ -24,11 +24,15 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from modulo.core.eval_engine import EvalDefinition, EvalType
+from modulo.core.eval_engine.discovery_eval import DISCOVERY_EVAL_FUNCTION, normalise_discovery_output
 from modulo.core.eval_engine.execute_suite_run import (
     EVAL_WATCH_EVENT_FAMILIES,
     SuiteRunEmptyDatasetError,
     SuiteRunExecutionError,
     _case_results,
+    _case_results_async,
+    _discovery_result_json,
     _suite_run_transition,
     build_suite_run,
     build_suite_run_tuple,
@@ -40,6 +44,7 @@ from modulo.core.eval_engine.execute_suite_run import (
     suite_run_daily_spend_used_for_trigger,
 )
 from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
+from modulo.core.system_maps_discovery import DiscoverySource, discover_draft
 from modulo.db.models import Base
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.eval import Eval
@@ -139,6 +144,78 @@ async def seed_cases(
 # --------------------------------------------------------------------------- #
 # Runner end-to-end                                                           #
 # --------------------------------------------------------------------------- #
+async def test_execute_suite_run_executes_discovery_adapter_not_input_echo(session) -> None:
+    org = await _org()
+    suite, dataset, _, backend = await seed_suite(session, org)
+    sources = [
+        {"kind": "pipeline", "identifier": "p1", "name": "Build"},
+        {"kind": "trigger", "identifier": "t1", "name": "Push", "pipeline_id": "p1"},
+    ]
+    expected = normalise_discovery_output(discover_draft([DiscoverySource(**source) for source in sources]))
+    for existing_definition in (await session.execute(select(Eval).where(Eval.eval_suite_id == suite.id))).scalars():
+        await session.delete(existing_definition)
+    await session.flush()
+    discovery_def = Eval(
+        organisation_id=org,
+        pipeline_id=uuid.uuid4(),
+        name="system-map-discovery",
+        eval_type="custom_function",
+        config_json={"function": DISCOVERY_EVAL_FUNCTION},
+        eval_suite_id=suite.id,
+        account_id=org,
+    )
+    session.add(discovery_def)
+    await session.flush()
+    await seed_cases(session, org, dataset, [{"sources": sources}])
+
+    case = (await session.execute(select(EvalCase).where(EvalCase.dataset_id == dataset.id))).scalar_one()
+    case.expected_output = expected
+    run = await build_suite_run(
+        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
+    )
+
+    stats = await execute_suite_run(session, run)
+    await session.flush()
+
+    assert stats["state"] == SuiteRunState.COMPLETED.value
+    rows = list((await session.execute(select(EvalResult).where(EvalResult.suite_run_id == run.id))).scalars())
+    discovery_row = next(row for row in rows if row.eval_id == discovery_def.id)
+    assert discovery_row.passed is True
+    assert discovery_row.judge_result_json["actual"] == expected
+    assert discovery_row.judge_result_json["provenance"]["evaluator_version"]
+    assert discovery_row.judge_result_json["actual"] != {"sources": sources}
+
+
+async def test_non_custom_definition_with_discovery_function_uses_declared_evaluator(session, monkeypatch) -> None:
+    org = await _org()
+    suite, dataset, definitions, backend = await seed_suite(session, org)
+    definitions[0].config_json = {
+        "pattern": "^billing$",
+        "field": "output.category",
+        "function": DISCOVERY_EVAL_FUNCTION,
+    }
+    await seed_cases(session, org, dataset, [{"category": "billing"}])
+
+    def _unexpected_discovery(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("discovery adapter must not handle non-custom definitions")
+
+    monkeypatch.setattr(
+        "modulo.core.eval_engine.execute_suite_run.evaluate_discovery_case",
+        _unexpected_discovery,
+    )
+
+    run = await build_suite_run(
+        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
+    )
+    stats = await execute_suite_run(session, run)
+
+    assert stats["state"] == SuiteRunState.COMPLETED.value
+    result = (await session.execute(select(EvalResult).where(EvalResult.suite_run_id == run.id))).scalar_one()
+    assert result.eval_id == definitions[0].id
+    assert result.passed is True
+    assert result.judge_result_json is None
+
+
 async def test_execute_suite_run_completes_and_persists_results(session) -> None:
     org = await _org()
     suite, dataset, _, backend = await seed_suite(session, org)
@@ -951,3 +1028,99 @@ async def test_judging_budget_exhaustion_terminalises_honestly(session) -> None:
     assert len(rows) == 1
     assert rows[0].outcome == "error"
     assert rows[0].error_code == "judge.timeout"
+
+
+# --------------------------------------------------------------------------- #
+# Discovery adapter outcome branches                                          #
+# --------------------------------------------------------------------------- #
+def _discovery_definition() -> EvalDefinition:
+    return EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        pipeline_id=uuid.uuid4(),
+        name="system-map-discovery",
+        eval_type=EvalType.CUSTOM_FUNCTION,
+        config={"function": DISCOVERY_EVAL_FUNCTION},
+    )
+
+
+def _discovery_case(input_payload: Any, expected_output: Any) -> Any:
+    return SimpleNamespace(id=uuid.uuid4(), input_payload=input_payload, expected_output=expected_output)
+
+
+def _expectation_for(sources: list[dict[str, Any]]) -> dict[str, Any]:
+    return normalise_discovery_output(discover_draft([DiscoverySource(**source) for source in sources]))
+
+
+def test_discovery_case_error_produces_error_outcome() -> None:
+    definition = _discovery_definition()
+    case = _discovery_case({"sources": []}, None)
+
+    results, errored = _case_results(
+        SimpleNamespace(id=uuid.uuid4(), organisation_id=uuid.uuid4()),
+        case,
+        [definition],
+        SimpleNamespace(),
+        None,
+        None,
+        eval_definition_version=1,
+    )
+
+    assert errored == 1
+    row = results[0]
+    assert row.outcome == "error"
+    assert row.passed is False
+    assert row.score is None
+    assert row.error_code == JudgeErrorCode.JUDGE_CONFIGURATION.value
+    assert row.judge_result_json["error"] is True
+
+
+def test_discovery_case_mismatch_produces_fail_outcome() -> None:
+    sources = [{"kind": "pipeline", "identifier": "p1", "name": "Build"}]
+    expected = _expectation_for(sources)
+    expected["nodes"][0]["display_name"] = "Wrong"
+    definition = _discovery_definition()
+    case = _discovery_case({"sources": sources}, expected)
+
+    results, errored = _case_results(
+        SimpleNamespace(id=uuid.uuid4(), organisation_id=uuid.uuid4()),
+        case,
+        [definition],
+        SimpleNamespace(),
+        None,
+        None,
+        eval_definition_version=1,
+    )
+
+    assert errored == 0
+    row = results[0]
+    assert row.outcome == "fail"
+    assert row.passed is False
+    assert row.score == 0.0
+    assert row.error_code is None
+    assert row.judge_result_json["passed"] is False
+
+
+def test_discovery_result_json_ignores_non_string_detail() -> None:
+    assert _discovery_result_json(SimpleNamespace(detail=None)) is None
+    assert _discovery_result_json(SimpleNamespace(detail={"provenance": {}})) is None
+
+
+async def test_async_case_results_runs_discovery_adapter() -> None:
+    sources = [{"kind": "pipeline", "identifier": "p1", "name": "Build"}]
+    definition = _discovery_definition()
+    case = _discovery_case({"sources": sources}, _expectation_for(sources))
+
+    results, errored = await _case_results_async(
+        SimpleNamespace(id=uuid.uuid4(), organisation_id=uuid.uuid4()),
+        case,
+        [definition],
+        SimpleNamespace(),
+        None,
+        None,
+        eval_definition_version=1,
+    )
+
+    assert errored == 0
+    assert results[0].outcome == "pass"
+    assert results[0].judge_result_json["passed"] is True

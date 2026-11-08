@@ -65,7 +65,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 `-diff-rollback` hang off this surface), and execution semantics are pinned by
 `core/pipeline_engine` and the pipelines BDD/unit suites.
 
-## Behaviours
+## Behaviors
 
 - [x] Pipeline creation supports minimal, LLM-node, manual-node and run_context-default
       configs; duplicate names are refused (409) (`create.feature`)
@@ -73,7 +73,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       (`crud.feature`, `test_pipeline_copy_errors.py`, `test_pipeline_patch_updated_at.py`)
 - [x] Folder security model (ADR 038): `PipelineFolder` is org-scoped only – no
       `owner_team_id`, no `visibility`, no security cascade. Pipeline ownership
-      is explicit on the pipeline; folders are a UI organisation concept. Any
+      is explicit on the pipeline; folders are a UI organization concept. Any
       future proposal for folder-level security must address ADR 038's rationale
       for rejecting folders-as-security.
 - [x] Node types – standard agent, manual (pauses the run to `awaiting_human` and
@@ -179,7 +179,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   (and `feat-pipelines-pipeline-diff-rollback`) – this entry covers authoring,
   management, validation and the graph layer, not the run-detail surfaces.
 - **`run_context.feature` / `run_variants.feature`** live under the pipelines BDD
-  directory but describe run-time behaviour and are registered for execution – by
+  directory but describe run-time behavior and are registered for execution – by
   `steps/test_run_context.py` and `steps/test_pipelines.py` respectively – so they are
   not re-listed here to keep the run surfaces owned by `feat-runs` / `feat-variants`.
 - **No BDD for authoring the graph through a real create/edit endpoint** – the graph
@@ -197,7 +197,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   routing, the wait/`dispatch.wait_timeout` semantics and the per-provider
   run-id round-trip contract shipped with NO product-map coverage in either
   layer (the PR itself only registered a `run-detail-dispatched` testid). Added
-  the behaviour line to the manifest `feat-pipelines` registry and this tracker,
+  the behavior line to the manifest `feat-pipelines` registry and this tracker,
   citing the graph-validator capability gate, the node_runner dispatch/wait
   helpers, and the connector capability contract; the run-side
   `execution_origin` provenance half is tracked under `feat-runs`, and the
@@ -206,7 +206,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 - 2026-10-07: **Improve Architecture product-map walk** – closed the untracked
   `feat-pipelines` sub-surface for FAR-1530 (per-pipeline Paused execution state),
   which shipped in PR #1367 but was described by neither product-map layer (the same
-  walk's FAR-1528 entry covered only archived/soft-deleted). Added the behaviour line
+  walk's FAR-1528 entry covered only archived/soft-deleted). Added the behavior line
   to the manifest `feat-pipelines` registry and this tracker, citing the pause/resume
   routes, the unified `run_enabled` / `run_disabled_reason` / `run_disabled_at` columns
   (migration 0286), the archive→Paused taxonomy, the create_run state gate, and the
@@ -222,7 +222,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   the absence of a pipeline-level batch recovery endpoint is kept as a deferral.
 - 2026-09-23: **product-map review pass** – resolved the last four
   `@awaiting-implementation` BDD gaps tracked under the pipelines directory.
-  All of them were stale placeholder drafts whose behaviour is already shipped
+  All of them were stale placeholder drafts whose behavior is already shipped
   and covered by the executing `feat-triggers` suite plus unit coverage, so the
   duplicates were archived rather than re-wired:
   - `pipelines/webhook_trigger.feature` (deleted) – the five HMAC webhook
@@ -343,7 +343,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   `pipeline_config_validation.feature` – their steps are awaiting a dedicated
   graph-validation create/edit surface.
 - 2026-09-08: **product-map review pass** – added the FAR-664
-  sandbox save-time validation behaviour to the graph layer: `agent_commands`
+  sandbox save-time validation behavior to the graph layer: `agent_commands`
   list items terminated by a heredoc terminator are rejected at save time
   (`SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM`) while a scalar `agent_command` is
   unaffected (`graph_validator/__init__.py`
@@ -361,8 +361,8 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   the restart node from the failure point. The three checkpoint/resume scenarios now
   collect and pass; the graph/config-validation BDD gap remains for
   `validation.feature` / `pipeline_config_validation.feature`.
-- 2026-08-27: **product-map review pass** – added this behaviour-tracker
+- 2026-08-27: **product-map review pass** – added this behavior-tracker
   for the registered manifest feature `feat-pipelines`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/pipelines.py`,
+  `docs/product-map/` entry. Behaviors verified against `api/routes/pipelines.py`,
   `core/pipeline_engine` and the pipelines/graph-validator BDD+unit suites.
   Status: covered.

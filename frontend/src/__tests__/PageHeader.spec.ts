@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { parse as parseCss } from 'postcss'
 import PageHeader from '../components/shared/PageHeader.vue'
 
 const RIGHT_SLOT_FILTERS = '<span data-testid="right-slot-content">Filters</span>'
@@ -90,6 +93,23 @@ describe('PageHeader', () => {
   it('renders no right-slot container when no #right slot is provided', () => {
     const wrapper = mountPageHeader({ title: 'Runs' })
     expect(wrapper.findAll('header > div')).toHaveLength(1)
+  })
+
+  it('applies the shared display typography contract to the header', () => {
+    const stylesheet = readFileSync(resolve(__dirname, '../style.css'), 'utf8')
+    const root = parseCss(stylesheet)
+    const typographyRule = root.nodes.find(
+      (node) => node.type === 'rule' && node.selector.includes('.page-header--display'),
+    )
+    const fontFamily = typographyRule?.type === 'rule'
+      ? typographyRule.nodes.find((node) => node.type === 'decl' && node.prop === 'font-family')
+      : undefined
+    expect(fontFamily?.type === 'decl' ? fontFamily.value : undefined).toBe("'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif")
+
+    const wrapper = mountPageHeader({ title: 'Runs' })
+    const header = wrapper.get('header')
+    expect(header.classes()).toContain('page-header--display')
+    expect(header.attributes('style')).toBeUndefined()
   })
 
   it('stacks title and actions vertically on mobile and rows them at sm+ (FAR-627)', () => {
