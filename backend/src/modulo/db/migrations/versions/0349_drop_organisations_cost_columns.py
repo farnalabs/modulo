@@ -81,6 +81,7 @@ depends_on: str | Sequence[str] | None = None
 
 _TABLE = "organisations"
 _COST_STATE_TABLE = "organisation_cost_state"
+_MIGRATE_ROLE = "modulo_migrate"
 
 #: The three retired per-org cost columns, in the order 0145 added them.
 _COST_COLUMNS: tuple[str, ...] = (
@@ -133,6 +134,13 @@ _RESTORE_SQL = (
     "WHERE s.org_id = o.id"
 )
 
+# The restore is deliberately cross-organisation: it is migration DML, not an
+# application operation.  ``modulo_migrate`` is the only role allowed to make
+# that exception, and SET LOCAL keeps the elevation transaction-scoped.
+_GRANT_RESTORE_SQL = "GRANT SELECT, UPDATE ON TABLE public.organisations TO " + _MIGRATE_ROLE
+_SET_LOCAL_ROLE_SQL = "SET LOCAL ROLE " + _MIGRATE_ROLE
+_RESET_ROLE_SQL = "RESET ROLE"
+
 _DDL_LOCK_TIMEOUT = "30s"
 _DDL_RETRIES = 3
 _DDL_RETRY_SLEEP_SECONDS = 1.0
@@ -177,10 +185,39 @@ def _ddl_with_retry(bind: Connection, sql: str, *, description: str) -> None:
             time.sleep(_DDL_RETRY_SLEEP_SECONDS)
 
 
+def _role_exists(bind: Connection, role: str) -> bool:
+    return (
+        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
+        is not None
+    )
+
+
 def _cost_state_table_exists(bind: Connection) -> bool:
     return (
         bind.execute(sa.text("SELECT to_regclass('public.organisation_cost_state')")).scalar_one_or_none() is not None
     )
+
+
+def _restore_postgres(bind: Connection) -> int:
+    """Restore every organisation while preserving the migration transaction.
+
+    ``organisation_cost_state`` is FORCE-RLS and the restore is intentionally
+    cross-organisation.  When the dedicated migration role exists, perform the
+    DML under its transaction-local BYPASSRLS role; never rely on a caller's
+    tenant setting or leave the elevated role active after the statement.
+    """
+    if not _role_exists(bind, _MIGRATE_ROLE):
+        raise RuntimeError(
+            "FAR-1902 downgrade cannot restore organisations cost columns: "
+            "the dedicated modulo_migrate role does not exist"
+        )
+
+    bind.execute(sa.text(_GRANT_RESTORE_SQL))
+    bind.execute(sa.text(_SET_LOCAL_ROLE_SQL))
+    try:
+        return int(bind.execute(sa.text(_RESTORE_SQL)).rowcount or 0)
+    finally:
+        bind.execute(sa.text(_RESET_ROLE_SQL))
 
 
 def _sqlite_check_constraints(bind: Connection, table: str) -> set[str]:
@@ -298,7 +335,7 @@ def downgrade() -> None:
         description="ADD COLUMN organisations.org_cumulative_spend_cents",
     )
 
-    restored = bind.execute(sa.text(_RESTORE_SQL)).rowcount or 0
+    restored = _restore_postgres(bind)
     _log.info(
         "FAR-1902 downgrade: restored %d organisation(s)' cost columns from organisation_cost_state",
         restored,

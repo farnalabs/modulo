@@ -328,6 +328,18 @@ class TestUpgrade:
 
 
 class TestDowngrade:
+    async def test_migration_role_is_bypassrls_for_cross_org_restore(self, upgraded_db_url: str) -> None:
+        engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(text("SELECT rolbypassrls FROM pg_roles WHERE rolname = 'modulo_migrate'"))
+                ).one_or_none()
+            assert row is not None, "0349 requires the dedicated modulo_migrate role for its cross-org restore"
+            assert row[0] is True, "modulo_migrate must bypass RLS for the cross-org downgrade restore"
+        finally:
+            await engine.dispose()
+
     async def test_columns_are_restored_from_organisation_cost_state(self, upgraded_db_url: str) -> None:
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
         try:
