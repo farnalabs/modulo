@@ -5590,26 +5590,59 @@ const viewRawEdges = ref<any[]>([])
 const viewFlowNodes = ref<any[]>([])
 const viewFlowEdges = ref<any[]>([])
 
+const HISTORIC_SECRET_FIELDS = [
+  'env_vars',
+  'context_files',
+  'composite_parameter_values',
+  'parameter_overrides',
+] as const
+
+function stripHistoricNodeSecrets(node: any): any {
+  if (!node || typeof node !== 'object') return node
+  const stripped = { ...node }
+  for (const field of HISTORIC_SECRET_FIELDS) delete stripped[field]
+  if (stripped.data && typeof stripped.data === 'object') {
+    stripped.data = { ...stripped.data }
+    for (const field of HISTORIC_SECRET_FIELDS) delete stripped.data[field]
+  }
+  return stripped
+}
+
+function stripHistoricEdgeSecrets(edge: any): any {
+  if (!edge || typeof edge !== 'object') return edge
+  const stripped = { ...edge }
+  for (const field of HISTORIC_SECRET_FIELDS) delete stripped[field]
+  if (stripped.data && typeof stripped.data === 'object') {
+    stripped.data = { ...stripped.data }
+    for (const field of HISTORIC_SECRET_FIELDS) delete stripped.data[field]
+  }
+  return stripped
+}
+
 /** VueFlow's v-model: the frozen snapshot graph while viewing, live otherwise. */
 const displayNodes = computed<any[]>({
-  get: () => (isViewing.value ? viewFlowNodes.value : flowNodes.value),
+  get: () => (isViewing.value ? viewFlowNodes.value.map(stripHistoricNodeSecrets) : flowNodes.value),
   set: (value: any[]) => {
-    if (isViewing.value) viewFlowNodes.value = value
+    if (isViewing.value) viewFlowNodes.value = value.map(stripHistoricNodeSecrets)
     else flowNodes.value = value
   },
 })
 
 const displayEdges = computed<any[]>({
-  get: () => (isViewing.value ? viewFlowEdges.value : flowEdges.value),
+  get: () => (isViewing.value ? viewFlowEdges.value.map(stripHistoricEdgeSecrets) : flowEdges.value),
   set: (value: any[]) => {
-    if (isViewing.value) viewFlowEdges.value = value
+    if (isViewing.value) viewFlowEdges.value = value.map(stripHistoricEdgeSecrets)
     else flowEdges.value = value
   },
 })
 
 /** What the inspector reads: the graph the canvas is showing. */
-const inspectSourceNodes = computed(() => (isViewing.value ? viewRawNodes.value : rawNodes.value))
-const inspectSourceEdges = computed(() => (isViewing.value ? viewRawEdges.value : rawEdges.value))
+const inspectSourceNodes = computed(() =>
+  isViewing.value ? viewRawNodes.value.map(stripHistoricNodeSecrets) : rawNodes.value,
+)
+const inspectSourceEdges = computed(() =>
+  isViewing.value ? viewRawEdges.value.map(stripHistoricEdgeSecrets) : rawEdges.value,
+)
 
 const isViewing = computed(
   () =>
