@@ -114,4 +114,20 @@ describe('PipelineVersionChip', () => {
     expect(wrapper.find('[data-testid="pipeline-editor-version-chip-popover"]').exists()).toBe(true)
     wrapper.unmount()
   })
+
+  it('emits open-timeline when the Open in timeline button is clicked', async () => {
+    const wrapper = mountChip()
+    await wrapper.find('[data-testid="pipeline-editor-version-chip"]').trigger('click')
+    await nextTick()
+
+    const openTimelineBtn = wrapper.find('[data-testid="pipeline-editor-version-chip-open-timeline"]')
+    expect(openTimelineBtn.exists()).toBe(true)
+
+    await openTimelineBtn.trigger('click')
+    await nextTick()
+
+    expect(wrapper.emitted('open-timeline')).toBeTruthy()
+    expect(wrapper.emitted('open-timeline')).toHaveLength(1)
+    wrapper.unmount()
+  })
 })
