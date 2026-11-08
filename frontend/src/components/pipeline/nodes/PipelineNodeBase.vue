@@ -1,8 +1,8 @@
 <template>
   <div
     :class="[
-      'relative min-w-[160px] max-w-[280px] rounded-lg px-4 py-2.5 shadow-sm transition-shadow hover:shadow-md',
-      'font-brand-mono text-[11px] font-medium lowercase tracking-wide',
+      'relative rounded-lg px-4 py-2 shadow-sm transition-shadow hover:shadow-md',
+      theme.radius,
       theme.border,
       theme.bg,
       selected ? 'ring-2 ring-primary' : '',
@@ -10,14 +10,14 @@
     :data-testid="testId"
   >
     <div class="flex items-center justify-between gap-2">
-      <div class="flex items-center gap-1.5 min-w-0">
-        <span :class="theme.labelColour">{{ glyph }}</span>
+      <div :class="['flex items-center gap-1.5 min-w-0 font-brand-mono text-[11px] font-medium lowercase tracking-wide', theme.labelColour]">
+        <slot name="glyph"><span>{{ glyph }}</span></slot>
         <slot name="extra-badges" />
       </div>
       <slot name="actions" />
     </div>
     <div
-      class="mt-1 text-sm font-semibold text-foreground truncate"
+      class="text-sm font-semibold text-foreground truncate"
       :title="description || undefined"
     >
       {{ label || fallbackLabel }}
@@ -56,6 +56,8 @@ interface Props {
 
 const props = defineProps<Props>()
 defineSlots<{
+  /** Override the default kind glyph (e.g. a shape icon plus its label). */
+  glyph: (props: Record<string, never>) => unknown
   /** Additional badges to show next to the glyph. */
   'extra-badges': (props: Record<string, never>) => unknown
   /** Additional actions (e.g. expand button for composites). */

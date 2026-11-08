@@ -43,6 +43,8 @@ export interface NodeTheme {
   bg: string
   /** Badge/label text colour Tailwind classes (e.g. 'text-warning-text'). */
   labelColour: string
+  /** Optional extra corner-radius classes (e.g. 'rounded-r-3xl'). */
+  radius?: string
 }
 
 /** Registry entry for a single node type. */
@@ -105,6 +107,7 @@ export const NODE_REGISTRY: Readonly<Record<NodeTypeId, NodeRegistryEntry>> = {
       border: 'border-2 border-dashed border-indigo-500/60',
       bg: 'bg-indigo-500/10',
       labelColour: 'text-indigo-600 dark:text-indigo-300',
+      radius: 'rounded-r-3xl',
     },
     hasConfigPanel: false,
   },
