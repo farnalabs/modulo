@@ -172,6 +172,27 @@ class TestBuildInferPrompt:
         assert "rarely-used fields" in messages[0].content.lower()
         assert "exclude" in messages[0].content.lower()
 
+    def test_system_prompt_instructs_type_detection_from_values(self) -> None:
+        """The product map claims inference "detects field types" — that detection
+        is LLM-guided, so the draft-quality guard is the prompt instruction to
+        infer types from the sampled values rather than to echo field names."""
+        system = _build_infer_prompt([{"id": 1, "status": "open"}])[0].content.lower()
+        assert "infer types from actual values" in system
+
+    def test_issue_tracker_guidance_requests_enum_suggestions(self) -> None:
+        """The product map claims inference "suggests enums for constrained fields";
+        the constrained-field rule lives in the issue-tracker connector guidance."""
+        system = _build_infer_prompt([{"status": "open"}], connector_type="jira")[0].content.lower()
+        assert "enum constraints" in system
+        assert "where values repeat" in system
+
+    def test_optional_field_rule_is_in_the_system_prompt(self) -> None:
+        """A field present in only some records must be non-required, which is a
+        prompt rule (the LLM builds the draft), not route-level logic."""
+        system = _build_infer_prompt([{"a": 1}])[0].content.lower()
+        assert "some but not all" in system
+        assert "not required" in system
+
 
 class TestFlagRareFields:
     def test_no_fields_when_all_common(self) -> None:
@@ -221,6 +242,47 @@ class TestFlagRareFields:
             flag_rare_fields([{"a": 1}], threshold=-0.1)
         with pytest.raises(ValueError, match="threshold"):
             flag_rare_fields([{"a": 1}], threshold="0.1")
+
+
+class TestSupportedInferenceTypes:
+    """The route-level connector admission allowlist must not drift from the
+    connector-type category map it is derived from (single source of truth)."""
+
+    def test_supported_types_derive_from_the_category_map(self) -> None:
+        from modulo.core.schema_registry.inference import (
+            _CONNECTOR_TYPE_CATEGORY,
+            SUPPORTED_INFERENCE_TYPES,
+        )
+
+        assert (
+            frozenset(connector_type.value for connector_type in _CONNECTOR_TYPE_CATEGORY) == SUPPORTED_INFERENCE_TYPES
+        )
+
+    def test_non_sampled_connector_types_are_not_admitted(self) -> None:
+        from modulo.connectors.base import ConnectorType
+        from modulo.core.schema_registry.inference import SUPPORTED_INFERENCE_TYPES
+
+        # Abstract markers and non-record connectors have no sampleable resource,
+        # so the route must reject them (400) rather than run inference on nothing.
+        for unsupported in (
+            ConnectorType.FILESYSTEM,
+            ConnectorType.TICKET_TRACKER,
+            ConnectorType.CI_RUNNER,
+            ConnectorType.CUSTOM,
+        ):
+            assert unsupported.value not in SUPPORTED_INFERENCE_TYPES
+
+    def test_every_admitted_type_has_concrete_guidance(self) -> None:
+        from modulo.core.schema_registry.inference import (
+            _CONNECTOR_CATEGORY_GUIDANCE,
+            SUPPORTED_INFERENCE_TYPES,
+            connector_category,
+        )
+
+        for connector_type in SUPPORTED_INFERENCE_TYPES:
+            category = connector_category(connector_type)
+            assert category != "generic", connector_type
+            assert category in _CONNECTOR_CATEGORY_GUIDANCE
 
 
 class TestParseSchemaFromResponse:

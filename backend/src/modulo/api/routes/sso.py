@@ -17,7 +17,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import FormData
 
-from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
+from modulo.api.constants import MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     get_db_session,
@@ -156,6 +156,65 @@ def _redirect_to_frontend(tokens: dict[str, str], settings: Settings) -> Redirec
 # SSO callback error, SsoProvisioningDeniedError) so there is ONE definition;
 # the redirect target itself is built in the handler
 # (``modulo.api.exception_handlers.sso_error_redirect``).
+
+
+# ---------------------------------------------------------------------------
+# SSO login-INITIATION failure -> frontend login page (FAR-1794)
+# ---------------------------------------------------------------------------
+# The login page links to these routes directly (``<a href="/api/v1/auth/…/login">``
+# in ``LoginView.vue`` / ``OrgLoginView.vue``), so the browser NAVIGATES here and
+# a failure used to surface as a raw JSON page — exactly the defect FAR-1791
+# fixed on the callback half of the surface. The initiation routes therefore use
+# the SAME mechanism: RAISE :class:`SsoCallbackError` (a whitelisted code, never
+# exception text) and let the registered handler render the 303 to
+# ``/login?sso_error=<code>``.
+#
+# ADR-036 anti-enumeration is preserved, not weakened: ``_resolve_saml_for_route``
+# keeps raising its uniform 404 for an unknown / disabled / non-SAML slug, and
+# every one of those states (and a provider that exists but is misconfigured)
+# now maps to the SAME generic ``auth_failed`` code with the SAME redirect
+# target — a prober can no longer distinguish them by status code OR by the
+# error text that ``detail=str(exc)`` used to echo. A DB fault is the only
+# distinct code (``provider_unavailable``), and it is a per-request state, not a
+# per-slug one.
+#
+# ``oidc_login`` and ``_saml_login_redirect`` are shared by both SAML initiation
+# routes (per-provider and legacy), so the mapping lives in one place per leg.
+
+
+async def _resolve_saml_provider_for_browser(
+    provider_id: str,
+    system_session: AsyncSession | None,
+    app_session: AsyncSession,
+) -> SsoProvider:
+    """Resolve a SAML provider for a browser-navigated route, mapping failures.
+
+    Shared by the per-provider login and the per-provider ACS (FAR-1794 /
+    FAR-1791). ``_resolve_saml_for_route`` raises the uniform
+    ``_SAML_NOT_FOUND`` for unknown / disabled / non-SAML slugs (ADR 036); the
+    browser-facing routes must not render that as JSON, so the SAME uniform
+    failure maps to the SAME ``auth_failed`` redirect, and a DB fault maps to
+    ``provider_unavailable`` exactly as it already did on the ACS.
+    """
+    try:
+        return await _resolve_saml_for_route(provider_id, system_session, app_session)
+    except HTTPException as exc:
+        # The uniform 404 (or anything else HTTP-shaped) is as opaque as the
+        # redirect code: nothing about the slug's existence is disclosed.
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
+    except ProgrammingError as exc:
+        _log.warning("SAML provider resolution failed — DB table missing: %s", exc, exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    except SQLAlchemyError as exc:
+        # Specific arms stay ahead of their bases: ``ProgrammingError`` above is
+        # a ``SQLAlchemyError``, and a session-contract violation is delegated to
+        # the shared classifier (500) exactly as the process-response arm does.
+        raise_session_contract_error(exc, "sso.saml_provider_resolution")
+        _log.warning("SAML provider resolution DB error: %s", exc, exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    except Exception as exc:
+        _log.exception("sso.saml_provider_resolution.unexpected_error")
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
 
 
 async def _resolve_org_slug_for_error(session: AsyncSession, org_id: uuid.UUID | None) -> str | None:
@@ -565,7 +624,26 @@ async def oidc_login(
                 provider, settings, redirect_uri, system_session, session
             )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
+        # Unknown provider, missing client config or a discovery-fetch failure —
+        # all are the SAME generic auth failure to the browser.
+        _log.warning(
+            "OIDC login rejected for provider %s: %s",
+            sanitise_log_value(provider),
+            sanitise_log_value(exc),
+        )
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
+    except ProgrammingError as exc:
+        _log.warning("OIDC login failed — DB table missing: %s", exc, exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "sso.oidc_login")
+        _log.warning("OIDC login DB error: %s", exc, exc_info=True)
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("sso.oidc_login.unexpected_error")
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
 
     response = Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
     # FAR-1982: carry the nonce + PKCE verifier to the callback in a
@@ -699,12 +777,19 @@ async def _saml_login_redirect(
     relay_state: str | None = None,
     unexpected_error_tag: str,
 ) -> Response:
-    """Generate the IdP redirect for a SAML login, mapping DB errors to HTTP errors.
+    """Generate the IdP redirect for a SAML login.
 
     Shared by the legacy single-tenant ``/saml/login`` route and the
-    per-provider ``/saml/{provider_id}/login`` route so the error-mapping
-    contract (`ValueError` -> 400, missing table -> 501, DB error -> 503,
-    unexpected -> 500) stays identical in both call sites.
+    per-provider ``/saml/{provider_id}/login`` route so the browser-facing
+    error contract stays identical in both call sites.
+
+    FAR-1794: the login page links here directly, so a failure must RAISE
+    :class:`SsoCallbackError` (rendered as the 303 login redirect by
+    ``sso_callback_error_handler``) rather than a raw JSON page. ``ValueError``
+    (SAML disabled / no metadata / no resolvable provider) maps to the SAME
+    generic ``auth_failed`` code for every case, so no exception text and no
+    provider existence signal reaches the browser (ADR-036); a DB fault maps to
+    ``provider_unavailable`` on both SAML initiation routes and the ACS.
 
     When ``relay_state`` is given (a signed HMAC token), it is embedded in
     the IdP redirect URL as the RelayState parameter — defense-in-depth
@@ -721,28 +806,20 @@ async def _saml_login_redirect(
                 relay_state=relay_state,
             )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
+        _log.warning("SAML login failed: %s", sanitise_log_value(exc))
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
     except ProgrammingError as exc:
         _log.warning("SAML login failed — DB table missing: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "sso._saml_login_redirect")
         _log.warning("SAML login DB error: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
     except HTTPException:
         raise
     except Exception as e:
         _log.exception(unexpected_error_tag)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
+        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from e
 
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
@@ -815,37 +892,14 @@ async def saml_acs_provider(
     signal, not the control.
     """
     bind_audit_org(request, SYSTEM_ORG_ID)
-    try:
-        provider = await _resolve_saml_for_route(provider_id, system_session, session)
-    except HTTPException as exc:
-        # FAR-1791: the ACS is browser-facing, so an unknown / disabled /
-        # non-SAML slug must redirect to the login page rather than render the
-        # uniform JSON 404 the non-ACS routes keep. The 303 is exactly as
-        # opaque as the 404 (ADR 036): all three cases raise the SAME uniform
-        # ``_SAML_NOT_FOUND`` above and map to the SAME code here, so nothing
-        # new is disclosed.
-        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED) from exc
-    except ProgrammingError as exc:
-        # FAR-1791: a DB fault during provider resolution is the same outage
-        # the process-response arms below already map to ``provider_unavailable``
-        # — the browser must get the 303, not ``handle_db_errors``' raw 501 JSON.
-        _log.warning("SAML ACS provider resolution failed — DB table missing: %s", exc, exc_info=True)
-        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
-    except SQLAlchemyError as exc:
-        # Specific arms stay ahead of their bases: ``ProgrammingError`` above is
-        # a ``SQLAlchemyError``, and a session-contract violation is delegated to
-        # the shared classifier (500) exactly as the process-response arm does.
-        raise_session_contract_error(exc, "sso.saml_acs_provider_resolution")
-        _log.warning("SAML ACS provider resolution DB error: %s", exc, exc_info=True)
-        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
-    except Exception as exc:
-        # FAR-1791: an UNEXPECTED (non-HTTP, non-DB) fault resolving the provider
-        # must reach the browser as the same login-page 303 the process-response
-        # arms give, never ``handle_db_errors``' raw JSON 500 — the resolution
-        # path's contract is uniform with ``_run_sso_callback_process``'s
-        # catch-all. Logged (not swallowed), so the real cause stays visible.
-        _log.exception("sso.saml_acs_provider_resolution.unexpected_error")
-        raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
+    # FAR-1791 / FAR-1794: the ACS is browser-facing, so an unknown / disabled /
+    # non-SAML slug redirects to the login page rather than rendering the
+    # uniform JSON 404 the non-ACS routes keep. The 303 is exactly as opaque as
+    # the 404 (ADR 036): all three cases raise the SAME uniform
+    # ``_SAML_NOT_FOUND`` and map to the SAME code in the shared resolver, so
+    # nothing new is disclosed. DB faults map to ``provider_unavailable``, the
+    # same outage contract the per-provider login route now shares.
+    provider = await _resolve_saml_provider_for_browser(provider_id, system_session, session)
     # FAR-1516: the provider names its org — record the ACS attempt there (an
     # unknown slug redirects above and keeps the sentinel).
     bind_audit_org(request, provider.organisation_id)
@@ -955,7 +1009,13 @@ async def saml_login_provider(
     and a timestamp. This is defense-in-depth: routing is by the ACS URL
     path, and RelayState absence must NOT fail (IdP-initiated SSO).
     """
-    await _resolve_saml_for_route(provider_id, system_session, session)
+    # FAR-1794: resolution failures redirect the BROWSER back to the login page
+    # with a whitelisted code (303), never a raw JSON page; an unknown /
+    # disabled / non-SAML slug stays indistinguishable (ADR-036) because the
+    # uniform ``_SAML_NOT_FOUND`` maps to the same generic ``auth_failed``
+    # redirect. (Kept as a comment, not a docstring: a route docstring is
+    # emitted verbatim into the published OpenAPI contract.)
+    await _resolve_saml_provider_for_browser(provider_id, system_session, session)
 
     public_url = get_public_url(settings).rstrip("/")
     acs_url = f"{public_url}/api/v1/auth/saml/acs/{provider_id}"
@@ -991,6 +1051,10 @@ async def saml_login(
     system_session: AsyncSession = Depends(get_system_db_session),
 ) -> Any:
     """Redirect the user to the SAML IdP for authentication."""
+    # FAR-1794: a failure redirects the BROWSER back to the login page with a
+    # whitelisted code (303), never a raw JSON page — same contract as the
+    # per-provider route and the ACS. (Kept as a comment: route docstrings are
+    # published verbatim in the OpenAPI contract.)
     public_url = get_public_url(settings).rstrip("/")
     acs_url = f"{public_url}/api/v1/auth/saml/acs"
 

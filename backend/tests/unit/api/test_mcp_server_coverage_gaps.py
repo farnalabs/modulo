@@ -2101,12 +2101,26 @@ class TestSnapshotLockBusyIsRetryable(_AuthContext):
         connector.visibility = "org"
         connector.owner_team_id = None
         connector.connector_type_id = "github"
+        # FAR-1395: an empty allowlist is UNRESTRICTED; these tests are about the
+        # snapshot-lock arms, not the operation-scope gate.
+        connector.allowed_operations = []
 
         node_id = uuid.uuid4()
         pipeline = MagicMock()
         pipeline.owner_team_id = None
         pipeline.graph_nodes_json = [
-            {"id": str(node_id), "node_type": "connector", "position": {"x": 0, "y": 0}, "label": "n"}
+            {
+                "id": str(node_id),
+                "node_type": "connector",
+                "position": {"x": 0, "y": 0},
+                "label": "n",
+                "connector_binding": {
+                    "type": "github",
+                    "instance_id": str(uuid.uuid4()),
+                    "operation": "query",
+                    "resource": "pull",
+                },
+            }
         ]
         session = _mock_session()
         session.execute.return_value = _make_execute_result(scalar_one_or_none=pipeline)
@@ -2163,6 +2177,9 @@ class TestBindConnectorEditSnapshot(_AuthContext):
         connector.visibility = "org"
         connector.owner_team_id = None
         connector.connector_type_id = "github"
+        # FAR-1395: an empty allowlist is UNRESTRICTED; these tests are about the
+        # snapshot-lock arms, not the operation-scope gate.
+        connector.allowed_operations = []
         session = _mock_session()
         session.execute.return_value = _make_execute_result(scalar_one_or_none=pipeline)
         with (
@@ -2202,6 +2219,7 @@ class TestBindConnectorEditSnapshot(_AuthContext):
                     "type": "github",
                     "instance_id": str(connector_instance_id),
                     "operation": "query",
+                    "resource": "pull",
                 },
             }
         ]
@@ -2218,7 +2236,18 @@ class TestBindConnectorEditSnapshot(_AuthContext):
         pipeline = MagicMock()
         pipeline.owner_team_id = None
         pipeline.graph_nodes_json = [
-            {"id": str(node_id), "node_type": "connector", "position": {"x": 0, "y": 0}, "label": "n"}
+            {
+                "id": str(node_id),
+                "node_type": "connector",
+                "position": {"x": 0, "y": 0},
+                "label": "n",
+                "connector_binding": {
+                    "type": "github",
+                    "instance_id": str(uuid.uuid4()),
+                    "operation": "query",
+                    "resource": "pull",
+                },
+            }
         ]
 
         result, snap_mock = await self._bind(pipeline, uuid.uuid4(), None)

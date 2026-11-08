@@ -1,0 +1,17 @@
+{
+  "name": "modulo",
+  "owner": {
+    "name": "Farna Labs",
+    "url": "https://github.com/farnalabs/modulo"
+  },
+  "metadata": {
+    "description": "Claude Code skills for installing, connecting to, and operating self-hosted Modulo instances."
+  },
+  "plugins": [
+    {
+      "name": "modulo",
+      "source": "./plugins/modulo",
+      "description": "Agent-native setup and safe operation of self-hosted Modulo."
+    }
+  ]
+}

@@ -31,82 +31,68 @@ class TestRedisSlidingWindowRateLimiter:
         ids=["empty", "single", "at-limit", "over-limit"],
     )
     async def test_allows_up_to_max_requests_then_blocks(self, sliding_redis, zcard_value, expected):
-        sliding_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, zcard_value, True))
+        sliding_redis.eval = AsyncMock(return_value=(int(expected), 0))
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         assert await limiter.check("test-key", max_requests=5) is expected
 
     async def test_uses_correct_redis_key(self, sliding_redis):
         limiter = RedisSlidingWindowRateLimiter(sliding_redis, prefix="rl:")
+        sliding_redis.eval = AsyncMock(return_value=(1, 0))
         await limiter.check("mykey", max_requests=10, window_s=30)
-        pipe = sliding_redis.pipeline.return_value
-        call_args = pipe.zadd.call_args
-        assert call_args is not None
-        redis_key = call_args[0][0]
-        assert redis_key == "rl:mykey"
-        pipe.zremrangebyscore.assert_called_once()
-        assert pipe.zremrangebyscore.call_args[0][0] == "rl:mykey"
-        pipe.zcard.assert_called_once()
-        assert pipe.zcard.call_args[0][0] == "rl:mykey"
-        pipe.expire.assert_called_once()
-        assert pipe.expire.call_args[0][0] == "rl:mykey"
+        args = sliding_redis.eval.await_args.args
+        assert args[2] == "rl:mykey"
+        assert args[4] == 30
+        assert args[1] == 1
 
     async def test_pipeline_created_transactional(self, sliding_redis):
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5)
-        sliding_redis.pipeline.assert_called_once_with(transaction=True)
+        sliding_redis.eval.assert_awaited_once()
 
     async def test_prunes_entries_older_than_window(self, sliding_redis, frozen_time):
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5, window_s=120)
-        pipe = sliding_redis.pipeline.return_value
-        pipe.zremrangebyscore.assert_called_once()
-        _, lower_bound, cutoff = pipe.zremrangebyscore.call_args[0]
-        assert lower_bound == 0
-        assert cutoff == frozen_time - 120
+        args = sliding_redis.eval.await_args.args
+        assert args[4] == 120
 
     async def test_uses_default_window(self, sliding_redis, frozen_time):
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5)
-        pipe = sliding_redis.pipeline.return_value
-        _, _, cutoff = pipe.zremrangebyscore.call_args[0]
-        assert cutoff == frozen_time - WINDOW_SECONDS
+        args = sliding_redis.eval.await_args.args
+        assert args[4] == WINDOW_SECONDS
 
     @pytest.mark.parametrize("window_s", [120, WINDOW_SECONDS], ids=["explicit-window", "default-window"])
     async def test_expires_key_at_double_window(self, sliding_redis, window_s):
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5, window_s=window_s)
-        pipe = sliding_redis.pipeline.return_value
-        pipe.expire.assert_called_once()
-        assert pipe.expire.call_args[0][0] == "ratelimit:k"
-        assert pipe.expire.call_args[0][1] == window_s * 2
+        args = sliding_redis.eval.await_args.args
+        assert args[2] == "ratelimit:k"
+        assert args[4] == window_s
 
     async def test_records_timestamp_member(self, sliding_redis, frozen_time):
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5)
-        pipe = sliding_redis.pipeline.return_value
-        pipe.zadd.assert_called_once()
-        _, member = pipe.zadd.call_args[0]
-        ((ts, score),) = member.items()
-        assert score == frozen_time
-        ts_str, sep, suffix = ts.partition(":")
+        args = sliding_redis.eval.await_args.args
+        assert args[2] == "ratelimit:k"
+        assert args[3] == frozen_time
+        ts_str, sep, suffix = args[6].partition(":")
         assert sep == ":"
-        assert ts_str == str(score)
+        assert ts_str == str(args[3])
         assert len(suffix) == 32
 
     async def test_blocks_every_request_when_max_requests_zero(self, sliding_redis):
         """max_requests=0 must block: the current request is recorded before the check."""
-        sliding_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, 1, True))
+        sliding_redis.eval = AsyncMock(return_value=(0, 60))
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         assert await limiter.check("k", max_requests=0) is False
 
     async def test_window_zero_sets_cutoff_to_now(self, sliding_redis, frozen_time):
         """window_s=0 prunes everything strictly before now but still allows the current request."""
-        sliding_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, 1, True))
+        sliding_redis.eval = AsyncMock(return_value=(1, 0))
         limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         assert await limiter.check("k", max_requests=1, window_s=0) is True
-        pipe = sliding_redis.pipeline.return_value
-        _, _, cutoff = pipe.zremrangebyscore.call_args[0]
-        assert cutoff == frozen_time
+        args = sliding_redis.eval.await_args.args
+        assert args[4] == 0
 
 
 class TestRateLimitRule:
@@ -140,16 +126,16 @@ class TestRateLimiterRegistry:
     )
     async def test_registry_allows_or_blocks_based_on_count(self, redis_result, expected):
         sliding_redis = MagicMock()
-        sliding_redis.pipeline.return_value.execute = AsyncMock(return_value=redis_result)
+        sliding_redis.eval = AsyncMock(return_value=(int(expected), 0))
         registry = RateLimiterRegistry(redis_client=sliding_redis)
         assert await registry.check("k", max_requests=5) is expected
 
     async def test_registry_forwards_window(self, sliding_redis, frozen_time):
         registry = RateLimiterRegistry(redis_client=sliding_redis)
+        sliding_redis.eval = AsyncMock(return_value=(1, 0))
         await registry.check("k", max_requests=5, window_s=90)
-        pipe = sliding_redis.pipeline.return_value
-        _, _, cutoff = pipe.zremrangebyscore.call_args[0]
-        assert cutoff == frozen_time - 90
+        args = sliding_redis.eval.await_args.args
+        assert args[4] == 90
 
     def test_requires_redis_client(self):
         with pytest.raises(ValueError, match="requires a Redis client"):

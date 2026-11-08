@@ -1040,7 +1040,7 @@ async def test_mcp_graph_writer_syncs_agent_rows_before_the_graph_write() -> Non
 
     with (
         patch.object(ms, "_session", _fake_session),
-        patch.object(ms, "_reject_unsupported_dispatch_bindings", new=AsyncMock(return_value=None)),
+        patch.object(ms, "_reject_invalid_connector_bindings", new=AsyncMock(return_value=None)),
         patch.object(ms, "_team_scoped_key_mismatch", return_value=False),
         patch.object(ms, "merge_masked_graph_nodes", new=lambda incoming, _stored: incoming),
         patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()),

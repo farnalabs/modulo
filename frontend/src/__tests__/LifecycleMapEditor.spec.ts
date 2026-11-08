@@ -847,3 +847,73 @@ describe('LifecycleMapEditor interactions', () => {
     expect((wrapper.vm as unknown as { saving: boolean }).saving).toBe(false)
   })
 })
+
+describe('LifecycleMapEditor typed state fallbacks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('returns empty defaults from the selection computeds when nothing is selected', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    expect((wrapper.vm as unknown as { selectedNodeData: unknown }).selectedNodeData).toEqual({
+      name: '', description: '', stage_type: 'placeholder', pipeline_id: null, external_url: null, owner: null, graduated: false,
+    })
+    expect((wrapper.vm as unknown as { selectedEdgeData: unknown }).selectedEdgeData).toEqual({
+      trigger_type: 'pipeline_completed', description: '', condition_expression: null, estimated_frequency: null, trigger_link: null,
+    })
+  })
+
+  it('falls back to defaults when a selected node or edge has no data payload', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    ;(wrapper.vm as unknown as { onNodeClick: (e: { node: unknown }) => void }).onNodeClick({ node: { id: 'stage-x' } })
+    const nodeData = (wrapper.vm as unknown as { selectedNodeData: Record<string, unknown> }).selectedNodeData
+    expect(nodeData.name).toBe('')
+    expect(nodeData.stage_type).toBe('placeholder')
+    expect(nodeData.graduated).toBe(false)
+
+    ;(wrapper.vm as unknown as { onEdgeClick: (e: { edge: unknown }) => void }).onEdgeClick({ edge: { id: 'edge-x' } })
+    const edgeData = (wrapper.vm as unknown as { selectedEdgeData: Record<string, unknown> }).selectedEdgeData
+    expect(edgeData.trigger_type).toBe('pipeline_completed')
+    expect(edgeData.description).toBe('')
+  })
+
+  it('serialises a stage node with no data payload using defaults', async () => {
+    putMock.mockResolvedValueOnce({ id: 'ver-1' })
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    ;(wrapper.vm as unknown as { flowNodes: unknown[] }).flowNodes = [
+      { id: 'stage-x', position: { x: 1, y: 2 } },
+      { id: 'stage-y', data: { name: 'Stage Y' } },
+    ]
+    await (wrapper.vm as unknown as { handleSave: () => Promise<void> }).handleSave()
+
+    expect(putMock).toHaveBeenCalledOnce()
+    const payload = putMock.mock.calls[0][1] as { stages: Array<Record<string, unknown>> }
+    expect(payload.stages[0]).toMatchObject({
+      id: 'stage-x', name: '', description: '', stage_type: 'placeholder', graduated: false,
+    })
+    expect(payload.stages[1]).toMatchObject({
+      id: 'stage-y', name: 'Stage Y', stage_type: 'placeholder', graduated: false,
+    })
+  })
+
+  it('graduates a node with no data payload using defaults', async () => {
+    putMock.mockResolvedValueOnce({ id: 'ver-1' })
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    ;(wrapper.vm as unknown as { flowNodes: unknown[] }).flowNodes = [{ id: 'stage-x' }]
+    await (wrapper.vm as unknown as { onGraduateConfirm: (stageId: string, pipelineId: string) => Promise<void> }).onGraduateConfirm('stage-x', 'pipe-1')
+
+    const node = (wrapper.vm as unknown as { flowNodes: Array<{ id: string; data: Record<string, unknown> }> }).flowNodes.find((n) => n.id === 'stage-x')
+    expect(node!.data).toMatchObject({
+      name: '', description: '', stage_type: 'modulo', pipeline_id: 'pipe-1', graduated: true,
+    })
+    expect(putMock).toHaveBeenCalledOnce()
+  })
+})

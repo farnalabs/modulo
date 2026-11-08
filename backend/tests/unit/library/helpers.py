@@ -98,6 +98,25 @@ def assert_step_matches(
     )
 
 
+def assert_step_ids(workflow: dict[str, Any], cases: list[tuple[str, dict[str, Any]]]) -> None:
+    """Pin the ordered step ids of *workflow* to the ids named in *cases*."""
+    actual_ids = [step["id"] for step in workflow["pipeline_steps"]]
+    expected_ids = [step_id for step_id, _ in cases]
+    assert actual_ids == expected_ids, f"unexpected step ids {actual_ids!r}"
+
+
+def assert_step_case_matches(workflow: dict[str, Any], case: tuple[str, dict[str, Any]]) -> None:
+    """Pin one ``(step_id, expected)`` entry from a workflow's step table."""
+    step_id, expected = case
+    assert_step_matches(
+        workflow,
+        step_id,
+        agent=expected["agent"],
+        depends_on=expected["depends_on"],
+        connector_binding=expected["connector_binding"],
+    )
+
+
 def _string_value(prop_schema: dict[str, Any]) -> str:
     """Pick a string that satisfies *prop_schema*, honoring ``pattern``.
 

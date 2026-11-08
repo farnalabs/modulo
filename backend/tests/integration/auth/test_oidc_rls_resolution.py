@@ -391,11 +391,18 @@ async def test_per_provider_oidc_login_resolves_cross_org_and_redirects_to_idp(
 
 
 @pytest.mark.asyncio
-async def test_per_provider_oidc_login_unknown_slug_is_400_not_500(
+async def test_per_provider_oidc_login_unknown_slug_redirects_to_login_not_500(
     multi_org_client: AsyncClient,
 ) -> None:
-    """An unknown OIDC slug fails CLOSED on the login route with a 400 (the
-    TypeError→ValueError mapping surfaces "not configured"), never the
-    RuntimeError→500 the FAR-1058 class produced."""
+    """An unknown OIDC slug fails CLOSED on the login route and FAR-1794 sends
+    the BROWSER to the login page (303 + generic ``auth_failed``) — never the
+    RuntimeError→500 the FAR-1058 class produced, and never a raw JSON page.
+
+    The redirect target carries no slug and no exception text, so the uniform
+    failure stays as opaque as the ADR-036 404 it replaces on this surface.
+    """
     resp = await multi_org_client.get(f"/api/v1/auth/oidc/no-such-{uuid.uuid4().hex[:8]}/login", follow_redirects=False)
-    assert resp.status_code == 400, resp.text
+    assert resp.status_code == 303, resp.text
+    location = resp.headers["location"]
+    assert location.endswith("/login?sso_error=auth_failed")
+    assert "no-such-" not in location

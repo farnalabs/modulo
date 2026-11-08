@@ -273,35 +273,28 @@ def extract_stored_output_json(
     telemetry_json: Any,
     node_id: str,
 ) -> dict[str, Any] | None:
-    """The agent's output_json for a node from the STORED run columns
-    (legacy-safe). P1 (split) rows carry the pure return — for sandbox_agent
-    that IS output_json; legacy rows bury it at ``artifacts[0].output.output_json``.
+    """Return the stored node return when it is an output mapping.
+
+    The stored value is already the producer's pure return. Its keys are
+    arbitrary contract data; telemetry is read separately and is never inferred
+    from the return's shape.
     """
     from modulo.core.node_output_split import node_return
 
     value = node_return(outputs_json, telemetry_json, node_id)
     if not isinstance(value, dict):
         return None
-    artifacts = value.get("artifacts")
-    if isinstance(artifacts, list) and artifacts and isinstance(artifacts[0], dict):
-        inner = artifacts[0].get("output")
-        if isinstance(inner, dict):
-            output_json = inner.get("output_json")
-            if isinstance(output_json, dict):
-                return cast(_DICT_STR_ANY, output_json)
-    if "artifacts" not in value and "output" not in value:
-        return value
-    return None
+    return cast(_DICT_STR_ANY, value)
 
 
 # --- no-op gate input -------------------------------------------------------
 
 
 def _inner_declared_success(inner: Any) -> bool:
-    """§7.2.3 gate on the INNER output dict (the split telemetry / legacy
-    inner output): the agent status is present AND completed, and the outcome
-    is explicitly ``success``. Missing status (legacy/unknown) never qualifies
-    — where the flag can't fire anyway, saving cost (§13.3).
+    """§7.2.3 gate on a stored telemetry dict.
+
+    A node qualifies only when its declared outcome is explicitly ``success``.
+    Missing status never qualifies and therefore never fires a no-op flag.
     """
     if not isinstance(inner, dict):
         return False
@@ -320,17 +313,9 @@ def node_declared_success(node_output: Any) -> bool:
 
 
 def _declared_success_nodes(outputs_json: Any, telemetry_json: Any) -> list[str]:
-    """Node ids whose STORED output declares success — the reconciliation
-    sweep's eligibility scan (legacy-safe via node_output_split.node_telemetry).
-    """
-    from modulo.core.node_output_split import node_telemetry
-
-    node_ids: set[str] = set()
-    if isinstance(outputs_json, dict):
-        node_ids.update(str(k) for k in outputs_json)
-    if isinstance(telemetry_json, dict):
-        node_ids.update(str(k) for k in telemetry_json)
-    return [nid for nid in node_ids if _inner_declared_success(node_telemetry(telemetry_json, outputs_json, nid))]
+    """Return node ids whose stored telemetry explicitly declares success."""
+    node_ids = {str(k) for k in telemetry_json} if isinstance(telemetry_json, dict) else set()
+    return [nid for nid in node_ids if _inner_declared_success(telemetry_json[nid])]
 
 
 # --- work_intact (terminalization, NOT the async probe) ---------------------

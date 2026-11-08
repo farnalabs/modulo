@@ -110,7 +110,7 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
 - [x] Latency tracked per check
 - [x] Fly.io deployment wiring – `fly.toml` `[[http_service.checks]]` probes `/healthz/ready`
 - [x] Worker process-group health check via top-level `[checks]` (ADR 021)
-- [ ] External uptime monitoring is GONE – `.github/workflows/uptime-monitor.yml`
+- [x] External uptime monitoring is GONE – `.github/workflows/uptime-monitor.yml`
       (the 10-minute off-platform probe of `app.modulo.run/healthz/ready` that failed
       and opened a Linear ticket on outage or on a degraded sub-check, FAR-400 /
       FAR-1156) has been removed in favor of dogfooding the product's own alerting:
@@ -229,6 +229,12 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
   liveness/readiness.
 
 ## QA History
+
+- 2026-11-08: **Improve Architecture product-map walk** – verified that the former
+  external uptime workflow is absent from `.github/workflows/` and that its replacement
+  in-app alerting and out-of-process Gatus coverage are documented and checked above.
+  Marked the removal behavior covered; the separate total-outage alerting limitation
+  remains explicitly tracked under Known Gaps.
 
 - 2026-10-07: **Improve Architecture product-map walk** – reconciled this tracker
   with the FAR-1571 fix (PR #1381), which shipped after the uptime-monitor removal
