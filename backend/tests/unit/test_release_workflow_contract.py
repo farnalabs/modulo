@@ -1,6 +1,8 @@
 """Contract checks for the unified GitHub Release publication paths."""
 
 import importlib.util
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -134,6 +136,46 @@ def test_image_digest_verification_fails_closed_for_missing_provenance() -> None
 
     with pytest.raises(validator.ReleaseValidationError, match="does not contain resolved digest"):
         validator.verify_image_digest("ghcr.io/farnalabs/modulo:v1.2.3", digest, {})
+
+
+def test_image_digest_cli_accepts_attestation_json_and_rejects_missing_digest(
+    tmp_path: Path,
+) -> None:
+    digest = "sha256:" + "a" * 64
+    attestation_path = tmp_path / "attestation.json"
+    attestation_path.write_text(
+        '{"verificationResult":{"subject":[{"digest":{"sha256":"' + "a" * 64 + '"}}]}}',
+        encoding="utf-8",
+    )
+    script = REPO_ROOT / "scripts" / "validate_release_tag.py"
+    command = [
+        sys.executable,
+        str(script),
+        "verify-image-digest",
+        "--image",
+        "ghcr.io/farnalabs/modulo:v1.2.3",
+        "--digest",
+        digest,
+        "--attestation-json",
+        str(attestation_path),
+    ]
+
+    success = subprocess.run(  # noqa: S603 - fixed CLI under test
+        command, capture_output=True, text=True, check=False, timeout=30
+    )
+    assert success.returncode == 0
+    assert success.stdout.strip() == digest
+    assert not success.stderr
+
+    missing = subprocess.run(  # noqa: S603 - fixed CLI under test
+        [*command[:-1], str(tmp_path / "missing.json")],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert missing.returncode == 1
+    assert "cannot read GitHub API JSON" in missing.stderr
 
 
 def test_rc_validation_uses_predecessor_bundle_image_tag_before_promotion() -> None:

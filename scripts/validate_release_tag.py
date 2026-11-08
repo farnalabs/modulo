@@ -150,17 +150,19 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        payload = _load_json(args.release_json)
-        if args.command == "validate":
-            print(validate_published_release(args.tag, payload))
-        elif args.command == "published-tags":
-            print("\n".join(published_tags(payload)))
-        elif args.command == "resolve-n-minus-1":
-            predecessor = resolve_n_minus_1(payload, args.current)
-            if predecessor is not None:
-                print(predecessor)
-        else:
+        if args.command == "verify-image-digest":
+            payload = _load_json(args.attestation_json)
             print(verify_image_digest(args.image, args.digest, payload))
+        else:
+            payload = _load_json(args.release_json)
+            if args.command == "validate":
+                print(validate_published_release(args.tag, payload))
+            elif args.command == "published-tags":
+                print("\n".join(published_tags(payload)))
+            else:
+                predecessor = resolve_n_minus_1(payload, args.current)
+                if predecessor is not None:
+                    print(predecessor)
         return 0
     except ReleaseValidationError as exc:
         print(f"release validation failed: {exc}", file=sys.stderr)
