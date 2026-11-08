@@ -45,93 +45,138 @@ function isPlainObject(value: unknown): value is Record<string, any> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-const badges = computed<SemanticBadge[]>(() => {
-  const node = props.node
-  const result: SemanticBadge[] = []
-  const binding = isPlainObject(node?.connector_binding) ? node.connector_binding : null
+function connectorBadges(
+  binding: Record<string, any> | null,
+  connectors: Array<Record<string, any>> | undefined,
+): SemanticBadge[] {
+  if (!binding || !nonEmptyString(binding.instance_id)) {
+    return []
+  }
 
-  const connector = props.connectors?.find((item) => item.id === binding?.instance_id)
-  const allowedOperations = Array.isArray(connector?.allowed_operations)
-    ? connector.allowed_operations.filter(nonEmptyString)
-    : []
-
-  if (binding && nonEmptyString(binding.instance_id)) {
-    result.push({
+  const result: SemanticBadge[] = [
+    {
       kind: 'connector',
       label: t('views.PipelineEditorView.semantic_badge_connector'),
       detail: nonEmptyString(binding.type) ? binding.type : undefined,
       testId: 'pipeline-node-semantic-connector',
-    })
+    },
+  ]
 
-    if (allowedOperations.length > 0) {
-      result.push({
-        kind: 'operation',
-        label: t('views.PipelineEditorView.semantic_badge_allowed_operations'),
-        detail: allowedOperations.join(', '),
-        testId: 'pipeline-node-semantic-allowed-operations',
-      })
-    }
+  const connector = connectors?.find((item) => item.id === binding.instance_id)
+  const allowedOperations = Array.isArray(connector?.allowed_operations)
+    ? connector.allowed_operations.filter(nonEmptyString)
+    : []
 
-    if (nonEmptyString(binding.operation) && binding.operation !== 'dispatch') {
-      result.push({
-        kind: 'operation',
-        label: t('views.PipelineEditorView.semantic_badge_operation'),
-        detail: binding.operation,
-        testId: 'pipeline-node-semantic-operation',
-      })
-    }
-  }
-
-  if (node?.node_type === 'dispatch' && binding) {
-    const parts = [binding.resource, binding.dispatch_action]
-      .filter(nonEmptyString)
-      .join(' · ')
-    if (parts.length > 0) {
-      result.push({
-        kind: 'dispatch',
-        label: t('views.PipelineEditorView.semantic_badge_dispatch'),
-        detail: parts,
-        testId: 'pipeline-node-semantic-dispatch',
-      })
-    }
-  }
-
-  if (node?.node_type === 'router' && isPlainObject(node.router_config)) {
-    const rules = node.router_config.rules
-    if (Array.isArray(rules) && rules.length > 0) {
-      result.push({
-        kind: 'router',
-        label: t('views.PipelineEditorView.semantic_badge_router'),
-        detail: t('views.PipelineEditorView.semantic_badge_rule_count', { count: rules.length }, rules.length),
-        testId: 'pipeline-node-semantic-router',
-      })
-    }
-  }
-
-  const hitlConfig = node?.node_type === 'hitl' && isPlainObject(node.hitl_config)
-    ? node.hitl_config
-    : null
-
-  if (hitlConfig) {
+  if (allowedOperations.length > 0) {
     result.push({
+      kind: 'operation',
+      label: t('views.PipelineEditorView.semantic_badge_allowed_operations'),
+      detail: allowedOperations.join(', '),
+      testId: 'pipeline-node-semantic-allowed-operations',
+    })
+  }
+
+  if (nonEmptyString(binding.operation) && binding.operation !== 'dispatch') {
+    result.push({
+      kind: 'operation',
+      label: t('views.PipelineEditorView.semantic_badge_operation'),
+      detail: binding.operation,
+      testId: 'pipeline-node-semantic-operation',
+    })
+  }
+
+  return result
+}
+
+function dispatchBadges(
+  nodeType: string | undefined,
+  binding: Record<string, any> | null,
+): SemanticBadge[] {
+  if (nodeType !== 'dispatch' || !binding) {
+    return []
+  }
+
+  const parts = [binding.resource, binding.dispatch_action]
+    .filter(nonEmptyString)
+    .join(' · ')
+  if (parts.length === 0) {
+    return []
+  }
+
+  return [
+    {
+      kind: 'dispatch',
+      label: t('views.PipelineEditorView.semantic_badge_dispatch'),
+      detail: parts,
+      testId: 'pipeline-node-semantic-dispatch',
+    },
+  ]
+}
+
+function routerBadges(
+  nodeType: string | undefined,
+  routerConfig: unknown,
+): SemanticBadge[] {
+  if (nodeType !== 'router' || !isPlainObject(routerConfig)) {
+    return []
+  }
+
+  const rules = routerConfig.rules
+  if (!Array.isArray(rules) || rules.length === 0) {
+    return []
+  }
+
+  return [
+    {
+      kind: 'router',
+      label: t('views.PipelineEditorView.semantic_badge_router'),
+      detail: t('views.PipelineEditorView.semantic_badge_rule_count', { count: rules.length }, rules.length),
+      testId: 'pipeline-node-semantic-router',
+    },
+  ]
+}
+
+function hitlBadges(
+  nodeType: string | undefined,
+  hitlConfigInput: unknown,
+): SemanticBadge[] {
+  if (nodeType !== 'hitl' || !isPlainObject(hitlConfigInput)) {
+    return []
+  }
+
+  const hitlConfig = hitlConfigInput
+  const result: SemanticBadge[] = [
+    {
       kind: 'hitl',
       label: t('views.PipelineEditorView.semantic_badge_hitl'),
       detail: nonEmptyString(hitlConfig.label) ? hitlConfig.label : undefined,
       testId: 'pipeline-node-semantic-hitl',
-    })
+    },
+  ]
 
-    const evalCondition = isPlainObject(hitlConfig.eval_condition) ? hitlConfig.eval_condition : null
-    if (evalCondition && nonEmptyString(evalCondition.eval_name)) {
-      result.push({
-        kind: 'eval',
-        label: t('views.PipelineEditorView.semantic_badge_eval'),
-        detail: evalCondition.eval_name,
-        testId: 'pipeline-node-semantic-eval',
-      })
-    }
+  const evalCondition = isPlainObject(hitlConfig.eval_condition) ? hitlConfig.eval_condition : null
+  if (evalCondition && nonEmptyString(evalCondition.eval_name)) {
+    result.push({
+      kind: 'eval',
+      label: t('views.PipelineEditorView.semantic_badge_eval'),
+      detail: evalCondition.eval_name,
+      testId: 'pipeline-node-semantic-eval',
+    })
   }
 
   return result
+}
+
+const badges = computed<SemanticBadge[]>(() => {
+  const node = props.node
+  const binding = isPlainObject(node?.connector_binding) ? node.connector_binding : null
+
+  return [
+    ...connectorBadges(binding, props.connectors),
+    ...dispatchBadges(node?.node_type, binding),
+    ...routerBadges(node?.node_type, node?.router_config),
+    ...hitlBadges(node?.node_type, node?.hitl_config),
+  ]
 })
 </script>
 
