@@ -148,6 +148,7 @@ vi.mock('../lib/api/client', () => ({
 import { api, getAccessToken } from '../lib/api/client'
 
 import PipelineEditorView from '../views/PipelineEditorView.vue'
+import { spotlight } from '../composables/useSpotlight'
 import { usePlanStore } from '../stores/planStore'
 
 // FAR-1588: archive/unarchive moved off the legacy untyped `useApi().post`
@@ -1107,7 +1108,7 @@ describe('PipelineEditorView — toolbar rendering', () => {
     wrapper.unmount()
   })
 
-  it('shows the empty-state overlay for a graph-less pipeline and adds a node from it', async () => {
+  it('shows progressive onboarding actions for a graph-less pipeline', async () => {
     ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       if (url.includes('/pipelines/{pipeline_id}/graph')) {
         return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
@@ -1119,11 +1120,66 @@ describe('PipelineEditorView — toolbar rendering', () => {
     const wrapper = await mountEditorLoaded()
     ;(wrapper.vm as any).pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline' }
     await nextTick()
-    expect(wrapper.text()).toContain('Test Pipeline')
-    // add node appends to both the flow and the raw graph
-    const addBtns = wrapper.findAll('[data-testid="pipeline-editor-add-node"]')
-    expect(addBtns.length).toBeGreaterThan(0)
-    await addBtns[0].trigger('click')
+
+    expect(wrapper.text()).toContain('Pipelines are made of nodes')
+    expect(wrapper.find('[data-testid="pipeline-editor-empty-show-me"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-empty-template"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-empty-add-node"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('routes Start from template to the pipeline-template library filter', async () => {
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const pushSpy = vi.spyOn(router, 'push')
+    await wrapper.find('[data-testid="pipeline-editor-empty-template"]').trigger('click')
+
+    expect(pushSpy).toHaveBeenCalledWith({ name: 'library', query: { type: 'pipeline_template' } })
+    wrapper.unmount()
+  })
+
+  it('starts the three-step walkthrough from the empty state', async () => {
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    await wrapper.find('[data-testid="pipeline-editor-empty-show-me"]').trigger('click')
+
+    expect(spotlight.active.value).toBe(true)
+    expect(spotlight.target.value).toBe('pipeline-editor-empty-add-node')
+    expect(spotlight.hasNext.value).toBe(true)
+    spotlight.next()
+    expect(spotlight.target.value).toBe('pipeline-editor-canvas')
+    spotlight.next()
+    expect(spotlight.target.value).toBe('pipeline-editor-arrange-graph')
+    spotlight.next()
+    expect(spotlight.active.value).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('adds a node from the empty-state action', async () => {
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    await wrapper.find('[data-testid="pipeline-editor-empty-add-node"]').trigger('click')
     await nextTick()
     const vm = wrapper.vm as any
     expect(vm.flowNodes.length).toBe(1)

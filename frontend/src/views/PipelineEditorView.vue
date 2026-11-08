@@ -910,9 +910,13 @@
           <div class="text-center">
             <h2 class="text-xl font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_fallback_title') }}</h2>
             <p v-if="pipeline?.description" class="mt-1 text-sm text-muted-foreground">{{ pipeline.description }}</p>
-            <p class="mt-4 text-sm italic text-muted-foreground select-none">{{ $t('views.PipelineEditorView.empty_state_hint') }}</p>
+            <p class="mt-4 max-w-xl text-sm text-muted-foreground">{{ $t('views.PipelineEditorView.empty_state_onboarding') }}</p>
+            <div class="mt-3 flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
+              <span class="rounded-full border border-input bg-background px-2.5 py-1">{{ $t('views.PipelineEditorView.empty_state_manual_hint') }}</span>
+              <span class="rounded-full border border-input bg-background px-2.5 py-1">{{ $t('views.PipelineEditorView.empty_state_agent_hint') }}</span>
+            </div>
           </div>
-          <div class="flex items-center gap-2 pointer-events-auto">
+          <div class="flex flex-wrap items-center justify-center gap-2 pointer-events-auto">
             <Button size="small" type="button" class="text-xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
             <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
@@ -927,7 +931,9 @@
               :aria-label="$t('views.PipelineEditorView.new_node_type')"
               data-testid="pipeline-editor-empty-node-type-select"
             />
-            <Button severity="secondary" outlined size="small" type="button" class="text-xs" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
+            <Button severity="secondary" outlined size="small" type="button" class="text-xs" data-testid="pipeline-editor-empty-add-node" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
+            <button type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-show-me" @click="startEmptyStateWalkthrough">{{ $t('views.PipelineEditorView.empty_state_show_me') }}</button>
+            <button type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-template" @click="openTemplateLibrary">{{ $t('views.PipelineEditorView.empty_state_start_from_template') }}</button>
           </div>
         </div>
         <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- palette keyboard region: Escape works from any palette control, including the option buttons -->
@@ -2253,7 +2259,7 @@ import HitlNode from '../components/pipeline/nodes/HitlNode.vue'
 import DispatchNode from '../components/pipeline/nodes/DispatchNode.vue'
 import ConnectorNode from '../components/pipeline/nodes/ConnectorNode.vue'
 import EdgeBadges from '../components/pipeline/nodes/EdgeBadges.vue'
-import { NODE_REGISTRY, PIPELINE_TEAM_NAMES_KEY } from '../components/pipeline/nodes/NodeRegistry'
+import { NODE_REGISTRY, PIPELINE_CONNECTORS_KEY, PIPELINE_TEAM_NAMES_KEY } from '../components/pipeline/nodes/NodeRegistry'
 import { shortId } from '../utils/format'
 import {
   isBlockingSeverity,
@@ -2280,6 +2286,7 @@ import type { LocationQueryRaw } from 'vue-router'
 import { useApi } from '../composables/useApi'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { spotlight } from '../composables/useSpotlight'
 import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import { useEnvironmentProfilesStore } from '../stores/environmentProfiles'
 import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
@@ -3858,6 +3865,12 @@ function convertBackendNode(n: any): any {
       parameter_set_id: n.parameter_set_id,
       parameter_overrides: n.parameter_overrides,
       hasCapabilityScope: doesNodeHaveCapabilityScope(n),
+      // FAR-2462: semantic-badge source fields. Display-only derivations —
+      // every one is an existing graph-contract field, copied by reference so
+      // a canvas card can state the actual binding rather than a guess. Save
+      // builds its payload from `rawNodes`, so nothing here reaches the wire.
+      connector_binding: n.connector_binding ?? null,
+      router_config: n.router_config ?? null,
     },
   }
 }
@@ -5023,6 +5036,18 @@ const nodeTypeOptions = [
   // correctly via convertBackendNode. Re-add once a config editor lands.
 ]
 
+function startEmptyStateWalkthrough() {
+  spotlight.start([
+    { targetTestId: 'pipeline-editor-empty-add-node', message: t('views.PipelineEditorView.empty_state_walkthrough_add_node') },
+    { targetTestId: 'pipeline-editor-canvas', message: t('views.PipelineEditorView.empty_state_walkthrough_canvas') },
+    { targetTestId: 'pipeline-editor-arrange-graph', message: t('views.PipelineEditorView.empty_state_walkthrough_arrange') },
+  ])
+}
+
+function openTemplateLibrary() {
+  void router.push({ name: 'library', query: { type: 'pipeline_template' } })
+}
+
 function addNode(nodeType: 'agent' | 'router' | 'hitl' | 'connector' = newNodeType.value) {
   if (isViewing.value) return
   const id = `node-${Date.now()}`
@@ -5386,6 +5411,9 @@ const teamNamesById = computed<Record<string, string>>(() =>
 // Vue Flow renders node cards through `nodeTypes`, which cannot forward
 // arbitrary props, so the extracted cards inject this map instead.
 provide(PIPELINE_TEAM_NAMES_KEY, teamNamesById)
+// The node cards also inject the editor's loaded connectors so a bound node's
+// semantic badge can resolve the connector's allowed operations.
+provide(PIPELINE_CONNECTORS_KEY, connectors)
 
 const ownerTeamError = computed(() => {
   if (ownerTeamUpdateError.value) return ownerTeamUpdateError.value

@@ -64,13 +64,13 @@ Modulo is a self-hosted Delivery Governance Platform: govern the software develo
 | **Database** | PostgreSQL 16 | Primary data store |
 | **Cache/queue** | Redis 8 | SAQ broker, rate limiting |
 | **Container** | Docker Compose | Local dev, production |
-| **Orchestration** | Docker Compose + Fly.io | Managed hosting (app.modulo.run) / self-hosted single-server |
+| **Orchestration** | Docker Compose + Fly.io | Fly.io deployment path for the Modulo app and staging infrastructure; self-hosted deployments use Docker Compose or the native bundle |
 
 ## Key Components
 
 ### API Layer (`modulo/api/`)
 
-FastAPI application providing REST endpoints, WebSocket event streaming, and the Remote MCP server at `/mcp`. Implements the ViewModel pattern – every user action maps to a named command. Routes are thin: they validate input, resolve dependencies (auth, org context, PlanContext), and delegate to core engine services.
+FastAPI application providing REST endpoints, WebSocket event streaming, and the Remote MCP server at `/mcp`. Implements the ViewModel pattern: every user action maps to a named command. Routes are thin: they validate input, resolve dependencies (auth, org context, PlanContext), and delegate to core engine services.
 
 Includes:
 - CORS middleware (configurable via `CORS_ORIGINS`)

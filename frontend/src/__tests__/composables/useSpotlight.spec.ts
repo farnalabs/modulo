@@ -114,4 +114,49 @@ describe('useSpotlight', () => {
     expect(spotlight.message.value).toBe('shared-msg')
     expect(spotlight.active.value).toBe(true)
   })
+
+  it('start walks a multi-step guide and clears it after the last step', async () => {
+    const { useSpotlight } = await import('../../composables/useSpotlight')
+    const spotlight = useSpotlight()
+    spotlight.start([
+      { targetTestId: 'step-1', message: 'first' },
+      { targetTestId: 'step-2', message: 'second' },
+    ])
+
+    expect(spotlight.active.value).toBe(true)
+    expect(spotlight.target.value).toBe('step-1')
+    expect(spotlight.message.value).toBe('first')
+    expect(spotlight.hasNext.value).toBe(true)
+
+    spotlight.next()
+    expect(spotlight.target.value).toBe('step-2')
+    expect(spotlight.hasNext.value).toBe(false)
+
+    spotlight.next()
+    expect(spotlight.active.value).toBe(false)
+    expect(spotlight.target.value).toBeNull()
+  })
+
+  it('start with no steps leaves the spotlight inactive', async () => {
+    const { useSpotlight } = await import('../../composables/useSpotlight')
+    const spotlight = useSpotlight()
+    spotlight.start([])
+    expect(spotlight.active.value).toBe(false)
+    expect(spotlight.hasNext.value).toBe(false)
+  })
+
+  it('highlight clears a guide started with start', async () => {
+    const { useSpotlight } = await import('../../composables/useSpotlight')
+    const spotlight = useSpotlight()
+    spotlight.start([
+      { targetTestId: 'step-1', message: 'first' },
+      { targetTestId: 'step-2', message: 'second' },
+    ])
+    spotlight.highlight('single-target', 'single')
+
+    expect(spotlight.target.value).toBe('single-target')
+    expect(spotlight.hasNext.value).toBe(false)
+    spotlight.next()
+    expect(spotlight.target.value).toBe('single-target')
+  })
 })

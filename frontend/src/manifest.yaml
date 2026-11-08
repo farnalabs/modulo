@@ -1160,6 +1160,12 @@ elements:
       - testid: spotlight-overlay
         type: element
         dynamic_testid: false
+      - testid: spotlight-backdrop
+        type: button
+        dynamic_testid: false
+      - testid: spotlight-next
+        type: button
+        dynamic_testid: false
       - testid: page-header-right
         type: element
         dynamic_testid: false
@@ -4787,6 +4793,15 @@ elements:
       - testid: pipeline-editor-empty-node-type-select
         type: select
         dynamic_testid: false
+      - testid: pipeline-editor-empty-add-node
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-empty-show-me
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-empty-template
+        type: button
+        dynamic_testid: false
       - testid: pipeline-editor-add-node
         type: button
         dynamic_testid: false
@@ -4854,6 +4869,18 @@ elements:
         type: button
         dynamic_testid: false
       - testid: pipeline-node-scope-badge
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-semantic-badges
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-semantic-allowed-operations
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-edge-semantic-hitl
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-edge-semantic-eval
         type: element
         dynamic_testid: false
       - testid: pipeline-editor-capability-scope

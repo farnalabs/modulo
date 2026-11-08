@@ -1,12 +1,16 @@
 <template>
-  <div
-    v-if="spotlight.active.value"
-    class="fixed inset-0 z-[60] bg-black/50"
-    @click="handleDismiss"
-    @keydown.escape="handleDismiss"
-    aria-hidden="true"
-    data-testid="spotlight-overlay"
-  >
+  <!-- The backdrop is a real button so pointer dismissal has a keyboard
+       equivalent. The coachmark card is a sibling, NOT a child, so its
+       focusable "Next" control stays exposed to assistive tech rather than
+       sitting inside a backdrop subtree. -->
+  <div v-if="spotlight.active.value" class="fixed inset-0 z-[60]" data-testid="spotlight-overlay">
+    <button
+      type="button"
+      class="absolute inset-0 bg-black/50"
+      :aria-label="$t('common.close')"
+      data-testid="spotlight-backdrop"
+      @click="handleDismiss"
+    />
     <div
       v-if="elementRect && spotlight.targetElement.value"
       class="absolute rounded-lg border-2 border-primary shadow-[0_0_0_4px_rgba(59,130,246,0.3)] pointer-events-auto"
@@ -15,19 +19,32 @@
       @keydown.enter.stop
       @keydown.space.prevent.stop
     >
-      <div
-        v-if="spotlight.message.value"
-        class="absolute left-1/2 -translate-x-1/2 mt-2 w-64 rounded-lg bg-background border shadow-lg p-3 text-sm"
-        :style="{ top: '100%' }"
-      >
-        <p class="font-medium text-foreground">{{ spotlight.message.value }}</p>
-        <p class="text-xs text-muted-foreground mt-1">{{ $t('components.onboarding.SpotlightOverlay.dismiss_hint') }}</p>
-      </div>
+        <div
+         v-if="spotlight.message.value"
+         class="absolute left-1/2 -translate-x-1/2 mt-2 w-64 rounded-lg bg-background border shadow-lg p-3 text-sm"
+         :style="{ top: '100%' }"
+         aria-live="polite"
+       >
+         <p class="font-medium text-foreground">{{ spotlight.message.value }}</p>
+         <div class="mt-2 flex items-center justify-between gap-2">
+           <p class="text-xs text-muted-foreground">{{ $t('components.onboarding.SpotlightOverlay.dismiss_hint') }}</p>
+           <button
+             v-if="spotlight.hasNext.value"
+             type="button"
+             class="shrink-0 rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent"
+             data-testid="spotlight-next"
+             @click="spotlight.next"
+           >
+             {{ $t('components.onboarding.SpotlightOverlay.next') }}
+           </button>
+         </div>
+       </div>
     </div>
 
     <div
       v-else
       class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-background border shadow-lg p-6 text-center max-w-sm"
+      aria-live="polite"
     >
       <p class="text-sm text-muted-foreground">
         {{ spotlight.message.value || 'Follow the next step to continue setting up Modulo.' }}

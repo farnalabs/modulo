@@ -110,9 +110,11 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
     await expect(page.getByTestId('pipeline-editor-arrange-graph')).toBeVisible()
     await expect(page.getByTestId('pipeline-editor-fit-view')).toBeVisible()
 
-    // The Vue Flow canvas area renders (empty graph → empty-state overlay hint)
+    // The Vue Flow canvas area renders (empty graph → empty-state onboarding)
     await expect(page.locator('.vue-flow').first()).toBeVisible()
-    await expect(page.getByText('no components in pipeline')).toBeVisible()
+    await expect(page.getByTestId('pipeline-editor-empty-add-node')).toBeVisible()
+    await expect(page.getByTestId('pipeline-editor-empty-show-me')).toBeVisible()
+    await expect(page.getByTestId('pipeline-editor-empty-template')).toBeVisible()
   })
 
   test('save flow reaches the graph PUT endpoint', { tag: '@regression' }, async ({ page, env }) => {
