@@ -2442,6 +2442,7 @@ async def get_run_io_endpoint(
     principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
 ) -> RunIOResponse:
     """Return per-node IO for a completed run, plus generated fixture_map.
+
     The response exposes a single NORMALIZED view (FAR-126): ``outputs_json``
     holds each node's pure return and ``node_telemetry`` holds its exhaustive
     telemetry. Both are resolved through the legacy-safe accessors
