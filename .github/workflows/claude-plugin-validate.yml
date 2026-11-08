@@ -1,0 +1,85 @@
+name: Claude plugin validation
+
+on:
+  push:
+    paths:
+      - '.claude-plugin/**'
+      - 'plugins/modulo/**'
+      - 'README.md'
+      - '.github/workflows/claude-plugin-validate.yml'
+  pull_request:
+    paths:
+      - '.claude-plugin/**'
+      - 'plugins/modulo/**'
+      - 'README.md'
+      - '.github/workflows/claude-plugin-validate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate JSON manifests
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          paths = [
+              Path('.claude-plugin/marketplace.json'),
+              Path('plugins/modulo/.claude-plugin/plugin.json'),
+              Path('plugins/modulo/.mcp.json'),
+          ]
+          for path in paths:
+              json.loads(path.read_text(encoding='utf-8'))
+              print(f'valid JSON: {path}')
+          marketplace = json.loads(paths[0].read_text(encoding='utf-8'))
+          plugins = marketplace.get('plugins', [])
+          assert any(item.get('name') == 'modulo' and item.get('source') == './plugins/modulo' for item in plugins)
+          plugin = json.loads(paths[1].read_text(encoding='utf-8'))
+          assert plugin['name'] == 'modulo'
+          mcp = json.loads(paths[2].read_text(encoding='utf-8'))
+          assert mcp == {'mcpServers': {'modulo': {'type': 'http', 'url': ''}}}
+          PY
+      - name: Validate skill structure and links
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          skill_paths = [
+              Path('plugins/modulo/SKILL.md'),
+              Path('plugins/modulo/skills/install/SKILL.md'),
+          ]
+          for path in skill_paths:
+              text = path.read_text(encoding='utf-8')
+              assert text.startswith('---\n') and '\n---\n' in text, path
+              assert 'name:' in text.split('\n---\n', 1)[0], path
+              assert 'description:' in text.split('\n---\n', 1)[0], path
+              print(f'valid Agent Skills frontmatter: {path}')
+          for path in [
+              Path('plugins/modulo/references/context-resolution.md'),
+              Path('plugins/modulo/references/context-schema.md'),
+              Path('plugins/modulo/references/onboarding.md'),
+              Path('plugins/modulo/references/operations.md'),
+              Path('plugins/modulo/references/recovery.md'),
+              Path('plugins/modulo/README.md'),
+          ]:
+              assert path.read_text(encoding='utf-8').strip(), path
+          root = Path('plugins/modulo/SKILL.md').read_text(encoding='utf-8')
+          install = Path('plugins/modulo/skills/install/SKILL.md').read_text(encoding='utf-8')
+          assert '/modulo' in Path('plugins/modulo/README.md').read_text(encoding='utf-8')
+          assert 'modulo:install' in Path('plugins/modulo/README.md').read_text(encoding='utf-8')
+          assert 'empty URL' in root and 'empty plugin URL' in install
+          PY
+      - name: Validate with Claude when available
+        shell: bash
+        run: |
+          if command -v claude >/dev/null 2>&1; then
+            claude plugin validate .
+          else
+            echo 'claude CLI unavailable; structural validation completed above.'
+          fi

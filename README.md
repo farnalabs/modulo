@@ -154,27 +154,19 @@ The [configuration reference](docs/configuration-reference.md) documents the
 server-side environment variables, and [agent-config.md](docs/agent-config.md)
 covers pipeline graph and node configuration.
 
-## Native install (Linux and macOS) - not yet published
+## Native install (Linux and macOS)
 
-The native single-install path is Alpha work for workstation and evaluation
-use. It is not the supported production path, and it is not installable today:
-a clean clone cannot install because no signed `bundle-v*` release or trust key
-has been published yet. Do not use the native installer until a signed release
-is published.
+The native single-install path is for workstation and evaluation use. Linux
+uses the published `scripts/install.sh` bundle path; macOS uses separate signed
+and notarized `.dmg` artifacts for Apple Silicon (`macos-arm64`) and Intel
+(`macos-x86_64`). Rosetta is not required. Use the public [installation
+documentation](https://modulo.run/docs/installation) for release availability,
+platform requirements, and the current installation steps.
 
-Docker Compose is the supported path for both evaluation and production. Start
-with the [system requirements](docs/system-requirements.md), then follow the
-[deployment guide](docs/deployment.md). The [release process](docs/release-process.md)
-documents what must exist before the native path can become available.
-
-Native installation on macOS uses separate supported, signed and notarized
-`.dmg` artifacts for Apple Silicon (`macos-arm64`) and Intel (`macos-x86_64`);
-Rosetta is not required (see the [system requirements](docs/system-requirements.md)).
-The arm64 artifact is validated on `macos-15` and the x86_64 artifact on
-`macos-15-intel`. It is not installable today because no signed `bundle-v*`
-release is published yet.
-Native Windows installation is Beta scope, planned after Alpha: the native
-installer is still in progress and no signed Windows artifact is published yet.
+Docker Compose remains the supported path for self-hosted server and production
+use. Start with the [system requirements](docs/system-requirements.md), then
+follow the [deployment guide](docs/deployment.md). Native Windows installation
+is Beta scope and is not a supported Alpha installation path.
 
 
 ## Documentation
