@@ -3,7 +3,7 @@
 Against REAL Postgres (testcontainers, private database per test — the
 ``test_migration_0321`` harness):
 
-* seed organisations at ``0323_pipeline_snapshots_substantive_version_index``
+* seed organisations at ``0348_far147_legacy_run_group_backfill``
   (the shape this migration runs against, where BOTH the three
   ``organisations`` cost columns and ``organisation_cost_state`` exist) with
   values in the two stores that are DELIBERATELY DIFFERENT, so every assertion
