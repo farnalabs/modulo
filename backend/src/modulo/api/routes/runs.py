@@ -4071,23 +4071,23 @@ def _resolve_reveal_prompt_template(
     node_id: str,
     variant_config_snapshot: Any,
 ) -> str | None:
-    """Resolve the template the reveal attests for a node.
+    """Resolve the frozen prompt that the node's dispatch path actually used.
 
-    FAR-1398 precedence, mirroring dispatch exactly:
+    Model-backed nodes use the snapshot ``prompt_template`` and the frozen
+    per-agent variant override, matching ``_resolve_node_run_overrides``.
+    ``sandbox_agent`` nodes are a separate dispatch path: they render the
+    snapshot ``agent_prompt`` directly, and do not consume the model-node
+    ``prompt_templates`` variant map. In particular, an ``agent_id`` on a
+    sandbox node does not make that model-node override applicable.
 
-    1. the run's FROZEN variant per-agent prompt override, when it names this
-       node's agent (``_variant_prompt_override``);
-    2. otherwise the snapshot node's ``prompt_template`` - the agent's
-       template copied ONTO the node at snapshot creation
-       (``db/crud/pipeline_snapshot.py``), so editing an agent after a run
-       cannot change what this endpoint attests.
-
-    Returns ``None`` when neither yields a template (no variant override and
-    no frozen template). Raises 404 via ``_require_node`` when the node is
-    absent from the graph - the same gate the visibility resolver uses, so
-    the 404 never depends on which helper the handler happens to call first.
+    Returns ``None`` when the snapshot carries no prompt for the node. Raises
+    404 via ``_require_node`` when the node is absent from the graph.
     """
     node = _require_node(graph_json, node_id)
+    if node.get("node_type") == "sandbox_agent":
+        agent_prompt = node.get("agent_prompt")
+        return str(agent_prompt) if agent_prompt is not None else None
+
     agent_id = _agent_id_from_node(node)
     override = _variant_prompt_override(variant_config_snapshot, agent_id) if agent_id is not None else None
     if override is not None:
