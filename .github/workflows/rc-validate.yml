@@ -292,7 +292,7 @@ jobs:
           if not isinstance(image, str) or not image.startswith(prefix):
               sys.exit(f"predecessor compose has invalid modulo image reference: {image!r}")
           tag = image[len(prefix):]
-          if not re.fullmatch(r"v[0-9]+\\.[0-9]+\\.[0-9]+(?:-rc[0-9]+)?", tag):
+          if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-rc[0-9]+)?", tag):
               sys.exit(f"predecessor compose pins non-immutable or unexpected image tag: {tag!r}")
           print(tag)
           PY

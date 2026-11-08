@@ -111,6 +111,6 @@ def test_rc_validation_uses_predecessor_bundle_image_tag_before_promotion() -> N
     assert 'compose_file="$bundle_dir/docker-compose.prod.yml"' in matrix
     assert 'image = compose.get("services", {}).get("modulo", {}).get("image")' in matrix
     assert 'old_tag="$(COMPOSE_FILE="$compose_file" python3 - <<\'PY\'' in matrix
-    assert 're.fullmatch(r"v[0-9]+\\\\.[0-9]+\\\\.[0-9]+(?:-rc[0-9]+)?", tag)' in matrix
+    assert 're.fullmatch(r"v[0-9]+\\.[0-9]+\\.[0-9]+(?:-rc[0-9]+)?", tag)' in matrix
     assert "predecessor compose pins non-immutable or unexpected image tag" in matrix
     assert "does not derive old_tag from bundle_tag" not in matrix
