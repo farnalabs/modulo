@@ -1431,6 +1431,7 @@ export default {
       "canvas_command_fit": "Fit view",
       "canvas_command_toggle_hitl": "Toggle HITL on edge",
       "canvas_command_timeline": "Open version timeline",
+      "canvas_command_escape_key": "Esc",
       "canvas_node_added": "Agent node added to the canvas.",
       "canvas_node_nudged": "Node moved.",
       "canvas_connect_started": "Connection started. Move to the target node and press Enter to connect, or Escape to cancel.",

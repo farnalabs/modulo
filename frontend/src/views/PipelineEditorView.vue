@@ -934,7 +934,7 @@
         >
           <div class="mb-2 flex items-center justify-between gap-2">
             <h2 class="text-sm font-semibold">{{ $t('views.PipelineEditorView.canvas_command_palette') }}</h2>
-            <kbd class="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">Esc</kbd>
+            <kbd class="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">{{ $t('views.PipelineEditorView.canvas_command_escape_key') }}</kbd>
           </div>
           <input
             ref="canvasPaletteInputRef"
