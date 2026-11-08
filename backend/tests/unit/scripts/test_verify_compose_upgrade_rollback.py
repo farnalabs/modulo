@@ -67,7 +67,9 @@ def test_matrix_records_every_required_transition(tmp_path: Path) -> None:
             assert failed_upgrade_env["TAG"] == "v1.1.0"
         if argv[0] == "curl":
             phase = next(item for item in reversed(calls) if item[0] == "docker" and "up" in item)
-            status = "503" if "--force-recreate" in phase else "200"
+            # The real failed-upgrade mode is an import-time crash-loop, so the
+            # all-in-one proxy answers 502 (not 503) while the backend restarts.
+            status = "502" if "--force-recreate" in phase else "200"
             return SimpleNamespace(returncode=0, stdout=status, stderr="")
         if argv[0] == "docker" and "logs" in argv:
             return SimpleNamespace(
@@ -153,6 +155,61 @@ def test_evidence_redacts_secret_literals(tmp_path: Path) -> None:
     assert "[REDACTED]" in rendered
 
 
+def test_credential_redaction_keeps_operator_tags_and_port(tmp_path: Path) -> None:
+    env = {
+        "TAG": "v1.1.0",
+        "PORT": "18080",
+        "COMPOSE_FILE": "/bundle/docker-compose.prod.yml",
+        "SECRET_KEY": "super-secret-value",
+        "POSTGRES_PASSWORD": "db-password",
+        "MODULO_USERS": "admin@example.com:admin-password",
+    }
+    secrets = module._secret_values(env)
+    assert secrets == {"super-secret-value", "db-password"}
+    evidence = Evidence(tmp_path / "evidence")
+    evidence.add_secrets(secrets)
+    evidence.record(
+        module.CommandResult(
+            "compose-config",
+            ("docker", "compose", "config", "http://127.0.0.1:18080/healthz/ready"),
+            0,
+            (
+                "image: ghcr.io/farnalabs/modulo:v1.1.0\n"
+                "SECRET_KEY: super-secret-value\n"
+                "POSTGRES_PASSWORD: db-password\n"
+            ),
+            "",
+        ),
+        outcome="success",
+    )
+    rendered = "\n".join(path.read_text(encoding="utf-8") for path in evidence.directory.iterdir())
+    assert "ghcr.io/farnalabs/modulo:v1.1.0" in rendered
+    assert "127.0.0.1:18080" in rendered
+    assert "super-secret-value" not in rendered
+    assert "db-password" not in rendered
+    assert "[REDACTED]" in rendered
+
+
+def test_ready_accepts_proxy_502_for_failed_upgrade(tmp_path: Path) -> None:
+    def runner(argv: list[str], **kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="502", stderr="")
+
+    evidence = Evidence(tmp_path / "evidence")
+    matrix = Matrix(
+        compose_file=tmp_path / "docker-compose.prod.yml",
+        compose_dir=tmp_path,
+        env_file=tmp_path / ".env",
+        project_name="proof-123",
+        old_tag="v1.0.0",
+        new_tag="v1.1.0",
+        evidence=evidence,
+        port="18080",
+        timeout=1,
+        runner=runner,
+    )
+    assert matrix.ready("failed-upgrade-not-ready", expected=False) is False
+
+
 def test_evidence_rejects_stale_directory(tmp_path: Path) -> None:
     directory = tmp_path / "evidence"
     directory.mkdir()
@@ -234,7 +291,7 @@ def test_matrix_rejects_a_healthy_failed_upgrade(tmp_path: Path) -> None:
         timeout=10,
         runner=runner,
     )
-    with pytest.raises(ValidationError, match="expected HTTP 503"):
+    with pytest.raises(ValidationError, match="not ready"):
         matrix.run()
 
 

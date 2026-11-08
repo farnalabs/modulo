@@ -90,10 +90,26 @@ def _parse_env_values(path: Path) -> dict[str, str]:
     return values
 
 
+# Only credential-bearing variables are redacted from the evidence transcript.
+# Operator flags such as TAG and PORT are documented provenance (the transcript
+# must show which immutable images ran), so their values are never in this set.
+_CREDENTIAL_NAME_PARTS = ("SECRET", "PASSWORD", "TOKEN", "FERNET", "CREDENTIAL", "PRIVATE_KEY", "API_KEY")
+
+
+def _is_credential_name(name: str) -> bool:
+    upper = name.strip().upper()
+    return any(part in upper for part in _CREDENTIAL_NAME_PARTS) or upper.endswith("_KEY")
+
+
 def _secret_values(env: dict[str, str] | None) -> set[str]:
+    """Collect values of credential-bearing variables only.
+
+    ``TAG``/``PORT``/``COMPOSE_FILE`` and other operator flags are deliberately
+    excluded: redacting them would rewrite the transcript's own provenance.
+    """
     if env is None:
         return set()
-    return {value for value in env.values() if value}
+    return {value for name, value in env.items() if value and _is_credential_name(name)}
 
 
 def _secret_values_from_file(path: Path) -> set[str]:
@@ -219,8 +235,17 @@ class Matrix:
         argv = build_compose_command(self.compose_file, self.project_name, *args, env_file=self.env_file)
         return self.command(name, argv, expected=expected, env=env)
 
-    def ready(self, name: str, *, expected: bool, expected_status: str | None = None) -> bool:
-        """Poll readiness until the requested state or the bounded deadline."""
+    def ready(self, name: str, *, expected: bool) -> bool:
+        """Poll readiness until the requested state or the bounded deadline.
+
+        ``expected=True`` waits for a healthy HTTP 200. ``expected=False`` waits
+        until the readiness endpoint is reachable but no longer reports 200 -
+        the documented "readiness is no longer HTTP 200" contract. That covers
+        the real failed-upgrade failure mode: an invalid ``SECRET_KEY`` crashes
+        the backend before it binds its port, so the all-in-one proxy answers
+        ``502`` for the whole crash-loop window rather than a bare ``503``, and
+        any reachable non-200 status satisfies the assertion.
+        """
         url = f"http://127.0.0.1:{self.port}/healthz/ready"
         argv = [
             "curl",
@@ -261,15 +286,10 @@ class Matrix:
             code = result.stdout.strip()
             last_code = code or "<none>"
             last_returncode = raw.returncode
-            is_ready = raw.returncode == 0 and code == "200"
-            reached_expected = code == expected_status if expected_status is not None else is_ready == expected
-            if reached_expected and (expected_status is not None or raw.returncode == 0):
-                if is_ready != expected:
-                    self.evidence.record(
-                        CommandResult(name + "-assertion", (url,), 0, f"HTTP {code}\n", ""),
-                        outcome="ready" if is_ready else "not-ready",
-                    )
-                    return is_ready
+            reachable = raw.returncode == 0
+            is_ready = reachable and code == "200"
+            reached_expected = is_ready if expected else (reachable and code.isdigit() and not is_ready)
+            if reached_expected:
                 self.evidence.record(
                     CommandResult(name + "-assertion", (url,), 0, f"HTTP {code}\n", ""),
                     outcome="ready" if is_ready else "not-ready",
@@ -278,11 +298,7 @@ class Matrix:
             if time.monotonic() >= deadline:
                 break
             time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
-        wanted = (
-            f"HTTP {expected_status}"
-            if expected_status is not None
-            else ("ready (HTTP 200)" if expected else "not ready")
-        )
+        wanted = "ready (HTTP 200)" if expected else "not ready (any reachable non-200)"
         raise ValidationError(
             f"{name}: expected {wanted} before deadline, received HTTP {last_code} (curl exit {last_returncode})"
         )
@@ -331,7 +347,9 @@ class Matrix:
         # The invalid key is deliberately too short for Settings. --force-recreate
         # ensures Compose replaces the healthy new container instead of treating
         # the command as a no-op. A successful command is not enough: readiness
-        # must become unavailable before rollback is accepted.
+        # must become unavailable before rollback is accepted. The backend
+        # crash-loops before binding its port, so the proxy serves 502 for the
+        # whole window - assert "no longer 200" rather than a single status code.
         self.compose(
             "failed-upgrade",
             self.new_tag,
@@ -343,7 +361,7 @@ class Matrix:
             expected="success",
             secret_key=_INVALID_SECRET_KEY,
         )
-        self.ready("failed-upgrade-not-ready", expected=False, expected_status="503")
+        self.ready("failed-upgrade-not-ready", expected=False)
         failed_logs = self.compose("failed-upgrade-logs", self.new_tag, "logs", "--no-color", "--tail=200", "modulo")
         self._assert_failed_upgrade_logs(failed_logs)
 
@@ -383,6 +401,10 @@ def main(argv: list[str] | None = None) -> int:
 
     evidence_dir = args.evidence_dir.resolve()
     evidence_secrets = _secret_values(dict(os.environ)) | _secret_values_from_file(env_file)
+    # Never redact the operator flags the harness itself sets, even if an env
+    # file happens to define the same value: they are documented provenance.
+    evidence_secrets -= {old_tag, new_tag, args.port}
+    evidence_secrets.discard("")
     evidence = Evidence(evidence_dir, secrets=evidence_secrets)
     matrix = Matrix(
         compose_file=compose_file,
