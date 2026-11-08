@@ -4,8 +4,10 @@ The backend lockfile pins source-archive dependencies (e.g. pytest-bdd) that
 ``uv sync --frozen`` downloads from GitHub's codeload CDN. A transient 504 on
 that CDN failed four pre-deploy jobs at once on main (2026-11-08) before any
 test ran, so ``deploy.yml`` routes every dependency install through this
-wrapper. These tests pin the retry policy: transient download errors are
-retried, deterministic failures are not, and the attempt count is bounded.
+wrapper. The same flake then failed CI's ``backend-lint`` job, so ``ci.yml``
+routes its ``uv sync`` invocations through the wrapper too. These tests pin the
+retry policy: transient download errors are retried, deterministic failures are
+not, and the attempt count is bounded.
 """
 
 from __future__ import annotations
@@ -100,10 +102,20 @@ def test_transient_failure_is_bounded_by_max_attempts(tmp_path: Path) -> None:
     assert "after 3 attempts" in result.stdout
 
 
-def test_deploy_workflow_routes_every_uv_sync_through_the_wrapper() -> None:
-    deploy = (REPO_ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
-    lines = [line.strip() for line in deploy.splitlines()]
+def _assert_no_raw_uv_sync(workflow_name: str) -> str:
+    text = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+    lines = [line.strip() for line in text.splitlines()]
     non_comment = [line for line in lines if line and not line.startswith("#")]
     raw_syncs = [line for line in non_comment if "uv sync" in line and "uv_sync_with_retry" not in line]
-    assert not raw_syncs, f"deploy.yml invokes uv sync directly instead of the retry wrapper: {raw_syncs}"
+    assert not raw_syncs, f"{workflow_name} invokes uv sync directly instead of the retry wrapper: {raw_syncs}"
+    return text
+
+
+def test_deploy_workflow_routes_every_uv_sync_through_the_wrapper() -> None:
+    deploy = _assert_no_raw_uv_sync("deploy.yml")
     assert deploy.count("uv_sync_with_retry.sh") == 4
+
+
+def test_ci_workflow_routes_every_uv_sync_through_the_wrapper() -> None:
+    ci = _assert_no_raw_uv_sync("ci.yml")
+    assert ci.count("uv_sync_with_retry.sh") == 10
