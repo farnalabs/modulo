@@ -1806,6 +1806,51 @@ describe('PipelineEditorView — coverage: edge slot + non-selected edge mapping
     wrapper.unmount()
   })
 
+  it('renders the human-only and eval-condition edge badges from the gate config', async () => {
+    // FAR-2462: the edge card states the gate's real mode. Both the
+    // human-only marker and the eval-condition badge are additive, so each
+    // needs a config that actually declares it.
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true }
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          VueFlow: {
+            render(this: { $slots: Record<string, any> }) {
+              const slot = this.$slots['edge-default']
+              return h('div', [
+                slot?.({
+                  data: {
+                    hitl_review_config: {
+                      label: 'Gate',
+                      human_only: true,
+                      eval_condition: { eval_name: 'quality', threshold: 0.8, operator: 'gte' },
+                    },
+                    edge_type: 'normal',
+                  },
+                }),
+              ])
+            },
+          },
+          Background: true,
+          Controls: true,
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-edge-semantic-hitl"]').text()).toContain('human-only')
+    expect(wrapper.find('[data-testid="pipeline-edge-semantic-eval"]').text()).toContain('quality')
+    wrapper.unmount()
+  })
+
   it('saveEdgeConfig preserves hitl_review_config on non-selected edges', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()

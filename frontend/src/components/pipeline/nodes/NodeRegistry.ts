@@ -1,4 +1,4 @@
-import type { ComputedRef, InjectionKey } from 'vue'
+import type { ComputedRef, InjectionKey, Ref } from 'vue'
 
 /**
  * Injection key for the editor's already-loaded team id → name map.
@@ -10,6 +10,18 @@ import type { ComputedRef, InjectionKey } from 'vue'
  */
 export const PIPELINE_TEAM_NAMES_KEY: InjectionKey<ComputedRef<Record<string, string>>> =
   Symbol('pipelineTeamNames')
+
+/**
+ * Injection key for the editor's already-loaded connector list.
+ *
+ * Semantic node badges (FAR-2462) resolve a bound node's connector by
+ * ``instance_id`` to show that connector's allowed operations. Vue Flow's
+ * ``nodeTypes`` registry cannot forward arbitrary props, so the editor provides
+ * the list and the cards inject it; isolated renders resolve no connector
+ * rather than inventing one.
+ */
+export const PIPELINE_CONNECTORS_KEY: InjectionKey<Ref<Array<Record<string, any>>>> =
+  Symbol('pipelineConnectors')
 
 /**
  * Node type registry for the pipeline editor.

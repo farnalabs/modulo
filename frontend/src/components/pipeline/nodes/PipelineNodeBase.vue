@@ -25,16 +25,23 @@
     <div v-if="description" class="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
       {{ description }}
     </div>
+    <PipelineNodeBadges :node="data" :connectors="connectors" />
     <PipelineGovernanceVisibility :node="data" :team-names="teamNames" mode="node" />
     <slot name="extra-content" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed, inject, ref, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PipelineGovernanceVisibility from '../PipelineGovernanceVisibility.vue'
-import { PIPELINE_TEAM_NAMES_KEY, getNodeRegistryEntry, getNodeType } from './NodeRegistry'
+import PipelineNodeBadges from '../PipelineNodeBadges.vue'
+import {
+  PIPELINE_CONNECTORS_KEY,
+  PIPELINE_TEAM_NAMES_KEY,
+  getNodeRegistryEntry,
+  getNodeType,
+} from './NodeRegistry'
 
 interface Props {
   /** The node data from Vue Flow. */
@@ -76,5 +83,13 @@ const description = computed(() => props.data.description as string | undefined)
 const teamNames = inject(
   PIPELINE_TEAM_NAMES_KEY,
   computed<Record<string, string>>(() => ({})),
+)
+
+// Same contract for the connector list the semantic badges resolve against:
+// the editor provides its loaded connectors; an isolated render shows the
+// binding's own fields and no derived connector detail.
+const connectors = inject<Ref<Array<Record<string, any>>>>(
+  PIPELINE_CONNECTORS_KEY,
+  ref<Array<Record<string, any>>>([]),
 )
 </script>

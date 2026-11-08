@@ -2213,7 +2213,7 @@ import HitlNode from '../components/pipeline/nodes/HitlNode.vue'
 import DispatchNode from '../components/pipeline/nodes/DispatchNode.vue'
 import ConnectorNode from '../components/pipeline/nodes/ConnectorNode.vue'
 import EdgeBadges from '../components/pipeline/nodes/EdgeBadges.vue'
-import { NODE_REGISTRY, PIPELINE_TEAM_NAMES_KEY } from '../components/pipeline/nodes/NodeRegistry'
+import { NODE_REGISTRY, PIPELINE_CONNECTORS_KEY, PIPELINE_TEAM_NAMES_KEY } from '../components/pipeline/nodes/NodeRegistry'
 import { shortId } from '../utils/format'
 import {
   isBlockingSeverity,
@@ -3788,6 +3788,12 @@ function convertBackendNode(n: any): any {
       parameter_set_id: n.parameter_set_id,
       parameter_overrides: n.parameter_overrides,
       hasCapabilityScope: doesNodeHaveCapabilityScope(n),
+      // FAR-2462: semantic-badge source fields. Display-only derivations —
+      // every one is an existing graph-contract field, copied by reference so
+      // a canvas card can state the actual binding rather than a guess. Save
+      // builds its payload from `rawNodes`, so nothing here reaches the wire.
+      connector_binding: n.connector_binding ?? null,
+      router_config: n.router_config ?? null,
     },
   }
 }
@@ -5011,6 +5017,9 @@ const teamNamesById = computed<Record<string, string>>(() =>
 // Vue Flow renders node cards through `nodeTypes`, which cannot forward
 // arbitrary props, so the extracted cards inject this map instead.
 provide(PIPELINE_TEAM_NAMES_KEY, teamNamesById)
+// The node cards also inject the editor's loaded connectors so a bound node's
+// semantic badge can resolve the connector's allowed operations.
+provide(PIPELINE_CONNECTORS_KEY, connectors)
 
 const ownerTeamError = computed(() => {
   if (ownerTeamUpdateError.value) return ownerTeamUpdateError.value
