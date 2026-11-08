@@ -79,17 +79,30 @@ def test_rc_validation_matrix_selects_old_and_rc_tags_through_real_helper(tmp_pa
         encoding="utf-8",
     )
     helper = REPO_ROOT / "scripts" / "render_validation_compose.py"
+    selector = "${TAG:?TAG is required - set the image tag for this matrix phase}"
+    result = subprocess.run(  # noqa: S603 - fixed repository helper under test
+        [sys.executable, str(helper), "--compose-file", str(compose_file)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 0
+    rendered = yaml.safe_load(compose_file.read_text(encoding="utf-8"))
+    assert rendered["services"]["modulo"]["image"] == f"ghcr.io/farnalabs/modulo:{selector}"
+
     phases = {
         "clean-install-old": "v1.0.0",
         "upgrade-new": "v1.1.0-rc1",
         "failed-upgrade": "v1.1.0-rc1",
         "rollback-old": "v1.0.0",
     }
-
     rendered_images: dict[str, str] = {}
     for phase, tag in phases.items():
+        phase_file = tmp_path / f"{phase}.yml"
+        phase_file.write_text(compose_file.read_text(encoding="utf-8"), encoding="utf-8")
         result = subprocess.run(  # noqa: S603 - fixed repository helper under test
-            [sys.executable, str(helper), "--compose-file", str(compose_file), "--tag", tag],
+            [sys.executable, str(helper), "--compose-file", str(phase_file)],
             capture_output=True,
             text=True,
             check=False,
@@ -97,10 +110,10 @@ def test_rc_validation_matrix_selects_old_and_rc_tags_through_real_helper(tmp_pa
             env={**os.environ, "TAG": tag},
         )
         assert result.returncode == 0
-        rendered = yaml.safe_load(compose_file.read_text(encoding="utf-8"))
-        rendered_images[phase] = rendered["services"]["modulo"]["image"].replace(
-            "${TAG:?TAG is required - set the image tag for this matrix phase}", tag
-        )
+        phase_rendered = yaml.safe_load(phase_file.read_text(encoding="utf-8"))
+        image = phase_rendered["services"]["modulo"]["image"]
+        assert image == f"ghcr.io/farnalabs/modulo:{selector}"
+        rendered_images[phase] = image.replace(selector, tag)
 
     assert rendered_images == {
         "clean-install-old": "ghcr.io/farnalabs/modulo:v1.0.0",
