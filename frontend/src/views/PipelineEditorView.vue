@@ -2408,6 +2408,12 @@ const filteredCanvasCommands = computed(() => {
   const query = canvasPaletteQuery.value.trim().toLowerCase()
   return query ? canvasCommands.value.filter((command) => command.label.toLowerCase().includes(query)) : canvasCommands.value
 })
+// Filtering shrinks the list, so a selection made before typing can point at a
+// command that no longer exists (or at a different one). Reset the selection
+// whenever the query changes so Enter always runs the highlighted command.
+watch(canvasPaletteQuery, () => {
+  canvasPaletteIndex.value = 0
+})
 const showSaveAsDropdown = ref(false)
 const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
 const saveAsDropdownRef = ref<HTMLElement | null>(null)

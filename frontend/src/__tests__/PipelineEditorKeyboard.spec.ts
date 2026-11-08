@@ -192,6 +192,37 @@ describe('PipelineEditorView canvas keyboard (FAR-2464)', () => {
     expect(announcement(wrapper)).toContain('Canvas fitted to view')
   })
 
+  it('resets the selection index when a query filters the list, so Enter runs the highlighted command', async () => {
+    const wrapper = await mountedEditor()
+    const vm = wrapper.vm as any
+    keydown(canvasOf(wrapper), 'k', { ctrlKey: true })
+    await nextTick()
+
+    const search = wrapper.find('[data-testid="pipeline-editor-command-palette-input"]').element as HTMLInputElement
+
+    // Move the selection down before typing, so a stale index would point past
+    // the shrunken result set (or at a different command).
+    keydown(search, 'ArrowDown')
+    keydown(search, 'ArrowDown')
+    keydown(search, 'ArrowDown')
+    expect(vm.canvasPaletteIndex).toBe(3)
+
+    search.value = 'fit'
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+
+    expect(vm.canvasPaletteIndex).toBe(0)
+    const options = wrapper.findAll('[data-testid="pipeline-editor-command-palette-list"] [role="option"]')
+    expect(options).toHaveLength(1)
+    expect(options[0].text()).toContain('Fit view')
+
+    keydown(search, 'Enter')
+    await nextTick()
+
+    expect(palette(wrapper).exists()).toBe(false)
+    expect(announcement(wrapper)).toContain('Canvas fitted to view')
+  })
+
   it('reports when no command matches the query', async () => {
     const wrapper = await mountedEditor()
     keydown(canvasOf(wrapper), 'k', { ctrlKey: true })
