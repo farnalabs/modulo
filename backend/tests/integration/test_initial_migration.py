@@ -142,33 +142,6 @@ _MIGRATION_OWNED_FKS: dict[str, frozenset[str]] = {
     "system_maps": frozenset({"fk_system_maps_published_revision"}),
 }
 
-# FAR-1902 expand/contract: the retired organisations cost mappings are
-# removed from the ORM in this release, while the physical columns (and the
-# ``ck_organisations_cum_spend`` CHECK) stay until migration
-# ``0324_drop_organisations_cost_columns`` ships in a LATER release — an
-# in-flight rolling deploy must never serve a release whose ORM still names a
-# dropped column (FAR-583 precedent: the runs blob mappings were cut in B1,
-# the columns dropped at B2b). Until 0324 lands the parity diff arrives as an
-# ORM-side ``remove_column`` / ``remove_constraint``.
-# expires: 2026-12-20 — two release windows out from this branch (2026-10-20):
-# this release removes the mappings, the NEXT one ships 0324, and the date is
-# the safety net that makes a forgotten drop fail loudly instead of silently
-# hiding a genuine re-add of the columns.
-_COST_COLUMN_PARITY_EXPIRES: dict[str, frozenset[str]] = {
-    "organisations": frozenset(
-        {
-            "max_run_cost_cents",  # expires: 2026-12-20 (migration 0324 drops the column)
-            "spend_ceiling_cents",  # expires: 2026-12-20 (migration 0324 drops the column)
-            "org_cumulative_spend_cents",  # expires: 2026-12-20 (migration 0324 drops the column)
-        }
-    ),
-}
-# The CHECK constraint rides the same contract: the ORM declaration is gone,
-# the DB-side constraint is dropped by 0324.
-# expires: 2026-12-20 (same window as the columns above)
-_COST_CHECK_PARITY_EXPIRES: dict[str, frozenset[str]] = {
-    "organisations": frozenset({"ck_organisations_cum_spend"}),
-}
 
 # ORM-declared CHECKs whose DB-side counterpart is the strict dialect twin —
 # the ORM's portable subset appears as add_constraint. PER ENTRY reason:
@@ -304,13 +277,9 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
         return inner[2] in _AUDIT_CHAIN_COLUMNS and inner[3].name in _AUDIT_CHAIN_COLUMNS[inner[2]]
     if kind == "remove_column":
         # Audit-chain columns the DB triggers own (0108) — per-table entries.
-        if inner[2] in _AUDIT_CHAIN_COLUMNS and inner[3].name in _AUDIT_CHAIN_COLUMNS[inner[2]]:
-            return True
-        # FAR-1902 cost-column contract cut: the ORM mappings were removed one
-        # release BEFORE migration 0324 drops the physical columns, so the
-        # parity diff arrives as an ORM-side remove_column until it lands.
-        # Per-column expiring entries (never per-table).
-        return inner[3].name in _COST_COLUMN_PARITY_EXPIRES.get(inner[2], frozenset())
+        # Cost-column mappings and physical columns were removed together by
+        # migration 0349; any remaining remove_column diff is real drift.
+        return inner[2] in _AUDIT_CHAIN_COLUMNS and inner[3].name in _AUDIT_CHAIN_COLUMNS[inner[2]]
     if kind == "remove_fk":
         # The audit-chain FKs on the trigger-maintained columns — per-table.
         if inner[1].table.name in _AUDIT_CHAIN_FK_COLUMNS and bool(
@@ -334,10 +303,8 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
         # CHECK guards that exist ONLY in migrations (0157/0165/0192) —
         # per-(table, constraint) entries.
         constraint = inner[1]
-        # FAR-1902: the retired cost CHECK is dropped by migration 0324 in a
-        # later release — an expiring entry until then.
-        if constraint.name in _COST_CHECK_PARITY_EXPIRES.get(constraint.table.name, frozenset()):
-            return True
+        # Migration 0349 drops the retired cost CHECK alongside its ORM
+        # mapping; any remaining remove_constraint diff is real drift.
         table_checks = _MIGRATION_OWNED_CHECKS.get(constraint.table.name, frozenset())
         return constraint.name in table_checks
     if kind == "add_constraint":
@@ -381,8 +348,8 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
     * ``# expires: <date> (migration <rev> drops ...)`` — an expand/contract
       entry: the ORM reference was removed one release BEFORE the DDL lands,
       so the drift disappears when that migration ships. The FAR-1902
-      organisations cost columns/CHECK are listed this way until migration
-      ``0324_drop_organisations_cost_columns`` lands.
+      organisations cost columns/CHECK were removed with migration 0349, so
+      no temporary parity exemption remains.
     * ``# permanent (documented repo divergence)`` — the repo's multi-backend
       convention (JSONB in migrations / generic JSON in the ORM) or
       DB-trigger-maintained columns.
