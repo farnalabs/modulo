@@ -2703,13 +2703,14 @@ async def admin_billing_overview(
         )
     ],
     status_code=status.HTTP_403_FORBIDDEN,
+    response_model=None,
     responses={
         status.HTTP_403_FORBIDDEN: {
             "description": "Active-organisation deletion is refused; use the system-admin route.",
         }
     },
 )
-def request_org_deletion(
+async def request_org_deletion(
     _current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
 ) -> None:
     """Refuse self-service deletion of the caller's own organisation.
@@ -2734,13 +2735,14 @@ class ConfirmDeletionRequest(BaseModel):
     "/org/deletion-confirm",
     dependencies=[Depends(audited("api_access_post", "organisation", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_403_FORBIDDEN,
+    response_model=None,
     responses={
         status.HTTP_403_FORBIDDEN: {
             "description": "Active-organisation deletion is refused; use the system-admin route.",
         }
     },
 )
-def confirm_org_deletion(
+async def confirm_org_deletion(
     _req: ConfirmDeletionRequest,
     _current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
 ) -> None:
@@ -2855,13 +2857,14 @@ async def export_org_data(
     "/org",
     dependencies=[Depends(audited("api_access_delete", "organisation", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_403_FORBIDDEN,
+    response_model=None,
     responses={
         status.HTTP_403_FORBIDDEN: {
             "description": "Active-organisation deletion is refused; use the system-admin route.",
         }
     },
 )
-def delete_org_immediate(
+async def delete_org_immediate(
     _current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
 ) -> None:
     """Refuse immediate deletion of the caller's own organisation.
