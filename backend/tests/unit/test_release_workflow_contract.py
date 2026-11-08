@@ -138,6 +138,30 @@ def test_image_digest_verification_fails_closed_for_missing_provenance() -> None
         validator.verify_image_digest("ghcr.io/farnalabs/modulo:v1.2.3", digest, {})
 
 
+def test_image_digest_verification_ignores_unrelated_nested_sha256_metadata() -> None:
+    validator = _release_validator()
+    requested = "sha256:" + "a" * 64
+    subject = "b" * 64
+    attestation = {
+        "verificationResult": {
+            "subject": [{"digest": {"sha256": subject}}],
+            "predicate": {"metadata": {"sha256": "a" * 64}},
+        }
+    }
+
+    with pytest.raises(validator.ReleaseValidationError, match="does not contain resolved digest"):
+        validator.verify_image_digest("ghcr.io/farnalabs/modulo:v1.2.3", requested, attestation)
+
+
+def test_image_digest_verification_rejects_malformed_subject_digest() -> None:
+    validator = _release_validator()
+    requested = "sha256:" + "a" * 64
+    attestation = {"verificationResult": {"subject": [{"digest": {"sha256": "not-a-digest"}}]}}
+
+    with pytest.raises(validator.ReleaseValidationError, match="does not contain resolved digest"):
+        validator.verify_image_digest("ghcr.io/farnalabs/modulo:v1.2.3", requested, attestation)
+
+
 def test_image_digest_cli_accepts_attestation_json_and_rejects_missing_digest(
     tmp_path: Path,
 ) -> None:

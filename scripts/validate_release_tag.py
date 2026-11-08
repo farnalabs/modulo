@@ -96,18 +96,37 @@ def resolve_n_minus_1(release_pages: Any, current: str) -> str | None:
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 
 
-def _attested_digests(payload: Any) -> set[str]:
-    """Collect sha256 subject digests from a GitHub attestation response."""
+def _subject_digests(subject: Any) -> set[str]:
+    """Extract valid SHA-256 digests from an attestation's image subjects."""
+    if not isinstance(subject, list):
+        return set()
     digests: set[str] = set()
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            if key == "sha256" and isinstance(value, str) and _DIGEST_RE.fullmatch(f"sha256:{value}"):
-                digests.add(f"sha256:{value}")
-            else:
-                digests.update(_attested_digests(value))
-    elif isinstance(payload, list):
+    for entry in subject:
+        if not isinstance(entry, dict):
+            continue
+        digest = entry.get("digest")
+        if not isinstance(digest, dict):
+            continue
+        value = digest.get("sha256")
+        if isinstance(value, str) and _DIGEST_RE.fullmatch(f"sha256:{value}"):
+            digests.add(f"sha256:{value}")
+    return digests
+
+
+def _attested_digests(payload: Any) -> set[str]:
+    """Collect digests only from GitHub attestation image subject fields."""
+    if isinstance(payload, list):
+        digests: set[str] = set()
         for item in payload:
             digests.update(_attested_digests(item))
+        return digests
+    if not isinstance(payload, dict):
+        return set()
+
+    digests = _subject_digests(payload.get("subject"))
+    verification_result = payload.get("verificationResult")
+    if isinstance(verification_result, dict):
+        digests.update(_subject_digests(verification_result.get("subject")))
     return digests
 
 
