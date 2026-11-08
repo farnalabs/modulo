@@ -180,7 +180,7 @@ class TestListConnectorInstances:
         cp_result.has_more = True
         paginator_mock.paginate = AsyncMock(return_value=cp_result)
 
-        with patch.object(CursorPaginator, "__new__", return_value=paginator_mock):
+        with patch.object(CursorPaginator, "paginate", paginator_mock.paginate):
             result = await list_connector_instances(
                 mock_session,
                 organisation_id=_ORG_ID,
@@ -209,7 +209,7 @@ class TestListConnectorInstances:
         cp_result.has_more = False
         paginator_mock.paginate = AsyncMock(return_value=cp_result)
 
-        with patch.object(CursorPaginator, "__new__", return_value=paginator_mock):
+        with patch.object(CursorPaginator, "paginate", paginator_mock.paginate):
             await list_connector_instances(
                 mock_session,
                 organisation_id=_ORG_ID,
@@ -236,7 +236,7 @@ class TestListConnectorInstances:
         cp_result.has_more = False
         paginator_mock.paginate = AsyncMock(return_value=cp_result)
 
-        with patch.object(CursorPaginator, "__new__", return_value=paginator_mock):
+        with patch.object(CursorPaginator, "paginate", paginator_mock.paginate):
             await list_connector_instances(
                 mock_session,
                 organisation_id=_ORG_ID,
@@ -261,7 +261,7 @@ class TestListConnectorInstances:
         cp_result.has_more = False
         paginator_mock.paginate = AsyncMock(return_value=cp_result)
 
-        with patch.object(CursorPaginator, "__new__", return_value=paginator_mock):
+        with patch.object(CursorPaginator, "paginate", paginator_mock.paginate):
             await list_connector_instances(mock_session, cursor="test-cursor")
 
         stmt = paginator_mock.paginate.await_args.args[1]
