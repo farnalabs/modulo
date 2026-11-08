@@ -320,35 +320,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             client_key = self._client_key(request)
             rule = self._rule_for(request)
 
-            registry_failed = False
-            try:
-                if type(self._registry) is RateLimiterRegistry:
-                    allowed, retry_after = await self._registry.check_with_retry_after(
-                        client_key,
-                        rule.max_requests,
-                        rule.window_s,
-                    )
-                else:
-                    result = await self._registry.check(
-                        client_key,
-                        rule.max_requests,
-                        rule.window_s,
-                    )
-                    if isinstance(result, tuple):
-                        allowed, retry_after = result
-                    else:
-                        allowed, retry_after = result, rule.window_s
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                registry_failed = True
-                _log.warning(
-                    "ratelimit.check_failed",
-                    extra={"client_key": client_key},
-                    exc_info=True,
-                )
-                allowed = True
-                retry_after = rule.window_s
+            allowed, retry_after, registry_failed = await self._check_registry(client_key, rule)
             if rule.path_prefix == DEMO_RULE_PREFIX and (
                 registry_failed or isinstance(self._registry, _NoopRateLimiter)
             ):
@@ -369,6 +341,42 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 ).to_response(headers={"Retry-After": str(retry_after)})
         response: Response = await call_next(request)
         return response
+
+    async def _check_registry(self, client_key: str, rule: RateLimitRule) -> tuple[bool, int, bool]:
+        """Evaluate the registry, returning ``(allowed, retry_after, registry_failed)``.
+
+        The Redis-backed registry exposes ``check_with_retry_after`` so the 429
+        can report the remaining window; every other registry (the noop
+        limiter, test doubles) keeps the bool ``check`` interface, and a tuple
+        return is accepted for callers that already carry a retry-after. A
+        failing registry degrades to fail-open (``allowed=True``) and reports
+        ``registry_failed=True`` so the demo rule can engage its local floor.
+        """
+        try:
+            if type(self._registry) is RateLimiterRegistry:
+                allowed, retry_after = await self._registry.check_with_retry_after(
+                    client_key,
+                    rule.max_requests,
+                    rule.window_s,
+                )
+                return allowed, retry_after, False
+            result = await self._registry.check(
+                client_key,
+                rule.max_requests,
+                rule.window_s,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "ratelimit.check_failed",
+                extra={"client_key": client_key},
+                exc_info=True,
+            )
+            return True, rule.window_s, True
+        if isinstance(result, tuple):
+            return result[0], result[1], False
+        return result, rule.window_s, False
 
     def _should_rate_limit(self, request: Request) -> bool:
         if request.method not in ("POST", "PUT", "PATCH", "GET"):
