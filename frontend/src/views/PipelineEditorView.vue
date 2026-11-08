@@ -2185,7 +2185,7 @@ import { formatDateShort } from '../lib/formatDate'
 import { formatCompactDuration, worstCaseForEvent, type WorstCase } from '../lib/worstCase'
 import { withTimeout } from '../lib/requestTimeout'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'
-import { layoutNodes } from '../utils/graph-layout'
+import { layoutNodes, layoutNodesIncremental } from '../utils/graph-layout'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
 import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
@@ -2318,14 +2318,23 @@ const userOwnedLayoutPipelines = new Map<string, boolean>()
 const layoutUserOwned = ref(false)
 const draftLayoutOwnership = ref<LayoutOwnership | undefined>(undefined)
 interface PositionSnapshot { x: number; y: number }
+interface ProvenanceMap { [nodeId: string]: 'user' | 'generated' }
 interface ArrangeUndoSnapshot {
   raw: Record<string, PositionSnapshot>
   flow: Record<string, PositionSnapshot>
   userOwned: boolean
   ownership: LayoutOwnership | undefined
+  /** The generated layout BEFORE the Arrange action (for incremental undo). */
+  generatedLayout: Record<string, PositionSnapshot>
+  /** Provenance of each node before the Arrange action. */
+  provenance: ProvenanceMap
 }
 
 const arrangeUndo = ref<ArrangeUndoSnapshot | null>(null)
+/** The last computed generated layout (before user drags). */
+const lastGeneratedLayout = ref<Record<string, PositionSnapshot>>({})
+/** Provenance of each node's current position: 'user' for manual drags, 'generated' for layout. */
+const nodeProvenance = ref<ProvenanceMap>({})
 const connectionAnnouncement = ref('')
 
 // Docked-toolbar styling: one height/radius/spacing per action class so the
@@ -3807,21 +3816,58 @@ function applyGeneratedLayoutIfUnplaced(): void {
     layoutUserOwned.value = true
     return
   }
-  applyGraphPositions(computeGraphLayout())
+  const generatedPositions = computeGraphLayout()
+  applyGraphPositions(generatedPositions)
+  // Store the generated layout and mark all nodes as generated provenance
+  lastGeneratedLayout.value = generatedPositions
+  nodeProvenance.value = Object.fromEntries(
+    rawNodes.value.map((node: any) => [node.id, 'generated' as const]),
+  )
   layoutUserOwned.value = false
   setDraftLayoutOwnership('generated')
 }
 
 /** Explicit Arrange graph: replace the arrangement and restore generated ownership. */
-function arrangeGraph(): void {
+async function arrangeGraph(): Promise<void> {
   if (isViewing.value || rawNodes.value.length === 0) return
+  // Capture the pre-Arrange generated layout and provenance for incremental undo
+  const preArrangeGeneratedLayout = { ...lastGeneratedLayout.value }
+  const preArrangeProvenance = { ...nodeProvenance.value }
   const undo: ArrangeUndoSnapshot = {
     raw: snapshotPositions(rawNodes.value),
     flow: snapshotPositions(flowNodes.value),
     userOwned: layoutUserOwned.value,
     ownership: getLayoutOwnership(),
+    generatedLayout: preArrangeGeneratedLayout,
+    provenance: preArrangeProvenance,
   }
-  applyGraphPositions(computeGraphLayout())
+  // Build nodes input for layoutNodesIncremental
+  const nodesInput = rawNodes.value.map((node: any) => ({
+    id: node.id,
+    node_type: node.node_type,
+    label: node.label,
+    width: node.width,
+    height: node.height,
+    position: node.position,
+  }))
+  const edgesInput = rawEdges.value.map((edge: any) => ({
+    source: edge.source_node_id,
+    target: edge.target_node_id,
+    edge_type: edge.edge_type,
+  }))
+  const laidOut = layoutNodesIncremental(
+    nodesInput,
+    edgesInput,
+    preArrangeGeneratedLayout,
+    preArrangeProvenance,
+  )
+  const newPositions = Object.fromEntries(laidOut.map((node) => [node.id, { ...node.position }]))
+  applyGraphPositions(newPositions)
+  // Update the stored generated layout and provenance
+  lastGeneratedLayout.value = newPositions
+  nodeProvenance.value = Object.fromEntries(
+    laidOut.map((node) => [node.id, preArrangeProvenance[node.id] === 'user' ? 'user' as const : 'generated' as const]),
+  )
   arrangeUndo.value = undo
   layoutUserOwned.value = false
   setDraftLayoutOwnership('generated')
@@ -3840,6 +3886,9 @@ function undoArrangeGraph(): void {
   flowNodes.value = restorePositions(flowNodes.value, undo.flow)
   layoutUserOwned.value = undo.userOwned
   setDraftLayoutOwnership(undo.ownership)
+  // Restore the pre-Arrange generated layout and provenance
+  lastGeneratedLayout.value = undo.generatedLayout
+  nodeProvenance.value = undo.provenance
   arrangeUndo.value = null
 }
 
@@ -3857,7 +3906,15 @@ function syncNodePositionsFromFlow(): void {
 
 function onNodeDragStop(): void {
   if (isViewing.value) return
+  const beforeDrag = snapshotPositions(rawNodes.value)
   syncNodePositionsFromFlow()
+  // Mark dragged nodes as user provenance
+  for (const node of rawNodes.value) {
+    const previous = beforeDrag[node.id]
+    if (previous && node.position && (node.position.x !== previous.x || node.position.y !== previous.y)) {
+      nodeProvenance.value = { ...nodeProvenance.value, [node.id]: 'user' }
+    }
+  }
   layoutUserOwned.value = true
   setDraftLayoutOwnership('user')
   arrangeUndo.value = null
