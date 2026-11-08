@@ -1010,8 +1010,9 @@
           v-model:edges="displayEdges"
           :node-types="nodeTypes"
           :default-edge-options="defaultEdgeOptions"
-          :fit-view-on-init="false"
-          :source-position="Position.Right"
+           :fit-view-on-init="false"
+           :only-render-visible-elements="displayNodes.length >= PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD"
+           :source-position="Position.Right"
           :target-position="Position.Left"
           :nodes-draggable="!isViewing"
           :nodes-connectable="!isViewing"
@@ -2268,7 +2269,7 @@ import {
 import { formatDateShort } from '../lib/formatDate'
 import { formatCompactDuration, worstCaseForEvent, type WorstCase } from '../lib/worstCase'
 import { withTimeout } from '../lib/requestTimeout'
-import { CANVAS_EDGE_STROKE } from '../constants/canvas'
+import { CANVAS_EDGE_STROKE, PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD } from '../constants/canvas'
 import { layoutNodes } from '../utils/graph-layout'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'

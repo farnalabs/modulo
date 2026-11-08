@@ -18,3 +18,10 @@
  * `url('#<id>')`, and a space in that fragment would break the lookup.
  */
 export const CANVAS_EDGE_STROKE = 'hsl(var(--muted-foreground)/0.6)'
+
+/**
+ * Node count at which Vue Flow's built-in viewport culling is worthwhile.
+ * Keep smaller graphs fully rendered so selection and keyboard interactions
+ * retain their simplest path; the threshold is intentionally deterministic.
+ */
+export const PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD = 100
