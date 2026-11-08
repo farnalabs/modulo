@@ -10,6 +10,15 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from modulo.determination.models import (
+    DeterminationAttempt,
+    EvidenceReference,
+    ProposalContract,
+    ProposalFact,
+    SourceInventoryItem,
+    UnavailableEvidence,
+    UnresolvedAssumption,
+)
 from modulo.determination.scanner import ScanSample, _repo_name
 
 _VALID_CONFIDENCES = frozenset({"high", "medium", "low"})
@@ -298,3 +307,126 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
         *_find_issue_lifecycle(data),
         *_find_overview(data),
     ]
+
+
+def build_proposal_contract(
+    samples: list[ScanSample],
+    findings: list[Finding] | None = None,
+    *,
+    attempt_id: uuid.UUID | None = None,
+    proposal_id: uuid.UUID | None = None,
+) -> ProposalContract:
+    """Build the read-only, versioned contract carried by an editable draft.
+
+    Scan samples are observed source records. Findings are derived from those
+    records, while missing/error samples become explicit unavailable evidence or
+    unresolved assumptions. The returned contract intentionally has no activation
+    operation or executable pipeline state.
+    """
+    resolved_findings = findings if findings is not None else infer(samples)
+    attempt_id = attempt_id or uuid.uuid4()
+    proposal_id = proposal_id or uuid.uuid4()
+    inventory: list[SourceInventoryItem] = []
+    unavailable: list[UnavailableEvidence] = []
+    provenance: list[EvidenceReference] = []
+    observed: list[ProposalFact] = []
+    derived: list[ProposalFact] = []
+
+    for sample in samples:
+        source_id = f"{sample.connector_id}:{sample.resource}"
+        source_status = "unavailable" if sample.error else "available"
+        inventory.append(
+            SourceInventoryItem(
+                source_id=source_id,
+                connector_type=sample.connector_type.value,
+                resource=sample.resource,
+                sample_count=sample.sample_count,
+                status=source_status,
+                error=sample.error,
+            )
+        )
+        if sample.error:
+            unavailable.append(
+                UnavailableEvidence(
+                    source_id=source_id,
+                    requested_resource=sample.resource,
+                    reason=sample.error,
+                )
+            )
+        elif sample.records:
+            ref = EvidenceReference(
+                reference_id=f"evidence:{source_id}",
+                source_id=source_id,
+                locator=f"scan:{sample.resource}",
+                provenance="observed",
+            )
+            provenance.append(ref)
+            observed.append(
+                ProposalFact(
+                    id=uuid.uuid5(uuid.NAMESPACE_URL, source_id),
+                    statement=f"Observed {sample.sample_count} records from {sample.resource}",
+                    kind="observed",
+                    confidence="high",
+                    evidence_refs=[ref],
+                )
+            )
+
+    for index, finding in enumerate(resolved_findings):
+        matched_ref = next((item for item in provenance if item.source_id in finding.evidence), None)
+        refs = [matched_ref] if matched_ref is not None else []
+        derived.append(
+            ProposalFact(
+                id=uuid.uuid5(uuid.NAMESPACE_URL, f"finding:{index}:{finding.category}:{finding.finding}"),
+                statement=finding.finding,
+                kind="derived",
+                confidence=finding.confidence,
+                evidence_refs=refs,
+            )
+        )
+
+    if not samples:
+        unavailable.append(
+            UnavailableEvidence(
+                source_id="determination:none",
+                requested_resource="determination sources",
+                reason="No determination sources were available",
+            )
+        )
+    uncertainty = [f.uncertainty for f in resolved_findings if f.uncertainty]
+    assumptions = [
+        UnresolvedAssumption(
+            id=uuid.uuid5(uuid.NAMESPACE_URL, f"assumption:{index}:{text}"),
+            statement=text,
+            reason="Determination evidence is insufficient to resolve this claim.",
+            evidence_refs=[],
+        )
+        for index, text in enumerate(uncertainty)
+    ]
+    confidence = "high" if derived and all(item.confidence == "high" for item in derived) else "medium"
+    if not derived or any(item.confidence == "low" for item in derived):
+        confidence = "low"
+    return ProposalContract(
+        proposal_id=proposal_id,
+        attempt=DeterminationAttempt(
+            id=attempt_id,
+            status="completed_with_gaps" if unavailable or assumptions else "completed",
+            source_inventory=inventory
+            or [
+                SourceInventoryItem(
+                    source_id="determination:none",
+                    connector_type="none",
+                    resource="none",
+                    sample_count=0,
+                    status="unavailable",
+                    error="No determination sources were available",
+                )
+            ],
+        ),
+        observed_facts=observed,
+        derived_elements=derived,
+        unresolved_assumptions=assumptions,
+        unavailable_evidence=unavailable,
+        confidence=confidence,
+        uncertainty=uncertainty,
+        provenance=provenance,
+    )

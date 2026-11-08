@@ -72,6 +72,8 @@ Modulo is a self-hosted Delivery Governance Platform: govern the software develo
 
 FastAPI application providing REST endpoints, WebSocket event streaming, and the Remote MCP server at `/mcp`. Implements the ViewModel pattern: every user action maps to a named command. Routes are thin: they validate input, resolve dependencies (auth, org context, PlanContext), and delegate to core engine services.
 
+`POST /api/v1/determination/draft` returns an editable, read-only proposal contract (`proposal`) alongside the draft graph. The versioned `alpha.determination-proposal.v1` contract (`backend/src/modulo/determination/models.py`) keeps observed facts separate from derived elements, records confidence and uncertainty, preserves evidence references and a complete source inventory, names unavailable evidence and unresolved assumptions, and records the determination attempt and review state. Its activation status is always `not_activated`: producing a proposal never publishes or executes a pipeline, so the endpoint's existing read-only semantics and audit event are unchanged.
+
 Includes:
 - CORS middleware (configurable via `CORS_ORIGINS`)
 - Rate limiting middleware (Redis token bucket or in-memory fallback)
