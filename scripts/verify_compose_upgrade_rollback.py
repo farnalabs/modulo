@@ -255,6 +255,28 @@ class Matrix:
         argv = build_compose_command(self.compose_file, self.project_name, *args, env_file=self.env_file)
         return self.command(name, argv, expected=expected, env=env)
 
+    def _readiness_outcome(self, returncode: int) -> str:
+        """Label one readiness poll for the evidence transcript."""
+        if returncode == 0:
+            return "success"
+        return f"unreachable:{returncode}"
+
+    def _readiness_reached(self, *, code: str, reachable: bool, expected: bool) -> bool:
+        """Return whether a poll satisfies the requested readiness transition."""
+        is_ready = reachable and code == "200"
+        if expected:
+            return is_ready
+        return reachable and code.isdigit() and not is_ready
+
+    def _record_readiness_assertion(self, name: str, url: str, code: str, is_ready: bool) -> bool:
+        """Record the terminal readiness assertion and report the ready state."""
+        outcome = "ready" if is_ready else "not-ready"
+        self.evidence.record(
+            CommandResult(name + "-assertion", (url,), 0, f"HTTP {code}\n", ""),
+            outcome=outcome,
+        )
+        return is_ready
+
     def ready(self, name: str, *, expected: bool) -> bool:
         """Poll readiness until the requested state or the bounded deadline.
 
@@ -299,22 +321,14 @@ class Matrix:
             result = CommandResult(
                 name + f"-attempt-{attempt}", tuple(argv), raw.returncode, raw.stdout or "", raw.stderr or ""
             )
-            self.evidence.record(
-                result,
-                outcome="success" if raw.returncode == 0 else f"unreachable:{raw.returncode}",
-            )
+            self.evidence.record(result, outcome=self._readiness_outcome(raw.returncode))
             code = result.stdout.strip()
             last_code = code or "<none>"
             last_returncode = raw.returncode
             reachable = raw.returncode == 0
             is_ready = reachable and code == "200"
-            reached_expected = is_ready if expected else (reachable and code.isdigit() and not is_ready)
-            if reached_expected:
-                self.evidence.record(
-                    CommandResult(name + "-assertion", (url,), 0, f"HTTP {code}\n", ""),
-                    outcome="ready" if is_ready else "not-ready",
-                )
-                return is_ready
+            if self._readiness_reached(code=code, reachable=reachable, expected=expected):
+                return self._record_readiness_assertion(name, url, code, is_ready)
             if time.monotonic() >= deadline:
                 break
             time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
@@ -403,6 +417,44 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _run_cleanup(
+    *,
+    cleanup: list[str],
+    compose_dir: Path,
+    cleanup_env: dict[str, str],
+    timeout: int,
+    evidence: Evidence,
+    primary_error: BaseException | None,
+) -> None:
+    """Tear down the disposable compose project without masking a primary error."""
+    try:
+        result = subprocess.run(
+            cleanup,
+            cwd=compose_dir,
+            env=cleanup_env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )  # nosec B603 - fixed compose cleanup command
+        evidence.record(
+            CommandResult("cleanup", tuple(cleanup), result.returncode, result.stdout or "", result.stderr or ""),
+            outcome="cleanup-success" if result.returncode == 0 else f"cleanup-failed:{result.returncode}",
+        )
+        if result.returncode != 0 and primary_error is None:
+            raise ValidationError(f"cleanup failed with exit {result.returncode}")
+    except subprocess.TimeoutExpired as exc:
+        if primary_error is None:
+            raise ValidationError("cleanup timed out; owned containers and volumes may remain") from exc
+        print(f"cleanup timed out after primary failure: {exc}", file=sys.stderr)
+    except OSError as exc:
+        if primary_error is None:
+            raise ValidationError(f"cleanup could not run: {exc}") from exc
+        print(f"cleanup could not run after primary failure: {exc}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     compose_file = args.compose_file.resolve()
@@ -452,32 +504,14 @@ def main(argv: list[str] | None = None) -> int:
         primary_error = exc
         raise
     finally:
-        try:
-            result = subprocess.run(
-                cleanup,
-                cwd=compose_dir,
-                env=cleanup_env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=args.timeout,
-                check=False,
-            )  # nosec B603 - fixed compose cleanup command
-            evidence.record(
-                CommandResult("cleanup", tuple(cleanup), result.returncode, result.stdout or "", result.stderr or ""),
-                outcome="cleanup-success" if result.returncode == 0 else f"cleanup-failed:{result.returncode}",
-            )
-            if result.returncode != 0 and primary_error is None:
-                raise ValidationError(f"cleanup failed with exit {result.returncode}")
-        except subprocess.TimeoutExpired as exc:
-            if primary_error is None:
-                raise ValidationError("cleanup timed out; owned containers and volumes may remain") from exc
-            print(f"cleanup timed out after primary failure: {exc}", file=sys.stderr)
-        except OSError as exc:
-            if primary_error is None:
-                raise ValidationError(f"cleanup could not run: {exc}") from exc
-            print(f"cleanup could not run after primary failure: {exc}", file=sys.stderr)
+        _run_cleanup(
+            cleanup=cleanup,
+            compose_dir=compose_dir,
+            cleanup_env=cleanup_env,
+            timeout=args.timeout,
+            evidence=evidence,
+            primary_error=primary_error,
+        )
 
     result_file = evidence.directory / "RESULT"
     if primary_error is not None:
