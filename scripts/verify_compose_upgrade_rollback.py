@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shlex
 import subprocess  # nosec B404 - commands are fixed docker/curl argv lists
 import sys
@@ -57,6 +58,25 @@ def validate_tag(tag: str, *, name: str) -> str:
     if value.lower() in {"latest", "stable"}:
         raise ValidationError(f"{name} must be immutable, not {value!r}")
     return value
+
+
+#: Taint barrier for the operator-supplied compose project name (S8705).
+#:
+#: The harness forwards the project name into a ``docker compose argv``. Bound
+#: it to its legitimate character set with ``re.fullmatch`` and pass only the
+#: fresh match result to the child process, so a crafted value can never be
+#: parsed as a CLI flag or carry an argument-injection payload
+#: (pythonsecurity:S8705). Mirrors the established pattern in
+#: ``scripts/fast_lane_classify.py``.
+_PROJECT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+
+def _safe_project_name(value: str) -> str:
+    """Return *value* only when it is a safe compose project name."""
+    matched = _PROJECT_NAME_RE.fullmatch(value or "")
+    if matched is None:
+        raise ValidationError("--project-name must contain only letters, numbers, and hyphens")
+    return matched.group(0)
 
 
 def build_compose_command(compose_file: Path, project_name: str, *args: str, env_file: Path | None = None) -> list[str]:
@@ -396,8 +416,7 @@ def main(argv: list[str] | None = None) -> int:
     new_tag = validate_tag(args.new_tag, name="--new-tag")
     if old_tag == new_tag:
         raise ValidationError("--old-tag and --new-tag must be different")
-    if not args.project_name.replace("-", "").isalnum():
-        raise ValidationError("--project-name must contain only letters, numbers, and hyphens")
+    project_name = _safe_project_name(args.project_name)
 
     evidence_dir = args.evidence_dir.resolve()
     evidence_secrets = _secret_values(dict(os.environ)) | _secret_values_from_file(env_file)
@@ -410,7 +429,7 @@ def main(argv: list[str] | None = None) -> int:
         compose_file=compose_file,
         compose_dir=compose_dir,
         env_file=env_file,
-        project_name=args.project_name,
+        project_name=project_name,
         old_tag=old_tag,
         new_tag=new_tag,
         evidence=evidence,
@@ -420,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     cleanup_env = {**os.environ, "TAG": old_tag, "PORT": args.port}
     cleanup = build_compose_command(
         compose_file,
-        args.project_name,
+        project_name,
         "down",
         "--volumes",
         "--remove-orphans",

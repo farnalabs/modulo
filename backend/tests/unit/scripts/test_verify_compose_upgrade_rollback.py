@@ -32,6 +32,7 @@ Matrix = module.Matrix
 ValidationError = module.ValidationError
 build_compose_command = module.build_compose_command
 validate_tag = module.validate_tag
+safe_project_name = module._safe_project_name
 
 
 def test_validate_tag_rejects_moving_tags() -> None:
@@ -39,6 +40,17 @@ def test_validate_tag_rejects_moving_tags() -> None:
         validate_tag("latest", name="tag")
     with pytest.raises(ValidationError, match="empty"):
         validate_tag("  ", name="tag")
+
+
+@pytest.mark.parametrize("value", ["proof-123", "modulo-upgrade-4321", "A1_b2"])
+def test_safe_project_name_accepts_bounded_values(value: str) -> None:
+    assert safe_project_name(value) == value
+
+
+@pytest.mark.parametrize("value", ["", "-oops", "has space", "semi;colon", "--privileged"])
+def test_safe_project_name_rejects_argv_injection(value: str) -> None:
+    with pytest.raises(ValidationError, match="letters, numbers, and hyphens"):
+        safe_project_name(value)
 
 
 def test_build_compose_command_is_project_isolated(tmp_path: Path) -> None:
