@@ -146,6 +146,7 @@ describe('SpotlightOverlay', () => {
 
      const nextButton = wrapper.findAll('button').find((b) => b.text() === 'Next')
      expect(nextButton).toBeDefined()
+     expect(document.querySelector('[data-testid="spotlight-next"]')).not.toBeNull()
      await nextButton!.trigger('click')
      expect(spotlight.message.value).toBe('second')
      wrapper.unmount()

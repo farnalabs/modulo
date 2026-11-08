@@ -1163,6 +1163,9 @@ elements:
       - testid: spotlight-backdrop
         type: button
         dynamic_testid: false
+      - testid: spotlight-next
+        type: button
+        dynamic_testid: false
       - testid: page-header-right
         type: element
         dynamic_testid: false

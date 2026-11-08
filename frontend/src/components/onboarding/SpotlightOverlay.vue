@@ -32,6 +32,7 @@
              v-if="spotlight.hasNext.value"
              type="button"
              class="shrink-0 rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent"
+             data-testid="spotlight-next"
              @click="spotlight.next"
            >
              {{ $t('components.onboarding.SpotlightOverlay.next') }}
