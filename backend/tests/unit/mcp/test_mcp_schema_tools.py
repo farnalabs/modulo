@@ -484,12 +484,95 @@ class TestUpdateModelBackend(AuthContext):
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
-    async def test_clear_fallback_chain_does_not_accept_credentials(
+    @patch("modulo.db.crud.model_backend.update_model_backend")
+    @patch("modulo.db.crud.model_backend.get_model_backend")
+    async def test_clear_fallback_chain_clears_the_chain(
+        self, mock_get: AsyncMock, mock_update: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        backend_id = uuid.uuid4()
+        backend = MagicMock(
+            id=backend_id,
+            organisation_id=ORG_ID,
+            owner_team_id=None,
+            fallback_backend_ids=[],
+            credentials_ciphertext=b"secret",
+        )
+        mock_get.return_value = backend
+        mock_update.return_value = backend
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        result = await update_model_backend(model_backend_id=str(backend_id), clear_fallback_chain=True)
+
+        assert result["fallback_backend_ids"] == []
+        assert mock_update.call_args.args[2]["fallback_backend_ids"] == []
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_invalid_uuid_rejected_even_when_clearing_chain(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         result = await update_model_backend(model_backend_id="not-a-uuid", clear_fallback_chain=True)
         assert result["error"] == "invalid_id"
+
+    @pytest.mark.parametrize(
+        ("kwargs", "expected_loc", "expected_msg"),
+        [
+            ({"tier": "not-a-tier"}, "tier", "'native'"),
+            ({"name": ""}, "name", "at least 1 character"),
+            ({"name": "x" * 256}, "name", "at most 255 characters"),
+            ({"display_name": ""}, "display_name", "at least 1 character"),
+            ({"model_id": ""}, "model_id", "at least 1 character"),
+            ({"model_id": "y" * 129}, "model_id", "at most 128 characters"),
+            ({"visibility": "team"}, None, "owner_team_id is required"),
+        ],
+    )
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.model_backend.update_model_backend")
+    @patch("modulo.db.crud.model_backend.get_model_backend")
+    async def test_rejects_invalid_scalar_fields_using_http_contract(
+        self,
+        mock_get: AsyncMock,
+        mock_update: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+        kwargs: dict[str, object],
+        expected_loc: str | None,
+        expected_msg: str,
+    ) -> None:
+        """MCP must not be a looser validation surface than HTTP PATCH."""
+        backend = MagicMock(id=uuid.uuid4(), organisation_id=ORG_ID, owner_team_id=None)
+        mock_get.return_value = backend
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        result = await update_model_backend(model_backend_id=str(backend.id), **kwargs)
+
+        assert result["error"] == "validation_error", result
+        matches = [
+            err
+            for err in result["detail"]
+            if expected_msg in err["msg"] and (expected_loc is None or expected_loc in err["loc"])
+        ]
+        assert matches, result["detail"]
+        mock_update.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.model_backend.update_model_backend")
+    @patch("modulo.db.crud.model_backend.get_model_backend")
+    async def test_duplicate_name_maps_to_conflict(
+        self, mock_get: AsyncMock, mock_update: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        backend = MagicMock(id=uuid.uuid4(), organisation_id=ORG_ID, owner_team_id=None)
+        mock_get.return_value = backend
+        mock_update.side_effect = IntegrityError("stmt", {}, Exception("duplicate key"))
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        result = await update_model_backend(model_backend_id=str(backend.id), name="duplicate")
+
+        assert result["error"] == "conflict", result
+        assert result["field"] == "name"
 
 
 # ---------------------------------------------------------------------------

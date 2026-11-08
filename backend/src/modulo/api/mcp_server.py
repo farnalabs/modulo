@@ -8622,13 +8622,14 @@ async def update_model_backend(
         except ValueError as exc:
             return {"error": "invalid_id", "field": "fallback_backend_ids", "detail": str(exc)}
 
-        from modulo.api.routes.model_backends import _validate_fallback_ids
+        from pydantic import ValidationError as PydanticValidationError
+
+        from modulo.api.routes.model_backends import ModelBackendUpdate, _validate_fallback_ids
         from modulo.db.crud.model_backend import get_model_backend as db_get_model_backend
         from modulo.db.crud.model_backend import update_model_backend as db_update_model_backend
 
         org_id = _ctx_org_id_val()
-        updates: dict[str, Any] = {}
-        updates = {
+        updates: dict[str, Any] = {
             field: value
             for field, value in (
                 ("name", name),
@@ -8647,6 +8648,24 @@ async def update_model_backend(
             existing = await db_get_model_backend(s, backend_id)
             if existing is None or existing.organisation_id != org_id:
                 return {"error": "not_found", "detail": f"Model backend {model_backend_id} not found"}
+
+            # Reuse the HTTP PATCH request contract so MCP cannot bypass the
+            # tier enum, the name/model_id bounds, or the team-visibility
+            # invariant that the REST route enforces.
+            validation_payload: dict[str, Any] = {
+                key: value for key, value in updates.items() if key != "fallback_backend_ids"
+            }
+            # owner_team_id is not exposed by this tool: carry the existing
+            # owner forward so an already-team backend stays valid, and let the
+            # shared validator reject a new team visibility with no owner.
+            validation_payload["owner_team_id"] = (
+                existing.owner_team_id if validation_payload.get("visibility") == "team" else None
+            )
+            try:
+                ModelBackendUpdate.model_validate(validation_payload)
+            except PydanticValidationError as exc:
+                return {"error": "validation_error", "detail": exc.errors(include_url=False)}
+
             if fallback_ids is not None:
                 await _validate_fallback_ids(s, org_id, fallback_ids, backend_id=backend_id)
             updated = await db_update_model_backend(s, backend_id, updates)
@@ -8660,6 +8679,16 @@ async def update_model_backend(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except FastAPIHTTPException as exc:
         return {"error": "validation_error", "detail": exc.detail}
+    except IntegrityError:
+        # The DB uniqueness constraint on (organisation_id, name) is the
+        # race-proof backstop; mirror the HTTP 409 already-exists contract
+        # instead of leaking a generic internal error.
+        _log.exception("update_model_backend name conflict")
+        return {
+            "error": "conflict",
+            "field": "name",
+            "detail": "A model backend with this name already exists in this organisation",
+        }
     except ProgrammingError:
         _log.exception("update_model_backend failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}

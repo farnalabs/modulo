@@ -873,7 +873,22 @@ async def _validate_fallback_ids(
     # every backend in the loop retry forever instead of reaching a terminal
     # provider failure.
     rows = list((await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars())
-    graph = {row.id: [uuid.UUID(str(fid)) for fid in (row.fallback_backend_ids or [])] for row in rows}
+    graph: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for row in rows:
+        children: list[uuid.UUID] = []
+        for fid in row.fallback_backend_ids or []:
+            try:
+                children.append(uuid.UUID(str(fid)))
+            except (ValueError, TypeError):
+                # ``fallback_backend_ids`` is a legacy JSON column, so a row
+                # can predate UUID validation. A malformed entry cannot form a
+                # cycle, so skip it instead of 500ing the whole validation.
+                logger.warning(
+                    "Ignoring malformed fallback_backend_id %r on model backend %s",
+                    fid,
+                    row.id,
+                )
+        graph[row.id] = children
     if backend_id is not None:
         graph[backend_id] = unique_ids
 
