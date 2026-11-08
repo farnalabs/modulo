@@ -201,7 +201,10 @@ _DB_BACKSTOP_DECISION: dict[str, str] = {
     "admin_update_user": "backstop",
     "admin_deactivate_user": "backstop",
     "admin_reactivate_user": "backstop",
-    "admin_reset_password": "backstop",
+    # Key is an admin ROUTE NAME, value a backstop decision category - not a
+    # credential. Sonar's S2068 matches the "password" substring in the key
+    # against the string value; there is no secret here.
+    "admin_reset_password": "backstop",  # NOSONAR python:S2068 — route name + decision category, not a credential
     "admin_invite_user": "backstop",
     "admin_list_invitations": "backstop",
     "admin_revoke_invitation": "backstop",
