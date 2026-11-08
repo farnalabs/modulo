@@ -1,11 +1,16 @@
 <template>
-  <!-- The backdrop is decorative and carries aria-hidden, but the coachmark
-       card does NOT: it now holds a focusable "Next" control, and focusable
-       content inside an aria-hidden subtree is unreachable for assistive tech.
-       Keep the two layers as siblings so the card stays exposed. -->
+  <!-- The backdrop is a real button so pointer dismissal has a keyboard
+       equivalent. The coachmark card is a sibling, NOT a child, so its
+       focusable "Next" control stays exposed to assistive tech rather than
+       sitting inside a backdrop subtree. -->
   <div v-if="spotlight.active.value" class="fixed inset-0 z-[60]" data-testid="spotlight-overlay">
-    <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- modal backdrop: pointer dismissal; Escape is handled at document level -->
-    <div class="absolute inset-0 bg-black/50" aria-hidden="true" @click="handleDismiss" />
+    <button
+      type="button"
+      class="absolute inset-0 bg-black/50"
+      :aria-label="$t('common.close')"
+      data-testid="spotlight-backdrop"
+      @click="handleDismiss"
+    />
     <div
       v-if="elementRect && spotlight.targetElement.value"
       class="absolute rounded-lg border-2 border-primary shadow-[0_0_0_4px_rgba(59,130,246,0.3)] pointer-events-auto"
