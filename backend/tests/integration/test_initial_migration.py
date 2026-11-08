@@ -303,8 +303,6 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
         # CHECK guards that exist ONLY in migrations (0157/0165/0192) —
         # per-(table, constraint) entries.
         constraint = inner[1]
-        # Migration 0349 drops the retired cost CHECK alongside its ORM
-        # mapping; any remaining remove_constraint diff is real drift.
         table_checks = _MIGRATION_OWNED_CHECKS.get(constraint.table.name, frozenset())
         return constraint.name in table_checks
     if kind == "add_constraint":
@@ -345,11 +343,10 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
     rewrite — the old blanket classes hid genuine drift). Every entry carries
     a one-line reason:
 
-    * ``# expires: <date> (migration <rev> drops ...)`` — an expand/contract
-      entry: the ORM reference was removed one release BEFORE the DDL lands,
-      so the drift disappears when that migration ships. The FAR-1902
-      organisations cost columns/CHECK were removed with migration 0349, so
-      no temporary parity exemption remains.
+     * ``# expires: <date> (migration <rev> drops ...)`` — an expand/contract
+       entry: the ORM reference was removed one release BEFORE the DDL lands,
+       so the drift disappears when that migration ships.
+
     * ``# permanent (documented repo divergence)`` — the repo's multi-backend
       convention (JSONB in migrations / generic JSON in the ORM) or
       DB-trigger-maintained columns.
@@ -523,21 +520,6 @@ class TestParityIgnoreListClassify:
         # Audit-chain FK + column (0108).
         assert _is_benign_migration_managed(("remove_fk", self._fk("agents", "created_by")))
         assert _is_benign_migration_managed(("remove_column", None, "agents", Column("created_by", UUID())))
-        # FAR-1902 expand/contract: the cost columns/CHECK are unmapped from
-        # the ORM while migration 0324 has not shipped yet — the ORM-side
-        # remove_column / remove_constraint is benign until then.
-        assert _is_benign_migration_managed(
-            ("remove_column", None, "organisations", Column("max_run_cost_cents", Integer()))
-        )
-        assert _is_benign_migration_managed(
-            ("remove_column", None, "organisations", Column("spend_ceiling_cents", Integer()))
-        )
-        assert _is_benign_migration_managed(
-            ("remove_column", None, "organisations", Column("org_cumulative_spend_cents", Integer()))
-        )
-        assert _is_benign_migration_managed(
-            ("remove_constraint", self._check("organisations", "ck_organisations_cum_spend"))
-        )
         # Table with no ORM model (FAR-583 quarantine side table).
         assert _is_benign_migration_managed(
             ("remove_table", Table("run_node_outputs_quarantine", MetaData(), Column("run_id", Integer)))
@@ -584,8 +566,6 @@ class TestParityIgnoreListClassify:
             ("remove_constraint", self._check("brand_new_table", "ck_brand_new_guard"))
         )
         assert not _is_benign_migration_managed(("remove_constraint", self._check("runs", "ck_run_brand_new_guard")))
-        # The FAR-1902 expiry is per-(table, constraint), not per-table: an
-        # UNLISTED organisations CHECK is real drift.
         assert not _is_benign_migration_managed(
             ("remove_constraint", self._check("organisations", "ck_organisations_brand_new_guard"))
         )
@@ -614,8 +594,6 @@ class TestParityIgnoreListClassify:
         # A listed table's UNLISTED remove_column is real drift (the B2b
         # expiry set is per-column, never per-table).
         assert not _is_benign_migration_managed(("remove_column", None, "runs", Column("brand_new_column", JSONB())))
-        # FAR-1902 expiry is likewise per-column: a NEW organisations column
-        # the ORM drops is real drift, not covered by the cost-column set.
         assert not _is_benign_migration_managed(
             ("remove_column", None, "organisations", Column("brand_new_column", Integer()))
         )
