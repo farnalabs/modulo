@@ -1,7 +1,7 @@
 """Contract checks for the unified GitHub Release publication paths."""
 
 import importlib.util
-import re
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -27,20 +27,6 @@ def _release_validator() -> Any:
 
 def _release_workflow_text() -> str:
     return RELEASE_WORKFLOW.read_text(encoding="utf-8")
-
-
-def _render_matrix_compose_image(compose_text: str, tag: str) -> str:
-    rendered, count = re.subn(
-        r"(?m)^(\s*image:\s*ghcr\.io/farnalabs/modulo:)[^\r\n]+$",
-        rf"\1{tag}",
-        compose_text,
-        count=1,
-    )
-    if count != 1:
-        raise AssertionError(f"expected one modulo image selector, found {count}")
-    compose = yaml.safe_load(rendered)
-
-    return compose["services"]["modulo"]["image"]
 
 
 def test_bundle_release_uses_product_title_without_changing_bundle_identity() -> None:
@@ -81,18 +67,18 @@ def test_rc_validation_runs_the_docker_acceptance_matrix_before_pen_test() -> No
     assert '--old-tag "$OLD_TAG"' in matrix
     assert '--new-tag "$RC_TAG"' in matrix
     assert "alpha-docker-upgrade-rollback-${{ github.run_id }}" in matrix
-    assert 'replacement = "${TAG:?TAG is required - set the image tag for this matrix phase}"' in matrix
-    assert "Rendered matrix compose image selector" in matrix
+    assert "scripts/render_validation_compose.py" in matrix
     assert "packaged compose asset is intentionally hard-pinned to RC_TAG" in matrix
     assert matrix_start < pen_test_start
 
 
-def test_rc_validation_matrix_selects_the_image_for_each_phase() -> None:
-    compose_text = """
-services:
-  modulo:
-    image: ghcr.io/farnalabs/modulo:v1.1.0-rc1
-"""
+def test_rc_validation_matrix_selects_old_and_rc_tags_through_real_helper(tmp_path: Path) -> None:
+    compose_file = tmp_path / "docker-compose.prod.yml"
+    compose_file.write_text(
+        "services:\n  modulo:\n    image: ghcr.io/farnalabs/modulo:v1.1.0-rc1\n",
+        encoding="utf-8",
+    )
+    helper = REPO_ROOT / "scripts" / "render_validation_compose.py"
     phases = {
         "clean-install-old": "v1.0.0",
         "upgrade-new": "v1.1.0-rc1",
@@ -100,7 +86,21 @@ services:
         "rollback-old": "v1.0.0",
     }
 
-    rendered_images = {phase: _render_matrix_compose_image(compose_text, tag) for phase, tag in phases.items()}
+    rendered_images: dict[str, str] = {}
+    for phase, tag in phases.items():
+        result = subprocess.run(  # noqa: S603 - fixed repository helper under test
+            [sys.executable, str(helper), "--compose-file", str(compose_file), "--tag", tag],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            env={**os.environ, "TAG": tag},
+        )
+        assert result.returncode == 0
+        rendered = yaml.safe_load(compose_file.read_text(encoding="utf-8"))
+        rendered_images[phase] = rendered["services"]["modulo"]["image"].replace(
+            "${TAG:?TAG is required - set the image tag for this matrix phase}", tag
+        )
 
     assert rendered_images == {
         "clean-install-old": "ghcr.io/farnalabs/modulo:v1.0.0",
