@@ -1,13 +1,11 @@
-"""Unit tests for the per-node output split helpers (FAR-124, P0).
+"""Unit tests for the per-node output split helpers (FAR-124).
 
 Covers the full ``split_node_output`` extraction table (sandbox_agent,
 regular agent, connector completed + failure, HITL gate incl. the pinned
 ``deliver_manual`` shape, manual-node resume, recovery markers, already-pure
 idempotence, pure-return-with-artifacts/output keys NOT re-split, lossless
-telemetry, malformed + unknown), the legacy-safe READ accessors
-(``node_return`` / ``node_telemetry`` incl. the equivalence with
-``finalize._node_output_dict``), and the edge-driven type-map extension for
-HITL gates.
+telemetry, malformed + unknown), the READ accessors (``node_return`` /
+``node_telemetry``), and the edge-driven type-map extension for HITL gates.
 """
 
 from __future__ import annotations
@@ -444,7 +442,7 @@ def test_split_recovery_skipped_omits_return_key() -> None:
     envelope = {"input": None, "output": None, "skipped": True}
     value, telemetry = split_node_output(envelope, "agent", None)
     # The return key is OMITTED: value is None and the telemetry is the sole
-    # record ({skipped: true}); the P1 writer must not write outputs_json[id].
+    # record ({skipped: true}); the writer must not write outputs_json[id].
     assert value is None
     assert telemetry == {"skipped": True}
 
@@ -571,7 +569,7 @@ def test_node_telemetry_pure_row_returns_stored() -> None:
 
 
 def test_has_telemetry_entry_true_when_entry_present() -> None:
-    """A P1+ row keyed by the node -> True (the accessor returns it verbatim)."""
+    """A split row keyed by the node -> True (the accessor returns it verbatim)."""
     assert has_telemetry_entry({"n1": {"status": "completed"}}, "n1")
     # Presence only, never the value's content: an entry of ANY shape counts.
     assert has_telemetry_entry({"n1": None}, "n1")
@@ -579,8 +577,7 @@ def test_has_telemetry_entry_true_when_entry_present() -> None:
 
 
 def test_has_telemetry_entry_false_when_entry_absent() -> None:
-    """A legacy row (or a node absent from telemetry) -> False: the accessor
-    falls back to the legacy inner output of ``outputs_json``."""
+    """A node absent from telemetry -> False; outputs are never interpreted."""
     assert not has_telemetry_entry({"n1": {"status": "completed"}}, "nope")
     assert not has_telemetry_entry({}, "n1")
 

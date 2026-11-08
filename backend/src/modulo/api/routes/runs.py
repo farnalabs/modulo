@@ -2443,15 +2443,11 @@ async def get_run_io_endpoint(
 ) -> RunIOResponse:
     """Return per-node IO for a completed run, plus generated fixture_map.
 
-    The response exposes a single NORMALIZED view (FAR-126): ``outputs_json``
-    holds each node's pure return and ``node_telemetry`` holds its exhaustive
-    telemetry. Both are resolved through the legacy-safe accessors
-    (``node_return`` / ``node_telemetry``), so legacy runs (no telemetry
-    column) are byte-identical to today's envelope shape, and P1+ runs expose
-    the split surfaces. Telemetry-only nodes (e.g. ``skipped`` recovery
-    markers without an ``outputs_json`` entry) still appear under
-    ``node_telemetry``. All surfaces — input payload, outputs, telemetry —
-    are masked for secrets.
+    ``outputs_json`` holds each node's pure return and ``node_telemetry`` holds
+    its exhaustive telemetry, exactly as stored. Telemetry-only nodes (e.g.
+    ``skipped`` recovery markers without an ``outputs_json`` entry) appear
+    under ``node_telemetry`` only. All surfaces — input payload, outputs,
+    telemetry — are masked for secrets.
     """
     try:
         async with session.begin():
@@ -2648,10 +2644,9 @@ async def export_run_fixture(
     # helper also passes non-dict payloads through unchanged.
     graph_json = _masked_snapshot_graph(snapshot.graph_json) if snapshot else {}
 
-    # Normalize to the pure return before masking (FAR-126): node_return
-    # resolves each node's pure return for new-shape rows (telemetry present)
-    # and returns the legacy envelope verbatim otherwise, so the exported
-    # outputs_json mirrors GET /runs/{id}/io and legacy runs stay byte-identical.
+    # Normalize to the pure return before masking (FAR-126): the read-side
+    # normaliser returns each node's stored pure return unchanged, so the
+    # exported outputs_json mirrors GET /runs/{id}/io.
     outputs_json = blobs.outputs
     telemetry_json = blobs.telemetry
     normalized_outputs = _normalize_run_outputs(outputs_json, telemetry_json)
@@ -2945,7 +2940,7 @@ async def get_run_node_output(
     *password*, *key*, *credential*) in the output are masked with
     bullet characters.
 
-    For P1+ (split) rows this returns the node's PURE return. When a node
+    For split rows this returns the node's PURE return. When a node
     has no return (skipped / recovered / failed-no-return) but exists in
     ``node_telemetry_json``, a DERIVED ``{status, summary}`` object is
     returned instead of a 404 — never the raw telemetry (no stdout / log

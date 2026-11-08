@@ -1,13 +1,13 @@
-"""Per-node run output split helpers (FAR-124, P0).
+"""Per-node run output split helpers (FAR-124).
 
 ``run.outputs_json[node_id]`` stores the PURE node return and
 ``node_telemetry_json[node_id]`` stores exhaustive runtime telemetry. The
 write-side splitter remains available for envelope inputs produced before the
 split, while read-side accessors expose only the stored post-split values.
 
-- ``split_node_output`` -- the WRITE-side splitter. Not called by production
-  writers until P1; fully unit-tested now. Never raises: unknown or malformed
-  envelopes produce a warning and a best-effort split.
+- ``split_node_output`` -- the WRITE-side splitter used by the production
+  writers when a pre-split envelope must be converted. Never raises: unknown or
+  malformed envelopes produce a warning and a best-effort split.
 - ``node_return`` / ``node_telemetry`` -- the READ-side accessors for pure
   returns and stored telemetry.
 - ``extend_node_type_map_from_edges`` -- stamps ``"gate"`` entries for the HITL
@@ -51,8 +51,8 @@ NODE_TYPE_GATE = "gate"
 #: default in ``build_graph_from_json`` / ``_split_agent``).
 DEFAULT_NODE_TYPE = "agent"
 
-#: Node types with a dedicated WRITE-side splitter in ``split_node_output``.
-#: These types have dedicated write-side envelope splitters.
+#: Node types with a dedicated WRITE-side envelope splitter in
+#: ``split_node_output``.
 SPLITTABLE_NODE_TYPES = frozenset(
     {
         "sandbox_agent",
@@ -296,7 +296,7 @@ def extend_node_type_map_from_edges(
 
 
 # ---------------------------------------------------------------------------
-# Per-node-type splitters (WRITE side -- production writers use them from P1)
+# Per-node-type splitters (WRITE side -- used by the production writers)
 # ---------------------------------------------------------------------------
 
 
@@ -453,9 +453,9 @@ def _split_recovery(envelope: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
 
     ``recovered`` -> return = ``input_data``, telemetry =
     ``{recovered: true, recovery_input: input_data}``. ``skipped`` -> return
-    key OMITTED: the helper returns ``(None, {skipped: true})`` and the P1
-    writer must NOT create the node's ``outputs_json`` entry (the telemetry
-    entry is the sole record).
+    key OMITTED: the helper returns ``(None, {skipped: true})`` and the writer
+    must NOT create the node's ``outputs_json`` entry (the telemetry entry is
+    the sole record).
     """
     if envelope.get("recovered") is True:
         input_data = envelope.get("input")
@@ -546,10 +546,9 @@ def split_node_output(
 ) -> tuple[Any, dict[str, Any]]:
     """Split a pre-split per-node envelope into ``(return_value, telemetry)``.
 
-    This is the WRITE-side splitter: P1 writers call it before persisting a
-    node's output so the pure return and the exhaustive telemetry land in their
-    separate columns. It is deliberately NOT called by any production writer in
-    P0 -- it is fully unit-tested now so the P1 flip is a straight swap.
+    This is the WRITE-side splitter: production writers call it when a stored
+    or incoming envelope must be converted, so the pure return and the
+    exhaustive telemetry land in their separate columns.
 
     Dispatch rules (first match wins):
 

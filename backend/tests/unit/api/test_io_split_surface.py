@@ -342,10 +342,8 @@ class TestIoLogTotals:
 
         assert body["stdout_total_length"] == 150_000
 
-    def test_total_length_falls_back_to_inline_when_no_telemetry(
-        self, client: TestClient, mock_session: AsyncMock
-    ) -> None:
-        """Legacy node without telemetry: derive from inline content length."""
+    def test_total_length_ignores_outputs_without_telemetry(self, client: TestClient, mock_session: AsyncMock) -> None:
+        """A node with only an outputs entry contributes zero (outputs are never logs)."""
         run = _make_run(
             outputs_json={"legacy-node": "hello world"},
             node_telemetry_json=None,
@@ -354,6 +352,7 @@ class TestIoLogTotals:
         body = self._get_io(client, run)
 
         assert body["stdout_total_length"] == 0
+        assert body["stderr_total_length"] == 0
 
     def test_total_length_zero_when_no_nodes(self, client: TestClient, mock_session: AsyncMock) -> None:
         """Empty run: totals are 0."""
@@ -384,7 +383,7 @@ class TestIoLogTotals:
         assert body["stdout_total_length"] == 0
 
     def test_total_length_mixed_legacy_and_new_shape_nodes(self, client: TestClient, mock_session: AsyncMock) -> None:
-        """Mix of P1 (telemetry) and legacy (envelope) nodes."""
+        """Mix of split (telemetry) and outputs-only (envelope) nodes."""
         envelope = {
             "artifacts": [
                 {
@@ -438,10 +437,17 @@ class TestIoLogTotals:
         assert body["stdout_total_length"] == 0
         assert body["stderr_total_length"] == 0
 
-    def test_total_length_ignores_null_legacy_inline_values(self, client: TestClient, mock_session: AsyncMock) -> None:
-        """A legacy dict output with null inline logs contributes 0, not ``len("None")``."""
+    def test_total_length_does_not_interpret_legacy_inline_outputs(
+        self, client: TestClient, mock_session: AsyncMock
+    ) -> None:
+        """Inline log fields on the outputs surface are ignored, not counted.
+
+        Only the telemetry surface carries log content after the split, so a
+        stored return that happens to contain ``agent_stdout`` / ``agent_stderr``
+        must contribute zero rather than inflating the totals.
+        """
         run = _make_run(
-            outputs_json={"legacy-node": {"agent_stdout": None, "agent_stderr": None}},
+            outputs_json={"legacy-node": {"agent_stdout": "x" * 1234, "agent_stderr": "e" * 99}},
             node_telemetry_json=None,
         )
 

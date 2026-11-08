@@ -16,13 +16,11 @@ never re-implements or re-scans anything:
   ``evidence.compute_work_intact`` and stored on ``runs.work_intact``) is
   consumed as an input and recorded as metadata (the decision table does not
   depend on it — the spec'd (status, error_code) table is authoritative).
- * node-return accessors (``node_output_split.node_return`` /
-   ``node_telemetry``) read the stored per-node returns, so the ``pr_url``
-   of a delivered run is recovered from real node output — from BOTH the node
-   return (outputs_json) and the node telemetry VALUE (a pr_url in
-   node_telemetry_json is a real delivery signal too).
-
-
+* node-return accessors (``node_output_split.node_return`` /
+  ``node_telemetry``) read the stored per-node returns, so the ``pr_url``
+  of a delivered run is recovered from real node output — from BOTH the node
+  return (outputs_json) and the node telemetry VALUE (a pr_url in
+  node_telemetry_json is a real delivery signal too).
 * ``evidence._declared_success_nodes`` counts declared-success nodes (recorded
   as metadata) without re-deriving the split/legacy shapes.
 * The reassembled raw-output markers (``run_node_outputs`` marker rows
@@ -71,12 +69,10 @@ harvested from the run's own output (the node's structured return, the node
 telemetry value, the FAR-188 raw-output markers) and NOTHING cross-checks that
 the run actually created the PR it names — the platform deliberately does not
 verify deliveries against an SCM of record. ``pr_url_provenance`` records,
-per URL, how it was harvested (``declared`` = the run's own output contract
-  — the node's structured return asserted it; ``matched`` = it was found in a
-  REAL telemetry entry or a
-
-FAR-188 raw-output marker, emitted output the run never asserted as a
-delivery), and ``delivery_confidence`` states plainly that every record
+per URL, how it was harvested (``declared`` = the run's own output contract —
+the node's structured return asserted it; ``matched`` = it was found in a REAL
+telemetry entry or a FAR-188 raw-output marker, emitted output the run never
+asserted as a delivery), and ``delivery_confidence`` states plainly that every record
 written today is ``agent_reported`` (FAR-1388 renamed the value from the
 ambiguous ``self_reported``, which separately names the cost-provenance
 vocabulary; rows persisted before the rename keep the old spelling and are
@@ -435,13 +431,11 @@ class ClassificationResult:
     FAR-1336 provenance metadata (additive; the verdict is unaffected):
 
     ``pr_url_provenance`` maps every URL in ``delivered_pr_urls`` to
-    ``PR_URL_PROVENANCE_DECLARED`` (it came from the node's structured RETURN
-    — the run's own output contract asserting delivery) or
-
+    ``PR_URL_PROVENANCE_DECLARED`` (it came from the node's structured RETURN —
+    the run's own output contract asserting delivery) or
     ``PR_URL_PROVENANCE_MATCHED`` (it was found in a real telemetry entry or a
     FAR-188 raw-output marker — it appears in emitted output but was never
     asserted as a delivery). A URL reachable by both routes is ``declared``
-
     (the stronger provenance wins). Empty when ``delivered_pr_urls`` is empty.
 
     FAR-1377: the map is held as a ``tuple[tuple[url, route], ...]``. The
@@ -643,19 +637,18 @@ def collect_pr_urls(
 
     Sources: (1) each node's stored return (via ``node_output_split.node_return``),
     (2) each node's telemetry VALUE (via ``node_output_split.node_telemetry`` — a
-    pr_url carried only in
-    ``node_telemetry_json`` is a real delivery signal), and (3) every FAR-188
-    raw-output marker's ``pr_url`` field, keyed by ANY attempt_key (a
-    first-attempt PR created before a sandbox stall/retry is a real delivery —
-    FAR-189 addendum).
+    pr_url carried only in ``node_telemetry_json`` is a real delivery signal),
+    and (3) every FAR-188 raw-output marker's ``pr_url`` field, keyed by ANY
+    attempt_key (a first-attempt PR created before a sandbox stall/retry is a
+    real delivery — FAR-189 addendum).
 
     FAR-1336: pass a *provenance* dict to have it filled, in the SAME single
     walk, with one entry per collected URL — ``declared`` (the node's
     structured RETURN asserted it) or ``matched`` (a REAL telemetry entry or a
-    marker only). The
-    map's keys are exactly the returned URL set — a caller-supplied
-    dict is CLEARED first, so stale pre-seeded entries cannot survive — and
-    collection order is identical whether or not *provenance* is given.
+    marker only). The map's keys are exactly the returned URL set — a
+    caller-supplied dict is CLEARED first, so stale pre-seeded entries cannot
+    survive — and collection order is identical whether or not *provenance* is
+    given.
     """
     seen: set[str] = set()
     urls: list[str] = []
