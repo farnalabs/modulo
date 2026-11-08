@@ -270,6 +270,25 @@ jobs:
             echo "::error::published predecessor bundle ${bundle_tag} has no downloadable compose asset; refusing Docker upgrade/rollback coverage"
             exit 1
           fi
+          gh release download "$bundle_tag" \
+            --repo "${{ github.repository }}" \
+            --pattern SHA256SUMS \
+            --dir "$RUNNER_TEMP" \
+            --clobber
+          published_sums="$RUNNER_TEMP/SHA256SUMS"
+          if [ ! -s "$published_sums" ]; then
+            echo "::error::published predecessor bundle ${bundle_tag} has no SHA256SUMS artifact; refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          archive_checksum_line="$(awk -v asset="$(basename "$downloaded_archive")" '$2 == asset { print; found=1 } END { if (!found) exit 1 }' "$published_sums" || true)"
+          if [ -z "$archive_checksum_line" ]; then
+            echo "::error::published predecessor bundle ${bundle_tag} has no checksum for $(basename "$downloaded_archive") in SHA256SUMS; refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          if ! printf '%s\\n' "$archive_checksum_line" | (cd "$RUNNER_TEMP" && sha256sum --check --status -); then
+            echo "::error::checksum mismatch for published predecessor bundle asset $(basename "$downloaded_archive"); refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
           bundle_dir="$(mktemp -d)"
           tar -xzf "$downloaded_archive" -C "$bundle_dir"
           compose_file="$bundle_dir/docker-compose.prod.yml"
@@ -277,7 +296,7 @@ jobs:
             echo "::error::predecessor bundle ${bundle_tag} does not contain docker-compose.prod.yml; refusing Docker upgrade/rollback coverage"
             exit 1
           fi
-          old_tag="$(COMPOSE_FILE="$compose_file" python3 - <<'PY'
+          old_tag="$(COMPOSE_FILE="$compose_file" BUNDLE_VERSION="$bundle_version" python3 - <<'PY'
           import os
           import re
           import sys
@@ -294,6 +313,12 @@ jobs:
           tag = image[len(prefix):]
           if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-rc[0-9]+)?", tag):
               sys.exit(f"predecessor compose pins non-immutable or unexpected image tag: {tag!r}")
+          expected_version = os.environ["BUNDLE_VERSION"]
+          if not re.fullmatch(rf"v{re.escape(expected_version)}(?:-rc[0-9]+)?", tag):
+              sys.exit(
+                  f"predecessor compose image tag {tag!r} does not match "
+                  f"published predecessor bundle version {expected_version!r} (including any RC suffix)"
+              )
           print(tag)
           PY
           )"

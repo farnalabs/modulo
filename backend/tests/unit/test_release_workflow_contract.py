@@ -99,6 +99,25 @@ def test_rc_validation_current_bundle_tag_selects_the_previous_published_tag() -
     assert validator.resolve_n_minus_1([releases], "bundle-v1.3.0") == "bundle-v1.2.0"
 
 
+def test_rc_validation_rejects_predecessor_checksum_and_version_mismatches() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "rc-validate.yml").read_text(encoding="utf-8")
+    matrix = workflow[
+        workflow.index("Resolve the previous published immutable bundle tag") : workflow.index(
+            "Run the Docker upgrade / failure / rollback matrix"
+        )
+    ]
+
+    assert 'gh release download "$bundle_tag"' in matrix
+    assert "--pattern SHA256SUMS" in matrix
+    assert 'published_sums="$RUNNER_TEMP/SHA256SUMS"' in matrix
+    assert "no SHA256SUMS artifact" in matrix
+    assert 'no checksum for $(basename "$downloaded_archive")' in matrix
+    assert "checksum mismatch for published predecessor bundle asset" in matrix
+    assert 'BUNDLE_VERSION="$bundle_version"' in matrix
+    assert "published predecessor bundle version" in matrix
+    assert "including any RC suffix" in matrix
+
+
 def test_rc_validation_uses_predecessor_bundle_image_tag_before_promotion() -> None:
     workflow = (REPO_ROOT / ".github" / "workflows" / "rc-validate.yml").read_text(encoding="utf-8")
     matrix = workflow[
@@ -110,7 +129,12 @@ def test_rc_validation_uses_predecessor_bundle_image_tag_before_promotion() -> N
     assert 'gh release download "$bundle_tag"' in matrix
     assert 'compose_file="$bundle_dir/docker-compose.prod.yml"' in matrix
     assert 'image = compose.get("services", {}).get("modulo", {}).get("image")' in matrix
-    assert 'old_tag="$(COMPOSE_FILE="$compose_file" python3 - <<\'PY\'' in matrix
+    assert 'old_tag="$(COMPOSE_FILE="$compose_file" BUNDLE_VERSION="$bundle_version" python3 - <<\'PY\'' in matrix
     assert 're.fullmatch(r"v[0-9]+\\.[0-9]+\\.[0-9]+(?:-rc[0-9]+)?", tag)' in matrix
+    assert 'expected_version = os.environ["BUNDLE_VERSION"]' in matrix
+    assert "published predecessor bundle version" in matrix
     assert "predecessor compose pins non-immutable or unexpected image tag" in matrix
+    assert 'published_sums="$RUNNER_TEMP/SHA256SUMS"' in matrix
+    assert 'no checksum for $(basename "$downloaded_archive")' in matrix
+    assert "checksum mismatch for published predecessor bundle asset" in matrix
     assert "does not derive old_tag from bundle_tag" not in matrix
