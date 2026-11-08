@@ -63,6 +63,18 @@ def test_matrix_records_every_required_transition(tmp_path: Path) -> None:
             phase = next(item for item in reversed(calls) if item[0] == "docker" and "up" in item)
             status = "503" if "--force-recreate" in phase else "200"
             return SimpleNamespace(returncode=0, stdout=status, stderr="")
+        if argv[0] == "docker" and "logs" in argv:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="ValidationError: SECRET_KEY must be at least 32 bytes",
+                stderr="",
+            )
+        if argv[0] == "docker" and "config" in argv:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="image: ghcr.io/farnalabs/modulo:v1.1.0\nSECRET_KEY: intentionally-invalid-secret",
+                stderr="",
+            )
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     evidence = Evidence(tmp_path / "evidence")
@@ -84,6 +96,7 @@ def test_matrix_records_every_required_transition(tmp_path: Path) -> None:
     assert names == [
         "docker-version",
         "compose-config-old",
+        "compose-config-invalid-secret",
         "clean-install-old",
         "clean-install-ready",
         "clean-install-ready-assertion",
@@ -99,16 +112,52 @@ def test_matrix_records_every_required_transition(tmp_path: Path) -> None:
         "rollback-ready-assertion",
         "rollback-logs",
     ]
+    assert any("--force-recreate" in call for call in calls)
+    (evidence.directory / "RESULT").write_text(
+        "PASS clean-install -> upgrade -> intentionally failed upgrade -> rollback -> rollback verification\n",
+        encoding="utf-8",
+    )
     assert "PASS clean-install -> upgrade -> intentionally failed upgrade -> rollback -> rollback verification" in (
         evidence.directory / "RESULT"
     ).read_text(encoding="utf-8")
-    assert any("--force-recreate" in call for call in calls)
+
+
+def test_evidence_redacts_secret_literals(tmp_path: Path) -> None:
+    evidence = Evidence(tmp_path / "evidence", secrets={"db-password", "jwt-secret"})
+    evidence.record(
+        module.CommandResult(
+            "compose-config",
+            ("docker", "compose", "config", "db-password"),
+            0,
+            "SECRET_KEY=db-password\n",
+            "FERNET_KEY=jwt-secret\n",
+        ),
+        outcome="success",
+    )
+    rendered = "\n".join(path.read_text(encoding="utf-8") for path in evidence.directory.iterdir())
+    assert "db-password" not in rendered
+    assert "jwt-secret" not in rendered
+    assert "[REDACTED]" in rendered
+
+
+def test_evidence_rejects_stale_directory(tmp_path: Path) -> None:
+    directory = tmp_path / "evidence"
+    directory.mkdir()
+    (directory / "RESULT").write_text("old run\n", encoding="utf-8")
+    with pytest.raises(ValidationError, match="not empty"):
+        Evidence(directory)
 
 
 def test_matrix_rejects_a_healthy_failed_upgrade(tmp_path: Path) -> None:
     def runner(argv: list[str], **kwargs: Any) -> SimpleNamespace:
         if argv[0] == "curl":
             return SimpleNamespace(returncode=0, stdout="200", stderr="")
+        if argv[0] == "docker" and "config" in argv:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="image: ghcr.io/farnalabs/modulo:v1.1.0",
+                stderr="",
+            )
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     evidence = Evidence(tmp_path / "evidence")
@@ -124,7 +173,7 @@ def test_matrix_rejects_a_healthy_failed_upgrade(tmp_path: Path) -> None:
         timeout=10,
         runner=runner,
     )
-    with pytest.raises(ValidationError, match="expected not ready"):
+    with pytest.raises(ValidationError, match="expected HTTP 503"):
         matrix.run()
 
 

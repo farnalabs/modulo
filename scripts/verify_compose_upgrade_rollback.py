@@ -67,25 +67,77 @@ def build_compose_command(compose_file: Path, project_name: str, *args: str, env
     return command
 
 
+_SECRET_NAMES = {
+    "MODULO_DB_PASSWORD",
+    "SECRET_KEY",
+    "FERNET_KEY",
+    "SAQ_AUTH_PASSWORD",
+    "SAQ_AUTH_USERNAME",
+    "DATABASE_URL",
+    "DATABASE_ADMIN_URL",
+    "MODULO_SYSTEM_DATABASE_URL",
+    "SMTP_PASSWORD",
+    "MODULO_LICENSE_KEY",
+}
+
+
+def _redact(text: str, secrets: set[str]) -> str:
+    """Redact configured secret values without emitting them to evidence."""
+    redacted = text
+    for secret in sorted(secrets, key=len, reverse=True):
+        if secret:
+            redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted
+
+
+def _secret_values(env: dict[str, str] | None) -> set[str]:
+    if env is None:
+        return set()
+    return {value for name, value in env.items() if name in _SECRET_NAMES and value}
+
+
+def _secret_values_from_file(path: Path) -> set[str]:
+    values: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        name, separator, value = line.partition("=")
+        if not separator:
+            continue
+        key = name.strip().upper()
+        if key in _SECRET_NAMES or any(token in key for token in ("SECRET", "PASSWORD", "TOKEN", "PRIVATE_KEY")):
+            values.add(value.strip().strip('"').strip("'"))
+    return {value for value in values if value}
+
+
 class Evidence:
     """Write bounded, machine-readable command evidence and human-readable logs."""
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, *, secrets: set[str] | None = None) -> None:
         self.directory = directory
-        self.directory.mkdir(parents=True, exist_ok=True)
+        if self.directory.exists():
+            if any(self.directory.iterdir()):
+                raise ValidationError(f"evidence directory is not empty: {self.directory}")
+        else:
+            self.directory.mkdir(parents=True)
         self.transcript = self.directory / "commands.jsonl"
         self._counter = 0
+        self._secrets = set(secrets or ())
+
+    def add_secrets(self, secrets: set[str]) -> None:
+        self._secrets.update(secrets)
 
     def record(self, result: CommandResult, *, outcome: str) -> None:
         self._counter += 1
         stem = f"{self._counter:02d}-{result.name}"
-        (self.directory / f"{stem}.stdout").write_text(result.stdout, encoding="utf-8")
-        (self.directory / f"{stem}.stderr").write_text(result.stderr, encoding="utf-8")
+        stdout = _redact(result.stdout, self._secrets)
+        stderr = _redact(result.stderr, self._secrets)
+        argv = tuple(_redact(value, self._secrets) for value in result.argv)
+        (self.directory / f"{stem}.stdout").write_text(stdout, encoding="utf-8")
+        (self.directory / f"{stem}.stderr").write_text(stderr, encoding="utf-8")
         row = {
             "at": datetime.now(UTC).isoformat(),
             "name": result.name,
-            "argv": list(result.argv),
-            "command": shlex.join(result.argv),
+            "argv": list(argv),
+            "command": shlex.join(argv),
             "returncode": result.returncode,
             "outcome": outcome,
             "stdout": f"{stem}.stdout",
@@ -107,7 +159,7 @@ class Evidence:
             "cwd": str(Path.cwd()),
         }
         (self.directory / "metadata.json").write_text(
-            json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            _redact(json.dumps(metadata, indent=2, sort_keys=True) + "\n", self._secrets), encoding="utf-8"
         )
 
 
@@ -142,6 +194,7 @@ class Matrix:
     def command(
         self, name: str, argv: list[str], *, expected: str = "success", env: dict[str, str] | None = None
     ) -> CommandResult:
+        self.evidence.add_secrets(_secret_values(env))
         result = self.runner(
             argv,
             cwd=self.compose_dir,
@@ -173,7 +226,7 @@ class Matrix:
         argv = build_compose_command(self.compose_file, self.project_name, *args, env_file=self.env_file)
         return self.command(name, argv, expected=expected, env=env)
 
-    def ready(self, name: str, *, expected: bool) -> bool:
+    def ready(self, name: str, *, expected: bool, expected_status: str | None = None) -> bool:
         url = f"http://127.0.0.1:{self.port}/healthz/ready"
         argv = [
             "curl",
@@ -201,6 +254,8 @@ class Matrix:
         self.evidence.record(result, outcome="success" if raw.returncode == 0 else f"unreachable:{raw.returncode}")
         code = result.stdout.strip()
         is_ready = raw.returncode == 0 and code == "200"
+        if expected_status is not None and code != expected_status:
+            raise ValidationError(f"{name}: expected HTTP {expected_status}, received HTTP {code or '<none>'}")
         if is_ready != expected:
             wanted = "ready (HTTP 200)" if expected else "not ready"
             raise ValidationError(f"{name}: expected {wanted}, received HTTP {code or '<none>'}")
@@ -209,6 +264,12 @@ class Matrix:
             outcome="ready" if is_ready else "not-ready",
         )
         return is_ready
+
+    def _assert_failed_upgrade_logs(self, result: CommandResult) -> None:
+        combined = f"{result.stdout}\n{result.stderr}"
+        expected = "SECRET_KEY must be at least"
+        if expected not in combined:
+            raise ValidationError("failed-upgrade logs did not contain the expected invalid SECRET_KEY startup failure")
 
     def run(self) -> None:
         self.evidence.write_metadata(
@@ -224,6 +285,16 @@ class Matrix:
             expected="success",
             env={**os.environ, "TAG": self.old_tag, "PORT": self.port},
         )
+        config = self.compose(
+            "compose-config-invalid-secret",
+            self.new_tag,
+            "config",
+            expected="success",
+            secret_key="intentionally-invalid-secret",
+        )
+        config_text = f"{config.stdout}\n{config.stderr}"
+        if self.new_tag not in config_text:
+            raise ValidationError("invalid-secret compose config did not use the requested new tag")
         self.compose("clean-install-old", self.old_tag, "up", "-d", "--remove-orphans")
         self.ready("clean-install-ready", expected=True)
 
@@ -245,16 +316,13 @@ class Matrix:
             expected="success",
             secret_key="intentionally-invalid-secret",
         )
-        self.ready("failed-upgrade-not-ready", expected=False)
-        self.compose("failed-upgrade-logs", self.new_tag, "logs", "--no-color", "--tail=200", "modulo")
+        self.ready("failed-upgrade-not-ready", expected=False, expected_status="503")
+        failed_logs = self.compose("failed-upgrade-logs", self.new_tag, "logs", "--no-color", "--tail=200", "modulo")
+        self._assert_failed_upgrade_logs(failed_logs)
 
         self.compose("rollback-old", self.old_tag, "up", "-d", "--remove-orphans")
         self.ready("rollback-ready", expected=True)
         self.compose("rollback-logs", self.old_tag, "logs", "--no-color", "--tail=200", "modulo")
-        (self.evidence.directory / "RESULT").write_text(
-            "PASS clean-install -> upgrade -> intentionally failed upgrade -> rollback -> rollback verification\n",
-            encoding="utf-8",
-        )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -286,7 +354,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.project_name.replace("-", "").isalnum():
         raise ValidationError("--project-name must contain only letters, numbers, and hyphens")
 
-    evidence = Evidence(args.evidence_dir.resolve())
+    evidence_dir = args.evidence_dir.resolve()
+    evidence_secrets = _secret_values(dict(os.environ)) | _secret_values_from_file(env_file)
+    evidence = Evidence(evidence_dir, secrets=evidence_secrets)
     matrix = Matrix(
         compose_file=compose_file,
         compose_dir=compose_dir,
@@ -307,15 +377,49 @@ def main(argv: list[str] | None = None) -> int:
         "--remove-orphans",
         env_file=env_file,
     )
+    primary_error: BaseException | None = None
     try:
         matrix.run()
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
-        result = subprocess.run(cleanup, cwd=compose_dir, env=cleanup_env, capture_output=True, text=True, check=False)  # nosec B603 - fixed compose cleanup command
-        evidence.record(
-            CommandResult("cleanup", tuple(cleanup), result.returncode, result.stdout or "", result.stderr or ""),
-            outcome="cleanup",
-        )
+        try:
+            result = subprocess.run(
+                cleanup,
+                cwd=compose_dir,
+                env=cleanup_env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=args.timeout,
+                check=False,
+            )  # nosec B603 - fixed compose cleanup command
+            evidence.record(
+                CommandResult("cleanup", tuple(cleanup), result.returncode, result.stdout or "", result.stderr or ""),
+                outcome="cleanup-success" if result.returncode == 0 else f"cleanup-failed:{result.returncode}",
+            )
+            if result.returncode != 0 and primary_error is None:
+                raise ValidationError(f"cleanup failed with exit {result.returncode}")
+        except subprocess.TimeoutExpired as exc:
+            if primary_error is None:
+                raise ValidationError("cleanup timed out; owned containers and volumes may remain") from exc
+            print(f"cleanup timed out after primary failure: {exc}", file=sys.stderr)
+        except OSError as exc:
+            if primary_error is None:
+                raise ValidationError(f"cleanup could not run: {exc}") from exc
+            print(f"cleanup could not run after primary failure: {exc}", file=sys.stderr)
 
+    result_file = evidence.directory / "RESULT"
+    if primary_error is not None:
+        return 1
+    if result_file.exists():
+        return 0
+    result_file.write_text(
+        "PASS clean-install -> upgrade -> intentionally failed upgrade -> rollback -> rollback verification\n",
+        encoding="utf-8",
+    )
     return 0
 
 
