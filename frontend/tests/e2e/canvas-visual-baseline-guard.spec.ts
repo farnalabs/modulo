@@ -56,7 +56,7 @@ function collectPairs(): BaselinePair[] {
 }
 
 test.describe('Canvas visual baselines', { tag: '@visual' }, () => {
-  test('every light/dark baseline pair pins a different render', () => {
+  test('every light/dark baseline pair pins a different render', { tag: '@visual' }, () => {
     const pairs = collectPairs()
     expect(pairs.length, 'no canvas baseline pairs found').toBeGreaterThan(0)
 
