@@ -116,7 +116,7 @@ export const NODE_REGISTRY: Readonly<Record<NodeTypeId, NodeRegistryEntry>> = {
       icon: 'shield-check',
     },
     hasConfigPanel: true,
-    fallbackLabel: 'HITL Gate',
+    fallbackLabel: 'Human-in-the-loop',
   },
   dispatch: {
     id: 'dispatch',

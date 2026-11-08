@@ -137,7 +137,7 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
 
     // FAR-2089: registered on the canvas alongside the other node types, so it
     // renders its own card instead of VueFlow's unstyled default box.
-    expect(vm.nodeTypes.connector).toBe('connector')
+    expect(vm.nodeTypes.connector).toBeTruthy()
 
     wrapper.unmount()
   })
@@ -1787,6 +1787,7 @@ describe('PipelineEditorView — coverage: edge slot + non-selected edge mapping
           },
           Background: true,
           Controls: true,
+          Handle: { template: '<span />' },
         },
       },
     })
@@ -1859,16 +1860,18 @@ describe('PipelineEditorView — coverage: connector node slot', () => {
         plugins: [pinia, router],
         stubs: {
           VueFlow: {
-            render(this: { $slots: Record<string, any> }) {
-              const slot = this.$slots['node-connector']
+            props: ['nodeTypes'],
+            render(this: { nodeTypes: Record<string, any> }) {
+              const connector = this.nodeTypes.connector
               return h('div', [
-                slot?.({ data: { label: 'Slack', description: 'Send a message' } }),
-                slot?.({ data: { label: '', description: 'No authored label' } }),
+                h(connector, { id: 'connector-authored', data: { label: 'Slack', description: 'Send a message', node_type: 'connector' } }),
+                h(connector, { id: 'connector-default', data: { label: '', description: 'No authored label', node_type: 'connector' } }),
               ])
             },
           },
           Background: true,
           Controls: true,
+          Handle: { template: '<span />' },
         },
       },
     })
@@ -1913,6 +1916,7 @@ describe('PipelineEditorView - agent reference is not a dead link', () => {
           VueFlow: { template: '<div><slot /></div>' },
           Background: true,
           Controls: true,
+          Handle: { template: '<span />' },
         },
       },
     })
@@ -1967,19 +1971,21 @@ describe('PipelineEditorView — FAR-2410 router/HITL node cards', () => {
         plugins: [pinia, router],
         stubs: {
           VueFlow: {
-            render(this: { $slots: Record<string, any> }) {
-              const routerSlot = this.$slots['node-router']
-              const hitlSlot = this.$slots['node-hitl']
+            props: ['nodeTypes'],
+            render(this: { nodeTypes: Record<string, any> }) {
+              const router = this.nodeTypes.router
+              const hitl = this.nodeTypes.hitl
               return h('div', [
-                routerSlot?.({ data: { label: 'Choose path', description: 'route' } }),
-                routerSlot?.({ data: { label: '', description: 'route default' } }),
-                hitlSlot?.({ data: { label: 'Approve', description: 'gate' } }),
-                hitlSlot?.({ data: { label: '', description: 'gate default' } }),
+                h(router, { id: 'router-authored', data: { label: 'Choose path', description: 'route', node_type: 'router' } }),
+                h(router, { id: 'router-default', data: { label: '', description: 'route default', node_type: 'router' } }),
+                h(hitl, { id: 'hitl-authored', data: { label: 'Approve', description: 'gate', node_type: 'hitl' } }),
+                h(hitl, { id: 'hitl-default', data: { label: '', description: 'gate default', node_type: 'hitl' } }),
               ])
             },
           },
           Background: true,
           Controls: true,
+          Handle: { template: '<span />' },
         },
       },
     })

@@ -2097,7 +2097,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount, type Component } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -2128,6 +2128,7 @@ import HitlNode from '../components/pipeline/nodes/HitlNode.vue'
 import DispatchNode from '../components/pipeline/nodes/DispatchNode.vue'
 import ConnectorNode from '../components/pipeline/nodes/ConnectorNode.vue'
 import EdgeBadges from '../components/pipeline/nodes/EdgeBadges.vue'
+import { NODE_REGISTRY } from '../components/pipeline/nodes/NodeRegistry'
 import { shortId } from '../utils/format'
 import {
   isBlockingSeverity,
@@ -2215,9 +2216,7 @@ const showSaveAsDropdown = ref(false)
 const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
 const saveAsDropdownRef = ref<HTMLElement | null>(null)
 const saveAsDropdownStyle = ref<Record<string, string>>({})
-const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch', connector: 'connector' }
-
-const NODE_COMPONENTS: Record<string, typeof AgentNode> = {
+const NODE_COMPONENTS: Record<string, Component> = {
   manual: ManualNode,
   agent: AgentNode,
   router: RouterNode,
@@ -2225,6 +2224,13 @@ const NODE_COMPONENTS: Record<string, typeof AgentNode> = {
   dispatch: DispatchNode,
   connector: ConnectorNode,
 }
+
+// VueFlow resolves each node's `type` through this object before rendering it.
+// Keep the editor's registry component-valued: the extracted node components
+// still own the shared card markup, badges, handles and selection state.
+const nodeTypes = Object.fromEntries(
+  Object.keys(NODE_REGISTRY).map((nodeType) => [nodeType, NODE_COMPONENTS[nodeType] ?? AgentNode]),
+) as Record<string, Component>
 
 function nodeComponent(nodeType: string) {
   return NODE_COMPONENTS[nodeType] ?? AgentNode
