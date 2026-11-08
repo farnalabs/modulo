@@ -584,6 +584,7 @@ class TestConstants:
             "create_pipeline",
             "update_pipeline_graph",
             "create_model_backend",
+            "update_model_backend",
             "list_runs",
             "get_run_evals",
             "list_eval_definitions",
