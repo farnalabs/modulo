@@ -604,6 +604,26 @@ def test_snapshot_detail_strips_credential_fields_entirely(client: TestClient) -
     assert node["position"] == {"x": 0, "y": 0}
 
 
+def test_sanitized_snapshot_graph_passes_through_non_dict_and_malformed_nodes() -> None:
+    """FAR-2456: the historic sanitiser tolerates non-dict graphs, non-list nodes
+    and non-dict node entries instead of crashing on them."""
+    from modulo.api.routes.pipelines import _sanitized_snapshot_graph
+
+    assert _sanitized_snapshot_graph(None) is None
+    assert _sanitized_snapshot_graph(["x"]) == ["x"]
+    # `nodes` is not a list -> left untouched.
+    assert _sanitized_snapshot_graph({"nodes": {"a": 1}}) == {"nodes": {"a": 1}}
+    # Non-dict node entries pass through; dict nodes have secrets stripped.
+    graph = {
+        "nodes": ["raw-node", {"id": "n1", "env_vars": {"TOKEN": "secret"}, "label": "keep"}],
+        "edges": [],
+    }
+    assert _sanitized_snapshot_graph(graph) == {
+        "nodes": ["raw-node", {"id": "n1", "label": "keep"}],
+        "edges": [],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Run fixture export: GET /runs/{id}/export-fixture
 # ---------------------------------------------------------------------------

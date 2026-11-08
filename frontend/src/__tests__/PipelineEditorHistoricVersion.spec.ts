@@ -42,6 +42,14 @@ import { usePlanStore } from '../stores/planStore'
 const LIVE_NODE_ID = 'node-live'
 const FROZEN_NODE_ID = 'node-frozen'
 
+// FAR-2456: the credential-bearing node/edge fields a historic view must strip.
+const HISTORIC_SECRET_FIELDS = [
+  'env_vars',
+  'context_files',
+  'composite_parameter_values',
+  'parameter_overrides',
+] as const
+
 const LIVE_GRAPH = {
   nodes: [
     {
@@ -2250,6 +2258,80 @@ describe('PipelineEditorView — restore helpers and change-summary edge states'
     await vm.confirmRestore()
     await flushPromises()
     expect(vm.restoreNotice).toBe('Restored. Created v10.')
+    wrapper.unmount()
+  })
+
+  it('strips credential-bearing fields from the historic view nodes and edges (FAR-2456)', async () => {
+    const frozenWithSecrets = {
+      nodes: [
+        {
+          id: FROZEN_NODE_ID,
+          node_type: 'agent',
+          label: 'Frozen Node',
+          position: { x: 40, y: 40 },
+          env_vars: { GITHUB_TOKEN: 'ghp_secret' },
+          context_files: { '/tmp/creds': 'token=secret' },
+          composite_parameter_values: { cfg: { api_key: 'sk_live_secret' } },
+          parameter_overrides: { nested: { password: 'hunter2' } },
+        },
+      ],
+      edges: [
+        {
+          id: 'edge-frozen',
+          source_node_id: FROZEN_NODE_ID,
+          target_node_id: FROZEN_NODE_ID,
+          env_vars: { GITHUB_TOKEN: 'ghp_secret' },
+          context_files: { '/tmp/creds': 'token=secret' },
+          composite_parameter_values: { cfg: { api_key: 'sk_live_secret' } },
+          parameter_overrides: { nested: { password: 'hunter2' } },
+        },
+      ],
+    }
+    const wrapper = await mountEditor({ snapshot: 'snap-4' }, () =>
+      seedApi({ frozenGraph: frozenWithSecrets }),
+    )
+    const vm = wrapper.vm as any
+    expect(vm.isViewing).toBe(true)
+
+    const rawNode = vm.inspectSourceNodes[0]
+    expect(rawNode.id).toBe(FROZEN_NODE_ID)
+    for (const field of HISTORIC_SECRET_FIELDS) expect(rawNode[field]).toBeUndefined()
+    // The canvas node carries parameter_overrides inside `data`; it must be gone.
+    const displayNode = vm.displayNodes[0]
+    expect(displayNode.data.parameter_overrides).toBeUndefined()
+    expect(displayNode.data.label).toBe('Frozen Node')
+
+    const rawEdge = vm.inspectSourceEdges[0]
+    expect(rawEdge.id).toBe('edge-frozen')
+    for (const field of HISTORIC_SECRET_FIELDS) expect(rawEdge[field]).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('tolerates malformed historic nodes/edges and strips secrets nested in node data', async () => {
+    const wrapper = await mountEditor({ snapshot: 'snap-4' })
+    const vm = wrapper.vm as any
+
+    vm.displayNodes = [
+      null,
+      'not-a-node',
+      { id: 'plain' },
+      { id: 'with-data', env_vars: { A: '1' }, data: { env_vars: { B: '2' }, keep: true } },
+    ]
+    expect(vm.viewFlowNodes[0]).toBeNull()
+    expect(vm.viewFlowNodes[1]).toBe('not-a-node')
+    expect(vm.viewFlowNodes[2]).toEqual({ id: 'plain' })
+    expect(vm.viewFlowNodes[3]).toEqual({ id: 'with-data', data: { keep: true } })
+
+    vm.displayEdges = [
+      null,
+      'not-an-edge',
+      { id: 'e-plain' },
+      { id: 'e-data', parameter_overrides: { x: 1 }, data: { context_files: { c: 'd' }, keep: true } },
+    ]
+    expect(vm.viewFlowEdges[0]).toBeNull()
+    expect(vm.viewFlowEdges[1]).toBe('not-an-edge')
+    expect(vm.viewFlowEdges[2]).toEqual({ id: 'e-plain' })
+    expect(vm.viewFlowEdges[3]).toEqual({ id: 'e-data', data: { keep: true } })
     wrapper.unmount()
   })
 })
