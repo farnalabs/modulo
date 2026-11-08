@@ -157,11 +157,13 @@ covers pipeline graph and node configuration.
 ## Native install (Linux and macOS)
 
 The native single-install path is for workstation and evaluation use. Linux
-uses the published `scripts/install.sh` bundle path; macOS uses separate signed
-and notarized `.dmg` artifacts for Apple Silicon (`macos-arm64`) and Intel
-(`macos-x86_64`). Rosetta is not required. Use the public [installation
-documentation](https://modulo.run/docs/installation) for release availability,
-platform requirements, and the current installation steps.
+uses the published `scripts/install.sh` bundle path. macOS signed and notarized
+`.dmg` artifacts are published by release when available; the current
+`bundle-v0.3.325` release includes Apple Silicon (`macos-arm64`) only, and does
+not include an Intel (`macos-x86_64`) artifact. Rosetta is not required for the
+published Apple Silicon artifact. Check the public [installation
+documentation](https://modulo.run/docs/installation) and the release assets for
+current platform availability, requirements, and installation steps.
 
 Docker Compose remains the supported path for self-hosted server and production
 use. Start with the [system requirements](docs/system-requirements.md), then
