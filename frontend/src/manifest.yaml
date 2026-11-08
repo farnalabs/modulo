@@ -4757,6 +4757,15 @@ elements:
       - testid: pipeline-editor-empty-node-type-select
         type: select
         dynamic_testid: false
+      - testid: pipeline-editor-empty-add-node
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-empty-show-me
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-empty-template
+        type: button
+        dynamic_testid: false
       - testid: pipeline-editor-add-node
         type: button
         dynamic_testid: false
