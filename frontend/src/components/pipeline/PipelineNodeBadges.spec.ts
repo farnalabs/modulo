@@ -80,6 +80,38 @@ describe('PipelineNodeBadges', () => {
     wrapper.unmount()
   })
 
+  it('renders detail-free connector, dispatch and HITL badges without inventing a detail', () => {
+    // A binding with no `type` still names a real connector, but there is no
+    // detail to show, so the title falls back to the bare label.
+    const connector = mountBadges({
+      node_type: 'agent',
+      connector_binding: { instance_id: 'conn-3', operation: 'dispatch' },
+    })
+    const connectorBadge = connector.find('[data-testid="pipeline-node-semantic-connector"]')
+    expect(connectorBadge.exists()).toBe(true)
+    expect(connectorBadge.attributes('title')).toBe('connector')
+    // `operation: dispatch` is left to the dispatch badge, which this agent
+    // node cannot render, so no operation badge is claimed.
+    expect(testIds(connector)).not.toContain('pipeline-node-semantic-operation')
+    connector.unmount()
+
+    // A dispatch binding that names no resource or action has nothing to say
+    // beyond the connector badge.
+    const dispatch = mountBadges({
+      node_type: 'dispatch',
+      connector_binding: { instance_id: 'conn-4', operation: 'dispatch' },
+    })
+    expect(testIds(dispatch)).not.toContain('pipeline-node-semantic-dispatch')
+    dispatch.unmount()
+
+    // A HITL gate with no label renders the gate badge, still without detail.
+    const gate = mountBadges({ node_type: 'hitl', hitl_config: {} })
+    const hitlBadge = gate.find('[data-testid="pipeline-node-semantic-hitl"]')
+    expect(hitlBadge.exists()).toBe(true)
+    expect(hitlBadge.attributes('title')).toBe('hitl gate')
+    gate.unmount()
+  })
+
   it('counts real router rules and stays silent for an empty rule set', () => {
     const withRules = mountBadges({
       node_type: 'router',
