@@ -329,6 +329,10 @@ test.describe('Pipeline canvas visual snapshots', { tag: '@visual' }, () => {
         await mockGraph(page, EMPTY_GRAPH)
         await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
         await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: 60_000 })
+        // The empty-graph overlay is the editor's real "nothing here yet" state;
+        // pin it by the test id of its add-node control rather than by copy
+        // (the onboarding sentence is long, i18n-owned and was never the string
+        // this assertion claimed to check).
         await expect(page.getByTestId('pipeline-editor-empty-add-node')).toBeVisible()
         await capture(page, 'empty', viewport.name, theme)
       })
