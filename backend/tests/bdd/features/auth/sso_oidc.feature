@@ -49,4 +49,5 @@ Feature: SSO OIDC Integration
 
   Scenario: Unknown provider is rejected
     When I initiate OIDC login with "unknown"
-    Then the response status is 400
+    Then the response status is 303
+    And the login redirect reports SSO error "auth_failed"

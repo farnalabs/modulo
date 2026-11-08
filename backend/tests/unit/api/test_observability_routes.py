@@ -564,3 +564,63 @@ class TestObservabilityTestEndpoint:
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
+
+
+# ── FAR-1912: the degraded-read decision must not hide programming errors ──
+
+
+class TestDegradedReadDoesNotHideSessionContractViolations:
+    """FAR-1912: GET/preview degrade on an OUTAGE, not on a programming bug.
+
+    The ``degraded_read`` decision deliberately answers 200 from cache/defaults
+    when the DB is unreachable (an outage is transient and the settings page
+    must keep rendering). A session-contract violation is NOT an outage — it
+    will fail identically on every retry — so the shared classifier surfaces it
+    as a 500 instead of silently returning stale config.
+    """
+
+    def test_get_session_contract_error_is_500_not_degraded(self, free_client: TestClient) -> None:
+        from sqlalchemy.exc import InvalidRequestError
+
+        with (
+            patch(
+                "modulo.api.routes.observability._fetch_and_cache",
+                side_effect=InvalidRequestError("session used outside a transaction"),
+            ),
+        ):
+            resp = free_client.get("/api/v1/settings/observability")
+        assert resp.status_code == 500
+        body = resp.json()
+        assert "session" in body["detail"].lower()
+        assert "otlp_endpoint" not in body
+
+    def test_preview_session_contract_error_is_500_not_degraded(self, free_client: TestClient) -> None:
+        from sqlalchemy.exc import InvalidRequestError
+
+        with (
+            patch(
+                "modulo.api.routes.observability._fetch_and_cache",
+                side_effect=InvalidRequestError("session used outside a transaction"),
+            ),
+        ):
+            resp = free_client.get("/api/v1/settings/observability/preview")
+        assert resp.status_code == 500
+        body = resp.json()
+        assert "session" in body["detail"].lower()
+        assert "sample_span" not in body
+
+    def test_put_session_contract_error_is_500_not_503(self, free_client: TestClient) -> None:
+        """The ``local_contract`` PUT arm classifies the contract violation first."""
+        from sqlalchemy.exc import InvalidRequestError
+
+        with (
+            patch(
+                "modulo.api.routes.observability.update_otel_config",
+                side_effect=InvalidRequestError("session used outside a transaction"),
+            ),
+        ):
+            resp = free_client.put("/api/v1/settings/observability", json={"otlp_endpoint": "http://e:4318"})
+        assert resp.status_code == 500
+        body = resp.json()
+        assert "session" in body["detail"].lower()
+        assert "temporarily unavailable" not in body["detail"].lower()
