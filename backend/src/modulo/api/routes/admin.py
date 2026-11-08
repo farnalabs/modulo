@@ -163,6 +163,97 @@ _CODE_ADMIN_ADMIN_MANUAL_PURGE = "admin.admin_manual_purge"
 _CODE_ADMIN_ADMIN_UPDATE_RETENTION = "admin.admin_update_retention"
 
 
+# ── Error-backstop decision registry (FAR-1912) ─────────────────────────────
+# EVERY route on this router that reaches the database is recorded here with
+# the deliberate decision about how it maps an escaping DB failure. The
+# vocabulary (enforced by tests/unit/api/test_db_backstop_decisions.py — a route
+# missing from this map fails the test, so the decision cannot silently drift):
+#
+#   backstop       — carries @handle_db_errors("admin.<route>"); an escaping
+#                    ProgrammingError -> 501, IntegrityError -> 409,
+#                    SQLAlchemyError -> 503, Exception -> 500.
+#   shared_helper  — the route delegates to a shared wrapper that already
+#                    applies the full contract: ``_run_admin_rls_txn``,
+#                    ``_admin_journey_write`` (journal write wrapper), or
+#                    ``_load_org_retention_setting``. A per-route decorator
+#                    would be redundant.
+#   local_contract — the route carries its own hand-written arm chain that
+#                    reproduces the standard contract, in the documented order:
+#                    CancelledError re-raise, IntegrityError -> 409,
+#                    ProgrammingError -> 501, `raise_session_contract_error`
+#                    then SQLAlchemyError -> 503, HTTPException passthrough,
+#                    Exception -> 500. Deliberately NOT wrapped: the local
+#                    ``except Exception`` arm shadows a decorator, so adding
+#                    one would be inert — it would not extend coverage by a
+#                    single exception class.
+#   no_db          — never reaches the database (a pure refusal, or Redis only).
+#
+# Adding a new DB-reaching route means adding a row here; choosing
+# ``local_contract`` implies writing (or reusing) the full arm chain above.
+_DB_BACKSTOP_DECISION: dict[str, str] = {
+    # @handle_db_errors(...) — the standard backstop.
+    "global_search": "backstop",
+    "admin_create_user": "backstop",
+    "admin_get_org": "backstop",
+    "admin_update_org": "backstop",
+    "admin_regenerate_api_key": "backstop",
+    "admin_list_users": "backstop",
+    "admin_update_user": "backstop",
+    "admin_deactivate_user": "backstop",
+    "admin_reactivate_user": "backstop",
+    "admin_reset_password": "backstop",
+    "admin_invite_user": "backstop",
+    "admin_list_invitations": "backstop",
+    "admin_revoke_invitation": "backstop",
+    "admin_reassign_all_team_resources": "backstop",
+    "admin_dashboard_summary": "backstop",
+    "admin_queue_metrics": "backstop",  # Redis only; decorator is harmless metadata
+    "admin_billing_overview": "backstop",
+    "cancel_org_deletion": "backstop",
+    "export_org_data": "backstop",
+    "eval_dashboard": "backstop",
+    "eval_regressions": "backstop",
+    "okr_progress": "backstop",
+    "admin_list_publishers": "backstop",
+    "admin_create_publisher": "backstop",
+    "admin_update_publisher": "backstop",
+    "admin_delete_publisher": "backstop",
+    "admin_get_storage": "backstop",
+    "admin_overdue_hitl_claims": "backstop",
+    "get_telemetry_status": "backstop",
+    "set_telemetry_status": "backstop",
+    "get_pipeline_snapshot_lock": "backstop",
+    "release_pipeline_snapshot_lock": "backstop",
+    # Shared wrapper already applies the full contract.
+    "admin_get_retention": "shared_helper",  # _load_org_retention_setting
+    "admin_get_sandbox_concurrency": "shared_helper",
+    "admin_update_sandbox_concurrency": "shared_helper",
+    "admin_get_hitl_review_window": "shared_helper",
+    "admin_update_hitl_review_window": "shared_helper",
+    "admin_get_work_item_agent_minting": "shared_helper",
+    "admin_update_work_item_agent_minting": "shared_helper",
+    "admin_get_community_objects": "shared_helper",
+    "admin_update_community_objects": "shared_helper",
+    "admin_get_run_concurrency": "shared_helper",
+    "admin_update_run_concurrency": "shared_helper",
+    "admin_dismiss_journey": "shared_helper",  # _admin_journey_write
+    "admin_restore_journey": "shared_helper",  # _admin_journey_write
+    # Route-local arm chain reproduces the standard contract (see vocabulary).
+    "admin_create_team": "local_contract",
+    "admin_list_teams": "local_contract",
+    "admin_update_team": "local_contract",
+    "admin_delete_team": "local_contract",
+    "admin_retention_purge_runs": "local_contract",
+    "admin_manual_purge": "local_contract",
+    "admin_purge_stale_runs": "local_contract",
+    "admin_update_retention": "local_contract",
+    # No database access.
+    "request_org_deletion": "no_db",  # pure refusal (audit dependency only)
+    "confirm_org_deletion": "no_db",  # pure refusal (audit dependency only)
+    "delete_org_immediate": "no_db",  # pure refusal
+}
+
+
 logger = logging.getLogger(__name__)
 
 
