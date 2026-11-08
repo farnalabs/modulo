@@ -54,6 +54,29 @@ POSIX = sys.platform != "win32"
 requires_posix = pytest.mark.skipif(not POSIX, reason="POSIX-only supervision mechanics")
 
 
+@pytest.fixture
+def deterministic_signal_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop fake-PID teardown tests from depending on the host PID table.
+
+    ``_signal_group`` resolves a child's process group with ``os.getpgid(pid)``
+    and then either ``os.killpg`` or ``os.kill``. These tests use fixed fake
+    PIDs, so on a busy runner a colliding PID that leads its own group routes
+    the signal to a real, unrelated process group - making the test flaky and,
+    when the colliding PID is the xdist worker itself, crashing the worker.
+    Force the documented non-group fallback and make the direct-PID signal
+    inert. Mirrors the fixture of the same name in
+    ``test_supervisor_coverage_extra.py``.
+    """
+    monkeypatch.setattr(
+        supervisor_module.os,
+        "getpgid",
+        lambda _pid: (_ for _ in ()).throw(OSError("no such process")),
+        raising=False,
+    )
+    monkeypatch.setattr(supervisor_module.os, "kill", lambda _pid, _signum: None)
+    monkeypatch.setattr(supervisor_module.os, "killpg", lambda _pgid, _signum: None, raising=False)
+
+
 class FakeClock:
     def __init__(self) -> None:
         self.now = 0.0
@@ -439,7 +462,7 @@ def test_tick_survives_an_unexpected_child_exception() -> None:
     assert harness.supervisor.degraded_reason is None
 
 
-def test_teardown_order_and_escalation_follows_priority() -> None:
+def test_teardown_order_and_escalation_follows_priority(deterministic_signal_group: None) -> None:
     events: list[str] = []
 
     def spawn(argv: list[str], env: dict[str, str] | None) -> RecordingProc:
@@ -470,7 +493,7 @@ def test_teardown_order_and_escalation_follows_priority() -> None:
         assert child.process is None
 
 
-def test_teardown_escapes_to_kill_when_child_ignores_grace() -> None:
+def test_teardown_escapes_to_kill_when_child_ignores_grace(deterministic_signal_group: None) -> None:
     events: list[str] = []
 
     class StubbornProc:
