@@ -117,6 +117,12 @@
               {{ $t('views.PipelineEditorView.version_chip_unavailable') }}
             </button>
           </div>
+          <!-- FAR-2463: read-only governance state derived from the pipeline
+               record this view already loads: the autonomy ceiling, the
+               configured concurrency cap and the spend circuit-breaker
+               threshold. Live run counts and current spend are NOT loaded
+               here, so neither is ever rendered. -->
+          <PipelineGovernanceVisibility :pipeline="pipeline" mode="toolbar" />
           <span :class="groupDividerClass" />
           <!-- Group: graph file actions -->
           <div class="flex items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_primary_actions')" data-testid="pipeline-editor-toolbar-group-file">
@@ -1047,8 +1053,9 @@
           v-model:edges="displayEdges"
           :node-types="nodeTypes"
           :default-edge-options="defaultEdgeOptions"
-          :fit-view-on-init="false"
-          :source-position="Position.Right"
+           :fit-view-on-init="false"
+           :only-render-visible-elements="displayNodes.length >= PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD"
+           :source-position="Position.Right"
           :target-position="Position.Left"
           :nodes-draggable="!isViewing"
           :nodes-connectable="!isViewing"
@@ -1068,11 +1075,13 @@
           <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning-text">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
+                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
                   </div></template>
           <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary-text">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                     <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
+                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
                   </div></template>
           <!-- Router/HITL cards carry a non-colour affordance too: a dashed
                border + branch glyph and a double border + gate glyph. The
@@ -1084,6 +1093,7 @@
                       {{ $t('views.PipelineEditorView.node_router_badge') }}
                     </div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_router_label') }}</div>
+                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
                   </div></template>
           <template #node-hitl="nodeProps"><div class="rounded-lg border-4 border-double border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-hitl">
                     <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">
@@ -1091,6 +1101,7 @@
                       {{ $t('views.PipelineEditorView.node_hitl_badge') }}
                     </div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
+                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
                   </div></template>
           <!-- FAR-1141: dispatch nodes render with their own badge/colour.
                Reachable because CANVAS_TYPE_BY_BACKEND_TYPE maps 'dispatch'
@@ -1100,6 +1111,7 @@
           <template #node-dispatch="nodeProps"><div class="rounded-lg border-2 border-cyan-500/60 bg-cyan-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
+                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
                   </div></template>
           <!-- FAR-2089: connector nodes render with their own badge/colour
                instead of the generic `agent` card. Reachable because
@@ -1110,6 +1122,7 @@
           <template #node-connector="nodeProps"><div class="rounded-lg border-2 border-teal-500/60 bg-teal-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-teal-700 dark:text-teal-300">{{ $t('views.PipelineEditorView.node_connector_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_connector_label') }}</div>
+                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
                   </div></template>
           <template #edge-default="edgeProps">
             <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2">
@@ -2300,7 +2313,7 @@ import {
 import { formatDateShort } from '../lib/formatDate'
 import { formatCompactDuration, worstCaseForEvent, type WorstCase } from '../lib/worstCase'
 import { withTimeout } from '../lib/requestTimeout'
-import { CANVAS_EDGE_STROKE } from '../constants/canvas'
+import { CANVAS_EDGE_STROKE, PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD } from '../constants/canvas'
 import { layoutNodes } from '../utils/graph-layout'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
@@ -2316,6 +2329,7 @@ import { currentSubstantiveVersion, NON_VERSION_CREATED_KINDS, SNAPSHOT_PAGE_SIZ
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon } from '@lucide/vue'
+import PipelineGovernanceVisibility from '../components/pipeline/PipelineGovernanceVisibility.vue'
 
 // The legacy useApi `post` helper aborted every request after 30s; the typed
 // client has no deadline of its own, so the archive/pause toggles keep the
@@ -3843,6 +3857,10 @@ function convertBackendNode(n: any): any {
       label: n.label || 'Node ' + shortId(n.id),
       description: n.description || '',
       node_type: n.node_type,
+      // FAR-2463: the governance pills read these straight off the graph
+      // contract this view already loads — no extra request, no derived gate.
+      hitl_config: n.hitl_config,
+      policy_gate: n.policy_gate,
       parameter_set_id: n.parameter_set_id,
       parameter_overrides: n.parameter_overrides,
       hasCapabilityScope: doesNodeHaveCapabilityScope(n),
@@ -5289,6 +5307,12 @@ const ownerTeamOptions = computed(() => {
   }
   return rows
 })
+
+// Resolves a HITL gate's team ID to the name only from teams this editor has
+// already loaded, so a node's gate pill never invents or fetches a team name.
+const teamNamesById = computed<Record<string, string>>(() =>
+  Object.fromEntries(ownerTeams.value.map((tm) => [tm.id, tm.name])),
+)
 
 const ownerTeamError = computed(() => {
   if (ownerTeamUpdateError.value) return ownerTeamUpdateError.value
