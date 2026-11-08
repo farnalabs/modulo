@@ -2232,7 +2232,7 @@ const NODE_COMPONENTS: Record<string, Component> = {
 // Keep the editor's registry component-valued: the extracted node components
 // still own the shared card markup, badges, handles and selection state.
 const nodeTypes = Object.fromEntries(
-  Object.keys(NODE_REGISTRY).map((nodeType) => [nodeType, NODE_COMPONENTS[nodeType] ?? AgentNode]),
+  Object.keys(NODE_REGISTRY).map((nodeType) => [nodeType, nodeComponent(nodeType)]),
 ) as Record<string, Component>
 
 function nodeComponent(nodeType: string) {
