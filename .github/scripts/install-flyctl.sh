@@ -29,8 +29,13 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf "${work_dir}"' EXIT
 
 echo "Downloading flyctl ${FLYCTL_VERSION} (linux x86_64)..."
-curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 15 --max-time 300 -o "${work_dir}/${tarball}" "${base_url}/${tarball}"
-curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 15 --max-time 300 -o "${work_dir}/checksums.txt" "${base_url}/flyctl_${version_num}_checksums.txt"
+# curl's default retry set already covers HTTP 504, but its three retries
+# (fixed 1s/2s/4s backoff, ~7s total) give up inside a longer CDN blip: on
+# 2026-11-08 a GitHub release-download 504 burst outlasted them and failed the
+# staging deploy before the image build even started. Retry for up to three
+# minutes instead so a transient upstream 5xx cannot fail the deploy.
+curl -fsSL --proto '=https' --tlsv1.2 --retry 6 --retry-delay 5 --retry-max-time 180 --connect-timeout 15 --max-time 300 -o "${work_dir}/${tarball}" "${base_url}/${tarball}"
+curl -fsSL --proto '=https' --tlsv1.2 --retry 6 --retry-delay 5 --retry-max-time 180 --connect-timeout 15 --max-time 300 -o "${work_dir}/checksums.txt" "${base_url}/flyctl_${version_num}_checksums.txt"
 
 expected_sha="$(awk -v file="${tarball}" '$2 == file { print $1 }' "${work_dir}/checksums.txt")"
 if [[ -z "${expected_sha}" ]]; then
