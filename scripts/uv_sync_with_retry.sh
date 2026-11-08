@@ -39,11 +39,15 @@ case "${MAX_ATTEMPTS}" in
     echo "::error::UV_SYNC_MAX_ATTEMPTS must be a positive integer (got '${MAX_ATTEMPTS}')." >&2
     exit 1
     ;;
+  *)
+    # A digits-only string; reject zero (and anything below one) here so the
+    # override cannot make the retry loop empty and skip uv silently.
+    if [ "${MAX_ATTEMPTS}" -lt 1 ]; then
+      echo "::error::UV_SYNC_MAX_ATTEMPTS must be at least 1 (got '${MAX_ATTEMPTS}')." >&2
+      exit 1
+    fi
+    ;;
 esac
-if [ "${MAX_ATTEMPTS}" -lt 1 ]; then
-  echo "::error::UV_SYNC_MAX_ATTEMPTS must be at least 1 (got '${MAX_ATTEMPTS}')." >&2
-  exit 1
-fi
 
 # The transient-download signatures observed from uv when the archive host is
 # unhealthy. Keep this list to NETWORK/SERVER failures only.
