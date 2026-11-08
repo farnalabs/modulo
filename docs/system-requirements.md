@@ -61,11 +61,11 @@ Windows binaries.
 
 | Platform | Status | Documentation |
 |----------|--------|---------------|
-| **Docker Compose** | Production-ready | [`docs/deployment.md`](./deployment.md) |
-| **Self-hosted (bare metal / VM)** | Production-ready | [`docs/operations/self-hosted-admin.md`](./operations/self-hosted-admin.md) |
-| **Fly.io** | Production-ready | [`docs/deployment-journey.md`](./deployment-journey.md) |
-| **Railway** | Production-ready | [`docs/deployment-journey.md`](./deployment-journey.md) |
-| **SQLite (standalone)** | Development only | [`docs/quickstart.md`](./quickstart.md) |
+| **Docker Compose** | Production-ready | [Deployment guide](./deployment.md) |
+| **Self-hosted (bare metal / VM)** | Production-ready | [Self-hosted administration](./operations/self-hosted-admin.md) |
+| **Fly.io** | Production-ready | [Deployment journey](./deployment-journey.md) |
+| **Railway** | Production-ready | [Deployment journey](./deployment-journey.md) |
+| **SQLite (standalone)** | Development only | [Quickstart](./quickstart.md) |
 
 ---
 

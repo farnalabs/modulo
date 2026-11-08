@@ -26,7 +26,7 @@ polling triggers; the API refuses to boot when `REDIS_URL` is empty.
 
 Both compose rows need a valid `FERNET_KEY` in `.env` at the repo root before
 the first `up` – compose refuses to start without one (FAR-2181):
-`printf 'FERNET_KEY=%s\n' "$(openssl rand -base64 32)" > .env`.
+`printf 'FERNET_KEY=%s\n' "$(uv run --with cryptography --no-project python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")" > .env`.
 
 For a full walkthrough, see `docs/quickstart.md`.
 
