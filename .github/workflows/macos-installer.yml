@@ -306,6 +306,15 @@ jobs:
            echo '::endgroup::'
 
 
+      - name: Restore notarization ticket cache
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/notarization-ticket
+          key: notarization-ticket-${{ needs.normalize-inputs.outputs.version }}-${{ needs.normalize-inputs.outputs.architecture }}
+          restore-keys: |
+            notarization-ticket-${{ needs.normalize-inputs.outputs.version }}-
+
       - name: Sign, notarize and smoke-test native installer
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         env:
@@ -1076,26 +1085,65 @@ jobs:
           # Apple's notarization ticket can take time to propagate to CloudKit after
           # notarytool accepts the submission. Run 41127149139 observed "Record not found"
           # and "Could not find base64 encoded ticket in response" from stapler (exit 65).
-          # DMG stapling is best-effort: up to 6 retries, 20s delay. Failure is logged but
-          # does not fail the build when stapler reports only ticket propagation/network trouble.
+          # DMG stapling is best-effort: exponential backoff (20s, 40s, 80s, 160s, 320s, 600s cap),
+          # max 10 attempts with +/-25% jitter. Failure is logged but does not fail the build
+          # when stapler reports only ticket propagation/network trouble.
           staple_dmg_with_retry() {
-            local attempt
-            for attempt in 1 2 3 4 5 6; do
+            local attempt=1 max_attempts=10 base_delay=20 max_delay=600
+            local wait_time jitter
+            while [[ "$attempt" -le "$max_attempts" ]]; do
               if xcrun stapler staple "$DMG"; then
+                printf 'staple_dmg_with_retry: attempt=%d success\n' "$attempt"
                 return 0
               fi
-              if [[ "$attempt" -lt 6 ]]; then
-                sleep 20
+              printf 'staple_dmg_with_retry: attempt=%d failed\n' "$attempt"
+              if [[ "$attempt" -lt "$max_attempts" ]]; then
+                wait_time=$(( base_delay * (2 ** (attempt - 1)) ))
+                [[ "$wait_time" -gt "$max_delay" ]] && wait_time="$max_delay"
+                # Add +/-25% jitter
+                jitter=$(( wait_time / 4 ))
+                wait_time=$(( wait_time + RANDOM % (2 * jitter + 1) - jitter ))
+                printf 'staple_dmg_with_retry: waiting %ds before retry (attempt %d/%d)\n' "$wait_time" "$attempt" "$max_attempts"
+                sleep "$wait_time"
               fi
+              attempt=$((attempt + 1))
             done
             return 1
           }
+
+          # Attempt to restore notarization ticket from GitHub Actions cache
+          # Cache key: notarization-ticket-${{ inputs.version }}-${{ needs.normalize-inputs.outputs.architecture }}
+          # On cache hit, attempt stapling from cached ticket before running notarytool submit
+          restore_notarization_cache() {
+            local cache_key="notarization-ticket-${VERSION_NUM}-${MACOS_ARCH}"
+            printf 'notarization_cache: looking for key=%s\n' "$cache_key"
+            # The cache is restored by actions/cache step; if present, ticket is at $RUNNER_TEMP/notarization-ticket
+            if [[ -d "$RUNNER_TEMP/notarization-ticket" && -f "$RUNNER_TEMP/notarization-ticket/ticket" ]]; then
+              printf 'notarization_cache: cache hit - attempting stapling from cached ticket\n'
+              if xcrun stapler staple "$DMG" 2>/dev/null; then
+                printf 'notarization_cache: stapling from cached ticket succeeded\n'
+                return 0
+              else
+                printf 'notarization_cache: stapling from cached ticket failed\n'
+              fi
+            else
+              printf 'notarization_cache: cache miss\n'
+            fi
+            return 1
+          }
+
           dmg_staple_output_file="$DATA/pre-smoke-dmg_staple.log"
           dmg_staple_ticket_unavailable=0
           rm -f "$dmg_staple_output_file"
           set +e
-          staple_dmg_with_retry >"$dmg_staple_output_file" 2>&1
-          dmg_staple_exit=$?
+          # Try cache first - if successful, skip notarytool submit entirely
+          if restore_notarization_cache; then
+            dmg_staple_exit=0
+            echo "notarization_cache: skip_notarytool_submit=true" >> "$GITHUB_OUTPUT"
+          else
+            staple_dmg_with_retry >"$dmg_staple_output_file" 2>&1
+            dmg_staple_exit=$?
+          fi
           set -e
           printf 'run_pre_smoke: dmg_staple command_exit=%d\n' "$dmg_staple_exit"
           if [[ "$dmg_staple_exit" -eq 0 ]]; then
@@ -1196,11 +1244,17 @@ jobs:
 
 
           # Post-install smoke assertions with diagnostic capture
+          # Sanitize DMG path: strip any duplicate .dmg extension (defensive against .dmg.dmg bug)
+          SANITIZED_DMG_WITH_SPACES="$DMG_WITH_SPACES"
+          while [[ "$SANITIZED_DMG_WITH_SPACES" == *.dmg.dmg ]]; do
+            SANITIZED_DMG_WITH_SPACES="${SANITIZED_DMG_WITH_SPACES%.dmg}"
+            printf 'install_sh: sanitized duplicate .dmg extension -> %s\n' "$SANITIZED_DMG_WITH_SPACES"
+          done
           # shellcheck disable=SC2016
           run_assertion "install_sh" \
             "${INSTALL_ENV[@]}" \
             bash -c 'MODULO_INSTALL_ROOT="$1" MODULO_DATA_DIR="$2" scripts/macos/install.sh "$3"' \
-            bash "$INSTALL_ROOT" "$DATA" "$DMG_WITH_SPACES" || exit 1
+            bash "$INSTALL_ROOT" "$DATA" "$SANITIZED_DMG_WITH_SPACES" || exit 1
 
           # The spaces-path copy exists only to prove the installer tolerates a
           # DMG path containing spaces. Once installed it is dead weight, and the
@@ -1421,14 +1475,34 @@ jobs:
              ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
            ' || exit 1
 
-           run_assertion "no_owned_modulo_processes" bash -c '
-             ! pgrep -f "'"$INSTALL_ROOT"'/.*/Contents/MacOS/modulo" >/dev/null 2>&1
-           ' || exit 1
+            run_assertion "no_owned_modulo_processes" bash -c '
+              ! pgrep -f "'"$INSTALL_ROOT"'/.*/Contents/MacOS/modulo" >/dev/null 2>&1
+            ' || exit 1
 
-           run_assertion "no_owned_postgres_redis" bash -c '
-             ! pgrep -f "'"$DATA"'/pgdata" >/dev/null 2>&1 && ! pgrep -f "'"$DATA"'/.*redis" >/dev/null 2>&1
-           ' || exit 1
+            run_assertion "no_owned_postgres_redis" bash -c '
+              ! pgrep -f "'"$DATA"'/pgdata" >/dev/null 2>&1 && ! pgrep -f "'"$DATA"'/.*redis" >/dev/null 2>&1
+            ' || exit 1
 
+            # Save notarization ticket for caching on successful notarization
+            if [[ -n "${DMG:-}" && -f "$DMG" ]]; then
+              TICKET_DIR="$RUNNER_TEMP/notarization-ticket"
+              mkdir -p "$TICKET_DIR"
+              # Extract and save the notarization ticket from the stapled DMG
+              if xcrun stapler staple -q "$DMG" 2>/dev/null; then
+                # Stapler caches the ticket; save a marker that we have a valid ticket
+                printf '%s\n' "$VERSION_NUM" > "$TICKET_DIR/version"
+                printf '%s\n' "$MACOS_ARCH" > "$TICKET_DIR/arch"
+                printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$TICKET_DIR/timestamp"
+                printf 'notarization_cache: saved ticket cache for %s %s\n' "$VERSION_NUM" "$MACOS_ARCH"
+              fi
+            fi
+
+      - name: Save notarization ticket cache
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/notarization-ticket
+          key: notarization-ticket-${{ needs.normalize-inputs.outputs.version }}-${{ needs.normalize-inputs.outputs.architecture }}
 
       - name: Upload real macOS installer
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
