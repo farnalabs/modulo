@@ -99,7 +99,7 @@ class TestHitlReviewRateLimit:
     def test_hitl_within_limit_succeeds(self, endpoint: str) -> None:
         """Within-limit requests to HITL endpoints should succeed."""
         mock_registry = MagicMock(spec=RateLimiterRegistry)
-        mock_registry.check = AsyncMock(return_value=True)
+        mock_registry.check = AsyncMock(return_value=(True, 0))
         app = _make_app(registry=mock_registry)
 
         with TestClient(app) as client:
@@ -127,7 +127,7 @@ class TestHitlReviewRateLimit:
         (FAR-611) — the variable run/gate ids and the action are normalized
         away so rotating any of them cannot dodge the 20/min budget."""
         mock_registry = MagicMock(spec=RateLimiterRegistry)
-        mock_registry.check = AsyncMock(return_value=True)
+        mock_registry.check = AsyncMock(return_value=(True, 0))
         app = _make_app(registry=mock_registry)
 
         with TestClient(app) as client:
@@ -147,7 +147,7 @@ class TestHitlReviewRateLimit:
         app = FastAPI()
         app.add_api_route(endpoint, lambda: {"status": "ok"}, methods=["POST"], include_in_schema=False)
         mock_registry = MagicMock(spec=RateLimiterRegistry)
-        mock_registry.check = AsyncMock(return_value=True)
+        mock_registry.check = AsyncMock(return_value=(True, 0))
         app.add_middleware(
             RateLimitMiddleware,  # type: ignore[arg-type]
             settings=_make_settings(),
@@ -171,7 +171,7 @@ class TestHitlReviewRateLimit:
         app = FastAPI()
         app.add_api_route(endpoint, lambda: {"status": "ok"}, methods=["POST"], include_in_schema=False)
         mock_registry = MagicMock(spec=RateLimiterRegistry)
-        mock_registry.check = AsyncMock(return_value=True)
+        mock_registry.check = AsyncMock(return_value=(True, 0))
         app.add_middleware(
             RateLimitMiddleware,  # type: ignore[arg-type]
             settings=_make_settings(),
@@ -194,7 +194,7 @@ class TestHitlReviewRateLimit:
         app = FastAPI()
         app.add_api_route(endpoint, lambda: {"status": "ok"}, methods=["POST"], include_in_schema=False)
         mock_registry = MagicMock(spec=RateLimiterRegistry)
-        mock_registry.check = AsyncMock(return_value=True)
+        mock_registry.check = AsyncMock(return_value=(True, 0))
         app.add_middleware(
             RateLimitMiddleware,  # type: ignore[arg-type]
             settings=_make_settings(),
@@ -213,7 +213,7 @@ class TestHitlReviewRateLimit:
     def test_hitl_check_uses_20_per_min_budget(self, endpoint: str) -> None:
         """The registry check for HITL review must use the 20/min budget."""
         mock_registry = MagicMock(spec=RateLimiterRegistry)
-        mock_registry.check = AsyncMock(return_value=True)
+        mock_registry.check = AsyncMock(return_value=(True, 0))
         app = _make_app(registry=mock_registry)
 
         with TestClient(app) as client:
@@ -332,6 +332,27 @@ class _FakeRedis:
     def __init__(self) -> None:
         self._store: dict[str, dict[str, float]] = {}
 
+    async def eval(
+        self,
+        _script: str,
+        _key_count: int,
+        key: str,
+        now: float,
+        window_s: int,
+        max_requests: int,
+        member: str,
+    ) -> tuple[int, int]:
+        bucket = self._store.setdefault(key, {})
+        cutoff = now - window_s
+        self._store[key] = {name: score for name, score in bucket.items() if score > cutoff}
+        bucket = self._store[key]
+        if len(bucket) >= max_requests:
+            oldest = min(bucket.values())
+            retry_after = max(1, int(oldest + window_s - now + 0.999999))
+            return (0, retry_after)
+        bucket[member] = now
+        return (1, 0)
+
     def pipeline(self, transaction: bool = True) -> _FakePipeline:
         return _FakePipeline(self._store)
 
@@ -426,7 +447,7 @@ class TestManualSubmitSharesHitlBudget:
         app = FastAPI()
         app.add_api_route(endpoint, lambda: {"status": "ok"}, methods=["POST"], include_in_schema=False)
         mock_registry = MagicMock(spec=RateLimiterRegistry)
-        mock_registry.check = AsyncMock(return_value=True)
+        mock_registry.check = AsyncMock(return_value=(True, 0))
         app.add_middleware(
             RateLimitMiddleware,  # type: ignore[arg-type]
             settings=_make_settings(),

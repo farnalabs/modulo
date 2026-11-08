@@ -322,11 +322,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
             registry_failed = False
             try:
-                allowed = await self._registry.check(
-                    client_key,
-                    rule.max_requests,
-                    rule.window_s,
-                )
+                if type(self._registry) is RateLimiterRegistry:
+                    allowed, retry_after = await self._registry.check_with_retry_after(
+                        client_key,
+                        rule.max_requests,
+                        rule.window_s,
+                    )
+                else:
+                    result = await self._registry.check(
+                        client_key,
+                        rule.max_requests,
+                        rule.window_s,
+                    )
+                    if isinstance(result, tuple):
+                        allowed, retry_after = result
+                    else:
+                        allowed, retry_after = result, rule.window_s
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -337,6 +348,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     exc_info=True,
                 )
                 allowed = True
+                retry_after = rule.window_s
             if rule.path_prefix == DEMO_RULE_PREFIX and (
                 registry_failed or isinstance(self._registry, _NoopRateLimiter)
             ):
@@ -348,12 +360,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 # a failing registry must NOT bypass the cap. Other routes
                 # keep the existing fail-open behaviour (allowed stays True).
                 allowed = await _consume_demo_floor(client_key)
+                retry_after = rule.window_s
             if not allowed:
                 _log.warning("ratelimit.exceeded", extra={"client_key": client_key})
                 return ProblemDetail.from_type(
                     ProblemType.RATE_LIMITED,
                     detail="Rate limit exceeded. Try again later.",
-                ).to_response(headers={"Retry-After": str(rule.window_s)})
+                ).to_response(headers={"Retry-After": str(retry_after)})
         response: Response = await call_next(request)
         return response
 
