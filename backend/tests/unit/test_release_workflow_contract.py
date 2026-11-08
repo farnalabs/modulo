@@ -1,9 +1,22 @@
 """Contract checks for the unified GitHub Release publication paths."""
 
+import importlib.util
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
+
+
+def _release_validator() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "validate_release_tag", REPO_ROOT / "scripts" / "validate_release_tag.py"
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("release validator module could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _release_workflow_text() -> str:
@@ -59,7 +72,7 @@ def test_rc_validation_refuses_to_claim_docker_matrix_without_previous_release()
     assert "refusing to claim Docker upgrade/rollback coverage" in matrix
 
 
-def test_rc_validation_normalizes_previous_bundle_tag_for_docker_image_rollback() -> None:
+def test_rc_validation_resolves_the_previous_bundle_tag_from_the_current_release() -> None:
     workflow = (REPO_ROOT / ".github" / "workflows" / "rc-validate.yml").read_text(encoding="utf-8")
     matrix = workflow[
         workflow.index("Resolve the previous published immutable bundle tag") : workflow.index(
@@ -67,7 +80,19 @@ def test_rc_validation_normalizes_previous_bundle_tag_for_docker_image_rollback(
         )
     ]
 
-    assert "bundle_tag=\"${published_tags##*$'\\n'}\"" in matrix
+    assert 'current_bundle_tag="bundle-v${version}"' in matrix
+    assert "scripts/validate_release_tag.py resolve-n-minus-1" in matrix
+    assert '--current "$current_bundle_tag"' in matrix
     assert 'bundle-v*) old_tag="v${bundle_tag#bundle-v}" ;;' in matrix
     assert 'echo "OLD_TAG=$old_tag" >> "$GITHUB_ENV"' in matrix
     assert 'old_tag="bundle-v' not in matrix
+
+
+def test_rc_validation_current_bundle_tag_selects_the_previous_published_tag() -> None:
+    validator = _release_validator()
+    releases = [
+        {"tag_name": "bundle-v1.2.0", "draft": False, "prerelease": False},
+        {"tag_name": "bundle-v1.3.0", "draft": False, "prerelease": False},
+    ]
+
+    assert validator.resolve_n_minus_1([releases], "bundle-v1.3.0") == "bundle-v1.2.0"
