@@ -1021,66 +1021,16 @@
           <Background :gap="20" :size="1" />
           <output class="sr-only" aria-live="polite" data-testid="pipeline-editor-connection-announcement">{{ connectionAnnouncement }}</output>
           <FlowControls :show-interactive="false" />
-          <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning-text">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
-                  </div></template>
-          <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary-text">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
-                    <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
-                  </div></template>
-          <!-- Router/HITL cards carry a non-colour affordance too: a dashed
-               border + branch glyph and a double border + gate glyph. The
-               badges already name the kind, so the shape survives greyscale
-               and colour-vision differences. -->
-          <template #node-router="nodeProps"><div class="rounded-lg rounded-r-3xl border-2 border-dashed border-indigo-500/60 bg-indigo-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-router">
-                    <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-indigo-600 dark:text-indigo-300">
-                      <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="18" r="2" /><path d="M6 8v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8M12 13v3" /></svg>
-                      {{ $t('views.PipelineEditorView.node_router_badge') }}
-                    </div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_router_label') }}</div>
-                  </div></template>
-          <template #node-hitl="nodeProps"><div class="rounded-lg border-4 border-double border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-hitl">
-                    <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">
-                      <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 10-4-2.5-7-5.5-7-10V6z" /><path d="M9 12l2 2 4-4" /></svg>
-                      {{ $t('views.PipelineEditorView.node_hitl_badge') }}
-                    </div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
-                  </div></template>
-          <!-- FAR-1141: dispatch nodes render with their own badge/colour.
-               Reachable because CANVAS_TYPE_BY_BACKEND_TYPE maps 'dispatch'
-               to this canvas type; without that entry the node would be
-               emitted as an `agent` node and this slot would never render.
-               Display only — no config panel or palette entry in this slice. -->
-          <template #node-dispatch="nodeProps"><div class="rounded-lg border-2 border-cyan-500/60 bg-cyan-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
-                  </div></template>
-          <!-- FAR-2089: connector nodes render with their own badge/colour
-               instead of the generic `agent` card. Reachable because
-               CANVAS_TYPE_BY_BACKEND_TYPE maps 'connector' to this canvas
-               type; without that entry the node would be emitted as an
-               `agent` node and this slot would never render. Display only —
-               no config panel or palette entry in this slice. -->
-          <template #node-connector="nodeProps"><div class="rounded-lg border-2 border-teal-500/60 bg-teal-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-teal-700 dark:text-teal-300">{{ $t('views.PipelineEditorView.node_connector_badge') }}</div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_connector_label') }}</div>
-                  </div></template>
+          <template #node-default="nodeProps">
+            <component
+              :is="nodeComponent(nodeProps.type)"
+              :data="nodeProps.data"
+              :selected="nodeProps.selected"
+              :id="nodeProps.id"
+            />
+          </template>
           <template #edge-default="edgeProps">
-            <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2">
-              <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning-text">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</span>
-            </div>
-            <div v-if="edgeProps.data?.edge_type === 'loop'" class="absolute translate-y-4 translate-x-2">
-              <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-900 dark:text-blue-300">
-                {{ $t('views.PipelineEditorView.loop') }}{{ edgeProps.data?.max_iterations ? ` (${edgeProps.data.max_iterations})` : '' }}
-              </span>
-            </div>
-            <div v-if="edgeProps.data?.edge_type === 'llm'" class="absolute translate-y-4 translate-x-2">
-              <span class="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-600 dark:bg-purple-900 dark:text-purple-300">
-                {{ $t('views.PipelineEditorView.llm_badge') }}{{ edgeProps.data?.routing_label ? `: ${edgeProps.data.routing_label}` : '' }}
-              </span>
-            </div>
+            <EdgeBadges :data="edgeProps.data" />
           </template>
         </VueFlow>
         </div>
@@ -2171,6 +2121,13 @@ import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.
 import SnapshotLockCard from '../components/pipeline/SnapshotLockCard.vue'
 import ProgressiveAutonomyPanel from '../components/pipeline/ProgressiveAutonomyPanel.vue'
 import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
+import ManualNode from '../components/pipeline/nodes/ManualNode.vue'
+import AgentNode from '../components/pipeline/nodes/AgentNode.vue'
+import RouterNode from '../components/pipeline/nodes/RouterNode.vue'
+import HitlNode from '../components/pipeline/nodes/HitlNode.vue'
+import DispatchNode from '../components/pipeline/nodes/DispatchNode.vue'
+import ConnectorNode from '../components/pipeline/nodes/ConnectorNode.vue'
+import EdgeBadges from '../components/pipeline/nodes/EdgeBadges.vue'
 import { shortId } from '../utils/format'
 import {
   isBlockingSeverity,
@@ -2259,6 +2216,20 @@ const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
 const saveAsDropdownRef = ref<HTMLElement | null>(null)
 const saveAsDropdownStyle = ref<Record<string, string>>({})
 const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch', connector: 'connector' }
+
+const NODE_COMPONENTS: Record<string, typeof AgentNode> = {
+  manual: ManualNode,
+  agent: AgentNode,
+  router: RouterNode,
+  hitl: HitlNode,
+  dispatch: DispatchNode,
+  connector: ConnectorNode,
+}
+
+function nodeComponent(nodeType: string) {
+  return NODE_COMPONENTS[nodeType] ?? AgentNode
+}
+
 const { fitView, onPaneReady } = useVueFlow()
 
 // Vue Flow renders edge geometry from these presentation options; semantic
