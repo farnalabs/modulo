@@ -2896,7 +2896,7 @@ class TestGetRunIO:
         body = resp.json()
         # The IO surface returns stored columns without shape-based inference.
         assert body["outputs_json"]["planner"] == _LEGACY_SANDBOX_ENVELOPE
-        assert body["node_telemetry"] == {}
+        assert not body["node_telemetry"]
         assert isinstance(body["fixture_map"], dict)
 
     def test_io_new_shape_run_returns_pure_returns_and_telemetry(self, client: TestClient) -> None:

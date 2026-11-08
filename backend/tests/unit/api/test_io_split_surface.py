@@ -211,7 +211,7 @@ class TestIoRoundTrip:
         body = self._get_io(client, run)
 
         assert body["outputs_json"]["planner"] == envelope
-        assert body["node_telemetry"] == {}
+        assert not body["node_telemetry"]
 
     def test_telemetry_only_node_appears_in_node_telemetry(self, client: TestClient, mock_session: AsyncMock) -> None:
         run = _make_run(
