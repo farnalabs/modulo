@@ -1304,6 +1304,7 @@ export default {
       "semantic_badge_router": "router",
       "semantic_badge_hitl": "hitl gate",
       "semantic_badge_eval": "eval gate",
+      "semantic_badge_human_only": "human-only",
       "semantic_badge_rule_count": "{count} route | {count} routes",
       "label_field": "Label",
       "output_schema": "Output Schema",

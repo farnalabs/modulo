@@ -4802,6 +4802,12 @@ elements:
       - testid: pipeline-node-semantic-allowed-operations
         type: element
         dynamic_testid: false
+      - testid: pipeline-edge-semantic-hitl
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-edge-semantic-eval
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-capability-scope
         type: element
         dynamic_testid: false

@@ -1073,9 +1073,15 @@
                     <PipelineNodeBadges :node="nodeProps.data" :connectors="connectors" />
                   </div></template>
           <template #edge-default="edgeProps">
-            <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2">
-              <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning-text">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</span>
-            </div>
+             <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2 flex max-w-56 flex-wrap gap-1">
+               <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning-text" data-testid="pipeline-edge-semantic-hitl">
+                 {{ $t('views.PipelineEditorView.node_hitl_badge') }}
+                 <template v-if="edgeProps.data.hitl_review_config.human_only"> · {{ $t('views.PipelineEditorView.semantic_badge_human_only') }}</template>
+               </span>
+               <span v-if="edgeProps.data.hitl_review_config.eval_condition?.eval_name" class="rounded bg-purple-500/10 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:text-purple-300" data-testid="pipeline-edge-semantic-eval">
+                 {{ $t('views.PipelineEditorView.semantic_badge_eval') }} · {{ edgeProps.data.hitl_review_config.eval_condition.eval_name }}
+               </span>
+             </div>
             <div v-if="edgeProps.data?.edge_type === 'loop'" class="absolute translate-y-4 translate-x-2">
               <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-900 dark:text-blue-300">
                 {{ $t('views.PipelineEditorView.loop') }}{{ edgeProps.data?.max_iterations ? ` (${edgeProps.data.max_iterations})` : '' }}
