@@ -163,7 +163,9 @@ jobs:
     name: Build and smoke-test macOS ${{ needs.normalize-inputs.outputs.architecture }} bundle
     needs: normalize-inputs
     runs-on: ${{ needs.normalize-inputs.outputs.architecture == 'x86_64' && 'macos-15-intel' || 'macos-15' }}
-    timeout-minutes: 90
+    # Worst-case retry sleeps are 62m55s with +25% jitter, plus the 30m
+    # notarytool wait, so 90m leaves no budget for build/sign/smoke work.
+    timeout-minutes: 120
     env:
       VERSION_NUM: ${{ needs.normalize-inputs.outputs.version }}
       MODE: ${{ needs.normalize-inputs.outputs.mode }}
@@ -305,15 +307,6 @@ jobs:
            done < <(find "$APP/Contents" -type l -print0)
            echo '::endgroup::'
 
-
-      - name: Restore notarization ticket cache
-        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/notarization-ticket
-          key: notarization-ticket-${{ needs.normalize-inputs.outputs.version }}-${{ needs.normalize-inputs.outputs.architecture }}
-          restore-keys: |
-            notarization-ticket-${{ needs.normalize-inputs.outputs.version }}-
 
       - name: Sign, notarize and smoke-test native installer
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
@@ -1111,39 +1104,12 @@ jobs:
             return 1
           }
 
-          # Attempt to restore notarization ticket from GitHub Actions cache
-          # Cache key: notarization-ticket-${{ inputs.version }}-${{ needs.normalize-inputs.outputs.architecture }}
-          # On cache hit, attempt stapling from cached ticket before running notarytool submit
-          restore_notarization_cache() {
-            local cache_key="notarization-ticket-${VERSION_NUM}-${MACOS_ARCH}"
-            printf 'notarization_cache: looking for key=%s\n' "$cache_key"
-            # The cache is restored by actions/cache step; if present, ticket is at $RUNNER_TEMP/notarization-ticket
-            if [[ -d "$RUNNER_TEMP/notarization-ticket" && -f "$RUNNER_TEMP/notarization-ticket/ticket" ]]; then
-              printf 'notarization_cache: cache hit - attempting stapling from cached ticket\n'
-              if xcrun stapler staple "$DMG" 2>/dev/null; then
-                printf 'notarization_cache: stapling from cached ticket succeeded\n'
-                return 0
-              else
-                printf 'notarization_cache: stapling from cached ticket failed\n'
-              fi
-            else
-              printf 'notarization_cache: cache miss\n'
-            fi
-            return 1
-          }
-
           dmg_staple_output_file="$DATA/pre-smoke-dmg_staple.log"
           dmg_staple_ticket_unavailable=0
           rm -f "$dmg_staple_output_file"
           set +e
-          # Try cache first - if successful, skip notarytool submit entirely
-          if restore_notarization_cache; then
-            dmg_staple_exit=0
-            echo "notarization_cache: skip_notarytool_submit=true" >> "$GITHUB_OUTPUT"
-          else
-            staple_dmg_with_retry >"$dmg_staple_output_file" 2>&1
-            dmg_staple_exit=$?
-          fi
+          staple_dmg_with_retry >"$dmg_staple_output_file" 2>&1
+          dmg_staple_exit=$?
           set -e
           printf 'run_pre_smoke: dmg_staple command_exit=%d\n' "$dmg_staple_exit"
           if [[ "$dmg_staple_exit" -eq 0 ]]; then
@@ -1482,27 +1448,6 @@ jobs:
             run_assertion "no_owned_postgres_redis" bash -c '
               ! pgrep -f "'"$DATA"'/pgdata" >/dev/null 2>&1 && ! pgrep -f "'"$DATA"'/.*redis" >/dev/null 2>&1
             ' || exit 1
-
-            # Save notarization ticket for caching on successful notarization
-            if [[ -n "${DMG:-}" && -f "$DMG" ]]; then
-              TICKET_DIR="$RUNNER_TEMP/notarization-ticket"
-              mkdir -p "$TICKET_DIR"
-              # Extract and save the notarization ticket from the stapled DMG
-              if xcrun stapler staple -q "$DMG" 2>/dev/null; then
-                # Stapler caches the ticket; save a marker that we have a valid ticket
-                printf '%s\n' "$VERSION_NUM" > "$TICKET_DIR/version"
-                printf '%s\n' "$MACOS_ARCH" > "$TICKET_DIR/arch"
-                printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$TICKET_DIR/timestamp"
-                printf 'notarization_cache: saved ticket cache for %s %s\n' "$VERSION_NUM" "$MACOS_ARCH"
-              fi
-            fi
-
-      - name: Save notarization ticket cache
-        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/notarization-ticket
-          key: notarization-ticket-${{ needs.normalize-inputs.outputs.version }}-${{ needs.normalize-inputs.outputs.architecture }}
 
       - name: Upload real macOS installer
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}

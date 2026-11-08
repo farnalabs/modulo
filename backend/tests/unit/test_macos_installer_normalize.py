@@ -211,3 +211,44 @@ def test_macos_normalize_direct_dispatch_rejects_non_dry_run(tmp_path: Path) -> 
     )
     assert result.returncode != 0
     assert "unsupported manual dispatch mode" in result.stderr
+
+
+def _install_sh_script() -> str:
+    """Read the install.sh script content."""
+    script_path = REPO_ROOT / "scripts" / "macos" / "install.sh"
+    return script_path.read_text(encoding="utf-8")
+
+
+def _run_install_sh(bogus_dmg_path: Path) -> subprocess.CompletedProcess[str]:
+    """Run install.sh with a bogus DMG path and return the result."""
+    script = _install_sh_script()
+
+    bash = (
+        r"C:\Program Files\Git\bin\bash.exe"
+        if Path(r"C:\Program Files\Git\bin\bash.exe").is_file()
+        else shutil.which("bash")
+    )
+    if bash is None:
+        pytest.skip("bash is required to execute install.sh")
+
+    return subprocess.run(  # noqa: S603 - fixed bash executable and repository-owned install script
+        [bash, "--noprofile", "--norc", "-c", script + '\ninstall.sh "$1"', "install.sh", bogus_dmg_path.as_posix()],
+        cwd=bogus_dmg_path.parent,
+        env={**os.environ, "PATH": os.environ.get("PATH", "")},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def test_install_sh_normalizes_duplicate_dmg_extension(tmp_path: Path) -> None:
+    """Test that install.sh normalizes .dmg.dmg to .dmg and shows the normalized path in the error."""
+    bogus_dmg = tmp_path / "foo.dmg.dmg"
+
+    result = _run_install_sh(bogus_dmg)
+
+    assert result.returncode != 0
+    assert "install.sh: normalized duplicate .dmg extension -> " in result.stderr
+    assert "foo.dmg" in result.stderr
+    assert "ERROR: DMG not found" in result.stderr
