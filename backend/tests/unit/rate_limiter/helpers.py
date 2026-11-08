@@ -76,6 +76,7 @@ def make_redis_client(*, auth: bool = False) -> MagicMock:
     pipe.expire = MagicMock(return_value=pipe)
     pipe.delete = MagicMock(return_value=pipe)
     pipe.execute = AsyncMock(return_value=(None, None, 1, True) if not auth else (None, 0))
+    client.eval = AsyncMock(return_value=(1, 0) if not auth else None)
     client.pipeline = MagicMock(return_value=pipe)
     client.zadd = AsyncMock()
     client.expire = AsyncMock()

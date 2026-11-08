@@ -100,7 +100,22 @@ async def test_demo_floor_limits_11th_request_per_ip_with_noop_registry() -> Non
     first_ten = [resp.status_code for resp in responses[:10]]
     assert all(status == 200 for status in first_ten)
     assert responses[10].status_code == 429
-    assert "Retry-After" in responses[10].headers
+    assert responses[10].headers["Retry-After"] == "3600"
+    assert call_next.await_count == 10
+
+
+async def test_repeated_rejected_demo_requests_do_not_extend_retry_window() -> None:
+    mw = _middleware()
+    call_next = _call_next()
+
+    for _ in range(10):
+        assert (await mw.dispatch(_demo_request("203.0.113.9"), call_next)).status_code == 200
+    first_rejection = await mw.dispatch(_demo_request("203.0.113.9"), call_next)
+    second_rejection = await mw.dispatch(_demo_request("203.0.113.9"), call_next)
+
+    assert first_rejection.status_code == 429
+    assert second_rejection.status_code == 429
+    assert first_rejection.headers["Retry-After"] == second_rejection.headers["Retry-After"]
     assert call_next.await_count == 10
 
 
