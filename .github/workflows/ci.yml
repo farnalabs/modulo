@@ -1028,6 +1028,16 @@ jobs:
           read -r -a FILES <<< "$(node scripts/e2e-visual-slice.mjs --list)"
           echo "visual/token e2e slice: ${FILES[*]}"
           pnpm exec playwright test "${FILES[@]}" --grep "@regression" --workers=1 --reporter=line
+      # FAR-2461: the canvas visual snapshots are tagged @visual, which the
+      # @regression slice above never selects. Without this step the visual
+      # regression coverage ran in no gate at all (PR #3024 review finding).
+      # The baselines under tests/e2e/canvas.visual.spec.ts-snapshots/ are
+      # committed per platform, including the Linux set this job runs on.
+      - name: Run canvas visual regression snapshots
+        if: needs.changes.outputs.frontend == 'true'
+        env:
+          E2E_TARGET: local
+        run: pnpm exec playwright test --grep "@visual" --workers=1 --reporter=line
       - name: Run unit tests (vitest)
         if: needs.changes.outputs.frontend == 'true'
         # The suite includes src/__tests__/stylesheets-parse.spec.ts (FAR-1995),

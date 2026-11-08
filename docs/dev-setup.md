@@ -67,6 +67,14 @@ Deliberately staging-only (with reasons in the script): `mobile-layout.spec.ts`
 and `wcag-contrast.spec.ts` (already runs as its own earlier step in the same
 job).
 
+Snapshot-based visual regression is a separate gate: `canvas.visual.spec.ts`
+is tagged `@visual` and runs in the same `frontend` CI job via
+`pnpm run test:e2e:visual` (equivalently
+`pnpm exec playwright test --grep "@visual"`). Its baselines live in
+`frontend/tests/e2e/canvas.visual.spec.ts-snapshots/` and are committed per
+platform — Playwright appends the platform suffix, so a Linux baseline (the
+platform CI runs on) must exist alongside any developer-captured one.
+
 ## Docs validity sweep
 
 `scripts/check_doc_validity.py` checks the product docs (`README.md` and
