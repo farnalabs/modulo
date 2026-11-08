@@ -149,7 +149,10 @@ again.
 check and before the live pen test. It resolves the previous published
 `bundle-v*` release as the rollback target, refuses to claim coverage when no
 previous release exists, and uploads the evidence directory as the
-`alpha-docker-upgrade-rollback-*` workflow artifact. A green build without that
+`alpha-docker-upgrade-rollback-*` workflow artifact. The predecessor is the
+greatest already-published version below the RC's version: the RC's own bundle
+is published after this validation is dispatched, so it does not need to exist
+in the release history for the matrix to run. A green build without that
 transcript is not a claim of rollback coverage. The same matrix remains
 available locally with the command in `docs/upgrade-process.md`.
 

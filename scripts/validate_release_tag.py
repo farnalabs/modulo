@@ -93,7 +93,22 @@ def resolve_n_minus_1(release_pages: Any, current: str) -> str | None:
     return ordered[index - 1] if index else None
 
 
+def resolve_previous_release(release_pages: Any, current: str) -> str | None:
+    """Resolve the greatest published bundle tag strictly below *current*.
+
+    Unlike :func:`resolve_n_minus_1`, *current* need not be published.  The RC
+    validation gate resolves its rollback target when the RC is cut, before
+    ``release-unified.yml`` publishes the current ``bundle-v*`` release, so the
+    current version is excluded from the candidate set rather than required in
+    the release history.
+    """
+    current_version = _version(current)
+    predecessors = [tag for tag in published_tags(release_pages) if _version(tag) < current_version]
+    return predecessors[-1] if predecessors else None
+
+
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+_PINNED_IMAGE = "ghcr.io/farnalabs/modulo"
 
 
 def _subject_digests(subject: Any) -> set[str]:
@@ -114,7 +129,16 @@ def _subject_digests(subject: Any) -> set[str]:
 
 
 def _attested_digests(payload: Any) -> set[str]:
-    """Collect digests only from GitHub attestation image subject fields."""
+    """Collect digests only from verified in-toto statement subject fields.
+
+    ``gh attestation verify --format json`` emits one object per verified
+    attestation shaped ``{"attestation": ..., "verificationResult": {...}}``,
+    and the in-toto statement carrying the ``subject`` array lives at
+    ``verificationResult.statement``.  The unverified bundle under
+    ``attestation`` is deliberately never read: its contents are
+    workflow-controlled metadata, not the verified statement.  A bare in-toto
+    statement is also accepted at the top level.
+    """
     if isinstance(payload, list):
         digests: set[str] = set()
         for item in payload:
@@ -126,14 +150,17 @@ def _attested_digests(payload: Any) -> set[str]:
     digests = _subject_digests(payload.get("subject"))
     verification_result = payload.get("verificationResult")
     if isinstance(verification_result, dict):
-        digests.update(_subject_digests(verification_result.get("subject")))
+        statement = verification_result.get("statement")
+        if isinstance(statement, dict):
+            digests.update(_subject_digests(statement.get("subject")))
     return digests
 
 
 def verify_image_digest(image: str, resolved_digest: str, attestation: Any) -> str:
     """Return the digest only when it is covered by published provenance."""
-    if not image.startswith("ghcr.io/"):
-        raise ReleaseValidationError(f"image must be a GHCR reference: {image}")
+    pinned_references = (f"{_PINNED_IMAGE}:", f"{_PINNED_IMAGE}@")
+    if image != _PINNED_IMAGE and not image.startswith(pinned_references):
+        raise ReleaseValidationError(f"image must be this project's GHCR reference ({_PINNED_IMAGE}): {image}")
     if _DIGEST_RE.fullmatch(resolved_digest) is None:
         raise ReleaseValidationError(f"resolved image digest is invalid: {resolved_digest}")
     attested = _attested_digests(attestation)
@@ -159,6 +186,13 @@ def _parser() -> argparse.ArgumentParser:
     predecessor.add_argument("--current", required=True)
     predecessor.add_argument("--release-json", type=Path, required=True)
 
+    previous = subparsers.add_parser(
+        "resolve-previous",
+        help="resolve the published predecessor of a not-yet-published release",
+    )
+    previous.add_argument("--current", required=True)
+    previous.add_argument("--release-json", type=Path, required=True)
+
     image = subparsers.add_parser("verify-image-digest", help="verify an image digest against provenance")
     image.add_argument("--image", required=True)
     image.add_argument("--digest", required=True)
@@ -178,10 +212,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(validate_published_release(args.tag, payload))
             elif args.command == "published-tags":
                 print("\n".join(published_tags(payload)))
-            else:
+            elif args.command == "resolve-n-minus-1":
                 predecessor = resolve_n_minus_1(payload, args.current)
                 if predecessor is not None:
                     print(predecessor)
+            else:
+                previous = resolve_previous_release(payload, args.current)
+                if previous is not None:
+                    print(previous)
         return 0
     except ReleaseValidationError as exc:
         print(f"release validation failed: {exc}", file=sys.stderr)

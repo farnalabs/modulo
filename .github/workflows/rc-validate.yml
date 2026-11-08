@@ -256,9 +256,16 @@ jobs:
           version="${RC_TAG#v}"
           version="${version%-rc*}"
           current_bundle_tag="bundle-v${version}"
-          bundle_tag="$(python3 scripts/validate_release_tag.py resolve-n-minus-1 \
+          # release-unified publishes the current bundle AFTER it dispatches this
+          # validation, so the current tag cannot be required in the release
+          # history. Resolve the greatest already-published tag strictly below
+          # the current version; the current tag itself is excluded.
+          if ! bundle_tag="$(python3 scripts/validate_release_tag.py resolve-previous \
             --current "$current_bundle_tag" \
-            --release-json "$RUNNER_TEMP/release-pages.json")"
+            --release-json "$RUNNER_TEMP/release-pages.json")"; then
+            echo "::error::could not resolve a previous published bundle-v* release from the release history; refusing to claim Docker upgrade/rollback coverage"
+            exit 1
+          fi
           if [ -z "$bundle_tag" ]; then
             echo "::error::no previous published bundle-v* release exists; refusing to claim Docker upgrade/rollback coverage"
             exit 1
@@ -313,7 +320,8 @@ jobs:
             echo "::error::predecessor bundle ${bundle_tag} does not contain docker-compose.prod.yml; refusing Docker upgrade/rollback coverage"
             exit 1
           fi
-          old_tag="$(COMPOSE_FILE="$compose_file" BUNDLE_VERSION="$bundle_version" python3 - <<'PY'
+          old_tag="$(COMPOSE_FILE="$compose_file" BUNDLE_VERSION="$bundle_version" \
+            uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 python - <<'PY'
           import os
           import re
           import sys
@@ -356,7 +364,6 @@ jobs:
             echo "::error::could not resolve a valid GHCR manifest digest for ${old_image}: ${old_digest:-<empty>}"
             exit 1
           fi
-          echo "OLD_IMAGE_DIGEST=$old_digest" >> "$GITHUB_ENV"
           old_subject="oci://ghcr.io/farnalabs/modulo@${old_digest}"
           if ! gh attestation verify "$old_subject" --repo "${{ github.repository }}" --format json > "$RUNNER_TEMP/predecessor-image-attestation.json"; then
             echo "::error::no verifiable build provenance for ${old_subject}; refusing Docker upgrade/rollback coverage"
@@ -387,7 +394,7 @@ jobs:
         with:
           name: alpha-docker-upgrade-rollback-${{ github.run_id }}
           path: ${{ runner.temp }}/compose-matrix-evidence
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
   # ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ def render_matrix_compose(compose_file: Path, tag: str | None = None) -> None:
     """Replace the packaged immutable image tag with a phase image selector."""
     text = compose_file.read_text(encoding="utf-8")
     replacement = tag if tag is not None else _REPLACEMENT
-    rendered, count = _IMAGE_LINE.subn(rf"\1{replacement}", text, count=1)
+    rendered, count = _IMAGE_LINE.subn(lambda match: match.group(1) + replacement, text, count=0)
     if count != 1:
         raise ValueError(f"expected exactly one modulo image to render, found {count}")
     compose_file.write_text(rendered, encoding="utf-8")
