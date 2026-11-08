@@ -20871,6 +20871,8 @@ export interface components {
             } | null;
             /** Seam Coverage */
             seam_coverage?: components["schemas"]["SeamCoverageStatement"][] | null;
+            /** Legacy Agent Verdict */
+            legacy_agent_verdict?: string | null;
             /** Trigger Type */
             trigger_type?: string | null;
             /** Execution Origin */
