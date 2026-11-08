@@ -7,6 +7,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import textwrap
 import time
@@ -49,6 +50,26 @@ EXPECTED_ARCHIVE_SIZES = {
 
 def _workflow_text() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
+
+
+def _bash() -> str:
+    """Return a native bash: Git for Windows on Windows, never the WSL shim.
+
+    ``shutil.which("bash")`` resolves to ``C:\\WINDOWS\\system32\\bash.exe``
+    (the WSL launcher) on this workstation, which runs in a different filesystem
+    namespace and cannot see the temporary Windows paths these tests use.
+    """
+    if os.name == "nt":
+        for candidate in (
+            Path(r"C:\Program Files\Git\bin\bash.exe"),
+            Path(r"C:\Program Files (x86)\Git\bin\bash.exe"),
+        ):
+            if candidate.is_file():
+                return str(candidate)
+    executable = shutil.which("bash")
+    assert executable is not None, "the download helper tests require a bash interpreter"
+    assert "system32" not in executable.lower(), f"resolved bash is the WSL shim, not a native bash: {executable}"
+    return executable
 
 
 def _locked_packages() -> dict[str, dict[str, Any]]:
@@ -280,8 +301,20 @@ def test_bundle_external_downloads_use_bounded_transient_retry_and_checksum_veri
     names = [step.get("name", "") for step in steps]
 
     helper = _download_helper(text)
-    assert 'local max_attempts="${DOWNLOAD_MAX_ATTEMPTS:-5}"' in helper
-    assert 'local max_retry_delay="${DOWNLOAD_MAX_RETRY_DELAY_SECONDS:-10}"' in helper
+    assert "local max_attempts=5" in helper
+    assert "local max_retry_delay=10" in helper
+    assert "DOWNLOAD_MAX_ATTEMPTS" not in helper
+    assert "DOWNLOAD_MAX_RETRY_DELAY_SECONDS" not in helper
+    assert "DOWNLOAD_CURL_BIN" not in helper
+    assert "DOWNLOAD_SHA256SUM_BIN" not in helper
+    assert "DOWNLOAD_SLEEP_BIN" not in helper
+    # Release verification must resolve the system tools itself: a caller cannot
+    # substitute curl/sha256sum/sleep, and the helper never rewrites PATH.
+    assert "curl -fsSL --proto '=https'" in helper
+    assert "| sha256sum --check --strict -" in helper
+    assert 'sleep "$retry_delay"' in helper
+    assert "PATH=" not in helper
+    assert "command -v" not in helper
     assert "--retry 0" in helper
     assert "--connect-timeout 20" in helper
     assert "--max-time 300" in helper
@@ -308,93 +341,83 @@ def test_bundle_external_downloads_use_bounded_transient_retry_and_checksum_veri
     assert "--retry 3" not in text
 
 
+_STUB_PREAMBLE = textwrap.dedent(
+    """
+    # Test harness only: shell functions shadow the helper's unqualified
+    # command lookups. Production selects curl/sha256sum/sleep by name with no
+    # environment indirection, so a stub can never be injected into a release.
+    curl() {
+      local state_file="${CURL_STATE_FILE:?}" output_file="" previous="" count=0
+      for argument in "$@"; do
+        if [ "$previous" = "-o" ]; then output_file="$argument"; fi
+        previous="$argument"
+      done
+      : "${output_file:?curl stub did not receive -o destination}"
+      if [ -f "$state_file" ]; then count="$(cat "$state_file")"; fi
+      count=$((count + 1))
+      printf '%s\\n' "$count" > "$state_file"
+      case "${CURL_SCENARIO:?}" in
+        transient_then_success)
+          if [ "$count" -eq 1 ]; then printf '%s' "transient" > "$output_file"; printf '503'; return 22; fi
+          if [ "$count" -eq 2 ]; then printf '%s' "transient" > "$output_file"; printf '504'; return 22; fi
+          printf '%s' "verified payload" > "$output_file"; printf '200'; return 0
+          ;;
+        permanent_404)
+          printf '%s' "not found" > "$output_file"; printf '404'; return 22
+          ;;
+        checksum_mismatch)
+          printf '%s' "wrong payload" > "$output_file"; printf '200'; return 0
+          ;;
+        partial_download)
+          printf '%s' "partial payload" > "$output_file"; printf '503'; return 22
+          ;;
+        *) return 99 ;;
+      esac
+    }
+
+    sha256sum() {
+      local expected path actual
+      read -r expected path
+      actual="$(
+        "$SHA256_PYTHON" -c \\
+          'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \\
+          "$path"
+      )"
+      expected="$(printf '%s' "$expected" | tr -d '\\r')"
+      if [ "$expected" = "$actual" ]; then return 0; fi
+      return 1
+    }
+
+    sleep() {
+      printf '%s\\n' "$1" >> "${SLEEP_LOG:?}"
+    }
+    """
+).lstrip("\n")
+
+
 def _run_download_helper(
     helper: str,
     scenario: str,
     expected_sha256: str,
     *,
     existing_destination: str | None = None,
-    max_attempts: str = "5",
-    max_retry_delay: str = "0",
-) -> tuple[subprocess.CompletedProcess[str], str, str, str]:
-    with tempfile.TemporaryDirectory(prefix="download-helper-test-") as temporary:
+) -> tuple[subprocess.CompletedProcess[str], str, str, str, bool]:
+    with tempfile.TemporaryDirectory(prefix="download-helper-test-", ignore_cleanup_errors=True) as temporary:
         root = Path(temporary)
-        bin_dir = root / "bin"
-        bin_dir.mkdir()
         destination = root / "artifact.tar.gz"
         if existing_destination is not None:
             destination.write_text(existing_destination, encoding="utf-8")
-        (bin_dir / "curl").write_text(
-            textwrap.dedent(
-                """
-                #!/usr/bin/env bash
-                set -euo pipefail
-                state_file="${CURL_STATE_FILE:?}"
-                output_file=""
-                previous=""
-                for argument in "$@"; do
-                  if [ "$previous" = "-o" ]; then output_file="$argument"; fi
-                  previous="$argument"
-                done
-                : "${output_file:?curl stub did not receive -o destination}"
-                count=0
-                if [ -f "$state_file" ]; then count="$(cat "$state_file")"; fi
-                count=$((count + 1))
-                printf '%s\\n' "$count" > "$state_file"
-                case "${CURL_SCENARIO:?}" in
-                  transient_then_success)
-                    if [ "$count" -eq 1 ]; then printf '%s' "transient" > "$output_file"; printf '503'; exit 22; fi
-                    if [ "$count" -eq 2 ]; then printf '%s' "transient" > "$output_file"; printf '504'; exit 22; fi
-                    printf '%s' "verified payload" > "$output_file"; printf '200'; exit 0
-                    ;;
-                  permanent_404)
-                    printf '%s' "not found" > "$output_file"; printf '404'; exit 22
-                    ;;
-                  checksum_mismatch)
-                    printf '%s' "wrong payload" > "$output_file"; printf '200'; exit 0
-                    ;;
-                  partial_download)
-                    printf '%s' "partial payload" > "$output_file"; printf '503'; exit 22
-                    ;;
-                  *) exit 99 ;;
-                esac
-                """
-            ).strip()
-            + "\n",
-            encoding="utf-8",
-        )
-        (bin_dir / "sha256sum").write_text(
-            textwrap.dedent(
-                """
-                #!/usr/bin/env bash
-                set -euo pipefail
-                read -r expected path
-                sha256_code='import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())'
-                actual="$(python -c "$sha256_code" "$path")"
-                expected="$(printf '%s' "$expected" | tr -d '\\r')"
-                if [ "$expected" = "$actual" ]; then exit 0; fi
-                exit 1
-                """
-            ).strip()
-            + "\n",
-            encoding="utf-8",
-        )
-        (bin_dir / "sleep").write_text(
-            '#!/usr/bin/env bash\nprintf \'%s\\n\' "$1" >> "${SLEEP_LOG:?}"\n',
-            encoding="utf-8",
-        )
-        for script in ("curl", "sha256sum", "sleep"):
-            (bin_dir / script).chmod(0o755)
         state_file = root / "curl.count"
         sleep_log = root / "sleep.log"
-        command = [
-            "bash",
-            "-c",
-            f'{helper}\ndownload_verified "$DOWNLOAD_URL" "$DESTINATION" "$EXPECTED_SHA256" test-label',
-        ]
+        script = "\n".join(
+            (
+                _STUB_PREAMBLE,
+                helper,
+                'download_verified "$DOWNLOAD_URL" "$DESTINATION" "$EXPECTED_SHA256" test-label',
+            )
+        )
         environment = {
             **os.environ,
-            "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
             "HOME": str(root),
             "CURL_SCENARIO": scenario,
             "CURL_STATE_FILE": str(state_file),
@@ -402,17 +425,10 @@ def _run_download_helper(
             "DESTINATION": str(destination),
             "EXPECTED_SHA256": expected_sha256,
             "SLEEP_LOG": str(sleep_log),
-            "DOWNLOAD_MAX_ATTEMPTS": max_attempts,
-            "DOWNLOAD_MAX_RETRY_DELAY_SECONDS": max_retry_delay,
-            "DOWNLOAD_CURL_BIN": str(bin_dir / "curl"),
-            "DOWNLOAD_SHA256SUM_BIN": str(bin_dir / "sha256sum"),
-            "DOWNLOAD_SLEEP_BIN": str(bin_dir / "sleep"),
+            "SHA256_PYTHON": sys.executable,
         }
-        script_path = root / "run-helper.sh"
-        script_path.write_text(command[2] + "\n", encoding="utf-8")
         result = subprocess.run(  # noqa: S603
-            [r"C:\Program Files\Git\bin\bash.exe", "-c", command[2]],
-            cwd=root,
+            [_bash(), "-c", script],
             env=environment,
             text=True,
             capture_output=True,
@@ -422,52 +438,74 @@ def _run_download_helper(
         attempts = state_file.read_text(encoding="utf-8").strip() if state_file.exists() else "0"
         sleeps = sleep_log.read_text(encoding="utf-8").strip() if sleep_log.exists() else ""
         destination_contents = destination.read_text(encoding="utf-8") if destination.exists() else ""
-        return result, attempts, sleeps, destination_contents
+        part_file = destination.with_name(destination.name + ".part")
+        return result, attempts, sleeps, destination_contents, part_file.exists()
 
 
 def test_download_verified_retries_transient_503_and_504_then_succeeds() -> None:
     expected = hashlib.sha256(b"verified payload").hexdigest()
-    result, attempts, sleeps, destination = _run_download_helper(
+    result, attempts, sleeps, destination, part_exists = _run_download_helper(
         _download_helper(_workflow_text()), "transient_then_success", expected
     )
     assert result.returncode == 0, result.stderr
     assert attempts == "3"
-    assert sleeps.splitlines() == ["0", "0"]
+    assert len(sleeps.splitlines()) == 2
+    assert all(1 <= int(value) <= 10 for value in sleeps.splitlines())
     assert destination == "verified payload"
+    assert not part_exists
+
+
+def test_download_verified_replaces_existing_destination_atomically_after_retry() -> None:
+    expected = hashlib.sha256(b"verified payload").hexdigest()
+    result, attempts, sleeps, destination, part_exists = _run_download_helper(
+        _download_helper(_workflow_text()),
+        "transient_then_success",
+        expected,
+        existing_destination="old artifact",
+    )
+    assert result.returncode == 0, result.stderr
+    assert attempts == "3"
+    assert len(sleeps.splitlines()) == 2
+    assert all(1 <= int(value) <= 10 for value in sleeps.splitlines())
+    assert destination == "verified payload"
+    assert not part_exists
 
 
 def test_download_verified_does_not_retry_permanent_404() -> None:
-    result, attempts, sleeps, destination = _run_download_helper(
+    result, attempts, sleeps, destination, part_exists = _run_download_helper(
         _download_helper(_workflow_text()), "permanent_404", hashlib.sha256(b"not found").hexdigest()
     )
     assert result.returncode == 22
     assert attempts == "1"
     assert sleeps == ""
     assert destination == ""
+    assert not part_exists
 
 
 def test_download_verified_checksum_mismatch_fails_without_consumable_destination() -> None:
-    result, attempts, sleeps, destination = _run_download_helper(
+    result, attempts, sleeps, destination, part_exists = _run_download_helper(
         _download_helper(_workflow_text()), "checksum_mismatch", hashlib.sha256(b"expected").hexdigest()
     )
     assert result.returncode == 1
     assert attempts == "1"
     assert sleeps == ""
     assert destination == ""
+    assert not part_exists
 
 
 def test_download_verified_preserves_existing_destination_on_partial_download() -> None:
-    result, attempts, sleeps, destination = _run_download_helper(
+    result, attempts, sleeps, destination, part_exists = _run_download_helper(
         _download_helper(_workflow_text()),
         "partial_download",
         hashlib.sha256(b"partial payload").hexdigest(),
         existing_destination="existing artifact",
-        max_attempts="2",
     )
     assert result.returncode == 1, result.stderr
-    assert attempts == "2", result.stderr
-    assert sleeps.splitlines() == ["0"]
+    assert attempts == "5", result.stderr
+    assert len(sleeps.splitlines()) == 4
+    assert all(1 <= int(value) <= 10 for value in sleeps.splitlines())
     assert destination == "existing artifact"
+    assert not part_exists
 
 
 def test_bundle_has_only_the_guarded_global_sync() -> None:
