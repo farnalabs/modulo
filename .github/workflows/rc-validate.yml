@@ -238,13 +238,20 @@ jobs:
           gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate --slurp > "$RUNNER_TEMP/release-pages.json"
           published_tags="$(python3 scripts/validate_release_tag.py published-tags \
             --release-json "$RUNNER_TEMP/release-pages.json")"
-          old_tag="${published_tags##*$'\n'}"
-          if [ -z "$old_tag" ]; then
+          bundle_tag="${published_tags##*$'\n'}"
+          if [ -z "$bundle_tag" ]; then
             echo "::error::no previous published bundle-v* release exists; refusing to claim Docker upgrade/rollback coverage"
             exit 1
           fi
+          case "$bundle_tag" in
+            bundle-v*) old_tag="v${bundle_tag#bundle-v}" ;;
+            *)
+              echo "::error::release resolver returned unexpected tag '${bundle_tag}'; expected bundle-vX.Y.Z"
+              exit 1
+              ;;
+          esac
           echo "OLD_TAG=$old_tag" >> "$GITHUB_ENV"
-          echo "Using previous immutable bundle tag $old_tag as the rollback target."
+          echo "Using previous immutable image tag $old_tag (from bundle release $bundle_tag) as the rollback target."
 
       - name: Run the Docker upgrade / failure / rollback matrix
         shell: bash

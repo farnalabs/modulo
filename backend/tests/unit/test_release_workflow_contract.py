@@ -57,3 +57,17 @@ def test_rc_validation_refuses_to_claim_docker_matrix_without_previous_release()
 
     assert "no previous published bundle-v* release exists" in matrix
     assert "refusing to claim Docker upgrade/rollback coverage" in matrix
+
+
+def test_rc_validation_normalizes_previous_bundle_tag_for_docker_image_rollback() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "rc-validate.yml").read_text(encoding="utf-8")
+    matrix = workflow[
+        workflow.index("Resolve the previous published immutable bundle tag") : workflow.index(
+            "Run the Docker upgrade / failure / rollback matrix"
+        )
+    ]
+
+    assert "bundle_tag=\"${published_tags##*$'\\n'}\"" in matrix
+    assert 'bundle-v*) old_tag="v${bundle_tag#bundle-v}" ;;' in matrix
+    assert 'echo "OLD_TAG=$old_tag" >> "$GITHUB_ENV"' in matrix
+    assert 'old_tag="bundle-v' not in matrix
