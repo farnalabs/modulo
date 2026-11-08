@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { layoutNodes, type GraphEdgeInput, type GraphNodeInput } from '../utils/graph-layout'
+import { PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD } from '../constants/canvas'
 
 function byId<T extends { id: string }>(nodes: T[]): Record<string, T> {
   return Object.fromEntries(nodes.map((node) => [node.id, node]))
@@ -245,5 +246,25 @@ describe('layoutNodes', () => {
       { nodeWidth: 100, nodeHeight: 50, xPad: 20, yPad: 30 },
     )
     expect(result[1].position).toEqual({ x: 120, y: 0 })
+  })
+
+  it('lays out the 100-node performance fixture deterministically', () => {
+    const nodes: GraphNodeInput[] = Array.from({ length: PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD }, (_, index) => ({
+      id: `node-${index}`,
+      label: `Node ${index}`,
+    }))
+    const edges: GraphEdgeInput[] = nodes.slice(1).map((node, index) => ({
+      source: `node-${index}`,
+      target: node.id,
+    }))
+
+    const first = layoutNodes(nodes, edges)
+    const second = layoutNodes(nodes, edges)
+
+    expect(first).toEqual(second)
+    expect(first).toHaveLength(PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD)
+    expect(new Set(first.map((node) => `${node.position.x}:${node.position.y}`)).size).toBe(
+      PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD,
+    )
   })
 })
