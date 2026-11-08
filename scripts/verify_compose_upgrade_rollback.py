@@ -27,6 +27,7 @@ import platform
 import shlex
 import subprocess  # nosec B404 - commands are fixed docker/curl argv lists
 import sys
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -67,22 +68,12 @@ def build_compose_command(compose_file: Path, project_name: str, *args: str, env
     return command
 
 
-_SECRET_NAMES = {
-    "MODULO_DB_PASSWORD",
-    "SECRET_KEY",
-    "FERNET_KEY",
-    "SAQ_AUTH_PASSWORD",
-    "SAQ_AUTH_USERNAME",
-    "DATABASE_URL",
-    "DATABASE_ADMIN_URL",
-    "MODULO_SYSTEM_DATABASE_URL",
-    "SMTP_PASSWORD",
-    "MODULO_LICENSE_KEY",
-}
+_INVALID_SECRET_KEY = "intentionally-invalid-secret"
 
 
 def _redact(text: str, secrets: set[str]) -> str:
     """Redact configured secret values without emitting them to evidence."""
+
     redacted = text
     for secret in sorted(secrets, key=len, reverse=True):
         if secret:
@@ -90,22 +81,24 @@ def _redact(text: str, secrets: set[str]) -> str:
     return redacted
 
 
+def _parse_env_values(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        name, separator, value = line.partition("=")
+        if separator and name.strip():
+            values[name.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
 def _secret_values(env: dict[str, str] | None) -> set[str]:
     if env is None:
         return set()
-    return {value for name, value in env.items() if name in _SECRET_NAMES and value}
+    return {value for value in env.values() if value}
 
 
 def _secret_values_from_file(path: Path) -> set[str]:
-    values: set[str] = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
-        name, separator, value = line.partition("=")
-        if not separator:
-            continue
-        key = name.strip().upper()
-        if key in _SECRET_NAMES or any(token in key for token in ("SECRET", "PASSWORD", "TOKEN", "PRIVATE_KEY")):
-            values.add(value.strip().strip('"').strip("'"))
-    return {value for value in values if value}
+    """Redact every configured env-file value, including non-obvious credentials."""
+    return {value for value in _parse_env_values(path).values() if value}
 
 
 class Evidence:
@@ -227,43 +220,78 @@ class Matrix:
         return self.command(name, argv, expected=expected, env=env)
 
     def ready(self, name: str, *, expected: bool, expected_status: str | None = None) -> bool:
+        """Poll readiness until the requested state or the bounded deadline."""
         url = f"http://127.0.0.1:{self.port}/healthz/ready"
         argv = [
             "curl",
             "--silent",
             "--show-error",
             "--max-time",
-            "10",
+            str(max(1, min(10, self.timeout))),
             "--output",
             os.devnull,
             "--write-out",
             "%{http_code}",
             url,
         ]
-        raw = self.runner(
-            argv,
-            cwd=self.compose_dir,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=self.timeout,
-            check=False,
+        deadline = time.monotonic() + self.timeout
+        poll_interval = min(0.25, max(0.01, self.timeout / 10))
+        attempt = 0
+        last_code = "<none>"
+        last_returncode = 0
+        while True:
+            attempt += 1
+            raw = self.runner(
+                argv,
+                cwd=self.compose_dir,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=max(1, min(10, self.timeout)),
+                check=False,
+            )
+            result = CommandResult(
+                name + f"-attempt-{attempt}", tuple(argv), raw.returncode, raw.stdout or "", raw.stderr or ""
+            )
+            self.evidence.record(
+                result,
+                outcome="success" if raw.returncode == 0 else f"unreachable:{raw.returncode}",
+            )
+            code = result.stdout.strip()
+            last_code = code or "<none>"
+            last_returncode = raw.returncode
+            is_ready = raw.returncode == 0 and code == "200"
+            reached_expected = code == expected_status if expected_status is not None else is_ready == expected
+            if reached_expected and (expected_status is not None or raw.returncode == 0):
+                if is_ready != expected:
+                    self.evidence.record(
+                        CommandResult(name + "-assertion", (url,), 0, f"HTTP {code}\n", ""),
+                        outcome="ready" if is_ready else "not-ready",
+                    )
+                    return is_ready
+                self.evidence.record(
+                    CommandResult(name + "-assertion", (url,), 0, f"HTTP {code}\n", ""),
+                    outcome="ready" if is_ready else "not-ready",
+                )
+                return is_ready
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
+        wanted = (
+            f"HTTP {expected_status}"
+            if expected_status is not None
+            else ("ready (HTTP 200)" if expected else "not ready")
         )
-        result = CommandResult(name, tuple(argv), raw.returncode, raw.stdout or "", raw.stderr or "")
-        self.evidence.record(result, outcome="success" if raw.returncode == 0 else f"unreachable:{raw.returncode}")
-        code = result.stdout.strip()
-        is_ready = raw.returncode == 0 and code == "200"
-        if expected_status is not None and code != expected_status:
-            raise ValidationError(f"{name}: expected HTTP {expected_status}, received HTTP {code or '<none>'}")
-        if is_ready != expected:
-            wanted = "ready (HTTP 200)" if expected else "not ready"
-            raise ValidationError(f"{name}: expected {wanted}, received HTTP {code or '<none>'}")
-        self.evidence.record(
-            CommandResult(name + "-assertion", (url,), 0, f"HTTP {code}\n", ""),
-            outcome="ready" if is_ready else "not-ready",
+        raise ValidationError(
+            f"{name}: expected {wanted} before deadline, received HTTP {last_code} (curl exit {last_returncode})"
         )
-        return is_ready
+
+    def _assert_failed_upgrade_config(self, text: str, name: str) -> None:
+        if self.new_tag not in text:
+            raise ValidationError(f"{name} compose config did not use the requested new tag")
+        if _INVALID_SECRET_KEY not in text:
+            raise ValidationError(f"{name} compose config did not receive the intentionally invalid SECRET_KEY")
 
     def _assert_failed_upgrade_logs(self, result: CommandResult) -> None:
         combined = f"{result.stdout}\n{result.stderr}"
@@ -290,11 +318,10 @@ class Matrix:
             self.new_tag,
             "config",
             expected="success",
-            secret_key="intentionally-invalid-secret",
+            secret_key=_INVALID_SECRET_KEY,
         )
         config_text = f"{config.stdout}\n{config.stderr}"
-        if self.new_tag not in config_text:
-            raise ValidationError("invalid-secret compose config did not use the requested new tag")
+        self._assert_failed_upgrade_config(config_text, "invalid-secret")
         self.compose("clean-install-old", self.old_tag, "up", "-d", "--remove-orphans")
         self.ready("clean-install-ready", expected=True)
 
@@ -314,7 +341,7 @@ class Matrix:
             "--no-deps",
             "modulo",
             expected="success",
-            secret_key="intentionally-invalid-secret",
+            secret_key=_INVALID_SECRET_KEY,
         )
         self.ready("failed-upgrade-not-ready", expected=False, expected_status="503")
         failed_logs = self.compose("failed-upgrade-logs", self.new_tag, "logs", "--no-color", "--tail=200", "modulo")

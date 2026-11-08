@@ -56,9 +56,15 @@ def test_build_compose_command_is_project_isolated(tmp_path: Path) -> None:
 
 def test_matrix_records_every_required_transition(tmp_path: Path) -> None:
     calls: list[tuple[str, ...]] = []
+    failed_upgrade_env: dict[str, str] | None = None
 
     def runner(argv: list[str], **kwargs: Any) -> SimpleNamespace:
+        nonlocal failed_upgrade_env
         calls.append(tuple(argv))
+        if argv[0] == "docker" and "--force-recreate" in argv:
+            failed_upgrade_env = kwargs["env"]
+            assert failed_upgrade_env["SECRET_KEY"] == module._INVALID_SECRET_KEY
+            assert failed_upgrade_env["TAG"] == "v1.1.0"
         if argv[0] == "curl":
             phase = next(item for item in reversed(calls) if item[0] == "docker" and "up" in item)
             status = "503" if "--force-recreate" in phase else "200"
@@ -98,21 +104,21 @@ def test_matrix_records_every_required_transition(tmp_path: Path) -> None:
         "compose-config-old",
         "compose-config-invalid-secret",
         "clean-install-old",
-        "clean-install-ready",
+        "clean-install-ready-attempt-1",
         "clean-install-ready-assertion",
         "upgrade-new",
-        "upgrade-ready",
+        "upgrade-ready-attempt-1",
         "upgrade-ready-assertion",
         "failed-upgrade",
-        "failed-upgrade-not-ready",
+        "failed-upgrade-not-ready-attempt-1",
         "failed-upgrade-not-ready-assertion",
         "failed-upgrade-logs",
         "rollback-old",
-        "rollback-ready",
+        "rollback-ready-attempt-1",
         "rollback-ready-assertion",
         "rollback-logs",
     ]
-    assert any("--force-recreate" in call for call in calls)
+    assert failed_upgrade_env is not None
     (evidence.directory / "RESULT").write_text(
         "PASS clean-install -> upgrade -> intentionally failed upgrade -> rollback -> rollback verification\n",
         encoding="utf-8",
@@ -123,20 +129,27 @@ def test_matrix_records_every_required_transition(tmp_path: Path) -> None:
 
 
 def test_evidence_redacts_secret_literals(tmp_path: Path) -> None:
-    evidence = Evidence(tmp_path / "evidence", secrets={"db-password", "jwt-secret"})
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "MODULO_USERS=admin@example.com:admin-password\nODD_CREDENTIAL=not-obvious-secret\n",
+        encoding="utf-8",
+    )
+    secrets = module._secret_values_from_file(env_file)
+    assert {"admin@example.com:admin-password", "not-obvious-secret"} <= secrets
+    evidence = Evidence(tmp_path / "evidence", secrets=secrets)
     evidence.record(
         module.CommandResult(
             "compose-config",
-            ("docker", "compose", "config", "db-password"),
+            ("docker", "compose", "config", "admin@example.com:admin-password"),
             0,
-            "SECRET_KEY=db-password\n",
-            "FERNET_KEY=jwt-secret\n",
+            "MODULO_USERS=admin@example.com:admin-password\n",
+            "ODD_CREDENTIAL=not-obvious-secret\n",
         ),
         outcome="success",
     )
     rendered = "\n".join(path.read_text(encoding="utf-8") for path in evidence.directory.iterdir())
-    assert "db-password" not in rendered
-    assert "jwt-secret" not in rendered
+    assert "admin@example.com:admin-password" not in rendered
+    assert "not-obvious-secret" not in rendered
     assert "[REDACTED]" in rendered
 
 
@@ -148,6 +161,54 @@ def test_evidence_rejects_stale_directory(tmp_path: Path) -> None:
         Evidence(directory)
 
 
+def test_ready_polls_transient_connection_refusal(tmp_path: Path) -> None:
+    attempts = 0
+
+    def runner(argv: list[str], **kwargs: Any) -> SimpleNamespace:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            return SimpleNamespace(returncode=7, stdout="", stderr="connection refused")
+        return SimpleNamespace(returncode=0, stdout="200", stderr="")
+
+    evidence = Evidence(tmp_path / "evidence")
+    matrix = Matrix(
+        compose_file=tmp_path / "docker-compose.prod.yml",
+        compose_dir=tmp_path,
+        env_file=tmp_path / ".env",
+        project_name="proof-123",
+        old_tag="v1.0.0",
+        new_tag="v1.1.0",
+        evidence=evidence,
+        port="18080",
+        timeout=1,
+        runner=runner,
+    )
+    assert matrix.ready("startup-ready", expected=True) is True
+    assert attempts == 3
+
+
+def test_ready_times_out_after_transient_connection_refusal(tmp_path: Path) -> None:
+    def runner(argv: list[str], **kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(returncode=7, stdout="", stderr="connection refused")
+
+    evidence = Evidence(tmp_path / "evidence")
+    matrix = Matrix(
+        compose_file=tmp_path / "docker-compose.prod.yml",
+        compose_dir=tmp_path,
+        env_file=tmp_path / ".env",
+        project_name="proof-123",
+        old_tag="v1.0.0",
+        new_tag="v1.1.0",
+        evidence=evidence,
+        port="18080",
+        timeout=1,
+        runner=runner,
+    )
+    with pytest.raises(ValidationError, match="before deadline"):
+        matrix.ready("startup-ready", expected=True)
+
+
 def test_matrix_rejects_a_healthy_failed_upgrade(tmp_path: Path) -> None:
     def runner(argv: list[str], **kwargs: Any) -> SimpleNamespace:
         if argv[0] == "curl":
@@ -155,7 +216,7 @@ def test_matrix_rejects_a_healthy_failed_upgrade(tmp_path: Path) -> None:
         if argv[0] == "docker" and "config" in argv:
             return SimpleNamespace(
                 returncode=0,
-                stdout="image: ghcr.io/farnalabs/modulo:v1.1.0",
+                stdout="image: ghcr.io/farnalabs/modulo:v1.1.0\nSECRET_KEY: intentionally-invalid-secret",
                 stderr="",
             )
         return SimpleNamespace(returncode=0, stdout="", stderr="")
