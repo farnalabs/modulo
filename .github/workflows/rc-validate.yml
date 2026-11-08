@@ -285,7 +285,7 @@ jobs:
             echo "::error::published predecessor bundle ${bundle_tag} has no checksum for $(basename "$downloaded_archive") in SHA256SUMS; refusing Docker upgrade/rollback coverage"
             exit 1
           fi
-          if ! printf '%s\\n' "$archive_checksum_line" | (cd "$RUNNER_TEMP" && sha256sum --check --status -); then
+          if ! printf '%s\n' "$archive_checksum_line" | (cd "$RUNNER_TEMP" && sha256sum --check --status -); then
             echo "::error::checksum mismatch for published predecessor bundle asset $(basename "$downloaded_archive"); refusing Docker upgrade/rollback coverage"
             exit 1
           fi
