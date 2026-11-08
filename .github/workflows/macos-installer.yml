@@ -163,7 +163,9 @@ jobs:
     name: Build and smoke-test macOS ${{ needs.normalize-inputs.outputs.architecture }} bundle
     needs: normalize-inputs
     runs-on: ${{ needs.normalize-inputs.outputs.architecture == 'x86_64' && 'macos-15-intel' || 'macos-15' }}
-    timeout-minutes: 90
+    # Worst-case retry sleeps are 62m55s with +25% jitter, plus the 30m
+    # notarytool wait, so 90m leaves no budget for build/sign/smoke work.
+    timeout-minutes: 120
     env:
       VERSION_NUM: ${{ needs.normalize-inputs.outputs.version }}
       MODE: ${{ needs.normalize-inputs.outputs.mode }}
@@ -224,7 +226,7 @@ jobs:
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
@@ -351,7 +353,7 @@ jobs:
           # files and downloaded tarballs are not needed once the .app exists:
           # signing, DMG creation and the smoke suite all read the bundle only.
           # Removing them here is worth roughly a gigabyte before the largest
-          # copies in the job (DMG, DMG-with-spaces duplicate, installed app).
+          # copies in the job (DMG, DMG-with-spaces, installed app).
           reclaim_build_sources() {
             local path free_before free_after
             free_before="$(df -k "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}' || true)"
@@ -1076,20 +1078,32 @@ jobs:
           # Apple's notarization ticket can take time to propagate to CloudKit after
           # notarytool accepts the submission. Run 41127149139 observed "Record not found"
           # and "Could not find base64 encoded ticket in response" from stapler (exit 65).
-          # DMG stapling is best-effort: up to 6 retries, 20s delay. Failure is logged but
-          # does not fail the build when stapler reports only ticket propagation/network trouble.
+          # DMG stapling is best-effort: exponential backoff (20s, 40s, 80s, 160s, 320s, 600s cap),
+          # max 10 attempts with +/-25% jitter. Failure is logged but does not fail the build
+          # when stapler reports only ticket propagation/network trouble.
           staple_dmg_with_retry() {
-            local attempt
-            for attempt in 1 2 3 4 5 6; do
+            local attempt=1 max_attempts=10 base_delay=20 max_delay=600
+            local wait_time jitter
+            while [[ "$attempt" -le "$max_attempts" ]]; do
               if xcrun stapler staple "$DMG"; then
+                printf 'staple_dmg_with_retry: attempt=%d success\n' "$attempt"
                 return 0
               fi
-              if [[ "$attempt" -lt 6 ]]; then
-                sleep 20
+              printf 'staple_dmg_with_retry: attempt=%d failed\n' "$attempt"
+              if [[ "$attempt" -lt "$max_attempts" ]]; then
+                wait_time=$(( base_delay * (2 ** (attempt - 1)) ))
+                [[ "$wait_time" -gt "$max_delay" ]] && wait_time="$max_delay"
+                # Add +/-25% jitter
+                jitter=$(( wait_time / 4 ))
+                wait_time=$(( wait_time + RANDOM % (2 * jitter + 1) - jitter ))
+                printf 'staple_dmg_with_retry: waiting %ds before retry (attempt %d/%d)\n' "$wait_time" "$attempt" "$max_attempts"
+                sleep "$wait_time"
               fi
+              attempt=$((attempt + 1))
             done
             return 1
           }
+
           dmg_staple_output_file="$DATA/pre-smoke-dmg_staple.log"
           dmg_staple_ticket_unavailable=0
           rm -f "$dmg_staple_output_file"
@@ -1421,14 +1435,13 @@ jobs:
              ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
            ' || exit 1
 
-           run_assertion "no_owned_modulo_processes" bash -c '
-             ! pgrep -f "'"$INSTALL_ROOT"'/.*/Contents/MacOS/modulo" >/dev/null 2>&1
-           ' || exit 1
+            run_assertion "no_owned_modulo_processes" bash -c '
+              ! pgrep -f "'"$INSTALL_ROOT"'/.*/Contents/MacOS/modulo" >/dev/null 2>&1
+            ' || exit 1
 
-           run_assertion "no_owned_postgres_redis" bash -c '
-             ! pgrep -f "'"$DATA"'/pgdata" >/dev/null 2>&1 && ! pgrep -f "'"$DATA"'/.*redis" >/dev/null 2>&1
-           ' || exit 1
-
+            run_assertion "no_owned_postgres_redis" bash -c '
+              ! pgrep -f "'"$DATA"'/pgdata" >/dev/null 2>&1 && ! pgrep -f "'"$DATA"'/.*redis" >/dev/null 2>&1
+            ' || exit 1
 
       - name: Upload real macOS installer
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}

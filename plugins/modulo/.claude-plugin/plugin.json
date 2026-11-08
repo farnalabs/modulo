@@ -1,0 +1,11 @@
+{
+  "name": "modulo",
+  "description": "Agent-native setup and safe operation of self-hosted Modulo.",
+  "author": {
+    "name": "Farna Labs",
+    "url": "https://github.com/farnalabs/modulo"
+  },
+  "homepage": "https://modulo.run/docs/what-is-modulo",
+  "repository": "https://github.com/farnalabs/modulo",
+  "license": "BUSL-1.1"
+}

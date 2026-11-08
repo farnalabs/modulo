@@ -31,6 +31,8 @@ from modulo.db.models.assistant_message import ChatMessage
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
+_MSG_SESSION_NOT_FOUND = "Session not found"
+
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -1270,3 +1272,393 @@ def test_run_mcp_tool_calls_with_key_empty_calls() -> None:
     req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o", mcp_api_key="k")
     events = _collect(assistant_routes._run_mcp_tool_calls([], req, "http://base"))
     assert events == []
+
+
+# ── Coverage for previously uncovered branches ──────────────────────────────
+
+
+def test_get_registry_returns_registry_when_redis_url_set() -> None:
+    """_get_registry creates and returns registry when redis_url is configured."""
+    with patch("modulo.api.routes.assistant.get_settings") as settings_cls:
+        settings_cls.return_value = MagicMock(redis_url="redis://localhost:6379")
+        assistant_routes._redis_registry = None
+        with patch("modulo.core.assistant.redis_registry.AssistantRedisRegistry") as registry_cls:
+            mock_registry = MagicMock()
+            registry_cls.return_value = mock_registry
+            result = assistant_routes._get_registry()
+    assert result is mock_registry
+    registry_cls.assert_called_once_with("redis://localhost:6379")
+    assistant_routes._redis_registry = None
+
+
+def test_message_to_langchain_assistant_with_tool_calls() -> None:
+    """_message_to_langchain handles assistant role with tool_calls_json."""
+    msg = _msg("assistant", "hi", tool_calls_json={"tool_calls": [{"name": "click", "args": {}, "id": "t1"}]})
+    result = assistant_routes._message_to_langchain(msg)
+    assert isinstance(result, AIMessage)
+    assert result.tool_calls[0]["name"] == "click"
+    assert not result.tool_calls[0]["args"]
+    assert result.tool_calls[0]["id"] == "t1"
+
+
+def test_build_backend_entry_none_raises() -> None:
+    """_build_backend raises 400 when provider not in _BACKEND_IMPORTS."""
+    with (
+        patch("modulo.api.routes.assistant.SUPPORTED_PROVIDERS", frozenset({"custom"})),
+        patch("modulo.api.routes.assistant._BACKEND_IMPORTS", {}),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        assistant_routes._build_backend("custom", "model", "key")
+    assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Unsupported provider" in str(exc_info.value.detail)
+
+
+def test_get_owned_session_raises_when_none() -> None:
+    """_get_owned_session raises 404 when session is None."""
+    db = _make_mock_session()
+    principal = TenantPrincipal(username="u", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    db.get = AsyncMock(return_value=None)
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(assistant_routes._get_owned_session(uuid.uuid4(), principal, db))
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == _MSG_SESSION_NOT_FOUND
+
+
+def test_get_owned_session_raises_when_wrong_account() -> None:
+    """_get_owned_session raises 404 when session belongs to different account."""
+    db = _make_mock_session()
+    principal = TenantPrincipal(username="u", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    other_user = uuid.UUID("00000000-0000-0000-0000-000000000099")
+    chat_session = _owned_chat_session(account_id=other_user)
+    db.get = AsyncMock(return_value=chat_session)
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(assistant_routes._get_owned_session(chat_session.id, principal, db))
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == _MSG_SESSION_NOT_FOUND
+
+
+def test_get_owned_session_returns_when_owned() -> None:
+    """_get_owned_session returns session when owned by principal."""
+    db = _make_mock_session()
+    principal = TenantPrincipal(username="u", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    chat_session = _owned_chat_session()
+    db.get = AsyncMock(return_value=chat_session)
+    result = asyncio.run(assistant_routes._get_owned_session(chat_session.id, principal, db))
+    assert result is chat_session
+
+
+def test_resolve_stream_api_key_returns_resolved_when_found() -> None:
+    """_resolve_stream_api_key returns (resolved_key, None) when key found."""
+    principal = TenantPrincipal(username="u", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o")
+    mock_session = _make_mock_session()
+    row = MagicMock()
+    row.scalar_one_or_none.return_value = MagicMock(credentials_ciphertext=b"cipher")
+    _queue_executes(mock_session, row)
+    ctx = assistant_routes._StreamContext(mock_session, principal, uuid.uuid4(), req, _make_settings(), MagicMock())
+    with (
+        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
+        patch(
+            "modulo.api.routes.assistant.decode_stored_secret_scoped",
+            new_callable=AsyncMock,
+            return_value="decrypted",
+        ),
+    ):
+        api_key, error = asyncio.run(assistant_routes._resolve_stream_api_key(ctx))
+    assert api_key == "decrypted"
+    assert error is None
+
+
+def test_resolve_stream_api_key_exception_returns_error() -> None:
+    """_resolve_stream_api_key returns (None, error) when decryption fails."""
+    principal = TenantPrincipal(username="u", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o")
+    mock_session = _make_mock_session()
+    row = MagicMock()
+    row.scalar_one_or_none.return_value = MagicMock(credentials_ciphertext=b"cipher")
+    _queue_executes(mock_session, row)
+    ctx = assistant_routes._StreamContext(mock_session, principal, uuid.uuid4(), req, _make_settings(), MagicMock())
+    with (
+        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
+        patch(
+            "modulo.api.routes.assistant.decode_stored_secret_scoped",
+            new_callable=AsyncMock,
+            side_effect=ValueError("bad"),
+        ),
+    ):
+        api_key, error = asyncio.run(assistant_routes._resolve_stream_api_key(ctx))
+    assert api_key is None
+    assert error is not None
+    assert "No active openai API key" in error
+
+
+def test_build_stream_tools_param_returns_none_when_no_tools() -> None:
+    """_build_stream_tools_param returns None when backend doesn't support tools."""
+    backend = MagicMock()
+    backend.supports_tools = False
+    ctx = _stream_ctx()
+    result = asyncio.run(assistant_routes._build_stream_tools_param(backend, ctx))
+    assert result is None
+
+
+def test_build_stream_tools_param_returns_tools_when_supported() -> None:
+    """_build_stream_tools_param returns tool definitions when backend supports tools."""
+    backend = MagicMock()
+    backend.supports_tools = True
+    ctx = _stream_ctx()
+    mcp_tools = [{"type": "function", "function": {"name": "mcp_tool", "parameters": {}}}]
+    with (
+        patch("modulo.api.routes.assistant.build_tool_registry", new_callable=AsyncMock),
+        patch("modulo.api.routes.assistant.get_mcp_tool_definitions", return_value=mcp_tools),
+    ):
+        result = asyncio.run(assistant_routes._build_stream_tools_param(backend, ctx))
+    assert result is not None
+    names = [tool["function"]["name"] for tool in result]
+    assert "get_manifest" in names
+    assert "mcp_tool" in names
+
+
+def test_accumulate_one_tool_call_new_index_sets_id_and_name() -> None:
+    """_accumulate_one_tool_call sets id and name for new index."""
+    buffers: dict[int, dict[str, Any]] = {}
+    chunk = {"index": 0, "id": "t1", "name": "click", "args": '{"s": 1}'}
+    assistant_routes._accumulate_one_tool_call(chunk, buffers)
+    assert buffers[0]["id"] == "t1"
+    assert buffers[0]["name"] == "click"
+    assert buffers[0]["args"] == '{"s": 1}'
+
+
+def test_accumulate_one_tool_call_updates_id_when_present() -> None:
+    """_accumulate_one_tool_call updates id when present in chunk."""
+    buffers: dict[int, dict[str, Any]] = {0: {"id": "old", "name": "click", "args": "a"}}
+    chunk = {"index": 0, "id": "new", "name": None, "args": "b"}
+    assistant_routes._accumulate_one_tool_call(chunk, buffers)
+    assert buffers[0]["id"] == "new"
+    assert buffers[0]["name"] == "click"
+    assert buffers[0]["args"] == "ab"
+
+
+def test_accumulate_one_tool_call_updates_name_when_present() -> None:
+    """_accumulate_one_tool_call updates name when present in chunk."""
+    buffers: dict[int, dict[str, Any]] = {0: {"id": "t1", "name": "old", "args": "a"}}
+    chunk = {"index": 0, "id": None, "name": "new", "args": "b"}
+    assistant_routes._accumulate_one_tool_call(chunk, buffers)
+    assert buffers[0]["id"] == "t1"
+    assert buffers[0]["name"] == "new"
+    assert buffers[0]["args"] == "ab"
+
+
+def test_auto_name_stream_session_first_message() -> None:
+    """_auto_name_stream_session names session from first message when msg_count == 1."""
+    db_session = _make_mock_session()
+    session_id = uuid.uuid4()
+    chat_session = MagicMock()
+    chat_session.name = None
+    req = assistant_routes.StreamRequest(
+        content="Hello world this is a test message",
+        provider="openai",
+        model="gpt-4o",
+    )
+    count_result = MagicMock()
+    count_result.scalar.return_value = 1
+    db_session.execute = AsyncMock(return_value=count_result)
+    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+        asyncio.run(assistant_routes._auto_name_stream_session(db_session, session_id, req, chat_session))
+    db_session.execute.assert_awaited()
+
+
+def test_auto_name_stream_session_many_messages() -> None:
+    """_auto_name_stream_session names session from first message when msg_count >= 10."""
+    db_session = _make_mock_session()
+    session_id = uuid.uuid4()
+    chat_session = MagicMock()
+    chat_session.name = None
+    req = assistant_routes.StreamRequest(content="test", provider="openai", model="gpt-4o")
+    count_result = MagicMock()
+    count_result.scalar.return_value = 15
+    count_result_2 = MagicMock()
+    count_result_2.scalar.return_value = "First message content here"
+    update_result = MagicMock()
+    db_session.execute = AsyncMock(side_effect=[count_result, count_result_2, update_result])
+    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+        asyncio.run(assistant_routes._auto_name_stream_session(db_session, session_id, req, chat_session))
+    assert db_session.execute.await_count == 3
+
+
+def test_auto_name_stream_session_skips_when_named() -> None:
+    """_auto_name_stream_session does nothing when session already has name."""
+    db_session = _make_mock_session()
+    session_id = uuid.uuid4()
+    chat_session = MagicMock()
+    chat_session.name = "Already Named"
+    req = assistant_routes.StreamRequest(content="test", provider="openai", model="gpt-4o")
+    asyncio.run(assistant_routes._auto_name_stream_session(db_session, session_id, req, chat_session))
+    db_session.execute.assert_not_awaited()
+
+
+def test_auto_name_stream_session_handles_exception() -> None:
+    """_auto_name_stream_session catches and logs exception during update without raising."""
+    db_session = _make_mock_session()
+    session_id = uuid.uuid4()
+    chat_session = MagicMock()
+    chat_session.name = None
+    req = assistant_routes.StreamRequest(content="test", provider="openai", model="gpt-4o")
+    count_result = MagicMock()
+    count_result.scalar.return_value = 1
+    # Make the update statement (2nd execute) raise an exception.
+    db_session.execute = AsyncMock(side_effect=[count_result, RuntimeError("db error")])
+    with (
+        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.assistant.logger.exception") as mock_log,
+    ):
+        asyncio.run(assistant_routes._auto_name_stream_session(db_session, session_id, req, chat_session))
+    mock_log.assert_called_once()
+
+
+# ── Route-level error path coverage ─────────────────────────────────────────
+
+
+def test_create_session_programming_error_returns_501(client: TestClient) -> None:
+    """POST /sessions returns 501 on ProgrammingError."""
+    programming_error = ProgrammingError("stmt", {}, Exception("missing table"))
+    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=programming_error):
+        resp = client.post("/api/v1/assistant/sessions", json={"context_window_tokens": 200000})
+    assert resp.status_code == 501
+
+
+def test_create_session_unexpected_error_returns_500(client: TestClient) -> None:
+    """POST /sessions returns 500 on unexpected error."""
+    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")):
+        resp = client.post("/api/v1/assistant/sessions", json={"context_window_tokens": 200000})
+    assert resp.status_code == 500
+
+
+def test_rename_session_programming_error_returns_501(client: TestClient) -> None:
+    """PATCH /sessions/{id} returns 501 on ProgrammingError."""
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    programming_error = ProgrammingError("stmt", {}, Exception("missing table"))
+    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=programming_error):
+        resp = client.patch(f"/api/v1/assistant/sessions/{chat_session.id}", json={"name": "New"})
+    assert resp.status_code == 501
+
+
+def test_rename_session_unexpected_error_returns_500(client: TestClient) -> None:
+    """PATCH /sessions/{id} returns 500 on unexpected error."""
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")):
+        resp = client.patch(f"/api/v1/assistant/sessions/{chat_session.id}", json={"name": "New"})
+    assert resp.status_code == 500
+
+
+def test_delete_session_programming_error_returns_501(client: TestClient) -> None:
+    """DELETE /sessions/{id} returns 501 on ProgrammingError."""
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    programming_error = ProgrammingError("stmt", {}, Exception("missing table"))
+    with (
+        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=programming_error),
+        patch("modulo.api.routes.assistant._get_registry", return_value=None),
+    ):
+        resp = client.delete(f"/api/v1/assistant/sessions/{chat_session.id}")
+    assert resp.status_code == 501
+
+
+def test_delete_session_unexpected_error_returns_500(client: TestClient) -> None:
+    """DELETE /sessions/{id} returns 500 on unexpected error."""
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with (
+        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")),
+        patch("modulo.api.routes.assistant._get_registry", return_value=None),
+    ):
+        resp = client.delete(f"/api/v1/assistant/sessions/{chat_session.id}")
+    assert resp.status_code == 500
+
+
+def test_list_messages_unexpected_error_returns_500(client: TestClient) -> None:
+    """GET /sessions/{id}/messages returns 500 on unexpected error."""
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")):
+        resp = client.get(f"/api/v1/assistant/sessions/{chat_session.id}/messages")
+    assert resp.status_code == 500
+
+
+def test_list_sessions_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    """GET /sessions returns 503 on SQLAlchemyError."""
+    client.mock_session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))  # type: ignore[attr-defined]
+    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+        resp = client.get("/api/v1/assistant/sessions")
+    assert resp.status_code == 503
+
+
+def test_get_session_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    """GET /sessions/{id} returns 503 on SQLAlchemyError."""
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    client.mock_session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))  # type: ignore[attr-defined]
+    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+        resp = client.get(f"/api/v1/assistant/sessions/{chat_session.id}")
+    assert resp.status_code == 503
+
+
+def test_rename_session_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    """PATCH /sessions/{id} returns 503 on SQLAlchemyError."""
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.assistant.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError("db down"),
+    ):
+        resp = client.patch(f"/api/v1/assistant/sessions/{chat_session.id}", json={"name": "New"})
+    assert resp.status_code == 503
+
+
+def test_delete_session_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    """DELETE /sessions/{id} returns 503 on SQLAlchemyError."""
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with (
+        patch(
+            "modulo.api.routes.assistant.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ),
+        patch("modulo.api.routes.assistant._get_registry", return_value=None),
+    ):
+        resp = client.delete(f"/api/v1/assistant/sessions/{chat_session.id}")
+    assert resp.status_code == 503
+
+
+def test_list_messages_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    """GET /sessions/{id}/messages returns 503 on SQLAlchemyError."""
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.assistant.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError("db down"),
+    ):
+        resp = client.get(f"/api/v1/assistant/sessions/{chat_session.id}/messages")
+    assert resp.status_code == 503
+
+
+def test_append_message_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    """POST /sessions/{id}/messages returns 503 on SQLAlchemyError."""
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.assistant.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError("db down"),
+    ):
+        resp = client.post(
+            f"/api/v1/assistant/sessions/{chat_session.id}/messages",
+            json={"role": "user", "content": "hi"},
+        )
+    assert resp.status_code == 503

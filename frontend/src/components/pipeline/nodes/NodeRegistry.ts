@@ -1,3 +1,16 @@
+import type { ComputedRef, InjectionKey } from 'vue'
+
+/**
+ * Injection key for the editor's already-loaded team id → name map.
+ *
+ * The extracted node components are rendered through Vue Flow's `nodeTypes`
+ * registry, which does not forward arbitrary props, so the editor provides the
+ * map (a computed ref) and the cards inject it. Governance pills resolve a HITL
+ * gate's team name only from teams the editor has actually loaded.
+ */
+export const PIPELINE_TEAM_NAMES_KEY: InjectionKey<ComputedRef<Record<string, string>>> =
+  Symbol('pipelineTeamNames')
+
 /**
  * Node type registry for the pipeline editor.
  *

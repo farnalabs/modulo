@@ -1234,16 +1234,20 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     wrapper.unmount()
   })
 
-  // -- nodeTypeOptions: only agent available --
-  it('nodeTypeOptions only contains agent', async () => {
+  // -- nodeTypeOptions: agent + connector; router/hitl authoring stays deferred --
+  it('nodeTypeOptions exposes agent and connector, not the deferred types', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = mountEditor()
     await flushPromises()
     const vm = wrapper.vm as any
 
-    expect(vm.nodeTypeOptions.length).toBe(1)
-    expect(vm.nodeTypeOptions[0].value).toBe('agent')
+    const values = (vm.nodeTypeOptions as Array<{ value: string }>).map((o) => o.value)
+    // FAR-1395: a connector query node is authorable from the palette.
+    expect(values).toEqual(['agent', 'connector'])
+    // Router/HITL still cannot emit the config the backend requires.
+    expect(values).not.toContain('router')
+    expect(values).not.toContain('hitl')
     wrapper.unmount()
   })
 

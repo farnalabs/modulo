@@ -5,13 +5,15 @@ Tests pure helper functions that don't need a database session.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
+from modulo.api.routes import scim as scim_routes
 from modulo.api.routes.scim import (
     _get_base_url,
     _group_to_scim,
@@ -214,3 +216,113 @@ def test_get_base_url_empty_string_raises():
     with pytest.raises(HTTPException) as exc_info:
         _get_base_url(settings)
     assert exc_info.value.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# Internal user/group branch helpers
+# ---------------------------------------------------------------------------
+
+
+def test_require_human_scim_user_rejects_missing_account() -> None:
+    user_id = uuid.uuid4()
+    with pytest.raises(HTTPException) as exc_info:
+        scim_routes._require_human_scim_user(None, user_id)
+    assert exc_info.value.status_code == 404
+
+
+def test_require_human_scim_user_rejects_service_account() -> None:
+    account = MagicMock()
+    account.id = uuid.uuid4()
+    with (
+        patch("modulo.api.routes.scim.is_service_account", return_value=True),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        scim_routes._require_human_scim_user(account, account.id)
+    assert exc_info.value.status_code == 404
+
+
+def test_require_human_scim_user_accepts_human_account() -> None:
+    account = MagicMock()
+    account.id = uuid.uuid4()
+    with patch("modulo.api.routes.scim.is_service_account", return_value=False):
+        assert scim_routes._require_human_scim_user(account, account.id) is account
+
+
+def test_resolve_scim_admin_caller_returns_id_and_none() -> None:
+    session = AsyncMock()
+    row = MagicMock()
+    row.__getitem__.return_value = uuid.uuid4()
+    result = MagicMock()
+    result.first.return_value = row
+    session.execute = AsyncMock(return_value=result)
+    org_id = uuid.uuid4()
+    caller = asyncio.run(scim_routes._resolve_scim_admin_caller(session, org_id))
+    assert caller == row[0]
+
+    result.first.return_value = None
+    caller = asyncio.run(scim_routes._resolve_scim_admin_caller(session, org_id))
+    assert caller is None
+
+
+def test_iter_member_uuids_handles_dict_and_invalid_values() -> None:
+    member_id = uuid.uuid4()
+    values = {"value": str(member_id)}
+    assert scim_routes._iter_member_uuids(values) == [member_id]
+    assert not scim_routes._iter_member_uuids({"value": "bad"})
+    assert not scim_routes._iter_member_uuids([{"other": "value"}, {"value": "bad"}])
+    assert not scim_routes._iter_member_uuids(None)
+
+
+def test_apply_user_patch_helpers_cover_all_operations() -> None:
+    account = MagicMock()
+    account.email = "old@example.com"
+    account.display_name = "Old"
+    replace = scim_routes.ScimPatchOperation(
+        op="replace",
+        value={"userName": "new@example.com", "active": True, "name": {"givenName": "New", "familyName": "Name"}},
+    )
+    assert not scim_routes._apply_user_replace_op(account, replace)
+    assert account.email == "new@example.com"
+    assert account.display_name == "New Name"
+
+    replace_active = scim_routes.ScimPatchOperation(op="replace", path="active", value=False)
+    assert scim_routes._apply_user_replace_op(account, replace_active)
+    assert not account.active
+    assert scim_routes._apply_user_remove_op(account, scim_routes.ScimPatchOperation(op="remove", path="active"))
+    assert scim_routes._apply_user_add_op(
+        account,
+        scim_routes.ScimPatchOperation(op="add", value={"userName": "again@example.com", "active": False}),
+    )
+    assert account.email == "again@example.com"
+
+
+def test_apply_user_patch_ops_rejects_unknown_operation() -> None:
+    account = MagicMock()
+    request = scim_routes.ScimPatchOperation(op="replace")
+    with pytest.raises(HTTPException) as exc_info:
+        scim_routes._apply_user_patch_ops(account, [scim_routes.ScimPatchOperation(op="invalid")])
+    assert exc_info.value.status_code == 400
+    assert request.op == "replace"
+
+
+def test_group_member_remove_helpers_cover_paths() -> None:
+    session = AsyncMock()
+    group = MagicMock(id=uuid.uuid4())
+    member_id = uuid.uuid4()
+    with patch("modulo.api.routes.scim.scim_remove_group_member", new_callable=AsyncMock) as remove:
+        asyncio.run(scim_routes._remove_member_by_path(session, group, f'members[value eq "{member_id}"]'))
+        asyncio.run(scim_routes._remove_member_by_path(session, group, 'members[value eq "bad"]'))
+        asyncio.run(scim_routes._remove_member_by_path(session, group, "other"))
+        asyncio.run(scim_routes._remove_members_from_value(session, group, {"value": str(member_id)}))
+        asyncio.run(scim_routes._remove_members_from_value(session, group, [{"value": str(member_id)}]))
+        asyncio.run(scim_routes._remove_members_from_value(session, group, [{"value": "bad"}]))
+    assert remove.await_count == 3
+
+
+def test_apply_remove_group_op_covers_empty_and_value() -> None:
+    session = AsyncMock()
+    group = MagicMock(id=uuid.uuid4())
+    with patch("modulo.api.routes.scim._remove_members_from_value", new_callable=AsyncMock) as remove:
+        asyncio.run(scim_routes._apply_remove_group_op(session, group, MagicMock(path=None, value=None)))
+        asyncio.run(scim_routes._apply_remove_group_op(session, group, MagicMock(path=None, value={"value": "x"})))
+    remove.assert_awaited_once()

@@ -513,7 +513,7 @@ class TestUpdatePipelineGraphDispatchAndValidation:
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.pipeline.get_pipeline")
     @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
-    @patch("modulo.api.mcp_server._reject_unsupported_dispatch_bindings")
+    @patch("modulo.api.mcp_server._reject_invalid_connector_bindings")
     async def test_a_dispatch_binding_to_a_non_ci_instance_blocks_the_write(
         self,
         mock_reject: AsyncMock,

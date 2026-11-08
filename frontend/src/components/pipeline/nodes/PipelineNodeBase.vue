@@ -25,14 +25,16 @@
     <div v-if="description" class="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
       {{ description }}
     </div>
+    <PipelineGovernanceVisibility :node="data" :team-names="teamNames" mode="node" />
     <slot name="extra-content" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getNodeRegistryEntry, getNodeType } from './NodeRegistry'
+import PipelineGovernanceVisibility from '../PipelineGovernanceVisibility.vue'
+import { PIPELINE_TEAM_NAMES_KEY, getNodeRegistryEntry, getNodeType } from './NodeRegistry'
 
 interface Props {
   /** The node data from Vue Flow. */
@@ -68,4 +70,11 @@ const fallbackLabel = computed(() => t(registryEntry.value.fallbackLabelKey))
 
 const label = computed(() => props.data.label as string | undefined)
 const description = computed(() => props.data.description as string | undefined)
+
+// The editor provides its already-loaded team map; cards rendered in isolation
+// (tests, storybook) resolve no names rather than inventing one.
+const teamNames = inject(
+  PIPELINE_TEAM_NAMES_KEY,
+  computed<Record<string, string>>(() => ({})),
+)
 </script>

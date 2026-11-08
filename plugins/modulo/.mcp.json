@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "modulo": {
+      "type": "http",
+      "url": ""
+    }
+  }
+}
