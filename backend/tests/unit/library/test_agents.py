@@ -61,8 +61,14 @@ def test_all_agents_exported() -> None:
     """``__all__`` mirrors the agent definitions module exactly."""
     assert AGENTS, "library catalog is empty"
     assert set(agent_exports) == set(AGENTS), f"unexported: {set(AGENTS) - set(agent_exports)}"
+
+
+def test_package_reexports_every_agent() -> None:
+    """The ``modulo.core.library`` package re-exports every agent primitive."""
+    import modulo.core.library as library_package
+
     for name in agent_exports:
-        assert isinstance(_agent(name), dict), name
+        assert getattr(library_package, name) is _agent(name)
 
 
 @pytest.mark.parametrize("name", agent_exports, ids=lambda n: n)

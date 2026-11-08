@@ -14,7 +14,7 @@ import pytest
 
 from modulo.core.library.workflows.definitions import DOGFOODING_PIPELINE
 
-from .helpers import assert_step_matches, step_by_id
+from .helpers import assert_step_case_matches, assert_step_ids, step_by_id
 
 STEP_CASES: list[tuple[str, dict[str, Any]]] = [
     (
@@ -60,19 +60,12 @@ def test_tags_include_canonical() -> None:
 
 
 def test_step_identifiers() -> None:
-    actual_ids = [step["id"] for step in DOGFOODING_PIPELINE["pipeline_steps"]]
-    assert actual_ids == [step_id for step_id, _ in STEP_CASES]
+    assert_step_ids(DOGFOODING_PIPELINE, STEP_CASES)
 
 
-@pytest.mark.parametrize(("step_id", "expected"), STEP_CASES, ids=[case[0] for case in STEP_CASES])
-def test_step_properties(step_id: str, expected: dict[str, Any]) -> None:
-    assert_step_matches(
-        DOGFOODING_PIPELINE,
-        step_id,
-        agent=expected["agent"],
-        depends_on=expected["depends_on"],
-        connector_binding=expected["connector_binding"],
-    )
+@pytest.mark.parametrize("case", STEP_CASES, ids=[case[0] for case in STEP_CASES])
+def test_step_properties(case: tuple[str, dict[str, Any]]) -> None:
+    assert_step_case_matches(DOGFOODING_PIPELINE, case)
 
 
 def test_default_config_keys() -> None:
