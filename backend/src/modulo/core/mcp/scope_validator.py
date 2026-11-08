@@ -171,6 +171,7 @@ _TOOL_REQUIREMENTS: dict[str, ToolRequirement] = {
     # validates the binding on both surfaces).
     "update_pipeline": ToolRequirement(_SCOPE_PIPELINE_UPDATE),
     "create_model_backend": ToolRequirement("model_backend.create"),
+    "update_model_backend": ToolRequirement("model_backend.update"),
     "list_runs": ToolRequirement("run.list"),
     "get_run_evals": ToolRequirement("run.evals"),
     "list_eval_definitions": ToolRequirement(_SCOPE_EVAL_LIST),

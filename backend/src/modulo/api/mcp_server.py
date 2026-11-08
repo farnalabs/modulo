@@ -8564,6 +8564,102 @@ async def get_model_backend(model_backend_id: str) -> dict[str, Any]:
 
 
 @mcp.tool(
+    name="update_model_backend",
+    description=(
+        "Update an existing model backend's non-secret configuration and replace or clear its fallback chain. "
+        "Credentials are never accepted by this tool; use the one-time setup URL flow for credential changes. "
+        "The fallback chain is replaced when fallback_backend_ids is supplied, or cleared with "
+        "clear_fallback_chain=true."
+    ),
+)
+@mcp_audited("model_backend_updated", "model_backend", fail_closed=False)
+@_RETRY_DB
+async def update_model_backend(
+    model_backend_id: str,
+    name: str | None = None,
+    display_name: str | None = None,
+    model_id: str | None = None,
+    default_params: dict[str, Any] | None = None,
+    visibility: str | None = None,
+    tier: str | None = None,
+    fallback_backend_ids: list[str] | None = None,
+    clear_fallback_chain: bool = False,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("update_model_backend")
+        backend_id, input_err = _parse_uuid_param(model_backend_id, "model_backend_id")
+        if input_err:
+            return input_err
+        if backend_id is None:
+            return {"error": "invalid_param", "detail": f"Invalid model_backend_id: {model_backend_id}"}
+        if fallback_backend_ids is not None and clear_fallback_chain:
+            return {
+                "error": "validation_error",
+                "field": "fallback_backend_ids",
+                "detail": "Supply fallback_backend_ids or clear_fallback_chain, not both",
+            }
+        if any(value is not None and not isinstance(value, str) for value in fallback_backend_ids or []):
+            return {
+                "error": "validation_error",
+                "field": "fallback_backend_ids",
+                "detail": "Fallback IDs must be strings",
+            }
+        try:
+            fallback_ids = (
+                [uuid.UUID(value) for value in fallback_backend_ids] if fallback_backend_ids is not None else None
+            )
+        except ValueError as exc:
+            return {"error": "invalid_id", "field": "fallback_backend_ids", "detail": str(exc)}
+
+        from modulo.api.routes.model_backends import _validate_fallback_ids
+        from modulo.db.crud.model_backend import get_model_backend as db_get_model_backend
+        from modulo.db.crud.model_backend import update_model_backend as db_update_model_backend
+
+        org_id = _ctx_org_id_val()
+        updates: dict[str, Any] = {}
+        updates = {
+            field: value
+            for field, value in (
+                ("name", name),
+                ("display_name", display_name),
+                ("model_id", model_id),
+                ("default_params", default_params),
+                ("visibility", visibility),
+                ("tier", tier),
+            )
+            if value is not None
+        }
+        if fallback_ids is not None or clear_fallback_chain:
+            updates["fallback_backend_ids"] = [str(value) for value in (fallback_ids or [])]
+
+        async with _session(org_id) as s:
+            existing = await db_get_model_backend(s, backend_id)
+            if existing is None or existing.organisation_id != org_id:
+                return {"error": "not_found", "detail": f"Model backend {model_backend_id} not found"}
+            if fallback_ids is not None:
+                await _validate_fallback_ids(s, org_id, fallback_ids, backend_id=backend_id)
+            updated = await db_update_model_backend(s, backend_id, updates)
+            if updated is None:
+                return {"error": "not_found", "detail": f"Model backend {model_backend_id} not found"}
+            await s.refresh(updated)
+        item = _model_backend_item(updated)
+        item["fallback_backend_ids"] = [str(fid) for fid in (updated.fallback_backend_ids or [])]
+        return item
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except FastAPIHTTPException as exc:
+        return {"error": "validation_error", "detail": exc.detail}
+    except ProgrammingError:
+        _log.exception("update_model_backend failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("update_model_backend failed")
+        return _tool_exception_error("Failed to update model backend", exc, "mcp.update_model_backend")
+
+
+@mcp.tool(
     description="Create a new connector instance (provider configuration). "
     "Credentials are encrypted at rest. Returns the created connector details. "
     "Pass a literal credential, or a 'secretref://<key>' token to resolve the "

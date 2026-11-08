@@ -868,6 +868,42 @@ async def _validate_fallback_ids(
             ],
         )
 
+    # The fallback column is intentionally JSON rather than a relational edge,
+    # so validate the proposed graph before persisting it. A cycle would make
+    # every backend in the loop retry forever instead of reaching a terminal
+    # provider failure.
+    rows = list((await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars())
+    graph = {row.id: [uuid.UUID(str(fid)) for fid in (row.fallback_backend_ids or [])] for row in rows}
+    if backend_id is not None:
+        graph[backend_id] = unique_ids
+
+    visiting: set[uuid.UUID] = set()
+    visited: set[uuid.UUID] = set()
+
+    def visit(node_id: uuid.UUID) -> bool:
+        if node_id in visiting:
+            return True
+        if node_id in visited:
+            return False
+        visiting.add(node_id)
+        if any(visit(child) for child in graph.get(node_id, [])):
+            return True
+        visiting.remove(node_id)
+        visited.add(node_id)
+        return False
+
+    if any(visit(node_id) for node_id in graph):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=[
+                {
+                    "type": "value_error",
+                    "loc": ["body", "fallback_backend_ids"],
+                    "msg": "Fallback backend references cannot contain a cycle",
+                }
+            ],
+        )
+
 
 def _validate_provider(provider: str) -> None:
     """Raise 422 if provider is not a known built-in or plugin backend."""

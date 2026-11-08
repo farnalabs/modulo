@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException as FastAPIHTTPException
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from modulo.api.mcp_server import (
@@ -14,6 +15,7 @@ from modulo.api.mcp_server import (
     create_schema,
     infer_schema,
     list_schemas,
+    update_model_backend,
     validate_payload,
 )
 from modulo.core.seed_data.library_schemas import SCHEMAS
@@ -391,6 +393,88 @@ class TestCreateModelBackendSuccess(AuthContext):
         mock_create.assert_awaited_once()
         assert not mock_create.call_args.kwargs["credentials_ciphertext"]
         mock_handoff.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# update_model_backend
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateModelBackend(AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.model_backend.update_model_backend")
+    @patch("modulo.db.crud.model_backend.get_model_backend")
+    async def test_updates_non_secret_fields_and_fallbacks(
+        self, mock_get: AsyncMock, mock_update: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        backend_id = uuid.uuid4()
+        fallback_id = uuid.uuid4()
+        backend = MagicMock(
+            id=backend_id,
+            organisation_id=ORG_ID,
+            name="primary",
+            display_name="Primary",
+            provider="openai",
+            model_id="gpt-4o",
+            credentials_ciphertext=b"secret",
+            default_params={},
+            visibility="org",
+            owner_team_id=None,
+            tier="native",
+            status="active",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            fallback_backend_ids=[str(fallback_id)],
+        )
+        mock_get.return_value = backend
+        mock_update.return_value = backend
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        with patch("modulo.api.routes.model_backends._validate_fallback_ids"):
+            result = await update_model_backend(
+                model_backend_id=str(backend_id), display_name="Updated", fallback_backend_ids=[str(fallback_id)]
+            )
+
+        assert result["display_name"] == "Primary"
+        assert result["has_credentials"] is True
+        assert result["fallback_backend_ids"] == [str(fallback_id)]
+        updates = mock_update.call_args.args[2]
+        assert updates["display_name"] == "Updated"
+        assert updates["fallback_backend_ids"] == [str(fallback_id)]
+        assert "api_key" not in updates
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.model_backend.get_model_backend")
+    async def test_rejects_invalid_and_self_fallbacks(
+        self, mock_get: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        backend_id = uuid.uuid4()
+        backend = MagicMock(id=backend_id, organisation_id=ORG_ID)
+        mock_get.return_value = backend
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        invalid = await update_model_backend(model_backend_id=str(backend_id), fallback_backend_ids=["not-a-uuid"])
+        assert invalid["error"] == "invalid_id"
+
+        with patch(
+            "modulo.api.routes.model_backends._validate_fallback_ids",
+            side_effect=FastAPIHTTPException(422, "self"),
+        ):
+            self_ref = await update_model_backend(
+                model_backend_id=str(backend_id), fallback_backend_ids=[str(backend_id)]
+            )
+        assert self_ref["error"] == "validation_error"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_clear_fallback_chain_does_not_accept_credentials(
+        self, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        mock_session.return_value = make_session_context(make_session_scope())
+        result = await update_model_backend(model_backend_id="not-a-uuid", clear_fallback_chain=True)
+        assert result["error"] == "invalid_id"
 
 
 # ---------------------------------------------------------------------------
