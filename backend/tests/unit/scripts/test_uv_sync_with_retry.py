@@ -5,9 +5,11 @@ The backend lockfile pins source-archive dependencies (e.g. pytest-bdd) that
 that CDN failed four pre-deploy jobs at once on main (2026-11-08) before any
 test ran, so ``deploy.yml`` routes every dependency install through this
 wrapper. The same flake then failed CI's ``backend-lint`` job, so ``ci.yml``
-routes its ``uv sync`` invocations through the wrapper too. These tests pin the
-retry policy: transient download errors are retried, deterministic failures are
-not, and the attempt count is bounded.
+routes its ``uv sync`` invocations through the wrapper too. It next failed the
+BDD suite's dependency install (run 42477715006), so ``bdd.yml`` routes its
+``uv sync`` through the wrapper as well. These tests pin the retry policy:
+transient download errors are retried, deterministic failures are not, and the
+attempt count is bounded.
 """
 
 from __future__ import annotations
@@ -119,3 +121,8 @@ def test_deploy_workflow_routes_every_uv_sync_through_the_wrapper() -> None:
 def test_ci_workflow_routes_every_uv_sync_through_the_wrapper() -> None:
     ci = _assert_no_raw_uv_sync("ci.yml")
     assert ci.count("uv_sync_with_retry.sh") == 10
+
+
+def test_bdd_workflow_routes_every_uv_sync_through_the_wrapper() -> None:
+    bdd = _assert_no_raw_uv_sync("bdd.yml")
+    assert bdd.count("uv_sync_with_retry.sh") == 1
