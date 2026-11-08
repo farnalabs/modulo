@@ -92,6 +92,7 @@ const VIEWPORTS = [
   { name: 'mobile', width: 390, height: 844 },
 ] as const
 const THEMES = ['light', 'dark'] as const
+type Theme = (typeof THEMES)[number]
 
 async function mockPipeline(page: Page): Promise<void> {
   await page.route(`**/api/v1/pipelines/${PIPELINE_ID}`, (route) => {
@@ -232,21 +233,70 @@ async function mockAmbientChrome(page: Page): Promise<void> {
   )
 }
 
-async function preparePage(page: Page, env: Parameters<typeof loginAsAdmin>[1], viewport: (typeof VIEWPORTS)[number], theme: string): Promise<void> {
+async function preparePage(page: Page, env: Parameters<typeof loginAsAdmin>[1], viewport: (typeof VIEWPORTS)[number], theme: Theme): Promise<void> {
   await page.setViewportSize({ width: viewport.width, height: viewport.height })
-  await page.emulateMedia({ colorScheme: theme as 'light' | 'dark', reducedMotion: 'reduce' })
-  await page.addInitScript((selectedTheme) => {
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' })
+  await page.addInitScript(() => {
     localStorage.setItem('assistant-panel-state', 'closed')
-    document.documentElement.classList.toggle('dark', selectedTheme === 'dark')
-    document.documentElement.classList.toggle('light', selectedTheme === 'light')
-  }, theme)
+  })
   await loginAsAdmin(page, env)
   await mockAmbientChrome(page)
   await mockPipeline(page)
   await mockSnapshots(page)
 }
 
-async function capture(page: Page, state: string, viewport: string, theme: string): Promise<void> {
+/**
+ * Apply the light/dark theme AFTER the app has booted, through the app's real
+ * theme control.
+ *
+ * The theme must NOT be pinned from an init script: `index.html` ships
+ * `<html class="dark">`, and the HTML parser re-applies that attribute while it
+ * parses the root element — overwriting anything an init script set at
+ * document_start. That made every "light" capture render the dark palette, so
+ * the whole theme axis was vacuous (dark and light baselines were byte-identical).
+ *
+ * Driving the real toggle after boot runs AppLayout's `toggleTheme()`, which
+ * swaps the `.dark`/`.light` class AND re-applies the PrimeVue token bridge, so
+ * the capture reflects the same theme the product renders.
+ */
+async function applyTheme(page: Page, theme: Theme): Promise<void> {
+  const current = await page.evaluate<Theme>(
+    () => (document.documentElement.classList.contains('light') ? 'light' : 'dark'),
+  )
+  if (current !== theme) {
+    await page.evaluate(() => {
+      // Expanded desktop sidebar: the labelled checkbox emits `toggle-theme`.
+      const fullToggle = document.getElementById('applayout-field-2') as HTMLInputElement | null
+      if (fullToggle) {
+        fullToggle.click()
+        return
+      }
+      // Collapsed desktop / mobile: the icon-rail button emits `toggle-theme`.
+      const railToggle = document.querySelector<HTMLElement>('button[aria-label="Toggle theme"]')
+      if (railToggle) {
+        railToggle.click()
+        return
+      }
+      // No control in the current shell layout: perform the same class swap
+      // `toggleTheme()` does. The PrimeVue bridge maps every `--p-*` token to
+      // `hsl(var(--source))`, so the palette re-resolves without re-running it.
+      const root = document.documentElement
+      const nextIsDark = !root.classList.contains('dark')
+      root.classList.toggle('dark', nextIsDark)
+      root.classList.toggle('light', !nextIsDark)
+    })
+  }
+  await expect
+    .poll(() => page.evaluate((selected) => document.documentElement.classList.contains(selected), theme))
+    .toBe(true)
+  const conflicting = theme === 'dark' ? 'light' : 'dark'
+  await expect
+    .poll(() => page.evaluate((other) => document.documentElement.classList.contains(other), conflicting))
+    .toBe(false)
+}
+
+async function capture(page: Page, state: string, viewport: string, theme: Theme): Promise<void> {
+  await applyTheme(page, theme)
   await settleCanvas(page)
   await expect(page.locator('[data-testid="pipeline-editor-root"]')).toHaveScreenshot(
     `canvas/${state}-${viewport}-${theme}.png`,

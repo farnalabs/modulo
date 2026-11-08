@@ -75,6 +75,16 @@ is tagged `@visual` and runs in the same `frontend` CI job via
 platform — Playwright appends the platform suffix, so a Linux baseline (the
 platform CI runs on) must exist alongside any developer-captured one.
 
+Each `(state, viewport)` is captured in both light and dark. The theme is
+applied **after boot** through the app's real toggle: `index.html` ships
+`class="dark"` and the parser re-applies that attribute over anything an init
+script sets at `document_start`, so a pre-boot theme override silently renders
+dark for both runs. `canvas-visual-baseline-guard.spec.ts` (also `@visual`)
+fails when the light and dark PNGs for the same `(state, viewport, platform)`
+are byte-identical, so a vacuous theme axis can never be committed again. Only
+Linux baselines are committed; regenerate another platform's on that platform
+with `pnpm exec playwright test --grep "@visual" --update-snapshots`.
+
 ## Docs validity sweep
 
 `scripts/check_doc_validity.py` checks the product docs (`README.md` and
