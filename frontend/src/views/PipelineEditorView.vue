@@ -2097,7 +2097,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount, type Component } from 'vue'
+import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount, markRaw, type Component } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -2216,13 +2216,16 @@ const showSaveAsDropdown = ref(false)
 const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
 const saveAsDropdownRef = ref<HTMLElement | null>(null)
 const saveAsDropdownStyle = ref<Record<string, string>>({})
+// markRaw keeps the component objects out of Vue's reactivity system: VueFlow
+// stores `nodeTypes` in reactive state, and a proxied component triggers a
+// "Vue received a Component that was made a reactive object" render loop.
 const NODE_COMPONENTS: Record<string, Component> = {
-  manual: ManualNode,
-  agent: AgentNode,
-  router: RouterNode,
-  hitl: HitlNode,
-  dispatch: DispatchNode,
-  connector: ConnectorNode,
+  manual: markRaw(ManualNode),
+  agent: markRaw(AgentNode),
+  router: markRaw(RouterNode),
+  hitl: markRaw(HitlNode),
+  dispatch: markRaw(DispatchNode),
+  connector: markRaw(ConnectorNode),
 }
 
 // VueFlow resolves each node's `type` through this object before rendering it.
