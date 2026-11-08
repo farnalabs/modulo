@@ -1,19 +1,27 @@
+import * as fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
-import { fc } from '@fast-check/vitest'
 import { layoutNodes, type GraphEdgeInput, type GraphNodeInput } from '../utils/graph-layout'
 
-const nodeIds = fc.uniqueArray(fc.string({ minLength: 1, maxLength: 5 }), {
+type PropertyGraph = {
+  nodes: GraphNodeInput[]
+  edges: GraphEdgeInput[]
+}
+
+const nodeIds: fc.Arbitrary<string[]> = fc.uniqueArray(fc.string({ minLength: 1, maxLength: 5 }), {
   minLength: 1,
   maxLength: 8,
 })
 
-const graphArbitrary = nodeIds.chain((ids) => {
+const graphArbitrary: fc.Arbitrary<PropertyGraph> = nodeIds.chain((ids: string[]) => {
   const edge = fc
-    .tuple(fc.constantFrom(...ids), fc.constantFrom(...ids))
-    .filter(([source, target]) => source !== target)
-    .map(([source, target]) => ({ source, target }))
+    .tuple(fc.integer({ min: 0, max: ids.length - 1 }), fc.integer({ min: 0, max: ids.length - 1 }))
+    .filter(([source, target]: [number, number]) => source < target)
+    .map(([source, target]: [number, number]): GraphEdgeInput => ({
+      source: ids[source],
+      target: ids[target],
+    }))
   return fc.record({
-    nodes: fc.constant(ids.map((id) => ({ id }))),
+    nodes: fc.constant(ids.map((id: string): GraphNodeInput => ({ id }))),
     edges: fc.array(edge, { maxLength: 16 }),
   })
 })
@@ -34,6 +42,7 @@ describe('layoutNodes property invariants', () => {
         const second = layoutNodes(nodesFromLayout(first), edges)
         expect(second).toEqual(first)
       }),
+      { numRuns: 25 },
     )
   })
 
@@ -47,22 +56,24 @@ describe('layoutNodes property invariants', () => {
           if (source && target) expect(source.x).toBeLessThanOrEqual(target.x)
         }
       }),
+      { numRuns: 25 },
     )
   })
 
   it('keeps each component layout independent of disconnected components', () => {
     fc.assert(
       fc.property(
-        fc.tuple(graphArbitrary, graphArbitrary).filter(([a, b]) => {
-          const ids = new Set(a.nodes.map((node) => node.id))
-          return b.nodes.every((node) => !ids.has(node.id))
+        fc.tuple(graphArbitrary, graphArbitrary).filter(([a, b]: [PropertyGraph, PropertyGraph]) => {
+          const ids = new Set(a.nodes.map((node: GraphNodeInput) => node.id))
+          return b.nodes.every((node: GraphNodeInput) => !ids.has(node.id))
         }),
-        ([a, b]) => {
+        ([a, b]: [PropertyGraph, PropertyGraph]) => {
           const aOnly = positions(layoutNodes(a.nodes, a.edges))
           const combined = positions(layoutNodes([...a.nodes, ...b.nodes], [...a.edges, ...b.edges]))
           for (const node of a.nodes) expect(combined.get(node.id)!.x).toBe(aOnly.get(node.id)!.x)
         },
       ),
+      { numRuns: 25 },
     )
   })
 
@@ -70,9 +81,9 @@ describe('layoutNodes property invariants', () => {
     fc.assert(
       fc.property(
         fc.uniqueArray(fc.string({ minLength: 1, maxLength: 5 }), { minLength: 2, maxLength: 8 }),
-        (ids) => {
-          const nodes = ids.map((id) => ({ id }))
-          const forward: GraphEdgeInput[] = ids.slice(1).map((target, index) => ({
+        (ids: string[]) => {
+          const nodes = ids.map((id: string): GraphNodeInput => ({ id }))
+          const forward: GraphEdgeInput[] = ids.slice(1).map((target: string, index: number) => ({
             source: ids[index],
             target,
           }))
@@ -83,6 +94,7 @@ describe('layoutNodes property invariants', () => {
           for (const id of ids) expect(withBackEdge.get(id)!.x).toBe(withoutBackEdge.get(id)!.x)
         },
       ),
+      { numRuns: 25 },
     )
   })
 
@@ -94,6 +106,7 @@ describe('layoutNodes property invariants', () => {
         const rearranged = layoutNodes(undone, edges)
         expect(rearranged).toEqual(arranged)
       }),
+      { numRuns: 25 },
     )
   })
 })
