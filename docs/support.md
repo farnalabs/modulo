@@ -24,9 +24,9 @@ modulo support
   could not collect, listed as `missing <member>: <reason>`.
 - If something looked like it might carry a credential, the bundle leaves it
   out rather than shipping it, and names it in a `withheld:` line:
-  `withheld: <member> - <n> item(s) removed (<reason>)`. A whole small member
+  `withheld: <member> — <n> item(s) removed (<reason>)`. A whole small member
   that cannot be split is withheld entirely, as
-  `withheld: <member> - member removed (<reason>)`.
+  `withheld: <member> — member removed (<reason>)`.
 - Pass `--out <path>` to write the zip somewhere else.
 
 `modulo doctor --report report.zip` also writes a redacted diagnostic zip, to a
@@ -153,7 +153,7 @@ Open the bundle and check it before sending it to Farnalabs support.
 
 If a member could not be collected, a `missing <member>: <reason>` line follows
 the summary. If the redaction gate removed something because it looked like it
-might carry a credential, a `withheld: <member> - <n> item(s) removed
+might carry a credential, a `withheld: <member> — <n> item(s) removed
 (<reason>)` line appears there too: the bundle still builds, minus that named
 item.
 
