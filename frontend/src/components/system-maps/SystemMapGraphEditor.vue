@@ -56,7 +56,10 @@
         :key="node.node_key"
         class="absolute w-48 rounded-lg border bg-card p-3 shadow-sm"
         :style="{ left: `${nodeLeft(node)}px`, top: `${nodeTop(node)}px` }"
-        :data-testid="`system-map-node-${node.node_key}`"
+         :data-testid="`system-map-node-${node.node_key}`"
+         :data-selected="rendererModel.nodes.find((renderNode) => renderNode.nodeKey === node.node_key)?.selected ? 'true' : 'false'"
+         @click="selectedNodeKey = node.node_key"
+
       >
         <div class="flex items-start justify-between gap-2">
           <div class="min-w-0 flex-1">
@@ -108,6 +111,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, useId, watch } from 'vue'
 import type { SystemMapNode, SystemMapRelationship, NodeType, RelationshipType } from '../../stores/systemMaps'
+import { createSystemMapRendererModel } from '../../utils/system-map-renderer'
+import type { SystemMapRendererNode } from '../../types/system-map-renderer'
 
 const props = defineProps<{ nodes: SystemMapNode[]; relationships: SystemMapRelationship[]; loopConfigs: unknown[]; nodeTypes: readonly NodeType[]; relationshipTypes: readonly RelationshipType[]; readOnly?: boolean; dataTestId?: string }>()
 const emit = defineEmits<{ (e: 'nodes-change', nodes: Array<Record<string, unknown>>): void; (e: 'relationships-change', relationships: Array<Record<string, unknown>>): void }>()
@@ -120,11 +125,13 @@ const MOVE_STEP = 16
 const uid = useId()
 const localNodes = ref<Array<SystemMapNode & { config_json: Record<string, unknown> }>>([])
 const localRelationships = ref<SystemMapRelationship[]>([])
+const selectedNodeKey = ref<string | null>(null)
 const nodeCounters = new Map<NodeType, number>()
 const relationshipType = ref<RelationshipType>(props.relationshipTypes[0])
 const relationshipSource = ref<string>('')
 const relationshipTarget = ref<string>('')
 const readOnly = computed(() => props.readOnly === true)
+const rendererModel = computed(() => createSystemMapRendererModel(localNodes.value, localRelationships.value, { readOnly: readOnly.value, selectedNodeKey: selectedNodeKey.value }))
 
 watch(() => props.nodes, (nodes) => {
   localNodes.value = nodes.map((node) => ({ ...node, config_json: { ...node.config_json } }))
@@ -145,20 +152,20 @@ watch(localNodes, (nodes) => {
 
 const canAddRelationship = computed(() => Boolean(relationshipSource.value) && Boolean(relationshipTarget.value) && relationshipSource.value !== relationshipTarget.value)
 
-function nodeLeft(node: SystemMapNode): number { return Number(node.position_x) + OFFSET }
-function nodeTop(node: SystemMapNode): number { return Number(node.position_y) + OFFSET }
+function nodeLeft(node: SystemMapRendererNode | SystemMapNode): number { return ('x' in node ? node.x : Number(node.position_x)) + OFFSET }
+function nodeTop(node: SystemMapRendererNode | SystemMapNode): number { return ('y' in node ? node.y : Number(node.position_y)) + OFFSET }
 
 function centreFor(nodeKey: string): { x: number; y: number } | null {
-  const node = localNodes.value.find((candidate) => candidate.node_key === nodeKey)
+  const node = rendererModel.value.nodes.find((candidate) => candidate.nodeKey === nodeKey)
   if (!node) return null
   return { x: nodeLeft(node) + NODE_WIDTH / 2, y: nodeTop(node) + NODE_HEIGHT / 2 }
 }
 
-const edgeLines = computed(() => localRelationships.value.flatMap((relationship) => {
-  const source = centreFor(relationship.source_node_key)
-  const target = centreFor(relationship.target_node_key)
+const edgeLines = computed(() => rendererModel.value.edges.flatMap((edge) => {
+  const source = centreFor(edge.source)
+  const target = centreFor(edge.target)
   if (!source || !target) return []
-  return [{ id: relationship.id, x1: source.x, y1: source.y, x2: target.x, y2: target.y }]
+  return [{ id: edge.id, x1: source.x, y1: source.y, x2: target.x, y2: target.y }]
 }))
 
 function emitNodes(): void { emit('nodes-change', localNodes.value as unknown as Array<Record<string, unknown>>) }
