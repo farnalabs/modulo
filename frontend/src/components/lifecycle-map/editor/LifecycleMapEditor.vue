@@ -159,7 +159,7 @@ import { formatApiError } from '../../../lib/api/formatError'
 import { randomId } from '../../../lib/randomId'
 import { computeLifecycleMapLayout } from '../../../stores/lifecycleMaps'
 import { CANVAS_EDGE_STROKE } from '../../../constants/canvas'
-import type { StageType, TriggerType, LifecycleMap, LifecycleStage, LifecycleEdge, LifecycleMapVersion, PipelineSummary } from '../../../types/lifecycleMap'
+import type { StageType, LifecycleMap, LifecycleStage, LifecycleEdge, LifecycleMapVersion, PipelineSummary } from '../../../types/lifecycleMap'
 import Button from 'primevue/button'
 
 const props = defineProps<{
@@ -197,14 +197,14 @@ const graduationStageName = ref('')
 
 const nodeTypes = {}
 
-const selectedNodeData = computed(() => {
-  if (!selectedNode.value) return { name: '', description: '', stage_type: 'placeholder' as StageType, pipeline_id: null, external_url: null, owner: null, graduated: false }
-  return selectedNode.value.data || {}
+const selectedNodeData = computed<StageNodeData>(() => {
+  if (!selectedNode.value) return { name: '', description: '', stage_type: 'placeholder', pipeline_id: null, external_url: null, owner: null, graduated: false }
+  return selectedNode.value.data ?? { name: '', description: '', stage_type: 'placeholder', pipeline_id: null, external_url: null, owner: null, graduated: false }
 })
 
-const selectedEdgeData = computed(() => {
-  if (!selectedEdge.value) return { trigger_type: 'pipeline_completed' as TriggerType, description: '', condition_expression: null, estimated_frequency: null, trigger_link: null }
-  return selectedEdge.value.data || {}
+const selectedEdgeData = computed<EdgeData>(() => {
+  if (!selectedEdge.value) return { trigger_type: 'pipeline_completed', description: '', condition_expression: null, estimated_frequency: null, trigger_link: null }
+  return selectedEdge.value.data ?? { trigger_type: 'pipeline_completed', description: '', condition_expression: null, estimated_frequency: null, trigger_link: null }
 })
 
 function createFlowNode(stage: LifecycleStage): StageNode {
@@ -259,15 +259,16 @@ function createFlowEdge(edge: LifecycleEdge): LifecycleFlowEdge {
 }
 
 function stageToBackend(node: StageNode): LifecycleStage {
+  const data = node.data ?? { name: '', description: '', stage_type: 'placeholder' as StageType, pipeline_id: null, external_url: null, owner: null, graduated: false }
   return {
     id: node.id,
-    name: node.data.name || '',
-    description: node.data.description || '',
-    stage_type: node.data.stage_type || 'placeholder',
-    pipeline_id: node.data.pipeline_id || null,
-    external_url: node.data.external_url || null,
-    owner: node.data.owner || null,
-    graduated: node.data.graduated || false,
+    name: data.name || '',
+    description: data.description || '',
+    stage_type: data.stage_type || 'placeholder',
+    pipeline_id: data.pipeline_id || null,
+    external_url: data.external_url || null,
+    owner: data.owner || null,
+    graduated: data.graduated || false,
     x: node.position?.x,
     y: node.position?.y,
   }
@@ -425,17 +426,19 @@ function onConnect(connection: Connection) {
 
 function onStageFieldUpdate(field: string, value: unknown) {
   if (!selectedNode.value) return
-  const node = flowNodes.value.find((n) => n.id === selectedNode.value.id)
+  const selectedId = selectedNode.value.id
+  const node = flowNodes.value.find((n) => n.id === selectedId)
   if (node) {
-    node.data = { ...node.data, [field]: value }
+    node.data = { ...node.data, [field]: value } as StageNodeData
   }
 }
 
 function onEdgeFieldUpdate(field: string, value: unknown) {
   if (!selectedEdge.value) return
-  const edge = flowEdges.value.find((e) => e.id === selectedEdge.value.id)
+  const selectedId = selectedEdge.value.id
+  const edge = flowEdges.value.find((e) => e.id === selectedId)
   if (edge) {
-    edge.data = { ...edge.data, [field]: value }
+    edge.data = { ...edge.data, [field]: value } as EdgeData
   }
 }
 
@@ -450,9 +453,15 @@ async function onGraduateConfirm(stageId: string, pipelineId: string) {
     const node = flowNodes.value.find((n) => n.id === stageId)
     if (!node) return
 
-    node.data.graduated = true
-    node.data.stage_type = 'modulo'
-    node.data.pipeline_id = pipelineId
+    node.data = {
+      name: node.data?.name ?? '',
+      description: node.data?.description ?? '',
+      stage_type: 'modulo',
+      pipeline_id: pipelineId,
+      external_url: node.data?.external_url ?? null,
+      owner: node.data?.owner ?? null,
+      graduated: true,
+    }
 
     await handleSave()
     showGraduation.value = false
