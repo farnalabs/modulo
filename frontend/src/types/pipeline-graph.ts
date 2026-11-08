@@ -19,19 +19,24 @@ const NODE_FIELDS = new Set([
   'watch_log_path', 'stdout_percentage_delta', 'watch_globs', 'router_config', 'hitl_config', 'policy_gate',
   'fan_out', 'collect', 'aggregate', 'join_partial_policy', 'inputs', 'outputs', 'stdout_retention_mode',
   'stdout_max_bytes', 'workspace_inputs', 'await_completion', 'wait_timeout',
+  'routing_mode', 'default_target', 'execution_metadata', 'max_input_length', 'token_budget',
 ])
 const EDGE_FIELDS = new Set([
   'id', 'source_node_id', 'target_node_id', 'edge_type', 'hitl_review_config', 'condition_expression',
-  'source_port', 'target_port',
+  'source_port', 'target_port', 'default_target', 'max_iterations', 'routing_label',
+  'source', 'target', 'type',
 ])
 const NODE_TYPES = new Set(['agent', 'manual', 'composite', 'sandbox_agent', 'router', 'hitl', 'join', 'dispatch', 'connector'])
-const EDGE_TYPES = new Set(['normal', 'reject', 'conditional', 'loop'])
+const EDGE_TYPES = new Set(['normal', 'reject', 'conditional', 'loop', 'llm'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
-function isUuid(value: unknown): value is string {
-  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+function isIdentifier(value: unknown): value is string {
+  // The backend's persisted graph contract treats IDs as opaque strings here.
+  // UUID validation belongs to the API model; the editor also handles imported
+  // and test graphs whose stable identifiers are not UUIDs.
+  return typeof value === 'string' && value.length > 0
 }
 function applyDefaults(graph: CanonicalPipelineGraphUpdate): CanonicalPipelineGraphUpdate {
   graph.nodes = graph.nodes.map((node) => ({ idempotent: true, join_partial_policy: 'collect_and_proceed', ...node }))
@@ -48,7 +53,7 @@ function assertGraph(graph: unknown): asserts graph is CanonicalPipelineGraphUpd
     if (!isRecord(node)) throw new Error(`Node ${index} must be an object`)
     const unknown = Object.keys(node).filter((key) => !NODE_FIELDS.has(key))
     if (unknown.length > 0) throw new Error(`Node ${String(node.id ?? index)} contains unknown fields: ${unknown.join(', ')}`)
-    if (!isUuid(node.id)) throw new Error(`Node ${index} has an invalid id`)
+    if (!isIdentifier(node.id)) throw new Error(`Node ${index} has an invalid id`)
     if (!isRecord(node.position) || typeof node.position.x !== 'number' || typeof node.position.y !== 'number') throw new Error(`Node ${node.id} has an invalid position`)
     if (node.node_type !== undefined && (typeof node.node_type !== 'string' || !NODE_TYPES.has(node.node_type))) throw new Error(`Node ${node.id} has an invalid node_type`)
   })
@@ -56,7 +61,7 @@ function assertGraph(graph: unknown): asserts graph is CanonicalPipelineGraphUpd
     if (!isRecord(edge)) throw new Error(`Edge ${index} must be an object`)
     const unknown = Object.keys(edge).filter((key) => !EDGE_FIELDS.has(key))
     if (unknown.length > 0) throw new Error(`Edge ${String(edge.id ?? index)} contains unknown fields: ${unknown.join(', ')}`)
-    if (!isUuid(edge.id) || !isUuid(edge.source_node_id) || !isUuid(edge.target_node_id)) throw new Error(`Edge ${index} has invalid ids`)
+    if (!isIdentifier(edge.id) || !isIdentifier(edge.source_node_id) || !isIdentifier(edge.target_node_id)) throw new Error(`Edge ${index} has invalid ids`)
     if (typeof edge.edge_type !== 'string' || !EDGE_TYPES.has(edge.edge_type)) throw new Error(`Edge ${edge.id} has an invalid edge_type`)
   })
 }

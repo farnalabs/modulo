@@ -5052,16 +5052,25 @@ function buildNodePayload(n: any): any {
 }
 
 function buildEdgePayload(e: any): any {
-  return {
-    id: e.id,
-    source_node_id: e.source_node_id,
-    target_node_id: e.target_node_id,
-    edge_type: e.edge_type || 'normal',
-    condition_expression: e.condition_expression || null,
-    hitl_review_config: e.hitl_review_config || null,
-    source_port: e.source_port || 'out',
-    target_port: e.target_port || 'in',
-  }
+  // Start from the backend edge object so fields added to the graph contract
+  // (including masked HITL config) survive an editor round-trip. Only VueFlow
+  // coordinates/aliases are normalised here; routing metadata must not be
+  // reconstructed from edge_type because imported snapshots can carry it on
+  // any edge kind.
+  const payload = { ...e }
+  delete payload.source
+  delete payload.target
+  delete payload.type
+  delete payload.data
+  payload.id = e.id
+  payload.source_node_id = e.source_node_id || e.source
+  payload.target_node_id = e.target_node_id || e.target
+  payload.edge_type = e.edge_type || 'normal'
+  payload.condition_expression = e.condition_expression ?? null
+  payload.hitl_review_config = e.hitl_review_config ?? null
+  payload.source_port = e.source_port || 'out'
+  payload.target_port = e.target_port || 'in'
+  return payload
 }
 
 async function saveGraph() {

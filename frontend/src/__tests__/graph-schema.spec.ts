@@ -23,6 +23,21 @@ const edge = {
   edge_type: 'normal',
 }
 
+const routingEdges = [
+  {
+    ...edge,
+    edge_type: 'loop',
+    default_target: TARGET_ID,
+    max_iterations: 3,
+  },
+  {
+    ...edge,
+    id: '00000000-0000-0000-0000-000000000004',
+    edge_type: 'llm',
+    routing_label: 'retry',
+  },
+]
+
 describe('canonical pipeline graph schema', () => {
   it('accepts a canonical node and applies stable defaults', () => {
     const parsed = CanonicalPipelineGraphNodeSchema.parse(node)
@@ -46,6 +61,17 @@ describe('canonical pipeline graph schema', () => {
     })
 
     expect(result.success).toBe(false)
+  })
+
+  it('accepts loop and LLM routing edge fields', () => {
+    const parsed = validateCanonicalGraph({
+      nodes: [{ ...node, routing_mode: 'llm', default_target: TARGET_ID, execution_metadata: { attempt: 2 } }],
+      edges: routingEdges,
+    })
+
+    expect(parsed.edges[0].max_iterations).toBe(3)
+    expect(parsed.edges[1].routing_label).toBe('retry')
+    expect(parsed.edges[1].edge_type).toBe('llm')
   })
 
   it('validates complete graph payloads for save requests', () => {

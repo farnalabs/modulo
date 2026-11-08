@@ -152,6 +152,16 @@
         language: system
         files: ^\.github/workflows/.*\.ya?ml$
         pass_filenames: false
+      - id: validate-graph-schema
+        name: validate canonical frontend graph writes
+        entry: uv run --project backend --no-sync --frozen python scripts/run_validate_graph_schema.py
+        language: system
+        files: ^(frontend/src/.*\.(vue|ts|js)|scripts/run_validate_graph_schema\.py)$
+        pass_filenames: false
+        stages: [pre-commit]
+
+
+
 
       # FAR-1847: deploy-critical guard. deploy.yml runs
       # `playwright test --grep "@regression"` against staging before promoting

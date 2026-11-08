@@ -12,9 +12,42 @@ a stale rejection from an earlier gate must never kick THIS edge to the
 reject target.
 """
 
-from modulo.core.pipeline_engine.graph_cache import _make_gate_kickback_router
+import pytest
+
+from modulo.core.pipeline_engine.graph_cache import (
+    _make_gate_kickback_router,
+    _reject_unknown_graph_fields,
+)
 
 _REVIEW_ID = "hitl_review_a_b"
+
+
+def test_graph_allowlist_accepts_compiler_and_persisted_fields():
+    graph = {
+        "nodes": [
+            {
+                "id": "node-1",
+                "routing_mode": "llm",
+                "default_target": "fallback",
+                "execution_metadata": {"attempt": 2},
+            }
+        ],
+        "edges": [
+            {
+                "id": "edge-1",
+                "default_target": "done",
+                "max_iterations": 3,
+                "routing_label": "retry",
+            }
+        ],
+    }
+    _reject_unknown_graph_fields(graph)
+    assert graph["edges"][0]["max_iterations"] == 3
+
+
+def test_graph_allowlist_rejects_unknown_fields():
+    with pytest.raises(ValueError, match="unknown fields"):
+        _reject_unknown_graph_fields({"nodes": [{"id": "node-1", "typo": True}], "edges": []})
 
 
 def test_reject_routes_to_reject_target():

@@ -97,6 +97,12 @@ _GRAPH_EDGE_FIELDS = frozenset(
         "condition_expression",
         "source_port",
         "target_port",
+        # Routing/loop metadata is persisted on edges and consumed by the
+        # compiler. Keep the legacy aliases too: imported snapshots may still
+        # use source/target/type while current writes use *_node_id/edge_type.
+        "default_target",
+        "max_iterations",
+        "routing_label",
     }
 )
 _GRAPH_NODE_FIELDS = frozenset(
@@ -161,6 +167,14 @@ _GRAPH_NODE_FIELDS = frozenset(
         "workspace_inputs",
         "await_completion",
         "wait_timeout",
+        "max_input_length",
+        "token_budget",
+        # Router metadata is read by the compiler but may be present only in
+        # imported or historical snapshots rather than the current API model.
+        "routing_mode",
+        "default_target",
+        # Runtime provenance retained on graph nodes by snapshot/export paths.
+        "execution_metadata",
     }
 )
 
