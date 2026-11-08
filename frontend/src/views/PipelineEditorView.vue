@@ -2185,7 +2185,11 @@ import { formatDateShort } from '../lib/formatDate'
 import { formatCompactDuration, worstCaseForEvent, type WorstCase } from '../lib/worstCase'
 import { withTimeout } from '../lib/requestTimeout'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'
-import { layoutNodes, layoutNodesIncremental } from '../utils/graph-layout'
+import {
+  layoutNodes,
+  layoutNodesIncrementalWithBaseline,
+  type ProvenanceMap,
+} from '../utils/graph-layout'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
 import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
@@ -2318,7 +2322,6 @@ const userOwnedLayoutPipelines = new Map<string, boolean>()
 const layoutUserOwned = ref(false)
 const draftLayoutOwnership = ref<LayoutOwnership | undefined>(undefined)
 interface PositionSnapshot { x: number; y: number }
-interface ProvenanceMap { [nodeId: string]: 'user' | 'generated' }
 interface ArrangeUndoSnapshot {
   raw: Record<string, PositionSnapshot>
   flow: Record<string, PositionSnapshot>
@@ -3855,7 +3858,7 @@ async function arrangeGraph(): Promise<void> {
     target: edge.target_node_id,
     edge_type: edge.edge_type,
   }))
-  const laidOut = layoutNodesIncremental(
+  const { nodes: laidOut, freshPositions } = layoutNodesIncrementalWithBaseline(
     nodesInput,
     edgesInput,
     preArrangeGeneratedLayout,
@@ -3863,8 +3866,11 @@ async function arrangeGraph(): Promise<void> {
   )
   const newPositions = Object.fromEntries(laidOut.map((node) => [node.id, { ...node.position }]))
   applyGraphPositions(newPositions)
-  // Update the stored generated layout and provenance
-  lastGeneratedLayout.value = newPositions
+  // Store the PRE-delta generated baseline, not the positions with user offsets
+  // baked in: a later Arrange measures its delta against this baseline, so
+  // storing post-delta positions would collapse the delta to zero and snap
+  // user-offset nodes back onto the generated layout.
+  lastGeneratedLayout.value = freshPositions
   nodeProvenance.value = Object.fromEntries(
     laidOut.map((node) => [node.id, preArrangeProvenance[node.id] === 'user' ? 'user' as const : 'generated' as const]),
   )

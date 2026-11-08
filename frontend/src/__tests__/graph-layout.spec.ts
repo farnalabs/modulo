@@ -296,7 +296,7 @@ describe('layoutNodesIncremental', () => {
     expect(byNode.c.position).toEqual({ x: 480, y: 0 })
   })
 
-  it('leaves user nodes unchanged when no previous generated position exists', () => {
+  it('falls back to the fresh layout for user nodes without a previous generated position', () => {
     const nodes: GraphNodeInput[] = [{ id: 'a', position: { x: 120, y: 80 } }]
     const result = layoutNodesIncremental(nodes, [], {}, { a: 'user' })
 

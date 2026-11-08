@@ -349,6 +349,19 @@ export interface ProvenanceMap {
   [nodeId: string]: 'user' | 'generated'
 }
 
+/** Result of an incremental layout: final nodes plus the pre-delta baseline. */
+export interface IncrementalLayoutResult {
+  /** Nodes with user offsets applied, in input order. */
+  nodes: LaidOutNode[]
+  /**
+   * The fresh generated positions BEFORE any user offsets are applied. Callers
+   * must store this as the next incremental layout's `previousPositions`;
+   * storing the post-delta positions instead makes the next Arrange compute a
+   * zero delta and snap user-offset nodes back onto the generated layout.
+   */
+  freshPositions: Record<string, { x: number; y: number }>
+}
+
 /**
  * Incremental layout that preserves user manual drag offsets.
  *
@@ -356,14 +369,17 @@ export interface ProvenanceMap {
  * computes the delta from the previous generated layout and applies it to the
  * new layout. This preserves the user's relative manual positioning while
  * benefiting from the improved algorithmic layout.
+ *
+ * Returns both the final nodes and the pre-delta fresh baseline so callers can
+ * keep the baseline (not the post-delta positions) for the next Arrange.
  */
-export function layoutNodesIncremental(
+export function layoutNodesIncrementalWithBaseline(
   nodes: GraphNodeInput[],
   edges: GraphEdgeInput[],
   previousPositions: Record<string, { x: number; y: number }>,
   userProvenance: ProvenanceMap,
   options: LayoutOptions = {},
-): LaidOutNode[] {
+): IncrementalLayoutResult {
   // First, compute the fresh layout
   const layoutOptions = options
   const freshLaidOut = layoutNodes(nodes, edges, layoutOptions)
@@ -400,5 +416,33 @@ export function layoutNodesIncremental(
     return node
   })
 
-  return result
+  return {
+    nodes: result,
+    freshPositions: Object.fromEntries(
+      Array.from(freshPositions, ([id, position]) => [id, { ...position }]),
+    ),
+  }
+}
+
+/**
+ * Incremental layout that preserves user manual drag offsets.
+ *
+ * Convenience wrapper over {@link layoutNodesIncrementalWithBaseline} that
+ * returns only the final nodes. Use the `WithBaseline` variant when the caller
+ * must persist the pre-delta baseline for a subsequent Arrange.
+ */
+export function layoutNodesIncremental(
+  nodes: GraphNodeInput[],
+  edges: GraphEdgeInput[],
+  previousPositions: Record<string, { x: number; y: number }>,
+  userProvenance: ProvenanceMap,
+  options: LayoutOptions = {},
+): LaidOutNode[] {
+  return layoutNodesIncrementalWithBaseline(
+    nodes,
+    edges,
+    previousPositions,
+    userProvenance,
+    options,
+  ).nodes
 }
