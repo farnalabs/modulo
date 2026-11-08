@@ -26,23 +26,12 @@
       {{ description }}
     </div>
     <slot name="extra-content" />
-    <!-- Vue Flow handles -->
-    <Handle
-      type="target"
-      :position="Position.Left"
-      class="!h-2.5 !w-2.5 !border-2 !border-border !bg-background"
-    />
-    <Handle
-      type="source"
-      :position="Position.Right"
-      class="!h-2.5 !w-2.5 !border-2 !border-border !bg-background"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Handle, Position } from '@vue-flow/core'
+import { useI18n } from 'vue-i18n'
 import { getNodeRegistryEntry, getNodeType } from './NodeRegistry'
 
 interface Props {
@@ -66,12 +55,16 @@ defineSlots<{
   'extra-content': (props: Record<string, never>) => unknown
 }>()
 
-const testId = computed(() => props.testId ?? `pipeline-node-${props.data.node_type ?? getNodeType(props.data)}`)
+const { t } = useI18n()
 
-const registryEntry = computed(() => getNodeRegistryEntry((props.data.node_type as string | undefined) ?? getNodeType(props.data)))
+const nodeType = computed(() => getNodeType(props.data))
+
+const testId = computed(() => props.testId ?? `pipeline-node-${nodeType.value}`)
+
+const registryEntry = computed(() => getNodeRegistryEntry(nodeType.value))
 const theme = computed(() => registryEntry.value.theme)
-const glyph = computed(() => registryEntry.value.glyph)
-const fallbackLabel = computed(() => registryEntry.value.fallbackLabel ?? 'Node')
+const glyph = computed(() => t(registryEntry.value.glyphKey))
+const fallbackLabel = computed(() => t(registryEntry.value.fallbackLabelKey))
 
 const label = computed(() => props.data.label as string | undefined)
 const description = computed(() => props.data.description as string | undefined)
