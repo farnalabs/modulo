@@ -21,8 +21,10 @@ Modulo is a self-hosted Delivery Governance Platform. Govern the software develo
 # Generate the Fernet key ONCE. Every process that reads or writes a stored
 # credential must hold the SAME key, so the value you export here is reused in
 # backend/.env in step 2. A Fernet key is URL-safe base64 of exactly 32 bytes.
-# (Windows PowerShell: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-export FERNET_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+# `uv run --with cryptography` installs the package into an ephemeral
+# environment, so this works before `uv sync` in step 2 and needs no pre-setup.
+# (Windows PowerShell: uv run --with cryptography --no-project python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+export FERNET_KEY=$(uv run --with cryptography --no-project python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
 
 # The backend .env below logs in with password `modulo`, so start Postgres with
 # the same password (the compose default is `changeme`).
