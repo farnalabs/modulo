@@ -521,7 +521,7 @@ jobs:
           BUNDLE="../build/${BUNDLE_ROOT}"
           mkdir -p "$BUNDLE/backend"
           cp -a src "$BUNDLE/backend/src"
-          cp pyproject.toml uv.lock alembic.ini "\$BUNDLE/backend/"
+          cp pyproject.toml uv.lock alembic.ini "$BUNDLE/backend/"
           cp -a .venv "$BUNDLE/backend/.venv"
 
       - name: Smoke the bundled launcher
