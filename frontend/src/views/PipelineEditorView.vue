@@ -2188,6 +2188,7 @@ import { CANVAS_EDGE_STROKE } from '../constants/canvas'
 import { layoutNodes } from '../utils/graph-layout'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
+import { validateCanonicalGraph, type CanonicalPipelineGraphUpdate } from '../types/pipeline-graph'
 import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
 import type { LocationQueryRaw } from 'vue-router'
 import { useApi } from '../composables/useApi'
@@ -3751,6 +3752,12 @@ function hasPlacedPositions(nodes: any[]): boolean {
 }
 
 function computeGraphLayout(): Record<string, PositionSnapshot> {
+  // Validate the source graph before layout so malformed/unknown fields cannot
+  // be carried into a generated arrangement.
+  validateCanonicalGraph({
+    nodes: rawNodes.value.map(buildNodePayload),
+    edges: rawEdges.value.map(buildEdgePayload),
+  })
   const laidOut = layoutNodes(
     rawNodes.value.map((node: any) => ({
       id: node.id,
@@ -4146,37 +4153,23 @@ async function saveEdgeConfig() {
   const updatedEdges = rawEdges.value.map((e: any) => {
     if (e.id === selectedEdgeData.value.id) {
       return {
-        id: e.id,
-        source_node_id: e.source_node_id,
-        target_node_id: e.target_node_id,
+        ...buildEdgePayload(e),
         edge_type: edgeForm.edge_type,
         condition_expression: edgeForm.condition_expression || null,
-        max_iterations: edgeForm.edge_type === 'loop' ? (edgeForm.max_iterations || 0) : undefined,
-        routing_label: edgeForm.edge_type === 'llm' ? (edgeForm.routing_label || undefined) : undefined,
         hitl_review_config: buildHitlReviewConfig(),
-        source_port: e.source_port || 'out',
-        target_port: e.target_port || 'in',
       }
     }
-    return {
-      id: e.id,
-      source_node_id: e.source_node_id,
-      target_node_id: e.target_node_id,
-      edge_type: e.edge_type || 'normal',
-      condition_expression: e.condition_expression || null,
-      hitl_review_config: e.hitl_review_config || null,
-      source_port: e.source_port || 'out',
-      target_port: e.target_port || 'in',
-    }
+    return buildEdgePayload(e)
   })
 
   try {
+    const graphPayload: CanonicalPipelineGraphUpdate = validateCanonicalGraph({
+      nodes: rawNodes.value.map(buildNodePayload),
+      edges: updatedEdges,
+    })
     await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
-      body: {
-        nodes: rawNodes.value.map(buildNodePayload),
-        edges: updatedEdges,
-      },
+      body: graphPayload as any,
       signal,
     }))
     await loadGraph()
@@ -5058,6 +5051,19 @@ function buildNodePayload(n: any): any {
   return payload
 }
 
+function buildEdgePayload(e: any): any {
+  return {
+    id: e.id,
+    source_node_id: e.source_node_id,
+    target_node_id: e.target_node_id,
+    edge_type: e.edge_type || 'normal',
+    condition_expression: e.condition_expression || null,
+    hitl_review_config: e.hitl_review_config || null,
+    source_port: e.source_port || 'out',
+    target_port: e.target_port || 'in',
+  }
+}
+
 async function saveGraph() {
   if (isViewing.value) return
   savingGraph.value = true
@@ -5071,23 +5077,13 @@ async function saveGraph() {
         ? { ...selectedNodeOverrides.value }
         : null
     }
+    const graphPayload: CanonicalPipelineGraphUpdate = validateCanonicalGraph({
+      nodes: rawNodes.value.map(buildNodePayload),
+      edges: rawEdges.value.map(buildEdgePayload),
+    })
     const saveResponse = await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
-      body: {
-        nodes: rawNodes.value.map(buildNodePayload),
-        edges: rawEdges.value.map((e: any) => ({
-          id: e.id,
-          source_node_id: e.source_node_id,
-          target_node_id: e.target_node_id,
-          edge_type: e.edge_type || 'normal',
-          condition_expression: e.condition_expression || null,
-          max_iterations: e.edge_type === 'loop' ? (e.max_iterations || 0) : undefined,
-          routing_label: e.edge_type === 'llm' ? (e.routing_label || undefined) : undefined,
-          hitl_review_config: e.hitl_review_config || null,
-          source_port: e.source_port || 'out',
-          target_port: e.target_port || 'in',
-        })),
-      },
+      body: graphPayload as any,
       signal,
     }))
     // openapi-fetch returns HTTP failures in `error` without rejecting. Treat

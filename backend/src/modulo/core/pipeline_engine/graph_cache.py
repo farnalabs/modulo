@@ -80,6 +80,110 @@ _MAX_SIZE = 256
 _CACHE_LOCK = threading.RLock()
 _MISSING = object()
 
+# Canonical graph payload fields (FAR-2457).  The API validates these fields at
+# write time, but snapshots and imported graphs can bypass that boundary.  The
+# compiler therefore rejects unknown keys instead of silently ignoring typos.
+_GRAPH_TOP_LEVEL_FIELDS = frozenset({"nodes", "edges"})
+_GRAPH_EDGE_FIELDS = frozenset(
+    {
+        "id",
+        "source_node_id",
+        "target_node_id",
+        "source",
+        "target",
+        "edge_type",
+        "type",
+        "hitl_review_config",
+        "condition_expression",
+        "source_port",
+        "target_port",
+    }
+)
+_GRAPH_NODE_FIELDS = frozenset(
+    {
+        "id",
+        "node_type",
+        "agent_id",
+        "position",
+        "connector_binding",
+        "output_schema_id",
+        "input_schema_pin",
+        "output_schema_pin",
+        "capability_scope",
+        "label",
+        "role",
+        "autonomy_recommendation",
+        "idempotent",
+        "composite_ref",
+        "composite_parameter_values",
+        "composite_input_mapping",
+        "composite_output_mapping",
+        "parameter_schema_id",
+        "parameter_set_id",
+        "parameter_overrides",
+        "template_id",
+        "mode",
+        "agent_commands",
+        "commands_concatenation_string",
+        "agent_prompt",
+        "script_command",
+        "model_class",
+        "egress_policy",
+        "egress_allowlist",
+        "resource_limits",
+        "read_only",
+        "git_credentials",
+        "wallclock_budget_seconds",
+        "delivery_sentinel",
+        "single_pr_per_run",
+        "env_vars",
+        "context_files",
+        "timeout_seconds",
+        "output_schema_json",
+        "schema_profile",
+        "description",
+        "stall_timeout_seconds",
+        "enable_heartbeat",
+        "watch_log_path",
+        "stdout_percentage_delta",
+        "watch_globs",
+        "router_config",
+        "hitl_config",
+        "policy_gate",
+        "fan_out",
+        "collect",
+        "aggregate",
+        "join_partial_policy",
+        "inputs",
+        "outputs",
+        "stdout_retention_mode",
+        "stdout_max_bytes",
+        "workspace_inputs",
+        "await_completion",
+        "wait_timeout",
+    }
+)
+
+
+def _reject_unknown_graph_fields(graph_json: dict[str, Any]) -> None:
+    """Reject fields outside the canonical graph node/edge contract."""
+    unknown_top = set(graph_json) - _GRAPH_TOP_LEVEL_FIELDS
+    if unknown_top:
+        raise ValueError(f"graph_json contains unknown fields: {sorted(unknown_top)}")
+    for kind, entries, allowed in (
+        ("node", graph_json.get("nodes", []), _GRAPH_NODE_FIELDS),
+        ("edge", graph_json.get("edges", []), _GRAPH_EDGE_FIELDS),
+    ):
+        if not isinstance(entries, list):
+            raise ValueError(f"graph_json {kind}s must be a list")
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                raise ValueError(f"graph_json {kind} at index {index} must be an object")
+            unknown = set(entry) - allowed
+            if unknown:
+                identifier = entry.get("id", index)
+                raise ValueError(f"graph_json {kind} {identifier!r} contains unknown fields: {sorted(unknown)}")
+
 
 @dataclasses.dataclass
 class _CompileLock:
@@ -1551,6 +1655,7 @@ def build_graph_from_json(
 
     Returns a compiled LangGraph that accepts dict[str, Any] state.
     """
+    _reject_unknown_graph_fields(graph_json)
     state_schema = cast("type[Any]", Annotated[dict[str, Any], _pipeline_state_reducer])
     graph: StateGraph[Any] = StateGraph(state_schema)
 

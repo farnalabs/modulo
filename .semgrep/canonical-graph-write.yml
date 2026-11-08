@@ -1,0 +1,22 @@
+rules:
+  - id: graph-write-must-use-canonical-schema
+    languages: [typescript, javascript]
+    message: Graph writes must validate against CanonicalPipelineGraphUpdateSchema via validateCanonicalGraph.
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: api.PUT($URL, ...)
+          - pattern: api.POST($URL, ...)
+      - metavariable-regex:
+          metavariable: $URL
+          regex: "['\"].*graph.*['\"]"
+      - pattern-not-inside: |
+          const $PAYLOAD: CanonicalPipelineGraphUpdate = validateCanonicalGraph(...)
+          ...
+      - pattern-not-inside: |
+          validateCanonicalGraph(...)
+          ...
+    paths:
+      include:
+        - frontend/src/**/*.ts
+        - frontend/src/**/*.vue
