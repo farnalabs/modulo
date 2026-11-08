@@ -1,49 +1,24 @@
 """Per-node run output split helpers (FAR-124, P0).
 
-Today ``run.outputs_json[node_id]`` is a MIXED envelope: sandbox_agent nodes
-bury the agent's structured return at ``artifacts[0].output.output_json`` with
-runtime telemetry flattened around it; non-sandbox nodes persist
-``{artifacts, output}``; connector/stub/HITL/manual/connector-failure nodes
-each have their own shape; recovery markers persist
-``{input, output, recovered|skipped}``.
-
-Future phases (P1/P2) write the PURE agent return to ``outputs_json[node_id]``
-and exhaustive runtime telemetry to a NEW ``node_telemetry_json[node_id]``
-column. This module is P0: it builds the helpers for that split WITHOUT
-changing any persisted shape, and routes every reader through them with
-byte-identical output for today's legacy rows, so P1's write-flip cannot break
-readers.
+``run.outputs_json[node_id]`` stores the PURE node return and
+``node_telemetry_json[node_id]`` stores exhaustive runtime telemetry. The
+write-side splitter remains available for envelope inputs produced before the
+split, while read-side accessors expose only the stored post-split values.
 
 - ``split_node_output`` -- the WRITE-side splitter. Not called by production
   writers until P1; fully unit-tested now. Never raises: unknown or malformed
   envelopes produce a warning and a best-effort split.
-- ``node_return`` / ``node_telemetry`` -- the READ-side accessors. For legacy
-  rows ``node_return`` returns ``outputs_json[node_id]`` verbatim and
-  ``node_telemetry`` returns exactly what today's cost readers extract via
-  ``finalize._node_output_dict``.
+- ``node_return`` / ``node_telemetry`` -- the READ-side accessors for pure
+  returns and stored telemetry.
 - ``extend_node_type_map_from_edges`` -- stamps ``"gate"`` entries for the HITL
   gate nodes synthesized at graph-compile time (absent from
   ``graph_json.nodes``) so gate envelopes can be resolved from a type map.
 
-FAR-132 precondition for stripping the legacy tolerance
--------------------------------------------------------
+FAR-132 backfill marker
+-----------------------
 
-The legacy branches here (``node_return`` / ``node_telemetry`` /
-``_legacy_inner_output``) exist only to read rows written BEFORE the P1 write
-flip. They may be deleted once BOTH hold:
-
-1. the P5 verify-backfill proves zero legacy rows in ``run_node_outputs``
-   (no ``__final__`` row with an outputs side present and a telemetry side
-   absent), AND
-2. a PERIODIC straggler sweep
-   (``modulo.core.agent_return_legacy.count_legacy_agent_return_rows``, run by
-   the ``legacy_agent_return_sweep`` system cron) reports zero legacy rows for
-   long enough to prove no old writer re-introduced them post-flip.
-
-Until both hold the tolerance is LIVE and load-bearing, not dual-shape debt to
-be removed speculatively. ``stored_row_is_legacy`` is the shared predicate the
-sweep uses, so the strip's "no legacy rows" condition is expressed by the same
-code the read accessors dispatch on.
+The scheduled straggler sweep still uses ``stored_row_is_legacy`` to identify
+rows that need backfill. Read accessors do not interpret those rows.
 """
 
 from __future__ import annotations
@@ -77,8 +52,7 @@ NODE_TYPE_GATE = "gate"
 DEFAULT_NODE_TYPE = "agent"
 
 #: Node types with a dedicated WRITE-side splitter in ``split_node_output``.
-#: Only these types can be resolved to a contract output from a live envelope;
-#: anything else keeps the legacy inner-``output`` read.
+#: These types have dedicated write-side envelope splitters.
 SPLITTABLE_NODE_TYPES = frozenset(
     {
         "sandbox_agent",
@@ -211,16 +185,10 @@ def resolve_node_contract_output(
     envelope: dict[str, Any],
     node_type: str | None,
 ) -> tuple[bool, Any]:
-    """Resolve a node envelope's CONTRACT output for eval validation (FAR-311).
+    """Resolve a node envelope's contract output for eval validation (FAR-311).
 
-    Returns ``(found, contract_output)``. The contract output is the pure
-    return users see as the node return — NOT the telemetry-style outer
-    ``output`` envelope, which for a sandbox_agent carries status/summary/cost
-    but never the agent's real fields (``pr_url`` / ``changed_files`` live in
-    ``artifacts[0].output.output_json``). Only SPLITTABLE_NODE_TYPES are
-    resolved this way; unknown node types report ``found=False`` so callers
-    keep their legacy read. ``found=False`` also covers a splittable type
-    whose contract output is missing or non-dict (callers fail closed).
+    Returns ``(found, contract_output)``. Only known splittable node types are
+    resolved; unknown types and missing/non-dict outputs fail closed.
     """
     resolved = node_type or DEFAULT_NODE_TYPE
     if resolved not in SPLITTABLE_NODE_TYPES:
@@ -232,7 +200,7 @@ def resolve_node_contract_output(
 
 
 # ---------------------------------------------------------------------------
-# READ-side accessors (used by ALL readers; legacy-safe)
+# READ-side accessors (used by ALL readers)
 # ---------------------------------------------------------------------------
 
 
@@ -265,19 +233,11 @@ def node_telemetry(telemetry_json: Any, _outputs_json: Any, node_id: str) -> Any
 
 
 def node_stdout_artifact(telemetry_json: Any, outputs_json: Any, node_id: str) -> dict[str, Any] | None:
-    """The persisted full-stdout transcript pointer for *node_id*, or ``None``.
+    """Return the stored full-stdout transcript pointer, or ``None``.
 
-    Sandbox nodes whose redacted stdout exceeds the inline retention cap hand
-    the full transcript to the artifact store under a ``:full:<cap>``-suffixed
-    attempt key and record its envelope pointer as ``stdout_artifact`` on the
-    node's telemetry (``_persist_full_stdout_artifact``, FAR-811). This returns
-    that pointer dict verbatim (``rel_path``/``size_bytes``/``sha256``/``stream``/
-    ``compression``/``truncated``/``redacted``) from whichever source the node's
-    telemetry lives in -- P1+ rows read ``node_telemetry_json`` directly, legacy
-    rows fall back to the derived inner ``output`` envelope (both carry the
-    pointer; the envelope's top-level ``output`` is never excluded from it).
-    Returns ``None`` for nodes with no stored transcript (non-sandbox nodes,
-    inline-sized stdout) so callers keep their absence/404 handling.
+    Transcript pointers are stored on the node's telemetry side. The
+    ``outputs_json`` argument remains for call-site compatibility but is not
+    interpreted.
     """
     telemetry = node_telemetry(telemetry_json, outputs_json, node_id)
     if isinstance(telemetry, dict):
@@ -288,16 +248,11 @@ def node_stdout_artifact(telemetry_json: Any, outputs_json: Any, node_id: str) -
 
 
 def node_stderr_artifact(telemetry_json: Any, outputs_json: Any, node_id: str) -> dict[str, Any] | None:
-    """The persisted full-stderr transcript pointer for *node_id*, or ``None``.
+    """Return the stored full-stderr transcript pointer, or ``None``.
 
-    Sandbox nodes whose redacted stderr exceeds the inline retention cap hand
-    the full transcript to the artifact store under a ``:full:stderr:<cap>``-
-    suffixed attempt key and record its envelope pointer as ``stderr_artifact``
-    on the node's telemetry (``_persist_full_stderr_artifact``, FAR-879). This
-    returns that pointer dict verbatim from whichever source the node's
-    telemetry lives in -- P1+ rows read ``node_telemetry_json`` directly,
-    legacy rows fall back to the derived inner ``output`` envelope.
-    Returns ``None`` for nodes with no stored transcript.
+    Transcript pointers are stored on the node's telemetry side. The
+    ``outputs_json`` argument remains for call-site compatibility but is not
+    interpreted.
     """
     telemetry = node_telemetry(telemetry_json, outputs_json, node_id)
     if isinstance(telemetry, dict):
@@ -589,7 +544,7 @@ def split_node_output(
     run_id: str | None = None,
     node_id: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
-    """Split a legacy per-node envelope into ``(return_value, telemetry)``.
+    """Split a pre-split per-node envelope into ``(return_value, telemetry)``.
 
     This is the WRITE-side splitter: P1 writers call it before persisting a
     node's output so the pure return and the exhaustive telemetry land in their

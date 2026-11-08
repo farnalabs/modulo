@@ -186,7 +186,7 @@ class TestIoRoundTrip:
             assert not any(key in node_output for key in _TELEMETRY_KEYS), f"{node_id} leaked telemetry keys"
             assert body["node_telemetry"][node_id] == telemetry[node_id]
 
-    def test_legacy_run_output_unchanged(self, client: TestClient, mock_session: AsyncMock) -> None:
+    def test_pre_backfill_run_output_is_not_interpreted(self, client: TestClient, mock_session: AsyncMock) -> None:
         envelope = {
             "artifacts": [
                 {
@@ -211,7 +211,7 @@ class TestIoRoundTrip:
         body = self._get_io(client, run)
 
         assert body["outputs_json"]["planner"] == envelope
-        assert body["node_telemetry"]["planner"] == {"status": "completed", "summary": "planned"}
+        assert body["node_telemetry"] is None
 
     def test_telemetry_only_node_appears_in_node_telemetry(self, client: TestClient, mock_session: AsyncMock) -> None:
         run = _make_run(

@@ -116,14 +116,14 @@ class TestExtractOutputJson:
 
 
 class TestExtractStoredOutputJson:
-    def test_legacy_envelope(self) -> None:
+    def test_mixed_pre_backfill_envelope_is_not_interpreted(self) -> None:
         outputs = {
             str(_NODE_A): {
                 "artifacts": [{"output": {"output_json": {"changed": True}, "status": "completed"}}],
                 "status": "completed",
             }
         }
-        assert extract_stored_output_json(outputs, {}, str(_NODE_A)) == {"changed": True}
+        assert extract_stored_output_json(outputs, {}, str(_NODE_A)) is None
 
     def test_pure_return_used_when_no_envelope(self) -> None:
         # A P1 split row: node_return returns the pure output_json dict.
