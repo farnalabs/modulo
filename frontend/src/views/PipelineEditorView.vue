@@ -2327,7 +2327,7 @@ const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
 const saveAsDropdownRef = ref<HTMLElement | null>(null)
 const saveAsDropdownStyle = ref<Record<string, string>>({})
 const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch', connector: 'connector' }
-const { fitView, onPaneReady } = useVueFlow()
+const { fitView, onPaneReady, addEdges } = useVueFlow()
 
 // Vue Flow renders edge geometry from these presentation options; semantic
 // edge metadata lives on each edge's `data` and is never affected.
@@ -4376,7 +4376,12 @@ function connectNodes(sourceId: string, targetId: string): void {
     target_port: 'in',
   }
   rawEdges.value = [...rawEdges.value, edge]
-  flowEdges.value = [...flowEdges.value, convertBackendEdge(edge, flowEdges.value.length)]
+  addEdges({ source: sourceId, target: targetId })
+  // The flow store owns the canonical visual edge after addEdges; retain the
+  // backend metadata on the raw graph for the existing save path.
+  flowEdges.value = flowEdges.value.some((flowEdge: any) => flowEdge.source === sourceId && flowEdge.target === targetId)
+    ? flowEdges.value
+    : [...flowEdges.value, convertBackendEdge(edge, flowEdges.value.length)]
   announceCanvas(t('views.PipelineEditorView.canvas_connect_done'))
 }
 
