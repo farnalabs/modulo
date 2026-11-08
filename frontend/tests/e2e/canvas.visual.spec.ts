@@ -255,9 +255,16 @@ async function capture(page: Page, state: string, viewport: string, theme: strin
       caret: 'hide',
       scale: 'css',
       // Sub-pixel text/border antialiasing is not stable to the byte in
-      // headless Chromium; 0.05% of the capture tolerates that without hiding a
-      // real layout, colour or marker change (those move far more pixels).
-      maxDiffPixelRatio: 0.0005,
+      // headless Chromium, and the committed Linux baselines were captured on a
+      // host whose font rasterisation differs slightly from the GitHub runner's
+      // (same image dimensions, same layout — only glyph/border edges shift by a
+      // sub-pixel). The observed residual is 0.05–0.15% of the capture (184–402
+      // pixels, identical in both themes, which is the signature of a geometry
+      // difference rather than a colour or content change); the previous 0.05%
+      // ceiling sat inside that noise band and failed healthy runs. 0.3% clears
+      // it with ~2x headroom while still catching a real layout, colour or
+      // marker change, which moves 1–2% of the capture.
+      maxDiffPixelRatio: 0.003,
     },
   )
 }
@@ -267,7 +274,7 @@ test.describe('Pipeline canvas visual snapshots', { tag: '@visual' }, () => {
 
   for (const viewport of VIEWPORTS) {
     for (const theme of THEMES) {
-      test(`empty graph and toolbar — ${viewport.name} ${theme}`, async ({ page, env }) => {
+      test(`empty graph and toolbar — ${viewport.name} ${theme}`, { tag: '@visual' }, async ({ page, env }) => {
         await preparePage(page, env, viewport, theme)
         await mockGraph(page, EMPTY_GRAPH)
         await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
@@ -276,7 +283,7 @@ test.describe('Pipeline canvas visual snapshots', { tag: '@visual' }, () => {
         await capture(page, 'empty', viewport.name, theme)
       })
 
-      test(`six node types and edge markers — ${viewport.name} ${theme}`, async ({ page, env }) => {
+      test(`six node types and edge markers — ${viewport.name} ${theme}`, { tag: '@visual' }, async ({ page, env }) => {
         await preparePage(page, env, viewport, theme)
         await mockGraph(page, DIAMOND_GRAPH)
         await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
@@ -289,7 +296,7 @@ test.describe('Pipeline canvas visual snapshots', { tag: '@visual' }, () => {
         await capture(page, 'six-node-types', viewport.name, theme)
       })
 
-      test(`historic banner and compare mode — ${viewport.name} ${theme}`, async ({ page, env }) => {
+      test(`historic banner and compare mode — ${viewport.name} ${theme}`, { tag: '@visual' }, async ({ page, env }) => {
         await preparePage(page, env, viewport, theme)
         await mockGraph(page, DIAMOND_GRAPH)
         await page.goto(`/pipelines/${PIPELINE_ID}/editor?snapshot=${SNAPSHOT_ID}`)
