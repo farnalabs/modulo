@@ -17,6 +17,29 @@ from typing import Any
 
 WINDOW_SECONDS = 60
 
+_REDIS_SLIDING_WINDOW_SCRIPT = """
+local now = tonumber(ARGV[1])
+local window_s = tonumber(ARGV[2])
+local max_requests = tonumber(ARGV[3])
+local member = ARGV[4]
+local cutoff = now - window_s
+
+redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, cutoff)
+local count = redis.call('ZCARD', KEYS[1])
+if count < max_requests then
+    redis.call('ZADD', KEYS[1], now, member)
+    redis.call('EXPIRE', KEYS[1], window_s * 2)
+    return {1, 0}
+end
+
+local oldest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')[2]
+local retry_after = window_s
+if oldest ~= nil then
+    retry_after = math.max(1, math.ceil(tonumber(oldest) + window_s - now))
+end
+return {0, retry_after}
+"""
+
 
 @dataclass
 class RateLimitRule:
@@ -41,20 +64,32 @@ class RedisSlidingWindowRateLimiter:
         self._redis = redis_client
         self._prefix = prefix
 
-    async def check(self, key: str, max_requests: int, window_s: int = WINDOW_SECONDS) -> bool:
-        """Record a request and return True if within limit, False if exceeded."""
+    async def check_with_retry_after(
+        self, key: str, max_requests: int, window_s: int = WINDOW_SECONDS
+    ) -> tuple[bool, int]:
+        """Record an accepted request and return its verdict and retry-after.
+
+        Rejected requests are deliberately not inserted into the window. This
+        keeps repeated probes from extending the lockout and reports the
+        remaining window from the oldest accepted request.
+        """
         now = time.time()
         redis_key = f"{self._prefix}{key}"
-        cutoff = now - window_s
+        result = await self._redis.eval(
+            _REDIS_SLIDING_WINDOW_SCRIPT,
+            1,
+            redis_key,
+            now,
+            window_s,
+            max_requests,
+            f"{now}:{uuid.uuid4().hex}",
+        )
+        return bool(result[0]), int(result[1])
 
-        pipe = self._redis.pipeline(transaction=True)
-        pipe.zremrangebyscore(redis_key, 0, cutoff)
-        pipe.zadd(redis_key, {f"{now}:{uuid.uuid4().hex}": now})
-        pipe.zcard(redis_key)
-        pipe.expire(redis_key, window_s * 2)
-        _, _, count, _ = await pipe.execute()
-
-        return bool(count <= max_requests)
+    async def check(self, key: str, max_requests: int, window_s: int = WINDOW_SECONDS) -> bool:
+        """Record an accepted request and return whether it is within the limit."""
+        allowed, _retry_after = await self.check_with_retry_after(key, max_requests, window_s)
+        return allowed
 
 
 class RateLimiterRegistry:
@@ -68,6 +103,11 @@ class RateLimiterRegistry:
 
     async def check(self, key: str, max_requests: int, window_s: int = WINDOW_SECONDS) -> bool:
         return await self._sliding.check(key, max_requests, window_s)
+
+    async def check_with_retry_after(
+        self, key: str, max_requests: int, window_s: int = WINDOW_SECONDS
+    ) -> tuple[bool, int]:
+        return await self._sliding.check_with_retry_after(key, max_requests, window_s)
 
 
 class TokenBucket:

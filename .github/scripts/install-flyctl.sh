@@ -24,18 +24,64 @@ if ! [[ "${FLYCTL_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 base_url="https://github.com/superfly/flyctl/releases/download/${FLYCTL_VERSION}"
+api_base="https://api.github.com/repos/superfly/flyctl"
 tarball="flyctl_${version_num}_Linux_x86_64.tar.gz"
+checksums_file="flyctl_${version_num}_checksums.txt"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "${work_dir}"' EXIT
 
+curl_flags=(-fsSL --proto '=https' --tlsv1.2 --connect-timeout 15)
+
+# The github.com/.../releases/download path and the release-asset API are
+# served by DIFFERENT CDN hosts. On 2026-11-08 part of the releases/download
+# CDN returned persistent 504s for 40+ minutes - long enough to outlast every
+# retry - while api.github.com/repos/.../releases/assets/<id> served the same
+# bytes from release-assets.githubusercontent.com with 200. So try the direct
+# release path briefly, then fall back to the API asset endpoint. Both paths
+# end at the same checksum verification below, so the fallback does not
+# weaken the integrity check.
+resolve_asset_id() {
+  local asset="$1" release_json
+  release_json="$(curl "${curl_flags[@]}" --retry 3 --retry-delay 2 --max-time 60 \
+    -H 'Accept: application/vnd.github+json' \
+    "${api_base}/releases/tags/${FLYCTL_VERSION}")"
+  printf '%s' "${release_json}" | python3 -c '
+import json
+import sys
+
+name = sys.argv[1]
+release = json.load(sys.stdin)
+for asset in release.get("assets", []):
+    if asset.get("name") == name:
+        print(asset["id"])
+        break
+else:
+    sys.exit(1)
+' "${asset}"
+}
+
+download_release_asset() {
+  local asset="$1" dest="$2" asset_id
+  if curl "${curl_flags[@]}" --retry 2 --retry-delay 2 --retry-max-time 30 \
+    --max-time 300 -o "${dest}" "${base_url}/${asset}"; then
+    return 0
+  fi
+  echo "::warning::Could not download ${asset} from ${base_url}; retrying via the GitHub release API asset endpoint." >&2
+  asset_id="$(resolve_asset_id "${asset}")" || {
+    echo "::error::Could not resolve the '${asset}' asset id for ${FLYCTL_VERSION} via the GitHub API." >&2
+    return 1
+  }
+  # Accept: application/octet-stream makes the asset endpoint return the
+  # artefact (a 302 to the signed release-assets URL) rather than its JSON
+  # metadata.
+  curl "${curl_flags[@]}" --retry 6 --retry-delay 5 --retry-max-time 180 \
+    --max-time 300 -H 'Accept: application/octet-stream' \
+    -o "${dest}" "${api_base}/releases/assets/${asset_id}"
+}
+
 echo "Downloading flyctl ${FLYCTL_VERSION} (linux x86_64)..."
-# curl's default retry set already covers HTTP 504, but its three retries
-# (fixed 1s/2s/4s backoff, ~7s total) give up inside a longer CDN blip: on
-# 2026-11-08 a GitHub release-download 504 burst outlasted them and failed the
-# staging deploy before the image build even started. Retry for up to three
-# minutes instead so a transient upstream 5xx cannot fail the deploy.
-curl -fsSL --proto '=https' --tlsv1.2 --retry 6 --retry-delay 5 --retry-max-time 180 --connect-timeout 15 --max-time 300 -o "${work_dir}/${tarball}" "${base_url}/${tarball}"
-curl -fsSL --proto '=https' --tlsv1.2 --retry 6 --retry-delay 5 --retry-max-time 180 --connect-timeout 15 --max-time 300 -o "${work_dir}/checksums.txt" "${base_url}/flyctl_${version_num}_checksums.txt"
+download_release_asset "${tarball}" "${work_dir}/${tarball}"
+download_release_asset "${checksums_file}" "${work_dir}/checksums.txt"
 
 expected_sha="$(awk -v file="${tarball}" '$2 == file { print $1 }' "${work_dir}/checksums.txt")"
 if [[ -z "${expected_sha}" ]]; then

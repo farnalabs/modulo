@@ -116,10 +116,12 @@ from modulo.db.crud.run import (
 )
 from modulo.db.crud.run_attempts import list_attempts as db_list_attempts
 from modulo.db.crud.run_node_outputs import (
+    OutputsRlsMismatch,
     RunBlobs,
     marker_attempt_suffix,
     read_run_blobs,
     read_run_markers,
+    read_run_outputs_map,
     read_run_telemetry,
 )
 from modulo.db.models.account import Account
@@ -197,6 +199,38 @@ _COST_ROLLUP_QUANTUM = Decimal("0.000001")
 def _quantize_cost_rollup(value: Decimal) -> Decimal:
     """Normalise a cost rollup value to 6 decimal places (Numeric(14, 6) scale)."""
     return value.quantize(_COST_ROLLUP_QUANTUM)
+
+
+def _extract_legacy_agent_verdict(outputs_json: dict[str, Any] | None) -> str | None:
+    """Extract an agent's self-reported verdict from a run's outputs_json.
+
+    Applies to any run whose node outputs carry the self-reported fields
+    ``agent_status`` or ``agent_outcome`` (the legacy agent-return shape);
+    it is not restricted to runs recorded before Phase 1. Each node output is
+    scanned directly and through its nested ``output`` object, and the first
+    ``"failed"`` self-reported value is returned (otherwise ``None``).
+
+    This is a read-only projection: it reports the agent's own claim and never
+    asserts anything about the run's outcome. It does not re-classify the run
+    as failed, does not affect ``work_intact``, and does not change the run's
+    official status.
+    """
+    if not isinstance(outputs_json, dict):
+        return None
+    for node_output in outputs_json.values():
+        if not isinstance(node_output, dict):
+            continue
+        candidates = [node_output]
+        inner = node_output.get("output")
+        if isinstance(inner, dict):
+            candidates.append(inner)
+        for candidate in candidates:
+            # Only explicitly self-reported fields are verdict evidence. The
+            # generic ``status`` field belongs to the engine/node envelope and
+            # can be ``failed`` without the agent reporting a verdict.
+            if any(candidate.get(key) == "failed" for key in ("agent_status", "agent_outcome")):
+                return "failed"
+    return None
 
 
 class RunNotFoundError(KeyError):
@@ -345,6 +379,49 @@ async def _do_get_workspace_inputs(
     except Exception:
         _log.warning(
             "runs.workspace_inputs_unavailable",
+            extra={"run_id": str(run_id)},
+            exc_info=True,
+        )
+        return None
+
+
+async def _do_get_run_outputs(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Load the narrow outputs projection for a run's legacy verdict (FAR-147).
+
+    Uses ``read_run_outputs_map`` so only ``run_id`` / ``node_id`` /
+    ``outputs_json`` are fetched — the telemetry, markers and artifacts blobs
+    are never loaded for a verdict read.
+
+    Fail-open applies to TRANSIENT database failures only (``OperationalError``
+    and the pool ``TimeoutError``): such an error degrades to ``None`` (the run
+    response is valid without the verdict). Tenant-integrity and query-shape
+    failures are never swallowed: :class:`OutputsRlsMismatch` (the session org
+    disagrees with the row org) and :class:`ProgrammingError` (a schema/query
+    defect) propagate to the route's existing error contract, and every other
+    non-transient error surfaces instead of silently deleting the verdict.
+    """
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            outputs_map = await read_run_outputs_map(
+                session,
+                run_ids=[run_id],
+                organisation_id=principal.organisation_id,
+            )
+            return outputs_map.get(run_id)
+    except asyncio.CancelledError:
+        raise
+    except OutputsRlsMismatch:
+        raise
+    except ProgrammingError:
+        raise
+    except (OperationalError, SA_TimeoutError):
+        _log.warning(
+            "runs.outputs_unavailable",
             extra={"run_id": str(run_id)},
             exc_info=True,
         )
@@ -637,6 +714,11 @@ class _ListPageContext:
     # ``str(snapshot_id)`` spelling the list item serialises, so the builder
     # never touches the run→snapshot relationship (no per-row query, no N+1).
     snapshot_versions: dict[str, int] = field(default_factory=dict)
+    # FAR-147: per-run outputs map for agent-verdict extraction. Loaded in
+    # ONE narrow projection query for the whole page (``read_run_outputs_map``,
+    # which fetches only run_id/node_id/outputs_json) — no N+1 on the list
+    # endpoint and no telemetry/marker/artifact blob columns.
+    outputs_map: dict[uuid.UUID, dict[str, Any] | None] = field(default_factory=dict)
 
 
 async def _load_account_labels(session: AsyncSession, runs: list[Run]) -> dict[uuid.UUID, str]:
@@ -675,6 +757,25 @@ def _coerce_snapshot_version(raw: Any) -> int | None:
     if isinstance(raw, bool) or not isinstance(raw, int):
         return None
     return raw
+
+
+async def _load_legacy_outputs(
+    session: AsyncSession,
+    runs: list[Run],
+    organisation_id: uuid.UUID,
+) -> dict[uuid.UUID, dict[str, Any] | None]:
+    """Load the per-run outputs map for a page — ONE narrow query (FAR-147).
+
+    Delegates to ``read_run_outputs_map``, which projects only
+    ``run_id`` / ``node_id`` / ``outputs_json`` for every run in the page in a
+    single statement, restricted to terminal node rows (the metadata sentinel
+    is excluded). No telemetry, marker or artifact blob is loaded.
+    """
+    return await read_run_outputs_map(
+        session,
+        run_ids=[run.id for run in runs],
+        organisation_id=organisation_id,
+    )
 
 
 async def _load_snapshot_versions(session: AsyncSession, runs: list[Run]) -> dict[str, int]:
@@ -757,6 +858,8 @@ def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
         "waiting": _is_capacity_waiting(run.status, ctx.active_count, ctx.concurrency_limit),
     }
     warnings_count = ctx.warnings_count.get(run.id, 0)
+    # FAR-147: extract legacy agent verdict from outputs_json
+    legacy_agent_verdict = _extract_legacy_agent_verdict(ctx.outputs_map.get(run.id))
     # FAR-490: snapshot_id must be a UUID/str or None; a MagicMock (e.g. in
     # test fakes) or any other non-UUID value must surface as None, never a 500.
     # Mirror the FAR-228/FAR-213 defensive coercion above.
@@ -812,6 +915,8 @@ def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
         "enqueue_failed_at": _iso_or_none(getattr(run, "enqueue_failed_at", None)),
         "capacity": capacity,
         "warnings_count": warnings_count,
+        # FAR-147: legacy agent verdict (read-only, does not affect work_intact)
+        "legacy_agent_verdict": legacy_agent_verdict,
     }
 
 
@@ -862,6 +967,10 @@ async def _do_list_runs(
         # per-row snapshot read (avoids N+1 on the list endpoint).
         snapshot_versions = await _load_snapshot_versions(session, result.items)
 
+        # FAR-147: load outputs_json for all runs in the page in bulk to extract
+        # legacy agent verdicts without N+1.
+        outputs_map = await _load_legacy_outputs(session, result.items, user.organisation_id)
+
         # Active-run observability (FAR-307). Capacity is computed ONCE per
         # request (one active-count query + one limit read) and reused for
         # every item; `waiting` is derived per item from its own status. The
@@ -880,6 +989,7 @@ async def _do_list_runs(
             concurrency_limit=concurrency_limit,
             warnings_count=warnings_count,
             snapshot_versions=snapshot_versions,
+            outputs_map=outputs_map,
         )
         items = [_build_list_item(run, ctx) for run in result.items]
     return {
@@ -1118,6 +1228,11 @@ class RunResponse(BaseModel):
     # ``not_applicable`` because Alpha does not consume a runtime tool-event
     # stream. NULL only for runs created before the column shipped.
     seam_coverage: list[SeamCoverageStatement] | None = None
+    # FAR-147: the agent's self-reported verdict ("failed") found in the run's
+    # node outputs, or None. Read-only exposure for dashboards and consumers;
+    # it reports what an agent claimed and makes no statement about the run's
+    # outcome. Does NOT affect work_intact or the run's official status.
+    legacy_agent_verdict: str | None = None
     # Active-run observability (FAR-307). `trigger_actor`, `heartbeat_at`, and
     # `capacity` are populated on every list item and on detail for active
     # runs; `work_item_refs` and `child_runs` are populated only on detail.
@@ -1319,15 +1434,21 @@ def _build_run_response(
     gate_fired: bool = False,
     workspace_inputs: list[dict[str, Any]] | None = None,
     deadline_triage: list[dict[str, Any]] | None = None,
+    outputs_json: dict[str, Any] | None = None,
 ) -> RunResponse:
     """Build a RunResponse from a Run ORM entity, populating derived fields.
 
     *gate_fired* is derived by the caller via :func:`_run_gate_fired` (which
     needs an open-transaction session for the FAR-583 markers read).
+    *outputs_json* is the reassembled outputs dict for the run (FAR-147), used
+    to extract the legacy agent verdict.
     """
     ctx = ctx or _RunDisplayContext()
     token_consumption = _resolve_token_consumption(run)
     trace_id, trace_url = _resolve_trace_display(run, ctx.otlp_endpoint)
+
+    # FAR-147: extract legacy agent verdict from outputs_json
+    legacy_agent_verdict = _extract_legacy_agent_verdict(outputs_json)
 
     pipeline_name: str | None = None
     if run.pipeline is not None:
@@ -1435,6 +1556,8 @@ def _build_run_response(
         input_payload=input_payload,
         workspace_inputs=workspace_inputs,
         deadline_triage=deadline_triage,
+        # FAR-147: legacy agent verdict (read-only, does not affect work_intact)
+        legacy_agent_verdict=legacy_agent_verdict,
     )
 
 
@@ -2050,6 +2173,8 @@ async def get_run_status(
                 run_attempt_count=_run_attempt_count(run),
             )
         )
+        # FAR-147: load outputs_json for legacy agent verdict extraction
+        outputs_json = await _run_with_retry(lambda: _do_get_run_outputs(factory, principal, run_id))
     except IntegrityError:
         _log.exception(_CODE_RUNS_GET_RUN_STATUS)
         raise HTTPException(
@@ -2100,6 +2225,7 @@ async def get_run_status(
         gate_fired=gate_fired,
         workspace_inputs=workspace_inputs,
         deadline_triage=deadline_triage,
+        outputs_json=outputs_json,
     )
 
 
@@ -2289,10 +2415,9 @@ def _build_fixture_map(
     inp = input_payload or {}
     out = outputs_json or {}
 
-    # Resolve every per-node value through node_return (the legacy-safe pure
-    # return accessor). For legacy rows it returns each value verbatim, so the
-    # fixture_map is byte-identical to today; once P1 writes pure returns the
-    # fixture logic keeps reading the same accessor.
+    # Resolve every per-node value through the pure-return accessor. The
+    # accessor preserves arbitrary producer keys, including ``input`` and
+    # ``output`` when those names are part of the contract.
     resolved_out: Any = out
     if isinstance(out, dict):
         resolved_out = {node_id: node_return(out, None, node_id) for node_id in out}
@@ -2328,23 +2453,18 @@ def _build_node_labels(graph_json: dict[str, Any] | None) -> dict[str, str]:
 
 def _normalize_run_outputs(
     outputs_json: dict[str, Any] | None,
-    telemetry_json: dict[str, Any] | None,
+    _telemetry_json: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Resolve each node's pure return (new rows) or envelope verbatim (legacy)."""
-    if not outputs_json:
-        return outputs_json
-    return {nid: node_return(outputs_json, telemetry_json, nid) for nid in outputs_json}
+    """Return the stored pure node returns without interpreting their contents."""
+    return outputs_json
 
 
 def _normalize_node_telemetry(
     telemetry_json: dict[str, Any] | None,
-    outputs_json: dict[str, Any] | None,
+    _outputs_json: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Resolve each node's telemetry (new rows) or the inner output envelope (legacy)."""
-    node_ids = set(outputs_json or {}) | set(telemetry_json or {})
-    if not node_ids:
-        return telemetry_json
-    return {nid: node_telemetry(telemetry_json, outputs_json, nid) for nid in node_ids}
+    """Return the stored per-node telemetry mappings without deriving values."""
+    return telemetry_json
 
 
 class FixtureExportResponse(BaseModel):
@@ -2380,46 +2500,24 @@ def _telemetry_log_lengths(tele: dict[str, Any]) -> tuple[int, int]:
     return stdout_total, stderr_total
 
 
-def _inline_log_lengths(out: Any) -> tuple[int, int]:
-    """``(stdout, stderr)`` lengths derived from a node's inline output blob.
-
-    A dict envelope contributes the length of its inline ``agent_stdout`` /
-    ``agent_stderr``; a bare string counts as stdout only (its inline length);
-    anything else contributes nothing.
-    """
-    if isinstance(out, dict):
-        return len(str(out.get("agent_stdout") or "")), len(str(out.get("agent_stderr") or ""))
-    if isinstance(out, str):
-        return len(out), 0
-    return 0, 0
-
-
 def _compute_log_totals(
     normalized_telemetry: dict[str, Any] | None,
-    normalized_outputs: dict[str, Any] | None,
+    _normalized_outputs: dict[str, Any] | None,
 ) -> tuple[int, int]:
-    """FAR-870: derive the true total stdout/stderr character lengths across all nodes.
+    """Derive log lengths only from separated per-node telemetry.
 
-    For each node, prefer the ``stdout_length`` / ``stderr_length`` value stored
-    in telemetry (the sandbox runner always records the pre-truncation character
-    count here, even when the inline ``agent_stdout`` is capped). Fall back to
-    ``len(str(…))`` of the inline content for nodes without telemetry or
-    missing length keys (non-sandbox nodes, legacy rows).
-
-    Legacy inner-output envelopes carry ``agent_stdout`` / ``agent_stderr`` but
-    NOT ``stdout_length`` -- the fallback derives the length from the inline
-    content in that case.  A null inline value contributes 0 rather than the
-    literal ``"None"`` (``str(None)`` would otherwise add phantom characters).
+    Telemetry stores pre-truncation lengths when available and otherwise derives
+    them from its own inline log fields. Pure node returns are never interpreted
+    as telemetry, so nodes without a telemetry entry contribute zero.
     """
     stdout_total = 0
     stderr_total = 0
-    all_node_ids = set(normalized_telemetry or {}) | set(normalized_outputs or {})
-    for node_id in all_node_ids:
+    for node_id in normalized_telemetry or {}:
         tele = (normalized_telemetry or {}).get(node_id)
         if isinstance(tele, dict):
             stdout_len, stderr_len = _telemetry_log_lengths(tele)
         else:
-            stdout_len, stderr_len = _inline_log_lengths((normalized_outputs or {}).get(node_id))
+            stdout_len, stderr_len = 0, 0
         stdout_total += stdout_len
         stderr_total += stderr_len
     return stdout_total, stderr_total
@@ -2428,13 +2526,12 @@ def _compute_log_totals(
 def _build_run_io_response(run: Run, node_labels: dict[str, str], blobs: RunBlobs) -> RunIOResponse:
     """Normalise, mask, and package a run's IO into a RunIOResponse.
 
-    One shape for the frontend: node_return resolves the pure return (new
-    rows) or the envelope verbatim (legacy rows); node_telemetry resolves
-    the stored telemetry (new rows) or the inner output envelope (legacy).
+    One shape for the frontend: ``outputs_json`` contains stored pure returns
+    and ``node_telemetry`` contains stored separated telemetry.
 
-    *blobs* is the run's reassembled legacy-dict shape (FAR-583 read-switch:
-    the caller reassembles via the ``run_node_outputs`` repo reader inside
-    its transaction).
+    *blobs* is the run's reassembled dictionary shape (FAR-583 read-switch:
+    the caller reassembles via the ``run_node_outputs`` repo reader inside its
+    transaction).
     """
     outputs_json = blobs.outputs
     telemetry_json = blobs.telemetry
@@ -2472,15 +2569,11 @@ async def get_run_io_endpoint(
 ) -> RunIOResponse:
     """Return per-node IO for a completed run, plus generated fixture_map.
 
-    The response exposes a single NORMALIZED view (FAR-126): ``outputs_json``
-    holds each node's pure return and ``node_telemetry`` holds its exhaustive
-    telemetry. Both are resolved through the legacy-safe accessors
-    (``node_return`` / ``node_telemetry``), so legacy runs (no telemetry
-    column) are byte-identical to today's envelope shape, and P1+ runs expose
-    the split surfaces. Telemetry-only nodes (e.g. ``skipped`` recovery
-    markers without an ``outputs_json`` entry) still appear under
-    ``node_telemetry``. All surfaces — input payload, outputs, telemetry —
-    are masked for secrets.
+    ``outputs_json`` holds each node's pure return and ``node_telemetry`` holds
+    its exhaustive telemetry, exactly as stored. Telemetry-only nodes (e.g.
+    ``skipped`` recovery markers without an ``outputs_json`` entry) appear
+    under ``node_telemetry`` only. All surfaces — input payload, outputs,
+    telemetry — are masked for secrets.
     """
     try:
         async with session.begin():
@@ -2677,10 +2770,9 @@ async def export_run_fixture(
     # helper also passes non-dict payloads through unchanged.
     graph_json = _masked_snapshot_graph(snapshot.graph_json) if snapshot else {}
 
-    # Normalize to the pure return before masking (FAR-126): node_return
-    # resolves each node's pure return for new-shape rows (telemetry present)
-    # and returns the legacy envelope verbatim otherwise, so the exported
-    # outputs_json mirrors GET /runs/{id}/io and legacy runs stay byte-identical.
+    # Normalize to the pure return before masking (FAR-126): the read-side
+    # normaliser returns each node's stored pure return unchanged, so the
+    # exported outputs_json mirrors GET /runs/{id}/io.
     outputs_json = blobs.outputs
     telemetry_json = blobs.telemetry
     normalized_outputs = _normalize_run_outputs(outputs_json, telemetry_json)
@@ -2974,7 +3066,7 @@ async def get_run_node_output(
     *password*, *key*, *credential*) in the output are masked with
     bullet characters.
 
-    For P1+ (split) rows this returns the node's PURE return. When a node
+    For split rows this returns the node's PURE return. When a node
     has no return (skipped / recovered / failed-no-return) but exists in
     ``node_telemetry_json``, a DERIVED ``{status, summary}`` object is
     returned instead of a 404 — never the raw telemetry (no stdout / log
@@ -4071,23 +4163,23 @@ def _resolve_reveal_prompt_template(
     node_id: str,
     variant_config_snapshot: Any,
 ) -> str | None:
-    """Resolve the template the reveal attests for a node.
+    """Resolve the frozen prompt that the node's dispatch path actually used.
 
-    FAR-1398 precedence, mirroring dispatch exactly:
+    Model-backed nodes use the snapshot ``prompt_template`` and the frozen
+    per-agent variant override, matching ``_resolve_node_run_overrides``.
+    ``sandbox_agent`` nodes are a separate dispatch path: they render the
+    snapshot ``agent_prompt`` directly, and do not consume the model-node
+    ``prompt_templates`` variant map. In particular, an ``agent_id`` on a
+    sandbox node does not make that model-node override applicable.
 
-    1. the run's FROZEN variant per-agent prompt override, when it names this
-       node's agent (``_variant_prompt_override``);
-    2. otherwise the snapshot node's ``prompt_template`` - the agent's
-       template copied ONTO the node at snapshot creation
-       (``db/crud/pipeline_snapshot.py``), so editing an agent after a run
-       cannot change what this endpoint attests.
-
-    Returns ``None`` when neither yields a template (no variant override and
-    no frozen template). Raises 404 via ``_require_node`` when the node is
-    absent from the graph - the same gate the visibility resolver uses, so
-    the 404 never depends on which helper the handler happens to call first.
+    Returns ``None`` when the snapshot carries no prompt for the node. Raises
+    404 via ``_require_node`` when the node is absent from the graph.
     """
     node = _require_node(graph_json, node_id)
+    if node.get("node_type") == "sandbox_agent":
+        agent_prompt = node.get("agent_prompt")
+        return str(agent_prompt) if agent_prompt is not None else None
+
     agent_id = _agent_id_from_node(node)
     override = _variant_prompt_override(variant_config_snapshot, agent_id) if agent_id is not None else None
     if override is not None:

@@ -1,13 +1,11 @@
-"""Unit tests for the per-node output split helpers (FAR-124, P0).
+"""Unit tests for the per-node output split helpers (FAR-124).
 
 Covers the full ``split_node_output`` extraction table (sandbox_agent,
 regular agent, connector completed + failure, HITL gate incl. the pinned
 ``deliver_manual`` shape, manual-node resume, recovery markers, already-pure
 idempotence, pure-return-with-artifacts/output keys NOT re-split, lossless
-telemetry, malformed + unknown), the legacy-safe READ accessors
-(``node_return`` / ``node_telemetry`` incl. the equivalence with
-``finalize._node_output_dict``), and the edge-driven type-map extension for
-HITL gates.
+telemetry, malformed + unknown), the READ accessors (``node_return`` /
+``node_telemetry``), and the edge-driven type-map extension for HITL gates.
 """
 
 from __future__ import annotations
@@ -17,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.cost_controller.finalize import _node_output_dict, _store_split_result
+from modulo.core.cost_controller.finalize import _store_split_result
 from modulo.core.node_output_split import (
     DISPATCH_PROVENANCE_FIELDS,
     NODE_TYPE_GATE,
@@ -444,7 +442,7 @@ def test_split_recovery_skipped_omits_return_key() -> None:
     envelope = {"input": None, "output": None, "skipped": True}
     value, telemetry = split_node_output(envelope, "agent", None)
     # The return key is OMITTED: value is None and the telemetry is the sole
-    # record ({skipped: true}); the P1 writer must not write outputs_json[id].
+    # record ({skipped: true}); the writer must not write outputs_json[id].
     assert value is None
     assert telemetry == {"skipped": True}
 
@@ -514,13 +512,13 @@ def test_split_lossless_unknown_top_level_fields() -> None:
 
 
 # ---------------------------------------------------------------------------
-# node_return -- legacy-safe pure-return accessor
+# node_return -- pure-return accessor
 # ---------------------------------------------------------------------------
 
 
-def test_node_return_legacy_verbatim() -> None:
-    outputs = {"n1": {"artifacts": [{"node_id": "n1", "status": "completed"}], "output": {"x": 1}}}
-    assert node_return(outputs, None, "n1") == outputs["n1"]
+def test_node_return_does_not_interpret_legacy_envelope() -> None:
+    envelope = {"artifacts": [{"node_id": "n1", "status": "completed"}], "output": {"x": 1}}
+    assert node_return({"n1": envelope}, None, "n1") is envelope
 
 
 def test_node_return_pure_row_verbatim_not_resplit() -> None:
@@ -545,36 +543,13 @@ def test_node_return_missing_node_returns_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# node_telemetry -- legacy extraction mirrors finalize._node_output_dict
+# node_telemetry -- pure telemetry accessor
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "node_value",
-    [
-        {"output": {"status": "completed", "wall_clock_time_ms": 1000}},
-        {"output": {"a": 1}, "extra": 2},
-        {"output": "a plain string", "other": 3},
-        {"artifacts": [{"node_id": "n"}], "manual_output": {"m": 1}},
-        {"artifacts": []},
-        "just a string",
-        None,
-        42,
-    ],
-    ids=[
-        "wallclock",
-        "output-plus-extra",
-        "plain-string-output",
-        "artifacts-and-manual",
-        "empty-artifacts",
-        "plain-string",
-        "none",
-        "int",
-    ],
-)
-def test_node_telemetry_legacy_equals_finalize_node_output_dict(node_value: Any) -> None:
-    outputs = {"n1": node_value}
-    assert node_telemetry(None, outputs, "n1") == _node_output_dict(outputs, "n1")
+def test_node_telemetry_does_not_interpret_legacy_envelope() -> None:
+    envelope = {"output": {"status": "completed", "wall_clock_time_ms": 1000}}
+    assert node_telemetry(None, {"n1": envelope}, "n1") is None
 
 
 def test_node_telemetry_absent_returns_none() -> None:
@@ -588,20 +563,13 @@ def test_node_telemetry_pure_row_returns_stored() -> None:
     assert node_telemetry(telemetry, outputs, "n1") == telemetry["n1"]
 
 
-def test_node_telemetry_legacy_extracts_wallclock() -> None:
-    outputs = {"n1": {"output": {"status": "completed", "wall_clock_time_ms": 3_600_000}}}
-    telemetry = node_telemetry(None, outputs, "n1")
-    assert telemetry is not None
-    assert telemetry["wall_clock_time_ms"] == 3_600_000
-
-
 # ---------------------------------------------------------------------------
-# has_telemetry_entry -- the single dispatch predicate behind node_telemetry
+# has_telemetry_entry -- presence predicate
 # ---------------------------------------------------------------------------
 
 
 def test_has_telemetry_entry_true_when_entry_present() -> None:
-    """A P1+ row keyed by the node -> True (the accessor returns it verbatim)."""
+    """A split row keyed by the node -> True (the accessor returns it verbatim)."""
     assert has_telemetry_entry({"n1": {"status": "completed"}}, "n1")
     # Presence only, never the value's content: an entry of ANY shape counts.
     assert has_telemetry_entry({"n1": None}, "n1")
@@ -609,8 +577,7 @@ def test_has_telemetry_entry_true_when_entry_present() -> None:
 
 
 def test_has_telemetry_entry_false_when_entry_absent() -> None:
-    """A legacy row (or a node absent from telemetry) -> False: the accessor
-    falls back to the legacy inner output of ``outputs_json``."""
+    """A node absent from telemetry -> False; outputs are never interpreted."""
     assert not has_telemetry_entry({"n1": {"status": "completed"}}, "nope")
     assert not has_telemetry_entry({}, "n1")
 
@@ -646,13 +613,11 @@ def test_node_stdout_artifact_pure_row_returns_stored_pointer_verbatim() -> None
     assert node_stdout_artifact(telemetry, {}, "n1") is pointer
 
 
-def test_node_stdout_artifact_legacy_envelope_extracts_pointer() -> None:
-    # Legacy sandbox envelope: the pointer rides the inner ``output`` dict
-    # (``_persist_full_stdout_artifact`` writes it onto the inner telemetry).
+def test_node_stdout_artifact_does_not_interpret_legacy_envelope() -> None:
     pointer = _stdout_pointer()
     inner = {"status": "completed", "stdout_artifact": pointer, "output_json": {"ok": 1}}
     outputs = {"n1": {"artifacts": [{"node_id": "n1", "status": "completed", "output": inner}], "output": inner}}
-    assert node_stdout_artifact(None, outputs, "n1") == pointer
+    assert node_stdout_artifact(None, outputs, "n1") is None
 
 
 def test_node_stdout_artifact_none_when_absent() -> None:
@@ -693,11 +658,11 @@ def test_node_stderr_artifact_pure_row_returns_stored_pointer_verbatim() -> None
     assert node_stderr_artifact(telemetry, {}, "n1") is pointer
 
 
-def test_node_stderr_artifact_legacy_envelope_extracts_pointer() -> None:
+def test_node_stderr_artifact_does_not_interpret_legacy_envelope() -> None:
     pointer = _stderr_pointer()
     inner = {"status": "completed", "stderr_artifact": pointer, "output_json": {"ok": 1}}
     outputs = {"n1": {"artifacts": [{"node_id": "n1", "status": "completed", "output": inner}], "output": inner}}
-    assert node_stderr_artifact(None, outputs, "n1") == pointer
+    assert node_stderr_artifact(None, outputs, "n1") is None
 
 
 def test_node_stderr_artifact_none_when_absent() -> None:
@@ -776,35 +741,8 @@ def test_extend_type_map_skips_edges_without_source_or_target() -> None:
 
 
 # ---------------------------------------------------------------------------
-# stored_row_is_legacy (FAR-132): the row-scope twin of has_telemetry_entry
+# Current writer invariant
 # ---------------------------------------------------------------------------
-
-
-def test_stored_row_is_legacy_only_when_outputs_present_and_telemetry_absent() -> None:
-    """Legacy == outputs present AND telemetry absent (the accessor's fallback)."""
-    assert stored_row_is_legacy(outputs_present=True, telemetry_present=False) is True
-    # A P1+ row: telemetry present, so it never reaches the legacy branch.
-    assert stored_row_is_legacy(outputs_present=True, telemetry_present=True) is False
-    # No outputs side: nothing for the legacy fallback to derive from.
-    assert stored_row_is_legacy(outputs_present=False, telemetry_present=False) is False
-    # Outputs absent but telemetry present: a skipped-recovery marker row.
-    assert stored_row_is_legacy(outputs_present=False, telemetry_present=True) is False
-
-
-def test_stored_row_is_legacy_agrees_with_has_telemetry_entry_on_a_one_node_map() -> None:
-    """The row predicate is the single-node form of has_telemetry_entry.
-
-    A ``__final__`` row stores one node per side, so the reassembled per-run
-    telemetry map holds an entry for the node iff its telemetry side is present.
-    Pin the equivalence across all four presence combinations so the two cannot
-    drift.
-    """
-    for outputs_present in (False, True):
-        for telemetry_present in (False, True):
-            telemetry_map = {"n": None} if telemetry_present else {}
-            row_form = stored_row_is_legacy(outputs_present=outputs_present, telemetry_present=telemetry_present)
-            map_form = outputs_present and not has_telemetry_entry(telemetry_map, "n")
-            assert row_form is map_form
 
 
 def test_split_node_output_never_yields_a_legacy_row_for_splittable_types() -> None:
@@ -845,5 +783,6 @@ def test_split_node_output_never_yields_a_legacy_row_for_splittable_types() -> N
         outputs_present = "n" in merged_outputs
         telemetry_present = "n" in merged_telemetry
         assert telemetry_present is True, f"writer dropped the telemetry side for {node_type}"
-        is_legacy = stored_row_is_legacy(outputs_present=outputs_present, telemetry_present=telemetry_present)
-        assert is_legacy is False, node_type
+        assert stored_row_is_legacy(outputs_present=outputs_present, telemetry_present=telemetry_present) is False, (
+            node_type
+        )

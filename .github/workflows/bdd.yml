@@ -184,7 +184,10 @@ jobs:
       - name: Install backend deps
         if: steps.detect.outputs.bdd == 'true'
         working-directory: backend
-        run: uv sync --frozen
+        # Route through the shared retry wrapper: the lockfile pins pytest-bdd
+        # to a GitHub source archive and a transient codeload 5xx/timeout used
+        # to fail this job before a single scenario ran (run 42477715006).
+        run: bash ../scripts/uv_sync_with_retry.sh --frozen
 
       - name: Install Playwright browsers
         if: steps.detect.outputs.bdd == 'true'

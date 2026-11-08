@@ -464,8 +464,10 @@ class TestSsoAuthGating:
     def test_oidc_login_proceeds_when_unlicensed(self, client_no_sso: TestClient) -> None:
         resp = client_no_sso.get("/api/v1/auth/oidc/google/login")
         assert resp.status_code != 402, resp.text
-        # The gate let it through; no IdP is configured in this fixture.
-        assert resp.status_code == 400
+        # The gate let it through; no IdP is configured in this fixture, so the
+        # handler's own check fires and FAR-1794 redirects the browser.
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
 
     def test_oidc_callback_proceeds_when_unlicensed(self, client_no_sso: TestClient) -> None:
         resp = client_no_sso.get("/api/v1/auth/oidc/google/callback?code=abc&state=def")
@@ -476,7 +478,9 @@ class TestSsoAuthGating:
     def test_saml_login_proceeds_when_unlicensed(self, client_no_sso: TestClient) -> None:
         resp = client_no_sso.get("/api/v1/auth/saml/login")
         assert resp.status_code != 402, resp.text
-        assert resp.status_code == 400
+        # FAR-1794: a browser-facing login failure redirects, never raw JSON.
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
 
     def test_saml_acs_proceeds_when_unlicensed(self, client_no_sso: TestClient) -> None:
         resp = client_no_sso.post("/api/v1/auth/saml/acs", data={"SAMLResponse": "dGVzdA=="})
@@ -801,8 +805,10 @@ class TestPreAuthSsoNoAuthRequired:
             app.dependency_overrides.clear()
         assert resp.status_code != 401, f"Pre-auth OIDC login must not require authentication, got 401: {resp.text}"
         assert resp.status_code != 402, f"An unlicensed instance must not lock SSO sign-in out, got 402: {resp.text}"
-        # No IdP is configured in this fixture, so the handler's own check fires.
-        assert resp.status_code == 400
+        # No IdP is configured in this fixture, so the handler's own check fires;
+        # FAR-1794 renders that as the login-page redirect, never raw JSON.
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
 
     def test_oidc_callback_no_auth_not_401_or_402(self) -> None:
         """GET /oidc/{provider}/callback: browser-facing failure -> 303, never 401/402."""
@@ -824,7 +830,9 @@ class TestPreAuthSsoNoAuthRequired:
             app.dependency_overrides.clear()
         assert resp.status_code != 401, f"Pre-auth SAML login must not require authentication, got 401: {resp.text}"
         assert resp.status_code != 402, f"An unlicensed instance must not lock SSO sign-in out, got 402: {resp.text}"
-        assert resp.status_code == 400
+        # FAR-1794: the login page links here, so a failure redirects (303).
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
 
     def test_saml_acs_no_auth_not_401_or_402(self) -> None:
         """POST /saml/acs: browser-facing failure -> 303, never 401/402."""

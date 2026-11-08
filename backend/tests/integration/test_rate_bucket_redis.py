@@ -33,6 +33,7 @@ from modulo.connectors._rate_bucket import (
     RedisTokenBucket,
     SharedBudgetUnavailableError,
 )
+from modulo.core.rate_limiter import RedisSlidingWindowRateLimiter
 
 pytestmark = pytest.mark.integration
 REDIS_URL = os.environ.get("RATE_LIMIT_REDIS_URL", "redis://localhost:6379")
@@ -106,6 +107,33 @@ async def redis_client() -> aioredis.Redis:
     finally:
         await client.flushdb()
         await client.aclose()
+
+
+async def test_sliding_window_real_lua_rejection_does_not_extend_lockout(
+    redis_client: aioredis.Redis,
+    redis_prefix: str,
+) -> None:
+    """Run the production sliding-window Lua script against a real Redis server."""
+    limiter = RedisSlidingWindowRateLimiter(redis_client, prefix=redis_prefix)
+    window_s = 4
+    key = "sliding-window"
+
+    allowed, retry_after = await limiter.check_with_retry_after(key, max_requests=1, window_s=window_s)
+    assert allowed is True
+    assert retry_after == 0
+
+    await asyncio.sleep(1.1)
+    allowed, retry_after = await limiter.check_with_retry_after(key, max_requests=1, window_s=window_s)
+    assert allowed is False
+    assert 2 <= retry_after <= 3
+
+    await asyncio.sleep(1.1)
+    allowed, retry_after_after_probe = await limiter.check_with_retry_after(key, max_requests=1, window_s=window_s)
+    assert allowed is False
+    assert retry_after_after_probe < retry_after
+
+    members = await redis_client.zrange(f"{redis_prefix}{key}", 0, -1)
+    assert len(members) == 1
 
 
 async def test_real_lua_no_lost_token_race_under_concurrency(

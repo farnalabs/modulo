@@ -4931,15 +4931,11 @@ export interface paths {
          * Get Run Io Endpoint
          * @description Return per-node IO for a completed run, plus generated fixture_map.
          *
-         *     The response exposes a single NORMALIZED view (FAR-126): ``outputs_json``
-         *     holds each node's pure return and ``node_telemetry`` holds its exhaustive
-         *     telemetry. Both are resolved through the legacy-safe accessors
-         *     (``node_return`` / ``node_telemetry``), so legacy runs (no telemetry
-         *     column) are byte-identical to today's envelope shape, and P1+ runs expose
-         *     the split surfaces. Telemetry-only nodes (e.g. ``skipped`` recovery
-         *     markers without an ``outputs_json`` entry) still appear under
-         *     ``node_telemetry``. All surfaces — input payload, outputs, telemetry —
-         *     are masked for secrets.
+         *     ``outputs_json`` holds each node's pure return and ``node_telemetry`` holds
+         *     its exhaustive telemetry, exactly as stored. Telemetry-only nodes (e.g.
+         *     ``skipped`` recovery markers without an ``outputs_json`` entry) appear
+         *     under ``node_telemetry`` only. All surfaces — input payload, outputs,
+         *     telemetry — are masked for secrets.
          */
         get: operations["get_run_io_endpoint_api_v1_runs__run_id__io_get"];
         put?: never;
@@ -5069,7 +5065,7 @@ export interface paths {
          *     *password*, *key*, *credential*) in the output are masked with
          *     bullet characters.
          *
-         *     For P1+ (split) rows this returns the node's PURE return. When a node
+         *     For split rows this returns the node's PURE return. When a node
          *     has no return (skipped / recovered / failed-no-return) but exists in
          *     ``node_telemetry_json``, a DERIVED ``{status, summary}`` object is
          *     returned instead of a 404 — never the raw telemetry (no stdout / log
@@ -20871,6 +20867,8 @@ export interface components {
             } | null;
             /** Seam Coverage */
             seam_coverage?: components["schemas"]["SeamCoverageStatement"][] | null;
+            /** Legacy Agent Verdict */
+            legacy_agent_verdict?: string | null;
             /** Trigger Type */
             trigger_type?: string | null;
             /** Execution Origin */

@@ -553,3 +553,50 @@ class TestRotationAbortsOnCorruptSequence:
         assert exc.value.status_code == 500
         assert "sequence" in exc.value.detail.lower()
         rotate_mock.assert_not_awaited()
+
+
+class TestLocalContractNoShadowing:
+    """FAR-1912: the route-local arms reproduce the standard contract.
+
+    These routes are deliberately NOT wrapped in ``@handle_db_errors`` (a local
+    ``except Exception`` shadows the decorator, making it inert), so the
+    classification the shared backstop would apply must be pinned directly:
+    a session-contract violation is a 500 programming error, never a 503
+    "database temporarily unavailable" (FAR-1408/FAR-1464 class).
+    """
+
+    async def test_get_identity_session_contract_error_is_500_not_503(self) -> None:
+        from sqlalchemy.exc import InvalidRequestError
+
+        session = _mock_session()
+        with (
+            patch.object(
+                pa,
+                "get_or_create_instance_identity",
+                new=AsyncMock(side_effect=InvalidRequestError("session used outside a transaction")),
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await pa.get_identity(session, _current_user=None)
+
+        assert exc_info.value.status_code == 500
+        assert "session" in exc_info.value.detail.lower()
+        assert "temporarily unavailable" not in exc_info.value.detail.lower()
+
+    async def test_rotate_session_contract_error_is_500_not_503(self) -> None:
+        from sqlalchemy.exc import InvalidRequestError
+
+        session = _mock_session()
+        with (
+            patch.object(pa, "_check_rotation_rate_limit"),
+            patch.object(
+                pa,
+                "get_or_create_instance_identity",
+                new=AsyncMock(side_effect=InvalidRequestError("session used outside a transaction")),
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await pa.rotate_identity_secret(_rotate_req(), _request("10.9.9.99"), session, _current_user=None)
+
+        assert exc_info.value.status_code == 500
+        assert "temporarily unavailable" not in exc_info.value.detail.lower()
