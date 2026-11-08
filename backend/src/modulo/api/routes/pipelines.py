@@ -5824,6 +5824,31 @@ def _masked_snapshot_graph(graph_json: Any) -> Any:
     return masked
 
 
+def _sanitized_snapshot_graph(graph_json: Any) -> Any:
+    """Return ``graph_json`` with per-node credential fields STRIPPED entirely (FAR-2456).
+
+    For the historic (read-only) snapshot view, sensitive fields must not be
+    present at all — not even masked. This strips ``env_vars``,
+    ``context_files``, ``composite_parameter_values``, and ``parameter_overrides``
+    from every node. Non-dict payloads are returned unchanged.
+    """
+    if not isinstance(graph_json, dict):
+        return graph_json
+    sanitized = dict(graph_json)
+    nodes = graph_json.get("nodes")
+    if isinstance(nodes, list):
+        sanitized["nodes"] = [_strip_node_secrets(node) if isinstance(node, dict) else node for node in nodes]
+    return sanitized
+
+
+def _strip_node_secrets(node: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of *node* with all credential-bearing fields removed."""
+    stripped = dict(node)
+    for field in ("env_vars", "context_files", "composite_parameter_values", "parameter_overrides"):
+        stripped.pop(field, None)
+    return stripped
+
+
 def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
     return SnapshotDetailResponse(
         id=s.id,
@@ -5837,7 +5862,7 @@ def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
         created_kind=s.created_kind,
         draft=s.draft,
         channel=s.channel,
-        graph_json=_masked_snapshot_graph(s.graph_json),
+        graph_json=_sanitized_snapshot_graph(s.graph_json),
         connector_bindings_json=s.connector_bindings_json,
         schema_pins_json=s.schema_pins_json,
         prompt_pins_json=s.prompt_pins_json,

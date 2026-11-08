@@ -547,9 +547,61 @@ def test_snapshot_detail_masks_graph_nodes(client: TestClient) -> None:
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{snapshot_id}")
 
     assert resp.status_code == 200
-    env = resp.json()["graph_json"]["nodes"][0]["env_vars"]
-    assert env["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
-    assert env["APP_URL"] == "https://example.com"
+    node = resp.json()["graph_json"]["nodes"][0]
+    assert "env_vars" not in node
+    assert "context_files" not in node
+    assert "composite_parameter_values" not in node
+    assert "parameter_overrides" not in node
+
+
+def test_snapshot_detail_strips_credential_fields_entirely(client: TestClient) -> None:
+    """FAR-2456: historic snapshot detail strips credential fields entirely."""
+    snapshot_id = uuid.uuid4()
+    secret_node = {
+        "id": "n1",
+        "node_type": "agent",
+        "position": {"x": 0, "y": 0},
+        "env_vars": {"GITHUB_TOKEN": _GHP_SECRET},
+        "context_files": {"/tmp/creds.txt": f"token={_STRIPE_SECRET}"},
+        "composite_parameter_values": {"cfg": {"api_key": _STRIPE_SECRET}},
+        "parameter_overrides": {"nested": {"password": "hunter2-secret"}},
+    }
+    snapshot = SimpleNamespace(
+        id=snapshot_id,
+        pipeline_id=_PIPELINE_ID,
+        snapshot_version=1,
+        tag=None,
+        notes=None,
+        created_at=_NOW,
+        account_id=_USER_ID,
+        version_kind="edit",
+        created_kind="edit",
+        draft=False,
+        channel="none",
+        graph_json={"nodes": [secret_node], "edges": []},
+        connector_bindings_json=[],
+        schema_pins_json=[],
+        prompt_pins_json=[],
+        model_backend_pins_json=[],
+        default_autonomy_level="manual_approval",
+        max_autonomy_level=None,
+        run_context_defaults={},
+    )
+
+    with (
+        patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{snapshot_id}")
+
+    assert resp.status_code == 200
+    node = resp.json()["graph_json"]["nodes"][0]
+    assert "env_vars" not in node
+    assert "context_files" not in node
+    assert "composite_parameter_values" not in node
+    assert "parameter_overrides" not in node
+    assert node["position"] == {"x": 0, "y": 0}
 
 
 # ---------------------------------------------------------------------------
