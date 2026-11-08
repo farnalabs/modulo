@@ -169,7 +169,6 @@ class TestListConnectorInstances:
     async def test_uses_cursor_pagination_when_cursor_provided(self, mock_session: AsyncMock) -> None:
         # Import first, then patch
         from modulo.db.crud.connector_instance import list_connector_instances
-        from modulo.db.crud.pagination import CursorPaginator
 
         instances = [_make_connector_instance()]
         paginator_mock = AsyncMock()
@@ -180,7 +179,7 @@ class TestListConnectorInstances:
         cp_result.has_more = True
         paginator_mock.paginate = AsyncMock(return_value=cp_result)
 
-        with patch.object(CursorPaginator, "__new__", return_value=paginator_mock):
+        with patch("modulo.db.crud.connector_instance.CursorPaginator", return_value=paginator_mock):
             result = await list_connector_instances(
                 mock_session,
                 organisation_id=_ORG_ID,
@@ -197,7 +196,6 @@ class TestListConnectorInstances:
 
     async def test_cursor_pagination_applies_excluded_tiers(self, mock_session: AsyncMock) -> None:
         from modulo.db.crud.connector_instance import list_connector_instances
-        from modulo.db.crud.pagination import CursorPaginator
         from tests.unit.crud.helpers import compile_sql
 
         instances = [_make_connector_instance()]
@@ -209,7 +207,7 @@ class TestListConnectorInstances:
         cp_result.has_more = False
         paginator_mock.paginate = AsyncMock(return_value=cp_result)
 
-        with patch.object(CursorPaginator, "__new__", return_value=paginator_mock):
+        with patch("modulo.db.crud.connector_instance.CursorPaginator", return_value=paginator_mock):
             await list_connector_instances(
                 mock_session,
                 organisation_id=_ORG_ID,
@@ -224,7 +222,6 @@ class TestListConnectorInstances:
     async def test_cursor_pagination_applies_org_filter(self, mock_session: AsyncMock) -> None:
         """The cursor path must carry the org predicate into the paginated stmt."""
         from modulo.db.crud.connector_instance import list_connector_instances
-        from modulo.db.crud.pagination import CursorPaginator
         from tests.unit.crud.helpers import compile_sql
 
         instances = [_make_connector_instance()]
@@ -236,7 +233,7 @@ class TestListConnectorInstances:
         cp_result.has_more = False
         paginator_mock.paginate = AsyncMock(return_value=cp_result)
 
-        with patch.object(CursorPaginator, "__new__", return_value=paginator_mock):
+        with patch("modulo.db.crud.connector_instance.CursorPaginator", return_value=paginator_mock):
             await list_connector_instances(
                 mock_session,
                 organisation_id=_ORG_ID,
@@ -250,7 +247,6 @@ class TestListConnectorInstances:
     async def test_cursor_pagination_without_organisation_id(self, mock_session: AsyncMock) -> None:
         """With no org supplied the cursor path skips the org predicate but keeps the tier filter."""
         from modulo.db.crud.connector_instance import list_connector_instances
-        from modulo.db.crud.pagination import CursorPaginator
         from tests.unit.crud.helpers import compile_sql, where_column_names
 
         paginator_mock = AsyncMock()
@@ -261,7 +257,7 @@ class TestListConnectorInstances:
         cp_result.has_more = False
         paginator_mock.paginate = AsyncMock(return_value=cp_result)
 
-        with patch.object(CursorPaginator, "__new__", return_value=paginator_mock):
+        with patch("modulo.db.crud.connector_instance.CursorPaginator", return_value=paginator_mock):
             await list_connector_instances(mock_session, cursor="test-cursor")
 
         stmt = paginator_mock.paginate.await_args.args[1]
