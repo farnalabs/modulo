@@ -34,3 +34,26 @@ def test_ga_release_uses_product_title_while_tag_stays_machine_facing() -> None:
     assert 'gh release edit "$GA_TAG" --target "$MERGED_SHA" --title "$RELEASE_TITLE"' in promotion
     assert 'gh release create "$GA_TAG" --target "$MERGED_SHA" --title "$RELEASE_TITLE"' in promotion
     assert '--title "$GA_TAG"' not in promotion
+
+
+def test_rc_validation_runs_the_docker_acceptance_matrix_before_pen_test() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "rc-validate.yml").read_text(encoding="utf-8")
+    matrix_start = workflow.index("docker-upgrade-rollback:")
+    pen_test_start = workflow.index("pen-test:")
+    matrix = workflow[matrix_start:pen_test_start]
+
+    assert "needs: [clean-host-compose]" in matrix
+    assert "needs: [clean-host-compose, docker-upgrade-rollback]" in workflow[workflow.index("pen-test:") :]
+    assert "scripts/verify_compose_upgrade_rollback.py" in matrix
+    assert '--old-tag "$OLD_TAG"' in matrix
+    assert '--new-tag "$RC_TAG"' in matrix
+    assert "alpha-docker-upgrade-rollback-${{ github.run_id }}" in matrix
+    assert matrix_start < pen_test_start
+
+
+def test_rc_validation_refuses_to_claim_docker_matrix_without_previous_release() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "rc-validate.yml").read_text(encoding="utf-8")
+    matrix = workflow[workflow.index("docker-upgrade-rollback:") : workflow.index("pen-test:")]
+
+    assert "no previous published bundle-v* release exists" in matrix
+    assert "refusing to claim Docker upgrade/rollback coverage" in matrix

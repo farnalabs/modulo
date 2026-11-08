@@ -143,8 +143,15 @@ Linux bundle. The Docker leg is the companion
 extracted release compose asset and writes `metadata.json`, `commands.jsonl`,
 per-command stdout/stderr, and a final `RESULT` marker. Its failed-upgrade step
 must leave readiness unavailable before the old immutable image is started
-again. CI or an operator run must attach that evidence to the release record;
-a green build without the transcript is not a claim of rollback coverage.
+again.
+
+`rc-validate.yml` runs that Docker leg after the anonymous clean-host compose
+check and before the live pen test. It resolves the previous published
+`bundle-v*` release as the rollback target, refuses to claim coverage when no
+previous release exists, and uploads the evidence directory as the
+`alpha-docker-upgrade-rollback-*` workflow artifact. A green build without that
+transcript is not a claim of rollback coverage. The same matrix remains
+available locally with the command in `docs/upgrade-process.md`.
 
 The matrix is intentionally limited to Linux native and Docker. Windows is
 not covered by this acceptance claim, and macOS native validation is recorded

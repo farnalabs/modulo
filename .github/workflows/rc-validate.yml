@@ -189,14 +189,95 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
+  # Docker upgrade / failure / rollback acceptance matrix (FAR-2195)
+  # ---------------------------------------------------------------------------
+  docker-upgrade-rollback:
+    name: Docker upgrade and rollback acceptance matrix
+    needs: [clean-host-compose]
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      RC_TAG: ${{ inputs.rc_tag }}
+      PORT: "18081"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.rc_tag }}
+          persist-credentials: false
+
+      - name: Set up Python for the release harness
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+
+      - name: Package the exact RC compose asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RC_TAG#v}"
+          version="${version%-rc*}"
+          uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 \
+            python scripts/package_compose_release.py \
+            --version "$version" \
+            --tag "$RC_TAG" \
+            --output-dir "$RUNNER_TEMP/compose-matrix"
+          tar -xzf "$RUNNER_TEMP/compose-matrix/modulo-${version}-compose.tar.gz" \
+            -C "$RUNNER_TEMP/compose-matrix"
+          (cd "$RUNNER_TEMP/compose-matrix" && sha256sum --check SHA256SUMS)
+          "$RUNNER_TEMP/compose-matrix/init-env.sh"
+
+      - name: Resolve the previous published immutable bundle tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate --slurp > "$RUNNER_TEMP/release-pages.json"
+          published_tags="$(python3 scripts/validate_release_tag.py published-tags \
+            --release-json "$RUNNER_TEMP/release-pages.json")"
+          old_tag="${published_tags##*$'\n'}"
+          if [ -z "$old_tag" ]; then
+            echo "::error::no previous published bundle-v* release exists; refusing to claim Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          echo "OLD_TAG=$old_tag" >> "$GITHUB_ENV"
+          echo "Using previous immutable bundle tag $old_tag as the rollback target."
+
+      - name: Run the Docker upgrade / failure / rollback matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_compose_upgrade_rollback.py \
+            --compose-file "$RUNNER_TEMP/compose-matrix/docker-compose.prod.yml" \
+            --env-file "$RUNNER_TEMP/compose-matrix/.env" \
+            --old-tag "$OLD_TAG" \
+            --new-tag "$RC_TAG" \
+            --project-name "rc-matrix-${GITHUB_RUN_ID}" \
+            --port "$PORT" \
+            --evidence-dir "$RUNNER_TEMP/compose-matrix-evidence"
+
+      - name: Upload Docker acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: alpha-docker-upgrade-rollback-${{ github.run_id }}
+          path: ${{ runner.temp }}/compose-matrix-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
   # Read-only pen test against the live RC (the pre-existing gate)
   # ---------------------------------------------------------------------------
   pen-test:
     name: Schemathesis fuzz vs live RC
-    # FAR-2345: the validation marker is pushed by this job, so gating it on the
-    # clean-host deployment means a release is marked validated only when the
-    # downloadable artefacts actually come up for a self-hoster.
-    needs: [clean-host-compose]
+    # FAR-2195 / FAR-2345: the validation marker is pushed by this job, so
+    # gating it on both acceptance legs means a release is marked validated only
+    # when the downloadable artefacts come up for a self-hoster AND the Docker
+    # upgrade/failure/rollback matrix passes.
+    needs: [clean-host-compose, docker-upgrade-rollback]
     runs-on: ubicloud-standard-2
     timeout-minutes: 60
     permissions:

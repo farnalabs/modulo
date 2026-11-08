@@ -154,7 +154,11 @@ python3 scripts/verify_compose_upgrade_rollback.py \
 The harness records host/OS/Python versions, every command and exit code,
 stdout/stderr, image tags, readiness assertions, and final `RESULT`. It owns a
 unique Compose project name and always runs `down --volumes --remove-orphans`
-in a `finally` block. The matrix is:
+in a `finally` block. The release workflow runs this same command against the
+extracted RC compose asset after the clean-host check, using the previous
+published `bundle-v*` release as `--old-tag`; it uploads the evidence directory
+as a workflow artifact and fails closed when no previous release exists. The
+matrix is:
 
 1. clean install with the old immutable image tag;
 2. upgrade to the new immutable image tag and readiness check;
