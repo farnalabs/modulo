@@ -575,6 +575,152 @@ class TestUpdateModelBackend(AuthContext):
         assert result["field"] == "name"
 
 
+class TestUpdateModelBackendErrorPaths(AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    async def test_returns_auth_error_on_revoked_token(self, mock_validate: AsyncMock) -> None:
+        result = await update_model_backend(model_backend_id=str(uuid.uuid4()), name="renamed")
+
+        assert result["error"] == "auth_expired"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_insufficient_scope(self, mock_validate: AsyncMock) -> None:
+        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+
+        with patch(
+            "modulo.api.mcp_server.check_tool_scope",
+            side_effect=MCPAuthorizationError("Insufficient scope"),
+        ):
+            result = await update_model_backend(model_backend_id=str(uuid.uuid4()), name="renamed")
+
+        assert result["error"] == "insufficient_scope"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_rejects_fallback_and_clear_together(self, mock_validate: AsyncMock) -> None:
+        result = await update_model_backend(
+            model_backend_id=str(uuid.uuid4()),
+            fallback_backend_ids=[str(uuid.uuid4())],
+            clear_fallback_chain=True,
+        )
+
+        assert result["error"] == "validation_error"
+        assert result["field"] == "fallback_backend_ids"
+        assert "not both" in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_rejects_non_string_fallback_ids(self, mock_validate: AsyncMock) -> None:
+        result = await update_model_backend(
+            model_backend_id=str(uuid.uuid4()),
+            fallback_backend_ids=[42],
+        )
+
+        assert result["error"] == "validation_error"
+        assert result["field"] == "fallback_backend_ids"
+        assert "must be strings" in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.model_backend.get_model_backend")
+    async def test_missing_backend_returns_not_found(
+        self, mock_get: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        mock_get.return_value = None
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        result = await update_model_backend(model_backend_id=str(uuid.uuid4()), name="renamed")
+
+        assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.model_backend.get_model_backend")
+    async def test_cross_org_backend_reads_as_not_found(
+        self, mock_get: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        mock_get.return_value = MagicMock(id=uuid.uuid4(), organisation_id=uuid.uuid4(), owner_team_id=None)
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        result = await update_model_backend(model_backend_id=str(uuid.uuid4()), name="renamed")
+
+        assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.model_backend.update_model_backend")
+    @patch("modulo.db.crud.model_backend.get_model_backend")
+    async def test_vanished_backend_after_validation_returns_not_found(
+        self, mock_get: AsyncMock, mock_update: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        backend = MagicMock(id=uuid.uuid4(), organisation_id=ORG_ID, owner_team_id=None)
+        mock_get.return_value = backend
+        mock_update.return_value = None
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        result = await update_model_backend(model_backend_id=str(backend.id), name="renamed")
+
+        assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.model_backend.get_model_backend")
+    async def test_migration_required_on_programming_error(
+        self, mock_get: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        mock_get.side_effect = ProgrammingError("SELECT", {}, Exception("no table"))
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        result = await update_model_backend(model_backend_id=str(uuid.uuid4()), name="renamed")
+
+        assert result["error"] == "migration_required"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.model_backend.get_model_backend")
+    async def test_unexpected_error_is_mapped_to_server_error(
+        self, mock_get: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        mock_get.side_effect = RuntimeError("boom")
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        result = await update_model_backend(model_backend_id=str(uuid.uuid4()), name="renamed")
+
+        assert result["error"] == "server_error"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.model_backend.update_model_backend")
+    @patch("modulo.db.crud.model_backend.get_model_backend")
+    async def test_team_visibility_carries_existing_owner(
+        self, mock_get: AsyncMock, mock_update: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
+        owner_team_id = uuid.uuid4()
+        backend = MagicMock(
+            id=uuid.uuid4(),
+            organisation_id=ORG_ID,
+            name="team-backend",
+            display_name="Team backend",
+            provider="openai",
+            model_id="gpt-4o",
+            credentials_ciphertext=b"secret",
+            default_params={},
+            visibility="team",
+            owner_team_id=owner_team_id,
+            tier="native",
+            status="active",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            fallback_backend_ids=[],
+        )
+        mock_get.return_value = backend
+        mock_update.return_value = backend
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        result = await update_model_backend(model_backend_id=str(backend.id), visibility="team", name="renamed")
+
+        assert result["visibility"] == "team"
+        assert result["owner_team_id"] == str(owner_team_id)
+        assert mock_update.call_args.args[2]["visibility"] == "team"
+
+
 # ---------------------------------------------------------------------------
 # infer_schema
 # ---------------------------------------------------------------------------

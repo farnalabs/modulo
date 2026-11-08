@@ -873,25 +873,56 @@ async def _validate_fallback_ids(
     # every backend in the loop retry forever instead of reaching a terminal
     # provider failure.
     rows = list((await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars())
-    graph: dict[uuid.UUID, list[uuid.UUID]] = {}
-    for row in rows:
-        children: list[uuid.UUID] = []
-        for fid in row.fallback_backend_ids or []:
-            try:
-                children.append(uuid.UUID(str(fid)))
-            except (ValueError, TypeError):
-                # ``fallback_backend_ids`` is a legacy JSON column, so a row
-                # can predate UUID validation. A malformed entry cannot form a
-                # cycle, so skip it instead of 500ing the whole validation.
-                logger.warning(
-                    "Ignoring malformed fallback_backend_id %r on model backend %s",
-                    fid,
-                    row.id,
-                )
-        graph[row.id] = children
+    if _fallback_graph_has_cycle(rows, backend_id, unique_ids):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=[
+                {
+                    "type": "value_error",
+                    "loc": ["body", "fallback_backend_ids"],
+                    "msg": "Fallback backend references cannot contain a cycle",
+                }
+            ],
+        )
+
+
+def _parse_stored_fallback_ids(row: ModelBackend) -> list[uuid.UUID]:
+    """Coerce a stored JSON fallback chain to UUIDs, skipping malformed legacy entries."""
+    children: list[uuid.UUID] = []
+    for fid in row.fallback_backend_ids or []:
+        try:
+            children.append(uuid.UUID(str(fid)))
+        except (ValueError, TypeError):
+            # ``fallback_backend_ids`` is a legacy JSON column, so a row can
+            # predate UUID validation. A malformed entry cannot form a cycle,
+            # so skip it instead of 500ing the whole validation.
+            logger.warning(
+                "Ignoring malformed fallback_backend_id %r on model backend %s",
+                fid,
+                row.id,
+            )
+    return children
+
+
+def _build_fallback_graph(
+    rows: list[ModelBackend],
+    backend_id: uuid.UUID | None,
+    unique_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, list[uuid.UUID]]:
+    """Build the org-wide fallback graph, applying the proposed update on top."""
+    graph = {row.id: _parse_stored_fallback_ids(row) for row in rows}
     if backend_id is not None:
         graph[backend_id] = unique_ids
+    return graph
 
+
+def _fallback_graph_has_cycle(
+    rows: list[ModelBackend],
+    backend_id: uuid.UUID | None,
+    unique_ids: list[uuid.UUID],
+) -> bool:
+    """Return True when the proposed fallback graph contains a cycle."""
+    graph = _build_fallback_graph(rows, backend_id, unique_ids)
     visiting: set[uuid.UUID] = set()
     visited: set[uuid.UUID] = set()
 
@@ -907,17 +938,7 @@ async def _validate_fallback_ids(
         visited.add(node_id)
         return False
 
-    if any(visit(node_id) for node_id in graph):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=[
-                {
-                    "type": "value_error",
-                    "loc": ["body", "fallback_backend_ids"],
-                    "msg": "Fallback backend references cannot contain a cycle",
-                }
-            ],
-        )
+    return any(visit(node_id) for node_id in graph)
 
 
 def _validate_provider(provider: str) -> None:

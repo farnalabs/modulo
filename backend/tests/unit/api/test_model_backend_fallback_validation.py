@@ -85,3 +85,28 @@ async def test_malformed_legacy_fallback_value_does_not_500() -> None:
 
     assert exc_info.value.status_code == 422
     assert "cannot contain a cycle" in exc_info.value.detail[0]["msg"]
+
+
+async def test_clean_chain_without_backend_id_is_accepted() -> None:
+    """Create path: no self-reference possible, so backend_id is None."""
+    a, b = uuid.uuid4(), uuid.uuid4()
+    session = _session(found_ids=[a, b], rows=[_row(a, []), _row(b, [str(a)])])
+
+    assert (await _validate_fallback_ids(session, ORG_ID, [a, b])) is None
+
+
+async def test_diamond_chain_is_not_a_cycle() -> None:
+    """A shared downstream node is re-visited (the ``visited`` short-circuit),
+    and a diamond is a legitimate DAG, not a cycle."""
+    a, b, c, d = uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    session = _session(
+        found_ids=[b, c],
+        rows=[
+            _row(a, []),
+            _row(b, [str(d)]),
+            _row(c, [str(d)]),
+            _row(d, []),
+        ],
+    )
+
+    assert (await _validate_fallback_ids(session, ORG_ID, [b, c], backend_id=a)) is None
