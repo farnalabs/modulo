@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { layoutNodes, type GraphEdgeInput, type GraphNodeInput } from '../utils/graph-layout'
+import {
+  layoutNodes,
+  layoutNodesIncremental,
+  type GraphEdgeInput,
+  type GraphNodeInput,
+} from '../utils/graph-layout'
 import { PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD } from '../constants/canvas'
 
 function byId<T extends { id: string }>(nodes: T[]): Record<string, T> {
@@ -266,5 +271,56 @@ describe('layoutNodes', () => {
     expect(new Set(first.map((node) => `${node.position.x}:${node.position.y}`)).size).toBe(
       PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD,
     )
+  })
+})
+
+describe('layoutNodesIncremental', () => {
+  it('preserves manual offsets from the previous generated layout', () => {
+    const nodes: GraphNodeInput[] = [
+      { id: 'a', position: { x: 50, y: 25 } },
+      { id: 'b', position: { x: 240, y: 0 } },
+    ]
+    const edges: GraphEdgeInput[] = [{ source: 'a', target: 'b' }]
+    const previousGenerated = {
+      a: { x: 0, y: 0 },
+      b: { x: 240, y: 0 },
+    }
+
+    const result = layoutNodesIncremental(nodes, edges, previousGenerated, { a: 'user', b: 'generated' })
+    const byNode = byId(result)
+
+    expect(byNode.a.position).toEqual({ x: 50, y: 25 })
+    expect(byNode.b.position).toEqual({ x: 240, y: 0 })
+  })
+
+  it('recomputes generated nodes while preserving unchanged user positions', () => {
+    const nodes: GraphNodeInput[] = [
+      { id: 'a', position: { x: 30, y: 10 } },
+      { id: 'b', position: { x: 240, y: 0 } },
+      { id: 'c', position: { x: 480, y: 0 } },
+    ]
+    const edges: GraphEdgeInput[] = [
+      { source: 'a', target: 'b' },
+      { source: 'b', target: 'c' },
+    ]
+    const previousGenerated = {
+      a: { x: 0, y: 0 },
+      b: { x: 240, y: 0 },
+      c: { x: 480, y: 0 },
+    }
+
+    const result = layoutNodesIncremental(nodes, edges, previousGenerated, { a: 'user', b: 'generated', c: 'generated' })
+    const byNode = byId(result)
+
+    expect(byNode.a.position).toEqual({ x: 30, y: 10 })
+    expect(byNode.b.position).toEqual({ x: 240, y: 0 })
+    expect(byNode.c.position).toEqual({ x: 480, y: 0 })
+  })
+
+  it('falls back to the fresh layout for user nodes without a previous generated position', () => {
+    const nodes: GraphNodeInput[] = [{ id: 'a', position: { x: 120, y: 80 } }]
+    const result = layoutNodesIncremental(nodes, [], {}, { a: 'user' })
+
+    expect(result[0].position).toEqual({ x: 0, y: 0 })
   })
 })
