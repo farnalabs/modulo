@@ -103,6 +103,10 @@ _GRAPH_EDGE_FIELDS = frozenset(
         "default_target",
         "max_iterations",
         "routing_label",
+        # Per-edge retry policy and compensation target are validated by
+        # graph_validator and consumed by the retry/compensation wrapper.
+        "retry",
+        "on_failure_target",
     }
 )
 _GRAPH_NODE_FIELDS = frozenset(
@@ -187,12 +191,27 @@ _GRAPH_NODE_FIELDS = frozenset(
         "input_schema_json",
         "output_schema_version",
         "loop_intercept",
+        # Per-node retry policy is validated by graph_validator and read by the
+        # retry/compensation wrapper at compile time.
+        "retry",
+        # Composite sub-nodes and older snapshots may carry the bare ``prompt``
+        # alias; the composite expander injects parameters into it.
+        "prompt",
     }
 )
 
 
 def _reject_unknown_graph_fields(graph_json: dict[str, Any]) -> None:
-    """Reject fields outside the canonical graph node/edge contract."""
+    """Reject fields outside the canonical graph node/edge contract.
+
+    Underscore-prefixed keys are the engine's internal namespace, not
+    user-authored graph fields: snapshot materialisation bakes
+    ``_resolved_model`` / ``_model_origin`` / ``_resolved_parameters`` and the
+    composite expander stamps ``_composite_parent_id`` / ``_composite_index`` /
+    ``_composite_edges`` / ``_input_mapping`` / ``_output_mapping`` onto nodes
+    BEFORE ``build_graph_from_json`` compiles. Exempting them keeps composite
+    and snapshot pipelines compiling while still rejecting typo'd public fields.
+    """
     unknown_top = set(graph_json) - _GRAPH_TOP_LEVEL_FIELDS
     if unknown_top:
         raise ValueError(f"graph_json contains unknown fields: {sorted(unknown_top)}")
@@ -205,7 +224,7 @@ def _reject_unknown_graph_fields(graph_json: dict[str, Any]) -> None:
         for index, entry in enumerate(entries):
             if not isinstance(entry, dict):
                 raise ValueError(f"graph_json {kind} at index {index} must be an object")
-            unknown = set(entry) - allowed
+            unknown = {key for key in entry if not key.startswith("_")} - allowed
             if unknown:
                 identifier = entry.get("id", index)
                 raise ValueError(f"graph_json {kind} {identifier!r} contains unknown fields: {sorted(unknown)}")

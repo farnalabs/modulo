@@ -41,6 +41,19 @@ def test_graph_allowlist_accepts_compiler_and_persisted_fields():
                 "input_schema_json": {"type": "object"},
                 "output_schema_version": 1,
                 "loop_intercept": {"max_iterations": 3},
+                "prompt": "Composite sub-node prompt {{parameter.name}}",
+                "retry": {"max_attempts": 2, "on": ["error"]},
+                # Engine-internal namespace: stamped by the composite expander
+                # and snapshot materialisation before compile. Must survive the
+                # allowlist so composite pipelines keep compiling.
+                "_composite_parent_id": "composite-1",
+                "_composite_index": 0,
+                "_composite_edges": [],
+                "_input_mapping": {"input.name": "params.name"},
+                "_output_mapping": {"output": "result"},
+                "_resolved_model": "claude-sonnet-4",
+                "_model_origin": "registry",
+                "_resolved_parameters": {"temperature": 0.2},
             }
         ],
         "edges": [
@@ -49,6 +62,8 @@ def test_graph_allowlist_accepts_compiler_and_persisted_fields():
                 "default_target": "done",
                 "max_iterations": 3,
                 "routing_label": "retry",
+                "retry": {"max_attempts": 2, "on": ["error"]},
+                "on_failure_target": "node-2",
             }
         ],
     }
@@ -64,9 +79,9 @@ def test_graph_allowlist_rejects_unknown_fields():
 def test_build_graph_from_json_accepts_runtime_consumed_node_fields():
     """The compile path must accept node fields node_runner still reads from
     imported/historical snapshots (prompt_template, model_backend_id,
-    manual_prompt, routing_prompt). This exercises the real
-    build_graph_from_json -> _reject_unknown_graph_fields seam rather than
-    calling the validator directly."""
+    manual_prompt, routing_prompt) and the composite expander's internal tags.
+    This exercises the real build_graph_from_json -> _reject_unknown_graph_fields
+    seam rather than calling the validator directly."""
     graph = {
         "nodes": [
             {
@@ -76,6 +91,9 @@ def test_build_graph_from_json_accepts_runtime_consumed_node_fields():
                 "prompt_template": "Hello {{ input.name }}",
                 "routing_prompt": "Choose a route.",
                 "manual_prompt": "Enter a value.",
+                "_composite_parent_id": "composite-1",
+                "_composite_index": 0,
+                "_composite_edges": [],
             }
         ],
         "edges": [],

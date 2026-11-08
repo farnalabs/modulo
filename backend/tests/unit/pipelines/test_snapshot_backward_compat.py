@@ -6,6 +6,8 @@ still compile and execute correctly after adding node_type support.
 
 from typing import Any
 
+import pytest
+
 from modulo.core.pipeline_engine.graph_cache import _CACHE, build_graph_from_json
 
 
@@ -155,20 +157,26 @@ async def test_old_snapshot_node_ids_still_work():
 
 
 # ---------------------------------------------------------------------------
-# Backward compatibility: old snapshots with extra fields (future-proofing)
+# Canonical contract: old snapshots with unknown fields (FAR-2457)
 # ---------------------------------------------------------------------------
 
 
 def test_old_snapshot_with_unexpected_fields():
-    """Old snapshots might have unexpected fields that should be ignored."""
+    """A genuinely unknown field is rejected by the canonical graph contract.
+
+    Historical snapshots only carry fields that were valid when written, so
+    every *real* legacy field is in the allowlist (pinned by the accept fixture
+    in ``test_graph_cache.py``). A truly unknown key now fails closed instead of
+    being silently ignored — the behaviour this test used to pin.
+    """
     graph: dict[str, Any] = {
         "nodes": [
-            {"id": "n1", "role": None, "legacy_field": "should-be-ignored"},
+            {"id": "n1", "role": None, "legacy_field": "unknown"},
         ],
         "edges": [],
     }
-    compiled = build_graph_from_json(graph)
-    assert compiled is not None
+    with pytest.raises(ValueError, match="unknown fields"):
+        build_graph_from_json(graph)
 
 
 async def test_old_snapshot_role_field_still_works():
