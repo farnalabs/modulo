@@ -232,6 +232,37 @@ jobs:
           (cd "$RUNNER_TEMP/compose-matrix" && sha256sum --check SHA256SUMS)
           "$RUNNER_TEMP/compose-matrix/init-env.sh"
 
+
+      - name: Render matrix compose image from the phase TAG
+        shell: bash
+        env:
+          MATRIX_COMPOSE_FILE: ${{ runner.temp }}/compose-matrix/docker-compose.prod.yml
+        run: |
+          set -euo pipefail
+          # The packaged compose asset is intentionally hard-pinned to RC_TAG.
+          # Keep that verified artefact intact, but render the working matrix
+          # copy to use the TAG environment variable that each phase supplies.
+          # Without this substitution every phase silently exercises RC_TAG.
+          uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          compose_path = Path(os.environ["MATRIX_COMPOSE_FILE"])
+          text = compose_path.read_text(encoding="utf-8")
+          replacement = "${TAG:?TAG is required - set the image tag for this matrix phase}"
+          rendered, count = re.subn(
+              r"(?m)^(\s*image:\s*ghcr\.io/farnalabs/modulo:)[^\r\n]+$",
+              rf"\1{replacement}",
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f"expected exactly one modulo image to render, found {count}")
+          compose_path.write_text(rendered, encoding="utf-8")
+          print(f"Rendered matrix compose image selector in {compose_path}")
+          PY
+
       - name: Resolve the previous published immutable bundle tag
         shell: bash
         env:

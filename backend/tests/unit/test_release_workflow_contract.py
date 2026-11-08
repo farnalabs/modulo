@@ -1,12 +1,14 @@
 """Contract checks for the unified GitHub Release publication paths."""
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
@@ -25,6 +27,20 @@ def _release_validator() -> Any:
 
 def _release_workflow_text() -> str:
     return RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _render_matrix_compose_image(compose_text: str, tag: str) -> str:
+    rendered, count = re.subn(
+        r"(?m)^(\s*image:\s*ghcr\.io/farnalabs/modulo:)[^\r\n]+$",
+        rf"\1{tag}",
+        compose_text,
+        count=1,
+    )
+    if count != 1:
+        raise AssertionError(f"expected one modulo image selector, found {count}")
+    compose = yaml.safe_load(rendered)
+
+    return compose["services"]["modulo"]["image"]
 
 
 def test_bundle_release_uses_product_title_without_changing_bundle_identity() -> None:
@@ -65,7 +81,36 @@ def test_rc_validation_runs_the_docker_acceptance_matrix_before_pen_test() -> No
     assert '--old-tag "$OLD_TAG"' in matrix
     assert '--new-tag "$RC_TAG"' in matrix
     assert "alpha-docker-upgrade-rollback-${{ github.run_id }}" in matrix
+    assert 'replacement = "${TAG:?TAG is required - set the image tag for this matrix phase}"' in matrix
+    assert "Rendered matrix compose image selector" in matrix
+    assert "packaged compose asset is intentionally hard-pinned to RC_TAG" in matrix
     assert matrix_start < pen_test_start
+
+
+def test_rc_validation_matrix_selects_the_image_for_each_phase() -> None:
+    compose_text = """
+services:
+  modulo:
+    image: ghcr.io/farnalabs/modulo:v1.1.0-rc1
+"""
+    phases = {
+        "clean-install-old": "v1.0.0",
+        "upgrade-new": "v1.1.0-rc1",
+        "failed-upgrade": "v1.1.0-rc1",
+        "rollback-old": "v1.0.0",
+    }
+
+    rendered_images = {phase: _render_matrix_compose_image(compose_text, tag) for phase, tag in phases.items()}
+
+    assert rendered_images == {
+        "clean-install-old": "ghcr.io/farnalabs/modulo:v1.0.0",
+        "upgrade-new": "ghcr.io/farnalabs/modulo:v1.1.0-rc1",
+        "failed-upgrade": "ghcr.io/farnalabs/modulo:v1.1.0-rc1",
+        "rollback-old": "ghcr.io/farnalabs/modulo:v1.0.0",
+    }
+    assert rendered_images["clean-install-old"] == rendered_images["rollback-old"]
+    assert rendered_images["upgrade-new"] == rendered_images["failed-upgrade"]
+    assert rendered_images["clean-install-old"] != rendered_images["upgrade-new"]
 
 
 def test_rc_validation_refuses_to_claim_docker_matrix_without_previous_release() -> None:
