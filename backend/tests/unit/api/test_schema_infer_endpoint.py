@@ -18,6 +18,7 @@ from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _CONNECTOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 
 
@@ -62,8 +63,8 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-@pytest.fixture
-def client() -> Generator[TestClient, None, None]:
+def _install_authenticated_client(org_role: str) -> Generator[TestClient, None, None]:
+    """Build a TestClient whose principal carries ``org_role``."""
     mock_session = _make_mock_session()
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -75,14 +76,25 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
-        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
-        org_role="admin",
+        account_id=_ACCOUNT_ID,
+        org_role=org_role,
     )
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client() -> Generator[TestClient, None, None]:
+    yield from _install_authenticated_client("admin")
+
+
+@pytest.fixture
+def viewer_client() -> Generator[TestClient, None, None]:
+    """A viewer (below the ``schema.infer`` operator floor)."""
+    yield from _install_authenticated_client("viewer")
 
 
 @pytest.fixture
@@ -630,15 +642,41 @@ def test_infer_schema_defaults_filters_and_limit(client: TestClient) -> None:
     assert resp.json()["sample_count"] == 1
 
 
-def test_infer_schema_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
-    resp = unauth_client.post(
-        "/api/v1/schemas/infer",
-        json={
-            "connector_instance_id": str(_CONNECTOR_ID),
-            "sample_query": {"resource": "issues"},
-        },
-    )
-    assert resp.status_code in (401, 403)
+def test_infer_schema_unauthenticated_returns_401(unauth_client: TestClient) -> None:
+    """No credentials on a write/permission-gated route is an authentication
+    challenge (401), not a policy denial. The route must reject before reading
+    any connector row."""
+    with patch("modulo.api.routes.schemas.get_connector_instance", new_callable=AsyncMock) as mock_get:
+        resp = unauth_client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues"},
+            },
+        )
+    assert resp.status_code == 401, resp.text
+    mock_get.assert_not_awaited()
+
+
+def test_infer_schema_viewer_is_forbidden(viewer_client: TestClient) -> None:
+    """``schema.infer`` resolves to the operator role; a viewer is denied 403
+    before any connector or model-backend read happens."""
+    with (
+        patch("modulo.api.routes.schemas.get_connector_instance", new_callable=AsyncMock) as mock_get,
+        patch("modulo.api.routes.schemas.list_model_backends", new_callable=AsyncMock) as mock_backends,
+    ):
+        resp = viewer_client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues"},
+            },
+        )
+
+    assert resp.status_code == 403, resp.text
+    assert "schema.infer" in resp.json()["detail"]
+    mock_get.assert_not_awaited()
+    mock_backends.assert_not_awaited()
 
 
 def test_infer_schema_emits_audit_event_with_tool_source_and_model(client: TestClient) -> None:
@@ -853,3 +891,120 @@ def test_infer_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
             },
         )
     assert resp.status_code == 503
+
+
+@pytest.mark.parametrize("limit", [0, 201])
+def test_infer_schema_sample_limit_outside_bounds_returns_422(client: TestClient, limit: int) -> None:
+    """The sample window is bounded 1..200 (the default is 200) — an out-of-range
+    limit is rejected by request validation before any connector read."""
+    with patch("modulo.api.routes.schemas.get_connector_instance", new_callable=AsyncMock) as mock_get:
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues", "limit": limit},
+            },
+        )
+
+    assert resp.status_code == 422, resp.text
+    mock_get.assert_not_awaited()
+
+
+def test_infer_schema_scopes_reads_to_the_principal_org(client: TestClient) -> None:
+    """The connector read runs under the caller's org + user RLS context.
+
+    ``get_connector_instance`` is org-filtered through RLS, so the context must
+    be set inside the same transaction BEFORE the connector is looked up —
+    otherwise a cross-org connector id could resolve (or an org-scoped row read
+    could fail closed as a 503). The subsequent sampling read re-asserts the
+    connector's org (transaction-local ``set_config`` does not survive the
+    loader's commit)."""
+    ci = _make_mock_connector_instance()
+    ci.organisation_id = _ORG_ID
+    mb = _make_mock_model_backend()
+    page_result = MagicMock(items=[mb], total=1, page=1, page_size=1)
+    backend_id = uuid.uuid4()
+    events: list[tuple[str, object]] = []
+
+    async def spy_org(session: object, org_id: object) -> None:
+        events.append(("org", org_id))
+
+    async def spy_user(session: object, account_id: object, role: object) -> None:
+        events.append(("user", account_id, role))
+
+    async def spy_connector(session: object, connector_id: object) -> object:
+        events.append(("connector", connector_id))
+        return ci
+
+    with (
+        patch("modulo.api.routes.schemas.get_connector_instance", side_effect=spy_connector),
+        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.schemas.set_rls_org", side_effect=spy_org),
+        patch("modulo.api.routes.schemas.set_rls_user_context", side_effect=spy_user),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=[{"id": "1"}]),
+        patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
+        patch("modulo.api.routes.schemas.SchemaInferenceService.infer", return_value={"type": "object"}),
+        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
+        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues", "limit": 5},
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    connector_index = events.index(("connector", _CONNECTOR_ID))
+    assert ("org", _ORG_ID) in events[:connector_index], events
+    assert ("user", _ACCOUNT_ID, "admin") in events[:connector_index], events
+
+
+def test_infer_schema_empty_sample_set_returns_empty_draft(client: TestClient) -> None:
+    """A connector that yields zero records still produces a valid (empty) draft:
+    200 with ``sample_count`` 0 and no rare fields, never a crash or a bogus
+    field list. The draft is the connector's shape, so no records means the LLM
+    has nothing to infer properties from."""
+    ci = _make_mock_connector_instance()
+    mb = _make_mock_model_backend()
+    page_result = MagicMock(items=[mb], total=1, page=1, page_size=1)
+    backend_id = uuid.uuid4()
+    empty_definition = {"type": "object", "properties": {}}
+
+    with (
+        patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
+        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.set_rls_user_context"),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=[]),
+        patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
+        patch("modulo.api.routes.schemas.SchemaInferenceService.infer", return_value=empty_definition),
+        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
+        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues"},
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["definition_json"] == empty_definition
+    assert body["sample_count"] == 0
+    assert not body["rare_fields"]

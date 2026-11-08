@@ -29,6 +29,32 @@ _CODE_OBSERVABILITY_MANAGE = "observability.manage"
 
 _CODE_OBSERVABILITY_UPDATE_OBSERVABILITY_SETTINGS = "observability.update_observability_settings"
 
+# ── Error-backstop decision registry (FAR-1912) ─────────────────────────────
+# Per-route decision for every route on this router that reaches the database.
+# Enforced by tests/unit/api/test_db_backstop_decisions.py: a DB-reaching route
+# missing from this map (or a decision outside the vocabulary) fails the test.
+#
+#   backstop      — wraps @handle_db_errors; an escaping ProgrammingError -> 501,
+#                   SQLAlchemyError -> 503, Exception -> 500.
+#   local_contract— hand-written arms reproduce the standard contract in the
+#                   documented order (ProgrammingError -> 501, session-contract
+#                   guard, SQLAlchemyError -> 503, TimeoutError -> 504,
+#                   Exception -> 500). NOT wrapped: the local ``except
+#                   Exception`` shadows a decorator, making it inert.
+#   degraded_read — DELIBERATE deviation: this is a read surface whose contract
+#                   is to serve the last-good cache (or defaults) when the DB is
+#                   unreachable, so a transient outage must NOT become a 503.
+#                   A session-contract violation (`InvalidRequestError`) is NOT
+#                   an outage and is surfaced as 500 instead of being silently
+#                   degraded (FAR-1408/FAR-1464 class).
+#   no_db         — never reaches the database.
+_DB_BACKSTOP_DECISION: dict[str, str] = {
+    "get_observability_settings": "degraded_read",
+    "update_observability_settings": "local_contract",
+    "test_otel_connection": "no_db",
+    "get_export_preview": "degraded_read",
+}
+
 
 _log = logging.getLogger(__name__)
 
@@ -145,6 +171,12 @@ def _build_degraded_response(org_id: str) -> OtelSettingsResponse:
     return _config_to_response(merged)
 
 
+# FAR-1912 decision — ``degraded_read``: deliberately NOT wrapped in
+# @handle_db_errors. A transient DB failure answers 200 from the last-good cache
+# (the settings page must not break because the DB blipped), which is why this
+# route deviates from the backstop. A session-contract violation is NOT an
+# outage, so it is surfaced as 500 by the shared classifier instead of hiding
+# behind the cache. Recorded in ``_DB_BACKSTOP_DECISION`` above.
 @router.get("", dependencies=[require_feature("observability")])
 async def get_observability_settings(
     session: AsyncSession = Depends(get_db_session),
@@ -166,7 +198,8 @@ async def get_observability_settings(
             "observability.get.timeout",
             extra={"org_id": str(principal.organisation_id)},
         )
-    except Exception:
+    except Exception as exc:
+        raise_session_contract_error(exc, "observability.get_observability_settings")
         _log.exception(
             "observability.get.failed",
             extra={"org_id": str(principal.organisation_id)},
@@ -332,6 +365,11 @@ async def test_otel_connection(
         await client.aclose()
 
 
+# FAR-1912 decision — ``degraded_read`` (same posture as the GET above): a
+# preview is a read-only convenience surface and must still render from
+# cache/defaults when the DB is unreachable. A session-contract violation is
+# surfaced as 500, never silently degraded. Recorded in
+# ``_DB_BACKSTOP_DECISION`` above.
 @router.get("/preview", dependencies=[require_feature("observability")])
 async def get_export_preview(
     session: AsyncSession = Depends(get_db_session),
@@ -354,7 +392,8 @@ async def get_export_preview(
         )
         cached = _cached_config(str(principal.organisation_id))
         merged = cached if cached is not None else dict(_DEFAULT_OTEL_CONFIG)
-    except Exception:
+    except Exception as exc:
+        raise_session_contract_error(exc, "observability.get_export_preview")
         _log.exception(
             "observability.preview.failed",
             extra={"org_id": str(principal.organisation_id)},

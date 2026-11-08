@@ -1242,6 +1242,84 @@ async def test_a_connector_node_bound_to_another_teams_connector_is_refused() ->
     assert str(excinfo.value.detail).startswith("connector_team_mismatch")
 
 
+def _connector_issue(code: str, message: str, node_id: str | None = None) -> SimpleNamespace:
+    """A GraphValidator issue shaped like the real ``ValidationIssue``."""
+    return SimpleNamespace(code=code, severity="error", message=message, node_id=node_id)
+
+
+def test_graph_save_blocks_a_binding_outside_the_connector_allowlist(client: TestClient) -> None:
+    """FAR-1395: ``CONNECTOR_MISSING_OPERATIONS`` is a hard 422 on the save path.
+
+    The validator derives the required ACL operation from the node's ROUTED verb
+    (FAR-1667), so the issue fires on real customer input — but it used to be
+    advisory, leaving the save to persist a binding the run-time ``ConnectorACL``
+    then denies. This pins the write-path gate end to end: the graph write runs,
+    the validator refuses, the transaction rolls back and the caller sees 422.
+    """
+    connector_id = uuid.uuid4()
+    nodes = [_connector_node_json(connector_id)]
+    issue = _connector_issue(
+        "CONNECTOR_MISSING_OPERATIONS",
+        f"Connector {connector_id} ('gh') does not allow 'read' required by node's 'query' operation",
+        node_id=nodes[0]["id"],
+    )
+
+    with (
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            return_value=(nodes, []),
+        ),
+        patch(
+            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            return_value=MagicMock(issues=[issue]),
+        ),
+        patch(
+            "modulo.api.routes.pipelines._resolve_graph_references",
+            return_value=([], []),
+        ),
+        patch(
+            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 422, resp.text
+    assert "does not allow 'read'" in resp.text
+
+
+def test_graph_save_blocks_only_the_allowlisted_connector_validation_codes() -> None:
+    """Only ``CONNECTOR_MISSING_OPERATIONS`` blocks — inactive/absent stay advisory.
+
+    A pre-existing inactive connector must not block an unrelated edit of a live
+    pipeline, while an operation the connector's allowlist denies is a binding
+    guaranteed to fail its first run and is refused at save time (FAR-1395).
+    """
+    from modulo.api.routes.pipelines import _reject_graph_validation_issues
+
+    # Advisory codes do not raise.
+    _reject_graph_validation_issues(
+        [
+            _connector_issue("CONNECTOR_INACTIVE", "Connector is inactive"),
+            _connector_issue("CONNECTOR_NOT_FOUND", "Connector not found"),
+        ]
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        _reject_graph_validation_issues(
+            [_connector_issue("CONNECTOR_MISSING_OPERATIONS", "does not allow 'read' required by 'query'")]
+        )
+
+    assert excinfo.value.status_code == 422
+    assert "does not allow 'read'" in str(excinfo.value.detail)
+
+
 def _sandbox_node_json() -> dict[str, object]:
     return {
         "id": str(uuid.uuid4()),

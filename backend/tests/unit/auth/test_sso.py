@@ -3059,8 +3059,14 @@ class TestPerProviderSamlRoutes:
             call_kwargs = mock_auth.call_args
             assert call_kwargs.kwargs.get("provider_id") == "okta-saml"
 
-    def test_per_provider_login_unknown_slug_returns_404(self, client: TestClient) -> None:
-        """GET /saml/{slug}/login returns uniform 404 for unknown slug."""
+    def test_per_provider_login_unknown_slug_redirects_to_login(self, client: TestClient) -> None:
+        """GET /saml/{slug}/login redirects to the login page for an unknown slug.
+
+        FAR-1794: the login page links here directly, so the browser must get
+        the 303 login redirect (generic ``auth_failed``), not a raw JSON 404.
+        The uniform failure raised by ``_resolve_saml_for_route`` is the
+        ADR-036 anti-enumeration shape; the redirect is exactly as opaque.
+        """
         _override_settings(
             modulo_license_key=_VALID_LICENSE_KEY,
             modulo_saml_enabled=True,
@@ -3068,8 +3074,10 @@ class TestPerProviderSamlRoutes:
         with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
             mock_lookup.return_value = None
             resp = client.get("/api/v1/auth/saml/ghost-saml/login", follow_redirects=False)
-            assert resp.status_code == 404
-            assert resp.json()["detail"] == "Not Found"
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
+        # Nothing about the (non-)existence of the slug is echoed.
+        assert "ghost-saml" not in resp.headers["location"]
 
     def test_no_preauth_route_401s_without_credentials(self, client: TestClient) -> None:
         """Pre-auth SAML per-provider routes must never 401 for missing Authorization."""
@@ -3589,18 +3597,25 @@ class TestPerProviderSamlRouteErrorPaths:
         assert resp.status_code == 303
         assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
 
-    def test_login_value_error_returns_400(self, client: TestClient) -> None:
+    def test_login_value_error_redirects_auth_failed(self, client: TestClient) -> None:
+        """FAR-1794: a config/provisioning failure redirects, never echoes text."""
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
         ):
             mock_lookup.return_value = self._provider()
-            mock_auth.side_effect = ValueError("bad config")
+            mock_auth.side_effect = ValueError("idp metadata secret-name is invalid")
             resp = client.get("/api/v1/auth/saml/okta-saml/login", follow_redirects=False)
-        assert resp.status_code == 400
+        assert resp.status_code == 303
+        location = resp.headers["location"]
+        assert location.endswith("/login?sso_error=auth_failed")
+        # The old contract echoed ``detail=str(exc)`` — no exception text and no
+        # provider slug may reach the browser (ADR-036, FAR-1794).
+        assert "secret-name" not in location
+        assert "okta-saml" not in location
 
-    def test_login_programming_error_returns_501(self, client: TestClient) -> None:
+    def test_login_programming_error_redirects_provider_unavailable(self, client: TestClient) -> None:
         from sqlalchemy.exc import ProgrammingError
 
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
@@ -3611,9 +3626,10 @@ class TestPerProviderSamlRouteErrorPaths:
             mock_lookup.return_value = self._provider()
             mock_auth.side_effect = ProgrammingError("select 1", {}, Exception("missing table"))
             resp = client.get("/api/v1/auth/saml/okta-saml/login", follow_redirects=False)
-        assert resp.status_code == 501
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
 
-    def test_login_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+    def test_login_sqlalchemy_error_redirects_provider_unavailable(self, client: TestClient) -> None:
         from sqlalchemy.exc import SQLAlchemyError
 
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
@@ -3624,7 +3640,8 @@ class TestPerProviderSamlRouteErrorPaths:
             mock_lookup.return_value = self._provider()
             mock_auth.side_effect = SQLAlchemyError("db down")
             resp = client.get("/api/v1/auth/saml/okta-saml/login", follow_redirects=False)
-        assert resp.status_code == 503
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
 
     def test_login_http_exception_passthrough(self, client: TestClient) -> None:
         from fastapi import HTTPException
@@ -3639,7 +3656,7 @@ class TestPerProviderSamlRouteErrorPaths:
             resp = client.get("/api/v1/auth/saml/okta-saml/login", follow_redirects=False)
         assert resp.status_code == 418
 
-    def test_login_unexpected_error_returns_500(self, client: TestClient) -> None:
+    def test_login_unexpected_error_redirects_provider_unavailable(self, client: TestClient) -> None:
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
         with (
             patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
@@ -3648,7 +3665,8 @@ class TestPerProviderSamlRouteErrorPaths:
             mock_lookup.return_value = self._provider()
             mock_auth.side_effect = RuntimeError("boom")
             resp = client.get("/api/v1/auth/saml/okta-saml/login", follow_redirects=False)
-        assert resp.status_code == 500
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
 
     def test_metadata_unexpected_error_returns_500(self, client: TestClient) -> None:
         _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
@@ -3656,6 +3674,95 @@ class TestPerProviderSamlRouteErrorPaths:
             mock_lookup.side_effect = RuntimeError("boom")
             resp = client.get("/api/v1/auth/saml/okta-saml/metadata", follow_redirects=False)
         assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# SSO login-INITIATION failures (FAR-1794)
+# ---------------------------------------------------------------------------
+# The login page links to these routes directly, so a failure must be a 303 to
+# the login page with a whitelisted ``sso_error`` code — never the raw JSON page
+# the routes returned before, and never ``detail=str(exc)`` (which named the
+# provider and distinguished "unknown" from "misconfigured", breaking ADR-036).
+
+
+class TestLoginInitiationRoutesRedirectNotJson:
+    """FAR-1794: OIDC + both SAML initiation routes redirect on failure."""
+
+    def test_oidc_login_config_failure_redirects_auth_failed(self, client: TestClient) -> None:
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY)
+        with patch("modulo.api.routes.sso.oidc_get_authorize_url", new_callable=AsyncMock) as mock_authorize:
+            mock_authorize.side_effect = ValueError("OIDC provider 'ghost' not configured")
+            resp = client.get("/api/v1/auth/oidc/ghost/login", follow_redirects=False)
+        assert resp.status_code == 303
+        location = resp.headers["location"]
+        assert location.endswith("/login?sso_error=auth_failed")
+        # The pre-fix contract put ``str(exc)`` in the body; neither the slug
+        # nor the exception text may reach the browser.
+        assert "ghost" not in location
+        assert "not configured" not in location
+
+    def test_oidc_login_unknown_and_misconfigured_are_indistinguishable(self, client: TestClient) -> None:
+        """ADR-036: unknown slug and an existing-but-broken provider are alike."""
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY)
+        locations: list[str] = []
+        for message in (
+            "OIDC provider 'ghost' not configured",
+            "OIDC provider 'google' is missing client_id or discovery_url",
+        ):
+            with patch("modulo.api.routes.sso.oidc_get_authorize_url", new_callable=AsyncMock) as mock_authorize:
+                mock_authorize.side_effect = ValueError(message)
+                resp = client.get("/api/v1/auth/oidc/google/login", follow_redirects=False)
+            assert resp.status_code == 303
+            locations.append(resp.headers["location"])
+        assert locations[0] == locations[1]
+
+    def test_oidc_login_programming_error_redirects_provider_unavailable(self, client: TestClient) -> None:
+        from sqlalchemy.exc import ProgrammingError
+
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY)
+        with patch("modulo.api.routes.sso.oidc_get_authorize_url", new_callable=AsyncMock) as mock_authorize:
+            mock_authorize.side_effect = ProgrammingError("select 1", {}, Exception("missing table"))
+            resp = client.get("/api/v1/auth/oidc/google/login", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
+
+    def test_oidc_login_sqlalchemy_error_redirects_provider_unavailable(self, client: TestClient) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY)
+        with patch("modulo.api.routes.sso.oidc_get_authorize_url", new_callable=AsyncMock) as mock_authorize:
+            mock_authorize.side_effect = SQLAlchemyError("db down")
+            resp = client.get("/api/v1/auth/oidc/google/login", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
+
+    def test_oidc_login_unexpected_error_redirects_provider_unavailable(self, client: TestClient) -> None:
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY)
+        with patch("modulo.api.routes.sso.oidc_get_authorize_url", new_callable=AsyncMock) as mock_authorize:
+            mock_authorize.side_effect = RuntimeError("boom")
+            resp = client.get("/api/v1/auth/oidc/google/login", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
+
+    def test_legacy_saml_login_value_error_redirects_auth_failed(self, client: TestClient) -> None:
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        with patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth:
+            mock_auth.side_effect = ValueError("SAML is not configured")
+            resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
+        assert resp.status_code == 303
+        location = resp.headers["location"]
+        assert location.endswith("/login?sso_error=auth_failed")
+        assert "not configured" not in location
+
+    def test_legacy_saml_login_db_error_redirects_provider_unavailable(self, client: TestClient) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        _override_settings(modulo_license_key=_VALID_LICENSE_KEY, modulo_saml_enabled=True)
+        with patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth:
+            mock_auth.side_effect = SQLAlchemyError("db down")
+            resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("/login?sso_error=provider_unavailable")
 
 
 # ---------------------------------------------------------------------------

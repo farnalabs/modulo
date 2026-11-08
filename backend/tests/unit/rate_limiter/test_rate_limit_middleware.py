@@ -49,9 +49,9 @@ def _make_app(registry=None, settings=None) -> FastAPI:
     return app
 
 
-def _registry(allowed: bool = True) -> MagicMock:
+def _registry(allowed: bool = True, retry_after: int = 60) -> MagicMock:
     reg = MagicMock()
-    reg.check = AsyncMock(return_value=allowed)
+    reg.check = AsyncMock(return_value=(allowed, retry_after))
     return reg
 
 
@@ -90,12 +90,12 @@ class TestDispatch:
         registry.check.assert_awaited_once()
 
     def test_blocks_when_exceeded(self):
-        registry = _registry(allowed=False)
+        registry = _registry(allowed=False, retry_after=17)
         app = _make_app(registry=registry)
         with TestClient(app) as client:
             resp = client.post("/api/v1/runs")
         assert resp.status_code == 429
-        assert resp.headers["Retry-After"] == "60"
+        assert resp.headers["Retry-After"] == "17"
 
     def test_passes_rule_params_to_registry(self):
         registry = _registry(allowed=True)
@@ -130,8 +130,9 @@ class TestDispatch:
         Drives the real middleware dispatch, so it proves the rule APPLIES —
         not merely that it was declared.
         """
-        registry = _registry(allowed=False)
+        registry = _registry(allowed=False, retry_after=60)
         app = _make_app(registry=registry)
+        app.add_api_route("/api/v1/auth/sso/providers", lambda: {"ok": True}, methods=["GET"])
         with TestClient(app) as client:
             resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 429
@@ -160,7 +161,7 @@ class TestDispatch:
         TypeError on those instead of returning False. The raw byte is sent so
         the middleware sees exactly what a real client would produce.
         """
-        registry = _registry(allowed=False)
+        registry = _registry(allowed=False, retry_after=60)
         settings = make_settings(modulo_ratelimit_bypass_token="bypass-secret")
         app = _make_app(registry=registry, settings=settings)
         with TestClient(app) as client:

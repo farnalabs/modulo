@@ -58,6 +58,23 @@ router = APIRouter(prefix="/api/v1/admin/run-retention", tags=["admin-run-retent
 
 _PERMISSION = "run_retention.manage"
 
+# ── Error-backstop decision registry (FAR-1912) ─────────────────────────────
+# Per-route decision for every route on this router that reaches the database.
+# Enforced by tests/unit/api/test_db_backstop_decisions.py.
+#
+#   backstop           — wraps @handle_db_errors(...).
+#   streaming_excluded — DB work runs after the handler returns (inside the
+#                        StreamingResponse generator), so a route-level
+#                        decorator cannot observe it; the documented mitigation
+#                        is the primed stream (start-up errors -> real HTTP
+#                        status) plus the completeness sentinel (mid-stream
+#                        truncation is detectable). See ``export``.
+_DB_BACKSTOP_DECISION: dict[str, str] = {
+    "candidates": "backstop",
+    "export": "streaming_excluded",
+    "purge": "backstop",
+}
+
 # FAR-1924: the terminating record that marks a run-retention export as
 # COMPLETE. NDJSON has no length prefix or total, so a stream that died after
 # the first item is otherwise indistinguishable from a short-but-complete one.
@@ -255,6 +272,14 @@ async def candidates(
 # body is being streamed. Do not "fix" this by adding the decorator: it would
 # be inert. Instead the generator is PRIMED below (FAR-1924) so a start-up
 # failure surfaces as a real HTTP status before the response starts.
+#
+# FAR-1912 decision — ``streaming_excluded``: recorded in the registry below.
+# The residual failure mode is explicit, not silent: an error AFTER the stream
+# starts terminates the body early, and the completeness sentinel emitted only
+# on exhaustion is then absent, so a consumer can tell a truncated export from
+# a complete one. Closing that gap needs a post-return mechanism (e.g. an
+# error frame / trailer), which is deliberately out of scope for the decorator
+# convention and left as a documented decision rather than an inert wrapper.
 @router.post("/export", dependencies=[require_feature("admin_run_retention")])
 async def export(
     req: ExportRequest,

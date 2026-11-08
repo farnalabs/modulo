@@ -416,7 +416,7 @@ jobs:
       - name: Backend lint
         working-directory: backend
         run: |
-          uv sync --frozen
+          bash ../scripts/uv_sync_with_retry.sh --frozen
           uv run --no-build --no-sync ruff check .
           uv run --no-build --no-sync mypy src/modulo/
           uv run --no-build --no-sync bandit -r src/modulo/ -ll
@@ -465,7 +465,7 @@ jobs:
 
       - name: Sync deps
         working-directory: backend
-        run: uv sync --frozen
+        run: bash ../scripts/uv_sync_with_retry.sh --frozen
 
       - name: Backend unit tests
         working-directory: backend
@@ -591,7 +591,7 @@ jobs:
 
       - name: Sync deps
         working-directory: backend
-        run: uv sync --frozen
+        run: bash ../scripts/uv_sync_with_retry.sh --frozen
 
       # Expensive tests
       - name: Start Postgres
@@ -722,7 +722,7 @@ jobs:
           enable-cache: true
 
       - name: Sync deps
-        run: uv sync --project backend --frozen
+        run: bash scripts/uv_sync_with_retry.sh --project backend --frozen
 
       - name: Security audit
         shell: bash
