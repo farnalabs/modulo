@@ -189,6 +189,9 @@ def _bind_kwargs(pipeline_id: uuid.UUID, connector_id: uuid.UUID) -> dict[str, s
         "node_id": str(_NODE_ID),
         "connector_type": "github",
         "connector_instance_id": str(connector_id),
+        # FAR-1395: a ``connector`` node's query binding requires a non-empty
+        # resource (the same rule the REST model enforces on save).
+        "resource": "pull",
     }
 
 

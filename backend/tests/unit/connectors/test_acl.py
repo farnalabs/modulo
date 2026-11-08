@@ -11,6 +11,7 @@ from modulo.connectors.base import (
     ConnectorPayload,
     ConnectorPermissionError,
     ConnectorQuery,
+    connector_binding_denied_acl_operations,
     unrestricted_allowed_operations,
 )
 from modulo.core.connector_hub import _TracedConnector
@@ -292,3 +293,28 @@ def test_acl_operation_table_unknown_method_raises_key_error():
     # resolve to ``acl_operation=None`` (which would skip the ACL gate).
     with pytest.raises(KeyError):
         ACL_OPERATION_BY_CONNECTOR_METHOD["does_not_exist"]
+
+
+def test_denied_acl_operations_for_a_binding_the_engine_never_routes():
+    # An ``agent`` node with an ``agent_id`` never reaches a connector, so it
+    # requires no ACL operation — the helper must answer [] rather than
+    # inventing a requirement the runtime never exercises.
+    node = {
+        "id": "n1",
+        "node_type": "agent",
+        "agent_id": "agent-1",
+        "connector_binding": {
+            "type": "github",
+            "instance_id": "conn-1",
+            "operation": "query",
+        },
+    }
+
+    denied = connector_binding_denied_acl_operations(
+        node,
+        visibility="org",
+        allowed_operations=["write"],
+        connector_type_id="github",
+    )
+
+    assert denied == []

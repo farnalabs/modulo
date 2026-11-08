@@ -117,6 +117,12 @@
               {{ $t('views.PipelineEditorView.version_chip_unavailable') }}
             </button>
           </div>
+          <!-- FAR-2463: read-only governance state derived from the pipeline
+               record this view already loads: the autonomy ceiling, the
+               configured concurrency cap and the spend circuit-breaker
+               threshold. Live run counts and current spend are NOT loaded
+               here, so neither is ever rendered. -->
+          <PipelineGovernanceVisibility :pipeline="pipeline" mode="toolbar" />
           <span :class="groupDividerClass" />
           <!-- Group: graph file actions -->
           <div class="flex items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_primary_actions')" data-testid="pipeline-editor-toolbar-group-file">
@@ -1004,8 +1010,9 @@
           v-model:edges="displayEdges"
           :node-types="nodeTypes"
           :default-edge-options="defaultEdgeOptions"
-          :fit-view-on-init="false"
-          :source-position="Position.Right"
+           :fit-view-on-init="false"
+           :only-render-visible-elements="displayNodes.length >= PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD"
+           :source-position="Position.Right"
           :target-position="Position.Left"
           :nodes-draggable="!isViewing"
           :nodes-connectable="!isViewing"
@@ -1024,11 +1031,13 @@
           <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning-text">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
+                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
                   </div></template>
           <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary-text">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                     <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
+                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
                   </div></template>
           <!-- Router/HITL cards carry a non-colour affordance too: a dashed
                border + branch glyph and a double border + gate glyph. The
@@ -1040,6 +1049,7 @@
                       {{ $t('views.PipelineEditorView.node_router_badge') }}
                     </div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_router_label') }}</div>
+                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
                   </div></template>
           <template #node-hitl="nodeProps"><div class="rounded-lg border-4 border-double border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-hitl">
                     <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">
@@ -1047,6 +1057,7 @@
                       {{ $t('views.PipelineEditorView.node_hitl_badge') }}
                     </div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
+                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
                   </div></template>
           <!-- FAR-1141: dispatch nodes render with their own badge/colour.
                Reachable because CANVAS_TYPE_BY_BACKEND_TYPE maps 'dispatch'
@@ -1056,6 +1067,7 @@
           <template #node-dispatch="nodeProps"><div class="rounded-lg border-2 border-cyan-500/60 bg-cyan-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
+                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
                   </div></template>
           <!-- FAR-2089: connector nodes render with their own badge/colour
                instead of the generic `agent` card. Reachable because
@@ -1066,6 +1078,7 @@
           <template #node-connector="nodeProps"><div class="rounded-lg border-2 border-teal-500/60 bg-teal-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-teal-700 dark:text-teal-300">{{ $t('views.PipelineEditorView.node_connector_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_connector_label') }}</div>
+                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
                   </div></template>
           <template #edge-default="edgeProps">
             <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2">
@@ -1178,6 +1191,78 @@
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.output_schema') }}</dt>
             <dd class="font-medium">{{ schemaName(selectedNodeData.output_schema_id) || shortId(selectedNodeData.output_schema_id) }}</dd>
           </div>
+          <!-- FAR-1395: connector query/write authoring. A connector node's whole
+               job is its binding, so the instance, verb, resource and
+               filters/data are first-class controls here — the same shape
+               ConnectorBinding validates on REST and MCP. -->
+          <template v-if="selectedNodeData.node_type === 'connector'">
+            <div>
+              <label for="pipeline-editor-connector-node-instance" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector') }}</label>
+              <select
+                id="pipeline-editor-connector-node-instance"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm"
+                :disabled="isViewing"
+                :value="selectedNodeData.connector_binding?.instance_id || ''"
+                data-testid="pipeline-editor-connector-node-instance"
+                @change="onConnectorNodeInstanceChange"
+              >
+                <option value="">{{ $t('views.PipelineEditorView.connector_node_select_connector') }}</option>
+                <option v-for="c in connectors" :key="c.id" :value="c.id">{{ c.name }} ({{ c.connector_type_id }})</option>
+              </select>
+            </div>
+            <div>
+              <label for="pipeline-editor-connector-node-operation" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector_node_operation') }}</label>
+              <select
+                id="pipeline-editor-connector-node-operation"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm"
+                :disabled="isViewing"
+                :value="selectedNodeData.connector_binding?.operation || 'query'"
+                data-testid="pipeline-editor-connector-node-operation"
+                @change="onConnectorNodeOperationChange"
+              >
+                <option value="query">{{ $t('views.PipelineEditorView.connector_node_operation_query') }}</option>
+                <option value="write">{{ $t('views.PipelineEditorView.connector_node_operation_write') }}</option>
+              </select>
+            </div>
+            <div>
+              <label for="pipeline-editor-connector-node-resource" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector_node_resource') }}</label>
+              <input
+                id="pipeline-editor-connector-node-resource"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm"
+                :readonly="isViewing"
+                :value="selectedNodeData.connector_binding?.resource || ''"
+                :placeholder="$t('views.PipelineEditorView.connector_node_resource_placeholder')"
+                data-testid="pipeline-editor-connector-node-resource"
+                @input="onConnectorNodeResourceInput"
+              />
+              <p class="mt-0.5 text-[11px] text-muted-foreground">{{ $t('views.PipelineEditorView.connector_node_resource_hint') }}</p>
+            </div>
+            <div>
+              <label for="pipeline-editor-connector-node-filters" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector_node_filters') }}</label>
+              <textarea
+                id="pipeline-editor-connector-node-filters"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 font-mono text-xs"
+                rows="3"
+                :readonly="isViewing"
+                :value="connectorNodeFiltersText"
+                data-testid="pipeline-editor-connector-node-filters"
+                @input="onConnectorNodeJsonInput('filters', $event)"
+              />
+            </div>
+            <div>
+              <label for="pipeline-editor-connector-node-data" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector_node_data') }}</label>
+              <textarea
+                id="pipeline-editor-connector-node-data"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 font-mono text-xs"
+                rows="3"
+                :readonly="isViewing"
+                :value="connectorNodeDataText"
+                data-testid="pipeline-editor-connector-node-data"
+                @input="onConnectorNodeJsonInput('data', $event)"
+              />
+            </div>
+            <p v-if="connectorNodeJsonError" role="alert" class="text-[11px] text-destructive" data-testid="pipeline-editor-connector-node-json-error">{{ connectorNodeJsonError }}</p>
+          </template>
           <!-- Agent node: Agent details -->
           <template v-if="(selectedNodeData.node_type === 'agent' || selectedNodeData.node_type === 'sandbox_agent') && selectedNodeData.agent_id">
             <div>
@@ -2184,7 +2269,7 @@ import {
 import { formatDateShort } from '../lib/formatDate'
 import { formatCompactDuration, worstCaseForEvent, type WorstCase } from '../lib/worstCase'
 import { withTimeout } from '../lib/requestTimeout'
-import { CANVAS_EDGE_STROKE } from '../constants/canvas'
+import { CANVAS_EDGE_STROKE, PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD } from '../constants/canvas'
 import {
   layoutNodes,
   layoutNodesIncrementalWithBaseline,
@@ -2204,6 +2289,7 @@ import { currentSubstantiveVersion, NON_VERSION_CREATED_KINDS, SNAPSHOT_PAGE_SIZ
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon } from '@lucide/vue'
+import PipelineGovernanceVisibility from '../components/pipeline/PipelineGovernanceVisibility.vue'
 
 // The legacy useApi `post` helper aborted every request after 30s; the typed
 // client has no deadline of its own, so the archive/pause toggles keep the
@@ -3429,6 +3515,83 @@ function connectorName(binding: any): string {
   return binding.instance_id ? `${binding.type} / ${shortId(binding.instance_id)}` : binding.type
 }
 
+// FAR-1395: connector-node authoring — the binding's query/write payload.
+// ``node_runner._connector_inputs`` reads ``resource`` / ``filters`` / ``data``
+// off the node's ``connector_binding``; without them a query falls back to
+// ``resource="command"``, which connectors do not serve, so a connector node
+// authored without these inputs could never complete a real run. The JSON
+// fields are edited as TEXT and only a parseable JSON object is committed to
+// the node, so a transiently-invalid draft never corrupts the graph.
+const connectorNodeFiltersText = ref('')
+const connectorNodeDataText = ref('')
+const connectorNodeJsonError = ref<string | null>(null)
+
+function loadConnectorNodeFields(node: any | null): void {
+  connectorNodeJsonError.value = null
+  const binding = node?.connector_binding
+  connectorNodeFiltersText.value = JSON.stringify(binding?.filters ?? {}, null, 2)
+  connectorNodeDataText.value = JSON.stringify(binding?.data ?? {}, null, 2)
+}
+
+function ensureConnectorNodeBinding(): any | null {
+  const node = selectedNodeData.value
+  if (!node) return null
+  if (!node.connector_binding || typeof node.connector_binding !== 'object') {
+    node.connector_binding = { type: '', instance_id: '', operation: 'query' }
+  }
+  return node.connector_binding
+}
+
+function onConnectorNodeInstanceChange(event: Event): void {
+  if (isViewing.value) return
+  const id = (event.target as HTMLSelectElement).value
+  const binding = ensureConnectorNodeBinding()
+  if (!binding) return
+  const connector = connectors.value.find((c: any) => c.id === id)
+  binding.instance_id = id
+  binding.type = connector?.connector_type_id ?? ''
+  connectorNodeJsonError.value = null
+}
+
+function onConnectorNodeOperationChange(event: Event): void {
+  if (isViewing.value) return
+  const value = (event.target as HTMLSelectElement).value
+  const binding = ensureConnectorNodeBinding()
+  if (!binding) return
+  binding.operation = value === 'write' ? 'write' : 'query'
+}
+
+function onConnectorNodeResourceInput(event: Event): void {
+  if (isViewing.value) return
+  const value = (event.target as HTMLInputElement).value
+  const binding = ensureConnectorNodeBinding()
+  if (!binding) return
+  if (value.trim()) binding.resource = value
+  else delete binding.resource
+}
+
+function onConnectorNodeJsonInput(field: 'filters' | 'data', event: Event): void {
+  if (isViewing.value) return
+  const text = (event.target as HTMLTextAreaElement).value
+  if (field === 'filters') connectorNodeFiltersText.value = text
+  else connectorNodeDataText.value = text
+  let parsed: unknown
+  try {
+    parsed = text.trim() === '' ? {} : JSON.parse(text)
+  } catch {
+    connectorNodeJsonError.value = t('views.PipelineEditorView.connector_node_json_invalid', { field })
+    return
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    connectorNodeJsonError.value = t('views.PipelineEditorView.connector_node_json_must_be_object', { field })
+    return
+  }
+  connectorNodeJsonError.value = null
+  const binding = ensureConnectorNodeBinding()
+  if (!binding) return
+  binding[field] = parsed
+}
+
 // FAR-437: node-level capability_scope authoring (narrow-not-widen)
 const nodeCapabilityScope = reactive<{ allowed_connectors: string[]; allowed_tools: string[]; context_scope: string[] }>({
   allowed_connectors: [],
@@ -3637,6 +3800,10 @@ function convertBackendNode(n: any): any {
       label: n.label || 'Node ' + shortId(n.id),
       description: n.description || '',
       node_type: n.node_type,
+      // FAR-2463: the governance pills read these straight off the graph
+      // contract this view already loads — no extra request, no derived gate.
+      hitl_config: n.hitl_config,
+      policy_gate: n.policy_gate,
       parameter_set_id: n.parameter_set_id,
       parameter_overrides: n.parameter_overrides,
       hasCapabilityScope: doesNodeHaveCapabilityScope(n),
@@ -4087,6 +4254,7 @@ function onNodeClick(event: any) {
   // frozen snapshot while viewing, the live graph otherwise.
   const backendNode = inspectSourceNodes.value.find((n: any) => n.id === node.id)
   selectedNodeData.value = backendNode || null
+  loadConnectorNodeFields(backendNode || null)
   // Populate capability scope (narrow-not-widen)
   const scope = backendNode?.capability_scope
   nodeCapabilityScope.allowed_connectors = Array.isArray(scope?.allowed_connectors) ? [...scope.allowed_connectors] : []
@@ -4267,6 +4435,7 @@ function onPaneClick() {
   nodeCapabilityScope.context_scope = []
   capabilityToolInput.value = ''
   capabilityContextInput.value = ''
+  loadConnectorNodeFields(null)
 }
 
 // --- Editor viewport fit (FAR-1841 mobile, FAR-1851 desktop) --------------
@@ -4473,16 +4642,21 @@ onBeforeUnmount(() => {
   if (refitFrame) window.cancelAnimationFrame(refitFrame)
 })
 
-const newNodeType = ref<'agent' | 'router' | 'hitl'>('agent')
+const newNodeType = ref<'agent' | 'router' | 'hitl' | 'connector'>('agent')
 const nodeTypeOptions = [
   { value: 'agent', label: t('views.PipelineEditorView.node_type_agent') },
+  // FAR-1395: connector query/write nodes are authorable from the palette. A
+  // connector node's whole job is its binding (instance + verb + resource +
+  // filters/data), which the inspector below edits; without that surface the
+  // engine could support the node while no authoring path could express it.
+  { value: 'connector', label: t('views.PipelineEditorView.node_connector_label') },
   // Router/HITL authoring is deferred: addNode cannot yet emit the mandatory
   // router_config/hitl_config the backend requires, so exposing them here
   // produces unsavable (422) nodes. Imported router/HITL graphs still render
   // correctly via convertBackendNode. Re-add once a config editor lands.
 ]
 
-function addNode(nodeType: 'agent' | 'router' | 'hitl' = newNodeType.value) {
+function addNode(nodeType: 'agent' | 'router' | 'hitl' | 'connector' = newNodeType.value) {
   if (isViewing.value) return
   const id = `node-${Date.now()}`
   const newNode = {
@@ -4492,13 +4666,20 @@ function addNode(nodeType: 'agent' | 'router' | 'hitl' = newNodeType.value) {
     data: { label: t('views.PipelineEditorView.new_node_label'), description: '', node_type: nodeType },
   }
   flowNodes.value = [...flowNodes.value, newNode]
-  rawNodes.value = [...rawNodes.value, {
+  const rawNode: any = {
     id,
     node_type: nodeType,
     label: t('views.PipelineEditorView.new_node_label'),
     description: '',
     position: { x: 250, y: 100 },
-  }]
+  }
+  if (nodeType === 'connector') {
+    // The binding skeleton lets the inspector render its controls immediately;
+    // the author must still choose an instance and a resource before the save
+    // is accepted (the backend rejects an incomplete connector binding).
+    rawNode.connector_binding = { type: '', instance_id: '', operation: 'query' }
+  }
+  rawNodes.value = [...rawNodes.value, rawNode]
 }
 
 function openAgentPicker() {
@@ -4828,6 +5009,12 @@ const ownerTeamOptions = computed(() => {
   }
   return rows
 })
+
+// Resolves a HITL gate's team ID to the name only from teams this editor has
+// already loaded, so a node's gate pill never invents or fetches a team name.
+const teamNamesById = computed<Record<string, string>>(() =>
+  Object.fromEntries(ownerTeams.value.map((tm) => [tm.id, tm.name])),
+)
 
 const ownerTeamError = computed(() => {
   if (ownerTeamUpdateError.value) return ownerTeamUpdateError.value

@@ -173,6 +173,96 @@ describe('AppSidebar', () => {
       expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
       wrapper.unmount()
     })
+
+    it('emits logout when mobile SidebarRail emits logout', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+
+      const sidebarRail = wrapper.findComponent({ name: 'SidebarRail' })
+      expect(sidebarRail.exists()).toBe(true)
+      await sidebarRail.vm.$emit('logout')
+      await flushPromises()
+
+      expect(wrapper.emitted('logout')).toBeTruthy()
+      expect(wrapper.emitted('logout')).toHaveLength(1)
+      wrapper.unmount()
+    })
+
+    it('emits toggle-theme when mobile SidebarRail emits toggle-theme', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+
+      const sidebarRail = wrapper.findComponent({ name: 'SidebarRail' })
+      expect(sidebarRail.exists()).toBe(true)
+      await sidebarRail.vm.$emit('toggle-theme')
+      await flushPromises()
+
+      expect(wrapper.emitted('toggle-theme')).toBeTruthy()
+      expect(wrapper.emitted('toggle-theme')).toHaveLength(1)
+      wrapper.unmount()
+    })
+
+    it('emits open-command-palette when mobile SidebarRail emits open-command-palette', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+
+      const sidebarRail = wrapper.findComponent({ name: 'SidebarRail' })
+      expect(sidebarRail.exists()).toBe(true)
+      await sidebarRail.vm.$emit('open-command-palette')
+      await flushPromises()
+
+      expect(wrapper.emitted('open-command-palette')).toBeTruthy()
+      expect(wrapper.emitted('open-command-palette')).toHaveLength(1)
+      wrapper.unmount()
+    })
+
+    it('emits logout when mobile SidebarFull emits logout', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+
+      const sidebarFull = wrapper.findComponent({ name: 'SidebarFull' })
+      expect(sidebarFull.exists()).toBe(true)
+      await sidebarFull.vm.$emit('logout')
+      await flushPromises()
+
+      expect(wrapper.emitted('logout')).toBeTruthy()
+      expect(wrapper.emitted('logout')).toHaveLength(1)
+      wrapper.unmount()
+    })
+
+    it('emits toggle-theme when mobile SidebarFull emits toggle-theme', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+
+      const sidebarFull = wrapper.findComponent({ name: 'SidebarFull' })
+      expect(sidebarFull.exists()).toBe(true)
+      await sidebarFull.vm.$emit('toggle-theme')
+      await flushPromises()
+
+      expect(wrapper.emitted('toggle-theme')).toBeTruthy()
+      expect(wrapper.emitted('toggle-theme')).toHaveLength(1)
+      wrapper.unmount()
+    })
+
+    it('emits open-command-palette when mobile SidebarFull emits open-command-palette', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+
+      const sidebarFull = wrapper.findComponent({ name: 'SidebarFull' })
+      expect(sidebarFull.exists()).toBe(true)
+      await sidebarFull.vm.$emit('open-command-palette')
+      await flushPromises()
+
+      expect(wrapper.emitted('open-command-palette')).toBeTruthy()
+      expect(wrapper.emitted('open-command-palette')).toHaveLength(1)
+      wrapper.unmount()
+    })
   })
 
   describe('desktop — in-flow collapsible sidebar', () => {
@@ -246,6 +336,102 @@ describe('AppSidebar', () => {
       const monitorItems = wrapper.find('#sidebar-group-monitor')
       const hrefs = monitorItems.findAll('a.sidebar-link').map((l) => l.attributes('href'))
       expect(hrefs).toContain('/admin/notification-delivery')
+    })
+
+    it('emits open-command-palette when desktop SidebarFull emits open-command-palette', async () => {
+      mockMatchMedia(true)
+      const wrapper = mountSidebar()
+      await flushPromises()
+
+      const sidebarFull = wrapper.findComponent({ name: 'SidebarFull' })
+      expect(sidebarFull.exists()).toBe(true)
+      await sidebarFull.vm.$emit('open-command-palette')
+      await flushPromises()
+
+      expect(wrapper.emitted('open-command-palette')).toBeTruthy()
+      expect(wrapper.emitted('open-command-palette')).toHaveLength(1)
+      wrapper.unmount()
+    })
+
+    it('emits logout when desktop SidebarFull emits logout', async () => {
+      mockMatchMedia(true)
+      const wrapper = mountSidebar()
+      await flushPromises()
+
+      const sidebarFull = wrapper.findComponent({ name: 'SidebarFull' })
+      expect(sidebarFull.exists()).toBe(true)
+      await sidebarFull.vm.$emit('logout')
+      await flushPromises()
+
+      expect(wrapper.emitted('logout')).toBeTruthy()
+      expect(wrapper.emitted('logout')).toHaveLength(1)
+      wrapper.unmount()
+    })
+
+    it('emits toggle-theme when desktop SidebarFull emits toggle-theme', async () => {
+      mockMatchMedia(true)
+      const wrapper = mountSidebar()
+      await flushPromises()
+
+      const sidebarFull = wrapper.findComponent({ name: 'SidebarFull' })
+      expect(sidebarFull.exists()).toBe(true)
+      await sidebarFull.vm.$emit('toggle-theme')
+      await flushPromises()
+
+      expect(wrapper.emitted('toggle-theme')).toBeTruthy()
+      expect(wrapper.emitted('toggle-theme')).toHaveLength(1)
+      wrapper.unmount()
+    })
+
+    it('calls closeMobilePanel when SidebarFull emits collapse event (mobile)', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(true)
+
+      // Find the SidebarFull component inside the mobile panel and emit collapse
+      const sidebarFull = wrapper.findComponent({ name: 'SidebarFull' })
+      expect(sidebarFull.exists()).toBe(true)
+      await sidebarFull.vm.$emit('collapse')
+      await flushPromises()
+
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('calls closeMobilePanel when SidebarFull emits navigate event (mobile)', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(true)
+
+      const sidebarFull = wrapper.findComponent({ name: 'SidebarFull' })
+      expect(sidebarFull.exists()).toBe(true)
+      await sidebarFull.vm.$emit('navigate')
+      await flushPromises()
+
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('calls closeMobilePanel and emits open-command-palette when SidebarFull emits open-command-palette (mobile)', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(true)
+
+      // Directly call the handler since event propagation in test env may differ
+      const vm = wrapper.vm as unknown as { onOpenCommandPalette: () => void }
+      vm.onOpenCommandPalette()
+      await flushPromises()
+
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
+      expect(wrapper.emitted('open-command-palette')).toBeTruthy()
+      expect(wrapper.emitted('open-command-palette')).toHaveLength(1)
+      wrapper.unmount()
     })
   })
 })

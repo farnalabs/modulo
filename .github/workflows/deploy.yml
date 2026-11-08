@@ -416,7 +416,7 @@ jobs:
       - name: Backend lint
         working-directory: backend
         run: |
-          uv sync --frozen
+          bash ../scripts/uv_sync_with_retry.sh --frozen
           uv run --no-build --no-sync ruff check .
           uv run --no-build --no-sync mypy src/modulo/
           uv run --no-build --no-sync bandit -r src/modulo/ -ll
@@ -465,7 +465,7 @@ jobs:
 
       - name: Sync deps
         working-directory: backend
-        run: uv sync --frozen
+        run: bash ../scripts/uv_sync_with_retry.sh --frozen
 
       - name: Backend unit tests
         working-directory: backend
@@ -512,7 +512,7 @@ jobs:
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -591,7 +591,7 @@ jobs:
 
       - name: Sync deps
         working-directory: backend
-        run: uv sync --frozen
+        run: bash ../scripts/uv_sync_with_retry.sh --frozen
 
       # Expensive tests
       - name: Start Postgres
@@ -722,7 +722,7 @@ jobs:
           enable-cache: true
 
       - name: Sync deps
-        run: uv sync --project backend --frozen
+        run: bash scripts/uv_sync_with_retry.sh --project backend --frozen
 
       - name: Security audit
         shell: bash
@@ -2395,7 +2395,7 @@ jobs:
           fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -3858,7 +3858,7 @@ jobs:
           fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"

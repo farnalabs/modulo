@@ -1369,7 +1369,7 @@ class TestInstalledEntitiesSingleSourceOfTruth:
         ]
 
     def test_install_response_carries_the_caller_preloaded_entity_list(self) -> None:
-        from modulo.api.routes.library import _install_response
+        from modulo.api.routes.library import _install_response, _load_install_facts
 
         install = _make_install_record()
         # A stale JSON copy on the record: the response must carry the list
@@ -1392,9 +1392,13 @@ class TestInstalledEntitiesSingleSourceOfTruth:
             ),
             _patch_no_newer_version(),
         ):
-            resp = asyncio.run(_install_response(session, install, preloaded))
+            # FAR-1782: the DB-derived facts are loaded inside the caller's
+            # RLS transaction and threaded in; the builder itself is pure.
+            facts = asyncio.run(_load_install_facts(session, install))
+        resp = _install_response(install, preloaded, facts)
 
         assert resp.installed_entities == preloaded
+        assert resp.runnable is True
 
 
 class TestUninstallCollectionService:

@@ -18,12 +18,17 @@ import pytest_asyncio
 from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.routes.library import _install_response, _load_installed_entities, get_collection_install_endpoint
+from modulo.api.routes.library import (
+    _install_response,
+    _load_install_facts,
+    _load_installed_entities,
+    get_collection_install_endpoint,
+)
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.library_service._seed_data import MODULO_ORG_ID
 from modulo.core.library_service.grant import grant_collection_agents
 from modulo.core.library_service.install import CollectionInstallError, install_collection
-from modulo.core.library_service.runnability import compute_runnable
+from modulo.core.library_service.runnability import _org_has_model_backend, compute_runnable
 from modulo.core.library_service.uninstall import uninstall_collection
 from modulo.core.library_service.upgrade import (
     NoUpdateAvailableError,
@@ -551,7 +556,8 @@ async def test_install_response_entity_list_matches_child_rows(
 
     # The API response carries exactly that list (threaded by the endpoint
     # from the in-transaction load).
-    response = await _install_response(db_session, install, scoped)
+    facts = await _load_install_facts(db_session, install)
+    response = _install_response(install, scoped, facts)
     reported = sorted((entry["entity_type"], entry["entity_id"]) for entry in response.installed_entities or [])
     assert reported == expected
 
@@ -560,6 +566,103 @@ async def test_install_response_entity_list_matches_child_rows(
         columns = await conn.run_sync(lambda sync_conn: inspect(sync_conn).get_columns("collection_install"))
     column_names = [column["name"] for column in columns]
     assert "installed_entities" not in column_names
+
+
+# ---------------------------------------------------------------------------
+# Test 1c: FAR-1782 — runnability / update facts are read under org RLS
+# ---------------------------------------------------------------------------
+
+
+async def test_install_facts_read_under_org_rls_not_post_transaction(
+    db_engine: AsyncEngine,
+    db_session: AsyncSession,
+    modulo_app_engine: AsyncEngine,
+    org: uuid.UUID,
+    user: uuid.UUID,
+    schemas: list[uuid.UUID],
+    agent_prim: uuid.UUID,
+    model_backend: uuid.UUID,
+) -> None:
+    """FAR-1782: the install response's runnability / update-available facts
+    are derived INSIDE the endpoint's org-RLS transaction.
+
+    Every read behind those facts is org-RLS'd (``model_backends`` for
+    ``compute_runnable``, ``library_primitives`` for ``_update_info``) and the
+    org GUC is transaction-scoped, so a post-transaction evaluation silently
+    sees zero rows: ``runnable`` is always ``False`` and ``update_available``
+    always ``False`` with no error and no log. The suite's normal ``db_engine``
+    is the testcontainer SUPERUSER (BYPASSRLS) and cannot catch that class, so
+    the reads are exercised on the real ``modulo_app`` (NOBYPASSRLS) role here:
+
+    * negative control — with NO org context the org-scoped reads are invisible
+      (``_org_has_model_backend`` False, facts ``runnable=False``) even though
+      the org HAS an active model backend and an installed collection;
+    * with the owning org's context live, both reads surface (``runnable=True``,
+      ``update_available=True`` with the stamped newer version);
+    * the REAL ``get_collection_install_endpoint`` is then driven on that role,
+      pinning that the endpoint threads the in-transaction facts into the
+      response. Moving ``_load_install_facts`` back outside the transaction
+      makes the endpoint assertions fail.
+    """
+    pins = [
+        {"slug": "input-schema", "version": "1.0"},
+        {"slug": "output-schema", "version": "1.0"},
+        {"slug": "test-agent", "version": "1.0"},
+    ]
+    collection_id = await _seed_collection(db_engine, org, pins)
+    # A newer PUBLISHED version, stamped on the installed row — the
+    # update-available read that ``_update_info`` performs.
+    newer_id = await _seed_collection(db_engine, org, pins, slug="test-collection-v2", version="2.0")
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("UPDATE library_primitives SET update_available_version_id = :newer WHERE id = :installed"),
+            {"newer": str(newer_id), "installed": str(collection_id)},
+        )
+
+    install = await install_collection(db_session, org, user, collection_id)
+    await db_session.commit()
+    install_id = install.install_id
+
+    app_factory = async_sessionmaker(modulo_app_engine, expire_on_commit=False)
+
+    # Negative control: NO org RLS context — exactly what a post-transaction
+    # read sees. The seeded active model backend is invisible and the install
+    # row itself fails closed, so the facts degrade to False/None.
+    async with app_factory() as unscoped_session, unscoped_session.begin():
+        assert not await _org_has_model_backend(unscoped_session, org)
+        unscoped_facts = await _load_install_facts(unscoped_session, install)
+    assert unscoped_facts.runnable is False
+    assert unscoped_facts.update_available is False
+    assert unscoped_facts.available_version is None
+
+    # The fix: with the owning org's RLS context live, both org-scoped reads
+    # surface — and the response builder carries them.
+    async with app_factory() as app_session, app_session.begin():
+        await set_rls_org(app_session, org)
+        assert await _org_has_model_backend(app_session, org)
+        facts = await _load_install_facts(app_session, install)
+
+    assert facts.runnable is True
+    assert facts.update_available is True
+    assert facts.available_version == "2.0"
+
+    # Drive the REAL endpoint on the RLS-enforced role: it must derive both
+    # facts inside its own transaction and report the scoped values.
+    principal = TenantPrincipal(
+        username="testuser",
+        organisation_id=org,
+        account_id=user,
+        org_role="admin",
+    )
+    async with app_factory() as endpoint_session:
+        endpoint_response = await get_collection_install_endpoint(
+            primitive_id=collection_id,
+            install_id=install_id,
+            session=endpoint_session,
+            principal=principal,
+        )
+    assert endpoint_response.runnable is True
+    assert endpoint_response.update_available is True
 
 
 # ---------------------------------------------------------------------------

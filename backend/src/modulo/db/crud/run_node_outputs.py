@@ -127,6 +127,7 @@ _log = logging.getLogger(__name__)
 
 __all__ = [
     "DualWriteError",
+    "OutputsRlsMismatch",
     "OutputsSentinelViolation",
     "RunBlobs",
     "assert_write_org",
@@ -145,6 +146,7 @@ __all__ = [
     "read_run_markers_fenced",
     "read_run_node_outputs_raw",
     "read_run_outputs",
+    "read_run_outputs_map",
     "read_run_telemetry",
     "replace_run_node_outputs",
     "resolve_dialect",
@@ -1403,6 +1405,55 @@ async def read_run_outputs(
 ) -> dict[str, Any] | None:
     """The reassembled outputs dict (legacy shape), new-table-only."""
     return (await read_run_blobs(session, run_id=run_id, organisation_id=organisation_id)).outputs
+
+
+async def read_run_outputs_map(
+    session: AsyncSession,
+    *,
+    run_ids: Sequence[uuid.UUID],
+    organisation_id: uuid.UUID,
+) -> dict[uuid.UUID, dict[str, Any] | None]:
+    """Narrow per-run outputs projection for read-only verdict extraction (FAR-147).
+
+    Projects ONLY ``run_id`` / ``node_id`` / ``outputs_json`` — never the
+    telemetry / markers / artifacts blob columns the full reassembly reader
+    loads — because the callers only read the final per-node outputs.
+
+    ONE query for every requested run (the list endpoint's anti-N+1 read),
+    scoped to ``organisation_id`` and restricted to terminal ``__final__``
+    node rows (the run metadata sentinel row is excluded, as it is not a node
+    return). Returns ``{run_id: {node_id: outputs_json}}`` with ``None`` for a
+    run that has no terminal output rows. A stored value that is not a JSON
+    object is skipped: it cannot carry a node-return verdict, and the callers'
+    contract is a ``dict[node_id, Any]`` map.
+
+    Raises :class:`OutputsRlsMismatch` when the session's RLS org disagrees
+    with ``organisation_id`` (a read with no bound org context skips the
+    check, exactly like the full readers).
+    """
+    if not run_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                RunNodeOutput.run_id,
+                RunNodeOutput.node_id,
+                RunNodeOutput.outputs_json,
+            ).where(
+                RunNodeOutput.run_id.in_(run_ids),
+                RunNodeOutput.organisation_id == organisation_id,
+                RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+                RunNodeOutput.node_id != META_NODE_ID,
+            )
+        )
+    ).all()
+    session_org = await read_rls_org(session)
+    _assert_read_org(session_org, organisation_id, run_ids[0])
+    outputs_map: dict[uuid.UUID, dict[str, Any]] = {}
+    for run_id, node_id, outputs_json in rows:
+        if isinstance(outputs_json, dict):
+            outputs_map.setdefault(run_id, {})[node_id] = outputs_json
+    return {run_id: outputs_map.get(run_id) for run_id in run_ids}
 
 
 async def read_run_telemetry(

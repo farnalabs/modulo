@@ -140,7 +140,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { VueFlow, useVueFlow, type EdgeMouseEvent, type NodeMouseEvent } from '@vue-flow/core'
+import { VueFlow, useVueFlow, type Connection, type Edge, type EdgeMouseEvent, type Node, type NodeMouseEvent } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 
 import '@vue-flow/core/dist/style.css'
@@ -159,7 +159,7 @@ import { formatApiError } from '../../../lib/api/formatError'
 import { randomId } from '../../../lib/randomId'
 import { computeLifecycleMapLayout } from '../../../stores/lifecycleMaps'
 import { CANVAS_EDGE_STROKE } from '../../../constants/canvas'
-import type { StageType, TriggerType, LifecycleStage, LifecycleEdge, LifecycleMapVersion, PipelineSummary } from '../../../types/lifecycleMap'
+import type { StageType, LifecycleMap, LifecycleStage, LifecycleEdge, LifecycleMapVersion, PipelineSummary } from '../../../types/lifecycleMap'
 import Button from 'primevue/button'
 
 const props = defineProps<{
@@ -182,27 +182,32 @@ const versions = ref<LifecycleMapVersion[]>([])
 const currentVersionId = ref('')
 const pipelines = ref<PipelineSummary[]>([])
 
-const flowNodes = ref<any[]>([])
-const flowEdges = ref<any[]>([])
-const selectedNode = ref<any>(null)
-const selectedEdge = ref<any>(null)
+type StageNodeData = Pick<LifecycleStage, 'name' | 'description' | 'stage_type' | 'pipeline_id' | 'external_url' | 'owner' | 'graduated'>
+type EdgeData = Pick<LifecycleEdge, 'trigger_type' | 'description' | 'condition_expression' | 'estimated_frequency' | 'trigger_link'>
+type StageNode = Node<StageNodeData>
+type LifecycleFlowEdge = Edge<EdgeData>
+
+const flowNodes = ref<StageNode[]>([])
+const flowEdges = ref<LifecycleFlowEdge[]>([])
+const selectedNode = ref<StageNode | null>(null)
+const selectedEdge = ref<LifecycleFlowEdge | null>(null)
 const showGraduation = ref(false)
 const graduationStageId = ref('')
 const graduationStageName = ref('')
 
 const nodeTypes = {}
 
-const selectedNodeData = computed(() => {
-  if (!selectedNode.value) return { name: '', description: '', stage_type: 'placeholder' as StageType, pipeline_id: null, external_url: null, owner: null, graduated: false }
-  return selectedNode.value.data || {}
+const selectedNodeData = computed<StageNodeData>(() => {
+  if (!selectedNode.value) return { name: '', description: '', stage_type: 'placeholder', pipeline_id: null, external_url: null, owner: null, graduated: false }
+  return selectedNode.value.data ?? { name: '', description: '', stage_type: 'placeholder', pipeline_id: null, external_url: null, owner: null, graduated: false }
 })
 
-const selectedEdgeData = computed(() => {
-  if (!selectedEdge.value) return { trigger_type: 'pipeline_completed' as TriggerType, description: '', condition_expression: null, estimated_frequency: null, trigger_link: null }
-  return selectedEdge.value.data || {}
+const selectedEdgeData = computed<EdgeData>(() => {
+  if (!selectedEdge.value) return { trigger_type: 'pipeline_completed', description: '', condition_expression: null, estimated_frequency: null, trigger_link: null }
+  return selectedEdge.value.data ?? { trigger_type: 'pipeline_completed', description: '', condition_expression: null, estimated_frequency: null, trigger_link: null }
 })
 
-function createFlowNode(stage: LifecycleStage): any {
+function createFlowNode(stage: LifecycleStage): StageNode {
   return {
     id: stage.id,
     type: 'lifecycle-stage',
@@ -219,7 +224,7 @@ function createFlowNode(stage: LifecycleStage): any {
   }
 }
 
-function buildFlowNodes(version: LifecycleMapVersion): any[] {
+function buildFlowNodes(version: LifecycleMapVersion): StageNode[] {
   const stages = version.stages ?? []
   const edges = version.edges ?? []
   const layout = computeLifecycleMapLayout(
@@ -236,7 +241,7 @@ function buildFlowNodes(version: LifecycleMapVersion): any[] {
   })
 }
 
-function createFlowEdge(edge: LifecycleEdge): any {
+function createFlowEdge(edge: LifecycleEdge): LifecycleFlowEdge {
   return {
     id: edge.id,
     source: edge.source_stage_id,
@@ -253,22 +258,23 @@ function createFlowEdge(edge: LifecycleEdge): any {
   }
 }
 
-function stageToBackend(node: any): LifecycleStage {
+function stageToBackend(node: StageNode): LifecycleStage {
+  const data = node.data ?? { name: '', description: '', stage_type: 'placeholder' as StageType, pipeline_id: null, external_url: null, owner: null, graduated: false }
   return {
     id: node.id,
-    name: node.data.name || '',
-    description: node.data.description || '',
-    stage_type: node.data.stage_type || 'placeholder',
-    pipeline_id: node.data.pipeline_id || null,
-    external_url: node.data.external_url || null,
-    owner: node.data.owner || null,
-    graduated: node.data.graduated || false,
+    name: data.name || '',
+    description: data.description || '',
+    stage_type: data.stage_type || 'placeholder',
+    pipeline_id: data.pipeline_id || null,
+    external_url: data.external_url || null,
+    owner: data.owner || null,
+    graduated: data.graduated || false,
     x: node.position?.x,
     y: node.position?.y,
   }
 }
 
-function edgeToBackend(edge: any): LifecycleEdge {
+function edgeToBackend(edge: LifecycleFlowEdge): LifecycleEdge {
   return {
     id: edge.id,
     source_stage_id: edge.source,
@@ -288,7 +294,7 @@ async function loadData() {
   pageError.value = null
   try {
     const [mapData, pipelinesData] = await Promise.all([
-      get<any>(`/api/v1/lifecycle-maps/${props.mapId}`).catch(() => null),
+      get<LifecycleMap>(`/api/v1/lifecycle-maps/${props.mapId}`).catch(() => null),
       get<{ items: PipelineSummary[] }>('/api/v1/pipelines?limit=200').catch(() => ({ items: [] })),
     ])
     mapName.value = mapData?.name ?? ''
@@ -327,7 +333,7 @@ async function handleSave() {
     const notes = `Saved ${stages.length} stages, ${edges.length} edges`
 
     if (currentVersionId.value) {
-      await put<any>(
+      await put<LifecycleMapVersion>(
         `/api/v1/lifecycle-maps/${props.mapId}/versions/${currentVersionId.value}`,
         { stages, edges, notes }
       )
@@ -403,7 +409,7 @@ function onPaneClick() {
   selectedEdge.value = null
 }
 
-function onConnect(connection: any) {
+function onConnect(connection: Connection) {
   const id = randomId()
   const edge: LifecycleEdge = {
     id,
@@ -420,17 +426,19 @@ function onConnect(connection: any) {
 
 function onStageFieldUpdate(field: string, value: unknown) {
   if (!selectedNode.value) return
-  const node = flowNodes.value.find((n: any) => n.id === selectedNode.value.id)
+  const selectedId = selectedNode.value.id
+  const node = flowNodes.value.find((n) => n.id === selectedId)
   if (node) {
-    node.data = { ...node.data, [field]: value }
+    node.data = { ...node.data, [field]: value } as StageNodeData
   }
 }
 
 function onEdgeFieldUpdate(field: string, value: unknown) {
   if (!selectedEdge.value) return
-  const edge = flowEdges.value.find((e: any) => e.id === selectedEdge.value.id)
+  const selectedId = selectedEdge.value.id
+  const edge = flowEdges.value.find((e) => e.id === selectedId)
   if (edge) {
-    edge.data = { ...edge.data, [field]: value }
+    edge.data = { ...edge.data, [field]: value } as EdgeData
   }
 }
 
@@ -442,12 +450,18 @@ function onGraduateClick(data: { id: string; name: string; stage_type: StageType
 
 async function onGraduateConfirm(stageId: string, pipelineId: string) {
   try {
-    const node = flowNodes.value.find((n: any) => n.id === stageId)
+    const node = flowNodes.value.find((n) => n.id === stageId)
     if (!node) return
 
-    node.data.graduated = true
-    node.data.stage_type = 'modulo'
-    node.data.pipeline_id = pipelineId
+    node.data = {
+      name: node.data?.name ?? '',
+      description: node.data?.description ?? '',
+      stage_type: 'modulo',
+      pipeline_id: pipelineId,
+      external_url: node.data?.external_url ?? null,
+      owner: node.data?.owner ?? null,
+      graduated: true,
+    }
 
     await handleSave()
     showGraduation.value = false

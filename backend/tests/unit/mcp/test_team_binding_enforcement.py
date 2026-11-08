@@ -216,6 +216,9 @@ class TestBindConnectorToNodeEnforcement:
             name="eng-db",
             visibility="team",
             owner_team_id=_TEAM_B,
+            # FAR-1395: an empty allowlist is UNRESTRICTED; these tests' subject
+            # is the team gate, not the operation-scope gate.
+            allowed_operations=[],
         )
         mock_get_connector.return_value = connector
 
@@ -254,6 +257,9 @@ class TestBindConnectorToNodeEnforcement:
             name="eng-db",
             visibility="team",
             owner_team_id=_TEAM_A,
+            # FAR-1395: an empty allowlist is UNRESTRICTED; these tests' subject
+            # is the team gate, not the operation-scope gate.
+            allowed_operations=[],
         )
         mock_get_connector.return_value = connector
 
@@ -305,6 +311,7 @@ class TestBindConnectorToNodeEnforcement:
             visibility="org",
             owner_team_id=None,
             connector_type_id="github_actions_ci",
+            allowed_operations=[],
         )
         mock_get_connector.return_value = connector
 

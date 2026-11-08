@@ -92,6 +92,8 @@ def _make_snapshot(
     *,
     agent_id: uuid.UUID | None = _AGENT_ID,
     prompt_template: str | None = None,
+    node_type: str | None = None,
+    agent_prompt: str | None = None,
 ) -> MagicMock:
     """Build a snapshot whose node mirrors snapshot creation: the agent's
     ``prompt_template`` is copied ONTO the node (db/crud/pipeline_snapshot.py)
@@ -100,7 +102,13 @@ def _make_snapshot(
     s = MagicMock()
     s.id = _SNAPSHOT_ID
     nodes = [
-        {"id": _NODE_ID, "agent_id": str(agent_id) if agent_id else None, "role": None},
+        {
+            "id": _NODE_ID,
+            "agent_id": str(agent_id) if agent_id else None,
+            "role": None,
+            **({"node_type": node_type} if node_type is not None else {}),
+            **({"agent_prompt": agent_prompt} if agent_prompt is not None else {}),
+        },
         {"id": "node-b", "agent_id": str(uuid.uuid4()) if agent_id else None, "role": None},
     ]
     if agent_id is None:
@@ -279,6 +287,30 @@ class TestResolveRevealPromptTemplate:
         graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID), "prompt_template": "<SNAPSHOT>"}]}
         variant = {"_run_overrides": {"prompt_templates": {str(_AGENT_ID): "<VARIANT>"}}}
         assert _resolve_reveal_prompt_template(graph, "node-a", variant) == "<VARIANT>"
+
+    def test_sandbox_agent_uses_agent_prompt_without_agent_id(self) -> None:
+        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+
+        graph = {"nodes": [{"id": "node-a", "node_type": "sandbox_agent", "agent_prompt": "<SANDBOX>"}]}
+        variant = {"_run_overrides": {"prompt_templates": {str(_AGENT_ID): "<MODEL-VARIANT>"}}}
+        assert _resolve_reveal_prompt_template(graph, "node-a", variant) == "<SANDBOX>"
+
+    def test_sandbox_agent_uses_agent_prompt_with_agent_id(self) -> None:
+        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+
+        graph = {
+            "nodes": [
+                {
+                    "id": "node-a",
+                    "node_type": "sandbox_agent",
+                    "agent_id": str(_AGENT_ID),
+                    "agent_prompt": "<SANDBOX>",
+                    "prompt_template": "<STALE-MODEL-FIELD>",
+                }
+            ]
+        }
+        variant = {"_run_overrides": {"prompt_templates": {str(_AGENT_ID): "<MODEL-VARIANT>"}}}
+        assert _resolve_reveal_prompt_template(graph, "node-a", variant) == "<SANDBOX>"
 
     def test_falls_back_to_snapshot_template_without_variant_config(self) -> None:
         from modulo.api.routes.runs import _resolve_reveal_prompt_template
@@ -587,6 +619,38 @@ class TestRevealNodePrompt:
         assert "<LIVE>" not in body["prompt"]
         assert "<LIVE>" not in json.dumps(body["messages"])
         assert body["prompt_always_visible"] is True
+
+    def test_reveal_uses_sandbox_agent_prompt_and_ignores_model_variant_override(self, client: TestClient) -> None:
+        session = _session_holder[0]
+        run = _make_run(
+            variant_config_snapshot={
+                "variant_id": "var-1",
+                "_run_overrides": {"prompt_templates": {str(_AGENT_ID): "<MODEL-VARIANT>"}},
+            }
+        )
+        snapshot = _make_snapshot(
+            prompt_template="<STALE-MODEL-FIELD>",
+            node_type="sandbox_agent",
+            agent_prompt="<SANDBOX>",
+        )
+        agent = _make_agent(prompt_template="<LIVE>")
+        agent.prompt_always_visible = True
+
+        session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
+
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        system_contents = [m["content"] for m in body["messages"] if m["role"] == "system"]
+        assert system_contents == ["<SANDBOX>"]
+        assert "<SANDBOX>" in body["prompt"]
+        assert "<MODEL-VARIANT>" not in body["prompt"]
+        assert "<STALE-MODEL-FIELD>" not in body["prompt"]
+        assert "<LIVE>" not in body["prompt"]
 
     def test_reveal_applies_run_frozen_variant_prompt_override(self, client: TestClient) -> None:
         """FAR-1398 regression: dispatch applies the run's frozen variant
