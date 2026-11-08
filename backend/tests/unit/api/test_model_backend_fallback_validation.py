@@ -14,6 +14,7 @@ import pytest
 from fastapi import HTTPException
 
 from modulo.api.routes.model_backends import _validate_fallback_ids
+from tests.unit.api.mock_session import configure_mock_session
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -31,7 +32,7 @@ def _session(*, found_ids: list[uuid.UUID], rows: list[SimpleNamespace]) -> Asyn
         # ``select(ModelBackend)`` renders every column and has no IN.
         return found_result if " IN " in str(stmt) else graph_result
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock())
     session.execute = AsyncMock(side_effect=_execute)
     return session
 
@@ -44,7 +45,7 @@ async def test_clean_chain_is_accepted() -> None:
     a, b = uuid.uuid4(), uuid.uuid4()
     session = _session(found_ids=[b], rows=[_row(a, []), _row(b, [])])
 
-    await _validate_fallback_ids(session, ORG_ID, [b], backend_id=a)
+    assert (await _validate_fallback_ids(session, ORG_ID, [b], backend_id=a)) is None
 
 
 async def test_multi_hop_cycle_is_rejected() -> None:

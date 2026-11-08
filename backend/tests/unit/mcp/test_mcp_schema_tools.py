@@ -503,8 +503,8 @@ class TestUpdateModelBackend(AuthContext):
 
         result = await update_model_backend(model_backend_id=str(backend_id), clear_fallback_chain=True)
 
-        assert result["fallback_backend_ids"] == []
-        assert mock_update.call_args.args[2]["fallback_backend_ids"] == []
+        assert not result["fallback_backend_ids"]
+        assert not mock_update.call_args.args[2]["fallback_backend_ids"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
