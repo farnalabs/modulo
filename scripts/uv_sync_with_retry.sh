@@ -31,6 +31,20 @@ set -uo pipefail
 MAX_ATTEMPTS="${UV_SYNC_MAX_ATTEMPTS:-3}"
 BACKOFF_SECONDS="${UV_SYNC_BACKOFF_SECONDS:-15}"
 
+# A non-positive or non-numeric attempt override makes `seq 1 N` empty, so the
+# loop below never runs and the script would exit 0 without ever installing
+# dependencies. Reject the override loudly instead of silently skipping uv.
+case "${MAX_ATTEMPTS}" in
+  '' | *[!0-9]*)
+    echo "::error::UV_SYNC_MAX_ATTEMPTS must be a positive integer (got '${MAX_ATTEMPTS}')." >&2
+    exit 1
+    ;;
+esac
+if [ "${MAX_ATTEMPTS}" -lt 1 ]; then
+  echo "::error::UV_SYNC_MAX_ATTEMPTS must be at least 1 (got '${MAX_ATTEMPTS}')." >&2
+  exit 1
+fi
+
 # The transient-download signatures observed from uv when the archive host is
 # unhealthy. Keep this list to NETWORK/SERVER failures only.
 TRANSIENT_RE='HTTP status server error|Failed to download|failed to download|Gateway Timeout|Bad Gateway|Service Unavailable|[45]0[234] (Gateway|Bad|Service|error)|timed out|Timed out|Timeout|Connection reset|Connection refused|Could not connect|Max retries exceeded|Temporary failure in name resolution|EOF occurred'
