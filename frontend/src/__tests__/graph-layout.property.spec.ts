@@ -13,13 +13,16 @@ const nodeIds: fc.Arbitrary<string[]> = fc.uniqueArray(fc.string({ minLength: 1,
 })
 
 const graphArbitrary: fc.Arbitrary<PropertyGraph> = nodeIds.chain((ids: string[]) => {
+  // Sort the sampled endpoints instead of filtering. Filtering is impossible
+  // for a one-node graph, and fast-check can spend its entire budget searching
+  // for a pair that cannot exist.
   const edge = fc
     .tuple(fc.integer({ min: 0, max: ids.length - 1 }), fc.integer({ min: 0, max: ids.length - 1 }))
-    .filter(([source, target]: [number, number]) => source < target)
-    .map(([source, target]: [number, number]): GraphEdgeInput => ({
-      source: ids[source],
-      target: ids[target],
-    }))
+    .map(([first, second]: [number, number]): GraphEdgeInput => {
+      const source = Math.min(first, second)
+      const target = Math.max(first, second)
+      return { source: ids[source], target: ids[target] }
+    })
   return fc.record({
     nodes: fc.constant(ids.map((id: string): GraphNodeInput => ({ id }))),
     edges: fc.array(edge, { maxLength: 16 }),
@@ -98,12 +101,12 @@ describe('layoutNodes property invariants', () => {
     )
   })
 
-  it('preserves provenance across Arrange, undo, and re-Arrange', () => {
+  it('re-layouts reconstructed nodes to the same deterministic result', () => {
     fc.assert(
       fc.property(graphArbitrary, ({ nodes, edges }) => {
         const arranged = layoutNodes(nodes, edges)
-        const undone: GraphNodeInput[] = nodes.map((node) => ({ ...node }))
-        const rearranged = layoutNodes(undone, edges)
+        const reconstructed: GraphNodeInput[] = nodesFromLayout(arranged)
+        const rearranged = layoutNodes(reconstructed, edges)
         expect(rearranged).toEqual(arranged)
       }),
       { numRuns: 25 },
