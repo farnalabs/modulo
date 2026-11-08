@@ -4662,7 +4662,7 @@ function runCanvasCommand(commandId: string): void {
       startKeyboardConnect()
       break
     case 'arrange':
-      arrangeGraph()
+      void arrangeGraph()
       announceCanvas(t('views.PipelineEditorView.canvas_arranged'))
       break
     case 'fit':
