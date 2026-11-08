@@ -83,7 +83,8 @@ def test_rc_validation_resolves_the_previous_bundle_tag_from_the_current_release
     assert 'current_bundle_tag="bundle-v${version}"' in matrix
     assert "scripts/validate_release_tag.py resolve-n-minus-1" in matrix
     assert '--current "$current_bundle_tag"' in matrix
-    assert 'bundle-v*) old_tag="v${bundle_tag#bundle-v}" ;;' in matrix
+    assert "bundle-v*) ;;" in matrix
+    assert 'gh release download "$bundle_tag"' in matrix
     assert 'echo "OLD_TAG=$old_tag" >> "$GITHUB_ENV"' in matrix
     assert 'old_tag="bundle-v' not in matrix
 
@@ -96,3 +97,20 @@ def test_rc_validation_current_bundle_tag_selects_the_previous_published_tag() -
     ]
 
     assert validator.resolve_n_minus_1([releases], "bundle-v1.3.0") == "bundle-v1.2.0"
+
+
+def test_rc_validation_uses_predecessor_bundle_image_tag_before_promotion() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "rc-validate.yml").read_text(encoding="utf-8")
+    matrix = workflow[
+        workflow.index("Resolve the previous published immutable bundle tag") : workflow.index(
+            "Run the Docker upgrade / failure / rollback matrix"
+        )
+    ]
+
+    assert 'gh release download "$bundle_tag"' in matrix
+    assert 'compose_file="$bundle_dir/docker-compose.prod.yml"' in matrix
+    assert 'image = compose.get("services", {}).get("modulo", {}).get("image")' in matrix
+    assert 'old_tag="$(COMPOSE_FILE="$compose_file" python3 - <<\'PY\'' in matrix
+    assert 're.fullmatch(r"v[0-9]+\\\\.[0-9]+\\\\.[0-9]+(?:-rc[0-9]+)?", tag)' in matrix
+    assert "predecessor compose pins non-immutable or unexpected image tag" in matrix
+    assert "does not derive old_tag from bundle_tag" not in matrix

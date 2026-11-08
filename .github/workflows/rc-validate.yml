@@ -248,14 +248,61 @@ jobs:
           fi
 
           case "$bundle_tag" in
-            bundle-v*) old_tag="v${bundle_tag#bundle-v}" ;;
+            bundle-v*) ;;
             *)
               echo "::error::release resolver returned unexpected tag '${bundle_tag}'; expected bundle-vX.Y.Z"
               exit 1
               ;;
           esac
+
+          # A bundle cut or recut is published before promotion, so its compose
+          # asset may pin the RC image (for example v1.2.0-rc2), not the stable
+          # v1.2.0 tag. Read the image reference from that immutable predecessor
+          # bundle instead of deriving a stable tag that may not exist yet.
+          bundle_version="${bundle_tag#bundle-v}"
+          gh release download "$bundle_tag" \
+            --repo "${{ github.repository }}" \
+            --pattern "modulo-${bundle_version}-compose.tar.gz" \
+            --dir "$RUNNER_TEMP" \
+            --clobber
+          downloaded_archive="$RUNNER_TEMP/modulo-${bundle_version}-compose.tar.gz"
+          if [ ! -s "$downloaded_archive" ]; then
+            echo "::error::published predecessor bundle ${bundle_tag} has no downloadable compose asset; refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          bundle_dir="$(mktemp -d)"
+          tar -xzf "$downloaded_archive" -C "$bundle_dir"
+          compose_file="$bundle_dir/docker-compose.prod.yml"
+          if [ ! -s "$compose_file" ]; then
+            echo "::error::predecessor bundle ${bundle_tag} does not contain docker-compose.prod.yml; refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          old_tag="$(COMPOSE_FILE="$compose_file" python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          import yaml
+
+          compose_path = os.environ["COMPOSE_FILE"]
+          with open(compose_path, encoding="utf-8") as handle:
+              compose = yaml.safe_load(handle)
+          image = compose.get("services", {}).get("modulo", {}).get("image")
+          prefix = "ghcr.io/farnalabs/modulo:"
+          if not isinstance(image, str) or not image.startswith(prefix):
+              sys.exit(f"predecessor compose has invalid modulo image reference: {image!r}")
+          tag = image[len(prefix):]
+          if not re.fullmatch(r"v[0-9]+\\.[0-9]+\\.[0-9]+(?:-rc[0-9]+)?", tag):
+              sys.exit(f"predecessor compose pins non-immutable or unexpected image tag: {tag!r}")
+          print(tag)
+          PY
+          )"
+          if [ -z "$old_tag" ]; then
+            echo "::error::could not resolve the predecessor image tag from bundle ${bundle_tag}; refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
           echo "OLD_TAG=$old_tag" >> "$GITHUB_ENV"
-          echo "Using previous immutable image tag $old_tag (from bundle release $bundle_tag) as the rollback target."
+          echo "Using predecessor bundle image tag $old_tag (pinned by bundle $bundle_tag) as the rollback target."
 
       - name: Run the Docker upgrade / failure / rollback matrix
         shell: bash
