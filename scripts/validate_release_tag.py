@@ -93,6 +93,38 @@ def resolve_n_minus_1(release_pages: Any, current: str) -> str | None:
     return ordered[index - 1] if index else None
 
 
+_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def _attested_digests(payload: Any) -> set[str]:
+    """Collect sha256 subject digests from a GitHub attestation response."""
+    digests: set[str] = set()
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key == "sha256" and isinstance(value, str) and _DIGEST_RE.fullmatch(f"sha256:{value}"):
+                digests.add(f"sha256:{value}")
+            else:
+                digests.update(_attested_digests(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            digests.update(_attested_digests(item))
+    return digests
+
+
+def verify_image_digest(image: str, resolved_digest: str, attestation: Any) -> str:
+    """Return the digest only when it is covered by published provenance."""
+    if not image.startswith("ghcr.io/"):
+        raise ReleaseValidationError(f"image must be a GHCR reference: {image}")
+    if _DIGEST_RE.fullmatch(resolved_digest) is None:
+        raise ReleaseValidationError(f"resolved image digest is invalid: {resolved_digest}")
+    attested = _attested_digests(attestation)
+    if resolved_digest not in attested:
+        raise ReleaseValidationError(
+            f"published provenance for {image} does not contain resolved digest {resolved_digest}"
+        )
+    return resolved_digest
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -107,6 +139,11 @@ def _parser() -> argparse.ArgumentParser:
     predecessor = subparsers.add_parser("resolve-n-minus-1", help="resolve a release predecessor")
     predecessor.add_argument("--current", required=True)
     predecessor.add_argument("--release-json", type=Path, required=True)
+
+    image = subparsers.add_parser("verify-image-digest", help="verify an image digest against provenance")
+    image.add_argument("--image", required=True)
+    image.add_argument("--digest", required=True)
+    image.add_argument("--attestation-json", type=Path, required=True)
     return parser
 
 
@@ -118,10 +155,12 @@ def main(argv: list[str] | None = None) -> int:
             print(validate_published_release(args.tag, payload))
         elif args.command == "published-tags":
             print("\n".join(published_tags(payload)))
-        else:
+        elif args.command == "resolve-n-minus-1":
             predecessor = resolve_n_minus_1(payload, args.current)
             if predecessor is not None:
                 print(predecessor)
+        else:
+            print(verify_image_digest(args.image, args.digest, payload))
         return 0
     except ReleaseValidationError as exc:
         print(f"release validation failed: {exc}", file=sys.stderr)

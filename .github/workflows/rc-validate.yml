@@ -198,9 +198,12 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      packages: read
+      attestations: read
     env:
       RC_TAG: ${{ inputs.rc_tag }}
       PORT: "18081"
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -328,6 +331,28 @@ jobs:
           fi
           echo "OLD_TAG=$old_tag" >> "$GITHUB_ENV"
           echo "Using predecessor bundle image tag $old_tag (pinned by bundle $bundle_tag) as the rollback target."
+
+          # A release tag is only a lookup key: GHCR tags can be retargeted.
+          # Resolve the exact manifest digest through the authenticated registry
+          # path, then require GitHub-published provenance for that digest.
+          echo "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          old_image="ghcr.io/farnalabs/modulo:${old_tag}"
+          old_digest="$(docker buildx imagetools inspect "$old_image" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          if [[ ! "$old_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::could not resolve a valid GHCR manifest digest for ${old_image}: ${old_digest:-<empty>}"
+            exit 1
+          fi
+          echo "OLD_IMAGE_DIGEST=$old_digest" >> "$GITHUB_ENV"
+          old_subject="oci://ghcr.io/farnalabs/modulo@${old_digest}"
+          if ! gh attestation verify "$old_subject" --repo "${{ github.repository }}" --format json > "$RUNNER_TEMP/predecessor-image-attestation.json"; then
+            echo "::error::no verifiable build provenance for ${old_subject}; refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          uv run --no-project --no-sync --no-build python scripts/validate_release_tag.py verify-image-digest \
+            --image "$old_image" \
+            --digest "$old_digest" \
+            --attestation-json "$RUNNER_TEMP/predecessor-image-attestation.json"
+          echo "Verified predecessor image identity: ${old_image} -> ${old_digest}"
 
       - name: Run the Docker upgrade / failure / rollback matrix
         shell: bash

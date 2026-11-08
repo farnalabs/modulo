@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
 
@@ -118,6 +120,22 @@ def test_rc_validation_rejects_predecessor_checksum_and_version_mismatches() -> 
     assert "including any RC suffix" in matrix
 
 
+def test_image_digest_verification_accepts_only_published_provenance() -> None:
+    validator = _release_validator()
+    digest = "sha256:" + "a" * 64
+    attestation = {"verificationResult": {"subject": [{"digest": {"sha256": "a" * 64}}]}}
+
+    assert validator.verify_image_digest("ghcr.io/farnalabs/modulo:v1.2.3", digest, attestation) == digest
+
+
+def test_image_digest_verification_fails_closed_for_missing_provenance() -> None:
+    validator = _release_validator()
+    digest = "sha256:" + "a" * 64
+
+    with pytest.raises(validator.ReleaseValidationError, match="does not contain resolved digest"):
+        validator.verify_image_digest("ghcr.io/farnalabs/modulo:v1.2.3", digest, {})
+
+
 def test_rc_validation_uses_predecessor_bundle_image_tag_before_promotion() -> None:
     workflow = (REPO_ROOT / ".github" / "workflows" / "rc-validate.yml").read_text(encoding="utf-8")
     matrix = workflow[
@@ -134,6 +152,10 @@ def test_rc_validation_uses_predecessor_bundle_image_tag_before_promotion() -> N
     assert 'expected_version = os.environ["BUNDLE_VERSION"]' in matrix
     assert "published predecessor bundle version" in matrix
     assert "predecessor compose pins non-immutable or unexpected image tag" in matrix
+    assert 'docker buildx imagetools inspect "$old_image"' in matrix
+    assert 'gh attestation verify "$old_subject"' in matrix
+    assert "verify-image-digest" in matrix
+    assert "no verifiable build provenance" in matrix
     assert 'published_sums="$RUNNER_TEMP/SHA256SUMS"' in matrix
     assert 'no checksum for $(basename "$downloaded_archive")' in matrix
     assert "checksum mismatch for published predecessor bundle asset" in matrix
