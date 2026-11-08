@@ -4666,48 +4666,33 @@ function onCanvasPaletteKeydown(event: KeyboardEvent): void {
   }
 }
 
-/**
- * Canvas-scoped key handling. Deliberately ignores events originating in an
- * editable control (the palette input has its own handler) so typing a node
- * label can never trigger a shortcut.
- */
-function onCanvasKeydown(event: KeyboardEvent): void {
-  if (canvasPaletteOpen.value) return
-  if (isTypingTarget(event.target)) return
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+/** Escape: cancel an in-progress keyboard connect, else clear the selection. */
+function handleCanvasEscape(event: KeyboardEvent): void {
+  if (keyboardConnectSourceId.value) {
+    keyboardConnectSourceId.value = null
+    announceCanvas(t('views.PipelineEditorView.canvas_connect_cancelled'))
+    return
+  }
+  if (selectedNodeData.value || selectedEdgeData.value) {
     event.preventDefault()
-    event.stopPropagation()
-    openCanvasPalette()
-    return
+    onPaneClick()
+    canvasRef.value?.focus({ preventScroll: true })
   }
-  if (event.key === 'Escape') {
-    if (keyboardConnectSourceId.value) {
-      keyboardConnectSourceId.value = null
-      announceCanvas(t('views.PipelineEditorView.canvas_connect_cancelled'))
-      return
-    }
-    if (selectedNodeData.value || selectedEdgeData.value) {
-      event.preventDefault()
-      onPaneClick()
-      canvasRef.value?.focus({ preventScroll: true })
-    }
-    return
-  }
-  if (event.key === 'e' || event.key === 'E') {
-    event.preventDefault()
-    startKeyboardConnect()
-    return
-  }
-  if (event.key === 'Enter' && keyboardConnectSourceId.value) {
-    const targetId = focusedGraphNodeId()
-    if (targetId) {
-      event.preventDefault()
-      connectNodes(keyboardConnectSourceId.value, targetId)
-      keyboardConnectSourceId.value = null
-    }
-    return
-  }
-  if (!event.key.startsWith('Arrow')) return
+}
+
+/** Enter: complete a pending keyboard connect against the focused node. */
+function handleCanvasConnectConfirm(event: KeyboardEvent): void {
+  const sourceId = keyboardConnectSourceId.value
+  if (!sourceId) return
+  const targetId = focusedGraphNodeId()
+  if (!targetId) return
+  event.preventDefault()
+  connectNodes(sourceId, targetId)
+  keyboardConnectSourceId.value = null
+}
+
+/** Arrow keys: Shift nudges the focused node, otherwise move focus. */
+function handleCanvasArrow(event: KeyboardEvent): void {
   event.preventDefault()
   if (event.shiftKey) {
     nudgeFocusedNode(event.key)
@@ -4721,6 +4706,35 @@ function onCanvasKeydown(event: KeyboardEvent): void {
   }
   const nextId = nodeIdInDirection(currentId, event.key)
   if (nextId) focusGraphNode(nextId)
+}
+
+/**
+ * Canvas-scoped key handling. Deliberately ignores events originating in an
+ * editable control (the palette input has its own handler) so typing a node
+ * label can never trigger a shortcut.
+ */
+function onCanvasKeydown(event: KeyboardEvent): void {
+  if (canvasPaletteOpen.value || isTypingTarget(event.target)) return
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    event.stopPropagation()
+    openCanvasPalette()
+    return
+  }
+  switch (event.key) {
+    case 'Escape':
+      handleCanvasEscape(event)
+      return
+    case 'e':
+    case 'E':
+      event.preventDefault()
+      startKeyboardConnect()
+      return
+    case 'Enter':
+      handleCanvasConnectConfirm(event)
+      return
+  }
+  if (event.key.startsWith('Arrow')) handleCanvasArrow(event)
 }
 
 // --- Editor viewport fit (FAR-1841 mobile, FAR-1851 desktop) --------------

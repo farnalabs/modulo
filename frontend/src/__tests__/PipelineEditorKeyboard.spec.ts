@@ -477,6 +477,20 @@ describe('PipelineEditorView canvas keyboard — branch coverage (FAR-2464)', ()
     expect(vm.keyboardConnectSourceId).toBe('a')
   })
 
+  it('ignores unrelated keys that are not canvas shortcuts', async () => {
+    const wrapper = await mountedEditor()
+    const vm = wrapper.vm as any
+    const canvas = canvasOf(wrapper)
+    vm.canvasPaletteOpen = false
+    vm.selectedNodeData = null
+    vm.selectedEdgeData = null
+
+    expect(() => keydown(canvas, 'a')).not.toThrow()
+    await nextTick()
+    expect(vm.canvasPaletteOpen).toBe(false)
+    expect(vm.keyboardConnectSourceId).toBeNull()
+  })
+
   it('completes a pending keyboard connection when Enter hits a focused node', async () => {
     const wrapper = await mountedEditor()
     const vm = wrapper.vm as any
