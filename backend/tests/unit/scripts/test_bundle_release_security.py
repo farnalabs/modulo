@@ -16,6 +16,7 @@ from subprocess import Popen
 from typing import Any
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 BACKEND_ROOT = REPO_ROOT / "backend"
@@ -254,6 +255,39 @@ def test_bundle_archive_urls_and_hashes_match_lockfile_exactly() -> None:
         actual[package] = {"url": url, "hash": f"sha256:{digest}"}
     assert actual == {package: {"url": value["url"], "hash": value["hash"]} for package, value in locked.items()}
     assert {package: value["size"] for package, value in locked.items()} == EXPECTED_ARCHIVE_SIZES
+
+
+def test_bundle_external_downloads_use_bounded_transient_retry_and_checksum_verification() -> None:
+    text = _workflow_text()
+    workflow = yaml.safe_load(text)
+    steps = workflow["jobs"]["bundle"]["steps"]
+    names = [step.get("name", "") for step in steps]
+
+    helper = steps[names.index("Define verified external download helper")]["run"]
+    assert "local max_attempts=5" in helper
+    assert "--retry 0" in helper
+    assert "--connect-timeout 20" in helper
+    assert "--max-time 300" in helper
+    assert "408|425|429|500|502|503|504" in helper
+    assert "curl_rc" in helper
+    assert "RANDOM % 3" in helper
+    assert "sha256sum --check --strict" in helper
+    assert "permanent failure" in helper
+    assert "checksum" not in helper.lower() or "sha256sum --check --strict" in helper
+
+    download_scripts = [
+        steps[names.index(step_name)]["run"]
+        for step_name in (
+            "Download and sha256-verify python-build-standalone",
+            "Download and sha256-verify pinned PostgreSQL source",
+            "Build and sha256-verify Redis from pinned upstream source",
+        )
+    ]
+    assert all('source "$GITHUB_WORKSPACE/.download-verified.sh"' in script for script in download_scripts)
+    assert all("download_verified" in script for script in download_scripts)
+    assert text.count("curl -fsSL") == 1
+    assert text.count("sha256sum --check --strict") >= 2
+    assert "--retry 3" not in text
 
 
 def test_bundle_has_only_the_guarded_global_sync() -> None:
