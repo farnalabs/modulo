@@ -211,7 +211,7 @@ class TestIoRoundTrip:
         body = self._get_io(client, run)
 
         assert body["outputs_json"]["planner"] == envelope
-        assert body["node_telemetry"] is None
+        assert body["node_telemetry"] == {}
 
     def test_telemetry_only_node_appears_in_node_telemetry(self, client: TestClient, mock_session: AsyncMock) -> None:
         run = _make_run(
@@ -353,7 +353,7 @@ class TestIoLogTotals:
 
         body = self._get_io(client, run)
 
-        assert body["stdout_total_length"] == 11  # len("hello world")
+        assert body["stdout_total_length"] == 0
 
     def test_total_length_zero_when_no_nodes(self, client: TestClient, mock_session: AsyncMock) -> None:
         """Empty run: totals are 0."""

@@ -522,7 +522,7 @@ def _child_dicts(item: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _extract_pr_url_from_node(node_value: Any) -> str:
     """Return the first valid ``pr_url`` in a pure node return."""
-    if not isinstance(node_value, dict) or "artifacts" in node_value or "output" in node_value:
+    if not isinstance(node_value, dict):
         return ""
     stack: list[dict[str, Any]] = [node_value]
     seen: set[int] = set()

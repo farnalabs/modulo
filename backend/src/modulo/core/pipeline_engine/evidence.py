@@ -273,16 +273,16 @@ def extract_stored_output_json(
     telemetry_json: Any,
     node_id: str,
 ) -> dict[str, Any] | None:
-    """Return the pure stored node return when it is an output mapping.
+    """Return the stored node return when it is an output mapping.
 
-    Stored output rows are post-strip pure returns. Mixed pre-backfill
-    envelopes are deliberately not interpreted here; their contents are not
-    current output evidence.
+    The stored value is already the producer's pure return. Its keys are
+    arbitrary contract data; telemetry is read separately and is never inferred
+    from the return's shape.
     """
     from modulo.core.node_output_split import node_return
 
     value = node_return(outputs_json, telemetry_json, node_id)
-    if not isinstance(value, dict) or "artifacts" in value or "output" in value:
+    if not isinstance(value, dict):
         return None
     return cast(_DICT_STR_ANY, value)
 

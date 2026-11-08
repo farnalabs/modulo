@@ -116,14 +116,14 @@ class TestExtractOutputJson:
 
 
 class TestExtractStoredOutputJson:
-    def test_mixed_pre_backfill_envelope_is_not_interpreted(self) -> None:
+    def test_pure_return_with_output_key_is_used_directly(self) -> None:
         outputs = {
             str(_NODE_A): {
-                "artifacts": [{"output": {"output_json": {"changed": True}, "status": "completed"}}],
-                "status": "completed",
+                "output": {"output_json": {"changed": True}, "status": "completed"},
+                "artifacts": ["producer-data"],
             }
         }
-        assert extract_stored_output_json(outputs, {}, str(_NODE_A)) is None
+        assert extract_stored_output_json(outputs, {}, str(_NODE_A)) == outputs[str(_NODE_A)]
 
     def test_pure_return_used_when_no_envelope(self) -> None:
         # A P1 split row: node_return returns the pure output_json dict.
@@ -136,9 +136,9 @@ class TestExtractStoredOutputJson:
         assert extract_stored_output_json(None, {}, str(_NODE_A)) is None
         assert extract_stored_output_json({str(_NODE_A): "just-a-string"}, {}, str(_NODE_A)) is None
 
-    def test_envelope_without_output_json_is_none(self) -> None:
+    def test_pure_return_without_output_json_is_used_directly(self) -> None:
         outputs = {str(_NODE_A): {"output": {"status": "completed"}}}
-        assert extract_stored_output_json(outputs, {}, str(_NODE_A)) is None
+        assert extract_stored_output_json(outputs, {}, str(_NODE_A)) == outputs[str(_NODE_A)]
 
 
 class TestCombineProbeResults:

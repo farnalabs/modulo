@@ -2289,10 +2289,9 @@ def _build_fixture_map(
     inp = input_payload or {}
     out = outputs_json or {}
 
-    # Resolve every per-node value through node_return (the legacy-safe pure
-    # return accessor). For legacy rows it returns each value verbatim, so the
-    # fixture_map is byte-identical to today; once P1 writes pure returns the
-    # fixture logic keeps reading the same accessor.
+    # Resolve every per-node value through the pure-return accessor. The
+    # accessor preserves arbitrary producer keys, including ``input`` and
+    # ``output`` when those names are part of the contract.
     resolved_out: Any = out
     if isinstance(out, dict):
         resolved_out = {node_id: node_return(out, None, node_id) for node_id in out}
@@ -2328,22 +2327,18 @@ def _build_node_labels(graph_json: dict[str, Any] | None) -> dict[str, str]:
 
 def _normalize_run_outputs(
     outputs_json: dict[str, Any] | None,
-    telemetry_json: dict[str, Any] | None,
+    _telemetry_json: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Resolve each node's pure return (new rows) or envelope verbatim (legacy)."""
-    if not outputs_json:
-        return outputs_json
-    return {nid: node_return(outputs_json, telemetry_json, nid) for nid in outputs_json}
+    """Return the stored pure node returns without interpreting their contents."""
+    return outputs_json
 
 
 def _normalize_node_telemetry(
     telemetry_json: dict[str, Any] | None,
-    outputs_json: dict[str, Any] | None,
+    _outputs_json: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Return only the stored per-node telemetry mappings."""
-    if not telemetry_json:
-        return None if outputs_json else telemetry_json
-    return {nid: node_telemetry(telemetry_json, outputs_json, nid) for nid in telemetry_json}
+    """Return the stored per-node telemetry mappings without deriving values."""
+    return telemetry_json
 
 
 class FixtureExportResponse(BaseModel):
@@ -2379,46 +2374,24 @@ def _telemetry_log_lengths(tele: dict[str, Any]) -> tuple[int, int]:
     return stdout_total, stderr_total
 
 
-def _inline_log_lengths(out: Any) -> tuple[int, int]:
-    """``(stdout, stderr)`` lengths derived from a node's inline output blob.
-
-    A dict envelope contributes the length of its inline ``agent_stdout`` /
-    ``agent_stderr``; a bare string counts as stdout only (its inline length);
-    anything else contributes nothing.
-    """
-    if isinstance(out, dict):
-        return len(str(out.get("agent_stdout") or "")), len(str(out.get("agent_stderr") or ""))
-    if isinstance(out, str):
-        return len(out), 0
-    return 0, 0
-
-
 def _compute_log_totals(
     normalized_telemetry: dict[str, Any] | None,
-    normalized_outputs: dict[str, Any] | None,
+    _normalized_outputs: dict[str, Any] | None,
 ) -> tuple[int, int]:
-    """FAR-870: derive the true total stdout/stderr character lengths across all nodes.
+    """Derive log lengths only from separated per-node telemetry.
 
-    For each node, prefer the ``stdout_length`` / ``stderr_length`` value stored
-    in telemetry (the sandbox runner always records the pre-truncation character
-    count here, even when the inline ``agent_stdout`` is capped). Fall back to
-    ``len(str(…))`` of the inline content for nodes without telemetry or
-    missing length keys (non-sandbox nodes, legacy rows).
-
-    Legacy inner-output envelopes carry ``agent_stdout`` / ``agent_stderr`` but
-    NOT ``stdout_length`` -- the fallback derives the length from the inline
-    content in that case.  A null inline value contributes 0 rather than the
-    literal ``"None"`` (``str(None)`` would otherwise add phantom characters).
+    Telemetry stores pre-truncation lengths when available and otherwise derives
+    them from its own inline log fields. Pure node returns are never interpreted
+    as telemetry, so nodes without a telemetry entry contribute zero.
     """
     stdout_total = 0
     stderr_total = 0
-    all_node_ids = set(normalized_telemetry or {}) | set(normalized_outputs or {})
-    for node_id in all_node_ids:
+    for node_id in normalized_telemetry or {}:
         tele = (normalized_telemetry or {}).get(node_id)
         if isinstance(tele, dict):
             stdout_len, stderr_len = _telemetry_log_lengths(tele)
         else:
-            stdout_len, stderr_len = _inline_log_lengths((normalized_outputs or {}).get(node_id))
+            stdout_len, stderr_len = 0, 0
         stdout_total += stdout_len
         stderr_total += stderr_len
     return stdout_total, stderr_total
@@ -2427,13 +2400,12 @@ def _compute_log_totals(
 def _build_run_io_response(run: Run, node_labels: dict[str, str], blobs: RunBlobs) -> RunIOResponse:
     """Normalise, mask, and package a run's IO into a RunIOResponse.
 
-    One shape for the frontend: node_return resolves the pure return (new
-    rows) or the envelope verbatim (legacy rows); node_telemetry resolves
-    the stored telemetry (new rows) or the inner output envelope (legacy).
+    One shape for the frontend: ``outputs_json`` contains stored pure returns
+    and ``node_telemetry`` contains stored separated telemetry.
 
-    *blobs* is the run's reassembled legacy-dict shape (FAR-583 read-switch:
-    the caller reassembles via the ``run_node_outputs`` repo reader inside
-    its transaction).
+    *blobs* is the run's reassembled dictionary shape (FAR-583 read-switch:
+    the caller reassembles via the ``run_node_outputs`` repo reader inside its
+    transaction).
     """
     outputs_json = blobs.outputs
     telemetry_json = blobs.telemetry
@@ -2470,7 +2442,6 @@ async def get_run_io_endpoint(
     principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
 ) -> RunIOResponse:
     """Return per-node IO for a completed run, plus generated fixture_map.
-
     The response exposes a single NORMALIZED view (FAR-126): ``outputs_json``
     holds each node's pure return and ``node_telemetry`` holds its exhaustive
     telemetry. Both are resolved through the legacy-safe accessors

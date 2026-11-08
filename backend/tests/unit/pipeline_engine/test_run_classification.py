@@ -265,17 +265,17 @@ class TestPrUrlSources:
         assert result.value == RunClassificationValue.delivered
         assert _PR in result.delivered_pr_urls
 
-    def test_pr_url_in_legacy_envelope_is_not_current_evidence(self) -> None:
-        outputs = {"n1": _legacy_envelope_with_pr(_PR)}
+    def test_pr_url_in_pure_return_with_output_key_is_current_evidence(self) -> None:
+        outputs = {"n1": {"output": {"pr_url": _PR}, "artifacts": ["producer-data"]}}
         result = classify_run("complete", None, outputs_json=outputs, telemetry_json={})
-        assert result.value == RunClassificationValue.no_delivery
-        assert not result.delivered_pr_urls
+        assert result.value == RunClassificationValue.delivered
+        assert result.delivered_pr_urls == (_PR,)
 
-    def test_pr_url_in_artifacts_envelope_is_not_current_evidence(self) -> None:
-        outputs = {"n1": _artifacts_envelope_with_pr(_PR)}
+    def test_pr_url_in_arbitrary_pure_return_is_current_evidence(self) -> None:
+        outputs = {"n1": {"artifacts": {"pr_url": _PR}}}
         result = classify_run("complete", None, outputs_json=outputs, telemetry_json={})
-        assert result.value == RunClassificationValue.no_delivery
-        assert not result.delivered_pr_urls
+        assert result.value == RunClassificationValue.delivered
+        assert result.delivered_pr_urls == (_PR,)
 
     def test_pr_url_nested_in_raw_output_markers_any_attempt_key(self) -> None:
         """A pr_url recovered from ANY attempt_key is a valid delivery signal —
