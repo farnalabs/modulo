@@ -41,7 +41,7 @@ from modulo.api.mcp_server import (
     _parse_mcp_datetime,
     _parse_uuid_param,
     _quantize_mcp_cost_rollup,
-    _reject_unsupported_dispatch_bindings,
+    _reject_invalid_connector_bindings,
     _resolve_run_node_output,
     _run_status_base,
     _run_status_detail,
@@ -1194,6 +1194,9 @@ class TestApplyNodeConnectorBinding:
 # ─── Instance-level dispatch capability on the full-graph write ────
 # FAR-1141 FIX 2: the MCP full-graph write validated only the caller-declared
 # ``binding.type``; REST resolves the bound INSTANCE's own type instead.
+# FAR-1395 widened the same instance-level check to every ROUTED binding's
+# ``allowed_operations`` scope, so this helper serves the instance row the
+# operation-scope gate reads too.
 
 
 def _session_returning_instances(rows: list[Any]) -> AsyncMock:
@@ -1210,11 +1213,20 @@ def _session_returning_instances(rows: list[Any]) -> AsyncMock:
     return session
 
 
-def _instance_row(cid: uuid.UUID, type_id: str) -> MagicMock:
+def _instance_row(
+    cid: uuid.UUID,
+    type_id: str,
+    *,
+    allowed_operations: list[str] | None = None,
+) -> MagicMock:
     instance = MagicMock()
     instance.id = cid
     instance.name = f"conn-{cid}"
     instance.connector_type_id = type_id
+    # The operation-scope gate reads these off the row exactly as the run-time
+    # hub does; an unset/blank allowlist is UNRESTRICTED (FAR-1564).
+    instance.visibility = "org"
+    instance.allowed_operations = allowed_operations if allowed_operations is not None else []
     return instance
 
 
@@ -1233,13 +1245,15 @@ def _dispatch_graph(cid: uuid.UUID, type_id: str) -> list[dict[str, Any]]:
     ]
 
 
-class TestRejectUnsupportedDispatchBindings:
+class TestRejectInvalidConnectorBindings:
+    """FAR-1141 + FAR-1395: instance-level checks on every ROUTED binding."""
+
     async def test_a_dispatch_binding_to_a_non_ci_instance_is_rejected(self) -> None:
         cid = uuid.uuid4()
         nodes = _dispatch_graph(cid, "github_actions_ci")
         session = _session_returning_instances([_instance_row(cid, "linear")])
 
-        err = await _reject_unsupported_dispatch_bindings(session, uuid.uuid4(), nodes)
+        err = await _reject_invalid_connector_bindings(session, uuid.uuid4(), nodes)
 
         assert err is not None
         assert err["error"] == "validation_failed"
@@ -1251,15 +1265,64 @@ class TestRejectUnsupportedDispatchBindings:
         nodes = _dispatch_graph(cid, "github_actions_ci")
         session = _session_returning_instances([_instance_row(cid, "github_actions_ci")])
 
-        err = await _reject_unsupported_dispatch_bindings(session, uuid.uuid4(), nodes)
+        err = await _reject_invalid_connector_bindings(session, uuid.uuid4(), nodes)
 
         assert err is None
 
-    async def test_a_graph_without_a_dispatch_binding_issues_no_query(self) -> None:
+    async def test_a_query_binding_outside_the_allowlist_is_rejected(self) -> None:
+        """FAR-1395: the operation scope gates ``query``, not only ``dispatch``.
+
+        The instance allows ``write`` only, so the routed ``query`` (``read``)
+        must be refused — the same answer the run-time ``ConnectorACL`` gives.
+        """
+        cid = uuid.uuid4()
         nodes = [
             {
                 "id": str(uuid.uuid4()),
-                "node_type": "router",
+                "node_type": "connector",
+                "connector_binding": {
+                    "type": "github",
+                    "instance_id": str(cid),
+                    "operation": "query",
+                    "resource": "pull",
+                },
+            }
+        ]
+        session = _session_returning_instances([_instance_row(cid, "github", allowed_operations=["write"])])
+
+        err = await _reject_invalid_connector_bindings(session, uuid.uuid4(), nodes)
+
+        assert err is not None
+        assert err["field"] == "connector_binding"
+        assert "'read'" in err["detail"]
+
+    async def test_a_query_binding_inside_the_allowlist_is_accepted(self) -> None:
+        cid = uuid.uuid4()
+        nodes = [
+            {
+                "id": str(uuid.uuid4()),
+                "node_type": "connector",
+                "connector_binding": {
+                    "type": "github",
+                    "instance_id": str(cid),
+                    "operation": "query",
+                    "resource": "pull",
+                },
+            }
+        ]
+        session = _session_returning_instances([_instance_row(cid, "github", allowed_operations=["read"])])
+
+        err = await _reject_invalid_connector_bindings(session, uuid.uuid4(), nodes)
+
+        assert err is None
+
+    async def test_an_unrouted_binding_issues_no_query(self) -> None:
+        """An ``agent`` node with an ``agent_id`` never routes — nothing to check."""
+        nodes = [
+            {
+                "id": str(uuid.uuid4()),
+                "node_type": "agent",
+                "agent_id": str(uuid.uuid4()),
                 "connector_binding": {
                     "type": "github",
                     "instance_id": str(uuid.uuid4()),
@@ -1269,7 +1332,7 @@ class TestRejectUnsupportedDispatchBindings:
         ]
         session = _session_returning_instances([])
 
-        err = await _reject_unsupported_dispatch_bindings(session, uuid.uuid4(), nodes)
+        err = await _reject_invalid_connector_bindings(session, uuid.uuid4(), nodes)
 
         assert err is None
         session.execute.assert_not_called()
@@ -1279,7 +1342,7 @@ class TestRejectUnsupportedDispatchBindings:
         nodes = _dispatch_graph(cid, "github_actions_ci")
         session = _session_returning_instances([])
 
-        err = await _reject_unsupported_dispatch_bindings(session, uuid.uuid4(), nodes)
+        err = await _reject_invalid_connector_bindings(session, uuid.uuid4(), nodes)
 
         assert err is None
 
@@ -1305,7 +1368,7 @@ class TestRejectUnsupportedDispatchBindings:
         ]
         session = _session_returning_instances([_instance_row(cid, "github_actions_ci")])
 
-        err = await _reject_unsupported_dispatch_bindings(session, uuid.uuid4(), nodes)
+        err = await _reject_invalid_connector_bindings(session, uuid.uuid4(), nodes)
 
         assert err is None
 

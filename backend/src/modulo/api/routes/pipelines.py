@@ -437,9 +437,27 @@ def _reject_graph_validation_issues(issues: list[Any]) -> None:
     descriptions. It is raised inside ``session.begin()`` so the already-run
     graph write rolls back with the rejection — without it the node-level
     check would be advisory-only and the save would succeed.
+
+    ``CONNECTOR_MISSING_OPERATIONS`` (FAR-1395) is hard-blocking for the same
+    reason: the issue means the bound connector's ``allowed_operations`` does
+    not permit the verb the node routes (``query`` → ``read``, ``write``/
+    ``dispatch`` → ``write``). Run time ALREADY refuses that binding, so a save
+    that accepted it would author a graph guaranteed to fail its first run —
+    and this is the check the ticket found could never gate a write path. The
+    derived requirement (``connector_binding_required_acl_operations``) means it
+    fires on real customer input rather than on a key no producer ever wrote.
+
+    Everything else stays advisory on purpose: a pre-existing inactive connector
+    or a legacy topology issue must not block an unrelated edit of a live
+    pipeline (the editor surfaces those separately).
     """
     for issue in issues:
-        if issue.code in ("GUARDRAIL_CAP_EXCEEDED", "REDACT_CORRECT_BLOCKED", "HITL_REVIEW_DESCRIPTION_REQUIRED"):
+        if issue.code in (
+            "GUARDRAIL_CAP_EXCEEDED",
+            "REDACT_CORRECT_BLOCKED",
+            "HITL_REVIEW_DESCRIPTION_REQUIRED",
+            "CONNECTOR_MISSING_OPERATIONS",
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=issue.message,
