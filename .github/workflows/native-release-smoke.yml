@@ -29,7 +29,9 @@ name: "Native: release smoke + canary (bundle-v*)"
 #    honest in the meantime.
 #
 # Rollback tooling: workflow_dispatch with rollback_version; the manual
-# playbook (triggers + actions) lives in docs/upgrade-process.md.
+# playbook (triggers + actions) lives in docs/upgrade-process.md. The complete
+# Alpha acceptance sequence is recorded by the native install/canary legs and
+# the Docker compose harness documented in docs/release-process.md.
 #
 # MANUAL DISPATCH REQUIRES A TARGET (FAR-2161). Supply ONE of:
 #   canary_version=bundle-vX.Y.Z   -> the canary leg (published artifact + N-1 upgrade)
