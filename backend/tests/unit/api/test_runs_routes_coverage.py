@@ -1309,6 +1309,12 @@ def test_compute_log_totals_ignores_bare_string_output_value() -> None:
     assert runs_module._compute_log_totals(None, {"node": "abc"}) == (0, 0)
 
 
+def test_compute_log_totals_ignores_non_dict_telemetry_value() -> None:
+    """A non-dict telemetry entry contributes zero rather than raising."""
+    assert runs_module._compute_log_totals({"node": 123}, None) == (0, 0)
+    assert runs_module._compute_log_totals({"node": "abc"}, None) == (0, 0)
+
+
 def test_telemetry_log_lengths_prefers_stored_lengths() -> None:
     """Stored pre-truncation lengths win, including the explicit zero case."""
     assert runs_module._telemetry_log_lengths({"stdout_length": 5, "stderr_length": 7}) == (5, 7)
