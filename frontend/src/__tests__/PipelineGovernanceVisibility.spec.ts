@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
-import enUS from '../../locales/en-US.js'
-import PipelineGovernanceVisibility from './PipelineGovernanceVisibility.vue'
+import enUS from '../locales/en-US.js'
+import PipelineGovernanceVisibility from '../components/pipeline/PipelineGovernanceVisibility.vue'
 
 const i18n = createI18n({
   legacy: false,
@@ -97,6 +97,38 @@ describe('PipelineGovernanceVisibility', () => {
 
     expect(wrapper.text()).toContain('Team: assigned')
     expect(wrapper.text()).not.toContain('team-unknown')
+    wrapper.unmount()
+  })
+
+  it('renders an unrecognised autonomy level through the unknown fallback key', () => {
+    const wrapper = mountVisibility({
+      mode: 'toolbar',
+      pipeline: { max_autonomy_level: 'future_level' },
+    })
+
+    expect(wrapper.text()).toContain('Ceiling: Unknown level')
+    expect(wrapper.html()).not.toContain('views.PipelineEditorView.governance_')
+    wrapper.unmount()
+  })
+
+  it('omits the team pill when a HITL gate declares no team at all', () => {
+    const wrapper = mountVisibility({
+      mode: 'node',
+      node: { hitl_config: { human_only: true } },
+    })
+
+    expect(wrapper.text()).toContain('Human-only')
+    expect(wrapper.find('[data-testid="pipeline-node-governance-team"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('splits an expiry over an hour into hours and minutes', () => {
+    const wrapper = mountVisibility({
+      mode: 'node',
+      node: { hitl_config: { claim_expiry_minutes: 90 } },
+    })
+
+    expect(wrapper.text()).toContain('Expiry: 1h 30m')
     wrapper.unmount()
   })
 

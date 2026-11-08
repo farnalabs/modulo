@@ -37,12 +37,11 @@ const autonomyLevel = computed(() => {
   return max ?? autonomyLabel(props.pipeline?.default_autonomy_level)
 })
 const autonomyInherited = computed(() => !props.pipeline?.max_autonomy_level && Boolean(autonomyLevel.value))
-const autonomyTitle = computed(() => {
-  if (!autonomyLevel.value) return ''
-  return autonomyInherited.value
+const autonomyTitle = computed(() =>
+  autonomyInherited.value
     ? t('views.PipelineEditorView.governance_autonomy_inherited_hint')
-    : t('views.PipelineEditorView.governance_autonomy_hint')
-})
+    : t('views.PipelineEditorView.governance_autonomy_hint'),
+)
 
 const threshold = computed(() => {
   const value = props.pipeline?.circuit_breaker_threshold
