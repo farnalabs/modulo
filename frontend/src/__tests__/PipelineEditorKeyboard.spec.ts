@@ -170,6 +170,28 @@ describe('PipelineEditorView canvas keyboard (FAR-2464)', () => {
     expect(document.activeElement).toBe(canvas)
   })
 
+  it('closes the palette on Escape from a focused option button', async () => {
+    const wrapper = await mountedEditor()
+    keydown(canvasOf(wrapper), 'k', { ctrlKey: true })
+    await nextTick()
+
+    const option = wrapper.findAll('[data-testid="pipeline-editor-command-palette-list"] [role="option"]')[0]
+    ;(option.element as HTMLElement).focus()
+    keydown(option.element, 'Escape')
+    await nextTick()
+
+    expect(palette(wrapper).exists()).toBe(false)
+  })
+
+  it('exposes a stable test id on every palette option', async () => {
+    const wrapper = await mountedEditor()
+    keydown(canvasOf(wrapper), 'k', { ctrlKey: true })
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-command-option-add-node"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-command-option-connect"]').exists()).toBe(true)
+  })
+
   it('filters commands and runs the selected one with Enter', async () => {
     const wrapper = await mountedEditor()
     const canvas = canvasOf(wrapper)
@@ -485,10 +507,42 @@ describe('PipelineEditorView canvas keyboard — branch coverage (FAR-2464)', ()
     vm.selectedNodeData = null
     vm.selectedEdgeData = null
 
-    expect(() => keydown(canvas, 'a')).not.toThrow()
+    expect(() => keydown(canvas, 'z')).not.toThrow()
     await nextTick()
     expect(vm.canvasPaletteOpen).toBe(false)
     expect(vm.keyboardConnectSourceId).toBeNull()
+  })
+
+  it('adds an agent node with the advertised A shortcut', async () => {
+    const wrapper = await mountedEditor()
+    const vm = wrapper.vm as any
+    vm.flowNodes = []
+    vm.rawNodes = []
+    await nextTick()
+
+    keydown(canvasOf(wrapper), 'a')
+    await nextTick()
+
+    expect(vm.flowNodes).toHaveLength(1)
+    expect(announcement(wrapper)).toContain('Agent node added')
+  })
+
+  it('leaves modified letter presses to the browser', async () => {
+    const wrapper = await mountedEditor()
+    const vm = wrapper.vm as any
+    vm.selectedNodeData = { id: 'a', node_type: 'agent' }
+    vm.flowNodes = []
+    vm.rawNodes = []
+    await nextTick()
+
+    keydown(canvasOf(wrapper), 'e', { ctrlKey: true })
+    keydown(canvasOf(wrapper), 'e', { metaKey: true })
+    keydown(canvasOf(wrapper), 'a', { ctrlKey: true })
+    keydown(canvasOf(wrapper), 'a', { altKey: true })
+    await nextTick()
+
+    expect(vm.keyboardConnectSourceId).toBeNull()
+    expect(vm.flowNodes).toHaveLength(0)
   })
 
   it('completes a pending keyboard connection when Enter hits a focused node', async () => {

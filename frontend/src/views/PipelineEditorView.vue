@@ -930,6 +930,7 @@
             <Button severity="secondary" outlined size="small" type="button" class="text-xs" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
           </div>
         </div>
+        <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- palette keyboard region: Escape works from any palette control, including the option buttons -->
         <div
           v-if="canvasPaletteOpen"
           class="absolute left-4 top-4 z-30 w-80 rounded-lg border border-border bg-card p-3 shadow-xl"
@@ -937,6 +938,7 @@
           aria-modal="false"
           :aria-label="$t('views.PipelineEditorView.canvas_command_palette')"
           data-testid="pipeline-editor-command-palette"
+          @keydown="onCanvasPaletteKeydown"
         >
           <div class="mb-2 flex items-center justify-between gap-2">
             <h2 class="text-sm font-semibold">{{ $t('views.PipelineEditorView.canvas_command_palette') }}</h2>
@@ -950,7 +952,6 @@
             :aria-label="$t('views.PipelineEditorView.canvas_command_search')"
             :placeholder="$t('views.PipelineEditorView.canvas_command_search')"
             data-testid="pipeline-editor-command-palette-input"
-            @keydown="onCanvasPaletteKeydown"
           />
           <ul role="listbox" class="max-h-56 overflow-y-auto" data-testid="pipeline-editor-command-palette-list">
             <li v-for="(command, index) in filteredCanvasCommands" :key="command.id">
@@ -960,6 +961,7 @@
                 :class="{ 'bg-accent': index === canvasPaletteIndex }"
                 :aria-selected="index === canvasPaletteIndex"
                 role="option"
+                :data-testid="'pipeline-editor-command-option-' + command.id"
                 @click="runCanvasCommand(command.id)"
               >
                 <span>{{ command.label }}</span>
@@ -4680,6 +4682,7 @@ function runCanvasCommand(commandId: string): void {
 }
 
 function onCanvasPaletteKeydown(event: KeyboardEvent): void {
+  if (event.defaultPrevented) return
   if (event.key === 'Escape') {
     event.preventDefault()
     closeCanvasPalette()
@@ -4697,6 +4700,8 @@ function onCanvasPaletteKeydown(event: KeyboardEvent): void {
     return
   }
   if (event.key === 'Enter') {
+    // A focused option button runs its command through its own click handler.
+    if ((event.target as HTMLElement | null)?.tagName === 'BUTTON') return
     event.preventDefault()
     const command = filteredCanvasCommands.value[canvasPaletteIndex.value]
     if (command) runCanvasCommand(command.id)
@@ -4758,9 +4763,17 @@ function onCanvasKeydown(event: KeyboardEvent): void {
     openCanvasPalette()
     return
   }
+  // Modified key presses belong to the browser/OS (Ctrl+A, Cmd+E, ...), not the
+  // canvas shortcuts below.
+  if (event.ctrlKey || event.metaKey || event.altKey) return
   switch (event.key) {
     case 'Escape':
       handleCanvasEscape(event)
+      return
+    case 'a':
+    case 'A':
+      event.preventDefault()
+      addNode('agent')
       return
     case 'e':
     case 'E':
