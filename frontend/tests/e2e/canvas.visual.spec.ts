@@ -329,7 +329,7 @@ test.describe('Pipeline canvas visual snapshots', { tag: '@visual' }, () => {
         await mockGraph(page, EMPTY_GRAPH)
         await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
         await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: 60_000 })
-        await expect(page.getByText('no components in pipeline')).toBeVisible()
+        await expect(page.getByTestId('pipeline-editor-empty-add-node')).toBeVisible()
         await capture(page, 'empty', viewport.name, theme)
       })
 
