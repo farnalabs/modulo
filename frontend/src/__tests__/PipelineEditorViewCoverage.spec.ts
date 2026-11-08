@@ -2005,3 +2005,54 @@ describe('PipelineEditorView — FAR-2410 router/HITL node cards', () => {
     wrapper.unmount()
   })
 })
+
+describe('PipelineEditorView — default node slot fallback', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useApiFns.get.mockReset()
+    useApiFns.post.mockReset()
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
+      return Promise.resolve({ items: [] })
+    })
+    useApiFns.post.mockResolvedValue({})
+  })
+
+  it('resolves registered node types and falls back to the agent card for unknown types', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true }
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          VueFlow: {
+            props: ['nodeTypes'],
+            render(this: { $slots: Record<string, any> }) {
+              const slot = this.$slots['node-default']
+              return h('div', [
+                slot?.({ type: 'agent', id: 'known', selected: false, data: { label: 'Known', node_type: 'agent' } }),
+                slot?.({ type: 'mystery', id: 'unknown', selected: true, data: { label: 'Mystery', node_type: 'mystery' } }),
+              ])
+            },
+          },
+          Background: true,
+          Controls: true,
+          Handle: { template: '<span />' },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Known')
+    expect(wrapper.text()).toContain('Mystery')
+    expect(wrapper.find('[data-testid="pipeline-node-agent"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})

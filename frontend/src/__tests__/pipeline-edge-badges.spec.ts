@@ -34,4 +34,20 @@ describe('EdgeBadges', () => {
     const wrapper = mount(EdgeBadges, { props: { data: { edge_type: 'normal' } } })
     expect(wrapper.find('[data-testid^="edge-badge-"]').exists()).toBe(false)
   })
+
+  it('renders loop and LLM badges without optional labels', () => {
+    const loop = mount(EdgeBadges, { props: { data: { edge_type: 'loop' } } })
+    expect(loop.find('[data-testid="edge-badge-loop"]').text()).toBe('Loop')
+    loop.unmount()
+
+    const llm = mount(EdgeBadges, { props: { data: { edge_type: 'llm' } } })
+    expect(llm.find('[data-testid="edge-badge-llm"]').text()).toBe('LLM')
+    llm.unmount()
+  })
+
+  it('treats a missing data payload as an empty edge', () => {
+    const wrapper = mount(EdgeBadges, { props: { data: null } })
+    expect(wrapper.find('[data-testid^="edge-badge-"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
 })
