@@ -20,7 +20,8 @@ not 402, and the org's post-auth plan is Team with ``sso`` enabled.
 What is NOT exercised: a real IdP round-trip (the callback leg needs a live or
 stubbed IdP). The login leg is driven only far enough to prove the GATE passed;
 its own discovery fetch is pointed at a closed local port, so the handler's
-configuration error (400) is the expected terminal state, never a 402.
+browser-facing ``auth_failed`` 303 redirect (FAR-1794) is the expected terminal
+state, never a 402.
 """
 
 import base64
@@ -47,7 +48,8 @@ pytestmark = pytest.mark.integration
 
 _VALID_32 = "a" * 32
 # A closed local port: the login leg must fail fast on its OWN config check
-# (Failed to fetch discovery document -> 400), never on the licence gate.
+# (Failed to fetch discovery document -> 303 auth_failed redirect), never on the
+# licence gate.
 _UNREACHABLE_DISCOVERY = "http://127.0.0.1:1/.well-known/openid-configuration"
 
 _TEST_KP = generate_keypair()
@@ -265,10 +267,16 @@ async def _provider_ids(client: AsyncClient) -> set[str]:
 
 
 async def _assert_login_leg_not_gated(client: AsyncClient, provider_id: str) -> None:
-    """The login leg is reachable: it fails on its IdP config, never on a 402."""
+    """The login leg is reachable: it fails on its IdP config, never on a 402.
+
+    FAR-1794: the login page links straight to this route, so a config failure
+    is a browser-facing 303 redirect to ``/login?sso_error=auth_failed`` — never
+    a raw JSON error page, and never the 402 a licence gate would raise.
+    """
     resp = await client.get(f"/api/v1/auth/oidc/{provider_id}/login", follow_redirects=False)
     assert resp.status_code != 402, f"SSO login was licence-gated: {resp.status_code} {resp.text}"
-    assert resp.status_code == 400, resp.text
+    assert resp.status_code == 303, resp.text
+    assert resp.headers["location"].endswith("/login?sso_error=auth_failed")
 
 
 async def _post_auth_plan(app_engine: AsyncEngine, org_id: uuid.UUID) -> Any:
