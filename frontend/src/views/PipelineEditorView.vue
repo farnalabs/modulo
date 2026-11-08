@@ -1028,6 +1028,7 @@
           <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary-text">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
+                    <PipelineNodeBadges :node="nodeProps.data" :connectors="connectors" />
                     <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
                   </div></template>
           <!-- Router/HITL cards carry a non-colour affordance too: a dashed
@@ -1040,6 +1041,7 @@
                       {{ $t('views.PipelineEditorView.node_router_badge') }}
                     </div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_router_label') }}</div>
+                    <PipelineNodeBadges :node="nodeProps.data" :connectors="connectors" />
                   </div></template>
           <template #node-hitl="nodeProps"><div class="rounded-lg border-4 border-double border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-hitl">
                     <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">
@@ -1047,6 +1049,7 @@
                       {{ $t('views.PipelineEditorView.node_hitl_badge') }}
                     </div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
+                    <PipelineNodeBadges :node="nodeProps.data" :connectors="connectors" />
                   </div></template>
           <!-- FAR-1141: dispatch nodes render with their own badge/colour.
                Reachable because CANVAS_TYPE_BY_BACKEND_TYPE maps 'dispatch'
@@ -1056,6 +1059,7 @@
           <template #node-dispatch="nodeProps"><div class="rounded-lg border-2 border-cyan-500/60 bg-cyan-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
+                    <PipelineNodeBadges :node="nodeProps.data" :connectors="connectors" />
                   </div></template>
           <!-- FAR-2089: connector nodes render with their own badge/colour
                instead of the generic `agent` card. Reachable because
@@ -1066,6 +1070,7 @@
           <template #node-connector="nodeProps"><div class="rounded-lg border-2 border-teal-500/60 bg-teal-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-teal-700 dark:text-teal-300">{{ $t('views.PipelineEditorView.node_connector_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_connector_label') }}</div>
+                    <PipelineNodeBadges :node="nodeProps.data" :connectors="connectors" />
                   </div></template>
           <template #edge-default="edgeProps">
             <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2">
@@ -2170,6 +2175,7 @@ import PipelineVersionChip from '../components/pipeline/PipelineVersionChip.vue'
 import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
 import SnapshotLockCard from '../components/pipeline/SnapshotLockCard.vue'
 import ProgressiveAutonomyPanel from '../components/pipeline/ProgressiveAutonomyPanel.vue'
+import PipelineNodeBadges from '../components/pipeline/PipelineNodeBadges.vue'
 import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
 import { shortId } from '../utils/format'
 import {
@@ -3628,6 +3634,13 @@ function convertBackendNode(n: any): any {
       parameter_set_id: n.parameter_set_id,
       parameter_overrides: n.parameter_overrides,
       hasCapabilityScope: doesNodeHaveCapabilityScope(n),
+      // FAR-2462: semantic-badge source fields. Display-only derivations —
+      // every one is an existing graph-contract field, copied by reference so
+      // a canvas card can state the actual binding rather than a guess. Save
+      // builds its payload from `rawNodes`, so nothing here reaches the wire.
+      connector_binding: n.connector_binding ?? null,
+      router_config: n.router_config ?? null,
+      hitl_config: n.hitl_config ?? null,
     },
   }
 }

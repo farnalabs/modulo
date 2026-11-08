@@ -4796,6 +4796,12 @@ elements:
       - testid: pipeline-node-scope-badge
         type: element
         dynamic_testid: false
+      - testid: pipeline-node-semantic-badges
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-semantic-allowed-operations
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-capability-scope
         type: element
         dynamic_testid: false
