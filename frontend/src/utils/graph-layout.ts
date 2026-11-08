@@ -6,6 +6,8 @@ export interface GraphNodeInput {
   width?: number
   /** Optional measured height; falls back to `options.nodeHeight`. */
   height?: number
+  /** Current position, used by incremental layout to calculate user offsets. */
+  position?: { x: number; y: number }
 }
 
 export interface GraphEdgeInput {
@@ -341,4 +343,106 @@ export function layoutNodes(
     position: positions.get(node.id)!,
     data: { label: node.label || node.id },
   }))
+}
+
+export interface ProvenanceMap {
+  [nodeId: string]: 'user' | 'generated'
+}
+
+/** Result of an incremental layout: final nodes plus the pre-delta baseline. */
+export interface IncrementalLayoutResult {
+  /** Nodes with user offsets applied, in input order. */
+  nodes: LaidOutNode[]
+  /**
+   * The fresh generated positions BEFORE any user offsets are applied. Callers
+   * must store this as the next incremental layout's `previousPositions`;
+   * storing the post-delta positions instead makes the next Arrange compute a
+   * zero delta and snap user-offset nodes back onto the generated layout.
+   */
+  freshPositions: Record<string, { x: number; y: number }>
+}
+
+/**
+ * Incremental layout that preserves user manual drag offsets.
+ *
+ * Computes a new layout from scratch, then for each node with provenance='user',
+ * computes the delta from the previous generated layout and applies it to the
+ * new layout. This preserves the user's relative manual positioning while
+ * benefiting from the improved algorithmic layout.
+ *
+ * Returns both the final nodes and the pre-delta fresh baseline so callers can
+ * keep the baseline (not the post-delta positions) for the next Arrange.
+ */
+export function layoutNodesIncrementalWithBaseline(
+  nodes: GraphNodeInput[],
+  edges: GraphEdgeInput[],
+  previousPositions: Record<string, { x: number; y: number }>,
+  userProvenance: ProvenanceMap,
+  options: LayoutOptions = {},
+): IncrementalLayoutResult {
+  // First, compute the fresh layout
+  const layoutOptions = options
+  const freshLaidOut = layoutNodes(nodes, edges, layoutOptions)
+  const freshPositions = new Map(freshLaidOut.map((node) => [node.id, node.position]))
+
+  // Compute deltas for user-positioned nodes from the previous generated layout
+  const userDeltas = new Map<string, { x: number; y: number }>()
+  for (const node of nodes) {
+    if (userProvenance[node.id] === 'user') {
+      const prevPos = previousPositions[node.id]
+      const freshPos = freshPositions.get(node.id)
+      const currentPos = node.position
+      if (prevPos && freshPos && currentPos) {
+        userDeltas.set(node.id, {
+          x: currentPos.x - prevPos.x,
+          y: currentPos.y - prevPos.y,
+        })
+      }
+    }
+  }
+
+  // Apply deltas to user-positioned nodes in the fresh layout
+  const result: LaidOutNode[] = freshLaidOut.map((node) => {
+    const delta = userDeltas.get(node.id)
+    if (delta) {
+      return {
+        ...node,
+        position: {
+          x: node.position.x + delta.x,
+          y: node.position.y + delta.y,
+        },
+      }
+    }
+    return node
+  })
+
+  return {
+    nodes: result,
+    freshPositions: Object.fromEntries(
+      Array.from(freshPositions, ([id, position]) => [id, { ...position }]),
+    ),
+  }
+}
+
+/**
+ * Incremental layout that preserves user manual drag offsets.
+ *
+ * Convenience wrapper over {@link layoutNodesIncrementalWithBaseline} that
+ * returns only the final nodes. Use the `WithBaseline` variant when the caller
+ * must persist the pre-delta baseline for a subsequent Arrange.
+ */
+export function layoutNodesIncremental(
+  nodes: GraphNodeInput[],
+  edges: GraphEdgeInput[],
+  previousPositions: Record<string, { x: number; y: number }>,
+  userProvenance: ProvenanceMap,
+  options: LayoutOptions = {},
+): LaidOutNode[] {
+  return layoutNodesIncrementalWithBaseline(
+    nodes,
+    edges,
+    previousPositions,
+    userProvenance,
+    options,
+  ).nodes
 }

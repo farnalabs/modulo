@@ -1072,72 +1072,16 @@
           <output class="sr-only" aria-live="polite" data-testid="pipeline-editor-connection-announcement">{{ connectionAnnouncement }}</output>
           <output class="sr-only" aria-live="polite" data-testid="pipeline-editor-canvas-announcement">{{ canvasAnnouncement }}</output>
           <FlowControls :show-interactive="false" />
-          <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning-text">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
-                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
-                  </div></template>
-          <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary-text">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
-                    <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
-                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
-                  </div></template>
-          <!-- Router/HITL cards carry a non-colour affordance too: a dashed
-               border + branch glyph and a double border + gate glyph. The
-               badges already name the kind, so the shape survives greyscale
-               and colour-vision differences. -->
-          <template #node-router="nodeProps"><div class="rounded-lg rounded-r-3xl border-2 border-dashed border-indigo-500/60 bg-indigo-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-router">
-                    <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-indigo-600 dark:text-indigo-300">
-                      <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="18" r="2" /><path d="M6 8v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8M12 13v3" /></svg>
-                      {{ $t('views.PipelineEditorView.node_router_badge') }}
-                    </div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_router_label') }}</div>
-                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
-                  </div></template>
-          <template #node-hitl="nodeProps"><div class="rounded-lg border-4 border-double border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-hitl">
-                    <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">
-                      <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 10-4-2.5-7-5.5-7-10V6z" /><path d="M9 12l2 2 4-4" /></svg>
-                      {{ $t('views.PipelineEditorView.node_hitl_badge') }}
-                    </div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
-                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
-                  </div></template>
-          <!-- FAR-1141: dispatch nodes render with their own badge/colour.
-               Reachable because CANVAS_TYPE_BY_BACKEND_TYPE maps 'dispatch'
-               to this canvas type; without that entry the node would be
-               emitted as an `agent` node and this slot would never render.
-               Display only — no config panel or palette entry in this slice. -->
-          <template #node-dispatch="nodeProps"><div class="rounded-lg border-2 border-cyan-500/60 bg-cyan-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
-                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
-                  </div></template>
-          <!-- FAR-2089: connector nodes render with their own badge/colour
-               instead of the generic `agent` card. Reachable because
-               CANVAS_TYPE_BY_BACKEND_TYPE maps 'connector' to this canvas
-               type; without that entry the node would be emitted as an
-               `agent` node and this slot would never render. Display only —
-               no config panel or palette entry in this slice. -->
-          <template #node-connector="nodeProps"><div class="rounded-lg border-2 border-teal-500/60 bg-teal-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-teal-700 dark:text-teal-300">{{ $t('views.PipelineEditorView.node_connector_badge') }}</div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_connector_label') }}</div>
-                    <PipelineGovernanceVisibility :node="nodeProps.data" :team-names="teamNamesById" mode="node" />
-                  </div></template>
+          <template #node-default="nodeProps">
+            <component
+              :is="nodeComponent(nodeProps.type)"
+              :data="nodeProps.data"
+              :selected="nodeProps.selected"
+              :id="nodeProps.id"
+            />
+          </template>
           <template #edge-default="edgeProps">
-            <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2">
-              <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning-text">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</span>
-            </div>
-            <div v-if="edgeProps.data?.edge_type === 'loop'" class="absolute translate-y-4 translate-x-2">
-              <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-900 dark:text-blue-300">
-                {{ $t('views.PipelineEditorView.loop') }}{{ edgeProps.data?.max_iterations ? ` (${edgeProps.data.max_iterations})` : '' }}
-              </span>
-            </div>
-            <div v-if="edgeProps.data?.edge_type === 'llm'" class="absolute translate-y-4 translate-x-2">
-              <span class="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-600 dark:bg-purple-900 dark:text-purple-300">
-                {{ $t('views.PipelineEditorView.llm_badge') }}{{ edgeProps.data?.routing_label ? `: ${edgeProps.data.routing_label}` : '' }}
-              </span>
-            </div>
+            <EdgeBadges :data="edgeProps.data" />
           </template>
         </VueFlow>
         </div>
@@ -2276,7 +2220,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount, markRaw, provide, type Component } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -2300,6 +2244,14 @@ import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.
 import SnapshotLockCard from '../components/pipeline/SnapshotLockCard.vue'
 import ProgressiveAutonomyPanel from '../components/pipeline/ProgressiveAutonomyPanel.vue'
 import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
+import ManualNode from '../components/pipeline/nodes/ManualNode.vue'
+import AgentNode from '../components/pipeline/nodes/AgentNode.vue'
+import RouterNode from '../components/pipeline/nodes/RouterNode.vue'
+import HitlNode from '../components/pipeline/nodes/HitlNode.vue'
+import DispatchNode from '../components/pipeline/nodes/DispatchNode.vue'
+import ConnectorNode from '../components/pipeline/nodes/ConnectorNode.vue'
+import EdgeBadges from '../components/pipeline/nodes/EdgeBadges.vue'
+import { NODE_REGISTRY, PIPELINE_TEAM_NAMES_KEY } from '../components/pipeline/nodes/NodeRegistry'
 import { shortId } from '../utils/format'
 import {
   isBlockingSeverity,
@@ -2314,7 +2266,11 @@ import { formatDateShort } from '../lib/formatDate'
 import { formatCompactDuration, worstCaseForEvent, type WorstCase } from '../lib/worstCase'
 import { withTimeout } from '../lib/requestTimeout'
 import { CANVAS_EDGE_STROKE, PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD } from '../constants/canvas'
-import { layoutNodes } from '../utils/graph-layout'
+import {
+  layoutNodes,
+  layoutNodesIncrementalWithBaseline,
+  type ProvenanceMap,
+} from '../utils/graph-layout'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
 import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
@@ -2418,7 +2374,29 @@ const showSaveAsDropdown = ref(false)
 const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
 const saveAsDropdownRef = ref<HTMLElement | null>(null)
 const saveAsDropdownStyle = ref<Record<string, string>>({})
-const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch', connector: 'connector' }
+// markRaw keeps the component objects out of Vue's reactivity system: VueFlow
+// stores `nodeTypes` in reactive state, and a proxied component triggers a
+// "Vue received a Component that was made a reactive object" render loop.
+const NODE_COMPONENTS: Record<string, Component> = {
+  manual: markRaw(ManualNode),
+  agent: markRaw(AgentNode),
+  router: markRaw(RouterNode),
+  hitl: markRaw(HitlNode),
+  dispatch: markRaw(DispatchNode),
+  connector: markRaw(ConnectorNode),
+}
+
+// VueFlow resolves each node's `type` through this object before rendering it.
+// Keep the editor's registry component-valued: the extracted node components
+// still own the shared card markup, badges, handles and selection state.
+const nodeTypes = Object.fromEntries(
+  Object.keys(NODE_REGISTRY).map((nodeType) => [nodeType, nodeComponent(nodeType)]),
+) as Record<string, Component>
+
+function nodeComponent(nodeType: string) {
+  return NODE_COMPONENTS[nodeType] ?? AgentNode
+}
+
 const { fitView, onPaneReady, addEdges } = useVueFlow()
 
 // Vue Flow renders edge geometry from these presentation options; semantic
@@ -2483,9 +2461,17 @@ interface ArrangeUndoSnapshot {
   flow: Record<string, PositionSnapshot>
   userOwned: boolean
   ownership: LayoutOwnership | undefined
+  /** The generated layout BEFORE the Arrange action (for incremental undo). */
+  generatedLayout: Record<string, PositionSnapshot>
+  /** Provenance of each node before the Arrange action. */
+  provenance: ProvenanceMap
 }
 
 const arrangeUndo = ref<ArrangeUndoSnapshot | null>(null)
+/** The last computed generated layout (before user drags). */
+const lastGeneratedLayout = ref<Record<string, PositionSnapshot>>({})
+/** Provenance of each node's current position: 'user' for manual drags, 'generated' for layout. */
+const nodeProvenance = ref<ProvenanceMap>({})
 const connectionAnnouncement = ref('')
 const canvasAnnouncement = ref('')
 
@@ -4049,21 +4035,61 @@ function applyGeneratedLayoutIfUnplaced(): void {
     layoutUserOwned.value = true
     return
   }
-  applyGraphPositions(computeGraphLayout())
+  const generatedPositions = computeGraphLayout()
+  applyGraphPositions(generatedPositions)
+  // Store the generated layout and mark all nodes as generated provenance
+  lastGeneratedLayout.value = generatedPositions
+  nodeProvenance.value = Object.fromEntries(
+    rawNodes.value.map((node: any) => [node.id, 'generated' as const]),
+  )
   layoutUserOwned.value = false
   setDraftLayoutOwnership('generated')
 }
 
 /** Explicit Arrange graph: replace the arrangement and restore generated ownership. */
-function arrangeGraph(): void {
+async function arrangeGraph(): Promise<void> {
   if (isViewing.value || rawNodes.value.length === 0) return
+  // Capture the pre-Arrange generated layout and provenance for incremental undo
+  const preArrangeGeneratedLayout = { ...lastGeneratedLayout.value }
+  const preArrangeProvenance = { ...nodeProvenance.value }
   const undo: ArrangeUndoSnapshot = {
     raw: snapshotPositions(rawNodes.value),
     flow: snapshotPositions(flowNodes.value),
     userOwned: layoutUserOwned.value,
     ownership: getLayoutOwnership(),
+    generatedLayout: preArrangeGeneratedLayout,
+    provenance: preArrangeProvenance,
   }
-  applyGraphPositions(computeGraphLayout())
+  // Build nodes input for layoutNodesIncremental
+  const nodesInput = rawNodes.value.map((node: any) => ({
+    id: node.id,
+    node_type: node.node_type,
+    label: node.label,
+    width: node.width,
+    height: node.height,
+    position: node.position,
+  }))
+  const edgesInput = rawEdges.value.map((edge: any) => ({
+    source: edge.source_node_id,
+    target: edge.target_node_id,
+    edge_type: edge.edge_type,
+  }))
+  const { nodes: laidOut, freshPositions } = layoutNodesIncrementalWithBaseline(
+    nodesInput,
+    edgesInput,
+    preArrangeGeneratedLayout,
+    preArrangeProvenance,
+  )
+  const newPositions = Object.fromEntries(laidOut.map((node) => [node.id, { ...node.position }]))
+  applyGraphPositions(newPositions)
+  // Store the PRE-delta generated baseline, not the positions with user offsets
+  // baked in: a later Arrange measures its delta against this baseline, so
+  // storing post-delta positions would collapse the delta to zero and snap
+  // user-offset nodes back onto the generated layout.
+  lastGeneratedLayout.value = freshPositions
+  nodeProvenance.value = Object.fromEntries(
+    laidOut.map((node) => [node.id, preArrangeProvenance[node.id] === 'user' ? 'user' as const : 'generated' as const]),
+  )
   arrangeUndo.value = undo
   layoutUserOwned.value = false
   setDraftLayoutOwnership('generated')
@@ -4082,6 +4108,9 @@ function undoArrangeGraph(): void {
   flowNodes.value = restorePositions(flowNodes.value, undo.flow)
   layoutUserOwned.value = undo.userOwned
   setDraftLayoutOwnership(undo.ownership)
+  // Restore the pre-Arrange generated layout and provenance
+  lastGeneratedLayout.value = undo.generatedLayout
+  nodeProvenance.value = undo.provenance
   arrangeUndo.value = null
 }
 
@@ -4099,7 +4128,15 @@ function syncNodePositionsFromFlow(): void {
 
 function onNodeDragStop(): void {
   if (isViewing.value) return
+  const beforeDrag = snapshotPositions(rawNodes.value)
   syncNodePositionsFromFlow()
+  // Mark dragged nodes as user provenance
+  for (const node of rawNodes.value) {
+    const previous = beforeDrag[node.id]
+    if (previous && node.position && (node.position.x !== previous.x || node.position.y !== previous.y)) {
+      nodeProvenance.value = { ...nodeProvenance.value, [node.id]: 'user' }
+    }
+  }
   layoutUserOwned.value = true
   setDraftLayoutOwnership('user')
   arrangeUndo.value = null
@@ -5333,6 +5370,9 @@ const ownerTeamOptions = computed(() => {
 const teamNamesById = computed<Record<string, string>>(() =>
   Object.fromEntries(ownerTeams.value.map((tm) => [tm.id, tm.name])),
 )
+// Vue Flow renders node cards through `nodeTypes`, which cannot forward
+// arbitrary props, so the extracted cards inject this map instead.
+provide(PIPELINE_TEAM_NAMES_KEY, teamNamesById)
 
 const ownerTeamError = computed(() => {
   if (ownerTeamUpdateError.value) return ownerTeamUpdateError.value
@@ -5971,26 +6011,59 @@ const viewRawEdges = ref<any[]>([])
 const viewFlowNodes = ref<any[]>([])
 const viewFlowEdges = ref<any[]>([])
 
+const HISTORIC_SECRET_FIELDS = [
+  'env_vars',
+  'context_files',
+  'composite_parameter_values',
+  'parameter_overrides',
+] as const
+
+function stripHistoricNodeSecrets(node: any): any {
+  if (!node || typeof node !== 'object') return node
+  const stripped = { ...node }
+  for (const field of HISTORIC_SECRET_FIELDS) delete stripped[field]
+  if (stripped.data && typeof stripped.data === 'object') {
+    stripped.data = { ...stripped.data }
+    for (const field of HISTORIC_SECRET_FIELDS) delete stripped.data[field]
+  }
+  return stripped
+}
+
+function stripHistoricEdgeSecrets(edge: any): any {
+  if (!edge || typeof edge !== 'object') return edge
+  const stripped = { ...edge }
+  for (const field of HISTORIC_SECRET_FIELDS) delete stripped[field]
+  if (stripped.data && typeof stripped.data === 'object') {
+    stripped.data = { ...stripped.data }
+    for (const field of HISTORIC_SECRET_FIELDS) delete stripped.data[field]
+  }
+  return stripped
+}
+
 /** VueFlow's v-model: the frozen snapshot graph while viewing, live otherwise. */
 const displayNodes = computed<any[]>({
-  get: () => (isViewing.value ? viewFlowNodes.value : flowNodes.value),
+  get: () => (isViewing.value ? viewFlowNodes.value.map(stripHistoricNodeSecrets) : flowNodes.value),
   set: (value: any[]) => {
-    if (isViewing.value) viewFlowNodes.value = value
+    if (isViewing.value) viewFlowNodes.value = value.map(stripHistoricNodeSecrets)
     else flowNodes.value = value
   },
 })
 
 const displayEdges = computed<any[]>({
-  get: () => (isViewing.value ? viewFlowEdges.value : flowEdges.value),
+  get: () => (isViewing.value ? viewFlowEdges.value.map(stripHistoricEdgeSecrets) : flowEdges.value),
   set: (value: any[]) => {
-    if (isViewing.value) viewFlowEdges.value = value
+    if (isViewing.value) viewFlowEdges.value = value.map(stripHistoricEdgeSecrets)
     else flowEdges.value = value
   },
 })
 
 /** What the inspector reads: the graph the canvas is showing. */
-const inspectSourceNodes = computed(() => (isViewing.value ? viewRawNodes.value : rawNodes.value))
-const inspectSourceEdges = computed(() => (isViewing.value ? viewRawEdges.value : rawEdges.value))
+const inspectSourceNodes = computed(() =>
+  isViewing.value ? viewRawNodes.value.map(stripHistoricNodeSecrets) : rawNodes.value,
+)
+const inspectSourceEdges = computed(() =>
+  isViewing.value ? viewRawEdges.value.map(stripHistoricEdgeSecrets) : rawEdges.value,
+)
 
 const isViewing = computed(
   () =>

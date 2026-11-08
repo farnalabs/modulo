@@ -4148,6 +4148,105 @@ describe('PipelineEditorView — FAR-2410 canvas layout & edge direction', () =>
     wrapper.unmount()
   })
 
+  it('records user provenance only for nodes whose position actually changed', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'x-changed', node_type: 'agent', label: 'X', position: { x: 0, y: 0 } },
+      { id: 'y-only', node_type: 'agent', label: 'Y', position: { x: 10, y: 10 } },
+      { id: 'no-move', node_type: 'agent', label: 'N', position: { x: 5, y: 5 } },
+      { id: 'no-prev-pos', node_type: 'agent', label: 'P' },
+    ]
+    vm.flowNodes = [
+      { id: 'x-changed', position: { x: 1, y: 1 }, data: {} },
+      { id: 'y-only', position: { x: 10, y: 50 }, data: {} },
+      { id: 'no-move', position: { x: 5, y: 5 }, data: {} },
+      { id: 'no-prev-pos', position: { x: 9, y: 9 }, data: {} },
+    ]
+    vm.nodeProvenance = {}
+
+    vm.onNodeDragStop()
+
+    expect(vm.nodeProvenance).toEqual({ 'x-changed': 'user', 'y-only': 'user' })
+    expect(vm.nodeProvenance['no-move']).toBeUndefined()
+    expect(vm.nodeProvenance['no-prev-pos']).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('preserves user provenance through an incremental Arrange', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'a', node_type: 'agent', label: 'A', position: { x: 50, y: 25 } },
+      { id: 'b', node_type: 'agent', label: 'B', position: { x: 240, y: 0 } },
+    ]
+    vm.flowNodes = vm.rawNodes.map((node: any) => ({ ...node }))
+    vm.rawEdges = [{ id: 'e1', source_node_id: 'a', target_node_id: 'b', edge_type: 'normal' }]
+    vm.lastGeneratedLayout = { a: { x: 0, y: 0 }, b: { x: 240, y: 0 } }
+    vm.nodeProvenance = { a: 'user', b: 'generated' }
+
+    await vm.arrangeGraph()
+
+    const byId = Object.fromEntries(vm.rawNodes.map((node: any) => [node.id, node]))
+    // The manual offset survives the fresh layout, so provenance stays 'user'.
+    expect(byId.a.position).toEqual({ x: 50, y: 25 })
+    expect(vm.nodeProvenance).toEqual({ a: 'user', b: 'generated' })
+    wrapper.unmount()
+  })
+
+  it('preserves user offsets across two consecutive Arranges with no intervening drag', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'a', node_type: 'agent', label: 'A', position: { x: 50, y: 25 } },
+      { id: 'b', node_type: 'agent', label: 'B', position: { x: 240, y: 0 } },
+    ]
+    vm.flowNodes = vm.rawNodes.map((node: any) => ({ ...node }))
+    vm.rawEdges = [{ id: 'e1', source_node_id: 'a', target_node_id: 'b', edge_type: 'normal' }]
+    vm.lastGeneratedLayout = { a: { x: 0, y: 0 }, b: { x: 240, y: 0 } }
+    vm.nodeProvenance = { a: 'user', b: 'generated' }
+
+    await vm.arrangeGraph()
+    await vm.arrangeGraph()
+
+    const byId = Object.fromEntries(vm.rawNodes.map((node: any) => [node.id, node]))
+    // The user offset measured against the generated BASELINE survives the
+    // second Arrange instead of collapsing to a zero delta.
+    expect(byId.a.position).toEqual({ x: 50, y: 25 })
+    expect(byId.b.position).toEqual({ x: 240, y: 0 })
+    // The stored baseline stays pre-delta so the next Arrange can still measure.
+    expect(vm.lastGeneratedLayout.a).toEqual({ x: 0, y: 0 })
+    expect(vm.nodeProvenance).toEqual({ a: 'user', b: 'generated' })
+    wrapper.unmount()
+  })
+
+  it('keeps a drag between Arranges while preserving the generated baseline', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'a', node_type: 'agent', label: 'A', position: { x: 50, y: 25 } },
+      { id: 'b', node_type: 'agent', label: 'B', position: { x: 240, y: 0 } },
+    ]
+    vm.flowNodes = vm.rawNodes.map((node: any) => ({ ...node }))
+    vm.rawEdges = [{ id: 'e1', source_node_id: 'a', target_node_id: 'b', edge_type: 'normal' }]
+    vm.lastGeneratedLayout = { a: { x: 0, y: 0 }, b: { x: 240, y: 0 } }
+    vm.nodeProvenance = { a: 'user', b: 'generated' }
+
+    await vm.arrangeGraph()
+    // Simulate a fresh manual drag of node-a after the first Arrange.
+    vm.flowNodes = vm.flowNodes.map((node: any) =>
+      node.id === 'a' ? { ...node, position: { x: 80, y: 40 } } : node,
+    )
+    vm.onNodeDragStop()
+    await vm.arrangeGraph()
+
+    const byId = Object.fromEntries(vm.rawNodes.map((node: any) => [node.id, node]))
+    expect(byId.a.position).toEqual({ x: 80, y: 40 })
+    expect(vm.nodeProvenance.a).toBe('user')
+    expect(vm.lastGeneratedLayout.a).toEqual({ x: 0, y: 0 })
+    wrapper.unmount()
+  })
+
   it('does not persist draft ownership when the graph save fails', async () => {
     const wrapper = await mountEditorLoaded()
     const vm = wrapper.vm as any

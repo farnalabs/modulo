@@ -52,7 +52,11 @@ vi.mock('../lib/api/client', () => {
 })
 
 import PipelineEditorView from '../views/PipelineEditorView.vue'
+import HitlNode from '../components/pipeline/nodes/HitlNode.vue'
+import { PIPELINE_TEAM_NAMES_KEY } from '../components/pipeline/nodes/NodeRegistry'
 import { usePlanStore } from '../stores/planStore'
+import { createI18n } from 'vue-i18n'
+import enUS from '../locales/en-US.js'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -160,6 +164,33 @@ describe('PipelineEditorView - governance visibility', () => {
 
     expect(converted.data.hitl_config).toEqual({ human_only: true, claim_expiry_minutes: 240, required_team_id: 'team-1' })
     expect(converted.data.policy_gate).toEqual({ action: 'block', eval_id: 'eval-1' })
+    wrapper.unmount()
+  })
+})
+
+describe('PipelineEditorView - governance on the extracted node cards', () => {
+  it('renders the HITL gate pills on the registry card, resolving the team name from the injected map', () => {
+    const i18n = createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': enUS } })
+    const wrapper = mount(HitlNode, {
+      props: {
+        id: 'gate-node',
+        data: {
+          label: 'Escalation',
+          node_type: 'hitl',
+          hitl_config: { human_only: true, required_team_id: 'team-1', claim_expiry_minutes: 240 },
+          policy_gate: { action: 'block', eval_id: 'eval-1' },
+        },
+      },
+      global: {
+        plugins: [i18n],
+        provide: { [PIPELINE_TEAM_NAMES_KEY]: computed(() => ({ 'team-1': 'Platform' })) },
+      },
+    })
+
+    expect(wrapper.find('[data-testid="pipeline-node-hitl"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-node-governance-human-only"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-node-governance-team"]').text()).toContain('Platform')
+    expect(wrapper.find('[data-testid="pipeline-node-governance-guardrail"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })
