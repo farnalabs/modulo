@@ -69,11 +69,23 @@ jobs:
               Path('plugins/modulo/README.md'),
           ]:
               assert path.read_text(encoding='utf-8').strip(), path
-          root = Path('plugins/modulo/SKILL.md').read_text(encoding='utf-8')
-          install = Path('plugins/modulo/skills/install/SKILL.md').read_text(encoding='utf-8')
-          assert '/modulo' in Path('plugins/modulo/README.md').read_text(encoding='utf-8')
-          assert 'modulo:install' in Path('plugins/modulo/README.md').read_text(encoding='utf-8')
-          assert 'empty URL' in root and 'empty plugin URL' in install
+          root_path = Path('plugins/modulo/SKILL.md')
+          install_path = Path('plugins/modulo/skills/install/SKILL.md')
+          root = root_path.read_text(encoding='utf-8')
+          install = install_path.read_text(encoding='utf-8')
+          readme = Path('plugins/modulo/README.md').read_text(encoding='utf-8')
+          assert 'name: modulo' in root.split('\n---\n', 1)[0]
+          assert '/modulo' in readme
+          assert '/modulo:install' in readme
+          assert 'empty URL' in root and 'empty URL placeholder' in install
+          plugin_markdown = [root_path, install_path, *Path('plugins/modulo/references').glob('*.md')]
+          for path in plugin_markdown:
+              text = path.read_text(encoding='utf-8')
+              assert 'plugins/modulo/' not in text, f'ambiguous project-relative plugin path: {path}'
+          assert '${CLAUDE_PLUGIN_ROOT}/' in root
+          assert '${CLAUDE_PLUGIN_ROOT}/' in install
+          print('plugin-internal references use CLAUDE_PLUGIN_ROOT')
+
           PY
       - name: Validate with Claude when available
         shell: bash
