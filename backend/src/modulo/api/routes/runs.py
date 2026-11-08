@@ -116,11 +116,12 @@ from modulo.db.crud.run import (
 )
 from modulo.db.crud.run_attempts import list_attempts as db_list_attempts
 from modulo.db.crud.run_node_outputs import (
+    OutputsRlsMismatch,
     RunBlobs,
     marker_attempt_suffix,
     read_run_blobs,
     read_run_markers,
-    read_run_outputs,
+    read_run_outputs_map,
     read_run_telemetry,
 )
 from modulo.db.models.account import Account
@@ -129,7 +130,7 @@ from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import CANCEL_REASON_USER_REQUESTED, TERMINAL_STATUSES, Run
-from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
+from modulo.db.models.run_node_outputs import RunNodeOutput
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
@@ -201,17 +202,18 @@ def _quantize_cost_rollup(value: Decimal) -> Decimal:
 
 
 def _extract_legacy_agent_verdict(outputs_json: dict[str, Any] | None) -> str | None:
-    """Extract the legacy agent verdict from a run's outputs_json.
+    """Extract an agent's self-reported verdict from a run's outputs_json.
 
-    Legacy runs (pre-Phase 1) stored the agent's self-reported verdict in
-    ``outputs_json[node_id].output.agent_status`` or
-    ``outputs_json[node_id].output.agent_outcome``. This function scans all
-    node outputs and returns the first "failed" verdict found, or None if
-    no failed verdict exists.
+    Applies to any run whose node outputs carry the self-reported fields
+    ``agent_status`` or ``agent_outcome`` (the legacy agent-return shape);
+    it is not restricted to runs recorded before Phase 1. Each node output is
+    scanned directly and through its nested ``output`` object, and the first
+    ``"failed"`` self-reported value is returned (otherwise ``None``).
 
-    The verdict is exposed as a read-only view field so dashboards/consumers
-    can see "agent said failed" on legacy rows. The design deliberately does
-    NOT retro-false work_intact.
+    This is a read-only projection: it reports the agent's own claim and never
+    asserts anything about the run's outcome. It does not re-classify the run
+    as failed, does not affect ``work_intact``, and does not change the run's
+    official status.
     """
     if not isinstance(outputs_json, dict):
         return None
@@ -388,18 +390,36 @@ async def _do_get_run_outputs(
     principal: TenantPrincipal,
     run_id: uuid.UUID,
 ) -> dict[str, Any] | None:
-    """Load the reassembled outputs_json for a run (FAR-147).
+    """Load the narrow outputs projection for a run's legacy verdict (FAR-147).
 
-    Best-effort: a DB failure degrades to None (the run response is valid
-    without the legacy agent verdict).
+    Uses ``read_run_outputs_map`` so only ``run_id`` / ``node_id`` /
+    ``outputs_json`` are fetched — the telemetry, markers and artifacts blobs
+    are never loaded for a verdict read.
+
+    Fail-open applies to TRANSIENT database failures only (``OperationalError``
+    and the pool ``TimeoutError``): such an error degrades to ``None`` (the run
+    response is valid without the verdict). Tenant-integrity and query-shape
+    failures are never swallowed: :class:`OutputsRlsMismatch` (the session org
+    disagrees with the row org) and :class:`ProgrammingError` (a schema/query
+    defect) propagate to the route's existing error contract, and every other
+    non-transient error surfaces instead of silently deleting the verdict.
     """
     try:
         async with factory() as session, session.begin():
             await set_rls_org(session, principal.organisation_id)
-            return await read_run_outputs(session, run_id=run_id, organisation_id=principal.organisation_id)
+            outputs_map = await read_run_outputs_map(
+                session,
+                run_ids=[run_id],
+                organisation_id=principal.organisation_id,
+            )
+            return outputs_map.get(run_id)
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except OutputsRlsMismatch:
+        raise
+    except ProgrammingError:
+        raise
+    except (OperationalError, SA_TimeoutError):
         _log.warning(
             "runs.outputs_unavailable",
             extra={"run_id": str(run_id)},
@@ -694,8 +714,10 @@ class _ListPageContext:
     # ``str(snapshot_id)`` spelling the list item serialises, so the builder
     # never touches the run→snapshot relationship (no per-row query, no N+1).
     snapshot_versions: dict[str, int] = field(default_factory=dict)
-    # FAR-147: per-run outputs_json map for legacy agent verdict extraction.
-    # Loaded in bulk via ``read_run_outputs`` to avoid N+1 on the list endpoint.
+    # FAR-147: per-run outputs map for agent-verdict extraction. Loaded in
+    # ONE narrow projection query for the whole page (``read_run_outputs_map``,
+    # which fetches only run_id/node_id/outputs_json) — no N+1 on the list
+    # endpoint and no telemetry/marker/artifact blob columns.
     outputs_map: dict[uuid.UUID, dict[str, Any] | None] = field(default_factory=dict)
 
 
@@ -742,23 +764,18 @@ async def _load_legacy_outputs(
     runs: list[Run],
     organisation_id: uuid.UUID,
 ) -> dict[uuid.UUID, dict[str, Any] | None]:
-    """Load legacy outputs for a page with one org-scoped bulk query."""
-    run_ids = [run.id for run in runs]
-    if not run_ids:
-        return {}
-    result = await session.execute(
-        select(RunNodeOutput).where(
-            RunNodeOutput.run_id.in_(run_ids),
-            RunNodeOutput.organisation_id == organisation_id,
-            RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
-            RunNodeOutput.node_id != META_NODE_ID,
-        )
+    """Load the per-run outputs map for a page — ONE narrow query (FAR-147).
+
+    Delegates to ``read_run_outputs_map``, which projects only
+    ``run_id`` / ``node_id`` / ``outputs_json`` for every run in the page in a
+    single statement, restricted to terminal node rows (the metadata sentinel
+    is excluded). No telemetry, marker or artifact blob is loaded.
+    """
+    return await read_run_outputs_map(
+        session,
+        run_ids=[run.id for run in runs],
+        organisation_id=organisation_id,
     )
-    outputs_map: dict[uuid.UUID, dict[str, Any]] = {}
-    for row in result.scalars().all():
-        if isinstance(row.outputs_json, dict):
-            outputs_map.setdefault(row.run_id, {})[row.node_id] = row.outputs_json
-    return {run_id: outputs_map.get(run_id) for run_id in run_ids}
 
 
 async def _load_snapshot_versions(session: AsyncSession, runs: list[Run]) -> dict[str, int]:
@@ -1211,12 +1228,10 @@ class RunResponse(BaseModel):
     # ``not_applicable`` because Alpha does not consume a runtime tool-event
     # stream. NULL only for runs created before the column shipped.
     seam_coverage: list[SeamCoverageStatement] | None = None
-    # FAR-147: legacy agent verdict exposure. For runs recorded before Phase 1
-    # surfaced agent_status/agent_outcome, the agent's self-reported verdict
-    # ("failed") was stored in outputs_json but the run was classified as
-    # success. This read-only field exposes that legacy verdict so dashboards
-    # and consumers can see "agent said failed" on legacy rows. Does NOT affect
-    # work_intact or the run's official status.
+    # FAR-147: the agent's self-reported verdict ("failed") found in the run's
+    # node outputs, or None. Read-only exposure for dashboards and consumers;
+    # it reports what an agent claimed and makes no statement about the run's
+    # outcome. Does NOT affect work_intact or the run's official status.
     legacy_agent_verdict: str | None = None
     # Active-run observability (FAR-307). `trigger_actor`, `heartbeat_at`, and
     # `capacity` are populated on every list item and on detail for active
