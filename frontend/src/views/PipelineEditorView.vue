@@ -4156,6 +4156,12 @@ async function saveEdgeConfig() {
         ...buildEdgePayload(e),
         edge_type: edgeForm.edge_type,
         condition_expression: edgeForm.condition_expression || null,
+        // FAR-2457: the form owns the routing metadata for the edge being
+        // edited. The buildEdgePayload spread carries the persisted values, so
+        // without these overrides a user edit to a loop's max_iterations (or
+        // an llm edge's routing_label) would silently save the stale value.
+        max_iterations: edgeForm.edge_type === 'loop' ? (edgeForm.max_iterations || 0) : undefined,
+        routing_label: edgeForm.edge_type === 'llm' ? (edgeForm.routing_label || undefined) : undefined,
         hitl_review_config: buildHitlReviewConfig(),
       }
     }

@@ -1929,6 +1929,63 @@ describe('PipelineEditorView — edge properties panel', () => {
     wrapper.unmount()
   })
 
+  it('applies edited loop max_iterations and llm routing_label to the save payload (FAR-2457)', async () => {
+    // buildEdgePayload spreads the persisted edge; the form values must win for
+    // the edge being edited or a user's routing edit is silently reverted.
+    const loopWrapper = await mountWithEdge(edgeFixture({
+      edge_type: 'loop',
+      max_iterations: 2,
+      hitl_review_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.' },
+    }))
+    const loopVm = loopWrapper.vm as any
+    loopVm.edgeForm.max_iterations = 7
+    await loopVm.saveEdgeConfig()
+    await flushPromises()
+    await nextTick()
+    const loopPut = vi.mocked(api.PUT).mock.calls[0]
+    expect((loopPut[1] as any).body.edges[0].max_iterations).toBe(7)
+    loopWrapper.unmount()
+
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockClear()
+
+    const llmWrapper = await mountWithEdge(edgeFixture({
+      edge_type: 'llm',
+      routing_label: 'stale',
+      hitl_review_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.' },
+    }))
+    const llmVm = llmWrapper.vm as any
+    llmVm.edgeForm.routing_label = 'escalate'
+    await llmVm.saveEdgeConfig()
+    await flushPromises()
+    await nextTick()
+    const llmPut = vi.mocked(api.PUT).mock.calls[0]
+    expect((llmPut[1] as any).body.edges[0].routing_label).toBe('escalate')
+    llmWrapper.unmount()
+  })
+
+  it('preserves routing metadata and HITL config on a normal edge through save (FAR-2457)', async () => {
+    // buildEdgePayload must round-trip fields persisted on any edge kind, not
+    // reconstruct them from edge_type — imported snapshots can carry routing
+    // metadata on normal edges.
+    const hitl = { label: 'Review gate', description: 'Approve the deploy only after a human reviews the plan.' }
+    const wrapper = await mountWithEdge(edgeFixture({
+      edge_type: 'normal',
+      default_target: 'node-2',
+      hitl_review_config: hitl,
+    }))
+
+    await wrapper.find('[data-testid="pipeline-editor-save-edge"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const put = vi.mocked(api.PUT).mock.calls[0]
+    const savedEdge = (put[1] as any).body.edges[0]
+    expect(savedEdge.edge_type).toBe('normal')
+    expect(savedEdge.default_target).toBe('node-2')
+    expect(savedEdge.hitl_review_config.label).toBe('Review gate')
+    wrapper.unmount()
+  })
+
   it('saves the edge config and reloads the graph', async () => {
     const wrapper = await mountWithEdge(edgeFixture({
       hitl_review_config: { label: 'Review gate', description: 'Approve the deploy only after a human reviews the plan.' },

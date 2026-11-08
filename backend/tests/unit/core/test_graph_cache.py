@@ -17,6 +17,7 @@ import pytest
 from modulo.core.pipeline_engine.graph_cache import (
     _make_gate_kickback_router,
     _reject_unknown_graph_fields,
+    build_graph_from_json,
 )
 
 _REVIEW_ID = "hitl_review_a_b"
@@ -58,6 +59,37 @@ def test_graph_allowlist_accepts_compiler_and_persisted_fields():
 def test_graph_allowlist_rejects_unknown_fields():
     with pytest.raises(ValueError, match="unknown fields"):
         _reject_unknown_graph_fields({"nodes": [{"id": "node-1", "typo": True}], "edges": []})
+
+
+def test_build_graph_from_json_accepts_runtime_consumed_node_fields():
+    """The compile path must accept node fields node_runner still reads from
+    imported/historical snapshots (prompt_template, model_backend_id,
+    manual_prompt, routing_prompt). This exercises the real
+    build_graph_from_json -> _reject_unknown_graph_fields seam rather than
+    calling the validator directly."""
+    graph = {
+        "nodes": [
+            {
+                "id": "node-1",
+                "role": None,
+                "model_backend_id": "backend-1",
+                "prompt_template": "Hello {{ input.name }}",
+                "routing_prompt": "Choose a route.",
+                "manual_prompt": "Enter a value.",
+            }
+        ],
+        "edges": [],
+    }
+
+    assert build_graph_from_json(graph) is not None
+
+
+def test_build_graph_from_json_rejects_unknown_node_fields():
+    """Unknown keys must still hard-fail through the compile path."""
+    graph = {"nodes": [{"id": "node-1", "role": None, "typo": True}], "edges": []}
+
+    with pytest.raises(ValueError, match="unknown fields"):
+        build_graph_from_json(graph)
 
 
 def test_reject_routes_to_reject_target():
