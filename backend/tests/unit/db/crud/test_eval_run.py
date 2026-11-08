@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
-_EVAL_ID_GUARDRAIL = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _EVAL_ID_NORMAL = uuid.UUID("00000000-0000-0000-0000-000000000004")
 _EVAL_ID_NORMAL2 = uuid.UUID("00000000-0000-0000-0000-000000000005")
 
@@ -35,15 +34,8 @@ def _make_eval_result(**overrides: Any) -> MagicMock:
     return er
 
 
-def _make_eval(**overrides: Any) -> MagicMock:
-    e = MagicMock()
-    e.id = overrides.get("id", _EVAL_ID_NORMAL)
-    e.organisation_id = _ORG_ID
-    e.eval_type = overrides.get("eval_type", "model_judge")
-    e.name = overrides.get("name", "test eval")
-    e.config_json = overrides.get("config_json", {})
-    e.__table__ = MagicMock()
-    return e
+def _compiled_sql(statement: Any) -> str:
+    return str(statement.compile(compile_kwargs={"literal_binds": True}))
 
 
 def _exec_result(scalar_value: Any = None, scalars_list: list[Any] | None = None) -> MagicMock:
@@ -70,10 +62,15 @@ class TestNonGuardrailEvalResultsClause:
     def test_excludes_error_outcome(self) -> None:
         from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 
-        clause = non_guardrail_eval_results_clause()
-        # The clause should include the is_distinct_from("error") condition
-        # We can't easily inspect the compiled SQL here, but we verify the function returns a clause
-        assert clause is not None
+        sql = _compiled_sql(non_guardrail_eval_results_clause())
+
+        # ADR 066 D18: an outcome='error' row records that the judge produced no
+        # verdict, so it must be excluded from every quality aggregate.
+        assert "eval_results.outcome IS DISTINCT FROM 'error'" in sql
+        # FAR-1725: the guardrail set is sourced from `evals` (the post-cutover
+        # storage), not the frozen `eval_definitions` snapshot.
+        assert "eval_results.eval_id NOT IN (SELECT evals.id" in sql
+        assert "evals.eval_type = 'guardrail'" in sql
 
 
 class TestGetRunEvals:
@@ -101,14 +98,16 @@ class TestGetRunEvals:
         mock_session.execute.assert_awaited_once()
 
     async def test_orders_by_evaluated_at_desc(self, mock_session: AsyncMock) -> None:
-        # The function should order by evaluated_at.desc()
         mock_session.execute = AsyncMock(return_value=_exec_result(scalars_list=[]))
         from modulo.db.crud.eval_run import get_run_evals
 
         await get_run_evals(mock_session, _RUN_ID)
 
-        # Verify execute was called with the right query
-        mock_session.execute.assert_awaited_once()
+        statement = mock_session.execute.await_args.args[0]
+        sql = _compiled_sql(statement)
+        assert f"eval_results.run_id = '{_RUN_ID.hex}'" in sql
+        assert "eval_results.outcome IS DISTINCT FROM 'error'" in sql
+        assert "ORDER BY eval_results.evaluated_at DESC" in sql
 
 
 class TestGetEvalsForRuns:
@@ -150,7 +149,10 @@ class TestGetEvalsForRuns:
 
         await get_evals_for_runs(mock_session, org_id=_ORG_ID, run_ids=[_RUN_ID])
 
-        mock_session.execute.assert_awaited_once()
+        statement = mock_session.execute.await_args.args[0]
+        sql = _compiled_sql(statement)
+        assert f"eval_results.organisation_id = '{_ORG_ID.hex}'" in sql
+        assert f"eval_results.run_id IN ('{_RUN_ID.hex}')" in sql
 
     async def test_handles_multiple_run_ids(self, mock_session: AsyncMock) -> None:
         run_id2 = uuid.uuid4()
@@ -165,10 +167,12 @@ class TestGetEvalsForRuns:
         mock_session.execute.assert_awaited_once()
 
     async def test_orders_by_evaluated_at_asc(self, mock_session: AsyncMock) -> None:
-        # The function should order by evaluated_at (ascending)
         mock_session.execute = AsyncMock(return_value=_exec_result(scalars_list=[]))
         from modulo.db.crud.eval_run import get_evals_for_runs
 
         await get_evals_for_runs(mock_session, org_id=_ORG_ID, run_ids=[_RUN_ID])
 
-        mock_session.execute.assert_awaited_once()
+        statement = mock_session.execute.await_args.args[0]
+        sql = _compiled_sql(statement)
+        assert "ORDER BY eval_results.evaluated_at" in sql
+        assert "DESC" not in sql

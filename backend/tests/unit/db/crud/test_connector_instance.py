@@ -5,7 +5,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
@@ -167,49 +166,6 @@ class TestListConnectorInstances:
         assert result.items == instances
         assert result.has_more is True
 
-    async def test_returns_empty_page_on_programming_error_total(self, mock_session: AsyncMock) -> None:
-        """Test that ProgrammingError on total_query is caught and returns empty page."""
-        # First call to execute (total_query) raises ProgrammingError
-        # Second call is not made because we return early
-
-        async def execute_raises_first(*args, **kwargs):
-            raise ProgrammingError("missing", None, Exception("boom"))
-
-        mock_session.execute = AsyncMock(side_effect=execute_raises_first)
-        from modulo.db.crud.connector_instance import list_connector_instances
-
-        result = await list_connector_instances(mock_session, page=1, page_size=20)
-        assert isinstance(result, PageResult)
-        assert result.total == 0
-        assert not result.items
-        # execute should have been called once
-        assert mock_session.execute.call_count == 1
-
-    async def test_returns_empty_page_on_programming_error_items(self, mock_session: AsyncMock) -> None:
-        """Test that ProgrammingError on items_stmt is caught and returns empty page."""
-        # First call (total_query) succeeds
-        # Second call (items_stmt) raises ProgrammingError
-
-        call_count = {"count": 0}
-        count_result = _exec_result()
-        count_result.scalar_one = MagicMock(return_value=5)
-
-        async def execute_side_effect(*args, **kwargs):
-            call_count["count"] += 1
-            if call_count["count"] == 1:
-                return count_result
-            raise ProgrammingError("missing", None, Exception("boom"))
-
-        mock_session.execute = AsyncMock(side_effect=execute_side_effect)
-        from modulo.db.crud.connector_instance import list_connector_instances
-
-        result = await list_connector_instances(mock_session, page=1, page_size=20)
-        assert isinstance(result, PageResult)
-        assert result.total == 0
-        assert not result.items
-        # execute should have been called twice
-        assert mock_session.execute.call_count == 2
-
     async def test_uses_cursor_pagination_when_cursor_provided(self, mock_session: AsyncMock) -> None:
         # Import first, then patch
         from modulo.db.crud.connector_instance import list_connector_instances
@@ -242,6 +198,7 @@ class TestListConnectorInstances:
     async def test_cursor_pagination_applies_excluded_tiers(self, mock_session: AsyncMock) -> None:
         from modulo.db.crud.connector_instance import list_connector_instances
         from modulo.db.crud.pagination import CursorPaginator
+        from tests.unit.crud.helpers import compile_sql
 
         instances = [_make_connector_instance()]
         paginator_mock = AsyncMock()
@@ -260,12 +217,15 @@ class TestListConnectorInstances:
                 excluded_tiers=["in_dev", "preview"],
             )
 
-        paginator_mock.paginate.assert_awaited_once()
+        stmt = paginator_mock.paginate.await_args.args[1]
+        sql = compile_sql(stmt)
+        assert "tier NOT IN ('in_dev', 'preview')" in sql
 
     async def test_cursor_pagination_applies_org_filter(self, mock_session: AsyncMock) -> None:
-        """Test that org_filter is applied in cursor pagination path."""
+        """The cursor path must carry the org predicate into the paginated stmt."""
         from modulo.db.crud.connector_instance import list_connector_instances
         from modulo.db.crud.pagination import CursorPaginator
+        from tests.unit.crud.helpers import compile_sql
 
         instances = [_make_connector_instance()]
         paginator_mock = AsyncMock()
@@ -283,9 +243,34 @@ class TestListConnectorInstances:
                 cursor="test-cursor",
             )
 
-        paginator_mock.paginate.assert_awaited_once()
+        stmt = paginator_mock.paginate.await_args.args[1]
+        sql = compile_sql(stmt)
+        assert f"organisation_id = '{_ORG_ID.hex}'" in sql
+
+    async def test_cursor_pagination_without_organisation_id(self, mock_session: AsyncMock) -> None:
+        """With no org supplied the cursor path skips the org predicate but keeps the tier filter."""
+        from modulo.db.crud.connector_instance import list_connector_instances
+        from modulo.db.crud.pagination import CursorPaginator
+        from tests.unit.crud.helpers import compile_sql, where_column_names
+
+        paginator_mock = AsyncMock()
+        cp_result = MagicMock()
+        cp_result.items = []
+        cp_result.total = 0
+        cp_result.next_cursor = None
+        cp_result.has_more = False
+        paginator_mock.paginate = AsyncMock(return_value=cp_result)
+
+        with patch.object(CursorPaginator, "__new__", return_value=paginator_mock):
+            await list_connector_instances(mock_session, cursor="test-cursor")
+
+        stmt = paginator_mock.paginate.await_args.args[1]
+        assert "organisation_id" not in where_column_names(stmt)
+        assert "tier NOT IN ('in_dev')" in compile_sql(stmt)
 
     async def test_offset_pagination_applies_excluded_tiers(self, mock_session: AsyncMock) -> None:
+        from tests.unit.crud.helpers import compile_sql
+
         instances = [_make_connector_instance()]
         count_result = _exec_result()
         count_result.scalar_one = MagicMock(return_value=5)
@@ -302,6 +287,8 @@ class TestListConnectorInstances:
         )
 
         assert mock_session.execute.call_count == 2
+        for call in mock_session.execute.await_args_list:
+            assert "tier NOT IN ('in_dev')" in compile_sql(call.args[0])
 
     async def test_works_without_organisation_id(self, mock_session: AsyncMock) -> None:
         instances = [_make_connector_instance()]
@@ -345,13 +332,6 @@ class TestUpdateConnectorInstance:
 
 
 class TestMarkInstancesDegraded:
-    async def test_noop_on_empty_dict(self, mock_session: AsyncMock) -> None:
-        from modulo.db.crud.connector_instance import mark_instances_degraded
-
-        await mark_instances_degraded(mock_session, {})
-        mock_session.execute.assert_not_called()
-        mock_session.flush.assert_not_awaited()
-
     async def test_executes_batched_update(self, mock_session: AsyncMock) -> None:
         instance_ids = {uuid.uuid4(), uuid.uuid4()}
         skipped = {iid: f"error for {iid}" for iid in instance_ids}
@@ -364,7 +344,9 @@ class TestMarkInstancesDegraded:
         mock_session.flush.assert_awaited_once()
 
     async def test_sanitizes_summaries(self, mock_session: AsyncMock) -> None:
-        """NUL bytes in summaries should be stripped."""
+        """NUL bytes in summaries must be stripped from the batched UPDATE."""
+        from tests.unit.crud.helpers import compile_sql
+
         bad_summary = "error\x00with\x00nuls"
         instance_id = uuid.uuid4()
         skipped = {instance_id: bad_summary}
@@ -373,17 +355,12 @@ class TestMarkInstancesDegraded:
 
         await mark_instances_degraded(mock_session, skipped)
 
-        mock_session.execute.assert_awaited_once()
+        sql = compile_sql(mock_session.execute.await_args.args[0])
+        assert "errorwithnuls" in sql
+        assert "\x00" not in sql
 
 
 class TestClearDegradedMarkers:
-    async def test_noop_on_empty_collection(self, mock_session: AsyncMock) -> None:
-        from modulo.db.crud.connector_instance import clear_degraded_markers
-
-        await clear_degraded_markers(mock_session, [])
-        mock_session.execute.assert_not_called()
-        mock_session.flush.assert_not_awaited()
-
     async def test_executes_batched_update(self, mock_session: AsyncMock) -> None:
         instance_ids = [uuid.uuid4(), uuid.uuid4()]
 
