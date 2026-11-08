@@ -8753,6 +8753,195 @@ async def get_model_backend(model_backend_id: str) -> dict[str, Any]:
         return _tool_exception_error("Failed to get model backend", exc, "mcp.get_model_backend")
 
 
+def _parse_model_backend_update_args(
+    *,
+    fallback_backend_ids: list[str] | None,
+    clear_fallback_chain: bool,
+    default_params: dict[str, Any] | None,
+) -> tuple[list[uuid.UUID] | None, dict[str, Any] | None]:
+    """Validate ``update_model_backend``'s non-UUID arguments.
+
+    Returns ``(fallback_ids, None)`` on success or ``(None, error_dict)``.
+    """
+    if fallback_backend_ids is not None and clear_fallback_chain:
+        return None, {
+            "error": "validation_error",
+            "field": "fallback_backend_ids",
+            "detail": "Supply fallback_backend_ids or clear_fallback_chain, not both",
+        }
+    if default_params is not None and "base_url" in default_params:
+        return None, {
+            "error": "validation_error",
+            "field": "default_params.base_url",
+            "detail": (
+                "Changing a model backend endpoint requires the explicit credential-rebinding setup flow; "
+                "base_url cannot be changed through MCP"
+            ),
+        }
+    if any(value is not None and not isinstance(value, str) for value in fallback_backend_ids or []):
+        return None, {
+            "error": "validation_error",
+            "field": "fallback_backend_ids",
+            "detail": "Fallback IDs must be strings",
+        }
+    try:
+        parsed = [uuid.UUID(value) for value in fallback_backend_ids] if fallback_backend_ids is not None else None
+    except ValueError as exc:
+        return None, {"error": "invalid_id", "field": "fallback_backend_ids", "detail": str(exc)}
+    return parsed, None
+
+
+def _collect_model_backend_updates(
+    *,
+    name: str | None,
+    display_name: str | None,
+    model_id: str | None,
+    default_params: dict[str, Any] | None,
+    visibility: str | None,
+    tier: str | None,
+    fallback_ids: list[uuid.UUID] | None,
+    clear_fallback_chain: bool,
+) -> dict[str, Any]:
+    """Collect the non-None fields the caller asked to change."""
+    updates: dict[str, Any] = {
+        field: value
+        for field, value in (
+            ("name", name),
+            ("display_name", display_name),
+            ("model_id", model_id),
+            ("default_params", default_params),
+            ("visibility", visibility),
+            ("tier", tier),
+        )
+        if value is not None
+    }
+    if fallback_ids is not None or clear_fallback_chain:
+        updates["fallback_backend_ids"] = [str(value) for value in (fallback_ids or [])]
+    return updates
+
+
+async def _apply_model_backend_update(
+    org_id: uuid.UUID,
+    backend_id: uuid.UUID,
+    model_backend_id: str,
+    updates: dict[str, Any],
+    fallback_ids: list[uuid.UUID] | None,
+) -> dict[str, Any]:
+    """Validate and persist the update; returns the rendered item or an error dict."""
+    from pydantic import ValidationError as PydanticValidationError
+
+    from modulo.api.routes.model_backends import ModelBackendUpdate, _validate_fallback_ids
+    from modulo.db.crud.model_backend import get_model_backend as db_get_model_backend
+    from modulo.db.crud.model_backend import update_model_backend as db_update_model_backend
+
+    async with _session(org_id) as s:
+        existing = await db_get_model_backend(s, backend_id)
+        if existing is None or existing.organisation_id != org_id:
+            return {"error": "not_found", "detail": f"Model backend {model_backend_id} not found"}
+
+        # Reuse the HTTP PATCH request contract so MCP cannot bypass the
+        # tier enum, the name/model_id bounds, or the team-visibility
+        # invariant that the REST route enforces.
+        validation_payload: dict[str, Any] = {
+            key: value for key, value in updates.items() if key != "fallback_backend_ids"
+        }
+        # owner_team_id is not exposed by this tool: carry the existing
+        # owner forward so an already-team backend stays valid, and let the
+        # shared validator reject a new team visibility with no owner.
+        validation_payload["owner_team_id"] = (
+            existing.owner_team_id if validation_payload.get("visibility") == "team" else None
+        )
+        try:
+            ModelBackendUpdate.model_validate(validation_payload)
+        except PydanticValidationError as exc:
+            return {"error": "validation_error", "detail": exc.errors(include_url=False)}
+
+        if fallback_ids is not None:
+            await _validate_fallback_ids(s, org_id, fallback_ids, backend_id=backend_id)
+        updated = await db_update_model_backend(s, backend_id, updates)
+        if updated is None:
+            return {"error": "not_found", "detail": f"Model backend {model_backend_id} not found"}
+        await s.refresh(updated)
+    item = _model_backend_item(updated)
+    item["fallback_backend_ids"] = [str(fid) for fid in (updated.fallback_backend_ids or [])]
+    return item
+
+
+@mcp.tool(
+    name="update_model_backend",
+    description=(
+        "Update an existing model backend's non-secret configuration and replace or clear its fallback chain. "
+        "Credentials are never accepted by this tool; use the one-time setup URL flow for credential changes. "
+        "The fallback chain is replaced when fallback_backend_ids is supplied, or cleared with "
+        "clear_fallback_chain=true."
+    ),
+)
+@mcp_audited("model_backend_updated", "model_backend", fail_closed=False)
+@_RETRY_DB
+async def update_model_backend(
+    model_backend_id: str,
+    name: str | None = None,
+    display_name: str | None = None,
+    model_id: str | None = None,
+    default_params: dict[str, Any] | None = None,
+    visibility: str | None = None,
+    tier: str | None = None,
+    fallback_backend_ids: list[str] | None = None,
+    clear_fallback_chain: bool = False,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("update_model_backend")
+        backend_id, input_err = _parse_uuid_param(model_backend_id, "model_backend_id")
+        if input_err:
+            return input_err
+        fallback_ids, arg_err = _parse_model_backend_update_args(
+            fallback_backend_ids=fallback_backend_ids,
+            clear_fallback_chain=clear_fallback_chain,
+            default_params=default_params,
+        )
+        if arg_err is not None:
+            return arg_err
+        updates = _collect_model_backend_updates(
+            name=name,
+            display_name=display_name,
+            model_id=model_id,
+            default_params=default_params,
+            visibility=visibility,
+            tier=tier,
+            fallback_ids=fallback_ids,
+            clear_fallback_chain=clear_fallback_chain,
+        )
+        return await _apply_model_backend_update(
+            _ctx_org_id_val(),
+            cast(uuid.UUID, backend_id),
+            model_backend_id,
+            updates,
+            fallback_ids,
+        )
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except FastAPIHTTPException as exc:
+        return {"error": "validation_error", "detail": exc.detail}
+    except IntegrityError:
+        # The DB uniqueness constraint on (organisation_id, name) is the
+        # race-proof backstop; mirror the HTTP 409 already-exists contract
+        # instead of leaking a generic internal error.
+        _log.exception("update_model_backend name conflict")
+        return {
+            "error": "conflict",
+            "field": "name",
+            "detail": "A model backend with this name already exists in this organisation",
+        }
+    except ProgrammingError:
+        _log.exception("update_model_backend failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("update_model_backend failed")
+        return _tool_exception_error("Failed to update model backend", exc, "mcp.update_model_backend")
+
+
 @mcp.tool(
     description="Create a new connector instance (provider configuration). "
     "Credentials are encrypted at rest. Returns the created connector details. "

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { h } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
@@ -151,8 +152,10 @@ describe('PipelineEditorView dispatch node-type recognition', () => {
     expect(converted.type).toBe('dispatch')
     expect(converted.data.node_type).toBe('dispatch')
 
-    // Registered alongside the other canvas node types.
-    expect(vm.nodeTypes.dispatch).toBe('dispatch')
+    // Registered alongside the other canvas node types (component-valued since
+    // the FAR-2460 extraction) and distinct from the agent fallback.
+    expect(vm.nodeTypes.dispatch).toBeTruthy()
+    expect(vm.nodeTypes.dispatch).not.toBe(vm.nodeTypes.agent)
 
     wrapper.unmount()
   })
@@ -160,8 +163,8 @@ describe('PipelineEditorView dispatch node-type recognition', () => {
 
 describe('PipelineEditorView dispatch canvas template (FAR-1141)', () => {
   it('renders the dispatch label, falling back to the generic dispatch label', async () => {
-    // The VueFlow stub renders the `#node-dispatch` scoped slot with a label
-    // present and absent, exercising both arms of the `label || $t(...)`.
+    // The VueFlow stub renders the registered dispatch component with a label
+    // present and absent, exercising both arms of the `label || fallback`.
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const pinia = createPinia()
@@ -175,14 +178,18 @@ describe('PipelineEditorView dispatch canvas template (FAR-1141)', () => {
         stubs: {
           VueFlow: {
             name: 'VueFlow',
-            props: ['nodes', 'edges'],
-            template: `<div>
-              <slot name="node-dispatch" :id="'d1'" :data="{ label: 'Fire job', description: '' }" />
-              <slot name="node-dispatch" :id="'d2'" :data="{ label: '', description: '' }" />
-            </div>`,
+            props: ['nodes', 'edges', 'nodeTypes'],
+            render(this: { nodeTypes: Record<string, any> }) {
+              const dispatch = this.nodeTypes.dispatch
+              return h('div', [
+                h(dispatch, { id: 'd1', data: { label: 'Fire job', description: '', node_type: 'dispatch' } }),
+                h(dispatch, { id: 'd2', data: { label: '', description: '', node_type: 'dispatch' } }),
+              ])
+            },
           },
           Background: true,
           Controls: true,
+          Handle: { template: '<span />' },
         },
       },
     })
