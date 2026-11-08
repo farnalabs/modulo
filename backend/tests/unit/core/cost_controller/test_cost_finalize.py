@@ -153,8 +153,9 @@ def test_split_merge_skipped_recovery_is_telemetry_only() -> None:
 
 def test_enrich_union_split_sandbox_signal() -> None:
     usage = {"node-a": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}}
-    outputs = {"node-a": {"output": {"status": "completed", "wall_clock_time_ms": 3_600_000}}}
-    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=True)
+    outputs = {"node-a": {"result": "completed"}}
+    telemetry = {"node-a": {"status": "completed", "wall_clock_time_ms": 3_600_000}}
+    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
     entry = union["node-a"]
     assert entry["is_sandbox_for_wallclock"] is True
     assert entry["sandbox_by_map"] is True
@@ -167,8 +168,9 @@ def test_enrich_union_split_sandbox_signal() -> None:
 def test_enrich_union_map_absent_wallclock_failsafe() -> None:
     """A map-absent node is sandbox for wall-clock, NEVER self-report-eligible."""
     usage = {"node-a": {"model_cost_usd": 5.0}}
-    outputs = {"node-a": {"output": {"wall_clock_time_ms": 1000}}}
-    union = _enrich_union(usage, outputs, {}, is_terminal=False)
+    outputs = {"node-a": {"result": "completed"}}
+    telemetry = {"node-a": {"wall_clock_time_ms": 1000}}
+    union = _enrich_union(usage, outputs, {}, is_terminal=False, merged_telemetry=telemetry)
     assert union["node-a"]["is_sandbox_for_wallclock"] is True
     assert union["node-a"]["sandbox_by_map"] is False
 
@@ -194,8 +196,9 @@ def test_enrich_union_resume_of_stored_unclamped_band_clamp() -> None:
 
 def test_enrich_union_output_present_overwrites_with_reclamped_fold() -> None:
     usage = {"node-a": {"model_cost_usd": 0.01}}
-    outputs = {"node-a": {"output": {"model_cost_usd": 0.04, "model_cost_raw_usd": 0.0412}}}
-    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=False)
+    outputs = {"node-a": {"result": "completed"}}
+    telemetry = {"node-a": {"model_cost_usd": 0.04, "model_cost_raw_usd": 0.0412}}
+    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=False, merged_telemetry=telemetry)
     # The union stores the RE-CLAMPED value from the RAW input (0.0412 unchanged
     # under the band) — the producer's own 0.04 clamp is not the union authority.
     assert union["node-a"]["model_cost_usd"] == pytest.approx(0.0412)
@@ -205,8 +208,9 @@ def test_enrich_union_output_present_overwrites_with_reclamped_fold() -> None:
 def test_enrich_union_output_present_but_lacking_pops_sibling_flags() -> None:
     """Case (2): output PRESENT but LACKS model_cost_usd -> the node is estimated."""
     usage = {"node-a": {"model_cost_usd": 5.0, "model_cost_raw_usd": 5.0}}
-    outputs = {"node-a": {"output": {"status": "completed", "wall_clock_time_ms": 1000}}}
-    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=False)
+    outputs = {"node-a": {"result": "completed"}}
+    telemetry = {"node-a": {"status": "completed", "wall_clock_time_ms": 1000}}
+    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=False, merged_telemetry=telemetry)
     for key in ("model_cost_usd", "model_cost_raw_usd", "model_cost_clamped", "model_cost_out_of_band_high"):
         assert key not in union["node-a"]
 
@@ -226,8 +230,14 @@ def test_enrich_union_folds_proven_zero_report() -> None:
     """FAR-653: a node output carrying an exact-zero cost WITH the all-zero
     ``model_tokens_*`` proof folds as a REAL report — the union keeps 0.0."""
     usage = {"node-a": {"model_cost_usd": 5.0}}
-    outputs = {"node-a": {"output": dict(_PROVEN_ZERO_NODE_OUTPUT)}}
-    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=False)
+    outputs = {"node-a": {"result": "completed"}}
+    union = _enrich_union(
+        usage,
+        outputs,
+        {"node-a": "sandbox_agent"},
+        is_terminal=False,
+        merged_telemetry={"node-a": dict(_PROVEN_ZERO_NODE_OUTPUT)},
+    )
     entry = union["node-a"]
     assert entry["model_cost_usd"] == 0.0
     assert entry["model_cost_raw_usd"] == 0.0
@@ -260,8 +270,14 @@ def test_enrich_union_folds_proven_zero_report() -> None:
 def test_enrich_union_pops_unproven_zero_fold(output: dict) -> None:
     """FAR-653: an unproven zero is NOT a report — the fold pops the fields."""
     usage = {"node-a": {"model_cost_usd": 5.0, "model_cost_raw_usd": 5.0}}
-    outputs = {"node-a": {"output": output}}
-    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=False)
+    outputs = {"node-a": {"result": "completed"}}
+    union = _enrich_union(
+        usage,
+        outputs,
+        {"node-a": "sandbox_agent"},
+        is_terminal=False,
+        merged_telemetry={"node-a": output},
+    )
     for key in ("model_cost_usd", "model_cost_raw_usd", "model_cost_clamped", "model_cost_out_of_band_high"):
         assert key not in union["node-a"]
 
@@ -298,9 +314,15 @@ def test_enrich_union_schema_drift_increment_gated(
     output = {"schema_drift": True}
     if pin_failed:
         output["pin_failed"] = True
-    outputs = {"node-a": {"output": output}}
+    outputs = {"node-a": {"result": "completed"}}
     with patch("modulo.core.cost_controller.finalize.record_schema_drift") as mock_counter:
-        _enrich_union({}, outputs, {"node-a": map_type}, is_terminal=is_terminal)
+        _enrich_union(
+            {},
+            outputs,
+            {"node-a": map_type},
+            is_terminal=is_terminal,
+            merged_telemetry={"node-a": output},
+        )
     if should_increment:
         mock_counter.assert_called_once()
     else:
@@ -387,7 +409,7 @@ def test_enrich_union_propagates_envelope_datum_provenance() -> None:
     """A sandbox envelope's per-datum ``reported`` map propagates onto the
     union's corresponding folded keys (token datums via the shared chain,
     the model-cost datum onto its pinned keys) — springing from BOTH views
-    (split telemetry, legacy inner output)."""
+    (the separated telemetry column)."""
     telemetry = {
         "node-a": {
             "status": "completed",
@@ -411,10 +433,10 @@ def test_enrich_union_propagates_envelope_datum_provenance() -> None:
     }
 
 
-def test_enrich_union_propagates_from_legacy_inner_output() -> None:
-    """Legacy (non-split) rows carry the map inside the envelope's inner
-    output — the same propagation applies with no telemetry column."""
-    outputs = {
+def test_enrich_union_propagates_from_pure_return_and_telemetry() -> None:
+    """The pure return and separated telemetry provide distinct cost facts."""
+    outputs = {"node-a": {"result": "completed"}}
+    telemetry = {
         "node-a": {
             "status": "completed",
             "wall_clock_time_ms": 1500,
@@ -423,9 +445,14 @@ def test_enrich_union_propagates_from_legacy_inner_output() -> None:
             "provenance": {"model_cost_usd": "reported", "model_tokens_input": "reported"},
         }
     }
-    union = _enrich_union(_PROV_BASE_USAGE, outputs, {"node-a": "sandbox_agent"})
+    union = _enrich_union(
+        _PROV_BASE_USAGE,
+        outputs,
+        {"node-a": "sandbox_agent"},
+        merged_telemetry=telemetry,
+    )
     entry = union["node-a"]
-    # No raw datum declared -> no raw fold -> no raw stamp.
+    # Provenance is read from the separated telemetry value.
     assert entry["provenance"] == {"model_cost_usd": "reported", "reported_input_tokens": "reported"}
 
 
@@ -791,9 +818,10 @@ def test_derive_node_type_map_absent_type_defaults_empty() -> None:
 def test_legacy_sandbox_cost_de_trusts_cost_estimate_usd() -> None:
     """The fallback total is SERVER-VERIFIED wall-clock ONLY — a hostile
     cost_estimate_usd contributes NOTHING (§1.5)."""
-    outputs = {"node-a": {"output": {"wall_clock_time_ms": 3_600_000, "cost_estimate_usd": 99999.0}}}
+    outputs = {"node-a": {"result": "completed"}}
+    telemetry = {"node-a": {"wall_clock_time_ms": 3_600_000}}
     with patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")):
-        cost = _legacy_sandbox_cost(outputs)
+        cost = _legacy_sandbox_cost(outputs, telemetry)
     assert cost == Decimal("0.1332")
 
 

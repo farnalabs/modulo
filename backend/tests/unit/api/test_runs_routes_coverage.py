@@ -1285,23 +1285,34 @@ def test_get_run_artifact_resolves_synthetic_full_attempt_key_stderr(client) -> 
     assert resp.content == b"full stderr transcript"
 
 
-# ── extracted helpers: inline log lengths, artifact DB error, telemetry pointer ──
+# ── extracted helpers: log totals, artifact DB error, telemetry pointer ──
 
 
-def test_inline_log_lengths_for_dict_envelope() -> None:
-    """A dict envelope contributes both inline lengths; a missing key is zero."""
-    assert runs_module._inline_log_lengths({"agent_stdout": "abc"}) == (3, 0)
-    assert runs_module._inline_log_lengths({"agent_stdout": "", "agent_stderr": "de"}) == (0, 2)
+def test_compute_log_totals_ignores_dict_outputs() -> None:
+    """A pure-return dict never contributes to the log totals (FAR-132).
+
+    After the split, only telemetry carries ``agent_stdout`` / ``agent_stderr``
+    and the length keys; the outputs surface holds pure returns and is never
+    interpreted as log content.
+    """
+    assert runs_module._compute_log_totals(None, {"node": {"agent_stdout": "abc"}}) == (0, 0)
+    assert runs_module._compute_log_totals(None, {"node": {"agent_stderr": "de"}}) == (0, 0)
 
 
-def test_inline_log_lengths_for_unsupported_value() -> None:
-    """A non-dict, non-str value contributes nothing."""
-    assert runs_module._inline_log_lengths(123) == (0, 0)
+def test_compute_log_totals_ignores_non_dict_output_value() -> None:
+    """A non-dict return contributes nothing, even with no telemetry entry."""
+    assert runs_module._compute_log_totals(None, {"node": 123}) == (0, 0)
 
 
-def test_inline_log_lengths_for_bare_string() -> None:
-    """A bare string counts as stdout only."""
-    assert runs_module._inline_log_lengths("abc") == (3, 0)
+def test_compute_log_totals_ignores_bare_string_output_value() -> None:
+    """A bare-string return contributes nothing, even with no telemetry entry."""
+    assert runs_module._compute_log_totals(None, {"node": "abc"}) == (0, 0)
+
+
+def test_compute_log_totals_ignores_non_dict_telemetry_value() -> None:
+    """A non-dict telemetry entry contributes zero rather than raising."""
+    assert runs_module._compute_log_totals({"node": 123}, None) == (0, 0)
+    assert runs_module._compute_log_totals({"node": "abc"}, None) == (0, 0)
 
 
 def test_telemetry_log_lengths_prefers_stored_lengths() -> None:
