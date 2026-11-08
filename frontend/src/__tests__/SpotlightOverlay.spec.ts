@@ -12,9 +12,10 @@ const i18n = createI18n({
     en: {
       components: {
         onboarding: {
-          SpotlightOverlay: {
-            dismiss_hint: 'Press Esc to dismiss',
-          },
+           SpotlightOverlay: {
+             dismiss_hint: 'Press Esc to dismiss',
+             next: 'Next',
+           },
         },
       },
     },
@@ -107,7 +108,7 @@ describe('SpotlightOverlay', () => {
     // instead of the fallback branch.
     spotlight.highlight('spot-target')
     await nextTick()
-    const cutout = document.querySelector('[data-testid="spotlight-overlay"] > div') as HTMLElement | null
+    const cutout = document.querySelector('[data-testid="spotlight-overlay"] > div:nth-child(2)') as HTMLElement | null
     expect(cutout).not.toBeNull()
 
     // These bindings must not throw and must stop propagation (not dismiss).
@@ -120,7 +121,38 @@ describe('SpotlightOverlay', () => {
     wrapper.unmount()
   })
 
-  it('updates the cutout position when the target moves', async () => {
+   it('keeps the coachmark card outside the aria-hidden backdrop so Next stays reachable', async () => {
+     targetEl('spot-target')
+     spotlight.start([
+       { targetTestId: 'spot-target', message: 'first' },
+       { targetTestId: 'spot-target', message: 'second' },
+     ])
+     const wrapper = mountOverlay()
+     await nextTick()
+
+     const nextButton = wrapper.findAll('button').find((b) => b.text() === 'Next')
+     expect(nextButton!.element.closest('[aria-hidden="true"]')).toBeNull()
+     wrapper.unmount()
+   })
+
+   it('shows a Next action for a multi-step spotlight', async () => {
+     targetEl('spot-target')
+     spotlight.start([
+       { targetTestId: 'spot-target', message: 'first' },
+       { targetTestId: 'spot-target', message: 'second' },
+     ])
+     const wrapper = mountOverlay()
+     await nextTick()
+
+     const nextButton = wrapper.findAll('button').find((b) => b.text() === 'Next')
+     expect(nextButton).toBeDefined()
+     expect(document.querySelector('[data-testid="spotlight-next"]')).not.toBeNull()
+     await nextButton!.trigger('click')
+     expect(spotlight.message.value).toBe('second')
+     wrapper.unmount()
+   })
+
+   it('updates the cutout position when the target moves', async () => {
     const target = targetEl('spot-target')
     const rect = { top: 10, right: 110, bottom: 60, left: 10, width: 100, height: 50 } as DOMRect
     vi.spyOn(target, 'getBoundingClientRect').mockReturnValue(rect)
@@ -128,14 +160,14 @@ describe('SpotlightOverlay', () => {
     const wrapper = mountOverlay()
     await nextTick()
 
-    expect((document.querySelector('[data-testid="spotlight-overlay"] > div') as HTMLElement).style.left).toBe('10px')
+    expect((document.querySelector('[data-testid="spotlight-overlay"] > div:nth-child(2)') as HTMLElement).style.left).toBe('10px')
 
     const movedRect = { ...rect, left: 40, right: 140 } as DOMRect
     vi.mocked(target.getBoundingClientRect).mockReturnValue(movedRect)
     window.dispatchEvent(new Event('scroll'))
     await nextTick()
 
-    expect((document.querySelector('[data-testid="spotlight-overlay"] > div') as HTMLElement).style.left).toBe('40px')
+    expect((document.querySelector('[data-testid="spotlight-overlay"] > div:nth-child(2)') as HTMLElement).style.left).toBe('40px')
     wrapper.unmount()
   })
 
@@ -180,7 +212,7 @@ describe('SpotlightOverlay', () => {
     // branch that has no propagation guards.
     spotlight.highlight('spot-target', 'focus the target')
     await nextTick()
-    const cutout = document.querySelector('[data-testid="spotlight-overlay"] > div') as HTMLElement | null
+    const cutout = document.querySelector('[data-testid="spotlight-overlay"] > div:nth-child(2)') as HTMLElement | null
     expect(cutout).not.toBeNull()
 
     let bubbled = false

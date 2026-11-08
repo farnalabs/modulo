@@ -1564,7 +1564,14 @@ export default {
       "llm_badge": "LLM",
       "id_label": "ID",
       "pipeline_fallback_title": "Pipeline",
-      "empty_state_hint": "no components in pipeline",
+      "empty_state_onboarding": "Pipelines are made of nodes. Start by adding an Agent node — it does the AI work. Then drag from one node's handle to the next to connect them.",
+      "empty_state_manual_hint": "Manual nodes hold static input and come from templates or imports",
+      "empty_state_agent_hint": "Agent nodes do the AI work — add one to start",
+      "empty_state_show_me": "Show me",
+      "empty_state_start_from_template": "Start from template",
+      "empty_state_walkthrough_add_node": "Add your first node here. Agent is the node type you can create directly.",
+      "empty_state_walkthrough_canvas": "Your node appears on the canvas. Drag from its handle to another node to connect them.",
+      "empty_state_walkthrough_arrange": "Once the graph grows, Arrange graph lays it out left to right.",
       "run_label": "Run",
       "close": "Close",
       "enter_node_label": "Enter node label",
@@ -4962,7 +4969,8 @@ export default {
         "recommended_actions": "Recommended actions"
       },
       "SpotlightOverlay": {
-        "dismiss_hint": "Click anywhere to dismiss this guide"
+        "dismiss_hint": "Click anywhere to dismiss this guide",
+        "next": "Next"
       }
     },
     "pipeline": {
