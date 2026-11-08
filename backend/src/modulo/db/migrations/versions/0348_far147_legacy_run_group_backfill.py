@@ -28,6 +28,54 @@ branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
 
+def _backfill_non_postgres(bind: sa.Connection) -> None:
+    """Backfill legacy children using portable row-by-row traversal."""
+    child_runs = bind.execute(
+        sa.text("""
+        SELECT id, parent_run_id, langgraph_thread_id
+        FROM runs
+        WHERE parent_run_id IS NOT NULL
+          AND run_group_id IS NULL
+        """)
+    ).fetchall()
+
+    for child_id, parent_run_id, child_thread_id in child_runs:
+        current_id = parent_run_id
+        root_id = None
+        parent_thread_id = None
+        depth = 0
+        while current_id and depth < 100:
+            row = bind.execute(
+                sa.text("""
+                SELECT id, parent_run_id, langgraph_thread_id
+                FROM runs WHERE id = :id
+                """),
+                {"id": current_id},
+            ).fetchone()
+            if not row:
+                break
+            row_id, row_parent, row_thread = row
+            if depth == 0:
+                # Direct children compare against their immediate parent,
+                # including when that parent is the root.
+                parent_thread_id = row_thread
+            if row_parent is None:
+                root_id = row_id
+                break
+            current_id = row_parent
+            depth += 1
+
+        if root_id:
+            kind = "resume" if child_thread_id == parent_thread_id else "retry"
+            bind.execute(
+                sa.text("""
+                UPDATE runs SET run_group_id = :root_id, run_group_kind = :kind
+                WHERE id = :child_id AND run_group_id IS NULL
+                """),
+                {"root_id": root_id, "kind": kind, "child_id": child_id},
+            )
+
+
 def upgrade() -> None:
     """Backfill run_group_id and run_group_kind for existing runs with parent_run_id."""
     bind = op.get_bind()
@@ -104,69 +152,18 @@ def upgrade() -> None:
     if backfill_sql:
         bind.execute(backfill_sql)
     else:
-        # Fallback for non-Postgres: iterate in Python
-        # Get all child runs needing backfill
-        child_runs = bind.execute(
-            sa.text("""
-            SELECT id, parent_run_id, langgraph_thread_id
-            FROM runs
-            WHERE parent_run_id IS NOT NULL
-              AND run_group_id IS NULL
-        """)
-        ).fetchall()
-
-        for child_id, parent_run_id, child_thread_id in child_runs:
-            # Walk up to find root
-            current_id = parent_run_id
-            root_id = None
-            parent_thread_id = None
-            depth = 0
-            while current_id and depth < 100:
-                row = bind.execute(
-                    sa.text("""
-                    SELECT id, parent_run_id, langgraph_thread_id
-                    FROM runs WHERE id = :id
-                """),
-                    {"id": current_id},
-                ).fetchone()
-                if not row:
-                    break
-                row_id, row_parent, row_thread = row
-                if row_parent is None:
-                    root_id = row_id
-                    break
-                if depth == 0:
-                    parent_thread_id = row_thread
-                current_id = row_parent
-                depth += 1
-
-            if root_id:
-                kind = "resume" if child_thread_id == parent_thread_id else "retry"
-                bind.execute(
-                    sa.text("""
-                    UPDATE runs SET run_group_id = :root_id, run_group_kind = :kind
-                    WHERE id = :child_id AND run_group_id IS NULL
-                """),
-                    {"root_id": root_id, "kind": kind, "child_id": child_id},
-                )
+        _backfill_non_postgres(bind)
 
 
 def downgrade() -> None:
-    """Downgrade: clear the backfilled run_group_id and run_group_kind for legacy rows.
+    """Refuse to downgrade because the backfill does not record ownership.
 
-    We only clear rows that were backfilled (where run_group_kind was set by this migration).
-    Since we can't distinguish backfilled rows from organically created ones, we clear
-    all rows that have a parent_run_id and run_group_kind set, but this is a best-effort
-    downgrade as the data may have been created by the application after the migration.
+    Clearing the grouping columns would destroy classifications written by the
+    application after this migration, and the migration has no durable marker
+    that distinguishes its own writes from later writes. Refusing is safer than
+    a destructive, best-effort rollback.
     """
-    bind = op.get_bind()
-    # Reset run_group_id and run_group_kind for child runs (parent_run_id IS NOT NULL)
-    # This is a best-effort downgrade - rows created by the app after migration
-    # will also be reset, but that's acceptable for a backfill migration downgrade.
-    bind.execute(
-        sa.text("""
-        UPDATE runs
-        SET run_group_id = NULL, run_group_kind = NULL
-        WHERE parent_run_id IS NOT NULL
-    """)
+    raise RuntimeError(
+        "0348_far147_legacy_run_group_backfill cannot be downgraded safely: "
+        "backfilled run-group values are not distinguishable from later application writes"
     )

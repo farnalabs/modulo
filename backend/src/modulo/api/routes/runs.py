@@ -129,7 +129,7 @@ from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import CANCEL_REASON_USER_REQUESTED, TERMINAL_STATUSES, Run
-from modulo.db.models.run_node_outputs import RunNodeOutput
+from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
@@ -218,14 +218,15 @@ def _extract_legacy_agent_verdict(outputs_json: dict[str, Any] | None) -> str | 
     for node_output in outputs_json.values():
         if not isinstance(node_output, dict):
             continue
+        candidates = [node_output]
         inner = node_output.get("output")
-        if not isinstance(inner, dict):
-            continue
-        # Check both agent_status and agent_outcome for "failed"
-        if inner.get("agent_status") == "failed":
-            return "failed"
-        if inner.get("agent_outcome") == "failed":
-            return "failed"
+        if isinstance(inner, dict):
+            candidates.append(inner)
+        for candidate in candidates:
+            # Legacy writers used all three names at different points in the
+            # transition: status, agent_status, and agent_outcome.
+            if any(candidate.get(key) == "failed" for key in ("status", "agent_status", "agent_outcome")):
+                return "failed"
     return None
 
 
@@ -735,6 +736,30 @@ def _coerce_snapshot_version(raw: Any) -> int | None:
     return raw
 
 
+async def _load_legacy_outputs(
+    session: AsyncSession,
+    runs: list[Run],
+    organisation_id: uuid.UUID,
+) -> dict[uuid.UUID, dict[str, Any] | None]:
+    """Load legacy outputs for a page with one org-scoped bulk query."""
+    run_ids = [run.id for run in runs]
+    if not run_ids:
+        return {}
+    result = await session.execute(
+        select(RunNodeOutput).where(
+            RunNodeOutput.run_id.in_(run_ids),
+            RunNodeOutput.organisation_id == organisation_id,
+            RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+            RunNodeOutput.node_id != META_NODE_ID,
+        )
+    )
+    outputs_map: dict[uuid.UUID, dict[str, Any]] = {}
+    for row in result.scalars().all():
+        if isinstance(row.outputs_json, dict):
+            outputs_map.setdefault(row.run_id, {})[row.node_id] = row.outputs_json
+    return {run_id: outputs_map.get(run_id) for run_id in run_ids}
+
+
 async def _load_snapshot_versions(session: AsyncSession, runs: list[Run]) -> dict[str, int]:
     """Bulk-load snapshot version numbers for a page of runs — ONE query (FAR-1838).
 
@@ -926,12 +951,7 @@ async def _do_list_runs(
 
         # FAR-147: load outputs_json for all runs in the page in bulk to extract
         # legacy agent verdicts without N+1.
-        outputs_map: dict[uuid.UUID, dict[str, Any] | None] = {}
-        if run_ids:
-            for run_id in run_ids:
-                outputs_map[run_id] = await read_run_outputs(
-                    session, run_id=run_id, organisation_id=user.organisation_id
-                )
+        outputs_map = await _load_legacy_outputs(session, result.items, user.organisation_id)
 
         # Active-run observability (FAR-307). Capacity is computed ONCE per
         # request (one active-count query + one limit read) and reused for

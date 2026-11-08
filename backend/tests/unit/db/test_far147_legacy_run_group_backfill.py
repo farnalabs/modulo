@@ -5,13 +5,16 @@ by walking parent_run_id chains and detecting resume vs retry based on
 langgraph_thread_id equality.
 """
 
+import importlib.util
 import os
 import uuid
 from collections.abc import AsyncGenerator
-from typing import cast
+from pathlib import Path
+from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import Table, func, select
+from sqlalchemy import Table, create_engine, func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 # Force SQLite mode for tests to avoid PostgreSQL capacity check issues
@@ -33,6 +36,19 @@ from modulo.db.models.variant_group import VariantGroup
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000f1")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000f2")
 _SNAPSHOT = uuid.UUID("00000000-0000-0000-0000-0000000000f3")
+_MIGRATION_PATH = (
+    Path(__file__).parents[3] / "src/modulo/db/migrations/versions/0348_far147_legacy_run_group_backfill.py"
+)
+
+
+def _load_migration() -> Any:
+    spec = importlib.util.spec_from_file_location("migration_0348", _MIGRATION_PATH)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 _GRAPH: dict[str, object] = {
     "nodes": [{"id": "n1", "node_type": "agent"}],
@@ -172,6 +188,48 @@ async def _seed_root(session: AsyncSession) -> Run:
     await _seed_pipeline(session)
     await _seed_snapshot(session)
     return await _create_run(session)
+
+
+def test_actual_non_postgres_backfill_uses_immediate_parent_and_root() -> None:
+    migration = _load_migration()
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE runs (
+                    id TEXT PRIMARY KEY,
+                    parent_run_id TEXT,
+                    langgraph_thread_id TEXT,
+                    run_group_id TEXT,
+                    run_group_kind TEXT
+                )
+                """
+            )
+        )
+        root_id, parent_id, child_id = (str(uuid.uuid4()) for _ in range(3))
+        connection.execute(
+            text(
+                """
+                INSERT INTO runs(id, parent_run_id, langgraph_thread_id)
+                VALUES (:root_id, NULL, 'root-thread'),
+                       (:parent_id, :root_id, 'parent-thread'),
+                       (:child_id, :parent_id, 'parent-thread')
+                """
+            ),
+            {"root_id": root_id, "parent_id": parent_id, "child_id": child_id},
+        )
+        migration._backfill_non_postgres(connection)
+        rows = connection.execute(text("SELECT id, run_group_id, run_group_kind FROM runs")).all()
+        first = list(rows)
+        migration._backfill_non_postgres(connection)
+        second = list(connection.execute(text("SELECT id, run_group_id, run_group_kind FROM runs")).all())
+
+    grouped = {row.id: (row.run_group_id, row.run_group_kind) for row in first}
+    assert grouped[root_id] == (None, None)
+    assert grouped[parent_id] == (root_id, "retry")
+    assert grouped[child_id] == (root_id, "resume")
+    assert first == second
 
 
 def _backfill_classify_run(run: Run, parent_run: Run | None) -> tuple[uuid.UUID | None, str | None]:
@@ -481,8 +539,47 @@ class TestLegacyRunGroupBackfillDB:
         assert retry_child.langgraph_thread_id != root.langgraph_thread_id
 
 
+def test_downgrade_refuses_destructive_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
+    migration = _load_migration()
+    monkeypatch.setattr(migration.op, "get_bind", lambda: pytest.fail("downgrade must not write"))
+
+    with pytest.raises(RuntimeError, match="cannot be downgraded safely"):
+        migration.downgrade()
+
+
 class TestLegacyAgentVerdictExtraction:
     """Test the legacy agent verdict extraction from outputs_json."""
+
+    def test_extract_failed_status_convention(self) -> None:
+        from modulo.api.routes.runs import _extract_legacy_agent_verdict
+
+        assert _extract_legacy_agent_verdict({"node1": {"status": "failed"}}) == "failed"
+
+    @pytest.mark.asyncio
+    async def test_bulk_reader_uses_one_org_scoped_query(self) -> None:
+        from modulo.api.routes.runs import _load_legacy_outputs
+
+        run_id = uuid.uuid4()
+        row = type("OutputRow", (), {})()
+        row.run_id = run_id
+        row.node_id = "node1"
+        row.outputs_json = {"output": {"agent_status": "failed"}}
+        scalars = type("Scalars", (), {"all": lambda self: [row]})()
+        result = type("Result", (), {"scalars": lambda self: scalars})()
+        session = AsyncMock(spec=AsyncSession)
+        session.execute.return_value = result
+
+        outputs = await _load_legacy_outputs(
+            session,
+            [type("Run", (), {"id": run_id})()],
+            _ORG,
+        )
+
+        assert outputs[run_id] == {"node1": row.outputs_json}
+        session.execute.assert_awaited_once()
+        query = session.execute.await_args.args[0]
+        assert "run_node_outputs" in str(query)
+        assert "organisation_id" in str(query)
 
     def test_extract_failed_agent_status(self) -> None:
         """Extract 'failed' verdict from agent_status == 'failed'."""
