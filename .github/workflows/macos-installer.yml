@@ -353,7 +353,7 @@ jobs:
           # files and downloaded tarballs are not needed once the .app exists:
           # signing, DMG creation and the smoke suite all read the bundle only.
           # Removing them here is worth roughly a gigabyte before the largest
-          # copies in the job (DMG, DMG-with-spaces duplicate, installed app).
+          # copies in the job (DMG, DMG-with-spaces, installed app).
           reclaim_build_sources() {
             local path free_before free_after
             free_before="$(df -k "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}' || true)"
@@ -1210,17 +1210,11 @@ jobs:
 
 
           # Post-install smoke assertions with diagnostic capture
-          # Sanitize DMG path: strip any duplicate .dmg extension (defensive against .dmg.dmg bug)
-          SANITIZED_DMG_WITH_SPACES="$DMG_WITH_SPACES"
-          while [[ "$SANITIZED_DMG_WITH_SPACES" == *.dmg.dmg ]]; do
-            SANITIZED_DMG_WITH_SPACES="${SANITIZED_DMG_WITH_SPACES%.dmg}"
-            printf 'install_sh: sanitized duplicate .dmg extension -> %s\n' "$SANITIZED_DMG_WITH_SPACES"
-          done
           # shellcheck disable=SC2016
           run_assertion "install_sh" \
             "${INSTALL_ENV[@]}" \
             bash -c 'MODULO_INSTALL_ROOT="$1" MODULO_DATA_DIR="$2" scripts/macos/install.sh "$3"' \
-            bash "$INSTALL_ROOT" "$DATA" "$SANITIZED_DMG_WITH_SPACES" || exit 1
+            bash "$INSTALL_ROOT" "$DATA" "$DMG_WITH_SPACES" || exit 1
 
           # The spaces-path copy exists only to prove the installer tolerates a
           # DMG path containing spaces. Once installed it is dead weight, and the
