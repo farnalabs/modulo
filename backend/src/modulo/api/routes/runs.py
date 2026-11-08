@@ -2340,11 +2340,10 @@ def _normalize_node_telemetry(
     telemetry_json: dict[str, Any] | None,
     outputs_json: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Resolve each node's telemetry (new rows) or the inner output envelope (legacy)."""
-    node_ids = set(outputs_json or {}) | set(telemetry_json or {})
-    if not node_ids:
-        return telemetry_json
-    return {nid: node_telemetry(telemetry_json, outputs_json, nid) for nid in node_ids}
+    """Return only the stored per-node telemetry mappings."""
+    if not telemetry_json:
+        return None if outputs_json else telemetry_json
+    return {nid: node_telemetry(telemetry_json, outputs_json, nid) for nid in telemetry_json}
 
 
 class FixtureExportResponse(BaseModel):

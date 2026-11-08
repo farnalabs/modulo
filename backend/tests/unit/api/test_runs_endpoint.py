@@ -2879,7 +2879,7 @@ _LEGACY_SANDBOX_ENVELOPE: dict[str, Any] = {
 class TestGetRunIO:
     """GET /api/v1/runs/{run_id}/io"""
 
-    def test_io_legacy_run_serves_envelope_verbatim(self, client: TestClient) -> None:
+    def test_io_pre_backfill_envelope_is_not_interpreted(self, client: TestClient) -> None:
         run = _make_io_run(
             input_payload={"prompt": "Hello"},
             outputs_json={"planner": _LEGACY_SANDBOX_ENVELOPE},
@@ -2894,13 +2894,9 @@ class TestGetRunIO:
 
         assert resp.status_code == 200
         body = resp.json()
-        # Legacy rows keep the mixed envelope byte-identical in outputs_json.
+        # Current readers do not interpret a pre-backfill envelope as telemetry.
         assert body["outputs_json"]["planner"] == _LEGACY_SANDBOX_ENVELOPE
-        # node_telemetry surfaces the inner output envelope (legacy-safe).
-        assert body["node_telemetry"]["planner"] == {
-            "status": "completed",
-            "summary": "planned the work",
-        }
+        assert body["node_telemetry"] is None
         assert isinstance(body["fixture_map"], dict)
 
     def test_io_new_shape_run_returns_pure_returns_and_telemetry(self, client: TestClient) -> None:

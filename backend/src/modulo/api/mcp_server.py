@@ -5790,12 +5790,12 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
 
 
 def _resolve_run_node_output(outputs: dict[str, Any], telemetry: dict[str, Any], node_id: str) -> dict[str, Any] | None:
-    """Resolve the node output dict, falling back to telemetry status/summary."""
-    from modulo.core.node_output_split import node_return, node_telemetry
+    """Resolve the pure node return, or a status summary for telemetry-only nodes."""
+    from modulo.core.node_output_split import node_return
 
     node_output = node_return(outputs, telemetry, node_id)
-    if node_output is None:
-        node_meta = node_telemetry(telemetry, outputs, node_id)
+    if node_output is None and node_id in telemetry:
+        node_meta = telemetry[node_id]
         if isinstance(node_meta, dict):
             node_output = {key: node_meta[key] for key in ("status", "summary") if key in node_meta}
     return cast("dict[str, Any] | None", node_output)

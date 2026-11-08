@@ -207,22 +207,6 @@ def _add_lossless(
             telemetry[key] = value
 
 
-def _legacy_inner_output(outputs_json: Any, node_id: str) -> dict[str, Any] | None:
-    """The inner ``output`` dict of a completed legacy node.
-
-    Mirrors ``finalize._node_output_dict`` EXACTLY (kept in lock-step): the
-    node value's ``output`` key when it is a dict, otherwise the whole node
-    value. ``None`` when the node is absent or the value is not a dict.
-    """
-    if not isinstance(outputs_json, dict):
-        return None
-    node_output = outputs_json.get(node_id)
-    if not isinstance(node_output, dict):
-        return None
-    inner = node_output.get("output")
-    return inner if isinstance(inner, dict) else node_output
-
-
 def resolve_node_contract_output(
     envelope: dict[str, Any],
     node_type: str | None,
@@ -253,81 +237,31 @@ def resolve_node_contract_output(
 
 
 def node_return(outputs_json: Any, _telemetry_json: Any, node_id: str) -> Any:
-    """The PURE agent return for *node_id* -- legacy-safe.
-
-    When a telemetry entry exists for the node (a P1+ row) the value in
-    ``outputs_json[node_id]`` is already the pure return; when it is absent (a
-    legacy row) the value is the mixed legacy envelope. In BOTH cases the
-    returned value is ``outputs_json[node_id]`` verbatim -- for legacy rows
-    this is byte-identical to today's direct column reads. ``None`` when the
-    node has no entry (callers keep their own not-found handling).
-    """
+    """Return the pure output mapping for *node_id*, or ``None`` when absent."""
     if not isinstance(outputs_json, dict):
         return None
     return outputs_json.get(node_id)
 
 
 def has_telemetry_entry(telemetry_json: Any, node_id: str) -> bool:
-    """True when *telemetry_json* carries a REAL telemetry entry for *node_id*.
-
-    This is the SINGLE source of truth for ``node_telemetry``'s dispatch: when
-    True the accessor returns ``telemetry_json[node_id]`` verbatim (a P1+ row);
-    when False it returns the legacy inner ``output`` of ``outputs_json``
-    instead -- i.e. the value is DERIVED FROM the node's structured return, not
-    from telemetry (FAR-1376: readers that attribute a value to its source use
-    this predicate rather than re-deriving the dispatch rule).
-    """
+    """True when *telemetry_json* carries an entry for *node_id*."""
     return isinstance(telemetry_json, dict) and node_id in telemetry_json
 
 
 def stored_row_is_legacy(*, outputs_present: bool, telemetry_present: bool) -> bool:
-    """True when a stored single-node ``run_node_outputs`` row is LEGACY-shaped.
+    """True for a stored row with outputs but no telemetry side.
 
-    The row-scope twin of :func:`has_telemetry_entry`, used to filter
-    ``__final__`` rows — the only row kind :func:`node_telemetry` reads. A
-    ``__final__`` row holds ONE node's value per side, so under the writers'
-    one-entry-per-side encoding the reassembled per-run telemetry dict has an
-    entry for that node iff the row's telemetry side is PRESENT. The flag form
-    therefore reports what :func:`node_telemetry` dispatches on for a
-    ``__final__`` row: outputs side PRESENT and telemetry side ABSENT.
-
-    Two scopes are deliberately NOT claimed:
-
-    * This predicate reads ONLY the two presence flags. It says nothing about
-      the rows :func:`node_telemetry` never reads — ``__``-prefixed sentinel
-      rows (``__run_meta__`` / ``__mwi_audit__``) and marker rows — which can
-      carry outputs-present/telemetry-absent flags without being a node return;
-      the FAR-132 sweep filters those out before applying it.
-    * It assumes the writer's encoding (a present telemetry side carries the
-      node's entry). A hand-written row whose telemetry side is present but
-      empty would not be flagged here even though the reassembled dict has no
-      entry for the node.
-
-    *outputs_present* / *telemetry_present* mirror
-    ``crud.run_node_outputs._ROW_COLUMNS``' ``outputs_absent`` /
-    ``telemetry_absent`` flags (SQL NULL means absent; a stored jsonb ``null``
-    is present), keeping the SQL NULL / jsonb-null distinction the round-trip
-    depends on.
-
-    Defined beside the accessors so the FAR-132 straggler sweep
-    (``core.agent_return_legacy``) and the read dispatch share ONE definition
-    of "legacy". The FAR-132 strip deletes this together with the fallback
-    branch it guards.
+    The scheduled straggler sweep still uses this row-level predicate even
+    though read accessors no longer interpret legacy envelopes.
     """
     return outputs_present and not telemetry_present
 
 
-def node_telemetry(telemetry_json: Any, outputs_json: Any, node_id: str) -> Any:
-    """The exhaustive telemetry for *node_id* -- legacy-safe.
-
-    When a telemetry entry exists for the node it is returned verbatim. For
-    legacy rows (no telemetry entry) the inner ``output`` envelope is extracted
-    from the mixed value (mirroring ``finalize._node_output_dict`` exactly), so
-    the value matches what today's cost readers extract.
-    """
-    if has_telemetry_entry(telemetry_json, node_id):
-        return telemetry_json[node_id]
-    return _legacy_inner_output(outputs_json, node_id)
+def node_telemetry(telemetry_json: Any, _outputs_json: Any, node_id: str) -> Any:
+    """Return the stored telemetry mapping for *node_id*, or ``None``."""
+    if not isinstance(telemetry_json, dict):
+        return None
+    return telemetry_json.get(node_id)
 
 
 def node_stdout_artifact(telemetry_json: Any, outputs_json: Any, node_id: str) -> dict[str, Any] | None:

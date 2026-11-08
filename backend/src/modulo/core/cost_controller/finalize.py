@@ -511,14 +511,7 @@ def _merge_segment_output(
 
 
 def _node_output_dict(merged_outputs: Any, node_id: str, merged_telemetry: Any = None) -> dict[str, Any] | None:
-    """The inner ``output`` dict of a completed node (or ``None``).
-
-    Routes through ``node_output_split.node_telemetry`` so the legacy
-    extraction is SHARED and identical everywhere (FAR-124 P0). When a split
-    telemetry entry exists (FAR-125 P1 rows) it is returned verbatim; ``None``
-    here means "no telemetry entry", which selects the legacy-row branch that
-    mirrors the historical implementation exactly.
-    """
+    """Return the stored telemetry dict for a completed node, if present."""
     value = node_telemetry(merged_telemetry, merged_outputs, node_id)
     return value if isinstance(value, dict) else None
 
@@ -1255,8 +1248,7 @@ def _legacy_sandbox_cost(merged_outputs: dict[str, Any], merged_telemetry: Any =
     ``elapsed/3600 * E2B_SANDBOX_USD_PER_HOUR`` over all completed sandbox
     nodes. The fallback DE-TRUSTS agent ``cost_estimate_usd`` (§1.5) — a hostile
     legacy ``cost_estimate_usd`` can no longer inflate the fallback total.
-    Per-node telemetry is read from the split ``node_telemetry_json`` column
-    when present (FAR-125 P1b) with the legacy extraction fallback.
+    Per-node telemetry is read from the split ``node_telemetry_json`` column.
     """
     if not isinstance(merged_outputs, dict):
         return Decimal(0)
