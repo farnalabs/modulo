@@ -550,10 +550,17 @@ def test_downgrade_refuses_destructive_rollback(monkeypatch: pytest.MonkeyPatch)
 class TestLegacyAgentVerdictExtraction:
     """Test the legacy agent verdict extraction from outputs_json."""
 
-    def test_extract_failed_status_convention(self) -> None:
+    def test_engine_status_alone_is_not_a_self_reported_verdict(self) -> None:
         from modulo.api.routes.runs import _extract_legacy_agent_verdict
 
-        assert _extract_legacy_agent_verdict({"node1": {"status": "failed"}}) == "failed"
+        outputs_json = {
+            "node1": {
+                "status": "failed",
+                "output": {"result": "engine failure envelope"},
+            }
+        }
+
+        assert _extract_legacy_agent_verdict(outputs_json) is None
 
     @pytest.mark.asyncio
     async def test_bulk_reader_uses_one_org_scoped_query(self) -> None:
@@ -581,16 +588,18 @@ class TestLegacyAgentVerdictExtraction:
         assert "run_node_outputs" in str(query)
         assert "organisation_id" in str(query)
 
-    def test_extract_failed_agent_status(self) -> None:
-        """Extract 'failed' verdict from agent_status == 'failed'."""
+    @pytest.mark.parametrize("field", ["agent_status", "agent_outcome"])
+    def test_extract_failed_self_reported_verdict(self, field: str) -> None:
+        """Extract 'failed' only from explicit agent self-report fields."""
         from modulo.api.routes.runs import _extract_legacy_agent_verdict
 
         outputs_json = {
             "node1": {
+                "status": "failed",
                 "output": {
-                    "agent_status": "failed",
+                    field: "failed",
                     "error": "Agent crashed",
-                }
+                },
             }
         }
         verdict = _extract_legacy_agent_verdict(outputs_json)

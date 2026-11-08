@@ -223,9 +223,10 @@ def _extract_legacy_agent_verdict(outputs_json: dict[str, Any] | None) -> str | 
         if isinstance(inner, dict):
             candidates.append(inner)
         for candidate in candidates:
-            # Legacy writers used all three names at different points in the
-            # transition: status, agent_status, and agent_outcome.
-            if any(candidate.get(key) == "failed" for key in ("status", "agent_status", "agent_outcome")):
+            # Only explicitly self-reported fields are verdict evidence. The
+            # generic ``status`` field belongs to the engine/node envelope and
+            # can be ``failed`` without the agent reporting a verdict.
+            if any(candidate.get(key) == "failed" for key in ("agent_status", "agent_outcome")):
                 return "failed"
     return None
 
