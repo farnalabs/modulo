@@ -5102,6 +5102,49 @@ def _validate_binding_arguments(operation: str | None, dispatch_action: str | No
     return None
 
 
+def _find_graph_node(nodes: list[dict[str, Any]], nid: uuid.UUID) -> dict[str, Any] | None:
+    """Return the graph node whose ``id`` equals *nid*, or ``None`` when absent."""
+    for node in nodes:
+        if uuid.UUID(node["id"]) == nid:
+            return node
+    return None
+
+
+def _patched_connector_binding(
+    existing: object,
+    connector_type: str,
+    connector_instance_id: str,
+    operation: str | None,
+    dispatch_action: str | None,
+    resource: str | None,
+    filters: dict[str, Any] | None,
+    data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Apply the caller's patch to the stored binding (FAR-1141 MAJOR 9 / FAR-1395).
+
+    Keys the caller does not mention keep their stored value; a string
+    (including ``""``) or mapping replaces it, and a blank ``resource`` CLEARS
+    the key so a binding can be reduced back to its dispatch shape.
+    """
+    binding: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    binding["type"] = connector_type
+    binding["instance_id"] = connector_instance_id
+    if operation is not None:
+        binding["operation"] = operation
+    if dispatch_action is not None:
+        binding["dispatch_action"] = dispatch_action
+    if resource is not None:
+        if resource.strip():
+            binding["resource"] = resource
+        else:
+            binding.pop("resource", None)
+    if filters is not None:
+        binding["filters"] = dict(filters)
+    if data is not None:
+        binding["data"] = dict(data)
+    return binding
+
+
 def _apply_node_connector_binding(
     pipeline: Any,
     nid: uuid.UUID,
@@ -5176,11 +5219,7 @@ def _apply_node_connector_binding(
     # ``connector_binding``. The copy also makes the caller's no-op comparison
     # (FAR-1810) genuinely pre-state vs post-state.
     nodes = copy.deepcopy(list(pipeline.graph_nodes_json)) if pipeline.graph_nodes_json else []
-    target = None
-    for node in nodes:
-        if uuid.UUID(node["id"]) == nid:
-            target = node
-            break
+    target = _find_graph_node(nodes, nid)
     if target is None:
         return {"error": "node_not_found", "detail": f"Node {node_id} not found in pipeline graph"}
 
@@ -5191,23 +5230,16 @@ def _apply_node_connector_binding(
         node_routes_binding_to_connector,
     )
 
-    existing = target.get("connector_binding")
-    binding: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
-    binding["type"] = connector_type
-    binding["instance_id"] = connector_instance_id
-    if operation is not None:
-        binding["operation"] = operation
-    if dispatch_action is not None:
-        binding["dispatch_action"] = dispatch_action
-    if resource is not None:
-        if resource.strip():
-            binding["resource"] = resource
-        else:
-            binding.pop("resource", None)
-    if filters is not None:
-        binding["filters"] = dict(filters)
-    if data is not None:
-        binding["data"] = dict(data)
+    binding = _patched_connector_binding(
+        target.get("connector_binding"),
+        connector_type,
+        connector_instance_id,
+        operation,
+        dispatch_action,
+        resource,
+        filters,
+        data,
+    )
     probe = {**target, "connector_binding": binding}
 
     # FAR-1141 FIX 2: a DECLARED ``dispatch`` verb on a node the engine does

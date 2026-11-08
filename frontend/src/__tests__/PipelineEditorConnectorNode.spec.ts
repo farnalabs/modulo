@@ -30,6 +30,12 @@ vi.mock('../lib/api/client', () => {
     if (url.includes('/pipelines/{pipeline_id}/graph')) {
       return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
     }
+    if (url.includes('/snapshots/')) {
+      return Promise.resolve({
+        data: { id: 'snap-1', graph_json: { nodes: [], edges: [] } },
+        error: undefined,
+      })
+    }
     if (url.includes('/api/v1/pipelines/{pipeline_id}')) {
       return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
     }
@@ -95,8 +101,12 @@ async function mountReady() {
 
 beforeEach(async () => {
   const { useRoute } = await import('vue-router')
-  const route = (useRoute as unknown as () => { params: Record<string, string> })()
+  const route = (useRoute as unknown as () => {
+    params: Record<string, string>
+    query: Record<string, string>
+  })()
   route.params = { id: 'test-pipeline-id' }
+  route.query = {}
   vi.clearAllMocks()
   useApiFns.get.mockReset()
   useApiFns.post.mockReset()
@@ -242,5 +252,73 @@ describe('PipelineEditorView — FAR-1395 connector query authoring', () => {
     expect(wrapper.find('[data-testid="pipeline-editor-connector-node-resource"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-editor-connector-node-filters"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-editor-connector-node-data"]').exists()).toBe(true)
+  })
+
+  it('renders the controls for a connector node that has no binding yet', async () => {
+    const { wrapper, vm } = await mountReady()
+    vm.selectedNodeData = { id: 'node-unbound', node_type: 'connector' }
+    await flushPromises()
+
+    const operation = wrapper.find('[data-testid="pipeline-editor-connector-node-operation"]')
+    expect(operation.exists()).toBe(true)
+    // The unset verb falls back to the engine's query default in the UI.
+    expect((operation.element as HTMLSelectElement).value).toBe('query')
+  })
+
+  it('ensureConnectorNodeBinding repairs a missing or non-object binding', async () => {
+    const { vm } = await mountReady()
+
+    vm.selectedNodeData = { id: 'node-missing', node_type: 'connector' }
+    expect(vm.ensureConnectorNodeBinding()).toEqual({ type: '', instance_id: '', operation: 'query' })
+    expect(vm.selectedNodeData.connector_binding).toEqual({ type: '', instance_id: '', operation: 'query' })
+
+    vm.selectedNodeData = { id: 'node-bad', node_type: 'connector', connector_binding: 'nonsense' }
+    expect(vm.ensureConnectorNodeBinding()).toEqual({ type: '', instance_id: '', operation: 'query' })
+  })
+
+  it('the authoring handlers are no-ops when no node is selected', async () => {
+    const { vm } = await mountReady()
+    vm.selectedNodeData = null
+
+    vm.onConnectorNodeInstanceChange({ target: { value: 'conn-1' } } as unknown as Event)
+    vm.onConnectorNodeOperationChange({ target: { value: 'write' } } as unknown as Event)
+    vm.onConnectorNodeResourceInput({ target: { value: 'pr_files' } } as unknown as Event)
+    vm.onConnectorNodeJsonInput('filters', { target: { value: '{"a": 1}' } } as unknown as Event)
+
+    expect(vm.selectedNodeData).toBeNull()
+  })
+
+  it('a blank filters/data draft commits an empty object', async () => {
+    const { vm } = await mountReady()
+    vm.addNode('connector')
+    vm.selectedNodeData = vm.rawNodes[0]
+
+    vm.onConnectorNodeJsonInput('data', { target: { value: '   ' } } as unknown as Event)
+
+    expect(vm.selectedNodeData.connector_binding.data).toEqual({})
+    expect(vm.connectorNodeJsonError).toBeNull()
+  })
+
+  it('the authoring handlers are inert while viewing a historic snapshot', async () => {
+    const { useRoute } = await import('vue-router')
+    const route = (useRoute as unknown as () => { query: Record<string, string> })()
+    route.query = { snapshot: 'snap-1' }
+
+    const { vm } = await mountReady()
+    expect(vm.isViewing).toBe(true)
+
+    vm.selectedNodeData = {
+      id: 'node-viewing',
+      node_type: 'connector',
+      connector_binding: { type: 'github', instance_id: 'conn-0', operation: 'query' },
+    }
+    const before = JSON.stringify(vm.selectedNodeData.connector_binding)
+
+    vm.onConnectorNodeInstanceChange({ target: { value: 'conn-1' } } as unknown as Event)
+    vm.onConnectorNodeOperationChange({ target: { value: 'write' } } as unknown as Event)
+    vm.onConnectorNodeResourceInput({ target: { value: 'pr_files' } } as unknown as Event)
+    vm.onConnectorNodeJsonInput('filters', { target: { value: '{"a": 1}' } } as unknown as Event)
+
+    expect(JSON.stringify(vm.selectedNodeData.connector_binding)).toBe(before)
   })
 })

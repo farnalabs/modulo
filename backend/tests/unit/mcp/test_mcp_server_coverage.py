@@ -1346,6 +1346,57 @@ class TestRejectInvalidConnectorBindings:
 
         assert err is None
 
+    async def test_a_non_dict_node_is_skipped_by_the_error_pass(self) -> None:
+        """A bare string in ``nodes`` must not crash the second pass.
+
+        ``_routed_binding_instance_ids`` already skips non-dicts; the error
+        walk must do the same so a malformed entry cannot abort the whole
+        graph write.
+        """
+        cid = uuid.uuid4()
+        nodes = [_dispatch_graph(cid, "github_actions_ci")[0], "not-a-node"]  # type: ignore[list-item]
+        session = _session_returning_instances([_instance_row(cid, "github_actions_ci")])
+
+        err = await _reject_invalid_connector_bindings(session, uuid.uuid4(), nodes)
+
+        assert err is None
+
+    async def test_an_unrouted_binding_shares_a_resolvable_instance(self) -> None:
+        """The second pass reaches an unrouted node whose instance IS resolved.
+
+        The query is issued for the routed node's instance id; the unrouted
+        ``agent`` node names the same instance, so the error walk must consult
+        it and then decline to gate a binding the engine never routes.
+        """
+        cid = uuid.uuid4()
+        nodes = [
+            {
+                "id": str(uuid.uuid4()),
+                "node_type": "connector",
+                "connector_binding": {
+                    "type": "github",
+                    "instance_id": str(cid),
+                    "operation": "query",
+                    "resource": "pull",
+                },
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "node_type": "agent",
+                "agent_id": str(uuid.uuid4()),
+                "connector_binding": {
+                    "type": "github",
+                    "instance_id": str(cid),
+                    "operation": "query",
+                },
+            },
+        ]
+        session = _session_returning_instances([_instance_row(cid, "github", allowed_operations=["read"])])
+
+        err = await _reject_invalid_connector_bindings(session, uuid.uuid4(), nodes)
+
+        assert err is None
+
     async def test_malformed_and_bindingless_nodes_are_skipped(self) -> None:
         """A binding-less dispatch node, a non-dispatch node and a dispatch node
         with an unparseable instance id are all skipped on BOTH passes — they
