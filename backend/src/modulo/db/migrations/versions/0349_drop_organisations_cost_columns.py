@@ -220,7 +220,8 @@ def _downgrade_sqlite(bind: Connection) -> None:
                 "spend_ceiling_cents = (SELECT s.spend_ceiling_cents FROM organisation_cost_state s "
                 "WHERE s.org_id = organisations.id), "
                 "org_cumulative_spend_cents = (SELECT s.org_cumulative_spend_cents FROM organisation_cost_state s "
-                "WHERE s.org_id = organisations.id)"
+                "WHERE s.org_id = organisations.id) "
+                "WHERE EXISTS (SELECT 1 FROM organisation_cost_state s WHERE s.org_id = organisations.id)"
             )
         )
 

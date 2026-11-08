@@ -8,7 +8,7 @@ Against REAL Postgres (testcontainers, private database per test — the
   ``organisations`` cost columns and ``organisation_cost_state`` exist) with
   values in the two stores that are DELIBERATELY DIFFERENT, so every assertion
   can tell which store a restored value came from;
-* the REAL alembic ``upgrade`` of ``0324_drop_organisations_cost_columns``
+* the REAL alembic ``upgrade`` of ``0349_drop_organisations_cost_columns``
   removes the three columns and the ``ck_organisations_cum_spend`` CHECK from
   ``organisations``, and leaves ``organisation_cost_state`` (the surviving home
   of those values) intact;
@@ -24,15 +24,20 @@ Against REAL Postgres (testcontainers, private database per test — the
 
 from __future__ import annotations
 
+import importlib.util
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from types import ModuleType
 from urllib.parse import urlparse, urlunparse
 
 import pytest
 import pytest_asyncio
+import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -47,22 +52,47 @@ PREV_REV = "0348_far147_legacy_run_group_backfill"
 
 _COST_COLUMNS = ("max_run_cost_cents", "spend_ceiling_cents", "org_cumulative_spend_cents")
 _CHECK_NAME = "ck_organisations_cum_spend"
+_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "src"
+    / "modulo"
+    / "db"
+    / "migrations"
+    / "versions"
+    / "0349_drop_organisations_cost_columns.py"
+)
 
 # The two stores must disagree, or "restored from organisation_cost_state" and
 # "the old organisations value survived" are indistinguishable.
-_RESTORED_SLUG = "m0324-restored"
+_RESTORED_SLUG = "m0349-restored"
 _RESTORED_ORG_VALUES = (111, 222000, 3333)
 _RESTORED_STATE_VALUES = (1500, 250000, 4242)
 
 # Mutated AFTER the columns are dropped — the post-cutover state a real
 # deployment accrues while only organisation_cost_state is being written.
-_MUTATED_SLUG = "m0324-mutated"
+_MUTATED_SLUG = "m0349-mutated"
 _SEEDED_STATE_VALUES = (10, 20, 30)
 _MUTATED_STATE_VALUES = (4000, 900000, 987654)
 
 # An org with no cost-state row at all: the LEFT-JOIN semantic.
-_PLAIN_SLUG = "m0324-no-state"
+_PLAIN_SLUG = "m0349-no-state"
 _PLAIN_ORG_VALUES = (999, 888, 777)
+
+
+def _load_migration() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("migration_0349_drop_organisations_cost_columns", _MIGRATION_PATH)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _run_sqlite_migration(engine: sa.Engine, action: str) -> None:
+    with engine.begin() as conn:
+        context = MigrationContext.configure(conn)
+        with Operations.context(context):
+            getattr(_load_migration(), action)()
 
 
 def _alembic_config(db_url: str) -> Config:
@@ -162,8 +192,8 @@ async def _seed(engine: AsyncEngine) -> None:
 
 @pytest_asyncio.fixture
 async def upgraded_db_url(db_url: str) -> AsyncGenerator[str, None]:
-    """Private Postgres migrated to 0324 with three organisations seeded at 0323."""
-    db_name, iso_url = await _fresh_db(db_url, "m0324")
+    """Private Postgres migrated to 0349 with three organisations seeded at 0348."""
+    db_name, iso_url = await _fresh_db(db_url, "m0349")
     try:
         _migrate(iso_url, PREV_REV)
         engine = create_async_engine(iso_url, poolclass=NullPool)
@@ -218,6 +248,46 @@ async def _state_values(engine: AsyncEngine, slug: str) -> tuple[object, object,
             )
         ).one()
     return (row[0], row[1], row[2])
+
+
+class TestSQLiteDowngrade:
+    def test_missing_cost_state_row_preserves_zero_default(self) -> None:
+        engine = sa.create_engine("sqlite://", poolclass=sa.pool.StaticPool)
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "CREATE TABLE organisations ("
+                        "id TEXT PRIMARY KEY, slug TEXT NOT NULL, name TEXT NOT NULL, "
+                        "settings_json JSON NOT NULL)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE TABLE organisation_cost_state ("
+                        "org_id TEXT PRIMARY KEY, max_run_cost_cents INTEGER, "
+                        "spend_ceiling_cents INTEGER, org_cumulative_spend_cents INTEGER NOT NULL)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO organisations (id, slug, name, settings_json) "
+                        "VALUES ('org-without-state', 'no-state', 'No state', '{}')"
+                    )
+                )
+
+            _run_sqlite_migration(engine, "downgrade")
+
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents "
+                        "FROM organisations WHERE id = 'org-without-state'"
+                    )
+                ).one()
+            assert tuple(row) == (None, None, 0)
+        finally:
+            engine.dispose()
 
 
 class TestUpgrade:
