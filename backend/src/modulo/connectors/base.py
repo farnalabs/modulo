@@ -890,6 +890,54 @@ class ConnectorACL:
                 )
 
 
+def connector_binding_denied_acl_operations(
+    node: Any,
+    *,
+    visibility: str,
+    allowed_operations: object,
+    connector_type_id: str | None,
+) -> list[str]:
+    """The ACL operations *node*'s routed binding requires but the surface denies.
+
+    The SHARED save/write-time gate (FAR-1395) for "``allowed_operations``
+    actually restricts what a node may request". It answers with the same
+    inputs and the same :class:`ConnectorACL` the runtime hub uses, so a write
+    surface cannot certify a binding the run would then deny — or, worse,
+    accept one the run would attempt with an operation the connector's
+    allowlist excludes.
+
+    The requirement is derived from the ROUTED verb through
+    :func:`connector_binding_required_acl_operations` (never a declared
+    ``required_operations`` key), so this helper covers the same three shapes
+    that helper does: ``query`` → ``read``, ``write`` → ``write``,
+    ``dispatch`` → ``write`` (+ ``read`` when ``await_completion`` polls), a
+    read-only dispatch action → ``read``, and an unrecognised non-empty verb →
+    ``read`` (the runtime's query fall-through).
+
+    Returns ``[]`` for a node the engine never routes to a connector (dead
+    configuration: an ``agent`` node with an ``agent_id``, a ``sandbox_agent``,
+    or a binding-less node) — there is no verb to gate. Unrestricted
+    (``None``/``[]``) and malformed allowlists are decided by
+    :class:`ConnectorACL` exactly as the hub decides them, so this function can
+    never disagree with enforcement at run time.
+    """
+    required = connector_binding_required_acl_operations(node)
+    if not required:
+        return []
+    acl = ConnectorACL(
+        visibility=visibility,
+        allowed_operations=allowed_operations,
+        connector_type_id=connector_type_id,
+    )
+    denied: list[str] = []
+    for operation in required:
+        try:
+            acl.check(operation)
+        except ConnectorPermissionError:
+            denied.append(operation)
+    return denied
+
+
 @dataclass
 class ConnectorQuery:
     resource: str

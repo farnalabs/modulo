@@ -1178,6 +1178,78 @@
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.output_schema') }}</dt>
             <dd class="font-medium">{{ schemaName(selectedNodeData.output_schema_id) || shortId(selectedNodeData.output_schema_id) }}</dd>
           </div>
+          <!-- FAR-1395: connector query/write authoring. A connector node's whole
+               job is its binding, so the instance, verb, resource and
+               filters/data are first-class controls here — the same shape
+               ConnectorBinding validates on REST and MCP. -->
+          <template v-if="selectedNodeData.node_type === 'connector'">
+            <div>
+              <label for="pipeline-editor-connector-node-instance" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector') }}</label>
+              <select
+                id="pipeline-editor-connector-node-instance"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm"
+                :disabled="isViewing"
+                :value="selectedNodeData.connector_binding?.instance_id || ''"
+                data-testid="pipeline-editor-connector-node-instance"
+                @change="onConnectorNodeInstanceChange"
+              >
+                <option value="">{{ $t('views.PipelineEditorView.connector_node_select_connector') }}</option>
+                <option v-for="c in connectors" :key="c.id" :value="c.id">{{ c.name }} ({{ c.connector_type_id }})</option>
+              </select>
+            </div>
+            <div>
+              <label for="pipeline-editor-connector-node-operation" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector_node_operation') }}</label>
+              <select
+                id="pipeline-editor-connector-node-operation"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm"
+                :disabled="isViewing"
+                :value="selectedNodeData.connector_binding?.operation || 'query'"
+                data-testid="pipeline-editor-connector-node-operation"
+                @change="onConnectorNodeOperationChange"
+              >
+                <option value="query">{{ $t('views.PipelineEditorView.connector_node_operation_query') }}</option>
+                <option value="write">{{ $t('views.PipelineEditorView.connector_node_operation_write') }}</option>
+              </select>
+            </div>
+            <div>
+              <label for="pipeline-editor-connector-node-resource" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector_node_resource') }}</label>
+              <input
+                id="pipeline-editor-connector-node-resource"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm"
+                :readonly="isViewing"
+                :value="selectedNodeData.connector_binding?.resource || ''"
+                :placeholder="$t('views.PipelineEditorView.connector_node_resource_placeholder')"
+                data-testid="pipeline-editor-connector-node-resource"
+                @input="onConnectorNodeResourceInput"
+              />
+              <p class="mt-0.5 text-[11px] text-muted-foreground">{{ $t('views.PipelineEditorView.connector_node_resource_hint') }}</p>
+            </div>
+            <div>
+              <label for="pipeline-editor-connector-node-filters" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector_node_filters') }}</label>
+              <textarea
+                id="pipeline-editor-connector-node-filters"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 font-mono text-xs"
+                rows="3"
+                :readonly="isViewing"
+                :value="connectorNodeFiltersText"
+                data-testid="pipeline-editor-connector-node-filters"
+                @input="onConnectorNodeJsonInput('filters', $event)"
+              />
+            </div>
+            <div>
+              <label for="pipeline-editor-connector-node-data" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector_node_data') }}</label>
+              <textarea
+                id="pipeline-editor-connector-node-data"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 font-mono text-xs"
+                rows="3"
+                :readonly="isViewing"
+                :value="connectorNodeDataText"
+                data-testid="pipeline-editor-connector-node-data"
+                @input="onConnectorNodeJsonInput('data', $event)"
+              />
+            </div>
+            <p v-if="connectorNodeJsonError" role="alert" class="text-[11px] text-destructive" data-testid="pipeline-editor-connector-node-json-error">{{ connectorNodeJsonError }}</p>
+          </template>
           <!-- Agent node: Agent details -->
           <template v-if="(selectedNodeData.node_type === 'agent' || selectedNodeData.node_type === 'sandbox_agent') && selectedNodeData.agent_id">
             <div>
@@ -3417,6 +3489,83 @@ function connectorName(binding: any): string {
   return binding.instance_id ? `${binding.type} / ${shortId(binding.instance_id)}` : binding.type
 }
 
+// FAR-1395: connector-node authoring — the binding's query/write payload.
+// ``node_runner._connector_inputs`` reads ``resource`` / ``filters`` / ``data``
+// off the node's ``connector_binding``; without them a query falls back to
+// ``resource="command"``, which connectors do not serve, so a connector node
+// authored without these inputs could never complete a real run. The JSON
+// fields are edited as TEXT and only a parseable JSON object is committed to
+// the node, so a transiently-invalid draft never corrupts the graph.
+const connectorNodeFiltersText = ref('')
+const connectorNodeDataText = ref('')
+const connectorNodeJsonError = ref<string | null>(null)
+
+function loadConnectorNodeFields(node: any | null): void {
+  connectorNodeJsonError.value = null
+  const binding = node?.connector_binding
+  connectorNodeFiltersText.value = JSON.stringify(binding?.filters ?? {}, null, 2)
+  connectorNodeDataText.value = JSON.stringify(binding?.data ?? {}, null, 2)
+}
+
+function ensureConnectorNodeBinding(): any | null {
+  const node = selectedNodeData.value
+  if (!node) return null
+  if (!node.connector_binding || typeof node.connector_binding !== 'object') {
+    node.connector_binding = { type: '', instance_id: '', operation: 'query' }
+  }
+  return node.connector_binding
+}
+
+function onConnectorNodeInstanceChange(event: Event): void {
+  if (isViewing.value) return
+  const id = (event.target as HTMLSelectElement).value
+  const binding = ensureConnectorNodeBinding()
+  if (!binding) return
+  const connector = connectors.value.find((c: any) => c.id === id)
+  binding.instance_id = id
+  binding.type = connector?.connector_type_id ?? ''
+  connectorNodeJsonError.value = null
+}
+
+function onConnectorNodeOperationChange(event: Event): void {
+  if (isViewing.value) return
+  const value = (event.target as HTMLSelectElement).value
+  const binding = ensureConnectorNodeBinding()
+  if (!binding) return
+  binding.operation = value === 'write' ? 'write' : 'query'
+}
+
+function onConnectorNodeResourceInput(event: Event): void {
+  if (isViewing.value) return
+  const value = (event.target as HTMLInputElement).value
+  const binding = ensureConnectorNodeBinding()
+  if (!binding) return
+  if (value.trim()) binding.resource = value
+  else delete binding.resource
+}
+
+function onConnectorNodeJsonInput(field: 'filters' | 'data', event: Event): void {
+  if (isViewing.value) return
+  const text = (event.target as HTMLTextAreaElement).value
+  if (field === 'filters') connectorNodeFiltersText.value = text
+  else connectorNodeDataText.value = text
+  let parsed: unknown
+  try {
+    parsed = text.trim() === '' ? {} : JSON.parse(text)
+  } catch {
+    connectorNodeJsonError.value = t('views.PipelineEditorView.connector_node_json_invalid', { field })
+    return
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    connectorNodeJsonError.value = t('views.PipelineEditorView.connector_node_json_must_be_object', { field })
+    return
+  }
+  connectorNodeJsonError.value = null
+  const binding = ensureConnectorNodeBinding()
+  if (!binding) return
+  binding[field] = parsed
+}
+
 // FAR-437: node-level capability_scope authoring (narrow-not-widen)
 const nodeCapabilityScope = reactive<{ allowed_connectors: string[]; allowed_tools: string[]; context_scope: string[] }>({
   allowed_connectors: [],
@@ -4024,6 +4173,7 @@ function onNodeClick(event: any) {
   // frozen snapshot while viewing, the live graph otherwise.
   const backendNode = inspectSourceNodes.value.find((n: any) => n.id === node.id)
   selectedNodeData.value = backendNode || null
+  loadConnectorNodeFields(backendNode || null)
   // Populate capability scope (narrow-not-widen)
   const scope = backendNode?.capability_scope
   nodeCapabilityScope.allowed_connectors = Array.isArray(scope?.allowed_connectors) ? [...scope.allowed_connectors] : []
@@ -4204,6 +4354,7 @@ function onPaneClick() {
   nodeCapabilityScope.context_scope = []
   capabilityToolInput.value = ''
   capabilityContextInput.value = ''
+  loadConnectorNodeFields(null)
 }
 
 // --- Editor viewport fit (FAR-1841 mobile, FAR-1851 desktop) --------------
@@ -4410,16 +4561,21 @@ onBeforeUnmount(() => {
   if (refitFrame) window.cancelAnimationFrame(refitFrame)
 })
 
-const newNodeType = ref<'agent' | 'router' | 'hitl'>('agent')
+const newNodeType = ref<'agent' | 'router' | 'hitl' | 'connector'>('agent')
 const nodeTypeOptions = [
   { value: 'agent', label: t('views.PipelineEditorView.node_type_agent') },
+  // FAR-1395: connector query/write nodes are authorable from the palette. A
+  // connector node's whole job is its binding (instance + verb + resource +
+  // filters/data), which the inspector below edits; without that surface the
+  // engine could support the node while no authoring path could express it.
+  { value: 'connector', label: t('views.PipelineEditorView.node_connector_label') },
   // Router/HITL authoring is deferred: addNode cannot yet emit the mandatory
   // router_config/hitl_config the backend requires, so exposing them here
   // produces unsavable (422) nodes. Imported router/HITL graphs still render
   // correctly via convertBackendNode. Re-add once a config editor lands.
 ]
 
-function addNode(nodeType: 'agent' | 'router' | 'hitl' = newNodeType.value) {
+function addNode(nodeType: 'agent' | 'router' | 'hitl' | 'connector' = newNodeType.value) {
   if (isViewing.value) return
   const id = `node-${Date.now()}`
   const newNode = {
@@ -4429,13 +4585,20 @@ function addNode(nodeType: 'agent' | 'router' | 'hitl' = newNodeType.value) {
     data: { label: t('views.PipelineEditorView.new_node_label'), description: '', node_type: nodeType },
   }
   flowNodes.value = [...flowNodes.value, newNode]
-  rawNodes.value = [...rawNodes.value, {
+  const rawNode: any = {
     id,
     node_type: nodeType,
     label: t('views.PipelineEditorView.new_node_label'),
     description: '',
     position: { x: 250, y: 100 },
-  }]
+  }
+  if (nodeType === 'connector') {
+    // The binding skeleton lets the inspector render its controls immediately;
+    // the author must still choose an instance and a resource before the save
+    // is accepted (the backend rejects an incomplete connector binding).
+    rawNode.connector_binding = { type: '', instance_id: '', operation: 'query' }
+  }
+  rawNodes.value = [...rawNodes.value, rawNode]
 }
 
 function openAgentPicker() {

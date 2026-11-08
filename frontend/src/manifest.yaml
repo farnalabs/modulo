@@ -4697,6 +4697,24 @@ elements:
       - testid: pipeline-editor-connector-select
         type: select
         dynamic_testid: false
+      - testid: pipeline-editor-connector-node-instance
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-editor-connector-node-operation
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-editor-connector-node-resource
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-connector-node-filters
+        type: textarea
+        dynamic_testid: false
+      - testid: pipeline-editor-connector-node-data
+        type: textarea
+        dynamic_testid: false
+      - testid: pipeline-editor-connector-node-json-error
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-snapshot-select
         type: select
         dynamic_testid: false
