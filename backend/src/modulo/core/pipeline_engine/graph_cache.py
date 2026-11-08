@@ -175,6 +175,18 @@ _GRAPH_NODE_FIELDS = frozenset(
         "default_target",
         # Runtime provenance retained on graph nodes by snapshot/export paths.
         "execution_metadata",
+        # Legacy execution fields the compiler/runner still reads from a node
+        # (``node_def.get(...)``) in imported or historical snapshots even
+        # though the current API write model no longer carries them. Rejecting
+        # them would break replay/compile of valid older graphs.
+        "model_backend_id",
+        "prompt_template",
+        "routing_prompt",
+        "manual_prompt",
+        "allowed_hosts",
+        "input_schema_json",
+        "output_schema_version",
+        "loop_intercept",
     }
 )
 

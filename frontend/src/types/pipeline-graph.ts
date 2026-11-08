@@ -20,6 +20,10 @@ const NODE_FIELDS = new Set([
   'fan_out', 'collect', 'aggregate', 'join_partial_policy', 'inputs', 'outputs', 'stdout_retention_mode',
   'stdout_max_bytes', 'workspace_inputs', 'await_completion', 'wait_timeout',
   'routing_mode', 'default_target', 'execution_metadata', 'max_input_length', 'token_budget',
+  // Legacy execution fields still read by the backend compiler from imported or
+  // historical snapshots; kept in sync with the backend node allowlist.
+  'model_backend_id', 'prompt_template', 'routing_prompt', 'manual_prompt', 'allowed_hosts',
+  'input_schema_json', 'output_schema_version', 'loop_intercept',
 ])
 const EDGE_FIELDS = new Set([
   'id', 'source_node_id', 'target_node_id', 'edge_type', 'hitl_review_config', 'condition_expression',

@@ -30,6 +30,16 @@ def test_graph_allowlist_accepts_compiler_and_persisted_fields():
                 "routing_mode": "llm",
                 "default_target": "fallback",
                 "execution_metadata": {"attempt": 2},
+                # Legacy fields still read from imported/historical snapshots by
+                # node_runner (node_def.get(...)). They must not be rejected.
+                "model_backend_id": "backend-1",
+                "prompt_template": "Hello {{ input.name }}",
+                "routing_prompt": "Choose a route.",
+                "manual_prompt": "Enter a value.",
+                "allowed_hosts": ["api.github.com"],
+                "input_schema_json": {"type": "object"},
+                "output_schema_version": 1,
+                "loop_intercept": {"max_iterations": 3},
             }
         ],
         "edges": [

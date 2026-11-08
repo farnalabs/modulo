@@ -65,7 +65,18 @@ describe('canonical pipeline graph schema', () => {
 
   it('accepts loop and LLM routing edge fields', () => {
     const parsed = validateCanonicalGraph({
-      nodes: [{ ...node, routing_mode: 'llm', default_target: TARGET_ID, execution_metadata: { attempt: 2 } }],
+      nodes: [
+        {
+          ...node,
+          routing_mode: 'llm',
+          default_target: TARGET_ID,
+          execution_metadata: { attempt: 2 },
+          model_backend_id: 'backend-1',
+          prompt_template: 'Hello {{ input.name }}',
+          manual_prompt: 'Enter a value.',
+          routing_prompt: 'Choose a route.',
+        },
+      ],
       edges: routingEdges,
     })
 
