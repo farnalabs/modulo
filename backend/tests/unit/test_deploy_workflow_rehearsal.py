@@ -538,7 +538,10 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert "bison" in workflow_text
     assert "flex" in workflow_text
     assert "Download and sha256-verify pinned PostgreSQL source" in workflow_text
-    assert 'echo "${PG_SOURCE_SHA256}  postgresql-${PG_VERSION}.tar.gz"' in workflow_text
+    assert (
+        'echo "${PG_SOURCE_SHA256}  postgresql-${PG_VERSION}.tar.gz" | (cd downloads && sha256sum --check --strict -)'
+        in workflow_text
+    )
     assert "Build and sha256-verify PostgreSQL from pinned upstream source" in workflow_text
     assert "../pg-src/configure" in workflow_text
     assert 'BUNDLE_PG_PREFIX="$PWD/build/${BUNDLE_ROOT}/pg"' in workflow_text
