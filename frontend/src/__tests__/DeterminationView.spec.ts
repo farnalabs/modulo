@@ -387,4 +387,40 @@ describe('DeterminationView', () => {
     // The acknowledgement belonged to the previous proposal and must not carry over.
     expect(wrapper.find('[data-testid="determination-review-approve"]').attributes('disabled')).toBeDefined()
   })
+
+  it('re-runs the scan from the error panel retry', async () => {
+    mockGet.mockResolvedValueOnce(problem(502, 'scan exploded'))
+    mockGet.mockResolvedValueOnce(ok(scanResponse()))
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-testid="determination-run-scan"]').trigger('click')
+    await flushPromises()
+
+    const retry = wrapper.find('[data-testid="determination-scan"] [data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    await retry.trigger('click')
+    await flushPromises()
+
+    expect(mockGet).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="determination-scan"] [data-testid="error-alert-retry"]').exists()).toBe(false)
+  })
+
+  it('re-generates the draft from the proposal error panel retry', async () => {
+    mockGet.mockResolvedValue(ok(scanResponse()))
+    mockPost.mockResolvedValueOnce(problem(500, 'draft exploded'))
+    mockPost.mockResolvedValueOnce(ok(draftResponse()))
+    const wrapper = await mountView()
+
+    await generateDraft(wrapper)
+
+    const retry = wrapper.find('[data-testid="determination-proposal"] [data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    await retry.trigger('click')
+    await flushPromises()
+
+    expect(mockPost).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="determination-review"]').exists()).toBe(true)
+  })
 })

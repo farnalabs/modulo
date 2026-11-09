@@ -271,6 +271,24 @@ def test_duplicate_corrections_are_refused() -> None:
         )
 
 
+def test_duplicate_removals_are_refused() -> None:
+    with pytest.raises(ProposalReviewError, match="duplicate removals"):
+        review_proposal(make_request(removed_derived_element_ids=[_DERIVED_ID, _DERIVED_ID]))
+
+
+def test_confidence_only_correction_keeps_the_statement() -> None:
+    reviewed = review_proposal(
+        make_request(
+            decision="needs_review",
+            corrected_derived_elements=[DerivedElementEdit(id=_DERIVED_ID, confidence="high")],
+        )
+    )
+
+    derived = reviewed.proposal.derived_elements[0]
+    assert derived.confidence == "high"
+    assert derived.statement == "Development stage observed"
+
+
 def test_acknowledging_an_unknown_assumption_is_refused() -> None:
     with pytest.raises(ProposalReviewError, match="assumption ids"):
         review_proposal(make_request(acknowledged_assumption_ids=[uuid.uuid4()]))

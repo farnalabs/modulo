@@ -45,6 +45,9 @@ _CODE_DETERMINATION_REVIEW_PROPOSAL = "determination.review_proposal"
 _EVENT_DETERMINATION_PROPOSAL_REVIEWED = "determination.proposal_review_decided"
 _RESOURCE_DETERMINATION_PROPOSAL = "determination_proposal"
 
+#: Permission that gates every determination read and review endpoint.
+_PERMISSION_DETERMINATION_SCAN = "determination.scan"
+
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +165,7 @@ def _sample_to_response(s: ScanSample) -> SampleResponse:
 @handle_db_errors(_CODE_DETERMINATION_RUN_DETERMINATION)
 async def run_determination(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("determination.scan"),
+    principal: TenantPrincipal = require_permission(_PERMISSION_DETERMINATION_SCAN),
     settings: Settings = Depends(get_settings),
 ) -> DeterminationResponse:
     """Scan all connected tools and produce an SDLC maturity assessment."""
@@ -254,7 +257,7 @@ async def run_determination(
 @handle_db_errors(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
 async def create_determination_draft(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("determination.scan"),
+    principal: TenantPrincipal = require_permission(_PERMISSION_DETERMINATION_SCAN),
     settings: Settings = Depends(get_settings),
 ) -> DraftResponse:
     """Run determination scan and produce an editable pipeline draft.
@@ -381,7 +384,7 @@ async def create_determination_draft(
 async def review_determination_proposal(
     review_request: ProposalReviewRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("determination.scan"),
+    principal: TenantPrincipal = require_permission(_PERMISSION_DETERMINATION_SCAN),
 ) -> ProposalReviewResponse:
     """Record a reviewer decision on a determination proposal.
 
