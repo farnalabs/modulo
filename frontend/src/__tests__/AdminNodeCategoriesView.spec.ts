@@ -118,6 +118,15 @@ describe('AdminNodeCategoriesView', () => {
     expect(wrapper.text()).not.toContain('No node categories configured')
   })
 
+  it('falls back to an empty list when the response omits items', async () => {
+    mockGet.mockResolvedValueOnce({ data: {}, error: null })
+    const wrapper = mountView([])
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('No node categories configured')
+  })
+
   // ─── Loading state ────────────────────────────────────────────────────
 
   it('shows a table skeleton while fetching', async () => {
