@@ -242,7 +242,7 @@ async def _run_sandbox_with_model_override(
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(state)
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     return sandbox.commands.run.call_args.args[0]
 
 
@@ -352,7 +352,7 @@ async def test_sandbox_agent_context_scope_allows_in_scope_key() -> None:
         "_org_id": "org-1",
     }
     result, sandbox = await _run_sandbox_agent(node_def, state)
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert "echo scoped-task" in sandbox.commands.run.call_args.args[0]
     assert "s3cr3t" not in sandbox.commands.run.call_args.args[0]
 
@@ -379,8 +379,8 @@ async def test_sandbox_agent_context_scope_filters_out_of_scope_key() -> None:
         "_org_id": "org-1",
     }
     result, _ = await _run_sandbox_agent(node_def, state)
-    assert result["status"] == "skipped"
-    assert "agent_command template references missing input fields" in result["summary"]
+    assert result["telemetry"]["status"] == "skipped"
+    assert "agent_command template references missing input fields" in result["output"]["summary"]
 
 
 @pytest.mark.asyncio
@@ -402,5 +402,5 @@ async def test_sandbox_agent_absent_context_scope_preserves_legacy() -> None:
         "_org_id": "org-1",
     }
     result, sandbox = await _run_sandbox_agent(node_def, state)
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert "echo s3cr3t" in sandbox.commands.run.call_args.args[0]
