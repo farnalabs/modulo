@@ -207,35 +207,11 @@
         </ul>
       </section>
 
-      <DeterminationProvenanceTrail :proposal="proposal" :review="review ?? null" />
-
-      <section class="space-y-2" data-testid="determination-source-inventory">
-        <h3 class="text-sm font-medium">{{ $t('views.DeterminationView.source_inventory_title') }}</h3>
-        <ul class="space-y-1 text-sm">
-          <li
-            v-for="source in sources"
-            :key="source.source_id"
-            :id="sourceRowId(source.source_id)"
-            class="flex flex-wrap items-baseline gap-2 rounded-lg border bg-muted/20 p-3"
-            :class="{ 'ring-2 ring-primary': highlightedSourceId === source.source_id }"
-            data-testid="determination-source-row"
-          >
-            <span class="font-mono text-xs break-all">{{ source.source_id }}</span>
-            <span class="text-muted-foreground">{{ source.connector_type }} · {{ source.resource }} · {{ source.sample_count }}</span>
-            <span class="rounded-full px-2 py-0.5 text-xs" :class="source.status === 'available' ? 'bg-success/10 text-success-text' : 'bg-destructive/10 text-destructive-text'">
-              {{ $t('views.DeterminationView.source_status_' + source.status) }}
-            </span>
-            <span v-if="source.error" class="text-xs text-destructive-text">{{ source.error }}</span>
-            <span
-              v-if="referenceCountsBySource[source.source_id]"
-              class="ml-auto text-xs text-muted-foreground"
-              data-testid="determination-source-ref-count"
-            >
-              {{ $t('views.DeterminationView.source_ref_count', referenceCountsBySource[source.source_id]) }}
-            </span>
-          </li>
-        </ul>
-      </section>
+      <DeterminationProvenanceTrail
+        :proposal="proposal"
+        :review="review ?? null"
+        :highlighted-source-id="highlightedSourceId"
+      />
 
       <DeterminationEvidencePanel :element="selectedElement" @close="clearSelection" />
     </template>
@@ -325,21 +301,6 @@ function clearSelection(): void {
 function reasonFor(reason: string): DisplayText {
   return displayEvidenceText(reason)
 }
-
-/**
- * How many element-level evidence references cite each sampled source, so a
- * source row cross-links back to the elements that depend on it.
- */
-const referenceCountsBySource = computed<Record<string, number>>(() => {
-  const counts: Record<string, number> = {}
-  const referenced = [...observedFacts.value, ...derivedElements.value, ...assumptions.value].flatMap(
-    (element) => element.evidence_refs ?? [],
-  )
-  for (const reference of referenced) {
-    counts[reference.source_id] = (counts[reference.source_id] ?? 0) + 1
-  }
-  return counts
-})
 
 const highlightedSourceId = ref<string | null>(null)
 
