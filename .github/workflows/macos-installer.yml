@@ -186,32 +186,27 @@ jobs:
           # Intel macOS is a Homebrew Tier-3 configuration: Homebrew no longer
           # builds bottles for x86_64 Darwin, so `brew install` on this runner
           # either fails at the bottle fetch or falls back to an unbounded source
-          # build. Record that state up front and make a failure actionable
-          # instead of leaving a deterministic, opaque error (FAR-2479).
+          # build. The Intel job therefore never calls Homebrew: it installs the
+          # pinned, SHA-256-verified upstream ShellCheck release instead, so the
+          # Intel installer cannot deterministically fail on an upstream
+          # withdrawal (FAR-2479, FAR-2486). arm64 keeps the Homebrew path
+          # unchanged.
           if [[ "$MACOS_ARCH" == x86_64 ]]; then
-            printf '::warning::Homebrew no longer builds bottles for the Intel (x86_64) macOS configuration; build tools on this runner must come from a preinstalled binary or a source build.\n'
-          fi
-          install_build_tool_with_homebrew() {
-            local formula="$1"
-            if brew install "$formula"; then
-              return 0
-            fi
-            if [[ "$MACOS_ARCH" == x86_64 ]]; then
-              printf '::error::Homebrew could not install %s on Intel (x86_64) macOS. Homebrew no longer builds bottles for this configuration, so this workflow needs a non-Homebrew %s (preinstalled binary, pinned release download or source build) before the Intel installer can be built; product behaviour is unchanged (FAR-2479).\n' "$formula" "$formula" >&2
-            else
-              printf '::error::Homebrew could not install %s on %s macOS (see the brew output above).\n' "$formula" "$MACOS_ARCH" >&2
-            fi
-            return 1
-          }
-          if ! brew update; then
-            if [[ "$MACOS_ARCH" == x86_64 ]]; then
-              printf '::error::brew update failed on Intel (x86_64) macOS, a Homebrew Tier-3 configuration that no longer receives bottles; refresh or replace this toolchain before rebuilding the Intel installer (FAR-2479).\n' >&2
-            else
+            printf '::notice::Intel (x86_64) macOS is a Homebrew Tier-3 configuration with no bottles; installing a pinned, SHA-256-verified ShellCheck release instead of using Homebrew (FAR-2486).\n'
+            SHELLCHECK_BIN_DIR="$RUNNER_TEMP/shellcheck-bin"
+            bash scripts/macos/install-pinned-shellcheck.sh "$MACOS_ARCH" "$SHELLCHECK_BIN_DIR"
+            printf '%s\n' "$SHELLCHECK_BIN_DIR" >> "$GITHUB_PATH"
+            export PATH="$SHELLCHECK_BIN_DIR:$PATH"
+          else
+            if ! brew update; then
               printf '::error::brew update failed on %s macOS (see the brew output above).\n' "$MACOS_ARCH" >&2
+              exit 1
             fi
-            exit 1
+            if ! brew install shellcheck; then
+              printf '::error::Homebrew could not install shellcheck on %s macOS (see the brew output above).\n' "$MACOS_ARCH" >&2
+              exit 1
+            fi
           fi
-          install_build_tool_with_homebrew shellcheck
           command -v shellcheck >/dev/null 2>&1 || {
             printf '::error::shellcheck is not on PATH after installation (arch=%s)\n' "$MACOS_ARCH" >&2
             exit 1
@@ -237,6 +232,10 @@ jobs:
           shellcheck scripts/macos/install.sh
           bash -n scripts/macos/build-native-bundle.sh
           bash -n scripts/macos/install.sh
+          # The Intel build tools step must never depend on Homebrew, so the
+          # pinned-download helper is part of the validated contract (FAR-2486).
+          test -x scripts/macos/install-pinned-shellcheck.sh
+          bash -n scripts/macos/install-pinned-shellcheck.sh
           grep -q 'macos-15' .github/workflows/macos-installer.yml
           {
             echo '## macOS native installer dry-run (contract-only)'

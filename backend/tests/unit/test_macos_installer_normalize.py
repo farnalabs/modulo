@@ -1,11 +1,14 @@
 """FAR-2327: the macOS installer normalize step must honour reusable-workflow call inputs
 even when the caller (release-unified) was itself started by workflow_dispatch."""
 
+import hashlib
 import http.server
+import io
 import os
 import re
 import shutil
 import subprocess
+import tarfile
 import threading
 from pathlib import Path
 
@@ -468,14 +471,314 @@ def test_macos_spa_root_gate_uses_the_readiness_poller() -> None:
     assert "# BEGIN spa_root_html_ready" in build_run
 
 
-def test_macos_intel_homebrew_withdrawal_is_explicit_and_actionable() -> None:
-    """FAR-2479: an Intel Homebrew failure must name its cause, not fail opaquely."""
+def _build_tools_step() -> str:
     workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "macos-installer.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["build"]["steps"]
     step = next(step for step in steps if step.get("name") == "Install build tools")
     run = step.get("run")
     assert isinstance(run, str)
-    assert "Homebrew no longer builds bottles for the Intel (x86_64) macOS configuration" in run
-    assert "::error::Homebrew could not install %s on Intel (x86_64) macOS" in run
-    assert "::error::brew update failed on Intel (x86_64) macOS" in run
+    return run
+
+
+def test_macos_intel_homebrew_withdrawal_is_explicit_and_actionable() -> None:
+    """FAR-2479: the Intel build must state why it no longer uses Homebrew."""
+    run = _build_tools_step()
+    assert "Intel (x86_64) macOS is a Homebrew Tier-3 configuration with no bottles" in run
+    assert "FAR-2486" in run
     assert 'test "$(uname -m)" =' in run
+
+
+# ---------------------------------------------------------------------------
+# FAR-2486: the Intel macOS installer must not depend on Homebrew at all.
+# The only Homebrew-installed build tool was shellcheck, so the Intel branch
+# installs a pinned, SHA-256-verified upstream release instead. arm64 keeps the
+# existing Homebrew path unchanged.
+# ---------------------------------------------------------------------------
+
+_X86_64_SHELLCHECK_SHA256 = "c2c15e08df0e8fbc374c335b230a7ee958c313fa5714817a59aa59f1aa594f51"
+_ARM64_SHELLCHECK_SHA256 = "339b930feb1ea764467013cc1f72d09cd6b869ebf1013296ba9055ab2ffbd26f"
+
+
+def test_macos_intel_build_tools_use_pinned_download_and_never_homebrew() -> None:
+    """FAR-2486: the x86_64 branch installs a pinned release, not a brew formula."""
+    run = _build_tools_step()
+    lines = [line.strip() for line in run.splitlines()]
+
+    x86_branch = next(index for index, line in enumerate(lines) if 'if [[ "$MACOS_ARCH" == x86_64 ]]; then' in line)
+    arm64_else = next(index for index, line in enumerate(lines) if line == "else" and index > x86_branch)
+    intel_branch = "\n".join(lines[x86_branch:arm64_else])
+
+    assert "bash scripts/macos/install-pinned-shellcheck.sh" in intel_branch
+    assert '"$MACOS_ARCH" "$SHELLCHECK_BIN_DIR"' in intel_branch
+    assert "$GITHUB_PATH" in intel_branch
+    assert "brew install" not in intel_branch
+    assert "brew update" not in intel_branch
+
+
+def test_macos_arm64_build_tools_keep_the_homebrew_path() -> None:
+    """FAR-2486: arm64 behaviour is unchanged - Homebrew still installs shellcheck."""
+    run = _build_tools_step()
+    arm64_section = run.split("else\n", 2)[1]
+    assert "brew update" in arm64_section
+    assert "brew install shellcheck" in arm64_section
+
+
+def _pinned_shellcheck_script() -> str:
+    script_path = REPO_ROOT / "scripts" / "macos" / "install-pinned-shellcheck.sh"
+    assert script_path.is_file()
+    return script_path.read_text(encoding="utf-8")
+
+
+def _pinned_shellcheck_case_arm(script: str, arch: str) -> str:
+    """Return the body of the `<arch>)` arm of the script's architecture case."""
+    lines = script.splitlines()
+    start = next(index for index, line in enumerate(lines) if line.strip() == f"{arch})")
+    end = next(index for index in range(start + 1, len(lines)) if lines[index].strip() == ";;")
+    return "\n".join(lines[start:end])
+
+
+def _sha256_literal(text: str) -> str:
+    """Return the single SHA256="..." literal inside a case arm."""
+    match = re.search(r'SHA256="([0-9a-f]{64})"', text)
+    assert match is not None, f"no SHA256 literal in arm:\n{text}"
+    return match.group(1)
+
+
+def test_pinned_shellcheck_manifest_pins_a_verified_asset_per_architecture() -> None:
+    """FAR-2486: each architecture resolves a pinned tarball and a pinned SHA-256."""
+    script = _pinned_shellcheck_script()
+    assert "https://github.com/koalaman/shellcheck/releases/download" in script
+    assert "shellcheck-${SHELLCHECK_VERSION}.darwin.x86_64.tar.gz" in script
+    assert "shellcheck-${SHELLCHECK_VERSION}.darwin.aarch64.tar.gz" in script
+    assert _X86_64_SHELLCHECK_SHA256 in script
+    assert _ARM64_SHELLCHECK_SHA256 in script
+    assert _X86_64_SHELLCHECK_SHA256 != _ARM64_SHELLCHECK_SHA256
+    assert "set -euo pipefail" in script
+    # The transport stays HTTPS-only by default; nothing here may downgrade it.
+    assert "${SHELLCHECK_DOWNLOAD_PROTOCOLS:-https}" in script
+
+
+def test_pinned_shellcheck_binds_each_digest_to_its_architecture() -> None:
+    """FAR-2486: each case arm must carry ITS OWN digest and tarball.
+
+    The manifest test above only proves both digests appear somewhere in the
+    file. Swapping the two values between the arms still satisfies that, yet in
+    production it downloads the genuine x86_64 tarball, compares it against the
+    aarch64 digest, fails verification, and makes the Intel job red on every run
+    - exactly the failure FAR-2486 exists to remove. Bind the digest to the arm
+    that selects the tarball, not merely to the file.
+    """
+    script = _pinned_shellcheck_script()
+    x86_arm = _pinned_shellcheck_case_arm(script, "x86_64")
+    arm_arm = _pinned_shellcheck_case_arm(script, "arm64")
+
+    assert _sha256_literal(x86_arm) == _X86_64_SHELLCHECK_SHA256
+    assert _sha256_literal(arm_arm) == _ARM64_SHELLCHECK_SHA256
+    assert "shellcheck-${SHELLCHECK_VERSION}.darwin.x86_64.tar.gz" in x86_arm
+    assert "shellcheck-${SHELLCHECK_VERSION}.darwin.aarch64.tar.gz" in arm_arm
+
+
+def _pinned_shellcheck_driver(tmp_path: Path) -> Path:
+    """Write a driver that runs the workflow script's verify+install block verbatim."""
+    script = _pinned_shellcheck_script()
+    marked = _extract_marked_bash(script, "shellcheck_verify_install")
+    driver = tmp_path / "shellcheck_verify_driver.sh"
+    driver.write_text(
+        "#!/usr/bin/env bash\nset -uo pipefail\n"
+        + marked
+        + """
+status=0
+verify_and_install_shellcheck "$1" "$2" "$3" "v0.11.0" "$4" || status=$?
+exit "$status"
+""",
+        encoding="utf-8",
+    )
+    return driver
+
+
+def _write_shellcheck_tarball(path: Path, payload: str) -> str:
+    """Create a release-shaped tar.gz containing shellcheck-v0.11.0/shellcheck."""
+    data = payload.encode("utf-8")
+    with tarfile.open(path, "w:gz") as archive:
+        info = tarfile.TarInfo("shellcheck-v0.11.0/shellcheck")
+        info.size = len(data)
+        info.mode = 0o755
+        archive.addfile(info, io.BytesIO(data))
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_pinned_shellcheck_installs_only_a_checksum_verified_archive(tmp_path: Path) -> None:
+    """FAR-2486: a matching digest installs the binary and runs shellcheck --version."""
+    driver = _pinned_shellcheck_driver(tmp_path)
+    tarball = tmp_path / "shellcheck-v0.11.0.darwin.x86_64.tar.gz"
+    digest = _write_shellcheck_tarball(
+        tarball,
+        "#!/usr/bin/env bash\nprintf 'ShellCheck - shell script analysis tool\\nversion: 0.11.0\\n'\n",
+    )
+    prefix = tmp_path / "install"
+
+    # Relative paths: GNU tar treats "C:/..." in `-C` as a remote host spec.
+    result = _run_bash_file(
+        driver,
+        [tarball.name, digest, "install", "work"],
+        cwd=tmp_path,
+    )
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert (prefix / "shellcheck").is_file()
+    assert "verified sha256 of" in result.stderr
+    assert "version: 0.11.0" in result.stderr
+
+
+def test_pinned_shellcheck_refuses_a_tampered_archive(tmp_path: Path) -> None:
+    """FAR-2486: a digest mismatch fails closed and installs nothing."""
+    driver = _pinned_shellcheck_driver(tmp_path)
+    tarball = tmp_path / "shellcheck-v0.11.0.darwin.x86_64.tar.gz"
+    digest = _write_shellcheck_tarball(tarball, "#!/usr/bin/env bash\nexit 0\n")
+    tarball.write_bytes(tarball.read_bytes() + b"tampered")
+    prefix = tmp_path / "install"
+
+    result = _run_bash_file(
+        driver,
+        [tarball.as_posix(), digest, prefix.as_posix(), (tmp_path / "work").as_posix()],
+        cwd=tmp_path,
+    )
+
+    assert result.returncode != 0
+    assert "checksum verification failed" in result.stderr
+    assert not (prefix / "shellcheck").exists()
+
+
+def test_pinned_shellcheck_refuses_a_missing_archive(tmp_path: Path) -> None:
+    """FAR-2486: an absent download is a hard failure, never a skipped check."""
+    driver = _pinned_shellcheck_driver(tmp_path)
+    prefix = tmp_path / "install"
+
+    result = _run_bash_file(
+        driver,
+        [
+            (tmp_path / "absent.tar.gz").as_posix(),
+            _X86_64_SHELLCHECK_SHA256,
+            prefix.as_posix(),
+            (tmp_path / "work").as_posix(),
+        ],
+        cwd=tmp_path,
+    )
+
+    assert result.returncode != 0
+    assert "missing or empty" in result.stderr
+    assert not prefix.exists()
+
+
+def _pinned_shellcheck_download_driver(tmp_path: Path) -> Path:
+    """Write a driver that runs the workflow script's download_verified block verbatim."""
+    script = _pinned_shellcheck_script()
+    marked = _extract_marked_bash(script, "download_verified")
+    driver = tmp_path / "shellcheck_download_driver.sh"
+    driver.write_text(
+        "#!/usr/bin/env bash\nset -uo pipefail\n"
+        # The loopback fixture is plain HTTP; production keeps the HTTPS default.
+        + "SHELLCHECK_DOWNLOAD_PROTOCOLS=http\n"
+        + "SHELLCHECK_MAX_ATTEMPTS=5\n"
+        + marked
+        + """
+status=0
+download_verified "$1" "$2" "$3" || status=$?
+exit "$status"
+""",
+        encoding="utf-8",
+    )
+    return driver
+
+
+def _serve_status_sequence(
+    statuses: list[int], body: bytes = b"verified-asset"
+) -> tuple[http.server.HTTPServer, threading.Thread, str, dict[str, int]]:
+    """Serve the given status codes in order (the last repeats) and count requests."""
+    lock = threading.Lock()
+    counter = {"requests": 0}
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            with lock:
+                index = counter["requests"]
+                counter["requests"] += 1
+            status = statuses[index] if index < len(statuses) else statuses[-1]
+            if status == 200:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(status)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            return
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    return server, thread, f"http://{host}:{port}/shellcheck.tar.gz", counter
+
+
+def test_pinned_shellcheck_download_retries_transient_http_then_succeeds(tmp_path: Path) -> None:
+    """FAR-2486: 503/503/200 is retried, then the asset is saved.
+
+    A regression that classified 503 as permanent would fail this job on the
+    first network blip; a regression that never retried would fail on request
+    two. Both are invisible to the verify/install tests.
+    """
+    driver = _pinned_shellcheck_download_driver(tmp_path)
+    server, thread, url, counter = _serve_status_sequence([503, 503, 200], b"retried-body")
+    destination = tmp_path / "pinned.tar.gz"
+    try:
+        result = _run_bash_file(driver, [url, destination.as_posix(), "fixture"], cwd=tmp_path)
+    finally:
+        _stop_server(server, thread)
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert counter["requests"] == 3
+    assert destination.read_bytes() == b"retried-body"
+    assert "transient HTTP 503" in result.stderr
+
+
+@pytest.mark.parametrize("status", [404, 403])
+def test_pinned_shellcheck_download_fails_fast_on_permanent_http_status(tmp_path: Path, status: int) -> None:
+    """FAR-2486: 404/403 is a single attempt, non-zero, and installs nothing."""
+    driver = _pinned_shellcheck_download_driver(tmp_path)
+    # The second entry is 200 so a wrongly-retried permanent failure would
+    # "succeed" and fail the assertions below, instead of hiding behind the
+    # 5-attempt exhaustion path.
+    server, thread, url, counter = _serve_status_sequence([status, 200], b"must-not-be-saved")
+    destination = tmp_path / "pinned.tar.gz"
+    try:
+        result = _run_bash_file(driver, [url, destination.as_posix(), "fixture"], cwd=tmp_path)
+    finally:
+        _stop_server(server, thread)
+
+    assert result.returncode != 0
+    assert counter["requests"] == 1
+    assert not destination.exists()
+    assert not Path(f"{destination.as_posix()}.part").exists()
+    assert f"permanent HTTP {status}" in result.stderr
+
+
+def test_pinned_shellcheck_download_leaves_no_temporary_files_on_success(tmp_path: Path) -> None:
+    """FAR-2486: a clean download leaves no .part/.status scratch files behind."""
+    driver = _pinned_shellcheck_download_driver(tmp_path)
+    server, thread, url, counter = _serve_status_sequence([200], b"clean-body")
+    destination = tmp_path / "pinned.tar.gz"
+    try:
+        result = _run_bash_file(driver, [url, destination.as_posix(), "fixture"], cwd=tmp_path)
+    finally:
+        _stop_server(server, thread)
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert counter["requests"] == 1
+    assert destination.read_bytes() == b"clean-body"
+    leftovers = sorted(path.name for path in tmp_path.iterdir() if path.name.startswith("pinned.tar.gz."))
+    assert not leftovers
