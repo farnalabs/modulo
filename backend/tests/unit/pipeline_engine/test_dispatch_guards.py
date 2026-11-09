@@ -725,18 +725,20 @@ async def test_a_slow_poll_loses_the_race_to_the_typed_wait_timeout():
     """A poll slower than the remaining budget must be CUT OFF at the budget and
     terminalise as the typed ``dispatch.wait_timeout``, never as the node's
     generic deadline — and never by waiting out the slow call."""
-    connector = _PollConnector([0.8])  # a call that outlives the whole window
-    wait_timeout = 0.1
-    start = asyncio.get_running_loop().time()
+    # A slow call that, if it were waited out, would report a TERMINAL success.
+    # Cutting it off at the budget is therefore the only reason this wait raises:
+    # a loop that waited for the call would return success instead. Asserting on
+    # the OUTCOME (never on wall-clock elapsed) keeps the test deterministic on
+    # a contended CI runner, where a scheduling stall can stretch elapsed time
+    # far past the budget on a correct implementation.
+    connector = _SlowStatusConnector(delay=5.0)
     with (
         patch.object(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 5.0),
         pytest.raises(nr.DispatchWaitTimeoutError),
     ):
-        await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=wait_timeout)
-    elapsed = asyncio.get_running_loop().time() - start
-    # the poll is bounded by min(poll_interval, remaining): it cannot consume
-    # the stub's full 0.8 s sleep.
-    assert elapsed < 0.8
+        await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=0.1)
+    # the slow call was entered ... and cut off before it could report a status.
+    assert connector.calls
 
 
 async def test_a_wait_timeout_only_reads_never_fires_a_job():
