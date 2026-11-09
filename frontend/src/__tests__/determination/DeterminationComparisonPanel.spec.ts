@@ -85,7 +85,7 @@ function populatedComparison(): ProposalComparison {
       {
         id: 'ship',
         side: 'target',
-        node: { id: 'ship', node_type: 'manual', label: 'Ship it' },
+        node: { id: 'ship', node_type: 'manual', label: 'Ship it', connector_type: 'github' },
         provenance: bundle({ provenance_kinds: ['inferred'], uncertainty: ['Owner team is not recorded.'] }),
       },
     ],
@@ -324,5 +324,70 @@ describe('DeterminationComparisonPanel', () => {
 
     const noTarget = mountPanel({ baseline: draft(BASE_ATTEMPT, BASE_PROPOSAL) })
     expect(noTarget.find('[data-testid="determination-comparison-run"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('shows the running label and loading indicator while a compare is in flight', () => {
+    const wrapper = mountPanel({ comparison: populatedComparison(), loading: true })
+
+    expect(wrapper.find('[data-testid="determination-comparison-loading"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="determination-comparison-run"]').text()).toBe('Comparing...')
+    expect(wrapper.find('[data-testid="determination-comparison-run"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="determination-comparison-sides"]').exists()).toBe(false)
+  })
+
+  it('reports no behaviour change when only the structure changed', () => {
+    const wrapper = mountPanel({ comparison: { ...populatedComparison(), behaviour_changes: [] } })
+
+    expect(wrapper.find('[data-testid="determination-comparison-behaviour"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="determination-comparison-behaviour-empty"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="determination-comparison-behaviour-row"]')).toHaveLength(0)
+  })
+
+  it('renders a connector and tolerates a provenance bundle with omitted optional fields', () => {
+    const comparison = {
+      ...emptyComparison(),
+      nodes_added: [
+        {
+          id: 'ship',
+          side: 'target',
+          node: { id: 'ship', node_type: 'manual', label: 'Ship it', connector_type: 'github' },
+          provenance: { confidence: 'high' } as ProvenanceBundle,
+        },
+      ],
+    } as ProposalComparison
+
+    const wrapper = mountPanel({ comparison })
+    const added = wrapper.find('[data-testid="determination-comparison-node-added"]')
+
+    expect(added.text()).toContain('Connector')
+    expect(added.text()).toContain('github')
+    expect(added.findAll('[data-testid="determination-comparison-provenance-kind"]')).toHaveLength(0)
+    expect(added.find('[data-testid="determination-comparison-uncertainty-empty"]').exists()).toBe(true)
+    expect(added.find('[data-testid="determination-comparison-uncertainty"]').exists()).toBe(false)
+  })
+
+  it('defaults every comparison-derived collection when no comparison is held', () => {
+    const wrapper = mountPanel()
+    const vm = wrapper.vm as unknown as {
+      sides: unknown[]
+      isEmpty: boolean
+      behaviourChanges: unknown[]
+      nodesAdded: unknown[]
+      nodesRemoved: unknown[]
+      nodesChanged: unknown[]
+      edgesAdded: unknown[]
+      edgesRemoved: unknown[]
+      edgesChanged: unknown[]
+    }
+
+    expect(vm.sides).toEqual([])
+    expect(vm.isEmpty).toBe(false)
+    expect(vm.behaviourChanges).toEqual([])
+    expect(vm.nodesAdded).toEqual([])
+    expect(vm.nodesRemoved).toEqual([])
+    expect(vm.nodesChanged).toEqual([])
+    expect(vm.edgesAdded).toEqual([])
+    expect(vm.edgesRemoved).toEqual([])
+    expect(vm.edgesChanged).toEqual([])
   })
 })

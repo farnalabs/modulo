@@ -448,6 +448,30 @@ def test_provenance_evidence_confidence_and_uncertainty_survive_on_both_sides() 
     assert added.provenance.uncertainty == ["Deployment cadence is unconfirmed"]
 
 
+def test_provenance_kinds_are_deduplicated_in_first_appearance_order() -> None:
+    target_contract = _contract(
+        proposal_id=_TARGET_PROPOSAL_ID,
+        provenance=[
+            _evidence("evidence:a", kind="observed"),
+            _evidence("evidence:b", kind="observed"),
+            _evidence("evidence:c", kind="inferred"),
+        ],
+    )
+
+    comparison = compare_proposals(
+        _side(),
+        _side(contract=target_contract, nodes=[_node("review")]),
+    )
+
+    added = comparison.nodes_added[0]
+    assert added.provenance.provenance_kinds == ["observed", "inferred"]
+    assert [reference.reference_id for reference in added.provenance.evidence_refs] == [
+        "evidence:a",
+        "evidence:b",
+        "evidence:c",
+    ]
+
+
 def test_empty_proposals_compare_to_no_changes() -> None:
     empty = _contract(observed=[], derived=[], provenance=[], uncertainty=[])
     comparison = compare_proposals(_side(contract=empty), _side(contract=empty))

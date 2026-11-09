@@ -333,4 +333,49 @@ describe('useDetermination', () => {
     expect(api.comparison.value).toBeNull()
     expect(api.comparisonError.value).toBeNull()
   })
+
+  it('ignores a hold when no draft has been generated', () => {
+    const api = mountComposable()
+
+    api.holdBaseline()
+
+    expect(api.baseline.value).toBeNull()
+  })
+
+  it('marks the surface busy while a comparison is in flight', async () => {
+    mockPost.mockImplementation((path: string) =>
+      path === '/api/v1/determination/draft' ? Promise.resolve(ok(draftPayload())) : Promise.resolve(ok(comparisonPayload())),
+    )
+    const api = mountComposable()
+    await api.generateDraft()
+    api.holdBaseline()
+
+    const pending = deferred<unknown>()
+    mockPost.mockReturnValue(pending.promise)
+
+    const inFlight = api.compareDrafts()
+    expect(api.busy.value).toBe(true)
+
+    pending.resolve(ok(comparisonPayload()))
+    await inFlight
+    expect(api.busy.value).toBe(false)
+  })
+
+  it('compares a draft that omits nodes and edges as empty graphs', async () => {
+    const sparse = { proposal: { proposal_id: PROPOSAL_ID, attempt: { id: 'attempt-1' } } }
+    mockPost.mockImplementation((path: string) =>
+      path === '/api/v1/determination/draft' ? Promise.resolve(ok(sparse)) : Promise.resolve(ok(comparisonPayload())),
+    )
+    const api = mountComposable()
+
+    await api.generateDraft()
+    api.holdBaseline()
+
+    expect(await api.compareDrafts()).not.toBeNull()
+    const call = mockPost.mock.calls.find(([path]) => path === '/api/v1/determination/compare')
+    expect(call?.[1]?.body).toEqual({
+      base: { proposal: sparse.proposal, nodes: [], edges: [] },
+      target: { proposal: sparse.proposal, nodes: [], edges: [] },
+    })
+  })
 })
