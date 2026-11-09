@@ -454,8 +454,33 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     await loadRevision(mapId, revisionId)
   }
 
+  /**
+   * Carry forward loop configs the editor cannot author.
+   *
+   * Every save creates a NEW revision from the submitted payload, so a map that
+   * already has loop configs loses them unless they are re-submitted. The graph
+   * editor only edits nodes and relationships, so a save would otherwise drop
+   * every loop config and make publish fail for any improvement_loop node that
+   * requires one. Keep only configs whose node still exists as an
+   * improvement_loop node in the payload (the backend rejects dangling ones).
+   */
+  function carriedLoopConfigs(nodes: Array<{ node_key: string; node_type: string }>): Array<components['schemas']['SystemMapLoopConfigCreate']> {
+    const loopNodeKeys = new Set(nodes.filter((node) => node.node_type === 'improvement_loop').map((node) => node.node_key))
+    return (graph.value?.loop_configs ?? [])
+      .filter((loop) => loopNodeKeys.has(loop.node_key))
+      .map((loop) => ({
+        node_key: loop.node_key,
+        target_signal: loop.target_signal,
+        observation_window_seconds: loop.observation_window_seconds,
+        action_pipeline_id: loop.action_pipeline_id,
+        budget_limit_usd: loop.budget_limit_usd,
+        cooldown_seconds: loop.cooldown_seconds,
+        outcome_metric: loop.outcome_metric,
+      }))
+  }
+
   async function saveDraft(mapId: string, nodes: Array<{ node_key: string; node_type: string; display_name: string; config_json?: Record<string, unknown>; pipeline_id?: string | null; connector_instance_id?: string | null; owner_team_id?: string | null; eval_id?: string | null; position_x: string | number; position_y: string | number }>, relationships: Array<{ source_node_key: string; target_node_key: string; relationship_type: string; config_json?: Record<string, unknown> }>, notes: string): Promise<SystemMapRevision> {
-    const response = await api.POST('/api/v1/system-maps/{map_id}/revisions', { params: { path: { map_id: mapId } }, body: { nodes, relationships, loop_configs: [], notes } })
+    const response = await api.POST('/api/v1/system-maps/{map_id}/revisions', { params: { path: { map_id: mapId } }, body: { nodes, relationships, loop_configs: carriedLoopConfigs(nodes), notes } })
     if (response.error || !response.data) throw new Error(tr('systemMaps.errors.save_draft_revision'))
     activeRevision.value = response.data
     revisions.value = [...revisions.value, response.data]
