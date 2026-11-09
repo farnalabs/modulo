@@ -180,7 +180,6 @@ export function projectGraphNode(node: PipelineGraphNodeWire): CanvasNodeProject
 }
 
 /** Map a single wire edge to its canvas projection. */
-/** Map a single wire edge to its canvas projection. */
 export function projectGraphEdge(
   edge: PipelineGraphEdgeWire,
   _index: number
@@ -203,7 +202,7 @@ export function projectGraph(
   graph: PipelineGraphResponseWire | PipelineGraphUpdateWire
 ): CanvasGraphProjection {
   const nodes = graph.nodes.map(projectGraphNode)
-  const edges = graph.edges.map(projectGraphEdge)
+  const edges = graph.edges.map((edge, index) => projectGraphEdge(edge, index))
   return { nodes, edges }
 }
 

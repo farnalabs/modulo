@@ -358,13 +358,22 @@ async def seeded_db(session: AsyncSession) -> None:
         )
     )
 
-    # Empty pipeline (graph seeded by test)
+    # Empty pipelines (graphs seeded by tests)
     session.add(
         Pipeline(
             id=_PIPELINE_ID,
             organisation_id=_ORG_ID,
             account_id=_ACCOUNT_ID,
             name="Roundtrip Pipeline",
+            graph_nodes_json=[],
+        )
+    )
+    session.add(
+        Pipeline(
+            id=_PIPELINE_ID_2,
+            organisation_id=_ORG_ID,
+            account_id=_ACCOUNT_ID,
+            name="Roundtrip Pipeline 2",
             graph_nodes_json=[],
         )
     )
@@ -528,19 +537,18 @@ def _assert_semantic_node_eq(a: dict[str, Any], b: dict[str, Any], *, path: str 
         "aggregate",
         "join_partial_policy",
         "connector_binding",
+        "env_vars",
+        "context_files",
     ):
         if key == "connector_binding" and a.get(key) is not None and b.get(key) is not None:
             _assert_connector_binding_eq(a[key], b[key], path=f"{path}.connector_binding")
             continue
         if key == "env_vars":
-            # Masking: response/env round-trip replaces values with SENSITIVE_VALUE_MASK
-            # Just check key presence and that values are strings
-            assert isinstance(a.get(key), dict), f"{path}.env_vars (A)"
-            assert isinstance(b.get(key), dict), f"{path}.env_vars (B)"
-            assert set(a[key].keys()) == set(b[key].keys()), f"{path}.env_vars keys"
-            for k, v in a[key].items():
-                assert isinstance(v, str), f"{path}.env_vars[{k}]"
+            # Both sides are response payloads, so sensitive values are masked
+            # identically; plain equality asserts the masked round-trip.
+            assert a.get(key) == b.get(key), f"{path}.env_vars"
             continue
+
         if key == "context_files":
             assert a.get(key) == b.get(key), f"{path}.context_files"
             continue
@@ -613,7 +621,8 @@ class TestRestGraphRoundtrip:
         put_nodes = {n["id"]: n for n in put_graph["nodes"]}
         get_nodes = {n["id"]: n for n in get_graph["nodes"]}
         payload_node_ids = {n["id"] for n in payload["nodes"]}
-        assert set(put_nodes.keys()) == payload_node_ids == set(get_nodes.keys()), "node id sets"
+        assert set(put_nodes.keys()) == payload_node_ids, "PUT node id set"
+        assert payload_node_ids == set(get_nodes.keys()), "GET node id set"
         assert {e["id"] for e in put_graph["edges"]} == {e["id"] for e in get_graph["edges"]}, "edge id sets"
 
         for n_payload in payload["nodes"]:
@@ -863,7 +872,21 @@ class TestMcpRestEquivalence:
     ``PipelineGraphUpdate`` validation + ``strip_unset_connector_binding_inputs``
     serialisation."""
 
-    @pytest.mark.skip(reason="SQLite/UUID compatibility issue in test infrastructure; core REST roundtrip works")
+    @pytest.fixture(autouse=True)
+    def _apply_patches(self):
+        """Patch SQLite-incompatible primitives (advisory lock + live-role re-read)."""
+        lock_patch, release_patch, role_patch = _patch_snapshot_and_role()
+        with lock_patch, release_patch, role_patch:
+            yield
+
+    @pytest.mark.xfail(
+        reason=(
+            "Direct in-process MCP tool invocation does not wire the MCP middleware's "
+            "role ContextVar, so the scope validator denies the call before persistence "
+            "(FAR-2475 follow-up: exercise this through the ASGI/MCP middleware path)."
+        ),
+        strict=False,
+    )
     async def test_mcp_and_rest_persist_identical_graph(
         self,
         engine: AsyncEngine,
@@ -916,6 +939,7 @@ class TestMcpRestEquivalence:
             lock_patch,
             release_patch,
             role_patch,
+            patch("modulo.api.mcp_server.resolve_role_from_membership", AsyncMock(return_value="admin")),
             patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
             patch("modulo.api.mcp_server._session", _session_factory),
             patch(
@@ -988,14 +1012,17 @@ class TestMcpRestEquivalence:
 
 def _pipeline_graph_edge_to_dict(edge: Any) -> dict[str, Any]:
     """Convert a validated PipelineGraphEdge to the dict shape used by replace_pipeline_graph."""
+    hitl_review_config = edge.hitl_review_config
+    if hasattr(hitl_review_config, "model_dump"):
+        hitl_review_config = hitl_review_config.model_dump(mode="json")
     return {
         "id": edge.id,
         "source_node_id": edge.source_node_id,
         "target_node_id": edge.target_node_id,
         "edge_type": edge.edge_type,
         "condition_expression": edge.condition_expression,
-        "hitl_review_config": edge.hitl_review_config,
-        "hitl_review_config_present": edge.hitl_review_config is not None,
+        "hitl_review_config": hitl_review_config,
+        "hitl_review_config_present": hitl_review_config is not None,
         "source_port": edge.source_port or "out",
         "target_port": edge.target_port or "in",
     }

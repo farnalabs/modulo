@@ -235,11 +235,29 @@ async def seeded_env(
     db_engine: AsyncEngine,
     integration_client: AsyncClient,
 ) -> dict[str, Any]:
-    """Seed a fresh org, admin account, pipeline, agent, connector and login."""
+    """Seed a fresh org, admin account, pipeline, agent, connector and login.
+
+    ``db_engine`` is session-scoped, so every test in this module shares one
+    database. The seed rows below use fixed IDs, which means the fixture must be
+    idempotent: re-running it for the second test must not violate a primary
+    key, and the pipeline's mutable graph state (nodes/edges/snapshots) must be
+    reset so each test starts from an empty graph.
+    """
     # Seed via raw SQL (matches test_evals_redirect pattern)
     async with db_engine.begin() as conn:
         await conn.execute(
-            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
+            text("DELETE FROM pipeline_edges WHERE pipeline_id = :pid"),
+            {"pid": str(_PIPELINE_ID)},
+        )
+        await conn.execute(
+            text("DELETE FROM pipeline_snapshots WHERE pipeline_id = :pid"),
+            {"pid": str(_PIPELINE_ID)},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) "
+                "VALUES (:id, :name, :slug, '{}'::json) ON CONFLICT DO NOTHING"
+            ),
             {"id": str(_ORG_ID), "name": f"Roundtrip {str(_ORG_ID)[:8]}", "slug": f"rt-{str(_ORG_ID)[:8]}"},
         )
         from modulo.auth.passwords import hash_password
@@ -248,7 +266,7 @@ async def seeded_env(
         await conn.execute(
             text(
                 "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, :hash, 'local', true)"
+                "VALUES (:id, :email, :name, :hash, 'local', true) ON CONFLICT DO NOTHING"
             ),
             {
                 "id": str(_ACCOUNT_ID),
@@ -259,7 +277,8 @@ async def seeded_env(
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin')"
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin') "
+                "ON CONFLICT DO NOTHING"
             ),
             {"id": str(uuid.uuid4()), "aid": str(_ACCOUNT_ID), "oid": str(_ORG_ID)},
         )
@@ -269,7 +288,7 @@ async def seeded_env(
                 "is_executable, prompt_always_visible, prompt_version_history, connector_type_refs, "
                 "required_environment_capabilities, retry_policy) "
                 "VALUES (:id, :oid, :uid, :name, :prompt, true, false, '[]'::json, '[]'::json, "
-                "'[]'::json, '{}'::json)"
+                "'[]'::json, '{}'::json) ON CONFLICT DO NOTHING"
             ),
             {
                 "id": str(_AGENT_ROW_ID),
@@ -283,7 +302,8 @@ async def seeded_env(
             text(
                 "INSERT INTO connector_instances (id, organisation_id, account_id, name, connector_type_id, "
                 "credentials_ciphertext, config_json, allowed_operations, status, visibility) "
-                "VALUES (:id, :oid, :uid, :name, 'github', :cred, '{}'::json, '[]'::json, 'active', 'org')"
+                "VALUES (:id, :oid, :uid, :name, 'github', :cred, '{}'::json, '[]'::json, 'active', 'org') "
+                "ON CONFLICT DO NOTHING"
             ),
             {
                 "id": str(_CONNECTOR_INSTANCE_ID),
@@ -296,9 +316,15 @@ async def seeded_env(
         await conn.execute(
             text(
                 "INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json) "
-                "VALUES (:id, :oid, :uid, :name, '[]'::json)"
+                "VALUES (:id, :oid, :uid, :name, '[]'::json) ON CONFLICT DO NOTHING"
             ),
             {"id": str(_PIPELINE_ID), "oid": str(_ORG_ID), "uid": str(_ACCOUNT_ID), "name": "Roundtrip Pipeline"},
+        )
+
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE pipelines SET graph_nodes_json = '[]'::json WHERE id = :pid"),
+            {"pid": str(_PIPELINE_ID)},
         )
 
     # Login
@@ -352,14 +378,14 @@ class TestPipelineGraphContractPostgres:
         for n_payload in payload["nodes"]:
             nid = n_payload["id"]
             _assert_semantic_node_eq(put_nodes[nid], get_nodes[nid], path=f"node {nid}")
-            _assert_semantic_node_eq(get_nodes[nid], n_payload, path=f"node {nid}")
+            _assert_node_matches_payload(get_nodes[nid], n_payload, path=f"node {nid}", masked=True)
 
         put_edges = {e["id"]: e for e in put_graph["edges"]}
         get_edges = {e["id"]: e for e in get_graph["edges"]}
         for e_payload in payload["edges"]:
             eid = e_payload["id"]
             _assert_semantic_edge_eq(put_edges[eid], get_edges[eid], path=f"edge {eid}")
-            _assert_semantic_edge_eq(get_edges[eid], e_payload, path=f"edge {eid}")
+            _assert_semantic_edge_eq(get_edges[eid], _edge_payload_with_defaults(e_payload), path=f"edge {eid}")
 
         # Persisted DB state
         async with db_engine.begin() as conn:
@@ -368,8 +394,11 @@ class TestPipelineGraphContractPostgres:
             pipeline = pipeline_row.scalar_one()
             persisted_nodes = {n["id"]: n for n in pipeline.graph_nodes_json}
             for n_payload in payload["nodes"]:
-                _assert_semantic_node_eq(
-                    persisted_nodes[n_payload["id"]], n_payload, path=f"persisted node {n_payload['id']}"
+                _assert_node_matches_payload(
+                    persisted_nodes[n_payload["id"]],
+                    n_payload,
+                    path=f"persisted node {n_payload['id']}",
+                    masked=False,
                 )
 
             # Edges
@@ -391,7 +420,7 @@ class TestPipelineGraphContractPostgres:
                         "condition_expression": edge.condition_expression,
                         "hitl_review_config": edge.hitl_review_config,
                     },
-                    e_payload,
+                    _edge_payload_with_defaults(e_payload),
                     path=f"persisted edge {eid}",
                 )
 
@@ -415,10 +444,23 @@ class TestPipelineGraphContractPostgres:
                 snap_node = snap_nodes[nid]
                 if n_payload["node_type"] == "agent":
                     assert "prompt_template" in snap_node
-                _assert_semantic_node_eq(snap_node, n_payload, path=f"snapshot node {nid}")
+                _assert_node_matches_payload(snap_node, n_payload, path=f"snapshot node {nid}", masked=False)
             for e_payload in payload["edges"]:
+                eid = e_payload["id"]
+                snap_edge = snap_edges[eid]
                 _assert_semantic_edge_eq(
-                    snap_edges[e_payload["id"]], e_payload, path=f"snapshot edge {e_payload['id']}"
+                    {
+                        "id": snap_edge["id"],
+                        "source_node_id": snap_edge.get("source", snap_edge.get("source_node_id")),
+                        "target_node_id": snap_edge.get("target", snap_edge.get("target_node_id")),
+                        "edge_type": snap_edge.get("type", snap_edge.get("edge_type")),
+                        "source_port": snap_edge.get("source_port", "out"),
+                        "target_port": snap_edge.get("target_port", "in"),
+                        "condition_expression": snap_edge.get("condition_expression"),
+                        "hitl_review_config": snap_edge.get("hitl_review_config"),
+                    },
+                    _edge_payload_with_defaults(e_payload),
+                    path=f"snapshot edge {eid}",
                 )
 
     async def test_postgres_write_vs_response_drops_unset_connector_binding_inputs(
@@ -474,7 +516,7 @@ class TestPipelineGraphContractPostgres:
         sb_node = next(n for n in put_graph["nodes"] if n["id"] == str(_SANDBOX_ID))
         env = sb_node.get("env_vars", {})
         assert "OPENAI_API_KEY" in env
-        assert env["OPENAI_API_KEY"] == "SENSITIVE_VALUE_MASK"
+        assert env["OPENAI_API_KEY"] == _MASK
 
         # Persisted value is real
         async with db_engine.begin() as conn:
@@ -690,21 +732,75 @@ def _assert_semantic_node_eq(a: dict[str, Any], b: dict[str, Any], *, path: str 
         "aggregate",
         "join_partial_policy",
         "connector_binding",
+        "env_vars",
+        "context_files",
     ):
         if key == "connector_binding" and a.get(key) is not None and b.get(key) is not None:
             _assert_connector_binding_eq(a[key], b[key], path=f"{path}.connector_binding")
             continue
         if key == "env_vars":
-            assert isinstance(a.get(key), dict), f"{path}.env_vars (A)"
-            assert isinstance(b.get(key), dict), f"{path}.env_vars (B)"
-            assert set(a[key].keys()) == set(b[key].keys()), f"{path}.env_vars keys"
-            for k, v in a[key].items():
-                assert isinstance(v, str), f"{path}.env_vars[{k}]"
+            # Both sides are response payloads, so sensitive values are masked
+            # identically; plain equality asserts the masked round-trip.
+            assert a.get(key) == b.get(key), f"{path}.env_vars"
             continue
+
         if key == "context_files":
             assert a.get(key) == b.get(key), f"{path}.context_files"
             continue
         assert a.get(key) == b.get(key), f"{path}.{key}: {a.get(key)!r} != {b.get(key)!r}"
+
+
+# Six-bullet sentinel from ``modulo.api.middleware.sensitive_mask``
+# (``SENSITIVE_VALUE_MASK``); pinned here so a response-layer mask change is caught.
+_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
+
+
+def _is_sensitive_env_key(key: str) -> bool:
+    upper = key.upper()
+    return upper.endswith("_API_KEY") or "SECRET" in upper or "TOKEN" in upper
+
+
+def _assert_node_matches_payload(
+    actual: dict[str, Any],
+    expected: dict[str, Any],
+    *,
+    path: str = "node",
+    masked: bool = False,
+) -> None:
+    """Assert the fields *explicitly present in the payload* survive on ``actual``.
+
+    Fields the payload omits are filled by model defaults on the write path and
+    are therefore intentionally not compared (mirrors the unit roundtrip suite).
+    ``masked=True`` expects sensitive ``env_vars`` values to be replaced by
+    ``_MASK`` (an API read response); ``masked=False`` expects the real stored
+    value (persisted JSON / snapshot).
+    """
+    for key, expected_value in expected.items():
+        actual_value = actual.get(key)
+        if key == "env_vars":
+            assert isinstance(actual_value, dict), f"{path}.env_vars"
+            assert set(actual_value.keys()) == set(expected_value.keys()), f"{path}.env_vars keys"
+            for k, v in expected_value.items():
+                if masked and _is_sensitive_env_key(k):
+                    assert actual_value[k] == _MASK, f"{path}.env_vars[{k}]"
+                else:
+                    assert actual_value[k] == v, f"{path}.env_vars[{k}]"
+        elif key == "context_files":
+            assert actual_value == expected_value, f"{path}.context_files"
+        elif isinstance(expected_value, dict) and isinstance(actual_value, dict):
+            for ek, ev in expected_value.items():
+                assert actual_value.get(ek) == ev, f"{path}.{key}.{ek}: {actual_value.get(ek)!r} != {ev!r}"
+        else:
+            assert actual_value == expected_value, f"{path}.{key}: {actual_value!r} != {expected_value!r}"
+
+
+def _edge_payload_with_defaults(edge_payload: dict[str, Any]) -> dict[str, Any]:
+    """Apply the wire defaults an omitted ``source_port``/``target_port`` implies."""
+    return {
+        **edge_payload,
+        "source_port": edge_payload.get("source_port", "out"),
+        "target_port": edge_payload.get("target_port", "in"),
+    }
 
 
 def _assert_connector_binding_eq(a: dict[str, Any], b: dict[str, Any], path: str = "") -> None:
