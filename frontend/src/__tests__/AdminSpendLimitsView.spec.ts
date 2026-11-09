@@ -11,11 +11,12 @@ const apiState = vi.hoisted(() => ({
   costsOverride: undefined as Record<string, unknown> | null | undefined,
   ceilingError: undefined as Record<string, unknown> | undefined,
   ceilingReject: undefined as Error | undefined,
+  costsGate: null as null | { promise: Promise<void>; release: () => void },
 }))
 
 vi.mock('../lib/api/client', () => ({
   api: {
-    GET: vi.fn().mockImplementation((path: string) => {
+    GET: vi.fn().mockImplementation(async (path: string) => {
        if (path === '/api/v1/admin/costs/limits') {
          return Promise.resolve({
             data: apiState.limitsOverride ?? {
@@ -30,6 +31,7 @@ vi.mock('../lib/api/client', () => ({
          })
        }
       if (path === '/api/v1/admin/costs') {
+        if (apiState.costsGate) await apiState.costsGate.promise
         return Promise.resolve({
            data: apiState.costsOverride ?? {
              period: 'month',
@@ -82,6 +84,7 @@ describe('AdminSpendLimitsView', () => {
      apiState.limitsOverride = undefined
      apiState.costsOverride = undefined
      apiState.ceilingError = undefined
+     apiState.costsGate = null
 
   })
 
@@ -289,6 +292,23 @@ describe('AdminSpendLimitsView', () => {
     expect(wrapper.find('[data-testid="admin-spend-limits-org-limit"]').element).toHaveProperty('value', '')
     expect(wrapper.text()).toContain('No teams found.')
     expect(wrapper.text()).toContain('$0.00')
+    wrapper.unmount()
+  })
+
+  it('shows the costs loading skeleton until the cost report resolves', async () => {
+    let release!: () => void
+    const promise = new Promise<void>((resolve) => { release = resolve })
+    apiState.costsGate = { promise, release }
+
+    const wrapper = await mountWithFeatures()
+    expect(wrapper.find('[data-testid="admin-spend-limits-costs-loading"]').exists()).toBe(true)
+
+    release()
+    apiState.costsGate = null
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="admin-spend-limits-costs-loading"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('$42.50')
     wrapper.unmount()
   })
 
