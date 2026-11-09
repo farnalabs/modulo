@@ -4538,6 +4538,7 @@ def _generic_exception_envelope(node_id: str = "node-x") -> dict[str, Any]:
             modulo_synthetic_failure=True,
         ),
         exclude_from_output=frozenset({"error_type", "error_message"}),
+        legacy_format=True,
     )
 
 
@@ -4558,6 +4559,7 @@ def _schema_validation_envelope(node_id: str = "node-x", business_json: dict[str
             attempt_key="attempt-1",
             modulo_synthetic_failure=True,
         ),
+        legacy_format=True,
     )
 
 
@@ -4816,6 +4818,7 @@ async def test_finalize_keeps_complete_for_failed_status_without_synthetic_marke
             output_json={"status": "failed", "summary": "genuinely failed differently"},
             attempt_key="attempt-1",
         ),
+        legacy_format=True,
     )
     return_value, telemetry = _split_stored_columns(honest)
     stored_run = _stored_run_with_outputs({"node-x": return_value}, {"node-x": telemetry})

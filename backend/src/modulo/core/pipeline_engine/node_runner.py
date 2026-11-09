@@ -9913,21 +9913,22 @@ def _build_sandbox_node_envelope(
     provider: str = "",
     via_provider: bool = False,
     sandbox_mode: str = "",
+    legacy_format: bool = False,
 ) -> dict[str, Any]:
     """Assemble a sandbox_agent node envelope from grouped output fields.
-    The envelope shape is ``{artifacts: [{node_id, status, output}], output}``.
-    The artifact's inner ``output`` carries the FULL field set; the top-level
-    ``output`` is the reduced telemetry view that omits ``output_json`` and
-    ``exit_code`` plus any caller-supplied artifact-only keys (e.g. the
-    success path's ``changed_files``/``pr_url``, the generic-exception path's
-    ``error_type``/``error_message``). Optional fields are omitted when left at
-    the ``_UNSET`` sentinel so each path emits exactly the key set it did
-    before this extraction. The FAR-510 synthetic-failure marker
-    (``MODULO_SYNTHETIC_FAILURE_MARKER``) is stamped into BOTH views only when
-    ``output.modulo_synthetic_failure`` is True — honest envelopes carry no
-    marker key at all, and the marker is deliberately NOT in
-    ``exclude_from_output`` so it survives into the persisted telemetry view
-    (and, after the P1b split, into ``node_telemetry_json``).
+
+    NEW FORMAT (default, legacy_format=False): Returns a split envelope with
+    two top-level keys:
+      - ``output``: the PURE agent return (``output_json`` for sandbox_agent)
+      - ``telemetry``: exhaustive telemetry (what ``split_node_output`` extracts
+        as telemetry for sandbox_agent)
+
+    LEGACY FORMAT (legacy_format=True): Returns the legacy envelope shape
+    ``{artifacts: [{node_id, status, output}], output}`` for backward
+    compatibility during transition. The artifact's inner ``output`` carries the
+    FULL field set; the top-level ``output`` is the reduced telemetry view that
+    omits ``output_json`` and ``exit_code`` plus any caller-supplied
+    artifact-only keys.
 
     FAR-1050 (ADR 040 "Flag and revert observability"): passing a non-empty
     ``provider`` stamps BOTH the resolved tier and the provider-routing
@@ -9948,6 +9949,7 @@ def _build_sandbox_node_envelope(
     Callers that pass no mode get no stamp (builder-level tests construct
     partial envelopes that way); the production paths always pass it.
     """
+    # Build the full inner dict (same as before)
     inner: dict[str, Any] = {
         "status": output.status,
         "summary": output.summary,
@@ -10001,11 +10003,31 @@ def _build_sandbox_node_envelope(
     reported = _sandbox_reported_datum_provenance(inner, output, sandbox_mode=sandbox_mode)
     if reported:
         inner[PROVENANCE_KEY] = reported
+
+    # The pure return for sandbox_agent is output_json (from the artifact)
+    pure_return = output.output_json if output.output_json is not _UNSET else None
+
+    # Build telemetry by mirroring what _split_sandbox_agent produces:
+    # telemetry = inner minus output_json, plus outer (legacy output) keys
+    # In the new format, telemetry IS the exhaustive telemetry channel.
+    telemetry = {k: v for k, v in inner.items() if k != "output_json"}
+
+    # Also include the legacy outer keys that were excluded from inner
     excluded = frozenset(("output_json", "exit_code")) | exclude_from_output
-    outer = {key: value for key, value in inner.items() if key not in excluded}
+    telemetry.update({k: v for k, v in inner.items() if k in excluded and k != "output_json"})
+
+    if legacy_format:
+        # Legacy format: {artifacts: [...], output: outer}
+        outer = {key: value for key, value in inner.items() if key not in excluded}
+        return {
+            "artifacts": [{"node_id": node_id, "status": output.status, "output": inner}],
+            "output": outer,
+        }
+
+    # New split format: {output: pure_return, telemetry: telemetry}
     return {
-        "artifacts": [{"node_id": node_id, "status": output.status, "output": inner}],
-        "output": outer,
+        "output": pure_return,
+        "telemetry": telemetry,
     }
 
 
