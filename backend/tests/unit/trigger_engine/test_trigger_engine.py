@@ -2747,3 +2747,64 @@ class TestAgentSignalPauseCheck:
         assert len(results) == 1
         assert results[0]["status"] == "fired"
         assert results[0]["run_id"] == str(run_mock.id)
+
+
+# ---------------------------------------------------------------------------
+# FAR-130 review — the split-envelope detection is the ONE canonical predicate
+# ---------------------------------------------------------------------------
+
+
+class TestResolveChildNodeOutputSplitDetection:
+    """``_resolve_child_node_output`` detects the NEW split envelope through
+    ``node_output_split.is_split_envelope`` — the same predicate the write-side
+    splitter uses. An earlier inline copy wrongly required ``artifacts`` to be
+    ABSENT, so it never fired on the production envelope (which always carries
+    all three channels) and only ``split_node_output``'s own detection saved it.
+    """
+
+    def test_real_split_envelope_takes_the_direct_branch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The production envelope resolves WITHOUT a legacy re-split."""
+        from modulo.core.trigger_engine import agent_signal
+
+        calls: list[Any] = []
+
+        def _spy(*args: Any, **kwargs: Any) -> tuple[Any, dict[str, Any]]:
+            calls.append(args)
+            return None, {}
+
+        monkeypatch.setattr(agent_signal, "split_node_output", _spy)
+        envelope = {
+            "output": {"pr_url": "https://example/1"},
+            "telemetry": {"status": "completed"},
+            "artifacts": [{"node_id": "my-node", "status": "completed", "output": {}}],
+        }
+
+        resolved = agent_signal._resolve_child_node_output(envelope, "sandbox_agent", node_id="my-node")
+
+        assert resolved == {"pr_url": "https://example/1"}
+        assert not calls
+
+    def test_legacy_envelope_still_uses_the_splitter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A legacy envelope (artifacts + output, no telemetry) must still be
+        resolved through ``split_node_output`` — the direct branch is keyed on
+        the canonical predicate, not on a bare ``output`` key."""
+        from modulo.core.trigger_engine import agent_signal
+
+        calls: list[Any] = []
+
+        def _spy(*args: Any, **kwargs: Any) -> tuple[Any, dict[str, Any]]:
+            calls.append(args)
+            return {"legacy": "return"}, {}
+
+        monkeypatch.setattr(agent_signal, "split_node_output", _spy)
+        legacy = {
+            "artifacts": [
+                {"node_id": "my-node", "status": "completed", "output": {"output_json": {"legacy": "return"}}},
+            ],
+            "output": {"status": "completed"},
+        }
+
+        resolved = agent_signal._resolve_child_node_output(legacy, "sandbox_agent", node_id="my-node")
+
+        assert resolved == {"legacy": "return"}
+        assert len(calls) == 1

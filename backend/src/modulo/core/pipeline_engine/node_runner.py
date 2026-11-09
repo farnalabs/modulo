@@ -9934,10 +9934,12 @@ def _build_sandbox_node_envelope(
         keys on the ``output``+``telemetry`` channels, never on the artifact,
         so the accumulator is never re-split or double-counted.
 
-    LEGACY FORMAT (legacy_format=True): Returns the legacy envelope shape
-    ``{artifacts: [{node_id, status, output}], output}`` for backward
-    compatibility during transition. The artifact's inner ``output`` carries the
-    FULL field set; the top-level ``output`` is the reduced telemetry view that
+    LEGACY FORMAT (``legacy_format=True``): Returns the legacy envelope shape
+    ``{artifacts: [{node_id, status, output}], output}``. TEST-SUPPORT ONLY —
+    production callers never pass ``legacy_format=True``; it exists so the
+    executor/finalize tests can build pre-split legacy envelopes to exercise
+    the read-side fallbacks. The artifact's inner ``output`` carries the FULL
+    field set; the top-level ``output`` is the reduced telemetry view that
     omits ``output_json`` and ``exit_code`` plus any caller-supplied
     artifact-only keys.
 
@@ -10018,14 +10020,16 @@ def _build_sandbox_node_envelope(
     # The pure return for sandbox_agent is output_json (from the artifact)
     pure_return = output.output_json if output.output_json is not _UNSET else None
 
-    # Build telemetry by mirroring what _split_sandbox_agent produces:
-    # telemetry = inner minus output_json, plus outer (legacy output) keys
-    # In the new format, telemetry IS the exhaustive telemetry channel.
+    # The new-format telemetry channel is the exhaustive ``inner`` field set
+    # minus the pure return (``output_json``). The comprehension already
+    # carries every other key — including the ``excluded`` ones — so no
+    # follow-up ``telemetry.update`` is needed (an earlier one re-added the
+    # same values as a dead no-op).
     telemetry = {k: v for k, v in inner.items() if k != "output_json"}
 
-    # Also include the legacy outer keys that were excluded from inner
+    # ``excluded`` names the keys the LEGACY outer view omits; it is unused by
+    # the new-format return below.
     excluded = frozenset(("output_json", "exit_code")) | exclude_from_output
-    telemetry.update({k: v for k, v in inner.items() if k in excluded and k != "output_json"})
 
     if legacy_format:
         # Legacy format: {artifacts: [...], output: outer}

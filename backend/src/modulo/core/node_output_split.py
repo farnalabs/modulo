@@ -35,6 +35,7 @@ __all__ = [
     "SPLITTABLE_NODE_TYPES",
     "extend_node_type_map_from_edges",
     "has_telemetry_entry",
+    "is_split_envelope",
     "node_return",
     "node_stderr_artifact",
     "node_stdout_artifact",
@@ -179,6 +180,42 @@ def _add_lossless(
             continue
         if key not in telemetry:
             telemetry[key] = value
+
+
+def is_split_envelope(value: Any) -> bool:
+    """True when *value* is an already-split node envelope (FAR-130).
+
+    The write-side contract (``node_runner._build_sandbox_node_envelope``)
+    emits all THREE channels together, so all three are required:
+
+    - ``output`` -- the PURE node return,
+    - ``telemetry`` -- the exhaustive runtime telemetry (a dict), and
+    - ``artifacts`` -- the LangGraph state accumulator entry the reducer
+      concatenates into ``state["artifacts"]``.
+
+    Requiring ``artifacts`` is the COLLISION GUARD. A legacy envelope carries
+    ``artifacts`` but no ``telemetry``; a bare ``{output, telemetry}`` pair is
+    NOT the production shape and is deliberately not detected as split -- it
+    falls through to the per-type splitter rather than being silently treated
+    as an already-split value. This predicate is the ONE canonical detection:
+    ``split_node_output``'s idempotent branch and
+    ``agent_signal._resolve_child_node_output`` both call it, so the two can
+    never drift apart again.
+
+    RESIDUAL AMBIGUITY (FAR-130 review note): an AGENT-AUTHORED pure return
+    coerced to exactly ``{output, telemetry, artifacts}`` would be mis-detected
+    as a split envelope. This is confined to the LEGACY RE-SPLIT leg --
+    ``split_node_output`` called with ``stored_telemetry=None`` (finalize with
+    no stored telemetry, or the trigger signal resolver) -- because once a
+    telemetry entry exists the idempotent ``stored_telemetry is not None``
+    branch fires first and never shape-sniffs.
+    """
+    return (
+        isinstance(value, dict)
+        and "output" in value
+        and isinstance(value.get("telemetry"), dict)
+        and "artifacts" in value
+    )
 
 
 def resolve_node_contract_output(
@@ -554,14 +591,15 @@ def split_node_output(
 
     1. ``stored_telemetry is not None`` -- the node is ALREADY pure: idempotent
        no-op returning ``(outer_dict, stored_telemetry)`` unchanged.
-    2. Already-split envelope (FAR-130) -- an ``output`` key AND a dict-valued
-       ``telemetry`` key: idempotent no-op returning
+    2. Already-split envelope (FAR-130) -- detected by the canonical
+       :func:`is_split_envelope` (``output`` + dict-valued ``telemetry`` +
+       ``artifacts``): idempotent no-op returning
        ``(outer_dict["output"], outer_dict["telemetry"])``. This is the
        READ-side twin of the write-side split: ``node_runner``'s sandbox
        envelope is emitted already split (with an ``artifacts`` accumulator
        alongside), so re-splitting it must NEVER nest the telemetry under the
-       return. Keyed on the presence of BOTH split channels, NOT on the
-       absence of ``artifacts`` (the new envelope carries all three).
+       return. Requiring ``artifacts`` is the documented collision guard -- see
+       :func:`is_split_envelope` for the residual agent-authored-return case.
     3. Not a dict -- malformed: warn and return ``(None, {})``.
     4. Recovery marker (no ``artifacts`` and a ``recovered`` / ``skipped`` key).
     5. Known ``node_type`` (``sandbox_agent``, ``agent``, ``connector``,
@@ -575,21 +613,18 @@ def split_node_output(
     """
     if stored_telemetry is not None:
         return outer_dict, stored_telemetry
-    if isinstance(outer_dict, dict):
-        telemetry = outer_dict.get("telemetry")
-        if "output" in outer_dict and isinstance(telemetry, dict):
-            # Already-split (new FAR-130 sandbox envelope): ``output`` is the
-            # pure return and ``telemetry`` the exhaustive side. The pure
-            # return is returned verbatim — never nest telemetry under it.
-            # Any OTHER top-level key (e.g. the ``otel_span_id`` /
-            # ``otel_trace_id`` stamps ``_record_chain_end_output`` adds before
-            # persistence) is folded into telemetry losslessly, exactly like
-            # the legacy path, so those stamps still surface in the stored
-            # ``node_telemetry_json`` entry. The three split channels
-            # themselves are never re-folded.
-            merged_telemetry = dict(telemetry)
-            _add_lossless(outer_dict, merged_telemetry, {"output", "telemetry", "artifacts"})
-            return outer_dict.get("output"), merged_telemetry
+    if is_split_envelope(outer_dict):
+        # Already-split (new FAR-130 sandbox envelope): ``output`` is the pure
+        # return and ``telemetry`` the exhaustive side. The pure return is
+        # returned verbatim — never nest telemetry under it. Any OTHER
+        # top-level key (e.g. the ``otel_span_id`` / ``otel_trace_id`` stamps
+        # ``_record_chain_end_output`` adds before persistence) is folded into
+        # telemetry losslessly, exactly like the legacy path, so those stamps
+        # still surface in the stored ``node_telemetry_json`` entry. The three
+        # split channels themselves are never re-folded.
+        merged_telemetry = dict(outer_dict["telemetry"])
+        _add_lossless(outer_dict, merged_telemetry, {"output", "telemetry", "artifacts"})
+        return outer_dict.get("output"), merged_telemetry
     if not isinstance(outer_dict, dict):
         _log.warning(
             "node_output_split.malformed",

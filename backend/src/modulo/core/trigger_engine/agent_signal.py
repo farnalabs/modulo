@@ -22,7 +22,12 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
-from modulo.core.node_output_split import DEFAULT_NODE_TYPE, SPLITTABLE_NODE_TYPES, split_node_output
+from modulo.core.node_output_split import (
+    DEFAULT_NODE_TYPE,
+    SPLITTABLE_NODE_TYPES,
+    is_split_envelope,
+    split_node_output,
+)
 from modulo.core.run_admission import (
     count_trigger_slot_occupancy,
 )
@@ -44,9 +49,10 @@ def _resolve_child_node_output(
 ) -> Any:
     """Resolve the value a child pipeline receives under ``node_output`` (FAR-131).
 
-    NEW FORMAT (split envelope): node_output has ``output`` (pure return) and
-    ``telemetry`` keys. For splittable types, return ``node_output["output"]``
-    directly.
+    NEW FORMAT (split envelope): node_output carries ``output`` (pure return),
+    a dict-valued ``telemetry``, and the ``artifacts`` state accumulator --
+    detected by the canonical ``is_split_envelope`` predicate. For splittable
+    types, return ``node_output["output"]`` directly.
 
     LEGACY FORMAT: node_output has ``artifacts`` and ``output`` keys. Uses
     ``split_node_output`` to extract the pure return.
@@ -80,16 +86,14 @@ def _resolve_child_node_output(
     if resolved_type not in SPLITTABLE_NODE_TYPES:
         return node_output
 
-    # Detect new split format (has "output" and "telemetry" keys, no "artifacts")
-    is_split = (
-        isinstance(node_output, dict)
-        and "telemetry" in node_output
-        and "output" in node_output
-        and "artifacts" not in node_output
-    )
-    if is_split:
+    # Detect the new split format through the ONE canonical predicate (the
+    # production envelope ALWAYS carries ``artifacts`` alongside ``output`` and
+    # ``telemetry``; an earlier inline predicate wrongly required its ABSENCE,
+    # so it never fired in production and the split was only recovered by
+    # ``split_node_output``'s own detection — a drift waiting to break).
+    if is_split_envelope(node_output):
         # New split format: pure return is directly in "output"
-        return node_output.get("output")
+        return node_output["output"]
 
     # Legacy format: use split_node_output to extract pure return
     pure_return, _telemetry = split_node_output(node_output, resolved_type, None)

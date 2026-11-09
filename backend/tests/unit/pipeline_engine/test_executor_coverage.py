@@ -81,6 +81,8 @@ from modulo.core.pipeline_engine.executor import (
 from modulo.core.pipeline_engine.node_runner import (
     ConnectorNodeFailedError,
     SupersededNodeError,
+    _build_sandbox_node_envelope,
+    _SandboxNodeOutput,
     make_connector_fn,
 )
 from modulo.core.pipeline_engine.retry_policy import (
@@ -1112,6 +1114,76 @@ def test_session_lost_text_collects_retained_surfaces():
     assert "stdout tail" in text
     assert "boom" in text
     assert "\n3" not in text
+
+
+# ---------------------------------------------------------------------------
+# FAR-130 review — the executor's NEW-FORMAT (split envelope) branches
+# ---------------------------------------------------------------------------
+
+
+def _split_sandbox_envelope(**overrides: Any) -> dict[str, Any]:
+    """The REAL production split envelope (``output`` + ``telemetry`` +
+    ``artifacts``) built by the runner's own builder — never the legacy shape."""
+    fields: dict[str, Any] = {
+        "status": "completed",
+        "summary": "did the thing",
+        "exit_code": 0,
+        "wall_clock_time_ms": 100,
+        "cost_estimate_usd": 0.0,
+        "output_json": {"summary": "did the thing"},
+        "attempt_key": "attempt-1",
+    }
+    fields.update(overrides)
+    return _build_sandbox_node_envelope(node_id="node-x", output=_SandboxNodeOutput(**fields))
+
+
+def test_agent_failure_reads_split_envelope_telemetry():
+    """A self-reported failure lives on the NEW telemetry channel."""
+    failed = _split_sandbox_envelope(status="failed", agent_status="failed", summary="agent crashed")
+    assert _node_output_agent_failure(failed) == "agent crashed"
+    # Non-failed telemetry yields None (no false A1 elevation).
+    assert _node_output_agent_failure(_split_sandbox_envelope(agent_status="success")) is None
+    # Legacy fallback still works.
+    assert _node_output_agent_failure({"output": {"agent_status": "failed", "error": "legacy"}}) == "legacy"
+
+
+def test_session_lost_reads_split_envelope_telemetry():
+    """The dead-session marker lives on the NEW telemetry channel."""
+    lost = _split_sandbox_envelope(status="failed", sandbox_session_lost=True, summary="session dead")
+    assert _node_output_sandbox_session_lost(lost) == "session dead"
+    assert _node_output_sandbox_session_lost(_split_sandbox_envelope()) is None
+
+
+def test_session_lost_text_reads_split_envelope_telemetry():
+    """FAR-1800 retained text is collected from the NEW telemetry channel."""
+    lost = _split_sandbox_envelope(
+        status="failed",
+        sandbox_session_lost=True,
+        summary="No output from agent - session interrupted",
+        error_message="Insufficient account funds",
+    )
+    text = _node_output_sandbox_session_lost_text(lost)
+    assert "No output from agent - session interrupted" in text
+    assert "Insufficient account funds" in text
+    # Isolate the telemetry view: with no artifact inner output and no dict
+    # pure return, the retained text can ONLY come from the telemetry channel
+    # (without the new-format branch this returns ""). The three split keys
+    # remain present, so the value is still the canonical split shape.
+    telemetry_only = {**lost, "output": None, "artifacts": []}
+    assert "Insufficient account funds" in _node_output_sandbox_session_lost_text(telemetry_only)
+
+
+def test_sandbox_failure_scan_views_includes_split_telemetry_view():
+    """FAR-510: the NEW telemetry channel is one of the scanned views, and it
+    drives the synthetic-failure downgrade predicate. The identity check is the
+    discriminator — the artifact's inner output carries the same fields, so a
+    value-only assertion would pass even with the telemetry branch removed."""
+    envelope = _split_sandbox_envelope(status="failed", modulo_synthetic_failure=True)
+
+    views = PipelineExecutor._sandbox_failure_scan_views(envelope)
+
+    assert envelope["telemetry"] in views
+    assert PipelineExecutor._is_sandbox_synthetic_failure_view(envelope["telemetry"])
 
 
 # ---------------------------------------------------------------------------
