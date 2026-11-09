@@ -217,8 +217,8 @@ routes:
         breadcrumb: Determination
         parent: /
         product_map: [feat-determination]
-        sidebar_group:
-        sidebar_order:
+        sidebar_group: build
+        sidebar_order: 6
         type: page
         <<: *community
         required_roles: [operator, admin]
@@ -7655,7 +7655,6 @@ features:
             - "[x] The route is registered in the router and the product map behind the determination.scan permission (operator floor), every user-facing string is i18n-backed under views.DeterminationView, and the surface's static data-testids are registered in the route's elements inventory (frontend/src/router/index.ts, frontend/src/manifest.yaml, frontend/src/locales/en-US.js)"
             - "[ ] Per-element evidence drill-down with cross-linking to the sampled source records (FAR-2472)"
         deferrals:
-            - "Sidebar navigation entry: the route is reachable at its URL only until frontend/src/config/navigation.ts gains a routeConfigMap icon/label and SvgIcon.vue an icon entry (both outside this change's footprint)"
             - "Proposal activation (creating or enabling a pipeline from an approved proposal) is deliberately out of scope: the contract and the review response pin activation_status to not_activated"
     feat-governance-stack:
         description: Read-only governance-hierarchy taxonomy readout (/governance)
