@@ -483,8 +483,3 @@ def _assert_semantic_edge_eq(a: dict[str, Any], b: dict[str, Any], path: str = "
                 assert a.get(key) == b.get(key), f"{path}.hitl_review_config"
             continue
         assert a.get(key) == b.get(key), f"{path}.{key}"
-
-
-# ---------------------------------------------------------------------------
-# Imports
-# ---------------------------------------------------------------------------

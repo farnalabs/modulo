@@ -483,11 +483,11 @@ class TestRestGraphRoundtrip:
                         assert set(actual_value.keys()) == set(expected_value.keys()), (
                             f"persisted node {n_payload['id']}.env_vars keys"
                         )
+                        # Persisted JSON holds the REAL value for every key -
+                        # masking happens only at the API response layer - so
+                        # every key round-trips verbatim here.
                         for k, v in expected_value.items():
-                            if k.upper().endswith("_API_KEY") or "SECRET" in k.upper() or "TOKEN" in k.upper():
-                                assert actual_value[k] == v, f"persisted node {n_payload['id']}.env_vars[{k}]"
-                            else:
-                                assert actual_value[k] == v, f"persisted node {n_payload['id']}.env_vars[{k}]"
+                            assert actual_value[k] == v, f"persisted node {n_payload['id']}.env_vars[{k}]"
                     elif key == "context_files":
                         assert actual_value == expected_value, f"persisted node {n_payload['id']}.context_files"
                     elif isinstance(expected_value, dict) and isinstance(actual_value, dict):
@@ -772,13 +772,10 @@ class TestMcpRestEquivalence:
             pipeline2 = pipeline2.scalar_one()
             mcp_nodes = {n["id"]: n for n in pipeline2.graph_nodes_json}
 
-        # 4. Semantic equivalence (modulo env masking which applies to REST only)
-        # Both use the SAME serialisation, so non-masked fields must match exactly
+        # 4. Semantic equivalence. Both writes use the SAME serialisation, so
+        # every non-env field must match exactly; env_vars is excluded (see the
+        # skip in the key loop below).
         for nid in rest_nodes:
-            if nid in (str(_SANDBOX_ID), str(_CONNECTOR_FULL_ID), str(_CONNECTOR_MIN_ID)):
-                # env_vars masking differs between REST (masked) and MCP (not masked via API response)
-                # But persisted JSON is the same before masking
-                pass
             # Compare all non-env fields
             for key in (
                 "id",

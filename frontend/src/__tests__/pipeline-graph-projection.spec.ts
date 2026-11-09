@@ -119,6 +119,18 @@ describe('pipeline-graph-projection', () => {
       expect(proj.type).toBe('agent')
     })
 
+    it('does not resolve inherited Object.prototype keys as canvas types', () => {
+      // A wire node_type of 'toString' must not resolve to an inherited
+      // Object.prototype member - it falls through to the agent card like any
+      // other unknown type. The assertion bypasses the declared literal union
+      // because that value can still arrive from a buggy/older payload.
+      const node = makeWireNode({
+        node_type: 'toString' as components['schemas']['PipelineGraphNode']['node_type'],
+      })
+      const proj = projectGraphNode(node)
+      expect(proj.type).toBe('agent')
+    })
+
     it('falls back label to "Node " + the shared shortId when label absent', () => {
       const node = makeWireNode({ label: undefined, id: '00000000-0000-0000-0000-00000000abcd' })
       const proj = projectGraphNode(node)
@@ -237,13 +249,18 @@ describe('pipeline-graph-projection', () => {
       expect(withState.ui.markerEnd.color).toBe('#3b82f6')
     })
 
-    it('withEdgeUiState uses different style for loop edges', () => {
-      const edge = makeWireEdge({ edge_type: 'loop' })
-      const proj = projectGraphEdge(edge, 0)
-      const withState = withEdgeUiState(proj)
+    it('withEdgeUiState treats reject and conditional edges as non-loop style', () => {
+      // The loop case is covered above; these are the remaining non-normal
+      // edge types and both must keep the default (non-animated, solid) style.
+      for (const edgeType of ['reject', 'conditional'] as const) {
+        const proj = projectGraphEdge(makeWireEdge({ edge_type: edgeType }), 0)
+        const withState = withEdgeUiState(proj)
 
-      expect(withState.ui.stroke).toBe('#3b82f6')
-      expect(withState.ui.style).toEqual({ stroke: '#3b82f6', strokeDasharray: '5,5' })
+        expect(withState.ui.animated).toBe(false)
+        expect(withState.ui.stroke).toBe('#64748b')
+        expect(withState.ui.style).toEqual({ stroke: '#64748b' })
+        expect(withState.ui.markerEnd.color).toBe('#64748b')
+      }
     })
 
     it('withEdgeUiState uses default style for normal edges', () => {
@@ -271,7 +288,14 @@ describe('pipeline-graph-projection', () => {
         style: { stroke: '#f00' },
         markerEnd: { type: 'ArrowClosed', width: 16, height: 16, color: '#f00' },
       }
-      expect(ui).toEqual(ui)
+      // The interface must carry exactly these four UI-styling keys: a
+      // semantic field (edgeType, conditionExpression, ...) leaking into the
+      // UI state would show up here as an extra key.
+      expect(Object.keys(ui).sort()).toEqual(['animated', 'markerEnd', 'stroke', 'style'])
+      expect(ui.animated).toBe(true)
+      expect(ui.stroke).toBe('#f00')
+      expect(ui.style).toEqual({ stroke: '#f00' })
+      expect(ui.markerEnd).toEqual({ type: 'ArrowClosed', width: 16, height: 16, color: '#f00' })
     })
   })
 })

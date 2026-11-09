@@ -12,7 +12,7 @@
  */
 
 import type { components } from '@/lib/api/schema'
-import { getNodeRegistryEntry, type NodeTypeId } from '@/components/pipeline/nodes/NodeRegistry'
+import { NODE_REGISTRY, getNodeRegistryEntry, type NodeTypeId } from '@/components/pipeline/nodes/NodeRegistry'
 import { shortId } from '@/utils/format'
 import { doesNodeHaveCapabilityScope } from '@/utils/pipeline-graph'
 
@@ -43,8 +43,20 @@ export type CanvasNodeType = NodeTypeId
  * Delegates to the editor's single node registry so the adapter cannot drift
  * from the types the editor actually renders (and the ``agent`` fallback lives
  * in exactly one place).
+ *
+ * The registry is a plain object, so a wire value that names an inherited
+ * ``Object.prototype`` member (``toString``, ``constructor``, ...) would
+ * otherwise resolve to that member instead of falling back. The own-property
+ * check keeps such a value on the ``agent`` card, where every unknown type
+ * belongs.
+ *
+ * Production consumer: ``PipelineEditorView.vue`` ``convertBackendNode`` (the
+ * graph-load path for both the live graph and a viewed snapshot).
  */
 export function getCanvasType(backendType: string): CanvasNodeType {
+  if (!Object.prototype.hasOwnProperty.call(NODE_REGISTRY, backendType)) {
+    return 'agent'
+  }
   return getNodeRegistryEntry(backendType).id as CanvasNodeType
 }
 
@@ -150,7 +162,14 @@ export interface CanvasGraphProjection {
  *  ========================================================================
  */
 
-/** Map a single wire node to its canvas projection. */
+/** Map a single wire node to its canvas projection.
+ *
+ * Production consumer: ``PipelineEditorView.vue`` ``convertBackendNode``, which
+ * both ``loadGraph()`` (live graph) and ``loadViewedSnapshot()`` map every node
+ * through. The editor normalises the three untyped fields it feeds in
+ * (``position``, ``label``, ``description``) to the same fallbacks it always
+ * used, then renders this projection directly.
+ */
 export function projectGraphNode(node: PipelineGraphNodeWire): CanvasNodeProjection {
   const nodeType = getCanvasType(node.node_type)
 
@@ -176,7 +195,15 @@ export function projectGraphNode(node: PipelineGraphNodeWire): CanvasNodeProject
   }
 }
 
-/** Map a single wire edge to its canvas projection. */
+/** Map a single wire edge to its canvas projection.
+ *
+ * NOTE (FAR-2481): ``projectGraphEdge`` / ``withEdgeUiState`` are NOT yet
+ * consumed by ``PipelineEditorView.vue``. The editor renders a Vue Flow edge
+ * whose styling carries an ``llm`` variant this union does not model plus a
+ * ``data`` wrapper the semantic projection does not produce. Wiring edges
+ * requires reconciling that shape first; until then the editor's
+ * ``convertBackendEdge`` remains the single source for canvas edges.
+ */
 export function projectGraphEdge(
   edge: PipelineGraphEdgeWire,
   _index: number
