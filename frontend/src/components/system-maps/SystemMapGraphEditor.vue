@@ -59,7 +59,8 @@
          :data-testid="`system-map-node-${node.node_key}`"
          :data-selected="rendererModel.nodes.find((renderNode) => renderNode.nodeKey === node.node_key)?.selected ? 'true' : 'false'"
          @click="selectedNodeKey = node.node_key"
-
+         @keydown.enter.self="selectedNodeKey = node.node_key"
+         @keydown.space.self.prevent="selectedNodeKey = node.node_key"
       >
         <div class="flex items-start justify-between gap-2">
           <div class="min-w-0 flex-1">
