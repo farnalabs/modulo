@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import ClassVar, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +24,11 @@ from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import list_connector_instances
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.determination.comparison import (
+    ProposalComparison,
+    ProposalComparisonRequest,
+    compare_proposals,
+)
 from modulo.determination.draft import generate_draft
 from modulo.determination.inference import Finding, build_proposal_contract, infer
 from modulo.determination.models import ProposalContract, ReviewState
@@ -365,6 +370,39 @@ async def create_determination_draft(
     except Exception:
         logger.exception("Unexpected error in create_determination_draft")
         raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None
+
+
+@router.post(
+    "/compare",
+    dependencies=[
+        Depends(audited("api_access_post", _RESOURCE_DETERMINATION_PROPOSAL, principal_dep=get_current_tenant_user))
+    ],
+)
+async def compare_determination_proposals(
+    comparison_request: ProposalComparisonRequest,
+    request: Request,
+    _principal: TenantPrincipal = require_permission(_PERMISSION_DETERMINATION_SCAN),
+) -> ProposalComparison:
+    """Compare a base proposal with a target proposal.
+
+    Each side carries its proposal contract plus the draft nodes and edges it
+    was generated with. The comparison is pure and deterministic
+    (``modulo.determination.comparison``): it reports added, removed and
+    changed nodes and edges with stable ids, names every changed property with
+    its base and target values, carries each side's provenance onto its items,
+    and reports only the approval/HITL and automation categories the draft
+    graph actually encodes.
+
+    Read-only: the handler takes no database session, persists the comparison
+    nowhere, activates nothing and writes to no connected tool. Both returned
+    side summaries carry ``activation_status`` ``not_activated``. Because the
+    request cannot change state it marks itself a no-op write, so ``audited()``
+    does not add a success event for a read-only comparison; a failed attempt
+    is still recorded.
+    """
+    comparison = compare_proposals(comparison_request.base, comparison_request.target)
+    request.state.audit_no_change = True
+    return comparison
 
 
 @router.post(

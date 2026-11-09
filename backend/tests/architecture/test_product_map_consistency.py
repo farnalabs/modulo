@@ -496,6 +496,8 @@ OWNED_PAGES = {
         "frontend/src/components/determination/DeterminationEvidenceRefs.vue",
         "frontend/src/components/determination/DeterminationEvidencePanel.vue",
         "frontend/src/components/determination/DeterminationProvenanceTrail.vue",
+        "frontend/src/components/determination/DeterminationComparisonPanel.vue",
+        "frontend/src/components/determination/DeterminationComparisonProvenance.vue",
         "frontend/src/components/shared/PageHeader.vue",
         "frontend/src/components/shared/ErrorAlert.vue",
     ),
