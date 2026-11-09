@@ -396,9 +396,8 @@ def test_no_additional_properties_forbidden(schemas: dict[str, Any]) -> None:
         "HitlResponseOption",
     }
     for name in graph_models:
-        comp = schemas.get(name)
-        if comp is None:
-            continue
+        assert name in schemas, f"missing component: {name}"
+        comp = schemas[name]
         # The component's top-level additionalProperties must NOT be False
         addl = comp.get("additionalProperties")
         assert addl is not False, (

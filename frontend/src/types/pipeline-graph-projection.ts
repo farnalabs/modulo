@@ -12,6 +12,9 @@
  */
 
 import type { components } from '@/lib/api/schema'
+import { getNodeRegistryEntry, type NodeTypeId } from '@/components/pipeline/nodes/NodeRegistry'
+import { shortId } from '@/utils/format'
+import { doesNodeHaveCapabilityScope } from '@/utils/pipeline-graph'
 
 /** ========================================================================
  *  Wire types (generated from OpenAPI) - re-exported for convenience
@@ -28,27 +31,21 @@ export type PipelineGraphUpdateWire = components['schemas']['PipelineGraphUpdate
  *  ========================================================================
  */
 
-/** Canvas node types that exist as distinct visual cards. */
-export type CanvasNodeType =
-  | 'manual'
-  | 'agent'
-  | 'router'
-  | 'hitl'
-  | 'dispatch'
-  | 'connector'
+/** Canvas node types that exist as distinct visual cards.
+ *
+ * This is the editor's node-type registry vocabulary, not a separate mapping:
+ * ``getNodeRegistryEntry`` already falls back to ``agent`` for unknown types.
+ */
+export type CanvasNodeType = NodeTypeId
 
-/** Mapping from backend node_type to canvas type. */
-export const CANVAS_TYPE_BY_BACKEND_TYPE: Record<string, CanvasNodeType> = {
-  manual: 'manual',
-  router: 'router',
-  hitl: 'hitl',
-  dispatch: 'dispatch',
-  connector: 'connector',
-}
-
-/** @deprecated Use CANVAS_TYPE_BY_BACKEND_TYPE directly. */
+/** Map a backend ``node_type`` to its canvas card type.
+ *
+ * Delegates to the editor's single node registry so the adapter cannot drift
+ * from the types the editor actually renders (and the ``agent`` fallback lives
+ * in exactly one place).
+ */
 export function getCanvasType(backendType: string): CanvasNodeType {
-  return CANVAS_TYPE_BY_BACKEND_TYPE[backendType] ?? 'agent'
+  return getNodeRegistryEntry(backendType).id as CanvasNodeType
 }
 
 /** Position on the canvas. */
@@ -155,7 +152,7 @@ export interface CanvasGraphProjection {
 
 /** Map a single wire node to its canvas projection. */
 export function projectGraphNode(node: PipelineGraphNodeWire): CanvasNodeProjection {
-  const nodeType = CANVAS_TYPE_BY_BACKEND_TYPE[node.node_type] ?? 'agent'
+  const nodeType = getCanvasType(node.node_type)
 
   // HitL config can be at node.hitl_config (node-level) OR on incoming edge
   // (edge-level). The projection carries node.hitl_config; edge config is
@@ -204,27 +201,6 @@ export function projectGraph(
   const nodes = graph.nodes.map(projectGraphNode)
   const edges = graph.edges.map((edge, index) => projectGraphEdge(edge, index))
   return { nodes, edges }
-}
-
-/** ========================================================================
- *  Helpers (duplicated from PipelineEditorView to keep adapter self-contained)
- *  ========================================================================
- */
-
-/** Short ID for fallback labels. */
-function shortId(id: string): string {
-  return id.slice(-4)
-}
-
-/** Whether a node declares a capability scope (displayed as a badge). */
-function doesNodeHaveCapabilityScope(node: PipelineGraphNodeWire): boolean {
-  const scope = node.capability_scope
-  if (!scope) return false
-  return (
-    (scope.allowed_connectors?.length ?? 0) > 0 ||
-    (scope.allowed_tools?.length ?? 0) > 0 ||
-    (scope.context_scope?.length ?? 0) > 0
-  )
 }
 
 /** ========================================================================

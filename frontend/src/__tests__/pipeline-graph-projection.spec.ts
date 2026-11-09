@@ -119,10 +119,11 @@ describe('pipeline-graph-projection', () => {
       expect(proj.type).toBe('agent')
     })
 
-    it('falls back label to "Node " + shortId when label absent', () => {
+    it('falls back label to "Node " + the shared shortId when label absent', () => {
       const node = makeWireNode({ label: undefined, id: '00000000-0000-0000-0000-00000000abcd' })
       const proj = projectGraphNode(node)
-      expect(proj.data.label).toBe('Node abcd')
+      // `shortId` lives in @/utils/format; it renders '#<first 8 chars>'.
+      expect(proj.data.label).toBe('Node #00000000')
     })
 
     it('omits UI-only fields from projection (no selected, dragging, width, height, zIndex)', () => {

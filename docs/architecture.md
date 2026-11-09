@@ -1205,9 +1205,9 @@ The pipeline graph contract has a single source of truth:
 **MCP/REST equivalence:**
 Both the REST `PUT /graph` and MCP `update_pipeline_graph` validate via
 `PipelineGraphUpdate`, serialise via `strip_unset_connector_binding_inputs`,
-and persist via `replace_pipeline_graph` (same service layer). The integration
-test `test_mcp_and_rest_persist_identical_graph` asserts persisted JSON
-equivalence for non-masked fields.
+and persist via `replace_pipeline_graph` (same service layer). The unit test
+`test_mcp_and_rest_persist_identical_graph` asserts persisted JSON equivalence
+for non-masked fields (and runs whenever the unit suite runs).
 
 **Frontend consumption:**
 The editor never uses the full wire types directly. Instead,

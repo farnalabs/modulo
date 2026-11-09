@@ -44,7 +44,10 @@ from modulo.api.dependencies import (
 from modulo.api.main import app
 from modulo.api.routes.pipelines import (
     PipelineGraphUpdate,
+    _edge_data_to_dict,
+    _edge_to_data,
     replace_pipeline_graph,
+    strip_unset_connector_binding_inputs,
 )
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.crud.pipeline import GraphWriteActor, GraphWriteRecording
@@ -57,35 +60,18 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.rls import set_rls_org, set_rls_user_context
-
-# ---------------------------------------------------------------------------
-# Test constants
-# ---------------------------------------------------------------------------
-
-_ORG_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b0")
-_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
-_PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000f2")
-_PIPELINE_ID_2 = uuid.UUID("00000000-0000-0000-0000-0000000000f3")
-_AGENT_ROW_ID = uuid.UUID("00000000-0000-0000-0000-0000000000a9")
-_CONNECTOR_INSTANCE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000c1")
-
-_MANUAL_ID = uuid.UUID("00000000-0000-0000-0000-000000000101")
-_SANDBOX_ID = uuid.UUID("00000000-0000-0000-0000-000000000102")
-_ROUTER_ID = uuid.UUID("00000000-0000-0000-0000-000000000103")
-_HITL_ID = uuid.UUID("00000000-0000-0000-0000-000000000104")
-_AGENT_NODE_ID = uuid.UUID("00000000-0000-0000-0000-000000000105")
-_JOIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000106")
-_CONNECTOR_FULL_ID = uuid.UUID("00000000-0000-0000-0000-000000000107")
-_CONNECTOR_MIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000108")
-
-_E1_ID = uuid.UUID("00000000-0000-0000-0000-000000000201")
-_E2_ID = uuid.UUID("00000000-0000-0000-0000-000000000202")
-_E3_ID = uuid.UUID("00000000-0000-0000-0000-000000000203")
-_E4_ID = uuid.UUID("00000000-0000-0000-0000-000000000204")  # hitl gate edge
-_E5_ID = uuid.UUID("00000000-0000-0000-0000-000000000205")  # reject edge
-_E6_ID = uuid.UUID("00000000-0000-0000-0000-000000000206")  # conditional edge
-_E7_ID = uuid.UUID("00000000-0000-0000-0000-000000000207")
-_E8_ID = uuid.UUID("00000000-0000-0000-0000-000000000208")
+from tests.helpers.pipeline_graph import (
+    _ACCOUNT_ID,
+    _AGENT_ROW_ID,
+    _CONNECTOR_FULL_ID,
+    _CONNECTOR_INSTANCE_ID,
+    _CONNECTOR_MIN_ID,
+    _ORG_ID,
+    _PIPELINE_ID,
+    _PIPELINE_ID_2,
+    _SANDBOX_ID,
+    _build_graph_payload,
+)
 
 # ---------------------------------------------------------------------------
 # SQLite harness: tables needed by the real service layer + snapshot
@@ -107,191 +93,6 @@ _TABLE_NAMES = {
     "schemas",
     "snapshot_schema_pins",
 }
-
-
-# ---------------------------------------------------------------------------
-# Test graph builder
-# ---------------------------------------------------------------------------
-
-
-def _pos(x: float, y: float) -> dict[str, float]:
-    return {"x": x, "y": y}
-
-
-def _build_graph_payload() -> dict[str, Any]:
-    """Construct the full graph payload used by all round-trip tests."""
-    return {
-        "nodes": [
-            # Manual start node
-            {
-                "id": str(_MANUAL_ID),
-                "node_type": "manual",
-                "position": _pos(10.0, 20.0),
-                "label": "Start",
-                "description": "Manual kick-off",
-                "output_schema_json": {"type": "object"},
-            },
-            # Sandbox agent (llm mode) with many semantic fields
-            {
-                "id": str(_SANDBOX_ID),
-                "node_type": "sandbox_agent",
-                "position": _pos(120.0, 20.0),
-                "label": "Sandbox",
-                "template_id": "opencode",
-                "mode": "llm",
-                "agent_commands": ["echo first", "echo second"],
-                "agent_prompt": "Do the thing",
-                "env_vars": {
-                    "OPENAI_API_KEY": "plain-placeholder-not-a-real-secret",
-                    "LOG_LEVEL": "debug",
-                },
-                "context_files": {"/tmp/input.txt": "contents"},
-                "timeout_seconds": 900,
-                "stall_timeout_seconds": 120,
-                "enable_heartbeat": False,
-                "read_only": True,
-                "git_credentials": "scoped",
-                "egress_policy": "deny_all",
-                "stdout_retention_mode": "full",
-                "stdout_max_bytes": 4096,
-                "idempotent": False,
-            },
-            # Router node
-            {
-                "id": str(_ROUTER_ID),
-                "node_type": "router",
-                "position": _pos(230.0, 20.0),
-                "label": "Route",
-                "router_config": {
-                    "mode": "rules",
-                    "rules": [
-                        {"guard": "`true`", "target": str(_HITL_ID)},
-                        {"default": True, "target": str(_HITL_ID)},
-                    ],
-                },
-            },
-            # HITL node
-            {
-                "id": str(_HITL_ID),
-                "node_type": "hitl",
-                "position": _pos(340.0, 20.0),
-                "label": "Approve",
-                "hitl_config": {
-                    "mode": "approval",
-                    "description": "A human must approve the sandbox output before the agent continues downstream.",
-                    "claim_expiry_minutes": 30,
-                    "human_only": True,
-                },
-            },
-            # Agent node (requires Agent row)
-            {
-                "id": str(_AGENT_NODE_ID),
-                "node_type": "agent",
-                "position": _pos(450.0, 20.0),
-                "label": "Agent",
-                "agent_id": str(_AGENT_ROW_ID),
-                "timeout_seconds": 600,
-            },
-            # Join node
-            {
-                "id": str(_JOIN_ID),
-                "node_type": "join",
-                "position": _pos(560.0, 20.0),
-                "label": "Join",
-                "collect": [{"node": str(_AGENT_NODE_ID)}],
-                "aggregate": {"kind": "concat"},
-                "join_partial_policy": "fail",
-            },
-            # Connector node - full binding (resource + filters + data)
-            {
-                "id": str(_CONNECTOR_FULL_ID),
-                "node_type": "connector",
-                "position": _pos(670.0, 20.0),
-                "label": "Fetch PR",
-                "connector_binding": {
-                    "type": "github",
-                    "instance_id": str(_CONNECTOR_INSTANCE_ID),
-                    "operation": "query",
-                    "resource": "pull",
-                    "filters": {"state": "open", "labels": ["agent", "backend"], "limit": 25},
-                    "data": {"note": "round-trip"},
-                },
-            },
-            # Connector node - minimal binding (only resource)
-            {
-                "id": str(_CONNECTOR_MIN_ID),
-                "node_type": "connector",
-                "position": _pos(780.0, 20.0),
-                "label": "Fetch Issue",
-                "connector_binding": {
-                    "type": "github",
-                    "instance_id": str(_CONNECTOR_INSTANCE_ID),
-                    "operation": "query",
-                    "resource": "issue",
-                },
-            },
-        ],
-        "edges": [
-            {
-                "id": str(_E1_ID),
-                "source_node_id": str(_MANUAL_ID),
-                "target_node_id": str(_SANDBOX_ID),
-                "edge_type": "normal",
-            },
-            {
-                "id": str(_E2_ID),
-                "source_node_id": str(_SANDBOX_ID),
-                "target_node_id": str(_ROUTER_ID),
-                "edge_type": "normal",
-            },
-            {
-                "id": str(_E3_ID),
-                "source_node_id": str(_ROUTER_ID),
-                "target_node_id": str(_HITL_ID),
-                "edge_type": "normal",
-            },
-            # HITL gate edge with review config
-            {
-                "id": str(_E4_ID),
-                "source_node_id": str(_HITL_ID),
-                "target_node_id": str(_AGENT_NODE_ID),
-                "edge_type": "normal",
-                "hitl_review_config": {
-                    "label": "Approve agent output",
-                    "description": "A human must approve the agent output before the join continues.",
-                    "claim_expiry_minutes": 30,
-                    "human_only": True,
-                },
-            },
-            # Reject edge
-            {
-                "id": str(_E5_ID),
-                "source_node_id": str(_HITL_ID),
-                "target_node_id": str(_SANDBOX_ID),
-                "edge_type": "reject",
-            },
-            # Conditional edge from agent to join
-            {
-                "id": str(_E6_ID),
-                "source_node_id": str(_AGENT_NODE_ID),
-                "target_node_id": str(_JOIN_ID),
-                "edge_type": "conditional",
-                "condition_expression": "`true`",
-            },
-            {
-                "id": str(_E7_ID),
-                "source_node_id": str(_JOIN_ID),
-                "target_node_id": str(_CONNECTOR_FULL_ID),
-                "edge_type": "normal",
-            },
-            {
-                "id": str(_E8_ID),
-                "source_node_id": str(_CONNECTOR_FULL_ID),
-                "target_node_id": str(_CONNECTOR_MIN_ID),
-                "edge_type": "normal",
-            },
-        ],
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -874,19 +675,24 @@ class TestMcpRestEquivalence:
 
     @pytest.fixture(autouse=True)
     def _apply_patches(self):
-        """Patch SQLite-incompatible primitives (advisory lock + live-role re-read)."""
-        lock_patch, release_patch, role_patch = _patch_snapshot_and_role()
-        with lock_patch, release_patch, role_patch:
-            yield
+        """Patch SQLite-incompatible primitives (advisory lock + live-role re-read)
+        and seed the MCP request ContextVars the direct tool call reads."""
+        import modulo.api.mcp_server as ms
 
-    @pytest.mark.xfail(
-        reason=(
-            "Direct in-process MCP tool invocation does not wire the MCP middleware's "
-            "role ContextVar, so the scope validator denies the call before persistence "
-            "(FAR-2475 follow-up: exercise this through the ASGI/MCP middleware path)."
-        ),
-        strict=False,
-    )
+        tokens = (
+            ms._ctx_org_id.set(_ORG_ID),
+            ms._ctx_role.set("admin"),
+            ms._ctx_user_id.set(_ACCOUNT_ID),
+        )
+        lock_patch, release_patch, role_patch = _patch_snapshot_and_role()
+        try:
+            with lock_patch, release_patch, role_patch:
+                yield
+        finally:
+            ms._ctx_org_id.reset(tokens[0])
+            ms._ctx_role.reset(tokens[1])
+            ms._ctx_user_id.reset(tokens[2])
+
     async def test_mcp_and_rest_persist_identical_graph(
         self,
         engine: AsyncEngine,
@@ -895,6 +701,11 @@ class TestMcpRestEquivalence:
         import modulo.api.mcp_server as ms
 
         payload = _build_graph_payload()
+        # ``pipeline_edges.id`` is a global primary key, so the second write
+        # needs its own edge ids; node ids are compared across the two writes.
+        mcp_payload = _build_graph_payload()
+        for mcp_edge in mcp_payload["edges"]:
+            mcp_edge["id"] = str(uuid.uuid4())
 
         # 1. REST write via real service (replace_pipeline_graph) on pipeline 1
         maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -949,8 +760,8 @@ class TestMcpRestEquivalence:
         ):
             result = await ms.update_pipeline_graph(
                 pipeline_id=str(_PIPELINE_ID_2),
-                nodes=payload["nodes"],
-                edges=payload["edges"],
+                nodes=mcp_payload["nodes"],
+                edges=mcp_payload["edges"],
             )
 
         assert "error" not in result, result
@@ -998,7 +809,12 @@ class TestMcpRestEquivalence:
                 "connector_binding",
             ):
                 if key == "connector_binding":
-                    _assert_connector_binding_eq(rest_nodes[nid].get(key, {}), mcp_nodes[nid].get(key, {}))
+                    rest_cb = rest_nodes[nid].get(key)
+                    mcp_cb = mcp_nodes[nid].get(key)
+                    if rest_cb is None or mcp_cb is None:
+                        assert rest_cb == mcp_cb, f"field {key} on {nid}"
+                    else:
+                        _assert_connector_binding_eq(rest_cb, mcp_cb)
                 elif key == "env_vars":
                     continue  # masked differently at response layer
                 else:
@@ -1011,34 +827,5 @@ class TestMcpRestEquivalence:
 
 
 def _pipeline_graph_edge_to_dict(edge: Any) -> dict[str, Any]:
-    """Convert a validated PipelineGraphEdge to the dict shape used by replace_pipeline_graph."""
-    hitl_review_config = edge.hitl_review_config
-    if hasattr(hitl_review_config, "model_dump"):
-        hitl_review_config = hitl_review_config.model_dump(mode="json")
-    return {
-        "id": edge.id,
-        "source_node_id": edge.source_node_id,
-        "target_node_id": edge.target_node_id,
-        "edge_type": edge.edge_type,
-        "condition_expression": edge.condition_expression,
-        "hitl_review_config": hitl_review_config,
-        "hitl_review_config_present": hitl_review_config is not None,
-        "source_port": edge.source_port or "out",
-        "target_port": edge.target_port or "in",
-    }
-
-
-def strip_unset_connector_binding_inputs(node: dict[str, Any]) -> dict[str, Any]:
-    """Copy of the route's helper so the mcp test can produce identical JSON."""
-    binding = node.get("connector_binding")
-    if not isinstance(binding, dict):
-        return node
-    optional_input_fields = ("resource", "filters", "data")
-
-    def _is_unset_binding_input(value: Any) -> bool:
-        return value is None or value == {}
-
-    cleaned = {k: v for k, v in binding.items() if not (k in optional_input_fields and _is_unset_binding_input(v))}
-    if len(cleaned) == len(binding):
-        return node
-    return {**node, "connector_binding": cleaned}
+    """Serialise a validated ``PipelineGraphEdge`` exactly as the REST route does."""
+    return _edge_data_to_dict(_edge_to_data(edge))

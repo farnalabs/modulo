@@ -2261,6 +2261,7 @@ import ConnectorNode from '../components/pipeline/nodes/ConnectorNode.vue'
 import EdgeBadges from '../components/pipeline/nodes/EdgeBadges.vue'
 import { NODE_REGISTRY, PIPELINE_CONNECTORS_KEY, PIPELINE_TEAM_NAMES_KEY } from '../components/pipeline/nodes/NodeRegistry'
 import { shortId } from '../utils/format'
+import { doesNodeHaveCapabilityScope } from '../utils/pipeline-graph'
 import {
   isBlockingSeverity,
   readBreakingChanges,
@@ -3658,13 +3659,6 @@ const nodeCapabilityScope = reactive<{ allowed_connectors: string[]; allowed_too
 })
 const capabilityToolInput = ref('')
 const capabilityContextInput = ref('')
-
-function doesNodeHaveCapabilityScope(node: any): boolean {
-  const cs = node?.capability_scope
-  if (!cs || typeof cs !== 'object') return false
-  return [cs.allowed_connectors, cs.allowed_tools, cs.context_scope]
-    .some((arr) => Array.isArray(arr) && arr.length > 0)
-}
 
 function nodeAgent(node: any): any {
   return agents.value.find((a: any) => a.id === node?.agent_id)
