@@ -341,6 +341,20 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
     ]
 
 
+def _contract_confidence(derived: list[ProposalFact]) -> str:
+    """Derive the contract confidence from its derived elements."""
+    if not derived or any(item.confidence == "low" for item in derived):
+        return "low"
+    if all(item.confidence == "high" for item in derived):
+        return "high"
+    return "medium"
+
+
+def _attempt_status(unavailable: list[UnavailableEvidence], assumptions: list[UnresolvedAssumption]) -> str:
+    """Return the bounded attempt status for the collected gaps."""
+    return "completed_with_gaps" if unavailable or assumptions else "completed"
+
+
 def build_proposal_contract(
     samples: list[ScanSample],
     findings: list[Finding] | None = None,
@@ -436,14 +450,12 @@ def build_proposal_contract(
         )
         for index, text in enumerate(uncertainty)
     ]
-    confidence = "high" if derived and all(item.confidence == "high" for item in derived) else "medium"
-    if not derived or any(item.confidence == "low" for item in derived):
-        confidence = "low"
+    confidence = _contract_confidence(derived)
     return ProposalContract(
         proposal_id=proposal_id,
         attempt=DeterminationAttempt(
             id=attempt_id,
-            status="completed_with_gaps" if unavailable or assumptions else "completed",
+            status=_attempt_status(unavailable, assumptions),
             source_inventory=inventory
             or [
                 SourceInventoryItem(

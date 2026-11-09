@@ -65,7 +65,7 @@ def test_ambiguous_connector_attribution_leaves_derived_evidence_unlinked() -> N
     contract = build_proposal_contract([github, gitlab])
 
     development = next(item for item in contract.derived_elements if "Development" in item.statement)
-    assert development.evidence_refs == []
+    assert not development.evidence_refs
 
 
 def test_inventory_rejects_error_on_available_source() -> None:
@@ -99,6 +99,29 @@ def test_incomplete_sample_surfaces_unavailable_evidence_and_assumption() -> Non
     assert contract.unavailable_evidence[0].reason == "permission denied"
     assert contract.unresolved_assumptions[0].statement == "Issue history was not available"
     assert contract.confidence == "low"
+
+
+def test_empty_records_sample_is_available_but_produces_no_observed_fact() -> None:
+    sample = make_sample("issues", [], connector_type=ConnectorType.JIRA)
+
+    contract = build_proposal_contract([sample], [])
+
+    assert contract.attempt.source_inventory[0].status == "available"
+    assert not contract.observed_facts
+    assert not contract.provenance
+    assert contract.attempt.status == "completed"
+
+
+def test_inventory_rejects_empty_error_string() -> None:
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceInventoryItem(
+            source_id="source",
+            connector_type="github",
+            resource="repos",
+            sample_count=0,
+            status="unavailable",
+            error="",
+        )
 
 
 def test_empty_determination_uses_explicit_unavailable_inventory() -> None:
@@ -137,6 +160,35 @@ def test_contract_rejects_invalid_provenance_and_extra_fields() -> None:
                 }
             ],
             unexpected="not accepted",
+        )
+
+
+def test_contract_rejects_observed_fact_that_is_derived() -> None:
+    with pytest.raises(ValidationError, match="observed_facts"):
+        ProposalContract(
+            proposal_id=uuid.uuid4(),
+            attempt={
+                "id": uuid.uuid4(),
+                "status": "completed",
+                "source_inventory": [
+                    {
+                        "source_id": "source",
+                        "connector_type": "github",
+                        "resource": "repos",
+                        "sample_count": 1,
+                        "status": "available",
+                    }
+                ],
+            },
+            confidence="high",
+            observed_facts=[
+                {
+                    "id": uuid.uuid4(),
+                    "statement": "derived",
+                    "kind": "derived",
+                    "confidence": "high",
+                }
+            ],
         )
 
 
