@@ -5,9 +5,9 @@ import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/schema'
 
 /**
- * Determination surface state (FAR-2471).
+ * Determination surface state (FAR-2471, FAR-2473).
  *
- * Three sequential, explicitly user-triggered operations:
+ * Four explicitly user-triggered operations:
  *
  * 1. ``runScan`` reads ``GET /api/v1/determination`` — the sampled connector
  *    sources and the inferred SDLC findings.
@@ -17,6 +17,9 @@ import type { components } from '../lib/api/schema'
  *    reviewer's decision. The response records ``activation_status`` as
  *    ``not_activated``: reviewing a proposal never creates a pipeline, enables a
  *    trigger or writes to a connected tool.
+ * 4. ``compareDrafts`` writes ``POST /api/v1/determination/compare`` — a pure,
+ *    deterministic difference between a held baseline draft and the current
+ *    draft. It persists nothing and activates nothing.
  *
  * Every type here is read from the generated OpenAPI schema — no wire shape is
  * declared by hand — so a backend contract change surfaces as a type error
@@ -37,6 +40,8 @@ export type UnresolvedAssumption = components['schemas']['UnresolvedAssumption']
 export type EvidenceReference = components['schemas']['EvidenceReference']
 export type ProposalConfidence = components['schemas']['ProposalFact']['confidence']
 export type ProposalReviewState = components['schemas']['ProposalContract']['review_state']
+export type DeterminationComparison = components['schemas']['ProposalComparison']
+type DeterminationComparisonSide = components['schemas']['ProposalComparisonSide']
 
 /** The reviewer's edits, ready to be merged into a review request. */
 export interface ReviewSubmission {
@@ -57,11 +62,20 @@ export interface UseDeterminationResult {
   review: Ref<DeterminationReviewResponse | null>
   reviewLoading: Ref<boolean>
   reviewError: Ref<string | null>
+  baseline: Ref<DeterminationDraftResponse | null>
+  comparison: Ref<DeterminationComparison | null>
+  comparisonLoading: Ref<boolean>
+  comparisonError: Ref<string | null>
   proposal: ComputedRef<DeterminationProposal | null>
   busy: ComputedRef<boolean>
   runScan: () => Promise<void>
   generateDraft: () => Promise<void>
   submitReview: (submission: ReviewSubmission) => Promise<DeterminationReviewResponse | null>
+  /** Hold the current draft as the comparison baseline (in memory only). */
+  holdBaseline: () => void
+  /** Drop the held baseline and any comparison rendered against it. */
+  clearBaseline: () => void
+  compareDrafts: () => Promise<DeterminationComparison | null>
 }
 
 export function useDetermination(): UseDeterminationResult {
@@ -79,8 +93,20 @@ export function useDetermination(): UseDeterminationResult {
   const reviewLoading = ref(false)
   const reviewError = ref<string | null>(null)
 
+  /**
+   * The draft held as the comparison baseline. Held in memory only - it is a
+   * snapshot of a generated draft, not a persisted record, and holding it
+   * writes nothing.
+   */
+  const baseline = ref<DeterminationDraftResponse | null>(null)
+  const comparison = ref<DeterminationComparison | null>(null)
+  const comparisonLoading = ref(false)
+  const comparisonError = ref<string | null>(null)
+
   const proposal = computed<DeterminationProposal | null>(() => draft.value?.proposal ?? null)
-  const busy = computed(() => scanLoading.value || draftLoading.value || reviewLoading.value)
+  const busy = computed(
+    () => scanLoading.value || draftLoading.value || reviewLoading.value || comparisonLoading.value,
+  )
 
   async function runScan(): Promise<void> {
     if (scanLoading.value) return
@@ -114,6 +140,11 @@ export function useDetermination(): UseDeterminationResult {
       // showing a result against a proposal the reviewer never decided.
       review.value = null
       reviewError.value = null
+      // The draft is also the comparison target, so a rendered comparison no
+      // longer describes the pair on screen. The held baseline is kept: the
+      // reviewer's whole point of holding it is to compare later drafts.
+      comparison.value = null
+      comparisonError.value = null
     } finally {
       draftLoading.value = false
     }
@@ -159,6 +190,59 @@ export function useDetermination(): UseDeterminationResult {
     return t(fallbackKey)
   }
 
+  /** One comparison side: the draft's proposal plus the graph it was drafted with. */
+  function comparisonSide(draftResponse: DeterminationDraftResponse): DeterminationComparisonSide {
+    return {
+      proposal: draftResponse.proposal,
+      nodes: draftResponse.nodes ?? [],
+      edges: draftResponse.edges ?? [],
+    }
+  }
+
+  function holdBaseline(): void {
+    const current = draft.value
+    if (!current) return
+    baseline.value = current
+    // A comparison rendered against the previous baseline (or target) no
+    // longer describes the pair the reviewer is about to compare.
+    comparison.value = null
+    comparisonError.value = null
+  }
+
+  function clearBaseline(): void {
+    baseline.value = null
+    comparison.value = null
+    comparisonError.value = null
+  }
+
+  async function compareDrafts(): Promise<DeterminationComparison | null> {
+    const base = baseline.value
+    const target = draft.value
+    if (!base || !target || comparisonLoading.value) return null
+    comparisonLoading.value = true
+    comparisonError.value = null
+    // Never leave a previous result on screen while a new comparison is in
+    // flight: a failed compare must not read as the outcome of this pair.
+    comparison.value = null
+    try {
+      const body: components['schemas']['ProposalComparisonRequest'] = {
+        base: comparisonSide(base),
+        target: comparisonSide(target),
+      }
+      const response = await api.POST('/api/v1/determination/compare', { body })
+      if (response.error || !response.data) {
+        // A refused comparison arrives as a 422 ProblemDetail; surface its
+        // detail verbatim (the translation only supplies the context).
+        comparisonError.value = errorText(response.error, 'views.DeterminationView.comparison_failed')
+        return null
+      }
+      comparison.value = response.data
+      return response.data
+    } finally {
+      comparisonLoading.value = false
+    }
+  }
+
   return {
     scan,
     scanLoading,
@@ -169,10 +253,17 @@ export function useDetermination(): UseDeterminationResult {
     review,
     reviewLoading,
     reviewError,
+    baseline,
+    comparison,
+    comparisonLoading,
+    comparisonError,
     proposal,
     busy,
     runScan,
     generateDraft,
     submitReview,
+    holdBaseline,
+    clearBaseline,
+    compareDrafts,
   }
 }

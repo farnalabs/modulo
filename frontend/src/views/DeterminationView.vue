@@ -45,6 +45,17 @@
       @retry="generateDraft()"
     />
 
+    <DeterminationComparisonPanel
+      :baseline="baseline"
+      :target="draft"
+      :comparison="comparison"
+      :loading="comparisonLoading"
+      :error="comparisonError"
+      @hold="holdBaseline()"
+      @clear="clearBaseline()"
+      @compare="compareDrafts()"
+    />
+
     <DeterminationReviewPanel
       v-if="proposal"
       :proposal="proposal"
@@ -63,6 +74,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import DeterminationScanPanel from '../components/determination/DeterminationScanPanel.vue'
 import DeterminationProposalPanel from '../components/determination/DeterminationProposalPanel.vue'
+import DeterminationComparisonPanel from '../components/determination/DeterminationComparisonPanel.vue'
 import DeterminationReviewPanel from '../components/determination/DeterminationReviewPanel.vue'
 import { useDetermination, type ReviewSubmission } from '../composables/useDetermination'
 
@@ -71,15 +83,23 @@ const {
   scanLoading,
   scanError,
   proposal,
+  draft,
   draftLoading,
   draftError,
   review,
   reviewLoading,
   reviewError,
+  baseline,
+  comparison,
+  comparisonLoading,
+  comparisonError,
   busy,
   runScan,
   generateDraft,
   submitReview,
+  holdBaseline,
+  clearBaseline,
+  compareDrafts,
 } = useDetermination()
 
 function onReviewSubmit(submission: ReviewSubmission): void {

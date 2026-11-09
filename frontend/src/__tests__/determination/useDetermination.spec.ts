@@ -64,8 +64,27 @@ function submission(): ReviewSubmission {
   }
 }
 
-function draftPayload() {
-  return { proposal: { proposal_id: PROPOSAL_ID } }
+function draftPayload(attemptId = 'attempt-1', proposalId = PROPOSAL_ID) {
+  return {
+    proposal: { proposal_id: proposalId, attempt: { id: attemptId } },
+    nodes: [{ id: 'build', node_type: 'agent', label: 'Build' }],
+    edges: [{ source: 'build', target: 'build', edge_type: 'normal', hitl_review: false }],
+  }
+}
+
+function comparisonPayload() {
+  return {
+    contract_version: 'alpha.determination-comparison.v1',
+    base: { side: 'base', attempt_id: 'attempt-1', proposal_id: PROPOSAL_ID },
+    target: { side: 'target', attempt_id: 'attempt-2', proposal_id: PROPOSAL_ID },
+    nodes_added: [],
+    nodes_removed: [],
+    nodes_changed: [],
+    edges_added: [],
+    edges_removed: [],
+    edges_changed: [],
+    behaviour_changes: [],
+  }
 }
 
 function reviewPayload() {
@@ -216,5 +235,102 @@ describe('useDetermination', () => {
 
     expect(result).toBeNull()
     expect(api.reviewError.value).toBe('review exploded')
+  })
+
+  it('holds the current draft as the baseline and compares it with a later draft', async () => {
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/determination/draft') return Promise.resolve(ok(draftPayload()))
+      return Promise.resolve(ok(comparisonPayload()))
+    })
+    const api = mountComposable()
+
+    await api.generateDraft()
+    api.holdBaseline()
+    expect(api.baseline.value).not.toBeNull()
+
+    const result = await api.compareDrafts()
+
+    expect(result).not.toBeNull()
+    expect(api.comparison.value).not.toBeNull()
+    const call = mockPost.mock.calls.find(([path]) => path === '/api/v1/determination/compare')
+    expect(call?.[1]?.body).toEqual({
+      base: {
+        proposal: draftPayload().proposal,
+        nodes: draftPayload().nodes,
+        edges: draftPayload().edges,
+      },
+      target: {
+        proposal: draftPayload().proposal,
+        nodes: draftPayload().nodes,
+        edges: draftPayload().edges,
+      },
+    })
+  })
+
+  it('refuses to compare without a held baseline', async () => {
+    mockPost.mockImplementation((path: string) =>
+      Promise.resolve(path === '/api/v1/determination/draft' ? ok(draftPayload()) : ok(comparisonPayload())),
+    )
+    const api = mountComposable()
+    await api.generateDraft()
+
+    expect(await api.compareDrafts()).toBeNull()
+    expect(mockPost.mock.calls.some(([path]) => path === '/api/v1/determination/compare')).toBe(false)
+  })
+
+  it('clears the previous comparison when a compare fails', async () => {
+    let compareCalls = 0
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/determination/draft') return Promise.resolve(ok(draftPayload()))
+      compareCalls += 1
+      return Promise.resolve(compareCalls === 1 ? ok(comparisonPayload()) : failure('duplicate node ids'))
+    })
+    const api = mountComposable()
+
+    await api.generateDraft()
+    api.holdBaseline()
+
+    expect(await api.compareDrafts()).not.toBeNull()
+    expect(api.comparison.value).not.toBeNull()
+
+    expect(await api.compareDrafts()).toBeNull()
+    expect(api.comparison.value).toBeNull()
+    expect(api.comparisonError.value).toBe('duplicate node ids')
+  })
+
+  it('keeps the held baseline but drops a stale comparison when a new draft is generated', async () => {
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/determination/draft') return Promise.resolve(ok(draftPayload()))
+      return Promise.resolve(ok(comparisonPayload()))
+    })
+    const api = mountComposable()
+
+    await api.generateDraft()
+    api.holdBaseline()
+    await api.compareDrafts()
+    expect(api.comparison.value).not.toBeNull()
+
+    await api.generateDraft()
+
+    expect(api.baseline.value).not.toBeNull()
+    expect(api.comparison.value).toBeNull()
+  })
+
+  it('clears the baseline and the comparison together', async () => {
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/determination/draft') return Promise.resolve(ok(draftPayload()))
+      return Promise.resolve(ok(comparisonPayload()))
+    })
+    const api = mountComposable()
+
+    await api.generateDraft()
+    api.holdBaseline()
+    await api.compareDrafts()
+
+    api.clearBaseline()
+
+    expect(api.baseline.value).toBeNull()
+    expect(api.comparison.value).toBeNull()
+    expect(api.comparisonError.value).toBeNull()
   })
 })
