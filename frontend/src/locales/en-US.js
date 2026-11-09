@@ -1356,10 +1356,15 @@ export default {
       "failed_to_load_scheduler_starvation": "Failed to load scheduler starvation:"
     },
     "AdminNodeCategoriesView": {
+      "title": "Node Categories",
+      "subtitle": "Manage categories for classifying nodes in pipelines",
+      "add_category": "Add Category",
       "failed_to_load_categories": "Failed to load categories:",
       "not_available_on_current_plan": "Node Categories are not available on your current plan.",
       "new_node_category": "New Node Category",
       "no_node_categories_configured": "No node categories configured",
+      "no_node_categories_description": "Add a category to classify and organize nodes in your pipelines.",
+      "delete_confirm": "Delete \"{name}\"?",
       "name": "Name",
       "description": "Description",
       "color": "Color",
