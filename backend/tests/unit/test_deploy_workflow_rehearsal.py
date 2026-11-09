@@ -1247,6 +1247,8 @@ def _cut_harness(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     log = tmp_path / "commands.log"
     real_git = shutil.which("git")
     assert real_git is not None
+    real_python3 = shutil.which("python3")
+    assert real_python3 is not None
     _write_executable(
         bin_dir / "git",
         f"""#!/usr/bin/env bash
@@ -1260,6 +1262,11 @@ exec {shlex.quote(real_git)} \"$@\"
         f"""#!/usr/bin/env bash
 set -e
 printf 'python3 %s\\n' \"$*\" >> {shlex.quote(str(log))}
+if [ \"$1\" = \"-\" ]; then
+  # Production runs `python3 - "$TARGET_SHA" <<'PY'` (stdin-script execution).
+  # Delegate to the real interpreter unchanged so the released code actually runs.
+  exec {shlex.quote(real_python3)} \"$@\"
+fi
 if [ \"$1\" = \"-c\" ]; then
   grep -q '0.2.0' backend/pyproject.toml && printf '0.2.0\\n' || printf '0.1.0\\n'
   exit 0
