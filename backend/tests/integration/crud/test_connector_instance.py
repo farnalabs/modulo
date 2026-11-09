@@ -203,7 +203,16 @@ async def test_clear_degraded_markers_empty_collection_is_noop(
 
 
 class TestListConnectorInstancesTierFiltering:
-    """Server-side tier filtering for list_connector_instances."""
+    """Server-side tier filtering for list_connector_instances.
+
+    The listing is scoped to ``test_org`` explicitly. The integration suite
+    shares one Postgres and, under the testcontainer superuser, RLS is bypassed,
+    so an unscoped ``list_connector_instances`` call also counts committed
+    connector instances that other test modules seeded for their own orgs
+    (e.g. ``api/test_pipeline_graph_contract.py``). Scoping to ``test_org``
+    mirrors the production call path (routes always pass ``organisation_id``)
+    and keeps these tier assertions independent of that shared state.
+    """
 
     async def _create_with_tier(
         self,
@@ -228,7 +237,7 @@ class TestListConnectorInstancesTierFiltering:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "preview", "-tier-prev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier-nat")
-        result = await list_connector_instances(rls_session)
+        result = await list_connector_instances(rls_session, organisation_id=test_org)
         assert result.total == 2
         assert all(i.tier != "in_dev" for i in result.items)
 
@@ -240,7 +249,7 @@ class TestListConnectorInstancesTierFiltering:
     ) -> None:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier2-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier2-nat")
-        result = await list_connector_instances(rls_session, excluded_tiers=["in_dev"])
+        result = await list_connector_instances(rls_session, organisation_id=test_org, excluded_tiers=["in_dev"])
         assert result.total == 1
         assert result.items[0].tier == "native"
 
@@ -252,7 +261,7 @@ class TestListConnectorInstancesTierFiltering:
     ) -> None:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier3-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier3-nat")
-        result = await list_connector_instances(rls_session, excluded_tiers=None)
+        result = await list_connector_instances(rls_session, organisation_id=test_org, excluded_tiers=None)
         assert result.total == 1
         assert result.items[0].tier == "native"
 
@@ -264,7 +273,7 @@ class TestListConnectorInstancesTierFiltering:
     ) -> None:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier4-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier4-nat")
-        result = await list_connector_instances(rls_session, excluded_tiers=[])
+        result = await list_connector_instances(rls_session, organisation_id=test_org, excluded_tiers=[])
         assert result.total == 2
 
     async def test_excluded_tiers_preview(
@@ -276,7 +285,7 @@ class TestListConnectorInstancesTierFiltering:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier5-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "preview", "-tier5-prev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier5-nat")
-        result = await list_connector_instances(rls_session, excluded_tiers=["preview"])
+        result = await list_connector_instances(rls_session, organisation_id=test_org, excluded_tiers=["preview"])
         assert result.total == 2
         assert all(i.tier != "preview" for i in result.items)
         tiers = {i.tier for i in result.items}
