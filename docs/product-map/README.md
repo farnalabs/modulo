@@ -91,6 +91,7 @@ Fresh entries for these features are added to the graph below as behavior tracke
 - **feat-lifecycle-maps** - Internal lifecycle maps and stage workflows (dev-mode dogfood only; not Alpha-facing) - routes: `/lifecycle-maps`, `/lifecycle-maps/:id/editor`, `/lifecycle-maps/:id`
 - **feat-system-maps** - Bounded visual authoring of delivery system maps (private_preview, dev-mode dogfood only; not Alpha-facing) - routes: `/system-maps`, `/system-maps/:id`
 - **feat-governance-stack** - Read-only governance-hierarchy taxonomy readout over existing list APIs - routes: `/governance`
+- **feat-determination** - Read-only SDLC determination scan, evidence-backed proposal review, and a recorded review decision that never activates a pipeline - routes: `/determination`
 
 ### Monitor
 - **feat-observability** - Error dashboard and observability exports (Error Forwarders and Browser Monitoring deferred from the MVP nav – hidden via private_preview; see FAR-547 / FAR-543) - routes: `/settings/observability`, `/admin/errors`, `/admin/errors/:id`
@@ -1271,6 +1272,7 @@ Behavior-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-dashboard](build/dashboard.md) => PRD 8.20
 - [feat-runs](build/runs.md) => PRD N/A
 - [feat-governance-stack](governance/governance-stack.md) => PRD N/A
+- [feat-determination](build/determination.md) => PRD N/A
 
 ### Configure
 - [feat-apply](configure/apply.md) => PRD N/A

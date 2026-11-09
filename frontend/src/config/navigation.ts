@@ -36,6 +36,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   notifications: { icon: 'Bell', labelKey: 'components.SidebarNav.item_notifications' },
   library: { icon: 'BookOpen', labelKey: 'components.SidebarNav.item_library' },
   'system-maps': { icon: 'Map', labelKey: 'components.SidebarNav.item_system_maps' },
+  determination: { icon: 'FlaskConical', labelKey: 'components.SidebarNav.item_determination' },
   'pipeline-list': { icon: 'GitFork', labelKey: 'components.SidebarNav.item_my_pipelines' },
 
   'pipeline-copy': { icon: 'Copy', labelKey: 'components.SidebarNav.item_copy_pipeline' },

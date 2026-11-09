@@ -2,7 +2,9 @@
 
 import asyncio
 import logging
-from typing import ClassVar
+import uuid
+from datetime import datetime
+from typing import ClassVar, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -16,6 +18,7 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ConnectorType
 from modulo.core.audit_coverage import audited
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import list_connector_instances
@@ -23,12 +26,27 @@ from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.determination.draft import generate_draft
 from modulo.determination.inference import Finding, build_proposal_contract, infer
-from modulo.determination.models import ProposalContract
+from modulo.determination.models import ProposalContract, ReviewState
+from modulo.determination.review import (
+    ProposalReviewError,
+    ProposalReviewRequest,
+    ReviewDecision,
+    ReviewedProposal,
+    review_proposal,
+)
 from modulo.determination.scanner import ScanSample, run_scan
 from modulo.settings import Settings, get_settings
 
 _CODE_DETERMINATION_RUN_DETERMINATION = "determination.run_determination"
 _CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT = "determination.create_determination_draft"
+_CODE_DETERMINATION_REVIEW_PROPOSAL = "determination.review_proposal"
+
+#: Rich audit event; the coarse ``audited()`` event uses ``api_access_post``.
+_EVENT_DETERMINATION_PROPOSAL_REVIEWED = "determination.proposal_review_decided"
+_RESOURCE_DETERMINATION_PROPOSAL = "determination_proposal"
+
+#: Permission that gates every determination read and review endpoint.
+_PERMISSION_DETERMINATION_SCAN = "determination.scan"
 
 
 logger = logging.getLogger(__name__)
@@ -97,6 +115,22 @@ class DraftResponse(BaseModel):
     proposal: ProposalContract
 
 
+class ProposalReviewResponse(BaseModel):
+    """A recorded review decision; the proposal remains ``not_activated``."""
+
+    proposal: ProposalContract
+    decision: ReviewDecision
+    review_state: ReviewState
+    activation_status: Literal["not_activated"]
+    actor_id: uuid.UUID
+    actor_username: str
+    decided_at: datetime
+    reason: str | None = None
+    acknowledged_assumption_ids: list[uuid.UUID]
+    corrected_derived_element_ids: list[uuid.UUID]
+    removed_derived_element_ids: list[uuid.UUID]
+
+
 def _finding_to_response(f: Finding) -> FindingResponse:
     return FindingResponse(
         category=f.category,
@@ -131,7 +165,7 @@ def _sample_to_response(s: ScanSample) -> SampleResponse:
 @handle_db_errors(_CODE_DETERMINATION_RUN_DETERMINATION)
 async def run_determination(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("determination.scan"),
+    principal: TenantPrincipal = require_permission(_PERMISSION_DETERMINATION_SCAN),
     settings: Settings = Depends(get_settings),
 ) -> DeterminationResponse:
     """Scan all connected tools and produce an SDLC maturity assessment."""
@@ -223,7 +257,7 @@ async def run_determination(
 @handle_db_errors(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
 async def create_determination_draft(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("determination.scan"),
+    principal: TenantPrincipal = require_permission(_PERMISSION_DETERMINATION_SCAN),
     settings: Settings = Depends(get_settings),
 ) -> DraftResponse:
     """Run determination scan and produce an editable pipeline draft.
@@ -331,3 +365,107 @@ async def create_determination_draft(
     except Exception:
         logger.exception("Unexpected error in create_determination_draft")
         raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None
+
+
+@router.post(
+    "/review",
+    responses={
+        409: {"description": "Conflict"},
+        422: {"description": "Review decision rejected"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+    dependencies=[
+        Depends(audited("api_access_post", _RESOURCE_DETERMINATION_PROPOSAL, principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors(_CODE_DETERMINATION_REVIEW_PROPOSAL)
+async def review_determination_proposal(
+    review_request: ProposalReviewRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_PERMISSION_DETERMINATION_SCAN),
+) -> ProposalReviewResponse:
+    """Record a reviewer decision on a determination proposal.
+
+    Accepts the proposal contract (validated on the way in), a decision
+    (``approve`` / ``reject`` / ``needs_review``), optional corrections to
+    derived elements, and optional acknowledgements of unresolved assumptions
+    by id. A reject requires a reason; an approve is refused while the proposal
+    carries low or unknown confidence assumptions the caller has not
+    acknowledged.
+
+    Reviewing a proposal never activates it: no pipeline is created, no trigger
+    is enabled and nothing is written to a connected tool - the returned and
+    recorded ``activation_status`` stays ``not_activated``. The decision, its
+    reason, the acknowledged assumption ids and the corrected
+    derived-element ids are recorded as one audit event.
+    """
+    try:
+        reviewed = review_proposal(review_request)
+    except ProposalReviewError as exc:
+        detail = str(exc)
+        if exc.blocking_assumption_ids:
+            ids = ", ".join(str(assumption_id) for assumption_id in exc.blocking_assumption_ids)
+            detail = f"{detail}: {ids}"
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail) from None
+
+    await _record_review_decision(session, principal, reviewed)
+
+    return ProposalReviewResponse(
+        proposal=reviewed.proposal,
+        decision=reviewed.decision,
+        review_state=reviewed.review_state,
+        activation_status=reviewed.activation_status,
+        actor_id=principal.account_id,
+        actor_username=principal.username,
+        decided_at=reviewed.decided_at,
+        reason=reviewed.reason,
+        acknowledged_assumption_ids=reviewed.acknowledged_assumption_ids,
+        corrected_derived_element_ids=reviewed.corrected_derived_element_ids,
+        removed_derived_element_ids=reviewed.removed_derived_element_ids,
+    )
+
+
+async def _record_review_decision(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    reviewed: ReviewedProposal,
+) -> None:
+    """Append the review decision to the audit chain.
+
+    The audit chain is the record of the decision (there is no review table),
+    so this append is deliberately NOT failure-isolated: if the decision cannot
+    be recorded the request fails rather than reporting a decision that was
+    never written.
+    """
+    payload: dict[str, object] = {
+        "proposal_id": str(reviewed.proposal.proposal_id),
+        "attempt_id": str(reviewed.proposal.attempt.id),
+        "contract_version": reviewed.proposal.contract_version,
+        "decision": reviewed.decision,
+        "review_state": reviewed.review_state,
+        "activation_status": reviewed.activation_status,
+        "reason": reviewed.reason,
+        "acknowledged_assumption_ids": [str(i) for i in reviewed.acknowledged_assumption_ids],
+        "corrected_derived_element_ids": [str(i) for i in reviewed.corrected_derived_element_ids],
+        "removed_derived_element_ids": [str(i) for i in reviewed.removed_derived_element_ids],
+        "decided_at": reviewed.decided_at.isoformat(),
+        "actor": principal.username,
+        "summary": (
+            f"Determination proposal {str(reviewed.proposal.proposal_id)[:8]} "
+            f"{reviewed.review_state} by {principal.username}"
+        ),
+    }
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        await append_audit_event(
+            session,
+            org_id=principal.organisation_id,
+            event_type=_EVENT_DETERMINATION_PROPOSAL_REVIEWED,
+            actor_user_id=principal.account_id,
+            resource_type=_RESOURCE_DETERMINATION_PROPOSAL,
+            resource_id=reviewed.proposal.proposal_id,
+            payload_json=payload,
+        )
