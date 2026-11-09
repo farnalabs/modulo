@@ -56,7 +56,7 @@ def _rc_validate_step(step_name: str) -> dict[str, Any]:
     matches = [step for step in steps if step.get("name") == step_name]
     if len(matches) != 1:
         raise AssertionError(f"expected exactly one {step_name!r} step, found {len(matches)}")
-    return matches[0]
+    return dict(matches[0])
 
 
 _COMPOSE_VAR = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?:(?P<modifier>:[-?])(?P<argument>[^}]*))?\}")

@@ -15,6 +15,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
+
+def _print_stdout(msg: str) -> None:
+    sys.stdout.write(msg + "\n")
+
+
+def _print_stderr(msg: str) -> None:
+    sys.stderr.write(msg + "\n")
+
+
 _TAG_RE = re.compile(
     r"bundle-v(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)",
     re.ASCII,
@@ -205,24 +214,24 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "verify-image-digest":
             payload = _load_json(args.attestation_json)
-            print(verify_image_digest(args.image, args.digest, payload))
+            _print_stdout(verify_image_digest(args.image, args.digest, payload))
         else:
             payload = _load_json(args.release_json)
             if args.command == "validate":
-                print(validate_published_release(args.tag, payload))
+                _print_stdout(validate_published_release(args.tag, payload))
             elif args.command == "published-tags":
-                print("\n".join(published_tags(payload)))
+                _print_stdout("\n".join(published_tags(payload)))
             elif args.command == "resolve-n-minus-1":
                 predecessor = resolve_n_minus_1(payload, args.current)
                 if predecessor is not None:
-                    print(predecessor)
+                    _print_stdout(predecessor)
             else:
                 previous = resolve_previous_release(payload, args.current)
                 if previous is not None:
-                    print(previous)
+                    _print_stdout(previous)
         return 0
     except ReleaseValidationError as exc:
-        print(f"release validation failed: {exc}", file=sys.stderr)
+        _print_stderr(f"release validation failed: {exc}")
         return 1
 
 

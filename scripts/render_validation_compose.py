@@ -5,7 +5,13 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
+
+
+def _print_stdout(msg: str) -> None:
+    sys.stdout.write(msg + "\n")
+
 
 _IMAGE_LINE = re.compile(r"(?m)^(\s*image:\s*ghcr\.io/farnalabs/modulo:)[^\r\n]+$")
 _REPLACEMENT = "${TAG:?TAG is required - set the image tag for this matrix phase}"
@@ -19,7 +25,7 @@ def render_matrix_compose(compose_file: Path, tag: str | None = None) -> None:
     if count != 1:
         raise ValueError(f"expected exactly one modulo image to render, found {count}")
     compose_file.write_text(rendered, encoding="utf-8")
-    print(f"Rendered matrix compose image selector in {compose_file}")
+    _print_stdout(f"Rendered matrix compose image selector in {compose_file}")
 
 
 def main() -> int:
