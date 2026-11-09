@@ -27,12 +27,16 @@ name: "macOS: Retry notarization stapling"
 # inconsistent release: the next scheduled run repairs it.
 #
 # A verified-complete release carries a tiny `MACOS_STAPLED.json` marker asset
-# recording the stapled DMG digests. The marker is written only after the
-# post-upload verification passes, so the Linux resolve job can short-circuit
-# the whole run when it is present and its digests still match the live release
-# assets. That keeps a normal, already-stapled release from spawning a paid
-# macOS runner every 30 minutes, while a genuinely deferred staple (no marker
-# yet) is still retried - bounded by the existing 24-hour propagation window.
+# recording, per DMG, its digest and an explicit `staple_verified` flag. The
+# marker is written only after the post-upload verification passes, so the Linux
+# resolve job can short-circuit the whole run only when EVERY published DMG is
+# staple-verified and its recorded digest still matches the live asset. A
+# single-architecture dispatch records just the DMG it verified and leaves the
+# other explicitly unverified, so the next tick still completes it - the marker
+# never claims an artefact this job did not staple. That keeps a normal,
+# already-stapled release from spawning a paid macOS runner every 30 minutes,
+# while a genuinely deferred staple (no marker, or one artefact still unverified)
+# is still retried - bounded by the existing 24-hour propagation window.
 #
 # This workflow does not touch product code and does not carry a build: it only
 # operates on bytes produced by a completed notarized build.
@@ -124,18 +128,19 @@ jobs:
           completed="false"
 
           # A release whose stapling has already been completed AND verified
-          # carries a MACOS_STAPLED.json marker naming the stapled DMG digests.
-          # The publish job writes it only after its post-upload verification
-          # passed, so the marker means "the release's DMGs and metadata were
-          # consistent at that moment". When the recorded digests still match the
-          # live assets there is nothing left to do: blank the target so neither
-          # the paid macOS job nor the publish job starts. A genuinely deferred
-          # staple has no marker yet and is still retried.
+          # carries a MACOS_STAPLED.json marker naming each DMG's digest and an
+          # explicit `staple_verified` flag. The publish job writes it only after
+          # its post-upload verification passed, so the marker means "the
+          # release's DMGs and metadata were consistent at that moment". It is
+          # only treated as complete when EVERY published DMG is staple-verified
+          # and its recorded digest still matches the live asset - a single-
+          # architecture run leaves the other DMG explicitly unverified, so there
+          # is still work left and the target is not blanked.
           #
           # Echoes exactly one status line on stdout: `complete`, `absent`, or
           # `stale: <reason>`.
           check_staple_marker() {
-            local tag="$1" dir state
+            local tag="$1" version="$2" dir state
             dir="$(mktemp -d)"
             if ! gh release download "$tag" --repo "$REPO" \
               --pattern 'MACOS_STAPLED.json' --dir "$dir" --clobber >/dev/null 2>&1; then
@@ -144,37 +149,48 @@ jobs:
               return 0
             fi
             gh api "repos/${REPO}/releases/tags/${tag}" >"$dir/release.json"
-            if state="$(python3 - "$dir/MACOS_STAPLED.json" "$dir/release.json" <<'PY'
+            if state="$(python3 - "$dir/MACOS_STAPLED.json" "$dir/release.json" "$version" <<'PY'
           import json
           import sys
 
           marker = json.load(open(sys.argv[1], encoding="utf-8"))
           release = json.load(open(sys.argv[2], encoding="utf-8"))
+          version = sys.argv[3]
           live = {asset["name"]: asset for asset in release.get("assets", [])}
+          recorded = {artefact.get("name"): artefact for artefact in (marker.get("artifacts") or [])}
 
-          artefacts = marker.get("artifacts") or []
-          if not artefacts:
-              print("stale: MACOS_STAPLED.json records no artefacts")
-          else:
-              stale = []
-              for artefact in artefacts:
-                  name = artefact.get("name")
-                  asset = live.get(name)
-                  if asset is None:
-                      stale.append(f"{name} is not on the release")
-                      continue
-                  digest = asset.get("digest") or ""
-                  if digest.startswith("sha256:"):
-                      if digest.split(":", 1)[1] != artefact.get("sha256"):
-                          stale.append(f"{name} digest no longer matches the marker")
-                  elif asset.get("size") != artefact.get("size"):
-                      stale.append(f"{name} size no longer matches the marker")
-                  else:
-                      print(
-                          f"::notice::{name}: GitHub reports no asset digest; matched the recorded size instead",
-                          file=sys.stderr,
-                      )
-              print("stale: " + "; ".join(stale) if stale else "complete")
+          expected = [
+              f"Modulo-{version}-macos-arm64.dmg",
+              f"Modulo-{version}-macos-x86_64.dmg",
+          ]
+          stale = []
+          for name in expected:
+              artefact = recorded.get(name)
+              if artefact is None:
+                  stale.append(f"{name} is not recorded in the marker")
+                  continue
+              # A marker that names an artefact without an explicit verification
+              # flag (an older marker, or one written by a run that never touched
+              # it) must never be read as complete.
+              if artefact.get("staple_verified") is not True:
+                  stale.append(f"{name} was never staple-verified")
+                  continue
+              asset = live.get(name)
+              if asset is None:
+                  stale.append(f"{name} is not on the release")
+                  continue
+              digest = asset.get("digest") or ""
+              if digest.startswith("sha256:"):
+                  if digest.split(":", 1)[1] != artefact.get("sha256"):
+                      stale.append(f"{name} digest no longer matches the marker")
+              elif asset.get("size") != artefact.get("size"):
+                  stale.append(f"{name} size no longer matches the marker")
+              else:
+                  print(
+                      f"::notice::{name}: GitHub reports no asset digest; matched the recorded size instead",
+                      file=sys.stderr,
+                  )
+          print("stale: " + "; ".join(stale) if stale else "complete")
           PY
             )"; then
               rm -rf "$dir"
@@ -244,9 +260,9 @@ jobs:
           # deliberately bypasses the marker so an operator can re-staple and
           # re-verify on demand.
           if [[ -n "$release_tag" && "${DISPATCH_FORCE:-false}" != "true" ]]; then
-            marker_state="$(check_staple_marker "$release_tag")"
+            marker_state="$(check_staple_marker "$release_tag" "$version")"
             if [[ "$marker_state" == "complete" ]]; then
-              echo "Release ${release_tag} already records a verified stapled state (MACOS_STAPLED.json); nothing to staple."
+              echo "Release ${release_tag} records every DMG as staple-verified (MACOS_STAPLED.json); nothing to staple."
               completed="true"
               version=""
               release_tag=""
@@ -272,7 +288,10 @@ jobs:
   staple:
     name: Staple and verify DMG(s)
     needs: [resolve-target]
-    if: needs.resolve-target.outputs.architectures != ''
+    # Two independent guards: `completed` is the load-bearing short-circuit (a
+    # verified-complete release starts no paid macOS job at all), and a blank
+    # `architectures` is the defence-in-depth target reset.
+    if: needs.resolve-target.outputs.completed != 'true' && needs.resolve-target.outputs.architectures != ''
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
@@ -280,6 +299,10 @@ jobs:
       actions: read
     outputs:
       changed: ${{ steps.collect.outputs.changed }}
+      # The architectures this job actually ran the helper against (both
+      # `stapled` and `unchanged` mean the ticket validated). The record step
+      # may only claim staple verification for these.
+      verified_arches: ${{ steps.collect.outputs.verified_arches }}
     env:
       VERSION: ${{ needs.resolve-target.outputs.version }}
       RELEASE_TAG: ${{ needs.resolve-target.outputs.release_tag }}
@@ -304,6 +327,7 @@ jobs:
           mkdir -p incoming stapled
           : >staple-results.txt
           : >stapled-arches.txt
+          : >verified-arches.txt
 
           read -r -a arches <<<"$ARCHITECTURES"
           for arch in "${arches[@]}"; do
@@ -344,6 +368,9 @@ jobs:
               cp "$dmg" "stapled/${dmg_name}"
               printf '%s\n' "$arch" >>stapled-arches.txt
             fi
+            # `stapled` and `unchanged` both mean the helper ran its full gate
+            # set on this DMG and the ticket validated.
+            printf '%s\n' "$arch" >>verified-arches.txt
             printf '%s: %s\n' "$arch" "$result" >>staple-results.txt
           done
 
@@ -359,8 +386,10 @@ jobs:
           else
             changed="false"
           fi
+          verified_arches="$(tr '\n' ' ' <verified-arches.txt)"
           {
             printf 'changed=%s\n' "$changed"
+            printf 'verified_arches=%s\n' "$verified_arches"
           } >>"$GITHUB_OUTPUT"
           {
             echo '### macOS notarization staple retry'
@@ -771,10 +800,17 @@ jobs:
           print(f"Verified SHA256SUMS and the signed RELEASE_MANIFEST for {tag} against the published asset digests.")
           PY
 
-      # Records that the release's stapling is complete AND verified, so the
-      # 30-minute backstop short-circuits instead of spawning a paid macOS
-      # runner. Written last: its presence is a claim that the post-upload
+      # Records which DMGs are staple-verified, per artefact, so the 30-minute
+      # backstop short-circuits only when there is genuinely nothing left to do.
+      # Written last: the marker's presence is a claim that the post-upload
       # verification above passed (or that the metadata was already consistent).
+      # An artefact is recorded `staple_verified: true` only when THIS run's
+      # staple job ran the helper against it (stapled or unchanged both mean the
+      # ticket validated) or when a prior marker recorded the same bytes as
+      # verified - never for an artefact the run did not touch. So a single-
+      # architecture dispatch writes an honest partial marker and the next tick
+      # completes the other DMG instead of being skipped forever.
+      #
       # Deliberately not recorded when the staple job failed - the ticket is
       # still propagating, and the next tick must retry. `success()` is explicit
       # because an explicit `if:` replaces a step's implicit success() guard: a
@@ -787,11 +823,22 @@ jobs:
           RELEASE_TAG: ${{ needs.resolve-target.outputs.release_tag }}
           REPO: ${{ github.repository }}
           VERSION: ${{ needs.resolve-target.outputs.version }}
+          VERIFIED_ARCHES: ${{ needs.staple.outputs.verified_arches }}
         run: |
           set -euo pipefail
           marker_dir="$(mktemp -d)"
           marker="${marker_dir}/MACOS_STAPLED.json"
-          python3 - "$marker" <<'PY'
+          prior_dir="${marker_dir}/prior"
+          mkdir -p "$prior_dir"
+          # Carry forward a previous run's verified entry - but only while its
+          # recorded digest still matches the live asset bytes - so a later
+          # single-architecture run neither discards verified state nor claims an
+          # artefact it did not verify.
+          if ! gh release download "$RELEASE_TAG" --repo "$REPO" \
+            --pattern 'MACOS_STAPLED.json' --dir "$prior_dir" --clobber >/dev/null 2>&1; then
+            rm -rf "$prior_dir"
+          fi
+          python3 - "$marker" "${prior_dir}/MACOS_STAPLED.json" <<'PY'
           import hashlib
           import json
           import os
@@ -799,16 +846,54 @@ jobs:
           from pathlib import Path
 
           version = os.environ["VERSION"]
+          verified = set(os.environ.get("VERIFIED_ARCHES", "").split())
+          root = Path("release-assets")
+
+          prior = {}
+          prior_path = Path(sys.argv[2])
+          if prior_path.is_file():
+              try:
+                  body = json.loads(prior_path.read_text(encoding="utf-8"))
+              except (OSError, ValueError):
+                  body = {}
+              for artefact in body.get("artifacts") or []:
+                  if isinstance(artefact, dict) and artefact.get("name"):
+                      prior[artefact["name"]] = artefact
+
           artefacts = []
-          for name in (f"Modulo-{version}-macos-arm64.dmg", f"Modulo-{version}-macos-x86_64.dmg"):
-              data = (Path("release-assets") / name).read_bytes()
+          for arch in ("arm64", "x86_64"):
+              name = f"Modulo-{version}-macos-{arch}.dmg"
+              data = (root / name).read_bytes()
+              digest = hashlib.sha256(data).hexdigest()
+              if arch in verified:
+                  staple_verified = True
+              else:
+                  # This run did not touch the artefact: carry forward a prior
+                  # verification only for these exact bytes.
+                  previous = prior.get(name) or {}
+                  staple_verified = (
+                      bool(previous.get("staple_verified")) and previous.get("sha256") == digest
+                  )
               artefacts.append(
-                  {"name": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+                  {
+                      "name": name,
+                      "sha256": digest,
+                      "size": len(data),
+                      "staple_verified": staple_verified,
+                  }
               )
+
           payload = {"version": version, "artifacts": artefacts}
           Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-          print("stapled digests: " + ", ".join(a["sha256"] for a in artefacts))
+          pending = [a["name"] for a in artefacts if not a["staple_verified"]]
+          print("staple-verified this marker: " + ", ".join(a["name"] for a in artefacts if a["staple_verified"]))
+          if pending:
+              print("awaiting staple verification: " + ", ".join(pending))
           PY
           gh release upload "$RELEASE_TAG" "$marker" --repo "$REPO" --clobber
-          echo "Recorded MACOS_STAPLED.json for ${RELEASE_TAG}; the scheduled backstop will now no-op."
+          if grep -q '"staple_verified": false' "$marker"; then
+            echo "Recorded MACOS_STAPLED.json for ${RELEASE_TAG} with DMGs still awaiting staple verification; the scheduled backstop will keep retrying."
+          else
+            echo "Recorded MACOS_STAPLED.json for ${RELEASE_TAG}; every DMG is staple-verified, so the scheduled backstop will now no-op."
+          fi
           rm -rf "$marker_dir"

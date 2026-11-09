@@ -1,6 +1,9 @@
 """Contract checks for the unified GitHub Release publication paths."""
 
+import hashlib
 import importlib.util
+import json
+import os
 import re
 import subprocess
 import sys
@@ -712,10 +715,20 @@ def test_macos_staple_retry_records_and_honours_a_completion_marker() -> None:
     assert "completed=%s" in resolve_script
     completed_output = workflow["jobs"]["resolve-target"].get("outputs", {}).get("completed")
     assert completed_output == "${{ steps.resolve.outputs.completed }}"
-    # Short-circuiting blanks the target so the staple job's `architectures != ''`
-    # guard cannot start it.
-    assert 'architectures="' in resolve_script
-    assert workflow["jobs"]["staple"]["if"] == "needs.resolve-target.outputs.architectures != ''"
+
+    # Regression pin for the short-circuit. `architectures="` alone is vacuous:
+    # it also matches the initialiser at the top of the script, so it kept
+    # passing after the completion-path reset was deleted - which silently
+    # restored the paid-macos-job-every-30-minutes behaviour. Pin the reset
+    # INSIDE the completion branch, and pin the job guard that consumes it.
+    completion_branch = _completion_branch(resolve_script)
+    for reset in ('version=""', 'release_tag=""', 'architectures=""', 'run_id=""'):
+        assert reset in completion_branch, f"the completion branch must blank {reset}"
+    staple_condition = " ".join(str(workflow["jobs"]["staple"]["if"]).split())
+    assert "needs.resolve-target.outputs.completed != 'true'" in staple_condition, (
+        "the staple job must gate on the resolve job's completed output"
+    )
+    assert "needs.resolve-target.outputs.architectures != ''" in staple_condition
 
     record = _step(workflow, "publish-stapled", "Record the verified staple state on the release")
     assert "gh release upload" in record["run"]
@@ -727,6 +740,185 @@ def test_macos_staple_retry_records_and_honours_a_completion_marker() -> None:
     record_condition = " ".join(str(record["if"]).split())
     assert "needs.staple.result == 'success'" in record_condition
     assert "success()" in record_condition
+
+
+def _completion_branch(script: str) -> str:
+    """Return only the `marker_state == "complete"` arm of the resolve script."""
+    start = script.index('"$marker_state" == "complete"')
+    end = script.index("elif", start)
+    return script[start:end]
+
+
+def _write_release_dmgs(tmp_path: Path, version: str, arm64: bytes, x86_64: bytes) -> None:
+    root = tmp_path / "release-assets"
+    root.mkdir(exist_ok=True)
+    (root / f"Modulo-{version}-macos-arm64.dmg").write_bytes(arm64)
+    (root / f"Modulo-{version}-macos-x86_64.dmg").write_bytes(x86_64)
+
+
+def _record_marker(
+    tmp_path: Path,
+    version: str,
+    verified_arches: str,
+    prior: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Execute the record step's embedded Python the way the workflow does."""
+    workflow = _staple_retry_workflow()
+    record = _step(workflow, "publish-stapled", "Record the verified staple state on the release")
+    source = _python_heredoc(record["run"], "PY")
+    marker = tmp_path / "MACOS_STAPLED.json"
+    prior_path = tmp_path / "prior.json"
+    if prior is not None:
+        prior_path.write_text(json.dumps(prior), encoding="utf-8")
+    result = subprocess.run(  # noqa: S603 - fixed interpreter running repository-owned workflow text
+        [sys.executable, "-c", source, str(marker), str(prior_path)],
+        cwd=tmp_path,
+        env={**os.environ, "VERSION": version, "VERIFIED_ARCHES": verified_arches},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(marker.read_text(encoding="utf-8"))
+
+
+def test_macos_staple_marker_records_only_the_architectures_this_run_verified(tmp_path: Path) -> None:
+    version = "0.1.0"
+    arm_bytes, x86_bytes = b"arm64-bytes", b"x86_64-bytes"
+    _write_release_dmgs(tmp_path, version, arm_bytes, x86_bytes)
+
+    # A single-architecture dispatch stapled/verified arm64 only.
+    payload = _record_marker(tmp_path, version, "arm64", prior=None)
+
+    by_name = {artefact["name"]: artefact for artefact in payload["artifacts"]}
+    arm = by_name[f"Modulo-{version}-macos-arm64.dmg"]
+    x86 = by_name[f"Modulo-{version}-macos-x86_64.dmg"]
+    assert arm["staple_verified"] is True
+    assert x86["staple_verified"] is False, (
+        "a single-architecture run must never record the other DMG as staple-verified"
+    )
+    assert arm["sha256"] == hashlib.sha256(arm_bytes).hexdigest()
+    assert x86["sha256"] == hashlib.sha256(x86_bytes).hexdigest()
+
+
+def test_macos_staple_marker_carries_forward_a_prior_verification_only_for_unchanged_bytes(
+    tmp_path: Path,
+) -> None:
+    version = "0.1.0"
+    _write_release_dmgs(tmp_path, version, b"arm64-bytes", b"x86_64-bytes")
+    first = _record_marker(tmp_path, version, "arm64", prior=None)
+
+    # A later run that staples only x86_64 keeps arm64's verified claim: its
+    # bytes are unchanged, so the prior verification still applies.
+    second = _record_marker(tmp_path, version, "x86_64", prior=first)
+    by_name = {artefact["name"]: artefact for artefact in second["artifacts"]}
+    assert by_name[f"Modulo-{version}-macos-arm64.dmg"]["staple_verified"] is True
+    assert by_name[f"Modulo-{version}-macos-x86_64.dmg"]["staple_verified"] is True
+
+    # A prior claim about DIFFERENT bytes no longer applies to the rebuilt DMG.
+    _write_release_dmgs(tmp_path, version, b"rebuilt-arm64-bytes", b"x86_64-bytes")
+    third = _record_marker(tmp_path, version, "x86_64", prior=second)
+    by_name = {artefact["name"]: artefact for artefact in third["artifacts"]}
+    assert by_name[f"Modulo-{version}-macos-arm64.dmg"]["staple_verified"] is False
+
+
+def _resolve_marker_state(
+    tmp_path: Path,
+    version: str,
+    marker: dict[str, Any],
+    release: dict[str, Any],
+) -> str:
+    """Execute the resolve step's embedded marker check the way the workflow does."""
+    workflow = _staple_retry_workflow()
+    resolve = _step(workflow, "resolve-target", "Resolve version, release tag and architectures")
+    source = _python_heredoc(resolve["run"], "PY")
+    marker_path = tmp_path / "MACOS_STAPLED.json"
+    release_path = tmp_path / "release.json"
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    release_path.write_text(json.dumps(release), encoding="utf-8")
+    result = subprocess.run(  # noqa: S603 - fixed interpreter running repository-owned workflow text
+        [sys.executable, "-c", source, str(marker_path), str(release_path), version],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def test_macos_staple_short_circuit_requires_every_artefact_to_be_verified(tmp_path: Path) -> None:
+    version = "0.1.0"
+    arm_name = f"Modulo-{version}-macos-arm64.dmg"
+    x86_name = f"Modulo-{version}-macos-x86_64.dmg"
+    arm_bytes, x86_bytes = b"arm64-bytes", b"x86_64-bytes"
+    arm_sha = hashlib.sha256(arm_bytes).hexdigest()
+    x86_sha = hashlib.sha256(x86_bytes).hexdigest()
+    release = {
+        "assets": [
+            {"name": arm_name, "digest": f"sha256:{arm_sha}", "size": len(arm_bytes)},
+            {"name": x86_name, "digest": f"sha256:{x86_sha}", "size": len(x86_bytes)},
+        ]
+    }
+
+    def artefact(name: str, sha: str, size: int, verified: bool | None) -> dict[str, Any]:
+        entry: dict[str, Any] = {"name": name, "sha256": sha, "size": size}
+        if verified is not None:
+            entry["staple_verified"] = verified
+        return entry
+
+    both_verified = {
+        "version": version,
+        "artifacts": [
+            artefact(arm_name, arm_sha, len(arm_bytes), True),
+            artefact(x86_name, x86_sha, len(x86_bytes), True),
+        ],
+    }
+    assert _resolve_marker_state(tmp_path, version, both_verified, release) == "complete"
+
+    # Matching digests alone are not enough: an unverified artefact is still work.
+    partial = {
+        "version": version,
+        "artifacts": [
+            artefact(arm_name, arm_sha, len(arm_bytes), True),
+            artefact(x86_name, x86_sha, len(x86_bytes), False),
+        ],
+    }
+    state = _resolve_marker_state(tmp_path, version, partial, release)
+    assert state.startswith("stale:")
+    assert "was never staple-verified" in state
+    assert x86_name in state
+
+    # A legacy marker with no verification flag must never be trusted.
+    legacy = {
+        "version": version,
+        "artifacts": [
+            artefact(arm_name, arm_sha, len(arm_bytes), None),
+            artefact(x86_name, x86_sha, len(x86_bytes), None),
+        ],
+    }
+    assert _resolve_marker_state(tmp_path, version, legacy, release).startswith("stale:")
+
+    # Omitting an artefact outright is incomplete, not complete-by-omission.
+    incomplete = {
+        "version": version,
+        "artifacts": [artefact(arm_name, arm_sha, len(arm_bytes), True)],
+    }
+    state = _resolve_marker_state(tmp_path, version, incomplete, release)
+    assert state.startswith("stale:")
+    assert x86_name in state
+
+    # Verified but different live bytes still forces a re-staple.
+    rebuilt = {
+        "assets": [
+            {"name": arm_name, "digest": f"sha256:{arm_sha}", "size": len(arm_bytes)},
+            {"name": x86_name, "digest": f"sha256:{'0' * 64}", "size": len(x86_bytes)},
+        ]
+    }
+    state = _resolve_marker_state(tmp_path, version, both_verified, rebuilt)
+    assert state.startswith("stale:")
+    assert x86_name in state
 
 
 def test_release_unified_staple_dispatch_is_non_fatal() -> None:
