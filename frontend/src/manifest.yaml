@@ -2347,6 +2347,9 @@ elements:
       - testid: admin-node-categories-add
         type: button
         dynamic_testid: false
+      - testid: admin-node-categories-loading
+        type: element
+        dynamic_testid: false
       - testid: admin-node-categories-delete-confirm
         type: button
         dynamic_testid: false
