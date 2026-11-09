@@ -14668,6 +14668,24 @@ export interface components {
             /** Ports */
             ports?: components["schemas"]["ParameterPort"][];
         };
+        /**
+         * DeterminationAttempt
+         * @description One read-only determination attempt and its bounded source inventory.
+         */
+        DeterminationAttempt: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "completed_with_gaps";
+            /** Source Inventory */
+            source_inventory: components["schemas"]["SourceInventoryItem"][];
+        };
         /** DeterminationResponse */
         DeterminationResponse: {
             /** Samples */
@@ -14748,6 +14766,7 @@ export interface components {
             automation_suggestions: components["schemas"]["AutomationSuggestion"][];
             /** Summary */
             summary: string;
+            proposal: components["schemas"]["ProposalContract"];
         };
         /**
          * EditorGraphResponse
@@ -15292,6 +15311,23 @@ export interface components {
             missing_artifact_types: string[];
             /** Artifacts */
             artifacts: components["schemas"]["ArtifactEntry"][];
+        };
+        /**
+         * EvidenceReference
+         * @description A reference to evidence without copying or upgrading the source claim.
+         */
+        EvidenceReference: {
+            /** Reference Id */
+            reference_id: string;
+            /** Source Id */
+            source_id: string;
+            /** Locator */
+            locator: string;
+            /**
+             * Provenance
+             * @enum {string}
+             */
+            provenance: "observed" | "derived" | "inferred" | "unavailable";
         };
         /**
          * EvidenceRetentionPolicyResponse
@@ -19844,6 +19880,78 @@ export interface components {
             /** Optimized From */
             optimized_from?: string | null;
         };
+        /**
+         * ProposalContract
+         * @description The Alpha contract for an editable draft; it never activates a pipeline.
+         */
+        ProposalContract: {
+            /**
+             * Contract Version
+             * @default alpha.determination-proposal.v1
+             * @constant
+             */
+            contract_version: "alpha.determination-proposal.v1";
+            /**
+             * Proposal Id
+             * Format: uuid
+             */
+            proposal_id: string;
+            attempt: components["schemas"]["DeterminationAttempt"];
+            /**
+             * Review State
+             * @default needs_review
+             * @enum {string}
+             */
+            review_state: "draft" | "needs_review" | "approved" | "rejected";
+            /**
+             * Activation Status
+             * @default not_activated
+             * @constant
+             */
+            activation_status: "not_activated";
+            /** Observed Facts */
+            observed_facts?: components["schemas"]["ProposalFact"][];
+            /** Derived Elements */
+            derived_elements?: components["schemas"]["ProposalFact"][];
+            /** Unresolved Assumptions */
+            unresolved_assumptions?: components["schemas"]["UnresolvedAssumption"][];
+            /** Unavailable Evidence */
+            unavailable_evidence?: components["schemas"]["UnavailableEvidence"][];
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low" | "unknown";
+            /** Uncertainty */
+            uncertainty?: string[];
+            /** Provenance */
+            provenance?: components["schemas"]["EvidenceReference"][];
+        };
+        /**
+         * ProposalFact
+         * @description An observed or derived statement used by a proposal.
+         */
+        ProposalFact: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Statement */
+            statement: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "observed" | "derived";
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low" | "unknown";
+            /** Evidence Refs */
+            evidence_refs?: components["schemas"]["EvidenceReference"][];
+        };
         /** ProposeGuardrailConfigRequest */
         ProposeGuardrailConfigRequest: {
             /** Config Yaml */
@@ -22076,6 +22184,27 @@ export interface components {
             /** Notes */
             notes?: string | null;
         };
+        /**
+         * SourceInventoryItem
+         * @description Inventory of every source sampled for this proposal.
+         */
+        SourceInventoryItem: {
+            /** Source Id */
+            source_id: string;
+            /** Connector Type */
+            connector_type: string;
+            /** Resource */
+            resource: string;
+            /** Sample Count */
+            sample_count: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "unavailable";
+            /** Error */
+            error?: string | null;
+        };
         /** SpendCeilingResponse */
         SpendCeilingResponse: {
             /** Max Run Cost */
@@ -23468,6 +23597,41 @@ export interface components {
             passed: number;
             /** Failed */
             failed: number;
+        };
+        /**
+         * UnavailableEvidence
+         * @description A missing evidence source that limits the determination.
+         */
+        UnavailableEvidence: {
+            /** Source Id */
+            source_id: string;
+            /** Reason */
+            reason: string;
+            /** Requested Resource */
+            requested_resource: string;
+        };
+        /**
+         * UnresolvedAssumption
+         * @description A condition that must be reviewed before a draft can be activated.
+         */
+        UnresolvedAssumption: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Statement */
+            statement: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Confidence
+             * @default low
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low" | "unknown";
+            /** Evidence Refs */
+            evidence_refs?: components["schemas"]["EvidenceReference"][];
         };
         /** UpdateCommunityObjectsRequest */
         UpdateCommunityObjectsRequest: {

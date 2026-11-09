@@ -22,7 +22,8 @@ from modulo.db.crud.connector_instance import list_connector_instances
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.determination.draft import generate_draft
-from modulo.determination.inference import Finding, infer
+from modulo.determination.inference import Finding, build_proposal_contract, infer
+from modulo.determination.models import ProposalContract
 from modulo.determination.scanner import ScanSample, run_scan
 from modulo.settings import Settings, get_settings
 
@@ -93,6 +94,7 @@ class DraftResponse(BaseModel):
     findings: list[FindingResponse]
     automation_suggestions: list[AutomationSuggestion]
     summary: str
+    proposal: ProposalContract
 
 
 def _finding_to_response(f: Finding) -> FindingResponse:
@@ -267,6 +269,7 @@ async def create_determination_draft(
 
         findings = infer(samples)
         draft = generate_draft(samples, findings)
+        proposal = build_proposal_contract(samples, findings)
 
         stage_findings = [f for f in findings if f.category == "overview"]
         summary = stage_findings[0].finding if stage_findings else "No SDLC stages detected"
@@ -301,6 +304,7 @@ async def create_determination_draft(
                 for s in draft.automation_suggestions
             ],
             summary=summary,
+            proposal=proposal,
         )
     except HTTPException:
         raise

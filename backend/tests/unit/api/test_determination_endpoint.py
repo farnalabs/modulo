@@ -341,6 +341,9 @@ class TestCreateDeterminationDraft:
         assert not data["edges"]
         assert not data["automation_suggestions"]
         assert len(data["findings"]) == 1
+        assert data["proposal"]["contract_version"] == "alpha.determination-proposal.v1"
+        assert data["proposal"]["activation_status"] == "not_activated"
+        assert data["proposal"]["observed_facts"][0]["kind"] == "observed"
 
     def test_unauthenticated_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.post("/api/v1/determination/draft")
