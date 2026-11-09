@@ -72,7 +72,7 @@ is tagged `@visual` and runs in the same `frontend` CI job via
 `pnpm run test:e2e:visual` (equivalently
 `pnpm exec playwright test --grep "@visual"`). Its baselines live in
 `frontend/tests/e2e/canvas.visual.spec.ts-snapshots/` and are committed per
-platform — Playwright appends the platform suffix, so a Linux baseline (the
+platform - Playwright appends the platform suffix, so a Linux baseline (the
 platform CI runs on) must exist alongside any developer-captured one.
 
 Each `(state, viewport)` is captured in both light and dark. The theme is

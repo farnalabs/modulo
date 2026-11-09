@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Modulo API Example: Pipeline CRUD — fetch
+ * Modulo API Example: Pipeline CRUD - fetch
  *
  * Demonstrates pipeline list, create, get, update, and delete.
  *

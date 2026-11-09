@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Modulo API Example: Run Lifecycle — fetch
+ * Modulo API Example: Run Lifecycle - fetch
  *
  * Demonstrates triggering a run, polling status, getting IO, and cancelling.
  *
@@ -57,7 +57,7 @@ async function main() {
   }
 
   if (!terminalStates.has(finalStatus)) {
-    console.log("\n  Run did not finish — cancelling ...");
+    console.log("\n  Run did not finish - cancelling ...");
     await api(`/api/v1/runs/${runId}/cancel`, { method: "POST", headers: h });
     console.log("  Cancel accepted");
   }

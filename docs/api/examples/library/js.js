@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Modulo API Example: Library Primitive Management — fetch
+ * Modulo API Example: Library Primitive Management - fetch
  *
  * Demonstrates browsing, searching, previewing, copying, and rating primitives.
  *

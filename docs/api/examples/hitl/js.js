@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Modulo API Example: Human-in-the-Loop (HITL) — fetch
+ * Modulo API Example: Human-in-the-Loop (HITL) - fetch
  *
  * Demonstrates listing, claiming, and approving HITL gates.
  *
@@ -25,20 +25,20 @@ async function main() {
   // Step 1: List all pending gates org-wide
   console.log("Fetching pending HITL gates ...");
   const pending = await api("/api/v1/hitl/pending", { headers: h });
-  console.log(`  ${logSafe(pending.gates.length)} pending gate(s)`);
+  console.log(`  ${logSafe(pending.reviews.length)} pending gate(s)`);
 
-  if (!pending.gates.length) {
+  if (!pending.reviews.length) {
     console.log("\nNo pending gates. Trigger a pipeline with a human_review node first.");
     return;
   }
 
-  for (const g of pending.gates) {
+  for (const g of pending.reviews) {
     const claimed = g.claimed_by || "available";
     console.log(`  Gate ${g.review_id} | Run ${g.run_id} | Claimed: ${claimed}`);
   }
 
   // Step 2: Pick first unclaimed gate
-  const available = pending.gates.filter((g) => !g.claimed_by);
+  const available = pending.reviews.filter((g) => !g.claimed_by);
   if (!available.length) {
     console.log("\nAll gates already claimed.");
     return;

@@ -59,7 +59,7 @@ def main():
     resp = client.get("/api/v1/hitl/pending", headers=headers)
     if resp.status_code != 200:
         bail(f"list pending gates failed: {resp.status_code} {resp.text}")
-    gates = resp.json().get("gates", [])
+    gates = resp.json().get("reviews", [])
     print(f"  {len(gates)} pending gate(s)")
 
     if not gates:
@@ -69,8 +69,8 @@ def main():
 
     # Show summary of all pending gates
     for g in gates:
-        print(f"  - Gate {g['review_id']} | Run {g['run_id']} | Node: {g.get('node_id', 'N/A')}")
-        print(f"    Created: {g.get('created_at', 'N/A')}")
+        print(f"  - Gate {g['review_id']} | Run {g['run_id']} | Pipeline: {g.get('pipeline_name', 'N/A')}")
+        print(f"    Claimed at: {g.get('claimed_at', 'N/A')}")
         claimed_by = g.get("claimed_by")
         print(f"    Claimed: {claimed_by or 'No (available)'}")
 
