@@ -9,12 +9,16 @@ as muted, otherwise a test double silently disables a security control.
 import uuid
 from unittest.mock import MagicMock
 
+import pytest
+
 from modulo.core.eval_engine import EvalType
 from modulo.core.guardrails import (
     serialize_guardrail_pin,
     to_engine_definition,
     to_engine_definition_from_pin,
 )
+
+NON_BOOLEAN_SENTINELS = [None, 0, 1, "", "false", 1.0, []]
 
 
 def _row(**overrides):
@@ -54,23 +58,23 @@ def _pin(**overrides):
 def test_unspecified_mock_row_is_not_muted():
     """An unspecified MagicMock ``is_muted`` (truthy) must not read as muted."""
     row = _row()
-    # Never assigned: MagicMock auto-creates the attribute, whose truthiness is
-    # True.  That sentinel must not be interpreted as a real mute.
-    assert bool(getattr(row, "is_muted", False)) is True
 
     assert serialize_guardrail_pin(row)["is_muted"] is False
     assert to_engine_definition(row).is_muted is False
 
 
-def test_explicit_true_row_stays_muted():
-    row = _row(is_muted=True)
+@pytest.mark.parametrize("value", [True, False])
+def test_explicit_boolean_row_value_round_trips(value):
+    row = _row(is_muted=value)
 
-    assert serialize_guardrail_pin(row)["is_muted"] is True
-    assert to_engine_definition(row).is_muted is True
+    assert serialize_guardrail_pin(row)["is_muted"] is value
+    assert to_engine_definition(row).is_muted is value
 
 
-def test_explicit_false_row_is_unmuted():
-    row = _row(is_muted=False)
+@pytest.mark.parametrize("value", NON_BOOLEAN_SENTINELS)
+def test_non_boolean_row_value_is_not_muted(value):
+    """A legacy/malformed row value must not suppress enforcement."""
+    row = _row(is_muted=value)
 
     assert serialize_guardrail_pin(row)["is_muted"] is False
     assert to_engine_definition(row).is_muted is False
@@ -80,12 +84,12 @@ def test_missing_pin_key_defaults_to_unmuted():
     assert to_engine_definition_from_pin(_pin()).is_muted is False
 
 
-def test_truthy_non_boolean_pin_value_is_not_muted():
+@pytest.mark.parametrize("value", NON_BOOLEAN_SENTINELS)
+def test_non_boolean_pin_value_is_not_muted(value):
     """A malformed/non-boolean pin value must not suppress enforcement."""
-    assert to_engine_definition_from_pin(_pin(is_muted="false")).is_muted is False
-    assert to_engine_definition_from_pin(_pin(is_muted=1)).is_muted is False
+    assert to_engine_definition_from_pin(_pin(is_muted=value)).is_muted is False
 
 
-def test_boolean_pin_values_round_trip():
-    assert to_engine_definition_from_pin(_pin(is_muted=True)).is_muted is True
-    assert to_engine_definition_from_pin(_pin(is_muted=False)).is_muted is False
+@pytest.mark.parametrize("value", [True, False])
+def test_boolean_pin_value_round_trips(value):
+    assert to_engine_definition_from_pin(_pin(is_muted=value)).is_muted is value
