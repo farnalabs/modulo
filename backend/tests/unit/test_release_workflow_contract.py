@@ -2,13 +2,16 @@
 
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -1134,3 +1137,281 @@ def test_release_unified_keeps_macos_hard_gates_while_consume_retry() -> None:
     assert "mounted_app_spctl spctl --assess" in installer
     assert "dmg_verify hdiutil verify" in installer
     assert "dmg_staple_validate xcrun stapler validate" in installer
+
+
+# ---------------------------------------------------------------------------
+# FAR-2484: the release proves schema freshness on the EXACT commit itself.
+#
+# A release samples a main commit that may be seconds old, and merges land
+# through the merge queue with GITHUB_TOKEN - which does not trigger push
+# workflows - so a completed ci.yml run for that exact commit usually does not
+# exist. Requiring one aborted a healthy cut (run 42673260700 on 5ea37c5, where
+# the only run for the commit was an unrelated single-job re-run). The release
+# workflow now dispatches ci.yml against a temporary tag pinned at the exact
+# commit when no run proves the gate, waits (bounded) for the Schema freshness
+# job, and always deletes the tag. These tests execute that proof logic.
+# ---------------------------------------------------------------------------
+
+_SCHEMA_PROOF_STEPS = {
+    "preflight": "Ensure schema freshness CI on the exact commit",
+    "release": "Assert schema-freshness gate green on exact cut/recut commit",
+}
+_SCHEMA_PROOF_TARGET = "d1c4e2b4a9f04f7a8e1c2d3b4a5f60798a9b0c1d"
+_SCHEMA_GREEN_RUN = {"databaseId": 11, "status": "completed", "conclusion": "success"}
+_SCHEMA_GREEN_JOBS = {"11": [{"name": "Schema freshness", "status": "completed", "conclusion": "success"}]}
+
+
+def _schema_proof_script(job_id: str) -> str:
+    return _step(_release_workflow(), job_id, _SCHEMA_PROOF_STEPS[job_id])["run"]
+
+
+def _schema_proof_python(job_id: str) -> str:
+    return _python_heredoc(_schema_proof_script(job_id), "PY")
+
+
+def _schema_proof_module(tmp_path: Path) -> Any:
+    path = tmp_path / "schema_freshness_proof.py"
+    path.write_text(_schema_proof_python("release"), encoding="utf-8")
+    return _load_module("schema_freshness_proof", path)
+
+
+def _fake_gh(
+    calls: list[list[str]],
+    *,
+    runs: list[dict[str, Any]],
+    jobs: dict[str, list[dict[str, Any]]],
+    runs_after_dispatch: list[dict[str, Any]] | None = None,
+    jobs_after_dispatch: dict[str, list[dict[str, Any]]] | None = None,
+    list_sequence: list[list[dict[str, Any]]] | None = None,
+    list_returncode: int = 0,
+) -> Any:
+    """Stand-in for the ``gh`` CLI the proof shells out to.
+
+    ``list_sequence`` (when supplied) is consumed one entry per ``gh run list``
+    call, which is how a test models a run that changes state between polls.
+    """
+    dispatched = [False]
+    sequence = list(list_sequence) if list_sequence is not None else None
+
+    def gh(*args: str) -> Any:
+        calls.append(list(args))
+        if args[:2] == ("api", "-X"):
+            return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        if args[:2] == ("workflow", "run"):
+            dispatched[0] = True
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[:3] == ("run", "list", "--workflow"):
+            if list_returncode != 0:
+                return SimpleNamespace(returncode=list_returncode, stdout="", stderr="gh: API unavailable")
+            if sequence is not None:
+                payload = sequence.pop(0) if sequence else []
+            elif dispatched[0] and runs_after_dispatch is not None:
+                payload = runs_after_dispatch
+            else:
+                payload = runs
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        if args[0] == "api" and "/actions/runs/" in args[1]:
+            run_id = args[1].split("/actions/runs/")[1].split("/")[0]
+            table = jobs_after_dispatch if dispatched[0] and jobs_after_dispatch is not None else jobs
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"jobs": table.get(run_id, [])}),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected gh invocation: {args}")
+
+    return gh
+
+
+def _run_schema_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    gh: Any,
+    *,
+    max_wait_seconds: int = 2,
+) -> tuple[int, str]:
+    module = _schema_proof_module(tmp_path)
+    monkeypatch.setattr(module, "gh", gh)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "farnalabs/modulo")
+    monkeypatch.setenv("GITHUB_RUN_ID", "4242")
+    monkeypatch.setenv("SCHEMA_GATE_POLL_INTERVAL_SECONDS", "1")
+    monkeypatch.setenv("SCHEMA_GATE_MAX_WAIT_SECONDS", str(max_wait_seconds))
+    stdout = io.StringIO()
+    with redirect_stdout(stdout):
+        try:
+            module.main([_SCHEMA_PROOF_TARGET])
+        except SystemExit as exc:
+            return (int(exc.code or 0), stdout.getvalue())
+    return (0, stdout.getvalue())
+
+
+def _tag_calls(calls: list[list[str]]) -> list[list[str]]:
+    return [call for call in calls if call[:3] == ["api", "-X", "POST"]]
+
+
+def _dispatches(calls: list[list[str]]) -> list[list[str]]:
+    return [call for call in calls if call[:2] == ["workflow", "run"]]
+
+
+def test_release_schema_freshness_proof_is_wired_into_both_jobs() -> None:
+    workflow = _release_workflow()
+    preflight_script = _schema_proof_script("preflight")
+    release_script = _schema_proof_script("release")
+
+    # The exact-commit proof is a real, executable step in both jobs, and both
+    # carry the SAME logic - a fix applied to one cannot silently skip the
+    # other (the preflight gate and the tagging gate).
+    assert "python3 - \"$TARGET_SHA\" <<'PY'" in preflight_script
+    assert "python3 - \"$TARGET_SHA\" <<'PY'" in release_script
+    assert _schema_proof_python("preflight") == _schema_proof_python("release")
+    compile(_schema_proof_python("preflight"), str(RELEASE_WORKFLOW), "exec")
+
+    # The preflight jobs needs write access to dispatch ci.yml and to create
+    # and delete the temporary verification tag.
+    preflight_permissions = workflow["jobs"]["preflight"]["permissions"]
+    assert preflight_permissions["actions"] == "write"
+    assert preflight_permissions["contents"] == "write"
+    # The release job tags releases, so it already holds both.
+    release_permissions = workflow["jobs"]["release"]["permissions"]
+    assert release_permissions["actions"] == "write"
+    assert release_permissions["contents"] == "write"
+
+    preflight_step = _step(workflow, "preflight", _SCHEMA_PROOF_STEPS["preflight"])
+    assert preflight_step["if"] == "inputs.mode != 'dry-run'"
+    assert preflight_step["env"]["TARGET_SHA"] == "${{ github.sha }}"
+
+    release_step = _step(workflow, "release", _SCHEMA_PROOF_STEPS["release"])
+    assert release_step["id"] == "schema-freshness"
+    assert release_step["env"]["MODE"] == "${{ inputs.mode }}"
+    assert release_step["env"]["CUT_SHA"] == "${{ steps.cut-commit.outputs.cut_sha }}"
+
+
+def test_release_schema_freshness_proof_dispatches_ci_for_the_exact_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+    gh = _fake_gh(
+        calls,
+        runs=[],
+        jobs={},
+        runs_after_dispatch=[_SCHEMA_GREEN_RUN],
+        jobs_after_dispatch=_SCHEMA_GREEN_JOBS,
+    )
+
+    code, stdout = _run_schema_proof(tmp_path, monkeypatch, gh)
+
+    assert code == 0
+    assert "Schema freshness passed on exact target " + _SCHEMA_PROOF_TARGET in stdout
+    # A temporary ref is created AT the exact commit, ci.yml is dispatched on
+    # it, and the ref is deleted again - all pinned to the commit being cut.
+    [tag_create] = _tag_calls(calls)
+    assert tag_create[3] == "repos/farnalabs/modulo/git/refs"
+    assert any(arg.startswith("ref=refs/tags/ci-verify-" + _SCHEMA_PROOF_TARGET[:12]) for arg in tag_create)
+    assert any(arg == "sha=" + _SCHEMA_PROOF_TARGET for arg in tag_create)
+    [dispatch] = _dispatches(calls)
+    assert dispatch[2] == "ci.yml"
+    assert dispatch[4].startswith("ci-verify-" + _SCHEMA_PROOF_TARGET[:12])
+    deletes = [call for call in calls if call[:3] == ["api", "-X", "DELETE"]]
+    assert deletes, "the temporary verification tag must be deleted"
+    assert "refs/tags/" + dispatch[4] in deletes[0][3]
+
+
+def test_release_schema_freshness_proof_does_not_read_an_unrelated_run_as_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The observed failure shape: the commit's only ci.yml run is a re-run of
+    # one unrelated failed job, so it has no Schema freshness job at all.
+    # That run is not evidence the gate failed - the proof must dispatch a
+    # real run instead of reporting "not found".
+    unrelated_run = {"databaseId": 9, "status": "completed", "conclusion": "failure"}
+    calls: list[list[str]] = []
+    gh = _fake_gh(
+        calls,
+        runs=[unrelated_run],
+        jobs={
+            "9": [
+                {
+                    "name": "Trigger Branch Fixer on main CI failure",
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+            ]
+        },
+        runs_after_dispatch=[_SCHEMA_GREEN_RUN],
+        jobs_after_dispatch=_SCHEMA_GREEN_JOBS,
+    )
+
+    code, stdout = _run_schema_proof(tmp_path, monkeypatch, gh)
+
+    assert code == 0
+    assert _dispatches(calls), "an unrelated run must trigger a real CI dispatch, not a failure"
+    assert "Schema freshness passed on exact target " + _SCHEMA_PROOF_TARGET in stdout
+
+
+def test_release_schema_freshness_proof_waits_for_a_pending_run_without_duplicating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pending_run = {"databaseId": 12, "status": "in_progress", "conclusion": None}
+    calls: list[list[str]] = []
+    gh = _fake_gh(
+        calls,
+        runs=[],
+        jobs={
+            "12": [{"name": "Schema freshness", "status": "in_progress", "conclusion": None}],
+            **_SCHEMA_GREEN_JOBS,
+        },
+        list_sequence=[[pending_run], [_SCHEMA_GREEN_RUN], [_SCHEMA_GREEN_RUN]],
+    )
+
+    code, stdout = _run_schema_proof(tmp_path, monkeypatch, gh)
+
+    assert code == 0
+    assert not _dispatches(calls), "an in-flight Schema freshness job must be waited for, not duplicated"
+    assert "Schema freshness passed on exact target " + _SCHEMA_PROOF_TARGET in stdout
+
+
+def test_release_schema_freshness_proof_fails_closed_on_a_red_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+    gh = _fake_gh(
+        calls,
+        runs=[{"databaseId": 8, "status": "completed", "conclusion": "failure"}],
+        jobs={"8": [{"name": "Schema freshness", "status": "completed", "conclusion": "failure"}]},
+    )
+
+    code, stdout = _run_schema_proof(tmp_path, monkeypatch, gh)
+
+    assert code == 1
+    assert "::error::Schema freshness was 'failure' on exact target " + _SCHEMA_PROOF_TARGET in stdout
+    assert "refusing to tag" in stdout
+    assert not _tag_calls(calls), "a red gate must never create a verification tag"
+
+
+def test_release_schema_freshness_proof_times_out_and_cleans_up_the_tag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+    gh = _fake_gh(calls, runs=[], jobs={}, runs_after_dispatch=[], jobs_after_dispatch={})
+
+    code, stdout = _run_schema_proof(tmp_path, monkeypatch, gh)
+
+    assert code == 1
+    assert "::error::Timed out after 2s waiting for a green Schema freshness job" in stdout
+    assert "refusing to tag" in stdout
+    deletes = [call for call in calls if call[:3] == ["api", "-X", "DELETE"]]
+    assert deletes, "a timed-out proof must still delete the temporary verification tag"
+
+
+def test_release_schema_freshness_proof_fails_closed_when_the_query_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A failed query is never evidence of absence.
+    calls: list[list[str]] = []
+    gh = _fake_gh(calls, runs=[], jobs={}, list_returncode=1)
+
+    code, stdout = _run_schema_proof(tmp_path, monkeypatch, gh)
+
+    assert code == 1
+    assert "::error::Could not query CI runs for exact target " + _SCHEMA_PROOF_TARGET in stdout
+    assert not _dispatches(calls)

@@ -60,10 +60,16 @@ jobs:
   preflight:
     name: Release Preflight Discovery Gate
     runs-on: ubicloud-standard-2
-    timeout-minutes: 15
+    # Covers the bounded schema-freshness proof below: when no completed
+    # ci.yml run proves the gate on the exact commit, the job dispatches one
+    # against a temporary tag pinned at that commit and waits for its
+    # Schema freshness job (FAR-2484). A full CI run takes ~35-50 minutes.
+    timeout-minutes: 75
     permissions:
-      contents: read
-      actions: read
+      # `contents: write` creates and deletes the temporary CI-verification
+      # tag; `actions: write` dispatches ci.yml for the exact commit.
+      contents: write
+      actions: write
       packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,6 +82,206 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+
+      # FAR-2484: a release samples a main commit that may be seconds old, and
+      # merges land through the merge queue with GITHUB_TOKEN - which does not
+      # trigger push workflows - so "a completed CI run exists on this exact
+      # commit" is usually false at preflight time even when the tree is
+      # healthy (run 42673260700 failed the gate on 5ea37c5 with only an
+      # unrelated re-run visible). Prove the gate instead of assuming it:
+      # dispatch ci.yml against a temporary tag pinned at the exact commit
+      # when no run proves it, then wait (bounded) for the Schema freshness
+      # job. The gate is unchanged - a green Schema freshness job on the
+      # exact commit is still required.
+      - name: Ensure schema freshness CI on the exact commit
+        if: inputs.mode != 'dry-run'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TARGET_SHA:-}" ]; then
+            echo "::error::No exact target commit SHA to prove schema freshness for; refusing to run the preflight gate."
+            exit 1
+          fi
+          python3 - "$TARGET_SHA" <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import time
+
+
+          def fail(message):
+              print("::error::" + message)
+              raise SystemExit(1)
+
+
+          def gh(*args):
+              return subprocess.run(["gh", *args], capture_output=True, text=True)
+
+
+          def main(argv=None):
+              target_sha = (sys.argv[1:] if argv is None else argv)[0]
+              repo = os.environ.get("GITHUB_REPOSITORY", "")
+              poll_seconds = int(os.environ.get("SCHEMA_GATE_POLL_INTERVAL_SECONDS", "30"))
+              max_wait_seconds = int(os.environ.get("SCHEMA_GATE_MAX_WAIT_SECONDS", "3600"))
+              tag = "ci-verify-" + target_sha[:12] + "-" + os.environ.get("GITHUB_RUN_ID", "0")
+
+              if poll_seconds < 1 or max_wait_seconds < 1:
+                  fail("SCHEMA_GATE_POLL_INTERVAL_SECONDS and SCHEMA_GATE_MAX_WAIT_SECONDS must be positive integers.")
+              if not repo:
+                  fail("GITHUB_REPOSITORY is unset; refusing to look for CI runs in an unknown repository.")
+
+              tag_created = False
+
+              def delete_temporary_tag():
+                  if not tag_created:
+                      return
+                  result = gh("api", "-X", "DELETE", "repos/" + repo + "/git/refs/tags/" + tag)
+                  if result.returncode != 0:
+                      print("::warning::Could not delete the temporary CI-verification tag " + tag + "; delete it manually.")
+
+              # The temporary tag must be removed on every exit path (success,
+              # timeout, query error), never left behind.
+              try:
+                  deadline = time.monotonic() + max_wait_seconds
+                  dispatched = False
+                  attempt = 0
+                  last_state = "no ci.yml run exists for the exact commit"
+
+                  while True:
+                      attempt += 1
+                      listing = gh(
+                          "run", "list", "--workflow", "ci.yml", "--commit", target_sha,
+                          "--limit", "100", "--json", "databaseId,status,conclusion",
+                      )
+                      if listing.returncode != 0:
+                          fail(
+                              "Could not query CI runs for exact target "
+                              + target_sha
+                              + ": "
+                              + (listing.stderr or listing.stdout).strip()
+                          )
+                      try:
+                          runs = json.loads(listing.stdout or "[]")
+                      except json.JSONDecodeError:
+                          fail("Could not parse the CI run list for exact target " + target_sha + ".")
+
+                      pending = False
+                      for run in runs:
+                          run_number = str(run.get("databaseId") or "")
+                          if not run_number:
+                              continue
+                          jobs_call = gh(
+                              "api", "repos/" + repo + "/actions/runs/" + run_number + "/jobs?per_page=100"
+                          )
+                          if jobs_call.returncode != 0:
+                              fail(
+                                  "Could not read the jobs of CI run "
+                                  + run_number
+                                  + ": "
+                                  + (jobs_call.stderr or jobs_call.stdout).strip()
+                              )
+                          try:
+                              jobs = json.loads(jobs_call.stdout or "{}").get("jobs", [])
+                          except json.JSONDecodeError:
+                              fail("Could not parse the jobs of CI run " + run_number + ".")
+                          schema_jobs = [job for job in jobs if job.get("name") == "Schema freshness"]
+                          if not schema_jobs:
+                              # A run with no Schema freshness job (for example a
+                              # re-run of one unrelated failed job) can neither prove
+                              # nor disprove the gate. It is not evidence of absence.
+                              continue
+                          conclusion = schema_jobs[0].get("conclusion")
+                          if conclusion == "success":
+                              print("Schema freshness passed on exact target " + target_sha + " (run " + run_number + ").")
+                              raise SystemExit(0)
+                          if conclusion in ("failure", "skipped"):
+                              fail(
+                                  "Schema freshness was '"
+                                  + str(conclusion)
+                                  + "' on exact target "
+                                  + target_sha
+                                  + " (run "
+                                  + run_number
+                                  + "); refusing to tag."
+                              )
+                          if conclusion in ("cancelled", "timed_out", "stale"):
+                              # Inconclusive (superseded or killed): keep looking.
+                              continue
+                          pending = True
+
+                      if pending:
+                          last_state = "a Schema freshness job is still in progress"
+                      else:
+                          last_state = "no CI run proves the Schema freshness gate"
+
+                      if not pending and not dispatched:
+                          create = gh(
+                              "api", "-X", "POST", "repos/" + repo + "/git/refs",
+                              "-f", "ref=refs/tags/" + tag, "-f", "sha=" + target_sha,
+                          )
+                          if create.returncode != 0:
+                              fail(
+                                  "Could not create the temporary CI-verification tag "
+                                  + tag
+                                  + " at "
+                                  + target_sha
+                                  + ": "
+                                  + (create.stderr or create.stdout).strip()
+                              )
+                          tag_created = True
+                          dispatch = gh("workflow", "run", "ci.yml", "--ref", tag)
+                          if dispatch.returncode != 0:
+                              fail(
+                                  "Could not dispatch ci.yml for exact target "
+                                  + target_sha
+                                  + ": "
+                                  + (dispatch.stderr or dispatch.stdout).strip()
+                              )
+                          dispatched = True
+                          print(
+                              "Dispatched ci.yml on temporary tag "
+                              + tag
+                              + " pinned at exact target "
+                              + target_sha
+                              + " (no completed run proved the gate)."
+                          )
+
+                      remaining = deadline - time.monotonic()
+                      if remaining <= 0:
+                          fail(
+                              "Timed out after "
+                              + str(max_wait_seconds)
+                              + "s waiting for a green Schema freshness job on exact target "
+                              + target_sha
+                              + " ("
+                              + last_state
+                              + "); refusing to tag."
+                          )
+                      print(
+                          "Waiting for schema freshness on "
+                          + target_sha
+                          + " (attempt "
+                          + str(attempt)
+                          + ", "
+                          + str(int(max_wait_seconds - remaining))
+                          + "s/"
+                          + str(max_wait_seconds)
+                          + "s): "
+                          + last_state
+                          + "."
+                      )
+                      time.sleep(min(poll_seconds, remaining))
+              finally:
+                  delete_temporary_tag()
+
+
+          if __name__ == "__main__":
+              main()
+          PY
 
       - name: Run release preflight discovery gate
         shell: bash
@@ -251,9 +457,10 @@ jobs:
     needs: [preflight]
     if: inputs.mode != 'dry-run'
     runs-on: ubicloud-standard-2
-    # Covers the bounded 90-minute merge-queue wait plus the bounded 45-minute
-    # schema-freshness wait and setup overhead.
-    timeout-minutes: 180
+    # Covers the bounded 90-minute merge-queue wait plus the bounded 60-minute
+    # schema-freshness proof (FAR-2484 may dispatch a full ci.yml run for the
+    # exact commit and wait for it) plus setup overhead.
+    timeout-minutes: 200
     permissions:
       contents: write
       pull-requests: write
@@ -584,101 +791,197 @@ jobs:
             TARGET_SHA="$(git rev-parse origin/main)"
           fi
           echo "Checking schema-freshness on exact target ${TARGET_SHA}..."
-          # A release samples a HEAD that may be only seconds old, so on a busy
-          # main the ci.yml run for that exact commit often does not exist yet.
-          # A single instantaneous lookup therefore aborted a perfectly healthy
-          # cut whenever the queue was warm (observed in runs 41649963889 and
-          # earlier). Poll for the run to APPEAR and then to COMPLETE, bounded by
-          # a budget, instead of sampling once. The gate itself is unchanged: a
-          # completed run must still be a success whose Schema freshness job is
-          # green. Both knobs are overridable so the rehearsal tests can drive
-          # the loop without waiting; production uses the defaults.
+          # FAR-2484: a release samples a HEAD that may be only seconds old,
+          # and merges land through the merge queue with GITHUB_TOKEN - which
+          # does not trigger push workflows - so a completed CI run for that
+          # exact commit usually does not exist yet. Requiring one aborted a
+          # healthy cut (run 42673260700). Instead, dispatch ci.yml against a
+          # temporary tag pinned at the exact commit when no run proves the
+          # gate, then wait (bounded) for its Schema freshness job. The gate is
+          # unchanged: a green Schema freshness job on the exact commit is
+          # still required, and a run with no Schema freshness job (for
+          # example a re-run of one unrelated failed job) is not evidence
+          # either way.
           #
-          # `gh run list --workflow ci.yml` already scopes to ci.yml; `path` is not
-          # a supported --json field and made this lookup always fail (FAR-2213).
-          POLL_INTERVAL_SECONDS="${SCHEMA_GATE_POLL_INTERVAL_SECONDS:-30}"
-          MAX_WAIT_SECONDS="${SCHEMA_GATE_MAX_WAIT_SECONDS:-3600}"
-          require_positive_integer() {
-            local name="$1"
-            local value="$2"
-            case "$value" in
-              ''|*[!0-9]*)
-                echo "::error::$name must be a positive integer, got '$value'."
-                exit 1
-                ;;
-              *)
-                ;;
-            esac
-            if [ "$value" -lt 1 ]; then
-              echo "::error::$name must be a positive integer, got '$value'."
-              exit 1
-            fi
-          }
-          require_positive_integer SCHEMA_GATE_POLL_INTERVAL_SECONDS "$POLL_INTERVAL_SECONDS"
-          require_positive_integer SCHEMA_GATE_MAX_WAIT_SECONDS "$MAX_WAIT_SECONDS"
-          MAX_POLLS=$(( (MAX_WAIT_SECONDS + POLL_INTERVAL_SECONDS - 1) / POLL_INTERVAL_SECONDS ))
-          SECONDS=0
-          RUN_ID=""
-          RUN_STATUS=""
-          RUN_CONCLUSION=""
-          LAST_LOOKUP_ERROR=""
-          for ((poll=1; poll<=MAX_POLLS; poll++)); do
-            RUN_ID=""
-            RUN_STATUS=""
-            RUN_CONCLUSION=""
-            LOOKUP_OUTPUT=""
-            # A transient gh/API failure is retried while budget remains; it is
-            # never treated as a green gate.
-            if LOOKUP_OUTPUT="$(gh run list --workflow ci.yml --commit "$TARGET_SHA" --limit 100 \
-              --json databaseId,status,conclusion \
-              --jq '.[0] | "\(.databaseId // "")\n\(.status // "")\n\(.conclusion // "")"' 2>&1)"; then
-              mapfile -t RUN_FIELDS <<<"$LOOKUP_OUTPUT"
-              RUN_ID="${RUN_FIELDS[0]:-}"
-              RUN_STATUS="${RUN_FIELDS[1]:-}"
-              RUN_CONCLUSION="${RUN_FIELDS[2]:-}"
-              LAST_LOOKUP_ERROR=""
-            else
-              LAST_LOOKUP_ERROR="$LOOKUP_OUTPUT"
-            fi
-            if [ -n "$RUN_ID" ] && [ "$RUN_STATUS" = "completed" ]; then
-              echo "Found completed CI run ${RUN_ID} on exact target ${TARGET_SHA} (${poll} attempt(s), ${SECONDS}s)."
-              break
-            fi
-            if [ -n "$LAST_LOOKUP_ERROR" ]; then
-              echo "gh run lookup failed (attempt ${poll}/${MAX_POLLS}): ${LAST_LOOKUP_ERROR}"
-            elif [ -z "$RUN_ID" ]; then
-              echo "No CI workflow run for exact target ${TARGET_SHA} yet (attempt ${poll}/${MAX_POLLS}, ${SECONDS}s/${MAX_WAIT_SECONDS}s)."
-            else
-              echo "CI run ${RUN_ID} is ${RUN_STATUS:-unknown} (attempt ${poll}/${MAX_POLLS}, ${SECONDS}s/${MAX_WAIT_SECONDS}s)."
-            fi
-            if [ "$poll" -lt "$MAX_POLLS" ]; then
-              sleep "$POLL_INTERVAL_SECONDS"
-            fi
-          done
-          if [ -z "$RUN_ID" ] || [ "$RUN_STATUS" != "completed" ]; then
-            ELAPSED_MINUTES=$(( SECONDS / 60 ))
-            if [ -n "$LAST_LOOKUP_ERROR" ]; then
-              echo "::error::Could not confirm a CI workflow run for exact target ${TARGET_SHA} after ${ELAPSED_MINUTES} minute(s) (${SECONDS}s of a ${MAX_WAIT_SECONDS}s budget); last error: ${LAST_LOOKUP_ERROR}; refusing to tag."
-              exit 1
-            fi
-            if [ -z "$RUN_ID" ]; then
-              echo "::error::No CI workflow run appeared for exact target ${TARGET_SHA} after ${ELAPSED_MINUTES} minute(s) (${SECONDS}s of a ${MAX_WAIT_SECONDS}s budget); refusing to tag."
-              exit 1
-            fi
-            echo "::error::Timed out after ${ELAPSED_MINUTES} minute(s) (${SECONDS}s of a ${MAX_WAIT_SECONDS}s budget) waiting for CI run ${RUN_ID} on exact target ${TARGET_SHA} to complete; refusing to tag."
-            exit 1
-          fi
-          if [ "$RUN_CONCLUSION" != "success" ]; then
-            echo "::error::CI run ${RUN_ID} on exact target ${TARGET_SHA} concluded '${RUN_CONCLUSION:-missing}', not success; refusing to tag."
-            exit 1
-          fi
-          SCHEMA_CONCLUSION="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" \
-            --jq '[.jobs[] | select(.name == "Schema freshness")][0].conclusion // empty')"
-          if [ "$SCHEMA_CONCLUSION" != "success" ]; then
-            echo "::error::Schema freshness was '${SCHEMA_CONCLUSION:-missing}' on exact target ${TARGET_SHA}; refusing to tag."
-            exit 1
-          fi
-          echo "Schema freshness passed on exact target ${TARGET_SHA}."
+          # Both knobs are overridable so the tests can drive the loop without
+          # waiting; production uses the defaults.
+          python3 - "$TARGET_SHA" <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import time
+
+
+          def fail(message):
+              print("::error::" + message)
+              raise SystemExit(1)
+
+
+          def gh(*args):
+              return subprocess.run(["gh", *args], capture_output=True, text=True)
+
+
+          def main(argv=None):
+              target_sha = (sys.argv[1:] if argv is None else argv)[0]
+              repo = os.environ.get("GITHUB_REPOSITORY", "")
+              poll_seconds = int(os.environ.get("SCHEMA_GATE_POLL_INTERVAL_SECONDS", "30"))
+              max_wait_seconds = int(os.environ.get("SCHEMA_GATE_MAX_WAIT_SECONDS", "3600"))
+              tag = "ci-verify-" + target_sha[:12] + "-" + os.environ.get("GITHUB_RUN_ID", "0")
+
+              if poll_seconds < 1 or max_wait_seconds < 1:
+                  fail("SCHEMA_GATE_POLL_INTERVAL_SECONDS and SCHEMA_GATE_MAX_WAIT_SECONDS must be positive integers.")
+              if not repo:
+                  fail("GITHUB_REPOSITORY is unset; refusing to look for CI runs in an unknown repository.")
+
+              tag_created = False
+
+              def delete_temporary_tag():
+                  if not tag_created:
+                      return
+                  result = gh("api", "-X", "DELETE", "repos/" + repo + "/git/refs/tags/" + tag)
+                  if result.returncode != 0:
+                      print("::warning::Could not delete the temporary CI-verification tag " + tag + "; delete it manually.")
+
+              # The temporary tag must be removed on every exit path (success,
+              # timeout, query error), never left behind.
+              try:
+                  deadline = time.monotonic() + max_wait_seconds
+                  dispatched = False
+                  attempt = 0
+                  last_state = "no ci.yml run exists for the exact commit"
+
+                  while True:
+                      attempt += 1
+                      listing = gh(
+                          "run", "list", "--workflow", "ci.yml", "--commit", target_sha,
+                          "--limit", "100", "--json", "databaseId,status,conclusion",
+                      )
+                      if listing.returncode != 0:
+                          fail(
+                              "Could not query CI runs for exact target "
+                              + target_sha
+                              + ": "
+                              + (listing.stderr or listing.stdout).strip()
+                          )
+                      try:
+                          runs = json.loads(listing.stdout or "[]")
+                      except json.JSONDecodeError:
+                          fail("Could not parse the CI run list for exact target " + target_sha + ".")
+
+                      pending = False
+                      for run in runs:
+                          run_number = str(run.get("databaseId") or "")
+                          if not run_number:
+                              continue
+                          jobs_call = gh(
+                              "api", "repos/" + repo + "/actions/runs/" + run_number + "/jobs?per_page=100"
+                          )
+                          if jobs_call.returncode != 0:
+                              fail(
+                                  "Could not read the jobs of CI run "
+                                  + run_number
+                                  + ": "
+                                  + (jobs_call.stderr or jobs_call.stdout).strip()
+                              )
+                          try:
+                              jobs = json.loads(jobs_call.stdout or "{}").get("jobs", [])
+                          except json.JSONDecodeError:
+                              fail("Could not parse the jobs of CI run " + run_number + ".")
+                          schema_jobs = [job for job in jobs if job.get("name") == "Schema freshness"]
+                          if not schema_jobs:
+                              # A run with no Schema freshness job (for example a
+                              # re-run of one unrelated failed job) can neither prove
+                              # nor disprove the gate. It is not evidence of absence.
+                              continue
+                          conclusion = schema_jobs[0].get("conclusion")
+                          if conclusion == "success":
+                              print("Schema freshness passed on exact target " + target_sha + " (run " + run_number + ").")
+                              raise SystemExit(0)
+                          if conclusion in ("failure", "skipped"):
+                              fail(
+                                  "Schema freshness was '"
+                                  + str(conclusion)
+                                  + "' on exact target "
+                                  + target_sha
+                                  + " (run "
+                                  + run_number
+                                  + "); refusing to tag."
+                              )
+                          if conclusion in ("cancelled", "timed_out", "stale"):
+                              # Inconclusive (superseded or killed): keep looking.
+                              continue
+                          pending = True
+
+                      if pending:
+                          last_state = "a Schema freshness job is still in progress"
+                      else:
+                          last_state = "no CI run proves the Schema freshness gate"
+
+                      if not pending and not dispatched:
+                          create = gh(
+                              "api", "-X", "POST", "repos/" + repo + "/git/refs",
+                              "-f", "ref=refs/tags/" + tag, "-f", "sha=" + target_sha,
+                          )
+                          if create.returncode != 0:
+                              fail(
+                                  "Could not create the temporary CI-verification tag "
+                                  + tag
+                                  + " at "
+                                  + target_sha
+                                  + ": "
+                                  + (create.stderr or create.stdout).strip()
+                              )
+                          tag_created = True
+                          dispatch = gh("workflow", "run", "ci.yml", "--ref", tag)
+                          if dispatch.returncode != 0:
+                              fail(
+                                  "Could not dispatch ci.yml for exact target "
+                                  + target_sha
+                                  + ": "
+                                  + (dispatch.stderr or dispatch.stdout).strip()
+                              )
+                          dispatched = True
+                          print(
+                              "Dispatched ci.yml on temporary tag "
+                              + tag
+                              + " pinned at exact target "
+                              + target_sha
+                              + " (no completed run proved the gate)."
+                          )
+
+                      remaining = deadline - time.monotonic()
+                      if remaining <= 0:
+                          fail(
+                              "Timed out after "
+                              + str(max_wait_seconds)
+                              + "s waiting for a green Schema freshness job on exact target "
+                              + target_sha
+                              + " ("
+                              + last_state
+                              + "); refusing to tag."
+                          )
+                      print(
+                          "Waiting for schema freshness on "
+                          + target_sha
+                          + " (attempt "
+                          + str(attempt)
+                          + ", "
+                          + str(int(max_wait_seconds - remaining))
+                          + "s/"
+                          + str(max_wait_seconds)
+                          + "s): "
+                          + last_state
+                          + "."
+                      )
+                      time.sleep(min(poll_seconds, remaining))
+              finally:
+                  delete_temporary_tag()
+
+
+          if __name__ == "__main__":
+              main()
+          PY
 
       - name: Clean up publication hold after failed cut preparation
         if: always() && inputs.mode == 'cut' && steps.publication-hold.outputs.established == 'true' && (steps.cut-commit.outcome != 'success' || steps.schema-freshness.outcome != 'success')
