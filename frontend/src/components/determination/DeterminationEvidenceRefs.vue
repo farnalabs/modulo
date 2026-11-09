@@ -15,9 +15,22 @@
           <span>·</span>
           <span>{{ $t('views.DeterminationView.evidence_source_id') }}: <span class="font-mono break-all">{{ reference.source_id }}</span></span>
           <span>·</span>
-          <span>{{ $t('views.DeterminationView.evidence_locator') }}: <span class="font-mono break-all">{{ reference.locator }}</span></span>
+          <span>
+            {{ $t('views.DeterminationView.evidence_locator') }}:
+            <span v-if="locatorFor(reference).withheld" class="italic" data-testid="determination-evidence-withheld">
+              {{ $t('views.DeterminationView.evidence_value_withheld') }}
+            </span>
+            <span v-else class="font-mono break-all">{{ locatorFor(reference).text }}</span>
+          </span>
           <span>·</span>
-          <span>{{ $t('views.DeterminationView.evidence_provenance') }}: {{ $t('views.DeterminationView.provenance_' + reference.provenance) }}</span>
+          <span>{{ $t('views.DeterminationView.evidence_provenance') }}:</span>
+          <span
+            class="ml-1 rounded-full px-2 py-0.5"
+            :class="provenanceBadgeClass(reference.provenance)"
+            data-testid="determination-evidence-provenance"
+          >
+            {{ $t('views.DeterminationView.provenance_' + reference.provenance) }}
+          </span>
           <button
             type="button"
             class="ml-auto rounded border px-1.5 py-0.5"
@@ -80,10 +93,13 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import type {
-  DeterminationSourceInventoryItem,
-  EvidenceReference,
-} from '../../composables/useDetermination'
+import {
+  displayEvidenceText,
+  provenanceBadgeClass,
+  type DisplayText,
+  type EvidenceReference,
+} from './evidencePresentation'
+import type { DeterminationSourceInventoryItem } from '../../composables/useDetermination'
 
 const props = withDefaults(
   defineProps<{
@@ -114,5 +130,14 @@ function sourceFor(sourceId: string): DeterminationSourceInventoryItem | null {
 
 function detailId(referenceId: string): string {
   return `determination-evidence-detail-${referenceId.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+}
+
+/**
+ * The locator is connector-produced free text, so it can carry a credential.
+ * The field is always shown; only its value is replaced when it looks like a
+ * secret (no ``v-html`` anywhere in this surface - every value is text).
+ */
+function locatorFor(reference: EvidenceReference): DisplayText {
+  return displayEvidenceText(reference.locator)
 }
 </script>

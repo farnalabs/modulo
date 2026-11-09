@@ -2,8 +2,8 @@
   <section class="card p-4 space-y-5" data-testid="determination-proposal">
     <header class="flex flex-wrap items-baseline justify-between gap-2">
       <h2 class="text-lg font-semibold">{{ $t('views.DeterminationView.proposal_title') }}</h2>
-      <span v-if="proposal" class="text-xs text-muted-foreground font-mono">
-        {{ proposal.contract_version }}
+      <span v-if="proposal" class="text-xs text-muted-foreground">
+        {{ $t('views.DeterminationView.review_state_' + proposal.review_state) }}
       </span>
     </header>
 
@@ -28,35 +28,6 @@
         {{ $t('views.DeterminationView.proposal_not_activated') }}
       </p>
 
-      <dl class="grid gap-3 text-sm sm:grid-cols-3">
-        <div>
-          <dt class="text-muted-foreground">{{ $t('views.DeterminationView.proposal_attempt_status') }}</dt>
-          <dd class="font-medium">{{ proposal.attempt.status }}</dd>
-        </div>
-        <div>
-          <dt class="text-muted-foreground">{{ $t('views.DeterminationView.proposal_confidence') }}</dt>
-          <dd class="font-medium" data-testid="determination-proposal-confidence">
-            <span class="rounded-full px-2 py-0.5 text-xs" :class="confidenceBadgeClass(proposal.confidence)">
-              {{ $t('views.DeterminationView.confidence_' + proposal.confidence) }}
-            </span>
-          </dd>
-        </div>
-        <div>
-          <dt class="text-muted-foreground">{{ $t('views.DeterminationView.proposal_review_state') }}</dt>
-          <dd class="font-medium">{{ $t('views.DeterminationView.review_state_' + proposal.review_state) }}</dd>
-        </div>
-      </dl>
-
-      <section class="space-y-2" data-testid="determination-proposal-uncertainty">
-        <h3 class="text-sm font-medium">{{ $t('views.DeterminationView.proposal_uncertainty') }}</h3>
-        <p v-if="uncertainty.length === 0" class="text-sm text-muted-foreground">
-          {{ $t('views.DeterminationView.proposal_uncertainty_empty') }}
-        </p>
-        <ul v-else class="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-          <li v-for="(entry, index) in uncertainty" :key="index">{{ entry }}</li>
-        </ul>
-      </section>
-
       <section class="space-y-2" data-testid="determination-observed-facts">
         <h3 class="text-sm font-medium">
           {{ $t('views.DeterminationView.observed_facts_title') }}
@@ -73,7 +44,16 @@
             data-testid="determination-observed-fact"
           >
             <div class="flex flex-wrap items-center justify-between gap-2">
-              <p class="text-sm font-medium">{{ fact.statement }}</p>
+              <div class="flex flex-wrap items-center gap-2">
+                <span
+                  class="rounded-full px-2 py-0.5 text-xs font-medium"
+                  :class="elementKindBadgeClass('observed')"
+                  data-testid="determination-element-kind"
+                >
+                  {{ $t('views.DeterminationView.element_kind_observed') }}
+                </span>
+                <p class="text-sm font-medium">{{ fact.statement }}</p>
+              </div>
               <span class="rounded-full px-2 py-0.5 text-xs" :class="confidenceBadgeClass(fact.confidence)">
                 {{ $t('views.DeterminationView.confidence_' + fact.confidence) }}
               </span>
@@ -83,6 +63,15 @@
               :sources="sources"
               @link-source="focusSource"
             />
+            <button
+              type="button"
+              class="mt-2 rounded border px-2 py-1 text-xs"
+              :aria-label="$t('views.DeterminationView.evidence_open_for', { statement: fact.statement })"
+              data-testid="determination-element-evidence"
+              @click="selectElement(elementView(fact, 'observed'))"
+            >
+              {{ $t('views.DeterminationView.evidence_open') }}
+            </button>
           </li>
         </ul>
       </section>
@@ -103,7 +92,16 @@
             data-testid="determination-derived-element"
           >
             <div class="flex flex-wrap items-center justify-between gap-2">
-              <p class="text-sm font-medium">{{ element.statement }}</p>
+              <div class="flex flex-wrap items-center gap-2">
+                <span
+                  class="rounded-full px-2 py-0.5 text-xs font-medium"
+                  :class="elementKindBadgeClass('derived')"
+                  data-testid="determination-element-kind"
+                >
+                  {{ $t('views.DeterminationView.element_kind_derived') }}
+                </span>
+                <p class="text-sm font-medium">{{ element.statement }}</p>
+              </div>
               <span class="rounded-full px-2 py-0.5 text-xs" :class="confidenceBadgeClass(element.confidence)">
                 {{ $t('views.DeterminationView.confidence_' + element.confidence) }}
               </span>
@@ -113,6 +111,15 @@
               :sources="sources"
               @link-source="focusSource"
             />
+            <button
+              type="button"
+              class="mt-2 rounded border px-2 py-1 text-xs"
+              :aria-label="$t('views.DeterminationView.evidence_open_for', { statement: element.statement })"
+              data-testid="determination-element-evidence"
+              @click="selectElement(elementView(element, 'derived'))"
+            >
+              {{ $t('views.DeterminationView.evidence_open') }}
+            </button>
           </li>
         </ul>
       </section>
@@ -133,32 +140,55 @@
             data-testid="determination-assumption"
           >
             <div class="flex flex-wrap items-center justify-between gap-2">
-              <p class="text-sm font-medium">{{ assumption.statement }}</p>
+              <div class="flex flex-wrap items-center gap-2">
+                <span
+                  class="rounded-full px-2 py-0.5 text-xs font-medium"
+                  :class="elementKindBadgeClass('assumption')"
+                  data-testid="determination-element-kind"
+                >
+                  {{ $t('views.DeterminationView.element_kind_assumption') }}
+                </span>
+                <p class="text-sm font-medium">{{ assumption.statement }}</p>
+              </div>
               <span class="rounded-full px-2 py-0.5 text-xs" :class="confidenceBadgeClass(assumption.confidence)">
                 {{ $t('views.DeterminationView.confidence_' + assumption.confidence) }}
               </span>
             </div>
             <p class="mt-1 text-xs text-muted-foreground">
-              <span class="font-medium">{{ $t('views.DeterminationView.assumption_reason') }}:</span> {{ assumption.reason }}
+              <span class="font-medium">{{ $t('views.DeterminationView.assumption_reason') }}:</span>
+              <span v-if="reasonFor(assumption.reason).withheld" class="italic">
+                {{ $t('views.DeterminationView.evidence_value_withheld') }}
+              </span>
+              <span v-else>{{ reasonFor(assumption.reason).text }}</span>
             </p>
             <DeterminationEvidenceRefs
               :references="assumption.evidence_refs ?? []"
               :sources="sources"
               @link-source="focusSource"
             />
+            <button
+              type="button"
+              class="mt-2 rounded border px-2 py-1 text-xs"
+              :aria-label="$t('views.DeterminationView.evidence_open_for', { statement: assumption.statement })"
+              data-testid="determination-element-evidence"
+              @click="selectElement(elementView(assumption, 'assumption'))"
+            >
+              {{ $t('views.DeterminationView.evidence_open') }}
+            </button>
           </li>
         </ul>
       </section>
 
-      <section class="space-y-2" data-testid="determination-unavailable-evidence">
+      <section class="space-y-2" data-testid="determination-unavailable-evidence" aria-live="polite">
         <h3 class="text-sm font-medium">{{ $t('views.DeterminationView.unavailable_evidence_title') }}</h3>
+        <p class="text-xs text-muted-foreground">{{ $t('views.DeterminationView.unavailable_evidence_hint') }}</p>
         <p v-if="unavailableEvidence.length === 0" class="text-sm text-muted-foreground">
           {{ $t('views.DeterminationView.unavailable_evidence_empty') }}
         </p>
         <ul v-else class="space-y-1 text-sm">
           <li
             v-for="entry in unavailableEvidence"
-            :key="`${entry.source_id}-${entry.requested_resource}`"
+            :key="unavailableEvidenceKey(entry)"
             class="rounded-lg border border-destructive/40 bg-destructive/5 p-3"
             data-testid="determination-unavailable-row"
           >
@@ -166,33 +196,18 @@
             <p class="text-muted-foreground">
               {{ $t('views.DeterminationView.unavailable_requested_resource') }}: {{ entry.requested_resource }}
             </p>
-            <p>{{ entry.reason }}</p>
+            <p>
+              <span class="font-medium">{{ $t('views.DeterminationView.unavailable_reason') }}:</span>
+              <span v-if="reasonFor(entry.reason).withheld" class="italic" data-testid="determination-evidence-withheld">
+                {{ $t('views.DeterminationView.evidence_value_withheld') }}
+              </span>
+              <span v-else>{{ reasonFor(entry.reason).text }}</span>
+            </p>
           </li>
         </ul>
       </section>
 
-      <section class="space-y-2" data-testid="determination-provenance">
-        <h3 class="text-sm font-medium">{{ $t('views.DeterminationView.provenance_title') }}</h3>
-        <p v-if="provenance.length === 0" class="text-sm text-muted-foreground">
-          {{ $t('views.DeterminationView.provenance_empty') }}
-        </p>
-        <ul v-else class="space-y-1 text-sm">
-          <li
-            v-for="reference in provenance"
-            :key="reference.reference_id"
-            class="rounded-lg border bg-muted/20 p-3 text-xs"
-            data-testid="determination-provenance-row"
-          >
-            <span class="font-mono break-all">{{ reference.reference_id }}</span>
-            <span class="mx-1">·</span>
-            <span class="font-mono break-all">{{ reference.source_id }}</span>
-            <span class="mx-1">·</span>
-            <span class="font-mono break-all">{{ reference.locator }}</span>
-            <span class="mx-1">·</span>
-            <span>{{ $t('views.DeterminationView.provenance_' + reference.provenance) }}</span>
-          </li>
-        </ul>
-      </section>
+      <DeterminationProvenanceTrail :proposal="proposal" :review="review ?? null" />
 
       <section class="space-y-2" data-testid="determination-source-inventory">
         <h3 class="text-sm font-medium">{{ $t('views.DeterminationView.source_inventory_title') }}</h3>
@@ -221,6 +236,8 @@
           </li>
         </ul>
       </section>
+
+      <DeterminationEvidencePanel :element="selectedElement" @close="clearSelection" />
     </template>
   </section>
 </template>
@@ -229,25 +246,85 @@
 import { computed, nextTick, ref } from 'vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
 import LoadingSpinner from '../shared/LoadingSpinner.vue'
+import DeterminationEvidencePanel from './DeterminationEvidencePanel.vue'
 import DeterminationEvidenceRefs from './DeterminationEvidenceRefs.vue'
+import DeterminationProvenanceTrail from './DeterminationProvenanceTrail.vue'
 import { confidenceBadgeClass } from './confidencePresentation'
-import type { DeterminationProposal } from '../../composables/useDetermination'
+import {
+  displayEvidenceText,
+  elementKindBadgeClass,
+  unavailableEvidenceKey,
+  type DisplayText,
+  type EvidenceElementKind,
+  type EvidenceElementView,
+} from './evidencePresentation'
+import type {
+  DeterminationProposal,
+  DeterminationReviewResponse,
+  DerivedElement,
+  UnresolvedAssumption,
+} from '../../composables/useDetermination'
 
 const props = defineProps<{
   proposal: DeterminationProposal | null
+  review?: DeterminationReviewResponse | null
   loading: boolean
   error: string | null
 }>()
 
 const emit = defineEmits<{ (event: 'retry'): void }>()
 
-const uncertainty = computed(() => props.proposal?.uncertainty ?? [])
 const observedFacts = computed(() => props.proposal?.observed_facts ?? [])
 const derivedElements = computed(() => props.proposal?.derived_elements ?? [])
 const assumptions = computed(() => props.proposal?.unresolved_assumptions ?? [])
 const unavailableEvidence = computed(() => props.proposal?.unavailable_evidence ?? [])
-const provenance = computed(() => props.proposal?.provenance ?? [])
 const sources = computed(() => props.proposal?.attempt.source_inventory ?? [])
+
+/**
+ * Selection is held by element ID, never by array position: removing or
+ * correcting one element must not move the drill-down onto a different one,
+ * and the reference ids shown are the contract's own.
+ */
+const selectedElementId = ref<string | null>(null)
+
+const selectedElement = computed<EvidenceElementView | null>(() => {
+  const id = selectedElementId.value
+  if (!id) return null
+  const observed = observedFacts.value.find((fact) => fact.id === id)
+  if (observed) return elementView(observed, 'observed')
+  const derived = derivedElements.value.find((element) => element.id === id)
+  if (derived) return elementView(derived, 'derived')
+  const assumption = assumptions.value.find((entry) => entry.id === id)
+  return assumption ? elementView(assumption, 'assumption') : null
+})
+
+function elementView(
+  element: DerivedElement | UnresolvedAssumption,
+  kind: EvidenceElementKind,
+): EvidenceElementView {
+  return {
+    id: element.id,
+    kind,
+    statement: element.statement,
+    confidence: element.confidence,
+    evidenceRefs: element.evidence_refs ?? [],
+    // Only an unresolved assumption carries its own uncertainty (its reason);
+    // observed and derived facts have no per-element field in the contract.
+    uncertainty: 'reason' in element ? element.reason : null,
+  }
+}
+
+function selectElement(element: EvidenceElementView): void {
+  selectedElementId.value = element.id
+}
+
+function clearSelection(): void {
+  selectedElementId.value = null
+}
+
+function reasonFor(reason: string): DisplayText {
+  return displayEvidenceText(reason)
+}
 
 /**
  * How many element-level evidence references cite each sampled source, so a

@@ -39,6 +39,7 @@
 
     <DeterminationProposalPanel
       :proposal="proposal"
+      :review="review"
       :loading="draftLoading"
       :error="draftError"
       @retry="generateDraft()"
