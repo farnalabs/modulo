@@ -19,12 +19,16 @@ _REPLACEMENT = "${TAG:?TAG is required - set the image tag for this matrix phase
 
 def render_matrix_compose(compose_file: Path, tag: str | None = None) -> None:
     """Replace the packaged immutable image tag with a phase image selector."""
-    text = compose_file.read_text(encoding="utf-8")
+    # ``compose_file`` is a CLI argument fixed by the calling workflow
+    # (.github/workflows/rc-validate.yml renders
+    # ``${{ runner.temp }}/compose-matrix/docker-compose.prod.yml``); it is never
+    # user- or model-supplied, so this S8707 taint flow is a false positive.
+    text = compose_file.read_text(encoding="utf-8")  # NOSONAR pythonsecurity:S8707
     replacement = tag if tag is not None else _REPLACEMENT
     rendered, count = _IMAGE_LINE.subn(lambda match: match.group(1) + replacement, text, count=0)
     if count != 1:
         raise ValueError(f"expected exactly one modulo image to render, found {count}")
-    compose_file.write_text(rendered, encoding="utf-8")
+    compose_file.write_text(rendered, encoding="utf-8")  # NOSONAR pythonsecurity:S8707
     _print_stdout(f"Rendered matrix compose image selector in {compose_file}")
 
 
