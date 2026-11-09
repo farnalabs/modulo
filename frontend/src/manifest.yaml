@@ -212,6 +212,20 @@ routes:
         <<: *community
         deprecated: false
 
+    /determination:
+        name: determination
+        breadcrumb: Determination
+        parent: /
+        product_map: [feat-determination]
+        sidebar_group:
+        sidebar_order:
+        type: page
+        <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [determination.scan]
+        deprecated: false
+        exact: true
+
     /runs/diff:
         name: runs-diff
         breadcrumb: Output Diff
@@ -3231,6 +3245,181 @@ elements:
         dynamic_testid: false
       - testid: risk-assessment-empty
         type: element
+        dynamic_testid: false
+    /determination:
+      - testid: determination-view
+        type: element
+        dynamic_testid: false
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
+      - testid: determination-run-scan
+        type: button
+        dynamic_testid: false
+      - testid: determination-generate-draft
+        type: button
+        dynamic_testid: false
+      - testid: determination-review-unavailable
+        type: element
+        dynamic_testid: false
+      - testid: determination-scan
+        type: element
+        dynamic_testid: false
+      - testid: determination-scan-summary
+        type: element
+        dynamic_testid: false
+      - testid: determination-scan-loading
+        type: element
+        dynamic_testid: false
+      - testid: determination-scan-empty
+        type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+      - testid: determination-samples
+        type: element
+        dynamic_testid: false
+      - testid: determination-samples-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-sample-row
+        type: element
+        dynamic_testid: false
+      - testid: determination-findings
+        type: element
+        dynamic_testid: false
+      - testid: determination-findings-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-finding-row
+        type: element
+        dynamic_testid: false
+      - testid: determination-proposal
+        type: element
+        dynamic_testid: false
+      - testid: determination-proposal-loading
+        type: element
+        dynamic_testid: false
+      - testid: determination-proposal-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-proposal-not-activated
+        type: element
+        dynamic_testid: false
+      - testid: determination-proposal-confidence
+        type: element
+        dynamic_testid: false
+      - testid: determination-proposal-uncertainty
+        type: element
+        dynamic_testid: false
+      - testid: determination-observed-facts
+        type: element
+        dynamic_testid: false
+      - testid: determination-observed-fact
+        type: element
+        dynamic_testid: false
+      - testid: determination-derived-elements
+        type: element
+        dynamic_testid: false
+      - testid: determination-derived-element
+        type: element
+        dynamic_testid: false
+      - testid: determination-assumptions
+        type: element
+        dynamic_testid: false
+      - testid: determination-assumption
+        type: element
+        dynamic_testid: false
+      - testid: determination-unavailable-evidence
+        type: element
+        dynamic_testid: false
+      - testid: determination-unavailable-row
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance-row
+        type: element
+        dynamic_testid: false
+      - testid: determination-source-inventory
+        type: element
+        dynamic_testid: false
+      - testid: determination-source-row
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-refs
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-ref
+        type: element
+        dynamic_testid: false
+      - testid: determination-review
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-result
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-result-state
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-result-actor
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-result-decided-at
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-result-reason
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-not-activated
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-error
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-derived
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-derived-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-derived-row
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-statements-invalid
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-blocking
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-blocking-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-approve-blocked
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-reason
+        type: textarea
+        dynamic_testid: false
+      - testid: determination-review-reason-required
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-approve
+        type: button
+        dynamic_testid: false
+      - testid: determination-review-reject
+        type: button
+        dynamic_testid: false
+      - testid: determination-review-needs-review
+        type: button
         dynamic_testid: false
     /admin/evidence-redaction:
       - testid: page-header-right
@@ -7453,6 +7642,21 @@ features:
             - "[x] Facet filters (key prefix, pipeline, time window, action) drive server-side filtering through the risk assessment store and update URL query params for deep-linking, and deep-link hydration accepts ONLY values the facet vocabulary can express and the wire contract parses — the time window must be one of the offered RISK_WINDOW_CHOICES, the action must be in the gate-action list, and pipeline_id must be a canonical UUID (key_prefix stays free text, as the API treats it as a LIKE prefix) — so an out-of-contract value is a malformed link that degrades to the default instead of being sent, because the backend answers it 422 and the error alert's Retry re-applies the same filters, turning a stale or hand-tampered link into an error the retry can never clear; the select renders the SAME RISK_WINDOW_CHOICES the hydration accepts, so the facet and the deep-link contract cannot drift (frontend/src/lib/riskAssessment.ts, frontend/src/views/RiskAssessmentView.vue, frontend/src/components/risk-assessment/RiskAssessmentFacets.vue, frontend/src/__tests__/RiskAssessmentView.spec.ts, frontend/src/__tests__/RiskAssessmentComponents.spec.ts)"
             - "[x] Summary card displays total rows and per-action counts (block, warn, continue, escalate) with facet degradation indicator and time window note (frontend/src/components/risk-assessment/RiskAssessmentSummaryCard.vue)"
             - "[x] Sortable table renders evidence rows with timestamp, key, action badge, subject, and formatted value columns; empty state handled (frontend/src/components/risk-assessment/RiskAssessmentTable.vue)"
+    feat-determination:
+        description: Read-only SDLC determination scan, evidence-backed proposal review, and a recorded review decision that never activates a pipeline
+        status: partial
+        behaviours:
+            - "[x] The /determination route runs GET /api/v1/determination and renders every sampled source (connector type, resource, record count, connector id, error) and every inferred finding (category, finding, evidence, confidence, uncertainty) with a polite live loading region and a retry-able error alert (frontend/src/views/DeterminationView.vue, frontend/src/components/determination/DeterminationScanPanel.vue)"
+            - "[x] Generate draft calls POST /api/v1/determination/draft and renders the returned ProposalContract: contract version, attempt status, overall confidence, review state, the uncertainty list, observed facts, derived elements, unresolved assumptions, unavailable evidence, provenance references and the attempt source inventory; every fact, derived element and assumption lists its own evidence references (reference id, source id, locator, provenance) (frontend/src/components/determination/DeterminationProposalPanel.vue, frontend/src/components/determination/DeterminationEvidenceRefs.vue)"
+            - "[x] The review panel records approve, reject or needs_review through POST /api/v1/determination/review; a reject is refused client-side while the reason is blank, and a refused decision surfaces the server's 422 ProblemDetail detail verbatim in an assertive live region rather than a generic message (frontend/src/components/determination/DeterminationReviewPanel.vue, frontend/src/composables/useDetermination.ts)"
+            - "[x] Approval is blocked while any low or unknown-confidence unresolved assumption is unacknowledged: each blocking assumption renders an acknowledgement checkbox, the approve control stays disabled until all are acknowledged, and the remaining count is announced politely (frontend/src/components/determination/DeterminationReviewPanel.vue)"
+            - "[x] Derived elements are correctable before submission: the statement and confidence are editable in place, an element can be removed and restored, and only actual changes are sent as corrected_derived_elements alongside removed_derived_element_ids; a blank statement blocks every decision (frontend/src/components/determination/DeterminationReviewPanel.vue, frontend/src/composables/useDetermination.ts)"
+            - "[x] A recorded decision shows review_state, the deciding actor, decided_at and an explicit not-activated statement; generating a new draft clears the previous result because the proposal id changed (frontend/src/components/determination/DeterminationReviewPanel.vue, frontend/src/composables/useDetermination.ts)"
+            - "[x] The route is registered in the router and the product map behind the determination.scan permission (operator floor), every user-facing string is i18n-backed under views.DeterminationView, and the surface's static data-testids are registered in the route's elements inventory (frontend/src/router/index.ts, frontend/src/manifest.yaml, frontend/src/locales/en-US.js)"
+            - "[ ] Per-element evidence drill-down with cross-linking to the sampled source records (FAR-2472)"
+        deferrals:
+            - "Sidebar navigation entry: the route is reachable at its URL only until frontend/src/config/navigation.ts gains a routeConfigMap icon/label and SvgIcon.vue an icon entry (both outside this change's footprint)"
+            - "Proposal activation (creating or enabling a pipeline from an approved proposal) is deliberately out of scope: the contract and the review response pin activation_status to not_activated"
     feat-governance-stack:
         description: Read-only governance-hierarchy taxonomy readout (/governance)
         status: covered

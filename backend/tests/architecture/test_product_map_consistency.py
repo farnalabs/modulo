@@ -488,6 +488,15 @@ OWNED_PAGES = {
         "frontend/src/components/shared/EmptyState.vue",
         "frontend/src/components/ui/data-table/DataTable.vue",
     ),
+    "/determination": (
+        "frontend/src/views/DeterminationView.vue",
+        "frontend/src/components/determination/DeterminationScanPanel.vue",
+        "frontend/src/components/determination/DeterminationProposalPanel.vue",
+        "frontend/src/components/determination/DeterminationReviewPanel.vue",
+        "frontend/src/components/determination/DeterminationEvidenceRefs.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+        "frontend/src/components/shared/ErrorAlert.vue",
+    ),
     "/admin/audit": (
         "frontend/src/views/AdminAuditView.vue",
         "frontend/src/components/shared/PageHeader.vue",

@@ -139,6 +139,7 @@ const AcceptInviteView = () => import('../views/AcceptInviteView.vue')
 const AssistantOnlyView = () => import('../views/AssistantOnlyView.vue')
 const SystemMapsView = () => import('../views/SystemMapsView.vue')
 const SystemMapDetailView = () => import('../views/SystemMapDetailView.vue')
+const DeterminationView = () => import('../views/DeterminationView.vue')
 
 /**
  * Move focus to the newly entered route's content.
@@ -422,6 +423,11 @@ const router = createRouter({
       path: '/risk-assessment',
       name: 'risk-assessment',
       component: RiskAssessmentView,
+    },
+    {
+      path: '/determination',
+      name: 'determination',
+      component: DeterminationView,
     },
     {
       path: '/runs/:id',
