@@ -230,7 +230,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/compose-matrix/modulo-${version}-compose.tar.gz" \
             -C "$RUNNER_TEMP/compose-matrix"
           (cd "$RUNNER_TEMP/compose-matrix" && sha256sum --check SHA256SUMS)
-          "$RUNNER_TEMP/compose-matrix/init-env.sh"
+          cd "$RUNNER_TEMP/compose-matrix" && ./init-env.sh
 
 
       - name: Render matrix compose image from the phase TAG
