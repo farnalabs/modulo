@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from modulo.connectors.base import ConnectorType
 from modulo.determination.inference import Finding, build_proposal_contract
-from modulo.determination.models import ProposalContract
+from modulo.determination.models import ProposalContract, SourceInventoryItem
 
 from .helpers import make_sample
 
@@ -26,6 +26,58 @@ def test_valid_contract_is_versioned_evidence_backed_and_not_activated() -> None
     assert contract.derived_elements[0].kind == "derived"
     assert contract.provenance[0].provenance == "observed"
     assert contract.attempt.source_inventory[0].sample_count == 1
+
+
+def test_derived_element_links_observed_evidence_for_its_connector() -> None:
+    sample = make_sample("repos", [{"name": "repo"}], connector_type=ConnectorType.GITHUB)
+    contract = build_proposal_contract(
+        [sample],
+        [
+            Finding(
+                category="stage",
+                finding="Development observed",
+                evidence="1 repository accessible",
+                confidence="high",
+                related_connector=sample.connector_id,
+            )
+        ],
+    )
+
+    derived = contract.derived_elements[0]
+    assert derived.evidence_refs
+    assert derived.evidence_refs[0].source_id == f"{sample.connector_id}:repos"
+    assert derived.evidence_refs == contract.provenance
+
+
+def test_inferred_derived_elements_carry_their_connector_evidence() -> None:
+    sample = make_sample("repos", [{"name": "repo"}], connector_type=ConnectorType.GITHUB)
+
+    contract = build_proposal_contract([sample])
+
+    development = next(item for item in contract.derived_elements if "Development" in item.statement)
+    assert development.evidence_refs
+    assert all(ref.source_id == f"{sample.connector_id}:repos" for ref in development.evidence_refs)
+
+
+def test_ambiguous_connector_attribution_leaves_derived_evidence_unlinked() -> None:
+    github = make_sample("repos", [{"name": "repo"}], connector_type=ConnectorType.GITHUB)
+    gitlab = make_sample("repos", [{"name": "repo"}], connector_type=ConnectorType.GITLAB)
+    contract = build_proposal_contract([github, gitlab])
+
+    development = next(item for item in contract.derived_elements if "Development" in item.statement)
+    assert development.evidence_refs == []
+
+
+def test_inventory_rejects_error_on_available_source() -> None:
+    with pytest.raises(ValidationError, match="unavailable"):
+        SourceInventoryItem(
+            source_id="source",
+            connector_type="github",
+            resource="repos",
+            sample_count=1,
+            status="available",
+            error="boom",
+        )
 
 
 def test_incomplete_sample_surfaces_unavailable_evidence_and_assumption() -> None:

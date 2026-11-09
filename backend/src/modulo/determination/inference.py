@@ -57,6 +57,12 @@ _CI_FILES = {
 _PLANNING_STATUSES = {"backlog", "to do", "todo", "ready", "selected for development"}
 
 
+_REPO_RESOURCES = frozenset({"repos", "projects"})
+_PULL_RESOURCES = frozenset({"pulls", "mrs"})
+_ISSUE_RESOURCES = frozenset({"issues"})
+_SDLC_RESOURCES = _REPO_RESOURCES | _PULL_RESOURCES | _ISSUE_RESOURCES
+
+
 @dataclass
 class _InferenceData:
     """Aggregated sample data consumed by the per-stage finding builders."""
@@ -67,6 +73,21 @@ class _InferenceData:
     has_ci_config: bool = False
     pr_ages: list[float] = field(default_factory=list)
     stale_pr_count: int = 0
+    connectors_by_resource: dict[str, set[uuid.UUID]] = field(default_factory=dict)
+
+
+def _contributing_connector(data: _InferenceData, resources: frozenset[str]) -> uuid.UUID | None:
+    """Return the single connector that contributed *resources*.
+
+    A derived finding can only link to observed evidence when exactly one
+    connector produced the records it is derived from; with zero contributing
+    connectors (no data) or several (an ambiguous attribution) there is no
+    single source to link, so the finding stays unlinked rather than guessing.
+    """
+    connector_ids: set[uuid.UUID] = set()
+    for resource in resources:
+        connector_ids |= data.connectors_by_resource.get(resource, set())
+    return next(iter(connector_ids)) if len(connector_ids) == 1 else None
 
 
 def _age_days(value: Any) -> float | None:
@@ -90,6 +111,8 @@ def _aggregate(samples: list[ScanSample]) -> _InferenceData:
     """Fold sampled connector records into a single :class:`_InferenceData`."""
     data = _InferenceData()
     for s in samples:
+        if not s.error and s.records and s.resource in _SDLC_RESOURCES:
+            data.connectors_by_resource.setdefault(s.resource, set()).add(s.connector_id)
         match s.resource:
             case "repos" | "projects":
                 _aggregate_repos(data, s.records)
@@ -149,6 +172,7 @@ def _find_planning_stage(data: _InferenceData) -> list[Finding]:
             evidence=f"{planning_count} issues in planning statuses",
             confidence="high",
             uncertainty="Status taxonomy varies by tool; mapped via common aliases",
+            related_connector=_contributing_connector(data, _ISSUE_RESOURCES),
         )
     ]
 
@@ -163,6 +187,7 @@ def _find_code_review(data: _InferenceData) -> list[Finding]:
             finding="Code review stage detected: open pull/merge requests found",
             evidence=f"{len(data.pull_requests)} open PRs/MRs across repos",
             confidence="high",
+            related_connector=_contributing_connector(data, _PULL_RESOURCES),
         )
     ]
 
@@ -178,6 +203,7 @@ def _find_development(data: _InferenceData) -> list[Finding]:
             finding="Development stage detected: source repositories found",
             evidence=f"{len(data.repo_names)} {repo_label} accessible",
             confidence="high",
+            related_connector=_contributing_connector(data, _REPO_RESOURCES),
         )
     ]
 
@@ -192,6 +218,7 @@ def _find_ci(data: _InferenceData) -> list[Finding]:
                 evidence="Repository metadata references CI tooling (GitHub Actions, GitLab CI, Jenkins, CircleCI)",
                 confidence="medium",
                 uncertainty="Cannot verify CI is actively running; only config references were checked",
+                related_connector=_contributing_connector(data, _REPO_RESOURCES),
             )
         ]
     return [
@@ -201,6 +228,7 @@ def _find_ci(data: _InferenceData) -> list[Finding]:
             evidence="Sampled repo metadata does not reference known CI tooling",
             confidence="low",
             uncertainty="CI config may exist in files not sampled; only repo metadata was scanned",
+            related_connector=_contributing_connector(data, _REPO_RESOURCES),
         )
     ]
 
@@ -222,6 +250,7 @@ def _find_stale_prs(data: _InferenceData) -> list[Finding]:
                 confidence="medium",
                 uncertainty="Cannot determine if PRs are waiting for review "
                 "or intentionally long-lived (e.g., draft PRs, WIP)",
+                related_connector=_contributing_connector(data, _PULL_RESOURCES),
             )
         ]
     return [
@@ -231,6 +260,7 @@ def _find_stale_prs(data: _InferenceData) -> list[Finding]:
             evidence=evidence_detail,
             confidence="low",
             uncertainty="Small sample may miss long-lived PRs on other branches or repos",
+            related_connector=_contributing_connector(data, _PULL_RESOURCES),
         )
     ]
 
@@ -254,6 +284,7 @@ def _find_issue_lifecycle(data: _InferenceData) -> list[Finding]:
             confidence="medium",
             uncertainty="Cannot infer transition order or speed from a single scan; "
             "would need status change history or webhook events",
+            related_connector=_contributing_connector(data, _ISSUE_RESOURCES),
         )
     ]
 
@@ -282,6 +313,7 @@ def _find_overview(data: _InferenceData) -> list[Finding]:
                 uncertainty="Deployment stage cannot be assessed "
                 "without deployment tool connector; "
                 "monitoring/incident stages not detectable from sampled data",
+                related_connector=_contributing_connector(data, _SDLC_RESOURCES),
             )
         ]
     return [
@@ -329,6 +361,7 @@ def build_proposal_contract(
     inventory: list[SourceInventoryItem] = []
     unavailable: list[UnavailableEvidence] = []
     provenance: list[EvidenceReference] = []
+    provenance_by_connector: dict[uuid.UUID, dict[str, EvidenceReference]] = {}
     observed: list[ProposalFact] = []
     derived: list[ProposalFact] = []
 
@@ -361,6 +394,7 @@ def build_proposal_contract(
                 provenance="observed",
             )
             provenance.append(ref)
+            provenance_by_connector.setdefault(sample.connector_id, {})[ref.reference_id] = ref
             observed.append(
                 ProposalFact(
                     id=uuid.uuid5(uuid.NAMESPACE_URL, source_id),
@@ -372,8 +406,8 @@ def build_proposal_contract(
             )
 
     for index, finding in enumerate(resolved_findings):
-        matched_ref = next((item for item in provenance if item.source_id in finding.evidence), None)
-        refs = [matched_ref] if matched_ref is not None else []
+        connector_refs = provenance_by_connector.get(finding.related_connector, {}) if finding.related_connector else {}
+        refs = list(connector_refs.values())
         derived.append(
             ProposalFact(
                 id=uuid.uuid5(uuid.NAMESPACE_URL, f"finding:{index}:{finding.category}:{finding.finding}"),

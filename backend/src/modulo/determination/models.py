@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ProposalConfidence = Literal["high", "medium", "low", "unknown"]
 ProvenanceKind = Literal["observed", "derived", "inferred", "unavailable"]
@@ -75,6 +75,12 @@ class SourceInventoryItem(BaseModel):
         if value == "":
             raise ValueError("error must be omitted or non-empty")
         return value
+
+    @model_validator(mode="after")
+    def available_sources_have_no_error(self) -> SourceInventoryItem:
+        if self.status == "available" and self.error is not None:
+            raise ValueError("error is only valid on unavailable sources")
+        return self
 
 
 class DeterminationAttempt(BaseModel):
