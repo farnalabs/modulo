@@ -201,9 +201,12 @@ class TestPipelineGraphContractPostgres:
         # Persisted DB state
         async with db_engine.begin() as conn:
             # Pipeline nodes
-            pipeline_row = await conn.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
-            pipeline = pipeline_row.scalar_one()
-            persisted_nodes = {n["id"]: n for n in pipeline.graph_nodes_json}
+            # A raw AsyncConnection does not materialise ORM entities, so select
+            # the JSON column directly rather than the whole entity.
+            graph_nodes = (
+                await conn.execute(select(Pipeline.graph_nodes_json).where(Pipeline.id == pipeline_id))
+            ).scalar_one()
+            persisted_nodes = {n["id"]: n for n in graph_nodes}
             for n_payload in payload["nodes"]:
                 _assert_node_matches_payload(
                     persisted_nodes[n_payload["id"]],
@@ -213,9 +216,22 @@ class TestPipelineGraphContractPostgres:
                 )
 
             # Edges
-            edges = list(
-                (await conn.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars()
-            )
+            # Select explicit columns: a raw AsyncConnection returns column
+            # values, not ORM entities (see the pipeline-nodes read above).
+            edges = (
+                await conn.execute(
+                    select(
+                        PipelineEdge.id,
+                        PipelineEdge.source_node_id,
+                        PipelineEdge.target_node_id,
+                        PipelineEdge.edge_type,
+                        PipelineEdge.source_port,
+                        PipelineEdge.target_port,
+                        PipelineEdge.condition_expression,
+                        PipelineEdge.hitl_review_config,
+                    ).where(PipelineEdge.pipeline_id == pipeline_id)
+                )
+            ).all()
             persisted_edges = {e.id: e for e in edges}
             for e_payload in payload["edges"]:
                 eid = uuid.UUID(e_payload["id"])
@@ -236,15 +252,14 @@ class TestPipelineGraphContractPostgres:
                 )
 
             # Snapshot
-            snaps = list(
-                (
-                    await conn.execute(
-                        select(PipelineSnapshot)
-                        .where(PipelineSnapshot.pipeline_id == pipeline_id)
-                        .order_by(PipelineSnapshot.snapshot_version)
-                    )
-                ).scalars()
-            )
+            # Explicit columns for the same raw-connection reason as above.
+            snaps = (
+                await conn.execute(
+                    select(PipelineSnapshot.version_kind, PipelineSnapshot.graph_json)
+                    .where(PipelineSnapshot.pipeline_id == pipeline_id)
+                    .order_by(PipelineSnapshot.snapshot_version)
+                )
+            ).all()
             assert snaps, "edit snapshot not created"
             latest = snaps[-1]
             assert latest.version_kind == "edit"
@@ -331,9 +346,12 @@ class TestPipelineGraphContractPostgres:
 
         # Persisted value is real
         async with db_engine.begin() as conn:
-            pipeline_row = await conn.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
-            pipeline = pipeline_row.scalar_one()
-            sb = next(n for n in pipeline.graph_nodes_json if n["id"] == str(_SANDBOX_ID))
+            # A raw AsyncConnection does not materialise ORM entities, so read
+            # the JSON column directly.
+            graph_nodes = (
+                await conn.execute(select(Pipeline.graph_nodes_json).where(Pipeline.id == pipeline_id))
+            ).scalar_one()
+            sb = next(n for n in graph_nodes if n["id"] == str(_SANDBOX_ID))
             assert sb["env_vars"]["OPENAI_API_KEY"] == "plain-placeholder-not-a-real-secret"
 
 
