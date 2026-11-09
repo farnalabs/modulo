@@ -101,7 +101,7 @@ async def test_e2b_dispatch_sees_resolved_binding_and_node_wins() -> None:
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     create_mock.assert_called_once()
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert envs["OPENCODE_API_KEY"] == "stanza-secret"
@@ -181,7 +181,7 @@ async def test_agent_without_bindings_skips_resolution() -> None:
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     resolve_mock.assert_not_called()
 
 
@@ -227,7 +227,7 @@ async def test_healthy_provisioning_is_not_falsely_failed(monkeypatch: pytest.Mo
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
 
 
 async def test_binding_resolution_timeout_classifies_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -271,6 +271,6 @@ async def test_real_e2b_provider_error_surfaced_in_failure_envelope() -> None:
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "failed"
-    assert result["output"]["error_type"] == "SandboxException"
-    assert "400: Timeout cannot be greater than 1 hours" in result["output"]["error_message"]
+    assert result["telemetry"]["status"] == "failed"
+    assert result["telemetry"]["error_type"] == "SandboxException"
+    assert "400: Timeout cannot be greater than 1 hours" in result["telemetry"]["error_message"]

@@ -534,7 +534,7 @@ async def test_script_mode_input_json_lands_through_the_provider(monkeypatch: py
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert fake_file_io.files["/home/user/input.json"] == json.dumps({"task": "x"}).encode("utf-8")
     assert not sandbox.files.write.called
 
@@ -563,7 +563,7 @@ async def test_bridge_writes_land_through_the_provider(monkeypatch: pytest.Monke
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     for bridge_path in (
         "/home/user/modulo_bridge.py",
         "/home/user/modulo_bridge_config.json",

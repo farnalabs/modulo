@@ -69,7 +69,7 @@ def _run_state(payload: dict | None = None) -> dict:
     run_context = {"input": payload if payload is not None else {"task": "x"}}
     return {
         "run_context": run_context,
-        "_run_id": "run-1",
+        "_run_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
         "_pipeline_id": "pipe-1",
         "_org_id": _ORG_ID,
     }
@@ -194,14 +194,26 @@ class _FakeSessionFactory:
 def _any_script_executing_marker(session: _FakeSession) -> bool:
     """True when any executed UPDATE carried a ``script_executing`` marker."""
     for _sql, params in session.executions:
-        marker = params.get("marker")
-        if isinstance(marker, str):
-            try:
-                state = json.loads(marker)
-            except (TypeError, ValueError):
-                continue
-            if isinstance(state, dict) and state.get("state") == "script_executing":
-                return True
+        # params can be a list (executemany) or dict
+        if isinstance(params, list):
+            for p in params:
+                marker = p.get("marker") if isinstance(p, dict) else None
+                if isinstance(marker, str):
+                    try:
+                        state = json.loads(marker)
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(state, dict) and state.get("state") == "script_executing":
+                        return True
+        elif isinstance(params, dict):
+            marker = params.get("marker")
+            if isinstance(marker, str):
+                try:
+                    state = json.loads(marker)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(state, dict) and state.get("state") == "script_executing":
+                    return True
     return False
 
 
@@ -275,7 +287,7 @@ async def test_llm_mode_takes_no_fencing_lease():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(state)
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert not _any_script_executing_marker(session)
 
 

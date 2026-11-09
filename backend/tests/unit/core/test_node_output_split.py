@@ -22,6 +22,7 @@ from modulo.core.node_output_split import (
     TELEMETRY_FIELDS,
     extend_node_type_map_from_edges,
     has_telemetry_entry,
+    is_split_envelope,
     node_return,
     node_stderr_artifact,
     node_stdout_artifact,
@@ -476,6 +477,97 @@ def test_split_idempotent_across_round_trip() -> None:
     first = split_node_output(envelope, "sandbox_agent", None)
     second = split_node_output(first[0], "sandbox_agent", first[1])
     assert second == first
+
+
+def test_split_new_format_output_telemetry_artifacts_idempotent() -> None:
+    """FAR-130 proof: the already-split sandbox envelope carries ``output`` +
+    ``telemetry`` + the state-accumulator ``artifacts`` — re-splitting it must
+    return the pure return and the flat telemetry verbatim, never nest the
+    telemetry under the return nor fold the artifact in."""
+    pure_return = {"pr_url": "https://github.com/farnalabs/modulo/pull/1", "summary": "done"}
+    telemetry = {"status": "completed", "cost_estimate_usd": 0.1, "agent_stdout": "hi"}
+    envelope = {
+        "output": pure_return,
+        "telemetry": telemetry,
+        "artifacts": [{"node_id": "sandbox-1", "status": "completed", "output": {"output_json": pure_return}}],
+    }
+
+    value, split_telemetry = split_node_output(envelope, "sandbox_agent", None)
+
+    assert value == pure_return
+    assert split_telemetry == telemetry
+    assert "telemetry" not in split_telemetry
+
+
+def test_split_bare_output_telemetry_without_artifacts_is_not_split() -> None:
+    """Collision guard (FAR-130 review): the production split envelope ALWAYS
+    carries ``artifacts``, so ``is_split_envelope`` requires it. A bare
+    ``{output, telemetry}`` pair is therefore NOT treated as already split --
+    it falls through to the per-type splitter, which returns the envelope's
+    ``output`` and folds the remaining keys into telemetry losslessly (the
+    already-split branch would instead have returned the telemetry channel
+    FLAT, never nested under a ``telemetry`` key)."""
+    pure_return = {"ok": True}
+    telemetry = {"status": "completed", "wall_clock_time_ms": 10}
+    value, split_telemetry = split_node_output({"output": pure_return, "telemetry": telemetry}, "router", None)
+    assert value == pure_return
+    assert split_telemetry == {"telemetry": telemetry}
+
+
+def test_split_new_format_folds_extra_toplevel_stamps_losslessly() -> None:
+    """The already-split envelope may carry extra top-level stamps (FAR-130:
+    ``_record_chain_end_output`` stamps ``otel_span_id`` / ``otel_trace_id``
+    before persistence). Those must be folded into telemetry losslessly rather
+    than dropped by the idempotent branch."""
+    stamped = {
+        "output": {"pr_url": "u"},
+        "telemetry": {"status": "completed"},
+        "artifacts": [{"node_id": "sb", "status": "completed", "output": {}}],
+        "otel_span_id": "span-123",
+        "otel_trace_id": "trace-abc",
+    }
+    ret, tel = split_node_output(stamped, "sandbox_agent", None)
+    assert ret == {"pr_url": "u"}
+    assert tel["status"] == "completed"
+    assert tel["otel_span_id"] == "span-123"
+    assert tel["otel_trace_id"] == "trace-abc"
+    # the split channels are NOT re-folded into telemetry
+    assert "output" not in tel
+    assert "telemetry" not in tel
+    assert "artifacts" not in tel
+
+
+# ---------------------------------------------------------------------------
+# is_split_envelope -- the ONE canonical split-detection predicate
+# ---------------------------------------------------------------------------
+
+
+def test_is_split_envelope_true_for_real_three_key_shape() -> None:
+    """The production envelope carries output + dict telemetry + artifacts."""
+    envelope = {
+        "output": {"pr_url": "u"},
+        "telemetry": {"status": "completed"},
+        "artifacts": [{"node_id": "sb", "status": "completed", "output": {}}],
+    }
+    assert is_split_envelope(envelope) is True
+
+
+def test_is_split_envelope_false_without_artifacts() -> None:
+    """Collision guard: a bare ``{output, telemetry}`` pair is not the
+    production shape, so it must NOT be detected as split."""
+    assert is_split_envelope({"output": {"ok": True}, "telemetry": {"status": "completed"}}) is False
+
+
+def test_is_split_envelope_false_for_legacy_artifacts_output() -> None:
+    """A legacy envelope carries ``artifacts`` + ``output`` but NO telemetry."""
+    legacy = {"artifacts": [{"node_id": "sb", "output": {}}], "output": {"status": "completed"}}
+    assert is_split_envelope(legacy) is False
+
+
+def test_is_split_envelope_false_for_non_dict_and_non_dict_telemetry() -> None:
+    assert is_split_envelope(None) is False
+    assert is_split_envelope("not-a-dict") is False
+    assert is_split_envelope({"output": {}, "telemetry": "flat", "artifacts": []}) is False
 
 
 # ---------------------------------------------------------------------------

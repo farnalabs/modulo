@@ -311,8 +311,8 @@ class TestAgentReportedTokenUsage:
         )
 
     def test_envelope_carries_reported_tokens_in_both_views(self) -> None:
-        """The envelope's inner (artifact) and outer (telemetry) views both
-        carry the extracted fields; a node without a report carries none."""
+        """The envelope's telemetry view carries the extracted fields; a node
+        without a report carries none."""
         output = nr._SandboxNodeOutput(
             status="completed",
             summary="did the thing",
@@ -322,14 +322,13 @@ class TestAgentReportedTokenUsage:
             cost_source={"token_usage": {"input": 1234, "output": 567, "total": 1801, "cache_read": 100}},
         )
         envelope = _build_sandbox_node_envelope(node_id="n1", output=output)
-        inner = envelope["artifacts"][0]["output"]
-        outer = envelope["output"]
-        for view in (inner, outer):
-            assert view["model_tokens_input"] == 1234
-            assert view["model_tokens_output"] == 567
-            assert view["model_tokens_total"] == 1801
-            assert view["model_tokens_cache_read"] == 100
-            assert "model_tokens_cache_write" not in view
+        # New split format: telemetry contains all telemetry fields including model_tokens_*
+        telemetry = envelope["telemetry"]
+        assert telemetry["model_tokens_input"] == 1234
+        assert telemetry["model_tokens_output"] == 567
+        assert telemetry["model_tokens_total"] == 1801
+        assert telemetry["model_tokens_cache_read"] == 100
+        assert "model_tokens_cache_write" not in telemetry
 
         silent = nr._SandboxNodeOutput(
             status="completed",
@@ -340,8 +339,7 @@ class TestAgentReportedTokenUsage:
             cost_source={"summary": "nothing"},
         )
         quiet_envelope = _build_sandbox_node_envelope(node_id="n2", output=silent)
-        assert not any(key.startswith("model_tokens_") for key in quiet_envelope["artifacts"][0]["output"])
-        assert not any(key.startswith("model_tokens_") for key in quiet_envelope["output"])
+        assert not any(key.startswith("model_tokens_") for key in quiet_envelope["telemetry"])
 
     def test_schema_drift_suppresses_token_report(self) -> None:
         """A truthy producer ``schema_drift`` flag suppresses the token report
@@ -359,7 +357,7 @@ class TestAgentReportedTokenUsage:
 
     def test_drifted_producer_tokens_not_folded_into_envelope(self) -> None:
         """A drifted producer's ``token_usage`` is NOT folded into the node
-        output (no ``model_tokens_*`` in either view — so no ``reported_*``
+        output (no ``model_tokens_*`` in telemetry — so no ``reported_*``
         keys ever fold downstream), while a clean producer's is."""
         drifted = nr._SandboxNodeOutput(
             status="completed",
@@ -370,8 +368,7 @@ class TestAgentReportedTokenUsage:
             cost_source={"schema_drift": True, "token_usage": {"input": 1234, "output": 567, "total": 1801}},
         )
         drifted_envelope = _build_sandbox_node_envelope(node_id="n1", output=drifted)
-        for view in (drifted_envelope["artifacts"][0]["output"], drifted_envelope["output"]):
-            assert not any(key.startswith("model_tokens_") for key in view)
+        assert not any(key.startswith("model_tokens_") for key in drifted_envelope["telemetry"])
 
         clean = nr._SandboxNodeOutput(
             status="completed",
@@ -382,10 +379,9 @@ class TestAgentReportedTokenUsage:
             cost_source={"schema_drift": False, "token_usage": {"input": 1234, "output": 567, "total": 1801}},
         )
         clean_envelope = _build_sandbox_node_envelope(node_id="n2", output=clean)
-        for view in (clean_envelope["artifacts"][0]["output"], clean_envelope["output"]):
-            assert view["model_tokens_input"] == 1234
-            assert view["model_tokens_output"] == 567
-            assert view["model_tokens_total"] == 1801
+        assert clean_envelope["telemetry"]["model_tokens_input"] == 1234
+        assert clean_envelope["telemetry"]["model_tokens_output"] == 567
+        assert clean_envelope["telemetry"]["model_tokens_total"] == 1801
 
 
 # ---------------------------------------------------------------------------
@@ -734,21 +730,19 @@ class TestStdoutTruncatedEnvelopeKey:
             node_id="n1",
             output=self._output(stdout_truncated=True, stdout_length=600_000),
         )
-        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
-            assert view["stdout_truncated"] is True
-            assert view["stdout_length"] == 600_000
+        assert envelope["telemetry"]["stdout_truncated"] is True
+        assert envelope["telemetry"]["stdout_length"] == 600_000
 
     def test_key_absent_when_not_truncated(self) -> None:
         envelope = _build_sandbox_node_envelope(node_id="n1", output=self._output())
-        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
-            assert "stdout_truncated" not in view
+        assert "stdout_truncated" not in envelope["telemetry"]
 
     def test_key_absent_when_explicitly_false(self) -> None:
         envelope = _build_sandbox_node_envelope(
             node_id="n1",
             output=self._output(stdout_truncated=False),
         )
-        assert "stdout_truncated" not in envelope["output"]
+        assert "stdout_truncated" not in envelope["telemetry"]
 
     def test_stdout_artifact_pointer_is_opt_in_extra_key(self) -> None:
         pointer = {
@@ -764,17 +758,15 @@ class TestStdoutTruncatedEnvelopeKey:
             node_id="n1",
             output=self._output(stdout_truncated=True, stdout_length=600_000, stdout_artifact=pointer),
         )
-        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
-            assert view["stdout_artifact"]["truncated"] is False
-            assert view["stdout_artifact"]["redacted"] is True
-            assert view["stdout_artifact"]["size_bytes"] == 600_000
-            assert view["stdout_artifact"]["sha256"] == "d1b2c3"
-            assert view["stdout_artifact"]["rel_path"].endswith(".zst")
+        assert envelope["telemetry"]["stdout_artifact"]["truncated"] is False
+        assert envelope["telemetry"]["stdout_artifact"]["redacted"] is True
+        assert envelope["telemetry"]["stdout_artifact"]["size_bytes"] == 600_000
+        assert envelope["telemetry"]["stdout_artifact"]["sha256"] == "d1b2c3"
+        assert envelope["telemetry"]["stdout_artifact"]["rel_path"].endswith(".zst")
 
     def test_stdout_artifact_absent_when_inline(self) -> None:
         envelope = _build_sandbox_node_envelope(node_id="n1", output=self._output())
-        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
-            assert "stdout_artifact" not in view
+        assert "stdout_artifact" not in envelope["telemetry"]
 
     def test_stderr_artifact_pointer_is_opt_in_extra_key(self) -> None:
         """FAR-879: stderr_artifact surfaces on the envelope when provided."""
@@ -791,19 +783,17 @@ class TestStdoutTruncatedEnvelopeKey:
             node_id="n1",
             output=self._output(stderr_artifact=pointer),
         )
-        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
-            assert view["stderr_artifact"]["truncated"] is False
-            assert view["stderr_artifact"]["redacted"] is True
-            assert view["stderr_artifact"]["size_bytes"] == 8000
-            assert view["stderr_artifact"]["sha256"] == "e4f5g6"
-            assert view["stderr_artifact"]["stream"] == "stderr"
-            assert view["stderr_artifact"]["rel_path"].endswith(".zst")
+        assert envelope["telemetry"]["stderr_artifact"]["truncated"] is False
+        assert envelope["telemetry"]["stderr_artifact"]["redacted"] is True
+        assert envelope["telemetry"]["stderr_artifact"]["size_bytes"] == 8000
+        assert envelope["telemetry"]["stderr_artifact"]["sha256"] == "e4f5g6"
+        assert envelope["telemetry"]["stderr_artifact"]["stream"] == "stderr"
+        assert envelope["telemetry"]["stderr_artifact"]["rel_path"].endswith(".zst")
 
     def test_stderr_artifact_absent_when_inline(self) -> None:
         """FAR-879: no stderr_artifact key when no pointer is provided."""
         envelope = _build_sandbox_node_envelope(node_id="n1", output=self._output())
-        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
-            assert "stderr_artifact" not in view
+        assert "stderr_artifact" not in envelope["telemetry"]
 
 
 # ---------------------------------------------------------------------------
@@ -1079,3 +1069,83 @@ def test_resolve_hitl_subject_invalid_path_fails_safe() -> None:
     """An unparseable JMESPath expression is swallowed (logged at debug) — a
     bad subject_path never blocks the HITL gate from raising its interrupt."""
     assert nr._resolve_hitl_subject("[invalid", {"output": {}}, "rev-1") == (None, None, None)
+
+
+# ---------------------------------------------------------------------------
+# FAR-130: the new split envelope must stay compatible with the LangGraph
+# state readers — the ``artifacts`` accumulator rides alongside the clean
+# ``output`` / ``telemetry`` channels.
+# ---------------------------------------------------------------------------
+
+
+def _new_format_sandbox_return(
+    *,
+    node_id: str = "sandbox-1",
+    output_json: dict[str, Any] | None = None,
+    status: str = "completed",
+) -> dict[str, Any]:
+    """Build the REAL new-format sandbox envelope via the production builder."""
+    output = nr._SandboxNodeOutput(
+        status=status,
+        summary="did the thing",
+        exit_code=0,
+        wall_clock_time_ms=1200,
+        cost_estimate_usd=0.01,
+        output_json=output_json if output_json is not None else {"pr_url": "u", "summary": "done"},
+    )
+    return _build_sandbox_node_envelope(node_id=node_id, output=output)
+
+
+def test_new_format_return_carries_artifacts_accumulator() -> None:
+    """The new split return ALSO carries the artifacts entry so LangGraph's
+    state reducer still accumulates the node (FAR-130 regression)."""
+    returned = _new_format_sandbox_return(node_id="sandbox-1")
+
+    assert set(returned) >= {"output", "telemetry", "artifacts"}
+    (artifact,) = returned["artifacts"]
+    assert artifact["node_id"] == "sandbox-1"
+    assert artifact["status"] == "completed"
+    assert artifact["output"]["output_json"] == {"pr_url": "u", "summary": "done"}
+
+
+def test_state_reducer_accumulates_new_format_artifacts() -> None:
+    """A new-format return concatenated by the real reducer lands in
+    ``state["artifacts"]`` (the channel every state reader resolves from)."""
+    from modulo.core.pipeline_engine.graph_cache import _pipeline_state_reducer
+
+    returned = _new_format_sandbox_return(node_id="sandbox-1")
+    state = _pipeline_state_reducer({"artifacts": []}, returned)
+
+    assert [a["node_id"] for a in state["artifacts"]] == ["sandbox-1"]
+    assert state["artifacts"][0]["output"]["output_json"] == {"pr_url": "u", "summary": "done"}
+
+
+def test_fold_ancestor_emission_refs_reads_new_format_sandbox_artifact() -> None:
+    """REGRESSION (FAR-130): an ancestor sandbox node's emitted refs are folded
+    from ``state["artifacts"]`` accumulated from the new-format return."""
+    from modulo.core.pipeline_engine.graph_cache import _pipeline_state_reducer
+
+    returned = _new_format_sandbox_return(node_id="sandbox-1")
+    # The emitting agent's self-reported refs live on the artifact's full inner
+    # output (the same placement the fold reads for every node type).
+    returned["artifacts"][0]["output"]["work_item_refs"] = [{"kind": "github_pr", "ref": "12", "source": "agent"}]
+    state = _pipeline_state_reducer({"artifacts": []}, returned)
+
+    folded = nr._fold_ancestor_emission_refs(state)
+
+    assert folded["sandbox-1"] == [{"kind": "github_pr", "ref": "12", "source": "agent"}]
+
+
+def test_resolve_gate_eval_target_resolves_new_format_sandbox_artifact() -> None:
+    """REGRESSION (FAR-130): a HITL gate after a sandbox node resolves the
+    sandbox agent's CONTRACT output (``output.output_json``) from the
+    new-format artifact instead of falling back to the whole state."""
+    from modulo.core.pipeline_engine.graph_cache import _pipeline_state_reducer
+
+    contract_output = {"pr_url": "https://github.com/farnalabs/modulo/pull/9", "summary": "done"}
+    returned = _new_format_sandbox_return(node_id="sandbox-1", output_json=contract_output)
+    state = _pipeline_state_reducer({"artifacts": []}, returned)
+
+    target = nr._resolve_gate_eval_target(state, "sandbox-1", {"sandbox-1": "sandbox_agent"})
+
+    assert target == contract_output

@@ -318,7 +318,7 @@ async def test_generic_exception_path_uses_provider(monkeypatch: pytest.MonkeyPa
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "failed"
+    assert result["telemetry"]["status"] == "failed"
     assert fake.calls == [("sbx-exc", 6000)]
     assert any(e.startswith("write:") for e in fake_file_io.events)
     assert not sandbox.files.write.called

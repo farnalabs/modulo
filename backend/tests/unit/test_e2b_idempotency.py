@@ -144,7 +144,7 @@ async def test_dispatch_marker_set_before_sandbox_create():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=_record_create)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert events.index("marker_set") < events.index("sandbox_create")
     assert events.index("marker_store_id") > events.index("sandbox_create")
     # The marker is cleared in the finally.
@@ -184,7 +184,7 @@ async def test_marker_cleared_even_when_sandbox_create_fails():
 
     # A create failure is a generic exception path — surfaces as a failed node
     # output (not a retryable/superseded class), and the marker is cleared.
-    assert result["output"]["status"] == "failed"
+    assert result["telemetry"]["status"] == "failed"
     assert events[-1] == "marker_clear"
 
 
@@ -195,7 +195,7 @@ async def test_marker_skip_fail_open_without_session_factory():
     sandbox = _sandbox_mock()
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
 
 
 async def test_retryable_infra_failure_raises_sandbox_node_failed():
@@ -228,8 +228,8 @@ async def test_marker_carries_attempt_key():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=_sandbox_mock())):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
-    assert result["output"]["attempt_key"] == "run:run-1:node:n1:0"
+    assert result["telemetry"]["status"] == "completed"
+    assert result["telemetry"]["attempt_key"] == "run:run-1:node:n1:0"
     assert result["artifacts"][0]["output"]["attempt_key"] == "run:run-1:node:n1:0"
     # Both the acquire and the store-id marker UPDATEs carry the attempt key.
     assert session._marker_values
@@ -252,7 +252,7 @@ async def test_reclaimed_run_produces_different_attempt_key():
         session.execute = _select_count  # type: ignore[method-assign]
         with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=_sandbox_mock())):
             result = await fn(_run_state())
-        keys.append(result["output"]["attempt_key"])
+        keys.append(result["telemetry"]["attempt_key"])
 
     assert keys[0] == "run:run-1:node:n1:1"
     assert keys[1] == "run:run-1:node:n1:2"
@@ -269,7 +269,7 @@ async def test_same_claim_attempt_key_stable_across_invocations():
         fn = make_sandbox_agent_fn(_base_node_def(), session_factory=_make_factory(session))
         with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=_sandbox_mock())):
             result = await fn(_run_state())
-        keys.append(result["output"]["attempt_key"])
+        keys.append(result["telemetry"]["attempt_key"])
 
     assert keys[0] == "run:run-1:node:n1:0"
     assert keys[1] == "run:run-1:node:n1:0"
@@ -290,9 +290,9 @@ async def test_fail_open_attempt_key_derives_from_claim_token():
         state2["_claim_lease"] = "tok-executor-xyz"
         r2 = await second(state2)
 
-    key1a = r1a["output"]["attempt_key"]
-    key1b = r1b["output"]["attempt_key"]
-    key2 = r2["output"]["attempt_key"]
+    key1a = r1a["telemetry"]["attempt_key"]
+    key1b = r1b["telemetry"]["attempt_key"]
+    key2 = r2["telemetry"]["attempt_key"]
     assert key1a == key1b
     assert key1a != key2
     assert key1a.startswith("run:run-1:node:n1:")

@@ -169,7 +169,8 @@ async def test_sandbox_agent_passes_node_def_to_conformance_gate(monkeypatch):
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    # New split format: status is in telemetry
+    assert result["telemetry"]["status"] == "completed"
     gate.assert_awaited_once()
     kwargs = gate.await_args.kwargs
     assert kwargs["node_def"] is node_def
@@ -246,13 +247,14 @@ async def test_sandbox_agent_success_output_includes_cost_estimate_usd():
             }
         )
 
-    assert result["output"]["status"] == "completed"
+    # New split format: status in telemetry, cost_estimate_usd in both output (from output_json) and telemetry
+    assert result["telemetry"]["status"] == "completed"
+    # The pure return (output) contains the agent-reported cost_estimate_usd
     assert isinstance(result["output"]["cost_estimate_usd"], float)
-    # sandbox uptime cost >= 0 plus the agent-reported 0.001.
     assert result["output"]["cost_estimate_usd"] >= 0.001
-    # Artifact output mirrors the node output cost.
-    assert result["artifacts"][0]["output"]["cost_estimate_usd"] == result["output"]["cost_estimate_usd"]
-    assert isinstance(result["artifacts"][0]["output"]["cost_estimate_usd"], float)
+    # Telemetry also carries the merged cost estimate
+    assert isinstance(result["telemetry"]["cost_estimate_usd"], float)
+    assert result["telemetry"]["cost_estimate_usd"] >= 0.001
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +299,7 @@ async def test_env_var_secret_ref_missing_omits_key_and_warns(caplog):
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert "FOO" not in envs
     warnings = [m for m in caplog.messages if "env_var.secret_ref_not_found" in m]
@@ -333,7 +335,7 @@ async def test_env_var_secret_ref_resolves_from_vault():
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert envs["FOO"] == "vault-secret"
     backend.get_secret.assert_awaited_once_with("FOO")
@@ -368,7 +370,7 @@ async def test_env_var_secret_ref_does_not_fall_back_to_host_env(caplog):
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert "FOO" not in envs
     assert any("env_var.secret_ref_not_found" in m for m in caplog.messages)
@@ -383,7 +385,7 @@ async def test_env_var_plain_value_passes_through():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert envs["FOO"] == "plain-value"
 
@@ -436,7 +438,7 @@ async def test_unresolved_secret_ref_does_not_clobber_system_default(caplog):
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert envs["GITHUB_TOKEN"] == "system-default-pat"
     assert any("env_var.secret_ref_not_found" in m for m in caplog.messages)
@@ -585,9 +587,9 @@ async def test_background_command_success_still_completes():
         result = await fn(_run_state())
 
     assert sandbox.commands.run.call_args.kwargs["background"] is True
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert result["output"]["summary"] == "done"
-    assert result["output"]["agent_stdout"] == "agent stdout"
+    assert result["telemetry"]["agent_stdout"] == "agent stdout"
 
 
 # ---------------------------------------------------------------------------
@@ -608,7 +610,7 @@ async def test_sandbox_command_stdout_redirected_to_log_file():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     wrapped = sandbox.commands.run.call_args.args[0]
     assert "> /home/user/agent.log 2>&1" in wrapped
     wrapped_lines = wrapped.splitlines()
@@ -662,15 +664,15 @@ async def test_drain_probe_keeps_silent_live_agent_alive():
     ):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
     # The idle watchdog must NOT have killed the live-but-silent process.
     handle.kill.assert_not_awaited()
     # The drain probe ran and refreshed liveness on every tick.
     sandbox.files.get_info.assert_awaited()
     # The drained log content is the artifact's stdout.
-    assert output["agent_stdout"] == "x" * 64
-    assert output["stdout_length"] == 64
+    assert telemetry["agent_stdout"] == "x" * 64
+    assert telemetry["stdout_length"] == 64
 
 
 async def test_drain_captures_pipe_buffer_size_output():
@@ -685,10 +687,10 @@ async def test_drain_captures_pipe_buffer_size_output():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
-    assert output["agent_stdout"] == big
-    assert output["stdout_length"] == len(big)
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["agent_stdout"] == big
+    assert telemetry["stdout_length"] == len(big)
 
 
 async def test_drain_no_double_emit_when_log_grows_between_probe_and_read():
@@ -749,10 +751,10 @@ async def test_drain_no_double_emit_when_log_grows_between_probe_and_read():
     ):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
-    assert output["agent_stdout"] == "x" * 150
-    assert output["stdout_length"] == 150
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["agent_stdout"] == "x" * 150
+    assert telemetry["stdout_length"] == 150
 
 
 async def test_drain_window_lossless_when_truncation_and_probe_lag_race():
@@ -821,10 +823,10 @@ async def test_drain_window_lossless_when_truncation_and_probe_lag_race():
     ):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
-    assert output["agent_stdout"] == ("n" * 50) + ("p" * 50)
-    assert output["stdout_length"] == 100
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["agent_stdout"] == ("n" * 50) + ("p" * 50)
+    assert telemetry["stdout_length"] == 100
 
 
 # ---------------------------------------------------------------------------
@@ -848,7 +850,7 @@ async def test_stall_timeout_seconds_config_passed_to_watchdog():
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     watchdog.assert_awaited_once()
     assert watchdog.await_args.kwargs["idle_timeout"] == 60
 
@@ -977,7 +979,7 @@ async def test_on_stdout_buffers_and_flushes_joined_chunk():
         with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
             result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
 
-        assert result["output"]["status"] == "completed"
+        assert result["telemetry"]["status"] == "completed"
         chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
         assert len(chunk_events) == 2
         assert chunk_events[0].payload["chunk"] == "line one\n"
@@ -1013,7 +1015,7 @@ async def test_on_stdout_publishes_unthrottled_when_interval_elapsed():
         ):
             result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
 
-        assert result["output"]["status"] == "completed"
+        assert result["telemetry"]["status"] == "completed"
         chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
         assert len(chunk_events) == 2
         assert chunk_events[0].payload["chunk"] == "a"
@@ -1038,7 +1040,7 @@ async def test_on_stderr_publishes_stderr_chunk_event():
         with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
             result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
 
-        assert result["output"]["status"] == "completed"
+        assert result["telemetry"]["status"] == "completed"
         stderr_events = [e for e in broker.replay_since(0) if e.event_type == "node.stderr_chunk"]
         assert len(stderr_events) == 1
         assert stderr_events[0].payload["chunk"] == "warn: something"
@@ -1062,7 +1064,7 @@ async def test_streaming_skipped_when_no_broker_registered_for_run():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await _run_with_live_stream(fn, sandbox, _feed, _run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert result["output"]["summary"] == "done"
 
 
@@ -1093,7 +1095,7 @@ async def test_stream_redacts_credentials_from_live_stdout_chunk():
         ):
             result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
 
-        assert result["output"]["status"] == "completed"
+        assert result["telemetry"]["status"] == "completed"
         chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
         assert chunk_events, "expected at least one streamed chunk event"
         joined = "".join(ev.payload["chunk"] for ev in chunk_events)
@@ -1137,7 +1139,7 @@ async def test_stream_redaction_is_idempotent_on_already_redacted_chunk():
         ):
             result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
 
-        assert result["output"]["status"] == "completed"
+        assert result["telemetry"]["status"] == "completed"
         stderr_events = [e for e in broker.replay_since(0) if e.event_type == "node.stderr_chunk"]
         assert stderr_events, "expected a re-drained stderr event"
         redrained = "".join(ev.payload["chunk"] for ev in stderr_events)
@@ -1178,15 +1180,15 @@ async def test_success_output_carries_full_stdout_length_when_truncated():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    output = result["output"]
-    artifact = result["artifacts"][0]["output"]
-    assert output["status"] == "completed"
-    assert output["stdout_length"] == len(long_stdout)
-    assert output["stderr_length"] == len("stderr line")
-    assert output["agent_stdout"] == long_stdout[:_MAX_ARTIFACT_LOG]
-    assert output["agent_stderr"] == "stderr line"
-    assert artifact["stdout_length"] == output["stdout_length"]
-    assert artifact["stderr_length"] == output["stderr_length"]
+    telemetry = result["telemetry"]
+    artifact = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["stdout_length"] == len(long_stdout)
+    assert telemetry["stderr_length"] == len("stderr line")
+    assert telemetry["agent_stdout"] == long_stdout[:_MAX_ARTIFACT_LOG]
+    assert telemetry["agent_stderr"] == "stderr line"
+    assert artifact["stdout_length"] == telemetry["stdout_length"]
+    assert artifact["stderr_length"] == telemetry["stderr_length"]
 
 
 # ---------------------------------------------------------------------------
@@ -1228,12 +1230,12 @@ async def test_full_retention_honors_stdout_max_bytes():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
-    assert output["agent_stdout"] == "x" * 2048
-    assert output["stdout_length"] == 4096
-    assert output["stdout_truncated"] is True
-    assert result["artifacts"][0]["output"]["stdout_truncated"] is True
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["agent_stdout"] == "x" * 2048
+    assert telemetry["stdout_length"] == 4096
+    assert telemetry["stdout_truncated"] is True
+    assert result["telemetry"]["stdout_truncated"] is True
 
 
 async def test_full_retention_default_5mb_holds_whole_stream():
@@ -1247,11 +1249,11 @@ async def test_full_retention_default_5mb_holds_whole_stream():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
-    assert output["agent_stdout"] == long_stdout
-    assert output["stdout_length"] == len(long_stdout)
-    assert "stdout_truncated" not in output
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["agent_stdout"] == long_stdout
+    assert telemetry["stdout_length"] == len(long_stdout)
+    assert "stdout_truncated" not in telemetry
 
 
 async def test_tail_mode_ignores_stdout_max_bytes():
@@ -1265,11 +1267,11 @@ async def test_tail_mode_ignores_stdout_max_bytes():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
-    assert output["agent_stdout"] == long_stdout[:_MAX_ARTIFACT_LOG]
-    assert output["stdout_length"] == len(long_stdout)
-    assert output["stdout_truncated"] is True
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["agent_stdout"] == long_stdout[:_MAX_ARTIFACT_LOG]
+    assert telemetry["stdout_length"] == len(long_stdout)
+    assert telemetry["stdout_truncated"] is True
 
 
 async def test_full_retention_redacts_before_truncation():
@@ -1287,11 +1289,11 @@ async def test_full_retention_redacts_before_truncation():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
-    assert "<redacted>" in output["agent_stdout"]
-    assert "BBB" not in output["agent_stdout"]
-    assert output["stdout_truncated"] is True
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert "<redacted>" in telemetry["agent_stdout"]
+    assert "BBB" not in telemetry["agent_stdout"]
+    assert telemetry["stdout_truncated"] is True
 
 
 async def test_over_cap_stdout_written_to_artifact_store_with_pointer(tmp_path):
@@ -1310,11 +1312,11 @@ async def test_over_cap_stdout_written_to_artifact_store_with_pointer(tmp_path):
     ):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
-    assert output["agent_stdout"] == "x" * 2048
-    assert output["stdout_truncated"] is True
-    pointer = output["stdout_artifact"]
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["agent_stdout"] == "x" * 2048
+    assert telemetry["stdout_truncated"] is True
+    pointer = telemetry["stdout_artifact"]
     assert pointer["truncated"] is False
     assert pointer["redacted"] is True
     assert pointer["stream"] == "stdout"
@@ -1323,7 +1325,7 @@ async def test_over_cap_stdout_written_to_artifact_store_with_pointer(tmp_path):
     assert pointer["sha256"] == hashlib.sha256(b"x" * 4096).hexdigest()
     assert pointer["rel_path"].endswith(".zst")
     assert store.read_bytes(pointer) == b"x" * 4096
-    assert result["artifacts"][0]["output"]["stdout_artifact"] == output["stdout_artifact"]
+    assert result["telemetry"]["stdout_artifact"] == telemetry["stdout_artifact"]
 
 
 async def test_under_cap_stdout_stays_inline_no_artifact(tmp_path, monkeypatch):
@@ -1350,10 +1352,10 @@ async def test_under_cap_stdout_stays_inline_no_artifact(tmp_path, monkeypatch):
     ):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["agent_stdout"] == "x" * 2048
-    assert "stdout_truncated" not in output
-    assert "stdout_artifact" not in output
+    telemetry = result["telemetry"]
+    assert telemetry["agent_stdout"] == "x" * 2048
+    assert "stdout_truncated" not in telemetry
+    assert "stdout_artifact" not in telemetry
     assert not list(tmp_path.rglob("*.zst"))
 
 
@@ -1630,11 +1632,11 @@ async def test_full_retention_drain_keeps_beyond_512kb():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
-    assert output["agent_stdout"] == log_content
-    assert output["stdout_length"] == len(log_content)
-    assert "stdout_truncated" not in output
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["agent_stdout"] == log_content
+    assert telemetry["stdout_length"] == len(log_content)
+    assert "stdout_truncated" not in telemetry
 
 
 async def test_success_output_omits_sandbox_log_tail():
@@ -1647,10 +1649,10 @@ async def test_success_output_omits_sandbox_log_tail():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert "sandbox_log_tail" not in result["output"]
     assert "sandbox_id" not in result["output"]
-    assert "sandbox_log_tail" not in result["artifacts"][0]["output"]
+    assert "sandbox_log_tail" not in result["telemetry"]
 
 
 async def test_timed_out_command_output_includes_sandbox_id_and_log_tail():
@@ -2024,7 +2026,7 @@ async def test_agent_command_renders_input_model():
             }
         )
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     wrapped = sandbox.commands.run.call_args.args[0]
     assert "--model opencode-go/mimo-v2.5" in wrapped
     assert "{{" not in wrapped
@@ -2042,7 +2044,7 @@ async def test_agent_command_renders_parameter_model():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     wrapped = sandbox.commands.run.call_args.args[0]
     assert "--model opencode-go/mimo-v2.5" in wrapped
     assert "{{" not in wrapped
@@ -2060,7 +2062,7 @@ async def test_agent_command_default_filter():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     wrapped = sandbox.commands.run.call_args.args[0]
     assert "--model opencode-go/deepseek-v4-flash" in wrapped
     assert "{{" not in wrapped
@@ -2076,7 +2078,7 @@ async def test_agent_command_without_template_unchanged():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     wrapped = sandbox.commands.run.call_args.args[0]
     wrapped_lines = wrapped.splitlines()
     assert wrapped_lines[0] == "("
@@ -2115,7 +2117,7 @@ async def test_agent_command_invalid_template_falls_back_verbatim():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     wrapped = sandbox.commands.run.call_args.args[0]
     assert "{{ }}" in wrapped
     assert sandbox.commands.run.call_count == 1
@@ -2131,7 +2133,7 @@ async def test_agent_command_unclosed_template_falls_back_verbatim():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     wrapped = sandbox.commands.run.call_args.args[0]
     assert "{{" in wrapped
     assert sandbox.commands.run.call_count == 1
@@ -2175,7 +2177,7 @@ async def test_agent_command_renders_baked_model_class_value():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     wrapped = sandbox.commands.run.call_args.args[0]
     assert "--model opencode-go/mimo-v2.6-flash" in wrapped
     assert "{{" not in wrapped
@@ -2199,7 +2201,7 @@ async def test_agent_command_run_override_beats_baked_model_value():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(state)
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     wrapped = sandbox.commands.run.call_args.args[0]
     assert "--model opencode-go/variant-choice" in wrapped
     assert "opencode-go/mimo-v2.6-flash" not in wrapped
@@ -2338,7 +2340,7 @@ async def test_watch_log_growth_keeps_silent_run_alive():
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     handle.kill.assert_not_awaited()
 
 
@@ -2458,7 +2460,7 @@ async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     handle.kill.assert_not_awaited()
 
 
@@ -2693,7 +2695,7 @@ async def test_context_scope_gates_sandbox_agent_render_view():
             }
         )
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
 
     # Pull the rendered prompt back out of the /home/user/prompt.md write.
     prompt_writes = [
@@ -2771,7 +2773,7 @@ async def test_failure_between_create_and_command_still_kills_sandbox():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "failed"
+    assert result["telemetry"]["status"] == "failed"
     sandbox.kill.assert_awaited()
     sandbox.commands.run.assert_not_called()
 
@@ -2845,7 +2847,7 @@ async def test_rate_limit_retry_loop_leaves_no_sandbox_behind():
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert create.await_count == 3
     sandbox.kill.assert_awaited()
 
@@ -3123,14 +3125,14 @@ async def test_sandbox_generic_exception_envelope_includes_error_type_and_messag
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "failed"
+    assert result["telemetry"]["status"] == "failed"
     # The failure envelope must now carry the exception type and message.
-    inner = result["artifacts"][0]["output"]
+    inner = result["telemetry"]
     assert inner["error_type"] == "_BoomError"
     assert "connection reset" in inner["error_message"]
     # And the reduced top-level output view must surface them too (not masked).
-    assert result["output"]["error_type"] == "_BoomError"
-    assert "connection reset" in result["output"]["error_message"]
+    assert result["telemetry"]["error_type"] == "_BoomError"
+    assert "connection reset" in result["telemetry"]["error_message"]
 
 
 def _raise_once_then_compute(real_compute_cost, raises):
@@ -3176,14 +3178,14 @@ async def test_exception_path_over_cap_stdout_written_to_artifact_store_with_poi
     ):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "failed"
-    assert output["error_type"] == "RuntimeError"
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "failed"
+    assert telemetry["error_type"] == "RuntimeError"
     # The truncated head is still inline on the failure envelope...
-    assert output["agent_stdout"] == "x" * 2048
-    assert output["stdout_truncated"] is True
+    assert telemetry["agent_stdout"] == "x" * 2048
+    assert telemetry["stdout_truncated"] is True
     # ...AND the full redacted transcript is retained via the pointer.
-    pointer = output["stdout_artifact"]
+    pointer = telemetry["stdout_artifact"]
     assert pointer["truncated"] is False
     assert pointer["redacted"] is True
     assert pointer["stream"] == "stdout"
@@ -3192,7 +3194,7 @@ async def test_exception_path_over_cap_stdout_written_to_artifact_store_with_poi
     assert pointer["sha256"] == hashlib.sha256(b"x" * 4096).hexdigest()
     assert pointer["rel_path"].endswith(".zst")
     assert store.read_bytes(pointer) == b"x" * 4096
-    assert result["artifacts"][0]["output"]["stdout_artifact"] == output["stdout_artifact"]
+    assert result["telemetry"]["stdout_artifact"] == telemetry["stdout_artifact"]
 
 
 async def test_exception_path_under_cap_stdout_stays_inline_no_artifact(tmp_path, monkeypatch):
@@ -3225,11 +3227,11 @@ async def test_exception_path_under_cap_stdout_stays_inline_no_artifact(tmp_path
     ):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "failed"
-    assert output["agent_stdout"] == "x" * 2048
-    assert "stdout_truncated" not in output
-    assert "stdout_artifact" not in output
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "failed"
+    assert telemetry["agent_stdout"] == "x" * 2048
+    assert "stdout_truncated" not in telemetry
+    assert "stdout_artifact" not in telemetry
     assert not list(tmp_path.rglob("*.zst"))
 
 
@@ -3257,12 +3259,12 @@ async def test_sandbox_provider_exception_message_visible_in_output():
     ):
         result = await fn(_run_state())
 
-    inner = result["artifacts"][0]["output"]
+    inner = result["telemetry"]
     assert inner["error_type"] == "SandboxException"
     # The provider error detail must be present in the output message.
     assert "Timeout cannot be greater than 1 hours" in inner["error_message"]
-    assert result["output"]["error_type"] == "SandboxException"
-    assert "Timeout cannot be greater than 1 hours" in result["output"]["error_message"]
+    assert result["telemetry"]["error_type"] == "SandboxException"
+    assert "Timeout cannot be greater than 1 hours" in result["telemetry"]["error_message"]
 
 
 def test_wrap_log_redirect_keeps_heredoc_terminator_on_its_own_line():
@@ -3389,7 +3391,7 @@ async def test_agent_command_dispatched_under_bash(monkeypatch):
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert dispatch.last_command is not None
     # FAR-1470: bash, not sh (dash has no `pipefail`).
     assert dispatch.last_command[:2] == ["bash", "-c"], dispatch.last_command
