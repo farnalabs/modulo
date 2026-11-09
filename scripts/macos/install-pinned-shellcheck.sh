@@ -101,6 +101,7 @@ verify_and_install_shellcheck() {
 # Bounded retries for transient HTTP/network failures (the same classification
 # bundle-release.yml uses); a permanent failure returns immediately. The
 # checksum is verified by verify_and_install_shellcheck before installation.
+# BEGIN download_verified (extracted verbatim by test_macos_installer_normalize)
 download_verified() {
   local url="$1" destination="$2" label="$3"
   local attempt=1 status curl_rc delay jitter retry_delay temporary status_file
@@ -160,6 +161,7 @@ download_verified() {
     attempt=$((attempt + 1))
   done
 }
+# END download_verified
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/modulo-shellcheck.XXXXXX")"
 cleanup() { rm -rf -- "$WORK_DIR"; }

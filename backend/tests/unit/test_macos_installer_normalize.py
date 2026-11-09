@@ -529,6 +529,21 @@ def _pinned_shellcheck_script() -> str:
     return script_path.read_text(encoding="utf-8")
 
 
+def _pinned_shellcheck_case_arm(script: str, arch: str) -> str:
+    """Return the body of the `<arch>)` arm of the script's architecture case."""
+    lines = script.splitlines()
+    start = next(index for index, line in enumerate(lines) if line.strip() == f"{arch})")
+    end = next(index for index in range(start + 1, len(lines)) if lines[index].strip() == ";;")
+    return "\n".join(lines[start:end])
+
+
+def _sha256_literal(text: str) -> str:
+    """Return the single SHA256="..." literal inside a case arm."""
+    match = re.search(r'SHA256="([0-9a-f]{64})"', text)
+    assert match is not None, f"no SHA256 literal in arm:\n{text}"
+    return match.group(1)
+
+
 def test_pinned_shellcheck_manifest_pins_a_verified_asset_per_architecture() -> None:
     """FAR-2486: each architecture resolves a pinned tarball and a pinned SHA-256."""
     script = _pinned_shellcheck_script()
@@ -541,6 +556,26 @@ def test_pinned_shellcheck_manifest_pins_a_verified_asset_per_architecture() -> 
     assert "set -euo pipefail" in script
     # The transport stays HTTPS-only by default; nothing here may downgrade it.
     assert "${SHELLCHECK_DOWNLOAD_PROTOCOLS:-https}" in script
+
+
+def test_pinned_shellcheck_binds_each_digest_to_its_architecture() -> None:
+    """FAR-2486: each case arm must carry ITS OWN digest and tarball.
+
+    The manifest test above only proves both digests appear somewhere in the
+    file. Swapping the two values between the arms still satisfies that, yet in
+    production it downloads the genuine x86_64 tarball, compares it against the
+    aarch64 digest, fails verification, and makes the Intel job red on every run
+    - exactly the failure FAR-2486 exists to remove. Bind the digest to the arm
+    that selects the tarball, not merely to the file.
+    """
+    script = _pinned_shellcheck_script()
+    x86_arm = _pinned_shellcheck_case_arm(script, "x86_64")
+    arm_arm = _pinned_shellcheck_case_arm(script, "arm64")
+
+    assert _sha256_literal(x86_arm) == _X86_64_SHELLCHECK_SHA256
+    assert _sha256_literal(arm_arm) == _ARM64_SHELLCHECK_SHA256
+    assert "shellcheck-${SHELLCHECK_VERSION}.darwin.x86_64.tar.gz" in x86_arm
+    assert "shellcheck-${SHELLCHECK_VERSION}.darwin.aarch64.tar.gz" in arm_arm
 
 
 def _pinned_shellcheck_driver(tmp_path: Path) -> Path:
@@ -633,3 +668,117 @@ def test_pinned_shellcheck_refuses_a_missing_archive(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "missing or empty" in result.stderr
     assert not prefix.exists()
+
+
+def _pinned_shellcheck_download_driver(tmp_path: Path) -> Path:
+    """Write a driver that runs the workflow script's download_verified block verbatim."""
+    script = _pinned_shellcheck_script()
+    marked = _extract_marked_bash(script, "download_verified")
+    driver = tmp_path / "shellcheck_download_driver.sh"
+    driver.write_text(
+        "#!/usr/bin/env bash\nset -uo pipefail\n"
+        # The loopback fixture is plain HTTP; production keeps the HTTPS default.
+        + "SHELLCHECK_DOWNLOAD_PROTOCOLS=http\n"
+        + "SHELLCHECK_MAX_ATTEMPTS=5\n"
+        + marked
+        + """
+status=0
+download_verified "$1" "$2" "$3" || status=$?
+exit "$status"
+""",
+        encoding="utf-8",
+    )
+    return driver
+
+
+def _serve_status_sequence(
+    statuses: list[int], body: bytes = b"verified-asset"
+) -> tuple[http.server.HTTPServer, threading.Thread, str, dict[str, int]]:
+    """Serve the given status codes in order (the last repeats) and count requests."""
+    lock = threading.Lock()
+    counter = {"requests": 0}
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            with lock:
+                index = counter["requests"]
+                counter["requests"] += 1
+            status = statuses[index] if index < len(statuses) else statuses[-1]
+            if status == 200:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(status)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            return
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    return server, thread, f"http://{host}:{port}/shellcheck.tar.gz", counter
+
+
+def test_pinned_shellcheck_download_retries_transient_http_then_succeeds(tmp_path: Path) -> None:
+    """FAR-2486: 503/503/200 is retried, then the asset is saved.
+
+    A regression that classified 503 as permanent would fail this job on the
+    first network blip; a regression that never retried would fail on request
+    two. Both are invisible to the verify/install tests.
+    """
+    driver = _pinned_shellcheck_download_driver(tmp_path)
+    server, thread, url, counter = _serve_status_sequence([503, 503, 200], b"retried-body")
+    destination = tmp_path / "pinned.tar.gz"
+    try:
+        result = _run_bash_file(driver, [url, destination.as_posix(), "fixture"], cwd=tmp_path)
+    finally:
+        _stop_server(server, thread)
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert counter["requests"] == 3
+    assert destination.read_bytes() == b"retried-body"
+    assert "transient HTTP 503" in result.stderr
+
+
+@pytest.mark.parametrize("status", [404, 403])
+def test_pinned_shellcheck_download_fails_fast_on_permanent_http_status(tmp_path: Path, status: int) -> None:
+    """FAR-2486: 404/403 is a single attempt, non-zero, and installs nothing."""
+    driver = _pinned_shellcheck_download_driver(tmp_path)
+    # The second entry is 200 so a wrongly-retried permanent failure would
+    # "succeed" and fail the assertions below, instead of hiding behind the
+    # 5-attempt exhaustion path.
+    server, thread, url, counter = _serve_status_sequence([status, 200], b"must-not-be-saved")
+    destination = tmp_path / "pinned.tar.gz"
+    try:
+        result = _run_bash_file(driver, [url, destination.as_posix(), "fixture"], cwd=tmp_path)
+    finally:
+        _stop_server(server, thread)
+
+    assert result.returncode != 0
+    assert counter["requests"] == 1
+    assert not destination.exists()
+    assert not Path(f"{destination.as_posix()}.part").exists()
+    assert f"permanent HTTP {status}" in result.stderr
+
+
+def test_pinned_shellcheck_download_leaves_no_temporary_files_on_success(tmp_path: Path) -> None:
+    """FAR-2486: a clean download leaves no .part/.status scratch files behind."""
+    driver = _pinned_shellcheck_download_driver(tmp_path)
+    server, thread, url, counter = _serve_status_sequence([200], b"clean-body")
+    destination = tmp_path / "pinned.tar.gz"
+    try:
+        result = _run_bash_file(driver, [url, destination.as_posix(), "fixture"], cwd=tmp_path)
+    finally:
+        _stop_server(server, thread)
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert counter["requests"] == 1
+    assert destination.read_bytes() == b"clean-body"
+    leftovers = sorted(path.name for path in tmp_path.iterdir() if path.name.startswith("pinned.tar.gz."))
+    assert not leftovers
