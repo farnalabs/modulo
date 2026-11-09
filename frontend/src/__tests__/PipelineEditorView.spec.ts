@@ -1956,6 +1956,39 @@ describe('PipelineEditorView — edge properties panel', () => {
     wrapper2.unmount()
   })
 
+  it('keeps the canvas edge data and the inspector reads in agreement (selection round-trip)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    // The canvas edge comes from the shared projection adapter...
+    const wireEdge = edgeFixture({
+      edge_type: 'loop',
+      condition_expression: '`true`',
+      max_iterations: 3,
+      hitl_review_config: { label: 'Gate', description: 'Human review' },
+    })
+    const flowEdge = vm.convertBackendEdge(wireEdge, 0)
+    vm.rawEdges = [wireEdge]
+    vm.flowEdges = [flowEdge]
+    // ...and selecting it still reads the raw wire edge (FAR-2482 moved only
+    // the canvas mapping; the inspector's source is unchanged).
+    vm.onEdgeClick({ edge: { id: wireEdge.id } })
+    await nextTick()
+
+    expect(vm.selectedEdgeData).toStrictEqual(wireEdge)
+    // The data wrapper the canvas/EdgeBadges render matches the form state the
+    // inspector derived from the same wire edge - no drift between the two.
+    expect(flowEdge.data.edge_type).toBe(vm.edgeForm.edge_type)
+    expect(flowEdge.data.condition_expression).toBe(vm.edgeForm.condition_expression)
+    expect(flowEdge.data.max_iterations).toBe(vm.edgeForm.max_iterations)
+    expect(flowEdge.data.routing_label).toBe(vm.edgeForm.routing_label)
+    expect(flowEdge.data.hitl_review_config).toBe(wireEdge.hitl_review_config)
+    wrapper.unmount()
+  })
+
   it('opens a gate-less loop edge with its real type and iterations (the defaults reset no longer wipes them)', async () => {
     // populateEdgeForm resets to defaults FIRST, then applies the edge's own
     // values — previously the gate-less branch reset after assignment, wiping

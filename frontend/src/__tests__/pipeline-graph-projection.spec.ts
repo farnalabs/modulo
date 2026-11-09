@@ -3,13 +3,20 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { MarkerType } from '@vue-flow/core'
 import type { components } from '@/lib/api/schema'
+import { CANVAS_EDGE_STROKE } from '@/constants/canvas'
 import {
   projectGraphNode,
   projectGraphEdge,
+  projectCanvasEdge,
   projectGraph,
+  normalizeCanvasEdgeType,
+  CANVAS_EDGE_TYPES,
   CanvasNodeUiState,
   CanvasEdgeUiState,
+  CanvasEdgeType,
+  PipelineGraphEdgeInput,
   defaultCanvasNodeUiState,
   withUiState,
   withEdgeUiState,
@@ -39,7 +46,7 @@ function makeWireNode(overrides: Partial<components['schemas']['PipelineGraphNod
   }
 }
 
-function makeWireEdge(overrides: Partial<components['schemas']['PipelineGraphEdge']> = {}): components['schemas']['PipelineGraphEdge'] {
+function makeWireEdge(overrides: Partial<PipelineGraphEdgeInput> = {}): PipelineGraphEdgeInput {
   return {
     id: '00000000-0000-0000-0000-000000000201',
     source_node_id: '00000000-0000-0000-0000-000000000101',
@@ -190,6 +197,41 @@ describe('pipeline-graph-projection', () => {
       expect(proj.hitl_review_config).toEqual(edge.hitl_review_config)
     })
 
+    it('produces the data wrapper the canvas + inspector consume', () => {
+      const hitl = { label: 'Approve', description: 'Desc', claim_expiry_minutes: 30, human_only: true }
+      const edge = makeWireEdge({
+        id: 'edge-data',
+        edge_type: 'llm',
+        condition_expression: '`true`',
+        hitl_review_config: hitl,
+        max_iterations: 7,
+        routing_label: 'escalate',
+      })
+
+      const data = projectGraphEdge(edge, 0).data
+
+      expect(data).toEqual({
+        hitl_review_config: hitl,
+        edge_type: 'llm',
+        condition_expression: '`true`',
+        max_iterations: 7,
+        routing_label: 'escalate',
+      })
+      // The config is carried by reference, exactly as the inline mapping did:
+      // the inspector builds its save payload from the selected edge's config.
+      expect(data.hitl_review_config).toBe(hitl)
+    })
+
+    it('defaults the data wrapper for an edge with no optional fields', () => {
+      const data = projectGraphEdge(makeWireEdge({ edge_type: 'normal' }), 0).data
+
+      expect(data.edge_type).toBe('normal')
+      expect(data.condition_expression).toBeNull()
+      expect(data.hitl_review_config).toBeNull()
+      expect(data.max_iterations).toBe(0)
+      expect(data.routing_label).toBe('')
+    })
+
     it('defaults id from index when absent', () => {
       const edge = makeWireEdge({ id: undefined })
       const proj = projectGraphEdge(edge, 42)
@@ -204,6 +246,68 @@ describe('pipeline-graph-projection', () => {
       expect(proj).not.toHaveProperty('stroke')
       expect(proj).not.toHaveProperty('style')
       expect(proj).not.toHaveProperty('markerEnd')
+    })
+  })
+
+  describe('normalizeCanvasEdgeType', () => {
+    it('keeps every known variant', () => {
+      for (const edgeType of CANVAS_EDGE_TYPES) {
+        expect(normalizeCanvasEdgeType(edgeType)).toBe(edgeType)
+      }
+    })
+
+    it('falls back to normal for absent or unknown values without dropping the raw value from data', () => {
+      expect(normalizeCanvasEdgeType(undefined)).toBe('normal')
+      expect(normalizeCanvasEdgeType(null)).toBe('normal')
+      expect(normalizeCanvasEdgeType('future-type')).toBe('normal')
+
+      // Styling normalises, but the wire value itself round-trips verbatim in
+      // the data wrapper - exactly what the pre-adapter inline mapping did.
+      const proj = projectGraphEdge(makeWireEdge({ edge_type: 'future-type' }), 0)
+      expect(proj.edgeType).toBe('normal')
+      expect(proj.data.edge_type).toBe('future-type')
+    })
+  })
+
+  describe('projectCanvasEdge', () => {
+    it('maps a loop edge to the exact Vue Flow edge shape', () => {
+      const edge = makeWireEdge({
+        id: 'e-loop',
+        source_node_id: 'a',
+        target_node_id: 'b',
+        edge_type: 'loop',
+        max_iterations: 3,
+      })
+      const flowEdge = projectCanvasEdge(edge, 0)
+
+      expect(flowEdge).toEqual({
+        id: 'e-loop',
+        source: 'a',
+        target: 'b',
+        type: 'smoothstep',
+        animated: true,
+        style: { stroke: '#3b82f6', strokeDasharray: '5,5' },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#3b82f6' },
+        data: {
+          hitl_review_config: null,
+          edge_type: 'loop',
+          condition_expression: null,
+          max_iterations: 3,
+          routing_label: '',
+        },
+      })
+    })
+
+    it('carries the projection data wrapper by reference (selection round-trip)', () => {
+      const edge = makeWireEdge({ edge_type: 'llm', routing_label: 'go' })
+      const projection = projectGraphEdge(edge, 0)
+      const flowEdge = projectCanvasEdge(edge, 0)
+
+      // The flow edge renders the same semantic data the projection defines,
+      // so the inspector (which reads the wire edge) and the canvas agree.
+      expect(flowEdge.data).toEqual(projection.data)
+      expect(flowEdge.data.edge_type).toBe('llm')
+      expect(flowEdge.data.routing_label).toBe('go')
     })
   })
 
@@ -238,7 +342,7 @@ describe('pipeline-graph-projection', () => {
       expect(proj).not.toHaveProperty('ui')
     })
 
-    it('withEdgeUiState derives style from edgeType', () => {
+    it('withEdgeUiState derives loop style (animated, dashed, blue)', () => {
       const edge = makeWireEdge({ edge_type: 'loop' })
       const proj = projectGraphEdge(edge, 0)
       const withState = withEdgeUiState(proj)
@@ -246,29 +350,56 @@ describe('pipeline-graph-projection', () => {
       expect(withState.ui.animated).toBe(true)
       expect(withState.ui.stroke).toBe('#3b82f6')
       expect(withState.ui.style).toEqual({ stroke: '#3b82f6', strokeDasharray: '5,5' })
+      expect(withState.ui.markerEnd.type).toBe(MarkerType.ArrowClosed)
       expect(withState.ui.markerEnd.color).toBe('#3b82f6')
     })
 
-    it('withEdgeUiState treats reject and conditional edges as non-loop style', () => {
-      // The loop case is covered above; these are the remaining non-normal
-      // edge types and both must keep the default (non-animated, solid) style.
-      for (const edgeType of ['reject', 'conditional'] as const) {
+    it('withEdgeUiState gives llm edges their own violet solid style', () => {
+      const proj = projectGraphEdge(makeWireEdge({ edge_type: 'llm' }), 0)
+      const withState = withEdgeUiState(proj)
+
+      expect(withState.ui.animated).toBe(false)
+      expect(withState.ui.stroke).toBe('#8b5cf6')
+      expect(withState.ui.style).toEqual({ stroke: '#8b5cf6' })
+      expect(withState.ui.markerEnd.color).toBe('#8b5cf6')
+    })
+
+    it('withEdgeUiState uses the shared canvas stroke for normal/reject/conditional', () => {
+      for (const edgeType of ['normal', 'reject', 'conditional'] as const) {
         const proj = projectGraphEdge(makeWireEdge({ edge_type: edgeType }), 0)
         const withState = withEdgeUiState(proj)
 
         expect(withState.ui.animated).toBe(false)
-        expect(withState.ui.stroke).toBe('#64748b')
-        expect(withState.ui.style).toEqual({ stroke: '#64748b' })
-        expect(withState.ui.markerEnd.color).toBe('#64748b')
+        expect(withState.ui.stroke).toBe(CANVAS_EDGE_STROKE)
+        expect(withState.ui.style).toEqual({ stroke: CANVAS_EDGE_STROKE })
+        expect(withState.ui.markerEnd.color).toBe(CANVAS_EDGE_STROKE)
       }
     })
 
-    it('withEdgeUiState uses default style for normal edges', () => {
-      const edge = makeWireEdge({ edge_type: 'normal' })
-      const proj = projectGraphEdge(edge, 0)
-      const withState = withEdgeUiState(proj)
+    it('styles every declared variant (exhaustiveness regression)', () => {
+      // A compile-time complete map: adding a variant to CanvasEdgeType makes
+      // this object literal a type error until the case is added here too.
+      const expected: Record<CanvasEdgeType, { stroke: string; animated: boolean }> = {
+        normal: { stroke: CANVAS_EDGE_STROKE, animated: false },
+        reject: { stroke: CANVAS_EDGE_STROKE, animated: false },
+        conditional: { stroke: CANVAS_EDGE_STROKE, animated: false },
+        loop: { stroke: '#3b82f6', animated: true },
+        llm: { stroke: '#8b5cf6', animated: false },
+      }
 
-      expect(withState.ui.stroke).toBe('#64748b')
+      // The adapter's exported variant list must cover exactly the union's
+      // members: a variant dropped from the list (or added to the union without
+      // a style) fails here instead of silently rendering as a plain edge.
+      expect([...CANVAS_EDGE_TYPES].sort()).toEqual(Object.keys(expected).sort())
+
+      for (const edgeType of CANVAS_EDGE_TYPES) {
+        const withState = withEdgeUiState(projectGraphEdge(makeWireEdge({ edge_type: edgeType }), 0))
+        expect(withState.ui.stroke).toBe(expected[edgeType].stroke)
+        expect(withState.ui.animated).toBe(expected[edgeType].animated)
+        // Every variant gets a distinct closed arrowhead matching its stroke.
+        expect(withState.ui.markerEnd.type).toBe(MarkerType.ArrowClosed)
+        expect(withState.ui.markerEnd.color).toBe(expected[edgeType].stroke)
+      }
     })
   })
 
@@ -286,7 +417,7 @@ describe('pipeline-graph-projection', () => {
         animated: true,
         stroke: '#f00',
         style: { stroke: '#f00' },
-        markerEnd: { type: 'ArrowClosed', width: 16, height: 16, color: '#f00' },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#f00' },
       }
       // The interface must carry exactly these four UI-styling keys: a
       // semantic field (edgeType, conditionExpression, ...) leaking into the
@@ -295,7 +426,7 @@ describe('pipeline-graph-projection', () => {
       expect(ui.animated).toBe(true)
       expect(ui.stroke).toBe('#f00')
       expect(ui.style).toEqual({ stroke: '#f00' })
-      expect(ui.markerEnd).toEqual({ type: 'ArrowClosed', width: 16, height: 16, color: '#f00' })
+      expect(ui.markerEnd).toEqual({ type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#f00' })
     })
   })
 })
