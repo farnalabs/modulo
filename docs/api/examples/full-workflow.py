@@ -320,11 +320,11 @@ def main():
         step("9. Handle HITL Gates")
         resp = client.get(f"/api/v1/runs/{run_id}/hitl/pending", headers=headers)
         if resp.status_code == 200:
-            gates = resp.json().get("gates", [])
+            gates = resp.json().get("reviews", [])
             if gates:
                 print(f"  {len(gates)} HITL gate(s) to review:")
                 for g in gates:
-                    print(f"    Gate {g['review_id']} (node: {g.get('node_id', 'N/A')})")
+                    print(f"    Gate {g['review_id']} (pipeline: {g.get('pipeline_name', 'N/A')})")
                     # Claim the gate
                     claim = client.post(
                         f"/api/v1/runs/{run_id}/hitl/{g['review_id']}/claim",

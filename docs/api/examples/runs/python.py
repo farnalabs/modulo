@@ -94,7 +94,7 @@ def main():
         if status in terminal_states:
             break
     else:
-        print("  Run did not reach terminal state — cancelling ...")
+        print("  Run did not reach terminal state - cancelling ...")
         resp = client.post(f"/api/v1/runs/{run_id}/cancel", headers=headers)
         if resp.status_code != 202:
             bail(f"cancel failed: {resp.status_code} {resp.text}")
@@ -129,10 +129,10 @@ def main():
     print(f"\nChecking pending HITL gates for run {run_id} ...")
     resp = client.get(f"/api/v1/runs/{run_id}/hitl/pending", headers=headers)
     if resp.status_code == 200:
-        gates = resp.json().get("gates", [])
+        gates = resp.json().get("reviews", [])
         print(f"  {len(gates)} pending gate(s)")
         for g in gates:
-            print(f"    - {g['review_id']} (node: {g.get('node_id', 'N/A')})")
+            print(f"    - {g['review_id']} (pipeline: {g.get('pipeline_name', 'N/A')})")
     else:
         print(f"  Could not fetch gates ({resp.status_code})")
 

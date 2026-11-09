@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Modulo API Example: Library Primitive Management — curl
+# Modulo API Example: Library Primitive Management - curl
 #
 # Demonstrates browsing, searching, previewing, and adapting library primitives.
 #
