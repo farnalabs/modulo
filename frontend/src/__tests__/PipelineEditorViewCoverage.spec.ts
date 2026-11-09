@@ -448,7 +448,7 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     vm.rawNodes = [{ id: 'n1', node_type: 'agent', label: 'A', description: '', position: { x: 0, y: 0 } }]
     vm.rawEdges = [
       { id: 'e1', source_node_id: 'n1', target_node_id: 'n1', edge_type: 'loop', max_iterations: 3, condition_expression: 'x > 1', hitl_review_config: null, source_port: 'out', target_port: 'in' },
-      { id: 'e2', source_node_id: 'n1', target_node_id: 'n1', edge_type: 'llm', routing_label: 'retry', condition_expression: null, hitl_review_config: null },
+      { id: 'e2', source_node_id: 'n1', target_node_id: 'n1', edge_type: 'conditional', routing_label: 'retry', condition_expression: null, hitl_review_config: null },
     ]
 
     await vm.saveGraph()
@@ -460,9 +460,9 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     expect(loopEdge.max_iterations).toBe(3)
     expect(loopEdge.condition_expression).toBe('x > 1')
     expect(loopEdge.routing_label).toBeUndefined()
-    const llmEdge = savedEdges.find((e: any) => e.id === 'e2')
-    expect(llmEdge.routing_label).toBe('retry')
-    expect(llmEdge.max_iterations).toBeUndefined()
+    const conditionalEdge = savedEdges.find((e: any) => e.id === 'e2')
+    expect(conditionalEdge.routing_label).toBe('retry')
+    expect(conditionalEdge.max_iterations).toBeUndefined()
 
     wrapper.unmount()
   })

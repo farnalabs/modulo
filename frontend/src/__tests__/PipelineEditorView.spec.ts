@@ -1985,6 +1985,90 @@ describe('PipelineEditorView — edge properties panel', () => {
     wrapper.unmount()
   })
 
+  it('applies edited loop max_iterations to the save payload (FAR-2457)', async () => {
+    // buildEdgePayload spreads the persisted edge; the form values must win for
+    // the edge being edited or a user's routing edit is silently reverted.
+    const loopWrapper = await mountWithEdge(edgeFixture({
+      edge_type: 'loop',
+      max_iterations: 2,
+      hitl_review_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.' },
+    }))
+    const loopVm = loopWrapper.vm as any
+    loopVm.edgeForm.max_iterations = 7
+    await loopVm.saveEdgeConfig()
+    await flushPromises()
+    await nextTick()
+    const loopPut = vi.mocked(api.PUT).mock.calls[0]
+    expect((loopPut[1] as any).body.edges[0].max_iterations).toBe(7)
+    loopWrapper.unmount()
+  })
+
+  it('rejects an llm-typed edge before the wire call (the backend 422s it) (FAR-2457)', async () => {
+    // The live endpoint only accepts normal|reject|conditional|loop. A legacy
+    // fixture carrying edge_type 'llm' must fail canonical validation locally
+    // instead of sending a payload the backend rejects with 422.
+    const wrapper = await mountWithEdge(edgeFixture({
+      edge_type: 'llm',
+      routing_label: 'stale',
+      hitl_review_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.' },
+    }))
+    const vm = wrapper.vm as any
+    vm.edgeForm.routing_label = 'escalate'
+    await vm.saveEdgeConfig()
+    await flushPromises()
+    await nextTick()
+
+    expect(api.PUT).not.toHaveBeenCalled()
+    expect(vm.edgeSaveError).toContain('invalid edge_type')
+    wrapper.unmount()
+  })
+
+  it('preserves routing metadata and HITL config on a normal edge through save (FAR-2457)', async () => {
+    // buildEdgePayload must round-trip fields persisted on any edge kind, not
+    // reconstruct them from edge_type — imported snapshots can carry routing
+    // metadata on normal edges.
+    const hitl = { label: 'Review gate', description: 'Approve the deploy only after a human reviews the plan.' }
+    const wrapper = await mountWithEdge(edgeFixture({
+      edge_type: 'normal',
+      default_target: 'node-2',
+      hitl_review_config: hitl,
+    }))
+
+    await wrapper.find('[data-testid="pipeline-editor-save-edge"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const put = vi.mocked(api.PUT).mock.calls[0]
+    const savedEdge = (put[1] as any).body.edges[0]
+    expect(savedEdge.edge_type).toBe('normal')
+    expect(savedEdge.default_target).toBe('node-2')
+    expect(savedEdge.hitl_review_config.label).toBe('Review gate')
+    wrapper.unmount()
+  })
+
+  it('normalises legacy source/target/type aliases and defaults edge_type on save (FAR-2457)', async () => {
+    // buildEdgePayload's fallbacks keep imported/historical edges that carry
+    // only the VueFlow-style `source`/`target`/`type` aliases savable.
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } }]
+    vm.rawEdges = [{ id: 'legacy-edge', source: 'a', target: 'b', type: 'normal' }]
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockClear()
+
+    await vm.saveGraph()
+
+    const savedEdge = (vi.mocked(api.PUT).mock.calls[0][1] as any).body.edges[0]
+    expect(savedEdge.source_node_id).toBe('a')
+    expect(savedEdge.target_node_id).toBe('b')
+    expect(savedEdge.edge_type).toBe('normal')
+    expect(savedEdge.source_port).toBe('out')
+    expect(savedEdge.target_port).toBe('in')
+    wrapper.unmount()
+  })
+
   it('saves the edge config and reloads the graph', async () => {
     const wrapper = await mountWithEdge(edgeFixture({
       hitl_review_config: { label: 'Review gate', description: 'Approve the deploy only after a human reviews the plan.' },
@@ -2861,7 +2945,7 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     wrapper.unmount()
   })
 
-  it('saveGraph includes edges with edge_type, max_iterations, and routing_label', async () => {
+  it('saveGraph includes loop max_iterations and conditional edges', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = mountEditor()
@@ -2877,7 +2961,7 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     ]
     vm.rawEdges = [
       { id: 'e1', source_node_id: 'node-1', target_node_id: 'node-2', edge_type: 'loop', max_iterations: 5, condition_expression: null, hitl_review_config: null },
-      { id: 'e2', source_node_id: 'node-2', target_node_id: 'node-1', edge_type: 'llm', routing_label: 'retry', condition_expression: null, hitl_review_config: null },
+      { id: 'e2', source_node_id: 'node-2', target_node_id: 'node-1', edge_type: 'conditional', condition_expression: 'status == "ok"', hitl_review_config: null },
     ]
     await vm.saveGraph()
     await flushPromises()
@@ -2887,9 +2971,9 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     const loopEdge = savedEdges.find((e: any) => e.id === 'e1')
     expect(loopEdge.edge_type).toBe('loop')
     expect(loopEdge.max_iterations).toBe(5)
-    const llmEdge = savedEdges.find((e: any) => e.id === 'e2')
-    expect(llmEdge.edge_type).toBe('llm')
-    expect(llmEdge.routing_label).toBe('retry')
+    const conditionalEdge = savedEdges.find((e: any) => e.id === 'e2')
+    expect(conditionalEdge.edge_type).toBe('conditional')
+    expect(conditionalEdge.condition_expression).toBe('status == "ok"')
     wrapper.unmount()
   })
 

@@ -80,6 +80,155 @@ _MAX_SIZE = 256
 _CACHE_LOCK = threading.RLock()
 _MISSING = object()
 
+# Canonical graph payload fields (FAR-2457).  The API validates these fields at
+# write time, but snapshots and imported graphs can bypass that boundary.  The
+# compiler therefore rejects unknown keys instead of silently ignoring typos.
+_GRAPH_TOP_LEVEL_FIELDS = frozenset({"nodes", "edges"})
+_GRAPH_EDGE_FIELDS = frozenset(
+    {
+        "id",
+        "source_node_id",
+        "target_node_id",
+        "source",
+        "target",
+        "edge_type",
+        "type",
+        "hitl_review_config",
+        "condition_expression",
+        "source_port",
+        "target_port",
+        # Routing/loop metadata is persisted on edges and consumed by the
+        # compiler. Keep the legacy aliases too: imported snapshots may still
+        # use source/target/type while current writes use *_node_id/edge_type.
+        "default_target",
+        "max_iterations",
+        "routing_label",
+        # Per-edge retry policy and compensation target are validated by
+        # graph_validator and consumed by the retry/compensation wrapper.
+        "retry",
+        "on_failure_target",
+    }
+)
+_GRAPH_NODE_FIELDS = frozenset(
+    {
+        "id",
+        "node_type",
+        "agent_id",
+        "position",
+        "connector_binding",
+        "output_schema_id",
+        "input_schema_pin",
+        "output_schema_pin",
+        "capability_scope",
+        "label",
+        "role",
+        "autonomy_recommendation",
+        "idempotent",
+        "composite_ref",
+        "composite_parameter_values",
+        "composite_input_mapping",
+        "composite_output_mapping",
+        "parameter_schema_id",
+        "parameter_set_id",
+        "parameter_overrides",
+        "template_id",
+        "mode",
+        "agent_commands",
+        "commands_concatenation_string",
+        "agent_prompt",
+        "script_command",
+        "model_class",
+        "egress_policy",
+        "egress_allowlist",
+        "resource_limits",
+        "read_only",
+        "git_credentials",
+        "wallclock_budget_seconds",
+        "delivery_sentinel",
+        "single_pr_per_run",
+        "env_vars",
+        "context_files",
+        "timeout_seconds",
+        "output_schema_json",
+        "schema_profile",
+        "description",
+        "stall_timeout_seconds",
+        "enable_heartbeat",
+        "watch_log_path",
+        "stdout_percentage_delta",
+        "watch_globs",
+        "router_config",
+        "hitl_config",
+        "policy_gate",
+        "fan_out",
+        "collect",
+        "aggregate",
+        "join_partial_policy",
+        "inputs",
+        "outputs",
+        "stdout_retention_mode",
+        "stdout_max_bytes",
+        "workspace_inputs",
+        "await_completion",
+        "wait_timeout",
+        "max_input_length",
+        "token_budget",
+        # Router metadata is read by the compiler but may be present only in
+        # imported or historical snapshots rather than the current API model.
+        "routing_mode",
+        "default_target",
+        # Runtime provenance retained on graph nodes by snapshot/export paths.
+        "execution_metadata",
+        # Legacy execution fields the compiler/runner still reads from a node
+        # (``node_def.get(...)``) in imported or historical snapshots even
+        # though the current API write model no longer carries them. Rejecting
+        # them would break replay/compile of valid older graphs.
+        "model_backend_id",
+        "prompt_template",
+        "routing_prompt",
+        "manual_prompt",
+        "allowed_hosts",
+        "input_schema_json",
+        "output_schema_version",
+        "loop_intercept",
+        # Per-node retry policy is validated by graph_validator and read by the
+        # retry/compensation wrapper at compile time.
+        "retry",
+        # Composite sub-nodes and older snapshots may carry the bare ``prompt``
+        # alias; the composite expander injects parameters into it.
+        "prompt",
+    }
+)
+
+
+def _reject_unknown_graph_fields(graph_json: dict[str, Any]) -> None:
+    """Reject fields outside the canonical graph node/edge contract.
+
+    Underscore-prefixed keys are the engine's internal namespace, not
+    user-authored graph fields: snapshot materialisation bakes
+    ``_resolved_model`` / ``_model_origin`` / ``_resolved_parameters`` and the
+    composite expander stamps ``_composite_parent_id`` / ``_composite_index`` /
+    ``_composite_edges`` / ``_input_mapping`` / ``_output_mapping`` onto nodes
+    BEFORE ``build_graph_from_json`` compiles. Exempting them keeps composite
+    and snapshot pipelines compiling while still rejecting typo'd public fields.
+    """
+    unknown_top = set(graph_json) - _GRAPH_TOP_LEVEL_FIELDS
+    if unknown_top:
+        raise ValueError(f"graph_json contains unknown fields: {sorted(unknown_top)}")
+    for kind, entries, allowed in (
+        ("node", graph_json.get("nodes", []), _GRAPH_NODE_FIELDS),
+        ("edge", graph_json.get("edges", []), _GRAPH_EDGE_FIELDS),
+    ):
+        if not isinstance(entries, list):
+            raise ValueError(f"graph_json {kind}s must be a list")
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                raise ValueError(f"graph_json {kind} at index {index} must be an object")
+            unknown = {key for key in entry if not key.startswith("_")} - allowed
+            if unknown:
+                identifier = entry.get("id", index)
+                raise ValueError(f"graph_json {kind} {identifier!r} contains unknown fields: {sorted(unknown)}")
+
 
 @dataclasses.dataclass
 class _CompileLock:
@@ -1551,6 +1700,7 @@ def build_graph_from_json(
 
     Returns a compiled LangGraph that accepts dict[str, Any] state.
     """
+    _reject_unknown_graph_fields(graph_json)
     state_schema = cast("type[Any]", Annotated[dict[str, Any], _pipeline_state_reducer])
     graph: StateGraph[Any] = StateGraph(state_schema)
 

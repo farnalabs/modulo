@@ -419,6 +419,11 @@ jobs:
       - name: Validate manifest nav structure
         working-directory: .
         run: uv run --no-build --project backend --no-sync python scripts/run_validate_nav_config.py
+      - name: Validate canonical frontend graph writes
+        # Keep this beside the backend structural gates: the checker is
+        # dependency-free and validates the frontend's graph write contract.
+        working-directory: .
+        run: uv run --no-build --project backend --no-sync python scripts/run_validate_graph_schema.py
       - name: Product map consistency (declared data-testids)
         # BLOCKING, deliberately in the fast lint job rather than only in the
         # "Test (Backend) non-unit suites" job. The test file itself only reads
@@ -982,6 +987,16 @@ jobs:
         if: needs.changes.outputs.frontend == 'true'
       - run: pnpm run type-check
         if: needs.changes.outputs.frontend == 'true'
+      # The graph-write checker is dependency-free but is invoked through uv
+      # (as in the backend structural-gate job), so this job needs uv on PATH.
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        if: needs.changes.outputs.frontend == 'true'
+        with:
+          python-version: "3.12"
+      - name: Validate canonical frontend graph writes
+        if: needs.changes.outputs.frontend == 'true'
+        working-directory: .
+        run: uv run --project backend --no-sync --frozen python scripts/run_validate_graph_schema.py
       - name: Install Playwright browsers
         if: needs.changes.outputs.frontend == 'true'
         run: pnpm exec playwright install chromium

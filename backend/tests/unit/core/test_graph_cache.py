@@ -12,9 +12,117 @@ a stale rejection from an earlier gate must never kick THIS edge to the
 reject target.
 """
 
-from modulo.core.pipeline_engine.graph_cache import _make_gate_kickback_router
+import pytest
+
+from modulo.core.pipeline_engine.graph_cache import (
+    _make_gate_kickback_router,
+    _reject_unknown_graph_fields,
+    build_graph_from_json,
+)
 
 _REVIEW_ID = "hitl_review_a_b"
+
+
+def test_graph_allowlist_accepts_compiler_and_persisted_fields():
+    graph = {
+        "nodes": [
+            {
+                "id": "node-1",
+                "routing_mode": "llm",
+                "default_target": "fallback",
+                "execution_metadata": {"attempt": 2},
+                # Legacy fields still read from imported/historical snapshots by
+                # node_runner (node_def.get(...)). They must not be rejected.
+                "model_backend_id": "backend-1",
+                "prompt_template": "Hello {{ input.name }}",
+                "routing_prompt": "Choose a route.",
+                "manual_prompt": "Enter a value.",
+                "allowed_hosts": ["api.github.com"],
+                "input_schema_json": {"type": "object"},
+                "output_schema_version": 1,
+                "loop_intercept": {"max_iterations": 3},
+                "prompt": "Composite sub-node prompt {{parameter.name}}",
+                "retry": {"max_attempts": 2, "on": ["error"]},
+                # Engine-internal namespace: stamped by the composite expander
+                # and snapshot materialisation before compile. Must survive the
+                # allowlist so composite pipelines keep compiling.
+                "_composite_parent_id": "composite-1",
+                "_composite_index": 0,
+                "_composite_edges": [],
+                "_input_mapping": {"input.name": "params.name"},
+                "_output_mapping": {"output": "result"},
+                "_resolved_model": "claude-sonnet-4",
+                "_model_origin": "registry",
+                "_resolved_parameters": {"temperature": 0.2},
+            }
+        ],
+        "edges": [
+            {
+                "id": "edge-1",
+                "default_target": "done",
+                "max_iterations": 3,
+                "routing_label": "retry",
+                "retry": {"max_attempts": 2, "on": ["error"]},
+                "on_failure_target": "node-2",
+            }
+        ],
+    }
+    _reject_unknown_graph_fields(graph)
+    assert graph["edges"][0]["max_iterations"] == 3
+
+
+def test_graph_allowlist_rejects_unknown_fields():
+    with pytest.raises(ValueError, match="unknown fields"):
+        _reject_unknown_graph_fields({"nodes": [{"id": "node-1", "typo": True}], "edges": []})
+
+
+def test_graph_allowlist_rejects_unknown_top_level_fields():
+    with pytest.raises(ValueError, match="graph_json contains unknown fields"):
+        _reject_unknown_graph_fields({"nodes": [], "edges": [], "typo": True})
+
+
+def test_graph_allowlist_rejects_non_list_entries():
+    with pytest.raises(ValueError, match="graph_json nodes must be a list"):
+        _reject_unknown_graph_fields({"nodes": {}, "edges": []})
+
+
+def test_graph_allowlist_rejects_non_object_entries():
+    with pytest.raises(ValueError, match="graph_json node at index 0 must be an object"):
+        _reject_unknown_graph_fields({"nodes": ["not-a-node"], "edges": []})
+
+
+def test_build_graph_from_json_accepts_runtime_consumed_node_fields():
+    """The compile path must accept node fields node_runner still reads from
+    imported/historical snapshots (prompt_template, model_backend_id,
+    manual_prompt, routing_prompt) and the composite expander's internal tags.
+    This exercises the real build_graph_from_json -> _reject_unknown_graph_fields
+    seam rather than calling the validator directly."""
+    graph = {
+        "nodes": [
+            {
+                "id": "node-1",
+                "role": None,
+                "model_backend_id": "backend-1",
+                "prompt_template": "Hello {{ input.name }}",
+                "routing_prompt": "Choose a route.",
+                "manual_prompt": "Enter a value.",
+                "_composite_parent_id": "composite-1",
+                "_composite_index": 0,
+                "_composite_edges": [],
+            }
+        ],
+        "edges": [],
+    }
+
+    assert build_graph_from_json(graph) is not None
+
+
+def test_build_graph_from_json_rejects_unknown_node_fields():
+    """Unknown keys must still hard-fail through the compile path."""
+    graph = {"nodes": [{"id": "node-1", "role": None, "typo": True}], "edges": []}
+
+    with pytest.raises(ValueError, match="unknown fields"):
+        build_graph_from_json(graph)
 
 
 def test_reject_routes_to_reject_target():

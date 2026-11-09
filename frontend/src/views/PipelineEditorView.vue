@@ -1683,7 +1683,7 @@
   append-to="body"
   :placeholder="$t('views.PipelineEditorView.normal')"
   class="w-full"
-  :options="[{ value: 'normal', label: $t('views.PipelineEditorView.normal') }, { value: 'reject', label: $t('views.PipelineEditorView.reject') }, { value: 'conditional', label: $t('views.PipelineEditorView.conditional') }, { value: 'loop', label: $t('views.PipelineEditorView.loop') }, { value: 'llm', label: $t('views.PipelineEditorView.llm_routing') }]"
+  :options="[{ value: 'normal', label: $t('views.PipelineEditorView.normal') }, { value: 'reject', label: $t('views.PipelineEditorView.reject') }, { value: 'conditional', label: $t('views.PipelineEditorView.conditional') }, { value: 'loop', label: $t('views.PipelineEditorView.loop') }]"
   option-label="label"
   option-value="value"
 >
@@ -2283,6 +2283,7 @@ import {
 } from '../utils/graph-layout'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
+import { validateCanonicalGraph, type CanonicalPipelineGraphUpdate } from '../types/pipeline-graph'
 import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
 import type { LocationQueryRaw } from 'vue-router'
 import { useApi } from '../composables/useApi'
@@ -3963,6 +3964,12 @@ function hasPlacedPositions(nodes: any[]): boolean {
 }
 
 function computeGraphLayout(): Record<string, PositionSnapshot> {
+  // Validate the source graph before layout so malformed/unknown fields cannot
+  // be carried into a generated arrangement.
+  validateCanonicalGraph({
+    nodes: rawNodes.value.map(buildNodePayload),
+    edges: rawEdges.value.map(buildEdgePayload),
+  })
   const laidOut = layoutNodes(
     rawNodes.value.map((node: any) => ({
       id: node.id,
@@ -4414,37 +4421,29 @@ async function saveEdgeConfig() {
   const updatedEdges = rawEdges.value.map((e: any) => {
     if (e.id === selectedEdgeData.value.id) {
       return {
-        id: e.id,
-        source_node_id: e.source_node_id,
-        target_node_id: e.target_node_id,
+        ...buildEdgePayload(e),
         edge_type: edgeForm.edge_type,
         condition_expression: edgeForm.condition_expression || null,
+        // FAR-2457: the form owns the routing metadata for the edge being
+        // edited. The buildEdgePayload spread carries the persisted values, so
+        // without these overrides a user edit to a loop's max_iterations (or
+        // an llm edge's routing_label) would silently save the stale value.
         max_iterations: edgeForm.edge_type === 'loop' ? (edgeForm.max_iterations || 0) : undefined,
         routing_label: edgeForm.edge_type === 'llm' ? (edgeForm.routing_label || undefined) : undefined,
         hitl_review_config: buildHitlReviewConfig(),
-        source_port: e.source_port || 'out',
-        target_port: e.target_port || 'in',
       }
     }
-    return {
-      id: e.id,
-      source_node_id: e.source_node_id,
-      target_node_id: e.target_node_id,
-      edge_type: e.edge_type || 'normal',
-      condition_expression: e.condition_expression || null,
-      hitl_review_config: e.hitl_review_config || null,
-      source_port: e.source_port || 'out',
-      target_port: e.target_port || 'in',
-    }
+    return buildEdgePayload(e)
   })
 
   try {
+    const graphPayload: CanonicalPipelineGraphUpdate = validateCanonicalGraph({
+      nodes: rawNodes.value.map(buildNodePayload),
+      edges: updatedEdges,
+    })
     await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
-      body: {
-        nodes: rawNodes.value.map(buildNodePayload),
-        edges: updatedEdges,
-      },
+      body: graphPayload as unknown as components['schemas']['PipelineGraphUpdate'],
       signal,
     }))
     await loadGraph()
@@ -5676,6 +5675,28 @@ function buildNodePayload(n: any): any {
   return payload
 }
 
+function buildEdgePayload(e: any): any {
+  // Start from the backend edge object so fields added to the graph contract
+  // (including masked HITL config) survive an editor round-trip. Only VueFlow
+  // coordinates/aliases are normalised here; routing metadata must not be
+  // reconstructed from edge_type because imported snapshots can carry it on
+  // any edge kind.
+  const payload = { ...e }
+  delete payload.source
+  delete payload.target
+  delete payload.type
+  delete payload.data
+  payload.id = e.id
+  payload.source_node_id = e.source_node_id || e.source
+  payload.target_node_id = e.target_node_id || e.target
+  payload.edge_type = e.edge_type || 'normal'
+  payload.condition_expression = e.condition_expression ?? null
+  payload.hitl_review_config = e.hitl_review_config ?? null
+  payload.source_port = e.source_port || 'out'
+  payload.target_port = e.target_port || 'in'
+  return payload
+}
+
 async function saveGraph() {
   if (isViewing.value) return
   savingGraph.value = true
@@ -5689,23 +5710,13 @@ async function saveGraph() {
         ? { ...selectedNodeOverrides.value }
         : null
     }
+    const graphPayload: CanonicalPipelineGraphUpdate = validateCanonicalGraph({
+      nodes: rawNodes.value.map(buildNodePayload),
+      edges: rawEdges.value.map(buildEdgePayload),
+    })
     const saveResponse = await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
-      body: {
-        nodes: rawNodes.value.map(buildNodePayload),
-        edges: rawEdges.value.map((e: any) => ({
-          id: e.id,
-          source_node_id: e.source_node_id,
-          target_node_id: e.target_node_id,
-          edge_type: e.edge_type || 'normal',
-          condition_expression: e.condition_expression || null,
-          max_iterations: e.edge_type === 'loop' ? (e.max_iterations || 0) : undefined,
-          routing_label: e.edge_type === 'llm' ? (e.routing_label || undefined) : undefined,
-          hitl_review_config: e.hitl_review_config || null,
-          source_port: e.source_port || 'out',
-          target_port: e.target_port || 'in',
-        })),
-      },
+      body: graphPayload as unknown as components['schemas']['PipelineGraphUpdate'],
       signal,
     }))
     // openapi-fetch returns HTTP failures in `error` without rejecting. Treat
