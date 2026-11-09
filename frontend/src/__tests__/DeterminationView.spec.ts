@@ -423,4 +423,145 @@ describe('DeterminationView', () => {
     expect(mockPost).toHaveBeenCalledTimes(2)
     expect(wrapper.find('[data-testid="determination-review"]').exists()).toBe(true)
   })
+
+  it('drills an evidence reference into its sampled source record and cross-links the source row', async () => {
+    routeApi({})
+    const wrapper = await mountView()
+    await generateDraft(wrapper)
+
+    // Collapsed by default: the drill-down is opt-in per element.
+    expect(wrapper.find('[data-testid="determination-evidence-drilldown"]').exists()).toBe(false)
+
+    const toggle = wrapper.findAll('[data-testid="determination-evidence-toggle"]')[0]
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    await toggle.trigger('click')
+
+    const drilldown = wrapper.find('[data-testid="determination-evidence-drilldown"]')
+    expect(drilldown.exists()).toBe(true)
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    // The drill-down names the sampled source record from the attempt inventory.
+    const source = wrapper.find('[data-testid="determination-evidence-source"]')
+    expect(source.text()).toContain('github')
+    expect(source.text()).toContain('repos')
+    expect(source.text()).toContain('3')
+    expect(source.text()).toContain('Available')
+
+    // The source row cross-links back to the elements that cite it (the
+    // observed fact and the derived element both cite this source).
+    expect(wrapper.findAll('[data-testid="determination-source-ref-count"]')[0].text()).toContain('2 evidence references')
+
+    await wrapper.find('[data-testid="determination-evidence-link-source"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="determination-source-row"]')[0].classes()).toContain('ring-2')
+
+    await toggle.trigger('click')
+    expect(wrapper.find('[data-testid="determination-evidence-drilldown"]').exists()).toBe(false)
+  })
+
+  it('states when an evidence reference cites a source absent from the inventory', async () => {
+    const orphaned = proposal()
+    orphaned.derived_elements = [
+      {
+        id: DERIVED_ID,
+        statement: 'Deployment stage inferred from an unlisted source',
+        kind: 'derived',
+        confidence: 'low',
+        evidence_refs: [
+          {
+            reference_id: 'evidence:unknown:deployments',
+            source_id: 'unknown:deployments',
+            locator: 'scan:deployments',
+            provenance: 'inferred',
+          },
+        ],
+      },
+    ]
+    routeApi({ draft: { ...draftResponse(), proposal: orphaned } })
+    const wrapper = await mountView()
+    await generateDraft(wrapper)
+
+    await wrapper.find('[data-testid="determination-derived-element"] [data-testid="determination-evidence-toggle"]').trigger('click')
+
+    const drilldown = wrapper.find('[data-testid="determination-derived-element"] [data-testid="determination-evidence-drilldown"]')
+    expect(drilldown.exists()).toBe(true)
+    expect(drilldown.find('[data-testid="determination-evidence-source-missing"]').exists()).toBe(true)
+    expect(drilldown.find('[data-testid="determination-evidence-source"]').exists()).toBe(false)
+    expect(drilldown.find('[data-testid="determination-evidence-link-source"]').exists()).toBe(false)
+  })
+
+  it('surfaces a failed source record in the evidence drill-down', async () => {
+    const withFailedSource = proposal()
+    withFailedSource.derived_elements = [
+      {
+        id: DERIVED_ID,
+        statement: 'Deployment stage inferred from the issues tracker',
+        kind: 'derived',
+        confidence: 'low',
+        evidence_refs: [
+          {
+            reference_id: 'evidence:c-2:issues',
+            source_id: 'c-2:issues',
+            locator: 'scan:issues',
+            provenance: 'inferred',
+          },
+        ],
+      },
+    ]
+    routeApi({ draft: { ...draftResponse(), proposal: withFailedSource } })
+    const wrapper = await mountView()
+    await generateDraft(wrapper)
+
+    await wrapper.find('[data-testid="determination-derived-element"] [data-testid="determination-evidence-toggle"]').trigger('click')
+
+    const source = wrapper.find('[data-testid="determination-derived-element"] [data-testid="determination-evidence-source"]')
+    expect(source.exists()).toBe(true)
+    expect(source.text()).toContain('connector query timed out')
+  })
+
+  it('scrolls a cross-linked source row into view when the row is present', async () => {
+    routeApi({})
+    const scrollSpy = vi.fn()
+    const originalScroll = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView')
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      writable: true,
+      value: scrollSpy,
+    })
+
+    const wrapper = mount(DeterminationView, { attachTo: document.body, global: { plugins: [createPinia()] } })
+    try {
+      await flushPromises()
+      await generateDraft(wrapper)
+
+      await wrapper.findAll('[data-testid="determination-evidence-toggle"]')[0].trigger('click')
+      await wrapper.find('[data-testid="determination-evidence-link-source"]').trigger('click')
+      await flushPromises()
+
+      expect(scrollSpy).toHaveBeenCalledWith({ block: 'center' })
+    } finally {
+      wrapper.unmount()
+      if (originalScroll) Object.defineProperty(Element.prototype, 'scrollIntoView', originalScroll)
+      else Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    }
+  })
+
+  it('omits the cross-link count when no element cites an inventory source', async () => {
+    const withoutRefs = {
+      ...proposal(),
+      observed_facts: [{ id: OBSERVED_ID, statement: 'Observed without refs', kind: 'observed', confidence: 'low' }],
+      derived_elements: [{ id: DERIVED_ID, statement: 'Derived without refs', kind: 'derived', confidence: 'low' }],
+      unresolved_assumptions: [
+        { id: LOW_ASSUMPTION_ID, statement: 'Assumption without refs', reason: 'Insufficient evidence.', confidence: 'low' },
+      ],
+    }
+    routeApi({ draft: { ...draftResponse(), proposal: withoutRefs } })
+    const wrapper = await mountView()
+    await generateDraft(wrapper)
+
+    // Sources still render, so the reference count map is evaluated, but no
+    // element cites one, so no source row carries a cross-link count.
+    expect(wrapper.findAll('[data-testid="determination-source-row"]')).toHaveLength(2)
+    expect(wrapper.findAll('[data-testid="determination-source-ref-count"]')).toHaveLength(0)
+  })
 })

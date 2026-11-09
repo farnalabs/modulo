@@ -58,7 +58,11 @@
                 {{ $t('views.DeterminationView.confidence_' + fact.confidence) }}
               </span>
             </div>
-            <DeterminationEvidenceRefs :references="fact.evidence_refs ?? []" />
+            <DeterminationEvidenceRefs
+              :references="fact.evidence_refs ?? []"
+              :sources="sources"
+              @link-source="focusSource"
+            />
             <button
               type="button"
               class="mt-2 rounded border px-2 py-1 text-xs"
@@ -102,7 +106,11 @@
                 {{ $t('views.DeterminationView.confidence_' + element.confidence) }}
               </span>
             </div>
-            <DeterminationEvidenceRefs :references="element.evidence_refs ?? []" />
+            <DeterminationEvidenceRefs
+              :references="element.evidence_refs ?? []"
+              :sources="sources"
+              @link-source="focusSource"
+            />
             <button
               type="button"
               class="mt-2 rounded border px-2 py-1 text-xs"
@@ -153,7 +161,11 @@
               </span>
               <span v-else>{{ reasonFor(assumption.reason).text }}</span>
             </p>
-            <DeterminationEvidenceRefs :references="assumption.evidence_refs ?? []" />
+            <DeterminationEvidenceRefs
+              :references="assumption.evidence_refs ?? []"
+              :sources="sources"
+              @link-source="focusSource"
+            />
             <button
               type="button"
               class="mt-2 rounded border px-2 py-1 text-xs"
@@ -195,7 +207,11 @@
         </ul>
       </section>
 
-      <DeterminationProvenanceTrail :proposal="proposal" :review="review ?? null" />
+      <DeterminationProvenanceTrail
+        :proposal="proposal"
+        :review="review ?? null"
+        :highlighted-source-id="highlightedSourceId"
+      />
 
       <DeterminationEvidencePanel :element="selectedElement" @close="clearSelection" />
     </template>
@@ -203,7 +219,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
 import LoadingSpinner from '../shared/LoadingSpinner.vue'
 import DeterminationEvidencePanel from './DeterminationEvidencePanel.vue'
@@ -238,6 +254,7 @@ const observedFacts = computed(() => props.proposal?.observed_facts ?? [])
 const derivedElements = computed(() => props.proposal?.derived_elements ?? [])
 const assumptions = computed(() => props.proposal?.unresolved_assumptions ?? [])
 const unavailableEvidence = computed(() => props.proposal?.unavailable_evidence ?? [])
+const sources = computed(() => props.proposal?.attempt.source_inventory)
 
 /**
  * Selection is held by element ID, never by array position: removing or
@@ -283,6 +300,23 @@ function clearSelection(): void {
 
 function reasonFor(reason: string): DisplayText {
   return displayEvidenceText(reason)
+}
+
+const highlightedSourceId = ref<string | null>(null)
+
+function sourceRowId(sourceId: string): string {
+  return `determination-source-${sourceId.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+}
+
+/** Cross-link an evidence reference to its sampled source record. */
+function focusSource(sourceId: string): void {
+  highlightedSourceId.value = sourceId
+  void nextTick(() => {
+    const row = document.getElementById(sourceRowId(sourceId))
+    if (row && typeof row.scrollIntoView === 'function') {
+      row.scrollIntoView({ block: 'center' })
+    }
+  })
 }
 
 function onRetry(): void {

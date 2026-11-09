@@ -116,7 +116,9 @@
         <li
           v-for="source in sources"
           :key="source.source_id"
+          :id="sourceRowId(source.source_id)"
           class="space-y-1 rounded-lg border bg-muted/20 p-3"
+          :class="{ 'ring-2 ring-primary': highlightedSourceId === source.source_id }"
           data-testid="determination-source-row"
         >
           <div class="flex flex-wrap items-baseline gap-2">
@@ -138,6 +140,13 @@
               {{ $t('views.DeterminationView.evidence_value_withheld') }}
             </span>
             <span v-else>{{ sourceErrorFor(source.error).text }}</span>
+          </p>
+          <p
+            v-if="referenceCountsBySource[source.source_id]"
+            class="text-xs text-muted-foreground"
+            data-testid="determination-source-ref-count"
+          >
+            {{ $t('views.DeterminationView.source_ref_count', referenceCountsBySource[source.source_id]) }}
           </p>
         </li>
       </ul>
@@ -163,11 +172,35 @@ import type {
 const props = defineProps<{
   proposal: DeterminationProposal
   review: DeterminationReviewResponse | null
+  highlightedSourceId?: string | null
 }>()
 
 const uncertainty = computed(() => props.proposal.uncertainty ?? [])
 const provenance = computed(() => props.proposal.provenance ?? [])
 const sources = computed(() => props.proposal.attempt.source_inventory ?? [])
+
+/**
+ * How many element-level evidence references cite each sampled source, so a
+ * source row cross-links back to the elements that depend on it.
+ */
+const referenceCountsBySource = computed<Record<string, number>>(() => {
+  const counts: Record<string, number> = {}
+  const elements = [
+    ...(props.proposal.observed_facts ?? []),
+    ...(props.proposal.derived_elements ?? []),
+    ...(props.proposal.unresolved_assumptions ?? []),
+  ]
+  for (const element of elements) {
+    for (const reference of element.evidence_refs ?? []) {
+      counts[reference.source_id] = (counts[reference.source_id] ?? 0) + 1
+    }
+  }
+  return counts
+})
+
+function sourceRowId(sourceId: string): string {
+  return `determination-source-${sourceId.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+}
 
 function formatDecidedAt(review: DeterminationReviewResponse): string {
   return formatDateShortWithTime(review.decided_at)
