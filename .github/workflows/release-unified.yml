@@ -53,46 +53,37 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Release Preflight Discovery Gate (FAR-2344)
-  # Aggregates all known release preconditions into an independent, non-failing
-  # discovery gate so that every check is evaluated in a single pass.
+  # Schema-freshness proof for the exact commit (FAR-2484)
+  # A release samples a main commit that may be seconds old, and merges land
+  # through the merge queue with GITHUB_TOKEN - which does not trigger push
+  # workflows - so "a completed CI run exists on this exact commit" is usually
+  # false at preflight time even when the tree is healthy (run 42673260700
+  # failed the gate on 5ea37c5 with only an unrelated re-run visible). Prove
+  # the gate instead of assuming it: dispatch ci.yml against a temporary tag
+  # pinned at the exact commit when no run proves it, then wait (bounded) for
+  # the Schema freshness job.
+  #
+  # This lives in its OWN job so the tag-create / dispatch / delete privileges
+  # (`contents: write` + `actions: write`) are granted to nothing but this
+  # proof. The discovery gate in `preflight` below runs with `contents: read`
+  # and must never hold a write token.
   # ---------------------------------------------------------------------------
-  preflight:
-    name: Release Preflight Discovery Gate
+  schema-gate:
+    name: Schema freshness proof (exact commit)
     runs-on: ubicloud-standard-2
-    # Covers the bounded schema-freshness proof below: when no completed
-    # ci.yml run proves the gate on the exact commit, the job dispatches one
-    # against a temporary tag pinned at that commit and waits for its
-    # Schema freshness job (FAR-2484). A full CI run takes ~35-50 minutes.
+    # Covers the bounded schema-freshness proof: when no completed ci.yml run
+    # proves the gate on the exact commit, the job dispatches one against a
+    # temporary tag pinned at that commit and waits for its Schema freshness
+    # job. A full CI run takes ~35-50 minutes.
     timeout-minutes: 75
     permissions:
       # `contents: write` creates and deletes the temporary CI-verification
       # tag; `actions: write` dispatches ci.yml for the exact commit.
       contents: write
       actions: write
-      packages: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          ref: main
-
-      - name: Set up Python 3.12
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
-        with:
-          python-version: "3.12"
-          enable-cache: true
-
-      # FAR-2484: a release samples a main commit that may be seconds old, and
-      # merges land through the merge queue with GITHUB_TOKEN - which does not
-      # trigger push workflows - so "a completed CI run exists on this exact
-      # commit" is usually false at preflight time even when the tree is
-      # healthy (run 42673260700 failed the gate on 5ea37c5 with only an
-      # unrelated re-run visible). Prove the gate instead of assuming it:
-      # dispatch ci.yml against a temporary tag pinned at the exact commit
-      # when no run proves it, then wait (bounded) for the Schema freshness
-      # job. The gate is unchanged - a green Schema freshness job on the
-      # exact commit is still required.
+      # No checkout: the proof only talks to the GitHub API through `gh`, so it
+      # never needs repository credentials persisted on disk.
       - name: Ensure schema freshness CI on the exact commit
         if: inputs.mode != 'dry-run'
         shell: bash
@@ -122,157 +113,236 @@ jobs:
               return subprocess.run(["gh", *args], capture_output=True, text=True)
 
 
+          def tag_names(payload):
+              # Tag names under refs/tags/ from a possibly-slurped matching-refs
+              # body: gh api --paginate --slurp yields a list of pages.
+              try:
+                  pages = json.loads(payload or "[]")
+              except json.JSONDecodeError:
+                  return None
+              if not isinstance(pages, list):
+                  return None
+              names = []
+              for page in pages:
+                  entries = [page] if isinstance(page, dict) else page
+                  if not isinstance(entries, list):
+                      return None
+                  for entry in entries:
+                      ref = str(entry.get("ref") or "")
+                      if ref.startswith("refs/tags/"):
+                          names.append(ref[len("refs/tags/") :])
+              return names
+
+
           def main(argv=None):
               target_sha = (sys.argv[1:] if argv is None else argv)[0]
               repo = os.environ.get("GITHUB_REPOSITORY", "")
               poll_seconds = int(os.environ.get("SCHEMA_GATE_POLL_INTERVAL_SECONDS", "30"))
               max_wait_seconds = int(os.environ.get("SCHEMA_GATE_MAX_WAIT_SECONDS", "3600"))
               tag = "ci-verify-" + target_sha[:12] + "-" + os.environ.get("GITHUB_RUN_ID", "0")
+              tag_prefix = "ci-verify-" + target_sha[:12] + "-"
 
               if poll_seconds < 1 or max_wait_seconds < 1:
                   fail("SCHEMA_GATE_POLL_INTERVAL_SECONDS and SCHEMA_GATE_MAX_WAIT_SECONDS must be positive integers.")
               if not repo:
                   fail("GITHUB_REPOSITORY is unset; refusing to look for CI runs in an unknown repository.")
+              max_attempts = max(1, -(-max_wait_seconds // poll_seconds))
 
-              tag_created = False
+              def list_tags(prefix):
+                  listing = gh("api", "--paginate", "--slurp", "repos/" + repo + "/git/matching-refs/tags/" + prefix)
+                  if listing.returncode != 0:
+                      return None
+                  return tag_names(listing.stdout)
+
+              def delete_tag(name):
+                  result = gh("api", "-X", "DELETE", "repos/" + repo + "/git/refs/tags/" + name)
+                  detail = (result.stderr or "") + (result.stdout or "")
+                  if result.returncode != 0 and "Not Found" not in detail and "404" not in detail:
+                      print("::warning::Could not delete the temporary CI-verification tag " + name + "; delete it manually.")
+
+              def sweep_stale_tags():
+                  # A tag leaked by an earlier attempt for this exact commit (a
+                  # cancelled, timed-out or SIGKILLed run skips every finally
+                  # block) must not survive: a tag-fetch plus an unfiltered
+                  # `git describe --tags` would otherwise pick it as the
+                  # changelog base. Remove any stale tag for this commit.
+                  names = list_tags(tag_prefix)
+                  if names is None:
+                      print("::warning::Could not list existing CI-verification tags for " + tag_prefix + ".")
+                      return
+                  for name in names:
+                      if name != tag:
+                          delete_tag(name)
 
               def delete_temporary_tag():
-                  if not tag_created:
-                      return
-                  result = gh("api", "-X", "DELETE", "repos/" + repo + "/git/refs/tags/" + tag)
-                  if result.returncode != 0:
-                      print("::warning::Could not delete the temporary CI-verification tag " + tag + "; delete it manually.")
+                  # Always attempt deletion, even when no create response was
+                  # observed: a POST whose response was lost still creates the
+                  # tag server-side.
+                  delete_tag(tag)
 
-              # The temporary tag must be removed on every exit path (success,
-              # timeout, query error), never left behind.
               try:
+                  sweep_stale_tags()
                   deadline = time.monotonic() + max_wait_seconds
                   dispatched = False
                   attempt = 0
-                  last_state = "no ci.yml run exists for the exact commit"
+                  last_state = "no CI run proves the Schema freshness gate"
+                  last_error = ""
 
                   while True:
                       attempt += 1
+                      pending = False
                       listing = gh(
                           "run", "list", "--workflow", "ci.yml", "--commit", target_sha,
                           "--limit", "100", "--json", "databaseId,status,conclusion",
                       )
+                      runs = None
                       if listing.returncode != 0:
-                          fail(
-                              "Could not query CI runs for exact target "
-                              + target_sha
-                              + ": "
-                              + (listing.stderr or listing.stdout).strip()
+                          last_error = (listing.stderr or listing.stdout).strip() or "gh run list failed"
+                          print(
+                              "::warning::gh run lookup failed (attempt "
+                              + str(attempt) + "/" + str(max_attempts) + "): " + last_error
                           )
-                      try:
-                          runs = json.loads(listing.stdout or "[]")
-                      except json.JSONDecodeError:
-                          fail("Could not parse the CI run list for exact target " + target_sha + ".")
-
-                      pending = False
-                      for run in runs:
-                          run_number = str(run.get("databaseId") or "")
-                          if not run_number:
-                              continue
-                          jobs_call = gh(
-                              "api", "repos/" + repo + "/actions/runs/" + run_number + "/jobs?per_page=100"
-                          )
-                          if jobs_call.returncode != 0:
-                              fail(
-                                  "Could not read the jobs of CI run "
-                                  + run_number
-                                  + ": "
-                                  + (jobs_call.stderr or jobs_call.stdout).strip()
-                              )
+                      else:
+                          last_error = ""
                           try:
-                              jobs = json.loads(jobs_call.stdout or "{}").get("jobs", [])
+                              runs = json.loads(listing.stdout or "[]")
                           except json.JSONDecodeError:
-                              fail("Could not parse the jobs of CI run " + run_number + ".")
-                          schema_jobs = [job for job in jobs if job.get("name") == "Schema freshness"]
-                          if not schema_jobs:
-                              # A run with no Schema freshness job (for example a
-                              # re-run of one unrelated failed job) can neither prove
-                              # nor disprove the gate. It is not evidence of absence.
-                              continue
-                          conclusion = schema_jobs[0].get("conclusion")
-                          if conclusion == "success":
-                              print("Schema freshness passed on exact target " + target_sha + " (run " + run_number + ").")
-                              raise SystemExit(0)
-                          if conclusion in ("failure", "skipped"):
-                              fail(
-                                  "Schema freshness was '"
-                                  + str(conclusion)
-                                  + "' on exact target "
-                                  + target_sha
-                                  + " (run "
-                                  + run_number
-                                  + "); refusing to tag."
+                              last_error = "could not parse the CI run list"
+                              print(
+                                  "::warning::gh run lookup failed (attempt "
+                                  + str(attempt) + "/" + str(max_attempts) + "): " + last_error
                               )
-                          if conclusion in ("cancelled", "timed_out", "stale"):
-                              # Inconclusive (superseded or killed): keep looking.
-                              continue
-                          pending = True
+                              runs = None
 
-                      if pending:
+                      if runs is not None:
+                          for run in runs:
+                              run_number = str(run.get("databaseId") or "")
+                              if not run_number:
+                                  continue
+                              jobs_call = gh(
+                                  "api", "repos/" + repo + "/actions/runs/" + run_number + "/jobs?per_page=100"
+                              )
+                              if jobs_call.returncode != 0:
+                                  last_error = "could not read the jobs of CI run " + run_number
+                                  print(
+                                      "::warning::gh jobs lookup failed (attempt "
+                                      + str(attempt) + "/" + str(max_attempts) + "): " + last_error
+                                  )
+                                  pending = True
+                                  continue
+                              try:
+                                  jobs = json.loads(jobs_call.stdout or "{}").get("jobs", [])
+                              except (json.JSONDecodeError, AttributeError):
+                                  last_error = "could not parse the jobs of CI run " + run_number
+                                  print(
+                                      "::warning::gh jobs lookup failed (attempt "
+                                      + str(attempt) + "/" + str(max_attempts) + "): " + last_error
+                                  )
+                                  pending = True
+                                  continue
+                              schema_jobs = [job for job in jobs if job.get("name") == "Schema freshness"]
+                              if not schema_jobs:
+                                  # A run with no Schema freshness job (for
+                                  # example a re-run of one unrelated failed
+                                  # job) can neither prove nor disprove the
+                                  # gate. It is not evidence of absence.
+                                  continue
+                              schema_conclusion = schema_jobs[0].get("conclusion")
+                              if run.get("status") == "completed":
+                                  # Evidence for the gate is a COMPLETED RUN
+                                  # THAT SUCCEEDED whose Schema freshness job is
+                                  # green. A green job inside a red run does not
+                                  # prove the commit's CI passed.
+                                  if schema_conclusion == "success":
+                                      if run.get("conclusion") != "success":
+                                          fail(
+                                              "CI run " + run_number + " concluded '"
+                                              + str(run.get("conclusion"))
+                                              + "', not success, on exact target " + target_sha
+                                              + "; refusing to tag."
+                                          )
+                                      print(
+                                          "Schema freshness passed on exact target "
+                                          + target_sha + " (run " + run_number + ")."
+                                      )
+                                      raise SystemExit(0)
+                                  if schema_conclusion in ("failure", "skipped"):
+                                      fail(
+                                          "Schema freshness was '" + str(schema_conclusion)
+                                          + "' on exact target " + target_sha
+                                          + " (run " + run_number + "); refusing to tag."
+                                      )
+                                  # cancelled / timed_out / stale / missing:
+                                  # inconclusive (superseded or killed).
+                                  continue
+                              if schema_conclusion in ("failure", "skipped"):
+                                  fail(
+                                      "Schema freshness was '" + str(schema_conclusion)
+                                      + "' on exact target " + target_sha
+                                      + " (run " + run_number + "); refusing to tag."
+                                  )
+                              if schema_conclusion in ("cancelled", "timed_out", "stale"):
+                                  continue
+                              pending = True
+
+                      if runs is None:
+                          last_state = "could not confirm a CI workflow run"
+                      elif pending:
                           last_state = "a Schema freshness job is still in progress"
                       else:
                           last_state = "no CI run proves the Schema freshness gate"
 
-                      if not pending and not dispatched:
+                      if runs is not None and not pending and not dispatched:
                           create = gh(
                               "api", "-X", "POST", "repos/" + repo + "/git/refs",
                               "-f", "ref=refs/tags/" + tag, "-f", "sha=" + target_sha,
                           )
                           if create.returncode != 0:
-                              fail(
-                                  "Could not create the temporary CI-verification tag "
-                                  + tag
-                                  + " at "
-                                  + target_sha
-                                  + ": "
-                                  + (create.stderr or create.stdout).strip()
+                              # The POST can succeed server-side while its
+                              # response is lost; verify the tag before treating
+                              # this as a failure.
+                              existing = list_tags(tag)
+                              if existing is None or tag not in existing:
+                                  fail(
+                                      "Could not create the temporary CI-verification tag "
+                                      + tag + " at " + target_sha + ": "
+                                      + (create.stderr or create.stdout).strip()
+                                  )
+                              print(
+                                  "::warning::The create response for " + tag
+                                  + " was lost; the tag exists, continuing."
                               )
-                          tag_created = True
                           dispatch = gh("workflow", "run", "ci.yml", "--ref", tag)
                           if dispatch.returncode != 0:
                               fail(
                                   "Could not dispatch ci.yml for exact target "
-                                  + target_sha
-                                  + ": "
-                                  + (dispatch.stderr or dispatch.stdout).strip()
+                                  + target_sha + ": " + (dispatch.stderr or dispatch.stdout).strip()
                               )
                           dispatched = True
                           print(
-                              "Dispatched ci.yml on temporary tag "
-                              + tag
-                              + " pinned at exact target "
-                              + target_sha
+                              "Dispatched ci.yml on temporary tag " + tag
+                              + " pinned at exact target " + target_sha
                               + " (no completed run proved the gate)."
                           )
 
                       remaining = deadline - time.monotonic()
-                      if remaining <= 0:
+                      if attempt >= max_attempts or remaining <= 0:
+                          if last_error:
+                              fail(
+                                  "Could not confirm a CI workflow run for exact target "
+                                  + target_sha + " (" + last_state + "; last error: "
+                                  + last_error + "); refusing to tag."
+                              )
                           fail(
-                              "Timed out after "
-                              + str(max_wait_seconds)
+                              "Timed out after " + str(max_wait_seconds)
                               + "s waiting for a green Schema freshness job on exact target "
-                              + target_sha
-                              + " ("
-                              + last_state
-                              + "); refusing to tag."
+                              + target_sha + " (" + last_state + "); refusing to tag."
                           )
                       print(
-                          "Waiting for schema freshness on "
-                          + target_sha
-                          + " (attempt "
-                          + str(attempt)
-                          + ", "
-                          + str(int(max_wait_seconds - remaining))
-                          + "s/"
-                          + str(max_wait_seconds)
-                          + "s): "
-                          + last_state
-                          + "."
+                          "Waiting for schema freshness on " + target_sha
+                          + " (attempt " + str(attempt) + "/" + str(max_attempts) + ", "
+                          + str(int(max_wait_seconds - remaining)) + "s/"
+                          + str(max_wait_seconds) + "s): " + last_state + "."
                       )
                       time.sleep(min(poll_seconds, remaining))
               finally:
@@ -282,6 +352,35 @@ jobs:
           if __name__ == "__main__":
               main()
           PY
+
+  # ---------------------------------------------------------------------------
+  # Release Preflight Discovery Gate (FAR-2344)
+  # Aggregates all known release preconditions into an independent, non-failing
+  # discovery gate so that every check is evaluated in a single pass. It runs
+  # AFTER the exact-commit schema proof above and holds no write permission:
+  # the discovery gate must never hold a write token.
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Release Preflight Discovery Gate
+    needs: [schema-gate]
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+          # The discovery gate is read-only; never persist the checkout token.
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
 
       - name: Run release preflight discovery gate
         shell: bash
@@ -311,6 +410,87 @@ jobs:
             --version "${RELEASE_VERSION}" \
             $freeze_arg \
             $windows_arg
+
+  # ---------------------------------------------------------------------------
+  # Backstop for the temporary CI-verification tags (FAR-2484)
+  # A `finally` block cannot run when a job is SIGKILLed, times out or is
+  # cancelled, and a create that succeeded with a lost response leaves a tag
+  # behind. A leaked ci-verify-* tag is not inert: an unfiltered
+  # `git describe --tags` could pick it as the changelog base. Every tag this
+  # run created is therefore reclaimed here even when the proving job died.
+  # ---------------------------------------------------------------------------
+  schema-gate-cleanup:
+    name: Reclaim temporary CI-verification tags
+    needs: [schema-gate, release]
+    if: always()
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Delete any ci-verify-* tag this run created
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+
+
+          def gh(*args):
+              return subprocess.run(["gh", *args], capture_output=True, text=True)
+
+
+          def tag_names(payload):
+              try:
+                  pages = json.loads(payload or "[]")
+              except json.JSONDecodeError:
+                  return None
+              if not isinstance(pages, list):
+                  return None
+              names = []
+              for page in pages:
+                  entries = [page] if isinstance(page, dict) else page
+                  if not isinstance(entries, list):
+                      return None
+                  for entry in entries:
+                      ref = str(entry.get("ref") or "")
+                      if ref.startswith("refs/tags/"):
+                          names.append(ref[len("refs/tags/") :])
+              return names
+
+
+          def main():
+              repo = os.environ.get("GITHUB_REPOSITORY", "")
+              run_id = os.environ.get("GITHUB_RUN_ID", "")
+              if not repo or not run_id:
+                  print("::warning::GITHUB_REPOSITORY/GITHUB_RUN_ID unset; cannot reclaim CI-verification tags.")
+                  return
+              listing = gh("api", "--paginate", "--slurp", "repos/" + repo + "/git/matching-refs/tags/ci-verify-")
+              if listing.returncode != 0:
+                  print("::warning::Could not list CI-verification tags; check for leaked ci-verify-* tags manually.")
+                  return
+              names = tag_names(listing.stdout)
+              if names is None:
+                  print("::warning::Could not parse the CI-verification tag list.")
+                  return
+              suffix = "-" + run_id
+              leaked = [name for name in names if name.endswith(suffix)]
+              for name in leaked:
+                  result = gh("api", "-X", "DELETE", "repos/" + repo + "/git/refs/tags/" + name)
+                  if result.returncode != 0:
+                      print("::warning::Could not delete leaked CI-verification tag " + name + ".")
+                  else:
+                      print("Deleted leaked CI-verification tag " + name + ".")
+              print("CI-verification tag sweep complete; reclaimed " + str(len(leaked)) + " tag(s).")
+
+
+          if __name__ == "__main__":
+              main()
+          PY
 
   # ---------------------------------------------------------------------------
   # Dry-run rehearsal
@@ -822,157 +1002,236 @@ jobs:
               return subprocess.run(["gh", *args], capture_output=True, text=True)
 
 
+          def tag_names(payload):
+              # Tag names under refs/tags/ from a possibly-slurped matching-refs
+              # body: gh api --paginate --slurp yields a list of pages.
+              try:
+                  pages = json.loads(payload or "[]")
+              except json.JSONDecodeError:
+                  return None
+              if not isinstance(pages, list):
+                  return None
+              names = []
+              for page in pages:
+                  entries = [page] if isinstance(page, dict) else page
+                  if not isinstance(entries, list):
+                      return None
+                  for entry in entries:
+                      ref = str(entry.get("ref") or "")
+                      if ref.startswith("refs/tags/"):
+                          names.append(ref[len("refs/tags/") :])
+              return names
+
+
           def main(argv=None):
               target_sha = (sys.argv[1:] if argv is None else argv)[0]
               repo = os.environ.get("GITHUB_REPOSITORY", "")
               poll_seconds = int(os.environ.get("SCHEMA_GATE_POLL_INTERVAL_SECONDS", "30"))
               max_wait_seconds = int(os.environ.get("SCHEMA_GATE_MAX_WAIT_SECONDS", "3600"))
               tag = "ci-verify-" + target_sha[:12] + "-" + os.environ.get("GITHUB_RUN_ID", "0")
+              tag_prefix = "ci-verify-" + target_sha[:12] + "-"
 
               if poll_seconds < 1 or max_wait_seconds < 1:
                   fail("SCHEMA_GATE_POLL_INTERVAL_SECONDS and SCHEMA_GATE_MAX_WAIT_SECONDS must be positive integers.")
               if not repo:
                   fail("GITHUB_REPOSITORY is unset; refusing to look for CI runs in an unknown repository.")
+              max_attempts = max(1, -(-max_wait_seconds // poll_seconds))
 
-              tag_created = False
+              def list_tags(prefix):
+                  listing = gh("api", "--paginate", "--slurp", "repos/" + repo + "/git/matching-refs/tags/" + prefix)
+                  if listing.returncode != 0:
+                      return None
+                  return tag_names(listing.stdout)
+
+              def delete_tag(name):
+                  result = gh("api", "-X", "DELETE", "repos/" + repo + "/git/refs/tags/" + name)
+                  detail = (result.stderr or "") + (result.stdout or "")
+                  if result.returncode != 0 and "Not Found" not in detail and "404" not in detail:
+                      print("::warning::Could not delete the temporary CI-verification tag " + name + "; delete it manually.")
+
+              def sweep_stale_tags():
+                  # A tag leaked by an earlier attempt for this exact commit (a
+                  # cancelled, timed-out or SIGKILLed run skips every finally
+                  # block) must not survive: a tag-fetch plus an unfiltered
+                  # `git describe --tags` would otherwise pick it as the
+                  # changelog base. Remove any stale tag for this commit.
+                  names = list_tags(tag_prefix)
+                  if names is None:
+                      print("::warning::Could not list existing CI-verification tags for " + tag_prefix + ".")
+                      return
+                  for name in names:
+                      if name != tag:
+                          delete_tag(name)
 
               def delete_temporary_tag():
-                  if not tag_created:
-                      return
-                  result = gh("api", "-X", "DELETE", "repos/" + repo + "/git/refs/tags/" + tag)
-                  if result.returncode != 0:
-                      print("::warning::Could not delete the temporary CI-verification tag " + tag + "; delete it manually.")
+                  # Always attempt deletion, even when no create response was
+                  # observed: a POST whose response was lost still creates the
+                  # tag server-side.
+                  delete_tag(tag)
 
-              # The temporary tag must be removed on every exit path (success,
-              # timeout, query error), never left behind.
               try:
+                  sweep_stale_tags()
                   deadline = time.monotonic() + max_wait_seconds
                   dispatched = False
                   attempt = 0
-                  last_state = "no ci.yml run exists for the exact commit"
+                  last_state = "no CI run proves the Schema freshness gate"
+                  last_error = ""
 
                   while True:
                       attempt += 1
+                      pending = False
                       listing = gh(
                           "run", "list", "--workflow", "ci.yml", "--commit", target_sha,
                           "--limit", "100", "--json", "databaseId,status,conclusion",
                       )
+                      runs = None
                       if listing.returncode != 0:
-                          fail(
-                              "Could not query CI runs for exact target "
-                              + target_sha
-                              + ": "
-                              + (listing.stderr or listing.stdout).strip()
+                          last_error = (listing.stderr or listing.stdout).strip() or "gh run list failed"
+                          print(
+                              "::warning::gh run lookup failed (attempt "
+                              + str(attempt) + "/" + str(max_attempts) + "): " + last_error
                           )
-                      try:
-                          runs = json.loads(listing.stdout or "[]")
-                      except json.JSONDecodeError:
-                          fail("Could not parse the CI run list for exact target " + target_sha + ".")
-
-                      pending = False
-                      for run in runs:
-                          run_number = str(run.get("databaseId") or "")
-                          if not run_number:
-                              continue
-                          jobs_call = gh(
-                              "api", "repos/" + repo + "/actions/runs/" + run_number + "/jobs?per_page=100"
-                          )
-                          if jobs_call.returncode != 0:
-                              fail(
-                                  "Could not read the jobs of CI run "
-                                  + run_number
-                                  + ": "
-                                  + (jobs_call.stderr or jobs_call.stdout).strip()
-                              )
+                      else:
+                          last_error = ""
                           try:
-                              jobs = json.loads(jobs_call.stdout or "{}").get("jobs", [])
+                              runs = json.loads(listing.stdout or "[]")
                           except json.JSONDecodeError:
-                              fail("Could not parse the jobs of CI run " + run_number + ".")
-                          schema_jobs = [job for job in jobs if job.get("name") == "Schema freshness"]
-                          if not schema_jobs:
-                              # A run with no Schema freshness job (for example a
-                              # re-run of one unrelated failed job) can neither prove
-                              # nor disprove the gate. It is not evidence of absence.
-                              continue
-                          conclusion = schema_jobs[0].get("conclusion")
-                          if conclusion == "success":
-                              print("Schema freshness passed on exact target " + target_sha + " (run " + run_number + ").")
-                              raise SystemExit(0)
-                          if conclusion in ("failure", "skipped"):
-                              fail(
-                                  "Schema freshness was '"
-                                  + str(conclusion)
-                                  + "' on exact target "
-                                  + target_sha
-                                  + " (run "
-                                  + run_number
-                                  + "); refusing to tag."
+                              last_error = "could not parse the CI run list"
+                              print(
+                                  "::warning::gh run lookup failed (attempt "
+                                  + str(attempt) + "/" + str(max_attempts) + "): " + last_error
                               )
-                          if conclusion in ("cancelled", "timed_out", "stale"):
-                              # Inconclusive (superseded or killed): keep looking.
-                              continue
-                          pending = True
+                              runs = None
 
-                      if pending:
+                      if runs is not None:
+                          for run in runs:
+                              run_number = str(run.get("databaseId") or "")
+                              if not run_number:
+                                  continue
+                              jobs_call = gh(
+                                  "api", "repos/" + repo + "/actions/runs/" + run_number + "/jobs?per_page=100"
+                              )
+                              if jobs_call.returncode != 0:
+                                  last_error = "could not read the jobs of CI run " + run_number
+                                  print(
+                                      "::warning::gh jobs lookup failed (attempt "
+                                      + str(attempt) + "/" + str(max_attempts) + "): " + last_error
+                                  )
+                                  pending = True
+                                  continue
+                              try:
+                                  jobs = json.loads(jobs_call.stdout or "{}").get("jobs", [])
+                              except (json.JSONDecodeError, AttributeError):
+                                  last_error = "could not parse the jobs of CI run " + run_number
+                                  print(
+                                      "::warning::gh jobs lookup failed (attempt "
+                                      + str(attempt) + "/" + str(max_attempts) + "): " + last_error
+                                  )
+                                  pending = True
+                                  continue
+                              schema_jobs = [job for job in jobs if job.get("name") == "Schema freshness"]
+                              if not schema_jobs:
+                                  # A run with no Schema freshness job (for
+                                  # example a re-run of one unrelated failed
+                                  # job) can neither prove nor disprove the
+                                  # gate. It is not evidence of absence.
+                                  continue
+                              schema_conclusion = schema_jobs[0].get("conclusion")
+                              if run.get("status") == "completed":
+                                  # Evidence for the gate is a COMPLETED RUN
+                                  # THAT SUCCEEDED whose Schema freshness job is
+                                  # green. A green job inside a red run does not
+                                  # prove the commit's CI passed.
+                                  if schema_conclusion == "success":
+                                      if run.get("conclusion") != "success":
+                                          fail(
+                                              "CI run " + run_number + " concluded '"
+                                              + str(run.get("conclusion"))
+                                              + "', not success, on exact target " + target_sha
+                                              + "; refusing to tag."
+                                          )
+                                      print(
+                                          "Schema freshness passed on exact target "
+                                          + target_sha + " (run " + run_number + ")."
+                                      )
+                                      raise SystemExit(0)
+                                  if schema_conclusion in ("failure", "skipped"):
+                                      fail(
+                                          "Schema freshness was '" + str(schema_conclusion)
+                                          + "' on exact target " + target_sha
+                                          + " (run " + run_number + "); refusing to tag."
+                                      )
+                                  # cancelled / timed_out / stale / missing:
+                                  # inconclusive (superseded or killed).
+                                  continue
+                              if schema_conclusion in ("failure", "skipped"):
+                                  fail(
+                                      "Schema freshness was '" + str(schema_conclusion)
+                                      + "' on exact target " + target_sha
+                                      + " (run " + run_number + "); refusing to tag."
+                                  )
+                              if schema_conclusion in ("cancelled", "timed_out", "stale"):
+                                  continue
+                              pending = True
+
+                      if runs is None:
+                          last_state = "could not confirm a CI workflow run"
+                      elif pending:
                           last_state = "a Schema freshness job is still in progress"
                       else:
                           last_state = "no CI run proves the Schema freshness gate"
 
-                      if not pending and not dispatched:
+                      if runs is not None and not pending and not dispatched:
                           create = gh(
                               "api", "-X", "POST", "repos/" + repo + "/git/refs",
                               "-f", "ref=refs/tags/" + tag, "-f", "sha=" + target_sha,
                           )
                           if create.returncode != 0:
-                              fail(
-                                  "Could not create the temporary CI-verification tag "
-                                  + tag
-                                  + " at "
-                                  + target_sha
-                                  + ": "
-                                  + (create.stderr or create.stdout).strip()
+                              # The POST can succeed server-side while its
+                              # response is lost; verify the tag before treating
+                              # this as a failure.
+                              existing = list_tags(tag)
+                              if existing is None or tag not in existing:
+                                  fail(
+                                      "Could not create the temporary CI-verification tag "
+                                      + tag + " at " + target_sha + ": "
+                                      + (create.stderr or create.stdout).strip()
+                                  )
+                              print(
+                                  "::warning::The create response for " + tag
+                                  + " was lost; the tag exists, continuing."
                               )
-                          tag_created = True
                           dispatch = gh("workflow", "run", "ci.yml", "--ref", tag)
                           if dispatch.returncode != 0:
                               fail(
                                   "Could not dispatch ci.yml for exact target "
-                                  + target_sha
-                                  + ": "
-                                  + (dispatch.stderr or dispatch.stdout).strip()
+                                  + target_sha + ": " + (dispatch.stderr or dispatch.stdout).strip()
                               )
                           dispatched = True
                           print(
-                              "Dispatched ci.yml on temporary tag "
-                              + tag
-                              + " pinned at exact target "
-                              + target_sha
+                              "Dispatched ci.yml on temporary tag " + tag
+                              + " pinned at exact target " + target_sha
                               + " (no completed run proved the gate)."
                           )
 
                       remaining = deadline - time.monotonic()
-                      if remaining <= 0:
+                      if attempt >= max_attempts or remaining <= 0:
+                          if last_error:
+                              fail(
+                                  "Could not confirm a CI workflow run for exact target "
+                                  + target_sha + " (" + last_state + "; last error: "
+                                  + last_error + "); refusing to tag."
+                              )
                           fail(
-                              "Timed out after "
-                              + str(max_wait_seconds)
+                              "Timed out after " + str(max_wait_seconds)
                               + "s waiting for a green Schema freshness job on exact target "
-                              + target_sha
-                              + " ("
-                              + last_state
-                              + "); refusing to tag."
+                              + target_sha + " (" + last_state + "); refusing to tag."
                           )
                       print(
-                          "Waiting for schema freshness on "
-                          + target_sha
-                          + " (attempt "
-                          + str(attempt)
-                          + ", "
-                          + str(int(max_wait_seconds - remaining))
-                          + "s/"
-                          + str(max_wait_seconds)
-                          + "s): "
-                          + last_state
-                          + "."
+                          "Waiting for schema freshness on " + target_sha
+                          + " (attempt " + str(attempt) + "/" + str(max_attempts) + ", "
+                          + str(int(max_wait_seconds - remaining)) + "s/"
+                          + str(max_wait_seconds) + "s): " + last_state + "."
                       )
                       time.sleep(min(poll_seconds, remaining))
               finally:
@@ -1228,7 +1487,9 @@ jobs:
           git fetch origin --tags
           PREV_FILE="$(mktemp)"
           PREV=""
-          if git describe --tags --abbrev=0 "${RC_SHA}^" > "$PREV_FILE" 2>/dev/null; then
+          # --match 'v*' pins the changelog base to release tags only: a leaked
+          # ci-verify-* helper tag (FAR-2484) must never become PREV.
+          if git describe --tags --match 'v*' --abbrev=0 "${RC_SHA}^" > "$PREV_FILE" 2>/dev/null; then
             PREV="$(cat "$PREV_FILE")"
           fi
           if [ -z "$PREV" ]; then
@@ -1763,7 +2024,9 @@ jobs:
 
           PREV_FILE="$(mktemp)"
           PREV=""
-          if git describe --tags --abbrev=0 "${GA_TAG}^" > "$PREV_FILE" 2>/dev/null; then
+          # --match 'v*' pins the changelog base to release tags only: a leaked
+          # ci-verify-* helper tag (FAR-2484) must never become PREV.
+          if git describe --tags --match 'v*' --abbrev=0 "${GA_TAG}^" > "$PREV_FILE" 2>/dev/null; then
             PREV="$(cat "$PREV_FILE")"
           fi
           if [ -z "$PREV" ]; then
@@ -2304,7 +2567,9 @@ jobs:
 
           # Generate changelog and release notes
           NOTES_FILE="$(mktemp)"
-          PREV="$(git describe --tags --abbrev=0 "${RC_TAG}^" 2>/dev/null || true)"
+          # --match 'v*' pins the changelog base to release tags only: a leaked
+          # ci-verify-* helper tag (FAR-2484) must never become PREV.
+          PREV="$(git describe --tags --match 'v*' --abbrev=0 "${RC_TAG}^" 2>/dev/null || true)"
           if [ -z "$PREV" ]; then
             PREV="$(git rev-list --max-parents=0 "$RC_TAG" | tail -n1)"
           fi

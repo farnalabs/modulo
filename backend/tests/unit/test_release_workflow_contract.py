@@ -1153,7 +1153,7 @@ def test_release_unified_keeps_macos_hard_gates_while_consume_retry() -> None:
 # ---------------------------------------------------------------------------
 
 _SCHEMA_PROOF_STEPS = {
-    "preflight": "Ensure schema freshness CI on the exact commit",
+    "schema-gate": "Ensure schema freshness CI on the exact commit",
     "release": "Assert schema-freshness gate green on exact cut/recut commit",
 }
 _SCHEMA_PROOF_TARGET = "d1c4e2b4a9f04f7a8e1c2d3b4a5f60798a9b0c1d"
@@ -1184,6 +1184,8 @@ def _fake_gh(
     jobs_after_dispatch: dict[str, list[dict[str, Any]]] | None = None,
     list_sequence: list[list[dict[str, Any]]] | None = None,
     list_returncode: int = 0,
+    create_returncode: int = 0,
+    existing_tags: list[str] | None = None,
 ) -> Any:
     """Stand-in for the ``gh`` CLI the proof shells out to.
 
@@ -1195,8 +1197,15 @@ def _fake_gh(
 
     def gh(*args: str) -> Any:
         calls.append(list(args))
+        if args[:3] == ("api", "-X", "POST"):
+            if create_returncode != 0:
+                return SimpleNamespace(returncode=create_returncode, stdout="", stderr="gh: HTTP 502")
+            return SimpleNamespace(returncode=0, stdout="{}", stderr="")
         if args[:2] == ("api", "-X"):
             return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        if args[0] == "api" and any("matching-refs" in arg for arg in args):
+            payload = [[{"ref": "refs/tags/" + name} for name in (existing_tags or [])]]
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
         if args[:2] == ("workflow", "run"):
             dispatched[0] = True
             return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -1255,30 +1264,39 @@ def _dispatches(calls: list[list[str]]) -> list[list[str]]:
 
 def test_release_schema_freshness_proof_is_wired_into_both_jobs() -> None:
     workflow = _release_workflow()
-    preflight_script = _schema_proof_script("preflight")
+    discovery_script = _schema_proof_script("schema-gate")
     release_script = _schema_proof_script("release")
 
-    # The exact-commit proof is a real, executable step in both jobs, and both
-    # carry the SAME logic - a fix applied to one cannot silently skip the
-    # other (the preflight gate and the tagging gate).
-    assert "python3 - \"$TARGET_SHA\" <<'PY'" in preflight_script
+    # The exact-commit proof is a real, executable step in both the dedicated
+    # schema-gate job and the release job, and both carry the SAME logic - a fix
+    # applied to one cannot silently skip the other (the preflight gate and the
+    # tagging gate).
+    assert "python3 - \"$TARGET_SHA\" <<'PY'" in discovery_script
     assert "python3 - \"$TARGET_SHA\" <<'PY'" in release_script
-    assert _schema_proof_python("preflight") == _schema_proof_python("release")
-    compile(_schema_proof_python("preflight"), str(RELEASE_WORKFLOW), "exec")
+    assert _schema_proof_python("schema-gate") == _schema_proof_python("release")
+    compile(_schema_proof_python("schema-gate"), str(RELEASE_WORKFLOW), "exec")
 
-    # The preflight jobs needs write access to dispatch ci.yml and to create
-    # and delete the temporary verification tag.
+    # Only the dedicated schema-gate job holds the write token the proof needs
+    # to create/delete the temporary tag and dispatch ci.yml. The discovery gate
+    # must never run with a write token.
+    schema_gate_permissions = workflow["jobs"]["schema-gate"]["permissions"]
+    assert schema_gate_permissions["actions"] == "write"
+    assert schema_gate_permissions["contents"] == "write"
     preflight_permissions = workflow["jobs"]["preflight"]["permissions"]
-    assert preflight_permissions["actions"] == "write"
-    assert preflight_permissions["contents"] == "write"
+    assert preflight_permissions.get("contents") == "read"
+    assert preflight_permissions.get("actions") != "write"
+    assert workflow["jobs"]["preflight"]["needs"] == ["schema-gate"]
+    preflight_checkout = workflow["jobs"]["preflight"]["steps"][0]
+    assert preflight_checkout["with"]["persist-credentials"] is False
+
     # The release job tags releases, so it already holds both.
     release_permissions = workflow["jobs"]["release"]["permissions"]
     assert release_permissions["actions"] == "write"
     assert release_permissions["contents"] == "write"
 
-    preflight_step = _step(workflow, "preflight", _SCHEMA_PROOF_STEPS["preflight"])
-    assert preflight_step["if"] == "inputs.mode != 'dry-run'"
-    assert preflight_step["env"]["TARGET_SHA"] == "${{ github.sha }}"
+    step = _step(workflow, "schema-gate", _SCHEMA_PROOF_STEPS["schema-gate"])
+    assert step["if"] == "inputs.mode != 'dry-run'"
+    assert step["env"]["TARGET_SHA"] == "${{ github.sha }}"
 
     release_step = _step(workflow, "release", _SCHEMA_PROOF_STEPS["release"])
     assert release_step["id"] == "schema-freshness"
@@ -1413,5 +1431,111 @@ def test_release_schema_freshness_proof_fails_closed_when_the_query_fails(
     code, stdout = _run_schema_proof(tmp_path, monkeypatch, gh)
 
     assert code == 1
-    assert "::error::Could not query CI runs for exact target " + _SCHEMA_PROOF_TARGET in stdout
+    assert "::error::Could not confirm a CI workflow run for exact target " + _SCHEMA_PROOF_TARGET in stdout
+    assert "last error" in stdout
     assert not _dispatches(calls)
+
+
+def test_release_schema_freshness_proof_requires_a_successful_run_not_only_a_green_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A green Schema freshness job inside a run that concluded red is not proof
+    # the commit's CI passed: the whole run must be a success.
+    calls: list[list[str]] = []
+    gh = _fake_gh(
+        calls,
+        runs=[{"databaseId": 21, "status": "completed", "conclusion": "failure"}],
+        jobs={"21": [{"name": "Schema freshness", "status": "completed", "conclusion": "success"}]},
+    )
+
+    code, stdout = _run_schema_proof(tmp_path, monkeypatch, gh)
+
+    assert code == 1
+    assert "concluded 'failure', not success" in stdout
+    assert "refusing to tag" in stdout
+    assert not _tag_calls(calls), "a red run must never be turned into a verification tag"
+
+
+def test_release_schema_freshness_proof_tolerates_a_lost_create_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tag = "ci-verify-" + _SCHEMA_PROOF_TARGET[:12] + "-4242"
+    calls: list[list[str]] = []
+    gh = _fake_gh(
+        calls,
+        runs=[],
+        jobs={},
+        runs_after_dispatch=[_SCHEMA_GREEN_RUN],
+        jobs_after_dispatch=_SCHEMA_GREEN_JOBS,
+        create_returncode=1,
+        existing_tags=[tag],
+    )
+
+    code, stdout = _run_schema_proof(tmp_path, monkeypatch, gh)
+
+    assert code == 0, stdout
+    assert "create response for " + tag + " was lost" in stdout
+    assert _dispatches(calls), "the tag already exists, so ci.yml must still be dispatched"
+    deletes = [call for call in calls if call[:3] == ["api", "-X", "DELETE"]]
+    assert deletes, "a tag that existed must still be deleted"
+
+
+def test_release_schema_freshness_proof_fails_when_the_tag_was_not_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+    gh = _fake_gh(calls, runs=[], jobs={}, create_returncode=1, existing_tags=[])
+
+    code, stdout = _run_schema_proof(tmp_path, monkeypatch, gh)
+
+    assert code == 1
+    assert "::error::Could not create the temporary CI-verification tag" in stdout
+    assert not _dispatches(calls)
+
+
+def test_release_schema_gate_cleanup_reclaims_this_runs_tags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workflow = _release_workflow()
+    job = workflow["jobs"]["schema-gate-cleanup"]
+    assert job["if"] == "always()"
+    assert job["permissions"]["contents"] == "write"
+    assert set(job["needs"]) == {"schema-gate", "release"}
+    script = _step(workflow, "schema-gate-cleanup", "Delete any ci-verify-* tag this run created")["run"]
+    module_path = tmp_path / "ci_verify_cleanup.py"
+    module_path.write_text(_python_heredoc(script, "PY"), encoding="utf-8")
+    module = _load_module("ci_verify_cleanup", module_path)
+
+    calls: list[list[str]] = []
+
+    def gh(*args: str) -> Any:
+        calls.append(list(args))
+        if any("matching-refs" in arg for arg in args):
+            payload = [
+                [
+                    {"ref": "refs/tags/ci-verify-aaaaaaaaaaaa-4242"},
+                    {"ref": "refs/tags/ci-verify-bbbbbbbbbbbb-4242"},
+                    {"ref": "refs/tags/ci-verify-aaaaaaaaaaaa-9999"},
+                ]
+            ]
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(module, "gh", gh)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "farnalabs/modulo")
+    monkeypatch.setenv("GITHUB_RUN_ID", "4242")
+    with redirect_stdout(io.StringIO()):
+        module.main()
+
+    deleted = [call[3].rsplit("/", 1)[1] for call in calls if call[:3] == ["api", "-X", "DELETE"]]
+    assert sorted(deleted) == ["ci-verify-aaaaaaaaaaaa-4242", "ci-verify-bbbbbbbbbbbb-4242"]
+
+
+def test_changelog_base_resolution_ignores_helper_tags() -> None:
+    # A leaked ci-verify-* helper tag must never become the changelog base.
+    describes = [
+        line
+        for line in _release_workflow_text().splitlines()
+        if "git describe --tags" in line and not line.lstrip().startswith("#")
+    ]
+    assert len(describes) >= 3
+    for line in describes:
+        assert "--match 'v*'" in line, line
