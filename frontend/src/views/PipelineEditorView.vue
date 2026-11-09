@@ -2260,6 +2260,7 @@ import DispatchNode from '../components/pipeline/nodes/DispatchNode.vue'
 import ConnectorNode from '../components/pipeline/nodes/ConnectorNode.vue'
 import EdgeBadges from '../components/pipeline/nodes/EdgeBadges.vue'
 import { NODE_REGISTRY, PIPELINE_CONNECTORS_KEY, PIPELINE_TEAM_NAMES_KEY } from '../components/pipeline/nodes/NodeRegistry'
+import { projectGraphNode } from '../types/pipeline-graph-projection'
 import { shortId } from '../utils/format'
 import { doesNodeHaveCapabilityScope } from '../utils/pipeline-graph'
 import {
@@ -3824,49 +3825,23 @@ async function loadParamSets() {
 
 const canConvert = computed(() => pickerAgentId.value !== '__all__' && pickerConnectorId.value !== '__all__')
 
-// Backend node types that map 1:1 onto their canvas type. Everything else
-// (including 'agent') collapses into the generic agent node — except dispatch
-// (FAR-1141) and connector (FAR-2089), which are first-class canvas types with
-// their own `#node-<type>` slot and must never be collapsed. Every canvas
-// node originates here — both loadGraph() and loadViewedSnapshot() map through
-// convertBackendNode — so this map is the single place that decides which
-// card a node renders as.
-// A Map (not an object literal) so an unknown node_type such as 'constructor'
-// or 'toString' cannot resolve to an inherited Object.prototype member — it
-// must fall through to 'agent', matching the original ternary chain.
-const CANVAS_TYPE_BY_BACKEND_TYPE = new Map<string, string>([
-  ['manual', 'manual'],
-  ['router', 'router'],
-  ['hitl', 'hitl'],
-  ['dispatch', 'dispatch'],
-  ['connector', 'connector'],
-])
-
+// Backend node types map onto their canvas card through the shared projection
+// adapter (FAR-2475/FAR-2481) - the adapter delegates to the editor's node
+// registry, where dispatch (FAR-1141) and connector (FAR-2089) are first-class
+// card types that must never collapse into a generic agent node. Every canvas
+// node originates here - both loadGraph() and loadViewedSnapshot() map through
+// convertBackendNode.
 function convertBackendNode(n: any): any {
-  const nodeType = CANVAS_TYPE_BY_BACKEND_TYPE.get(n.node_type) ?? 'agent'
-  return {
-    id: n.id,
-    type: nodeType,
-    position: n.position || { x: 0, y: 0 },
-    data: {
-      label: n.label || 'Node ' + shortId(n.id),
-      description: n.description || '',
-      node_type: n.node_type,
-      // FAR-2463: the governance pills read these straight off the graph
-      // contract this view already loads — no extra request, no derived gate.
-      hitl_config: n.hitl_config,
-      policy_gate: n.policy_gate,
-      parameter_set_id: n.parameter_set_id,
-      parameter_overrides: n.parameter_overrides,
-      hasCapabilityScope: doesNodeHaveCapabilityScope(n),
-      // FAR-2462: semantic-badge source fields. Display-only derivations —
-      // every one is an existing graph-contract field, copied by reference so
-      // a canvas card can state the actual binding rather than a guess. Save
-      // builds its payload from `rawNodes`, so nothing here reaches the wire.
-      connector_binding: n.connector_binding ?? null,
-      router_config: n.router_config ?? null,
-    },
-  }
+  // The adapter consumes the typed wire contract; `n` is untyped at this
+  // boundary, so normalise the fields it reads strictly onto this view's
+  // long-standing fallbacks: a missing position defaults to the origin, and an
+  // empty-string label/description falls back exactly as it always has.
+  return projectGraphNode({
+    ...n,
+    position: n.position ?? { x: 0, y: 0 },
+    label: n.label || undefined,
+    description: n.description || undefined,
+  })
 }
 
 function convertBackendEdge(e: any, i: number): any {
