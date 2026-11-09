@@ -9918,10 +9918,21 @@ def _build_sandbox_node_envelope(
     """Assemble a sandbox_agent node envelope from grouped output fields.
 
     NEW FORMAT (default, legacy_format=False): Returns a split envelope with
-    two top-level keys:
+    three top-level keys:
       - ``output``: the PURE agent return (``output_json`` for sandbox_agent)
       - ``telemetry``: exhaustive telemetry (what ``split_node_output`` extracts
         as telemetry for sandbox_agent)
+      - ``artifacts``: the ``[{node_id, status, output}]`` accumulator entry.
+        This is NOT the split channel — it is the LangGraph state channel the
+        ``_pipeline_state_reducer`` CONCATENATES into ``state["artifacts"]`` so
+        the state readers that resolve a node by id keep working: HITL
+        gate-eval resolution (``_resolve_gate_eval_target`` / FAR-311),
+        DAG-ancestor work-item-ref folding (``_fold_ancestor_emission_refs`` /
+        FAR-795) and the evidence probes. Dropping it from the return silently
+        emptied those for every graph downstream of a sandbox node (FAR-130).
+        Its ``output`` carries the FULL inner field set; ``split_node_output``
+        keys on the ``output``+``telemetry`` channels, never on the artifact,
+        so the accumulator is never re-split or double-counted.
 
     LEGACY FORMAT (legacy_format=True): Returns the legacy envelope shape
     ``{artifacts: [{node_id, status, output}], output}`` for backward
@@ -10024,10 +10035,14 @@ def _build_sandbox_node_envelope(
             "output": outer,
         }
 
-    # New split format: {output: pure_return, telemetry: telemetry}
+    # New split format: {output: pure_return, telemetry: telemetry}. The
+    # ``artifacts`` accumulator rides alongside so LangGraph's state reducer
+    # still concatenates this node into ``state["artifacts"]`` (gate-eval
+    # resolution, ancestor ref folding, evidence probes) — see the docstring.
     return {
         "output": pure_return,
         "telemetry": telemetry,
+        "artifacts": [{"node_id": node_id, "status": output.status, "output": inner}],
     }
 
 

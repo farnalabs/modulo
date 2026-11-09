@@ -567,13 +567,13 @@ class TestDriftFailureStillCompletes:
             ),
         ):
             result = await make_sandbox_agent_fn(node_def)(state)
-        assert result["output"]["status"] == "completed"
+        assert result["telemetry"]["status"] == "completed"
         # The check raised, so the envelope carries NO drift claim (_UNSET keys
         # are omissive) — but the node still completed and the rest of the
         # audit fields (agent_stdout, exit path, attempt_key) were written:
-        assert "workspace_drift" not in result["output"]
-        assert "workspace_drift_detected" not in result["output"]
-        assert result["output"]["agent_stdout"] == "out"
+        assert "workspace_drift" not in result["telemetry"]
+        assert "workspace_drift_detected" not in result["telemetry"]
+        assert result["telemetry"]["agent_stdout"] == "out"
 
 
 # ---------------------------------------------------------------------------
@@ -648,7 +648,7 @@ class TestAuditWriteUsesFinalAttemptKey:
         ):
             result = await make_sandbox_agent_fn(node_def, session_factory=_fake_session_factory())(state)
 
-        assert result["output"]["status"] == "completed"
+        assert result["telemetry"]["status"] == "completed"
         spy_resolved.assert_called_once()
         assert spy_resolved.call_args.kwargs["attempt_key"] == FINAL_ATTEMPT_KEY
         spy_drift.assert_called_once()
@@ -720,7 +720,7 @@ class TestAuditWriteUsesFinalAttemptKey:
         ):
             result = await make_sandbox_agent_fn(node_def, session_factory=_fake_session_factory())(state)
 
-        assert result["output"]["status"] == "completed"
+        assert result["telemetry"]["status"] == "completed"
         # Both the resolved-inputs and drift audit writes must run scoped to the org.
         from unittest.mock import ANY
 

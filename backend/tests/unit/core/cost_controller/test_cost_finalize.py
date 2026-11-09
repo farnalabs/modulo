@@ -3581,3 +3581,45 @@ def test_attributed_cost_present_treats_an_unreadable_total_as_attributed() -> N
     run.total_cost_usd = _Unstringable()
     run.cost_breakdown = None
     assert _attributed_cost_present(run) is True
+
+
+# ---------------------------------------------------------------------------
+# FAR-130: the persisted split must stay correct for the new split envelope
+# ---------------------------------------------------------------------------
+
+
+def test_split_merge_persists_new_format_sandbox_output_into_two_columns() -> None:
+    """PERSISTENCE PROOF (FAR-130): the new ``{output, telemetry, artifacts}``
+    sandbox envelope is split into the lockstep columns — ``outputs_json`` gets
+    the PURE return and ``node_telemetry_json`` the flat telemetry. Before the
+    fix the splitter nested the telemetry under the return and persisted
+    ``outputs=None`` with a ``telemetry`` key inside the telemetry column."""
+    from modulo.core.pipeline_engine.node_runner import (
+        _build_sandbox_node_envelope,
+        _SandboxNodeOutput,
+    )
+
+    pure_return = {"pr_url": "https://github.com/farnalabs/modulo/pull/1", "summary": "done"}
+    output = _SandboxNodeOutput(
+        status="completed",
+        summary="did the thing",
+        exit_code=0,
+        wall_clock_time_ms=1200,
+        cost_estimate_usd=0.1,
+        output_json=pure_return,
+        pr_url="https://github.com/farnalabs/modulo/pull/1",
+    )
+    segment = {"node-x": _build_sandbox_node_envelope(node_id="node-x", output=output)}
+
+    merged_outputs, merged_telemetry = _split_merge_outputs({}, {}, segment, {"node-x": "sandbox_agent"})
+
+    # outputs_json[node_id] is the pure return, not None and not the envelope.
+    assert merged_outputs["node-x"] == pure_return
+    # node_telemetry_json[node_id] is the flat telemetry — never nested.
+    telemetry = merged_telemetry["node-x"]
+    assert "telemetry" not in telemetry
+    assert "artifacts" not in telemetry
+    assert "output" not in telemetry
+    assert telemetry["status"] == "completed"
+    assert telemetry["cost_estimate_usd"] == pytest.approx(0.1)
+    assert telemetry["pr_url"] == "https://github.com/farnalabs/modulo/pull/1"

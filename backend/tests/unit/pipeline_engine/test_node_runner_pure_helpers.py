@@ -1069,3 +1069,83 @@ def test_resolve_hitl_subject_invalid_path_fails_safe() -> None:
     """An unparseable JMESPath expression is swallowed (logged at debug) — a
     bad subject_path never blocks the HITL gate from raising its interrupt."""
     assert nr._resolve_hitl_subject("[invalid", {"output": {}}, "rev-1") == (None, None, None)
+
+
+# ---------------------------------------------------------------------------
+# FAR-130: the new split envelope must stay compatible with the LangGraph
+# state readers — the ``artifacts`` accumulator rides alongside the clean
+# ``output`` / ``telemetry`` channels.
+# ---------------------------------------------------------------------------
+
+
+def _new_format_sandbox_return(
+    *,
+    node_id: str = "sandbox-1",
+    output_json: dict[str, Any] | None = None,
+    status: str = "completed",
+) -> dict[str, Any]:
+    """Build the REAL new-format sandbox envelope via the production builder."""
+    output = nr._SandboxNodeOutput(
+        status=status,
+        summary="did the thing",
+        exit_code=0,
+        wall_clock_time_ms=1200,
+        cost_estimate_usd=0.01,
+        output_json=output_json if output_json is not None else {"pr_url": "u", "summary": "done"},
+    )
+    return _build_sandbox_node_envelope(node_id=node_id, output=output)
+
+
+def test_new_format_return_carries_artifacts_accumulator() -> None:
+    """The new split return ALSO carries the artifacts entry so LangGraph's
+    state reducer still accumulates the node (FAR-130 regression)."""
+    returned = _new_format_sandbox_return(node_id="sandbox-1")
+
+    assert set(returned) >= {"output", "telemetry", "artifacts"}
+    (artifact,) = returned["artifacts"]
+    assert artifact["node_id"] == "sandbox-1"
+    assert artifact["status"] == "completed"
+    assert artifact["output"]["output_json"] == {"pr_url": "u", "summary": "done"}
+
+
+def test_state_reducer_accumulates_new_format_artifacts() -> None:
+    """A new-format return concatenated by the real reducer lands in
+    ``state["artifacts"]`` (the channel every state reader resolves from)."""
+    from modulo.core.pipeline_engine.graph_cache import _pipeline_state_reducer
+
+    returned = _new_format_sandbox_return(node_id="sandbox-1")
+    state = _pipeline_state_reducer({"artifacts": []}, returned)
+
+    assert [a["node_id"] for a in state["artifacts"]] == ["sandbox-1"]
+    assert state["artifacts"][0]["output"]["output_json"] == {"pr_url": "u", "summary": "done"}
+
+
+def test_fold_ancestor_emission_refs_reads_new_format_sandbox_artifact() -> None:
+    """REGRESSION (FAR-130): an ancestor sandbox node's emitted refs are folded
+    from ``state["artifacts"]`` accumulated from the new-format return."""
+    from modulo.core.pipeline_engine.graph_cache import _pipeline_state_reducer
+
+    returned = _new_format_sandbox_return(node_id="sandbox-1")
+    # The emitting agent's self-reported refs live on the artifact's full inner
+    # output (the same placement the fold reads for every node type).
+    returned["artifacts"][0]["output"]["work_item_refs"] = [{"kind": "github_pr", "ref": "12", "source": "agent"}]
+    state = _pipeline_state_reducer({"artifacts": []}, returned)
+
+    folded = nr._fold_ancestor_emission_refs(state)
+
+    assert folded["sandbox-1"] == [{"kind": "github_pr", "ref": "12", "source": "agent"}]
+
+
+def test_resolve_gate_eval_target_resolves_new_format_sandbox_artifact() -> None:
+    """REGRESSION (FAR-130): a HITL gate after a sandbox node resolves the
+    sandbox agent's CONTRACT output (``output.output_json``) from the
+    new-format artifact instead of falling back to the whole state."""
+    from modulo.core.pipeline_engine.graph_cache import _pipeline_state_reducer
+
+    contract_output = {"pr_url": "https://github.com/farnalabs/modulo/pull/9", "summary": "done"}
+    returned = _new_format_sandbox_return(node_id="sandbox-1", output_json=contract_output)
+    state = _pipeline_state_reducer({"artifacts": []}, returned)
+
+    target = nr._resolve_gate_eval_target(state, "sandbox-1", {"sandbox-1": "sandbox_agent"})
+
+    assert target == contract_output

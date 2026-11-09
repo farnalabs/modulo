@@ -554,19 +554,34 @@ def split_node_output(
 
     1. ``stored_telemetry is not None`` -- the node is ALREADY pure: idempotent
        no-op returning ``(outer_dict, stored_telemetry)`` unchanged.
-    2. Not a dict -- malformed: warn and return ``(None, {})``.
-    3. Recovery marker (no ``artifacts`` and a ``recovered`` / ``skipped`` key).
-    4. Known ``node_type`` (``sandbox_agent``, ``agent``, ``connector``,
+    2. Already-split envelope (FAR-130) -- an ``output`` key AND a dict-valued
+       ``telemetry`` key: idempotent no-op returning
+       ``(outer_dict["output"], outer_dict["telemetry"])``. This is the
+       READ-side twin of the write-side split: ``node_runner``'s sandbox
+       envelope is emitted already split (with an ``artifacts`` accumulator
+       alongside), so re-splitting it must NEVER nest the telemetry under the
+       return. Keyed on the presence of BOTH split channels, NOT on the
+       absence of ``artifacts`` (the new envelope carries all three).
+    3. Not a dict -- malformed: warn and return ``(None, {})``.
+    4. Recovery marker (no ``artifacts`` and a ``recovered`` / ``skipped`` key).
+    5. Known ``node_type`` (``sandbox_agent``, ``agent``, ``connector``,
        ``dispatch``, ``manual``, ``gate``).
-    5. Gate envelope detected by shape (interrupted status / ``human_data`` /
+    6. Gate envelope detected by shape (interrupted status / ``human_data`` /
        ``autonomy`` / ``result`` / ``condition_skipped`` / ``auto_approved``).
-    6. Unknown: warn with ``run_id`` / ``node_id`` / ``reason`` and return the
+    7. Unknown: warn with ``run_id`` / ``node_id`` / ``reason`` and return the
        best-effort ``(envelope.get("output"), {unknown fields})``.
 
     NEVER raises. Unknown envelope fields always land in telemetry (lossless).
     """
     if stored_telemetry is not None:
         return outer_dict, stored_telemetry
+    if isinstance(outer_dict, dict):
+        telemetry = outer_dict.get("telemetry")
+        if "output" in outer_dict and isinstance(telemetry, dict):
+            # Already-split (new FAR-130 sandbox envelope): ``output`` is the
+            # pure return and ``telemetry`` the exhaustive side. Return them
+            # verbatim — never fold one into the other.
+            return outer_dict.get("output"), telemetry
     if not isinstance(outer_dict, dict):
         _log.warning(
             "node_output_split.malformed",

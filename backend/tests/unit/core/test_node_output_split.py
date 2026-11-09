@@ -478,6 +478,36 @@ def test_split_idempotent_across_round_trip() -> None:
     assert second == first
 
 
+def test_split_new_format_output_telemetry_artifacts_idempotent() -> None:
+    """FAR-130 proof: the already-split sandbox envelope carries ``output`` +
+    ``telemetry`` + the state-accumulator ``artifacts`` — re-splitting it must
+    return the pure return and the flat telemetry verbatim, never nest the
+    telemetry under the return nor fold the artifact in."""
+    pure_return = {"pr_url": "https://github.com/farnalabs/modulo/pull/1", "summary": "done"}
+    telemetry = {"status": "completed", "cost_estimate_usd": 0.1, "agent_stdout": "hi"}
+    envelope = {
+        "output": pure_return,
+        "telemetry": telemetry,
+        "artifacts": [{"node_id": "sandbox-1", "status": "completed", "output": {"output_json": pure_return}}],
+    }
+
+    value, split_telemetry = split_node_output(envelope, "sandbox_agent", None)
+
+    assert value == pure_return
+    assert split_telemetry == telemetry
+    assert "telemetry" not in split_telemetry
+
+
+def test_split_already_split_without_artifacts_idempotent() -> None:
+    """The same idempotence holds when the caller built the split envelope
+    without the state accumulator."""
+    pure_return = {"ok": True}
+    telemetry = {"status": "completed", "wall_clock_time_ms": 10}
+    value, split_telemetry = split_node_output({"output": pure_return, "telemetry": telemetry}, "sandbox_agent", None)
+    assert value == pure_return
+    assert split_telemetry is telemetry
+
+
 # ---------------------------------------------------------------------------
 # split_node_output -- malformed / unknown (never raises)
 # ---------------------------------------------------------------------------
