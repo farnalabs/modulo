@@ -1768,12 +1768,10 @@ case "$*" in
 esac
 """,
     )
-    _write_executable(
-        bin_dir / "sleep",
-        f"""#!/usr/bin/env bash
-printf 'sleep %s\\n' "$*" >> {shlex.quote(str(log))}
-""",
-    )
+    # NOTE: the step now sleeps via Python's own ``time.sleep`` (the proof is a
+    # Python heredoc, not a bash loop), so a stub ``sleep`` binary on PATH is
+    # never consulted. The poll interval is kept at one second and the wait
+    # budget is the sample count, so each test waits only a couple of seconds.
     env = {
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -1819,8 +1817,9 @@ def test_schema_gate_waits_for_the_exact_commit_run_to_appear(tmp_path: Path) ->
     assert f"Schema freshness passed on exact target {_SCHEMA_TARGET_SHA}" in output
     commands = log.read_text(encoding="utf-8")
     assert commands.count("run list") == 3
-    # Two waits between the three attempts, then the gate is asserted.
-    assert commands.count("sleep 1") == 2
+    # Two bounded waits between the three attempts, then the gate is asserted.
+    assert output.count("Waiting for schema freshness on") == 2
+    assert "attempt 2/3" in output
 
 
 @pytest.mark.posix_only
