@@ -213,6 +213,7 @@ import type {
   DeterminationProposal,
   DeterminationReviewResponse,
   ProposalConfidence,
+  ReviewCorrections,
   ReviewSubmission,
 } from '../../composables/useDetermination'
 
@@ -226,7 +227,10 @@ const props = defineProps<{
   error: string | null
 }>()
 
-const emit = defineEmits<{ (event: 'submit', submission: ReviewSubmission): void }>()
+const emit = defineEmits<{
+  (event: 'submit', submission: ReviewSubmission): void
+  (event: 'corrections-change', corrections: ReviewCorrections): void
+}>()
 
 interface ElementDraft {
   statement: string
@@ -322,6 +326,20 @@ function correctionEdits(): ReviewSubmission['correctedDerivedElements'] {
   }
   return edits
 }
+
+/**
+ * The corrections this panel currently holds. Emitted so a rerun can carry
+ * them forward by prior element id without the parent reaching into panel
+ * state.
+ */
+const correctionPayload = computed<ReviewCorrections>(() => ({
+  correctedDerivedElements: correctionEdits(),
+  removedDerivedElementIds: [...removedIds.value],
+}))
+
+// Deep equality: an edit that is reverted emits an empty correction set again,
+// and an unchanged payload emits nothing.
+watch(correctionPayload, (value) => emit('corrections-change', value), { deep: true })
 
 function submit(decision: ReviewSubmission['decision']): void {
   if (props.loading || hasInvalidStatement.value) return

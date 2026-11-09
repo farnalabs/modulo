@@ -87,6 +87,46 @@ function comparisonPayload() {
   }
 }
 
+function rerunPayload() {
+  return {
+    contract_version: 'alpha.determination-rerun.v1',
+    proposal: { proposal_id: PROPOSAL_ID, attempt: { id: 'attempt-2' } },
+    prior_attempt: {
+      attempt_id: 'attempt-1',
+      proposal_id: PROPOSAL_ID,
+      status: 'completed',
+      confidence: 'high',
+      uncertainty: [],
+      provenance: [],
+      unavailable_evidence: [],
+      source_inventory: [],
+    },
+    current_attempt: {
+      attempt_id: 'attempt-2',
+      proposal_id: PROPOSAL_ID,
+      status: 'completed',
+      confidence: 'high',
+      uncertainty: [],
+      provenance: [],
+      unavailable_evidence: [],
+      source_inventory: [],
+    },
+    corrections: {},
+    source_changes: {},
+    input_set_unchanged: true,
+    element_changes: [],
+    incomplete: false,
+    incomplete_reasons: [],
+  }
+}
+
+function reviewCorrections() {
+  return {
+    correctedDerivedElements: [{ id: 'element-1', statement: 'Corrected statement' }],
+    removedDerivedElementIds: ['element-2'],
+  }
+}
+
 function reviewPayload() {
   return {
     decision: 'needs_review',
@@ -377,5 +417,102 @@ describe('useDetermination', () => {
       base: { proposal: sparse.proposal, nodes: [], edges: [] },
       target: { proposal: sparse.proposal, nodes: [], edges: [] },
     })
+  })
+
+  it('reruns with the proposal on screen and the review corrections', async () => {
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/determination/draft') return Promise.resolve(ok(draftPayload()))
+      return Promise.resolve(ok(rerunPayload()))
+    })
+    const api = mountComposable()
+    await api.generateDraft()
+
+    const result = await api.rerunDetermination(reviewCorrections())
+
+    expect(result).not.toBeNull()
+    expect(api.rerun.value).not.toBeNull()
+    const call = mockPost.mock.calls.find(([path]) => path === '/api/v1/determination/rerun')
+    expect(call?.[1]?.body).toEqual({
+      prior_proposal: draftPayload().proposal,
+      corrected_derived_elements: reviewCorrections().correctedDerivedElements,
+      removed_derived_element_ids: reviewCorrections().removedDerivedElementIds,
+    })
+  })
+
+  it('refuses to rerun without a proposal', async () => {
+    const api = mountComposable()
+
+    expect(await api.rerunDetermination(reviewCorrections())).toBeNull()
+    expect(mockPost.mock.calls.some(([path]) => path === '/api/v1/determination/rerun')).toBe(false)
+  })
+
+  it('clears the previous rerun result when a rerun fails', async () => {
+    let rerunCalls = 0
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/determination/draft') return Promise.resolve(ok(draftPayload()))
+      rerunCalls += 1
+      return Promise.resolve(rerunCalls === 1 ? ok(rerunPayload()) : failure('duplicate derived element ids'))
+    })
+    const api = mountComposable()
+    await api.generateDraft()
+
+    expect(await api.rerunDetermination(reviewCorrections())).not.toBeNull()
+    expect(api.rerun.value).not.toBeNull()
+
+    expect(await api.rerunDetermination(reviewCorrections())).toBeNull()
+    expect(api.rerun.value).toBeNull()
+    expect(api.rerunError.value).toBe('duplicate derived element ids')
+  })
+
+  it('ignores a second rerun while one is already in flight', async () => {
+    mockPost.mockImplementation((path: string) =>
+      path === '/api/v1/determination/draft' ? Promise.resolve(ok(draftPayload())) : Promise.resolve(ok(rerunPayload())),
+    )
+    const api = mountComposable()
+    await api.generateDraft()
+
+    const pending = deferred<unknown>()
+    mockPost.mockReturnValue(pending.promise)
+
+    const first = api.rerunDetermination(reviewCorrections())
+    const second = api.rerunDetermination(reviewCorrections())
+    expect(await second).toBeNull()
+
+    pending.resolve(ok(rerunPayload()))
+    expect(await first).not.toBeNull()
+  })
+
+  it('drops a stale rerun result when a new draft is generated', async () => {
+    mockPost.mockImplementation((path: string) => {
+      if (path === '/api/v1/determination/draft') return Promise.resolve(ok(draftPayload()))
+      return Promise.resolve(ok(rerunPayload()))
+    })
+    const api = mountComposable()
+    await api.generateDraft()
+    await api.rerunDetermination(reviewCorrections())
+    expect(api.rerun.value).not.toBeNull()
+
+    await api.generateDraft()
+
+    expect(api.rerun.value).toBeNull()
+    expect(api.rerunError.value).toBeNull()
+  })
+
+  it('marks the surface busy while a rerun is in flight', async () => {
+    mockPost.mockImplementation((path: string) =>
+      path === '/api/v1/determination/draft' ? Promise.resolve(ok(draftPayload())) : Promise.resolve(ok(rerunPayload())),
+    )
+    const api = mountComposable()
+    await api.generateDraft()
+
+    const pending = deferred<unknown>()
+    mockPost.mockReturnValue(pending.promise)
+
+    const inFlight = api.rerunDetermination(reviewCorrections())
+    expect(api.busy.value).toBe(true)
+
+    pending.resolve(ok(rerunPayload()))
+    await inFlight
+    expect(api.busy.value).toBe(false)
   })
 })

@@ -167,4 +167,18 @@ describe('DeterminationReviewPanel', () => {
 
     expect(wrapper.emitted('submit')?.[1]?.[0]).toMatchObject({ correctedDerivedElements: [] })
   })
+
+  it('emits its current corrections so a rerun can carry them forward', async () => {
+    const wrapper = mountPanel()
+
+    await wrapper.find(`[data-testid="determination-review-statement-${DERIVED_ID}"]`).setValue('  Updated stage  ')
+    await wrapper.find(`[data-testid="determination-review-remove-${SECOND_DERIVED_ID}"]`).trigger('click')
+
+    const emissions = wrapper.emitted('corrections-change') ?? []
+    const latest = emissions[emissions.length - 1]?.[0]
+    expect(latest).toEqual({
+      correctedDerivedElements: [{ id: DERIVED_ID, statement: 'Updated stage' }],
+      removedDerivedElementIds: [SECOND_DERIVED_ID],
+    })
+  })
 })
