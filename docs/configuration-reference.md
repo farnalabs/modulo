@@ -29,7 +29,7 @@ The application refuses to start if any required variable is absent or invalid.
 `MODULO_DB=mariadb` or `mysql` uses the aiomysql driver. Both values are accepted by
 the settings validator but are **not** production-ready: the per-node output
 store (`db/crud/run_node_outputs.py::dialect_insert`) raises `NotImplementedError`
-on any dialect other than `postgres` / `sqlite`, and MariaDB has been deprecated
+on any dialect other than `postgresql` / `sqlite`, and MariaDB has been deprecated
 since 2026-07-11. Use Postgres in production, SQLite for local development. See
 [`docs/system-requirements.md`](./system-requirements.md) for the full backend
 matrix.
