@@ -134,7 +134,7 @@ async def test_script_mode_uploads_contract_files_and_sets_env() -> None:
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     # FAR-1050 R4/R6: MODULO_SCHEMA_DIR rides the agent command's environment
     # (the ABC create has no sandbox-lifetime env carrier), never the SDK
     # create kwargs.
@@ -162,7 +162,7 @@ async def test_llm_mode_injects_schema_paths_into_prompt() -> None:
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     prompt = _written_content(sandbox, "/home/user/prompt.md")
     assert prompt is not None
     assert "Schema contract files (advisory" in prompt
@@ -187,7 +187,7 @@ async def test_contract_write_failure_is_best_effort() -> None:
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert not [path for path in _written_paths(sandbox) if "/home/user/schemas/" in path]
 
 
@@ -212,7 +212,7 @@ async def test_contract_temp_dir_cleaned_up_without_output_schema(tmp_path: Path
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     # The input contract is still written and uploaded on the no-output path.
     assert any(f"/home/user/schemas/{node_id}/input.active.json" in path for path in _written_paths(sandbox))
     # ...and the local temp dir is removed even though validation never ran.
@@ -239,7 +239,7 @@ async def test_contract_write_warnings_are_logged_but_do_not_fail() -> None:
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
 
 
 class _FakeResult:
