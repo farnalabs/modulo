@@ -125,6 +125,11 @@ def _run_state(payload: Any = None) -> dict:
     }
 
 
+def _assert_completed(result: dict) -> None:
+    """Assert a result is completed using the new split format."""
+    assert result["telemetry"]["status"] == "completed"
+
+
 def _script_node_def(**overrides) -> dict:
     node_def: dict[str, Any] = {
         "id": str(uuid.uuid4()),
@@ -359,7 +364,7 @@ async def test_script_mode_runs_command_verbatim_no_jinja_render():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state({"task": "resolved-value"}))
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     wrapped = sandbox.commands.run.call_args.args[0]
     assert "{{ input.task }}" in wrapped
     assert "${{ not_a_template }}" in wrapped
@@ -375,7 +380,7 @@ async def test_script_mode_does_not_write_prompt_md():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     written_paths = [call.args[0] for call in sandbox.files.write.call_args_list]
     assert "/home/user/prompt.md" not in written_paths
     assert "/home/user/input.json" in written_paths
@@ -400,7 +405,7 @@ async def test_script_mode_writes_full_input_json_no_truncation():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state(payload))
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     import json
 
     written = {
@@ -442,7 +447,7 @@ async def test_script_mode_input_json_scalar_and_list():
         sandbox = _script_sandbox_mock()
         with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
             result = await fn(_run_state(payload))
-        assert result["output"]["status"] == "completed"
+        assert result["telemetry"]["status"] == "completed"
         written = {
             call.args[0]: call.args[1]
             for call in sandbox.files.write.call_args_list
@@ -470,17 +475,18 @@ async def test_script_mode_output_is_raw_parsed_output():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    out = result["output"]
-    art = result["artifacts"][0]["output"]
-    assert out["status"] == "completed"
-    assert art["output_json"] == script_output
-    assert out["summary"] == "script mode: exit_code=0"
-    assert not art["changed_files"]
-    assert not art["pr_url"]
-    assert out["agent_status"] is None
-    assert out["agent_outcome"] is None
-    assert art["exit_code"] == 0
-    assert art["output_json"] == script_output
+    # New split format: output is pure return (output_json), telemetry has full envelope
+    assert result["output"] == script_output
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["summary"] == "script mode: exit_code=0"
+    assert not telemetry["changed_files"]
+    assert not telemetry["pr_url"]
+    assert telemetry["agent_status"] is None
+    assert telemetry["agent_outcome"] is None
+    assert telemetry["exit_code"] == 0
+    # output_json is the pure return, not in telemetry
+    assert result["output"] == script_output
 
 
 async def test_script_mode_does_not_elevate_llm_envelope_fields():
@@ -501,15 +507,16 @@ async def test_script_mode_does_not_elevate_llm_envelope_fields():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    out = result["output"]
-    art = result["artifacts"][0]["output"]
-    assert out["status"] == "completed"  # from exit_code, NOT output_json["status"]
-    assert out["summary"] == "script mode: exit_code=0"  # auto-generated, not the script's summary
-    assert not art["changed_files"]
-    assert not art["pr_url"]
-    assert out["agent_status"] is None
-    assert out["agent_outcome"] is None
-    assert art["output_json"]["summary"] == "llm-ish summary"  # raw, untouched
+    # New split format
+    assert result["output"]["summary"] == "llm-ish summary"  # pure return is the raw output_json
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"  # from exit_code, NOT output_json["status"]
+    assert telemetry["summary"] == "script mode: exit_code=0"  # auto-generated, not the script's summary
+    assert not telemetry["changed_files"]
+    assert not telemetry["pr_url"]
+    assert telemetry["agent_status"] is None
+    assert telemetry["agent_outcome"] is None
+    assert result["output"]["summary"] == "llm-ish summary"  # raw, untouched
 
 
 async def test_script_mode_non_zero_exit_raises_terminal():
@@ -578,10 +585,10 @@ async def test_script_mode_list_output_carried_in_envelope():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    out = result["output"]
-    art = result["artifacts"][0]["output"]
-    assert art["output_json"] == [1, 2, 3]
-    assert out["summary"] == "script mode: exit_code=0"
+    # New split format: output is pure return (the list)
+    assert result["output"] == [1, 2, 3]
+    telemetry = result["telemetry"]
+    assert telemetry["summary"] == "script mode: exit_code=0"
 
 
 async def test_script_mode_does_not_require_agent_prompt():
@@ -594,7 +601,7 @@ async def test_script_mode_does_not_require_agent_prompt():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -857,7 +864,7 @@ async def test_script_mode_injects_run_api_key_env():
     ):
         result = await fn(_run_state_with_run_id())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert envs["MODULO_API_KEY"] == _FAKE_RUN_KEY
     # FAR-1690 A1: the issuance provenance is stamped alongside the key.
@@ -880,7 +887,7 @@ async def test_script_mode_mint_failure_fails_open():
     ):
         result = await fn(_run_state_with_run_id())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert "MODULO_API_KEY" not in envs
 
@@ -897,7 +904,7 @@ async def test_script_mode_mint_none_fails_open():
     ):
         result = await fn(_run_state_with_run_id())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert "MODULO_API_KEY" not in envs
     # Provenance is stamped only when a credential was actually issued.
@@ -913,7 +920,7 @@ async def test_script_mode_mint_skipped_without_session_factory():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state_with_run_id())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert "MODULO_API_KEY" not in envs
 
@@ -1299,7 +1306,7 @@ async def test_wallclock_budget_not_killed_within_budget():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert 10 not in _killer_kill_timeouts(sandbox)
 
 
@@ -1362,7 +1369,7 @@ async def test_e2b_rate_limit_retries_then_succeeds():
         result = await fn(_run_state())
 
     assert create.await_count == 3
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
 
 
 async def test_e2b_rate_limit_exhausts_retries():
@@ -1589,7 +1596,7 @@ async def test_dispatch_capacity_llm_mode_without_session_factory_fails_open():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
 
 
 async def test_e2b_rate_limit_exhaustion_maps_to_queue_timeout():
