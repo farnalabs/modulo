@@ -423,4 +423,70 @@ describe('DeterminationView', () => {
     expect(mockPost).toHaveBeenCalledTimes(2)
     expect(wrapper.find('[data-testid="determination-review"]').exists()).toBe(true)
   })
+
+  it('drills an evidence reference into its sampled source record and cross-links the source row', async () => {
+    routeApi({})
+    const wrapper = await mountView()
+    await generateDraft(wrapper)
+
+    // Collapsed by default: the drill-down is opt-in per element.
+    expect(wrapper.find('[data-testid="determination-evidence-drilldown"]').exists()).toBe(false)
+
+    const toggle = wrapper.findAll('[data-testid="determination-evidence-toggle"]')[0]
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    await toggle.trigger('click')
+
+    const drilldown = wrapper.find('[data-testid="determination-evidence-drilldown"]')
+    expect(drilldown.exists()).toBe(true)
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    // The drill-down names the sampled source record from the attempt inventory.
+    const source = wrapper.find('[data-testid="determination-evidence-source"]')
+    expect(source.text()).toContain('github')
+    expect(source.text()).toContain('repos')
+    expect(source.text()).toContain('3')
+    expect(source.text()).toContain('Available')
+
+    // The source row cross-links back to the elements that cite it (the
+    // observed fact and the derived element both cite this source).
+    expect(wrapper.findAll('[data-testid="determination-source-ref-count"]')[0].text()).toContain('2 evidence references')
+
+    await wrapper.find('[data-testid="determination-evidence-link-source"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="determination-source-row"]')[0].classes()).toContain('ring-2')
+
+    await toggle.trigger('click')
+    expect(wrapper.find('[data-testid="determination-evidence-drilldown"]').exists()).toBe(false)
+  })
+
+  it('states when an evidence reference cites a source absent from the inventory', async () => {
+    const orphaned = proposal()
+    orphaned.derived_elements = [
+      {
+        id: DERIVED_ID,
+        statement: 'Deployment stage inferred from an unlisted source',
+        kind: 'derived',
+        confidence: 'low',
+        evidence_refs: [
+          {
+            reference_id: 'evidence:unknown:deployments',
+            source_id: 'unknown:deployments',
+            locator: 'scan:deployments',
+            provenance: 'inferred',
+          },
+        ],
+      },
+    ]
+    routeApi({ draft: { ...draftResponse(), proposal: orphaned } })
+    const wrapper = await mountView()
+    await generateDraft(wrapper)
+
+    await wrapper.find('[data-testid="determination-derived-element"] [data-testid="determination-evidence-toggle"]').trigger('click')
+
+    const drilldown = wrapper.find('[data-testid="determination-derived-element"] [data-testid="determination-evidence-drilldown"]')
+    expect(drilldown.exists()).toBe(true)
+    expect(drilldown.find('[data-testid="determination-evidence-source-missing"]').exists()).toBe(true)
+    expect(drilldown.find('[data-testid="determination-evidence-source"]').exists()).toBe(false)
+    expect(drilldown.find('[data-testid="determination-evidence-link-source"]').exists()).toBe(false)
+  })
 })

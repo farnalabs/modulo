@@ -3363,6 +3363,24 @@ elements:
       - testid: determination-evidence-ref
         type: element
         dynamic_testid: false
+      - testid: determination-evidence-toggle
+        type: button
+        dynamic_testid: false
+      - testid: determination-evidence-drilldown
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-source
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-source-missing
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-link-source
+        type: button
+        dynamic_testid: false
+      - testid: determination-source-ref-count
+        type: element
+        dynamic_testid: false
       - testid: determination-review
         type: element
         dynamic_testid: false
@@ -7646,7 +7664,7 @@ features:
             - "[x] Sortable table renders evidence rows with timestamp, key, action badge, subject, and formatted value columns; empty state handled (frontend/src/components/risk-assessment/RiskAssessmentTable.vue)"
     feat-determination:
         description: Read-only SDLC determination scan, evidence-backed proposal review, and a recorded review decision that never activates a pipeline
-        status: partial
+        status: covered
         behaviours:
             - "[x] The /determination route runs GET /api/v1/determination and renders every sampled source (connector type, resource, record count, connector id, error) and every inferred finding (category, finding, evidence, confidence, uncertainty) with a polite live loading region and a retry-able error alert (frontend/src/views/DeterminationView.vue, frontend/src/components/determination/DeterminationScanPanel.vue)"
             - "[x] Generate draft calls POST /api/v1/determination/draft and renders the returned ProposalContract: contract version, attempt status, overall confidence, review state, the uncertainty list, observed facts, derived elements, unresolved assumptions, unavailable evidence, provenance references and the attempt source inventory; every fact, derived element and assumption lists its own evidence references (reference id, source id, locator, provenance) (frontend/src/components/determination/DeterminationProposalPanel.vue, frontend/src/components/determination/DeterminationEvidenceRefs.vue)"
@@ -7655,7 +7673,7 @@ features:
             - "[x] Derived elements are correctable before submission: the statement and confidence are editable in place, an element can be removed and restored, and only actual changes are sent as corrected_derived_elements alongside removed_derived_element_ids; a blank statement blocks every decision (frontend/src/components/determination/DeterminationReviewPanel.vue, frontend/src/composables/useDetermination.ts)"
             - "[x] A recorded decision shows review_state, the deciding actor, decided_at and an explicit not-activated statement; generating a new draft clears the previous result because the proposal id changed (frontend/src/components/determination/DeterminationReviewPanel.vue, frontend/src/composables/useDetermination.ts)"
             - "[x] The route is registered in the router and the product map behind the determination.scan permission (operator floor), every user-facing string is i18n-backed under views.DeterminationView, and the surface's static data-testids are registered in the route's elements inventory (frontend/src/router/index.ts, frontend/src/manifest.yaml, frontend/src/locales/en-US.js)"
-            - "[ ] Per-element evidence drill-down with cross-linking to the sampled source records (FAR-2472)"
+            - "[x] Every evidence reference supports a per-element drill-down into the sampled source record it cites: an accessible toggle reveals the matching attempt source-inventory entry (connector type, resource, record count, status, error), a locate control cross-links to and highlights that source row, an unmatched source_id states the source is absent from the inventory, and each source row reports how many element-level references cite it (frontend/src/components/determination/DeterminationEvidenceRefs.vue, frontend/src/components/determination/DeterminationProposalPanel.vue)"
         deferrals:
             - "Proposal activation (creating or enabling a pipeline from an approved proposal) is deliberately out of scope: the contract and the review response pin activation_status to not_activated"
     feat-governance-stack:

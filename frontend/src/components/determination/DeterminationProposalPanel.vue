@@ -78,7 +78,11 @@
                 {{ $t('views.DeterminationView.confidence_' + fact.confidence) }}
               </span>
             </div>
-            <DeterminationEvidenceRefs :references="fact.evidence_refs ?? []" />
+            <DeterminationEvidenceRefs
+              :references="fact.evidence_refs ?? []"
+              :sources="sources"
+              @link-source="focusSource"
+            />
           </li>
         </ul>
       </section>
@@ -104,7 +108,11 @@
                 {{ $t('views.DeterminationView.confidence_' + element.confidence) }}
               </span>
             </div>
-            <DeterminationEvidenceRefs :references="element.evidence_refs ?? []" />
+            <DeterminationEvidenceRefs
+              :references="element.evidence_refs ?? []"
+              :sources="sources"
+              @link-source="focusSource"
+            />
           </li>
         </ul>
       </section>
@@ -133,7 +141,11 @@
             <p class="mt-1 text-xs text-muted-foreground">
               <span class="font-medium">{{ $t('views.DeterminationView.assumption_reason') }}:</span> {{ assumption.reason }}
             </p>
-            <DeterminationEvidenceRefs :references="assumption.evidence_refs ?? []" />
+            <DeterminationEvidenceRefs
+              :references="assumption.evidence_refs ?? []"
+              :sources="sources"
+              @link-source="focusSource"
+            />
           </li>
         </ul>
       </section>
@@ -188,7 +200,9 @@
           <li
             v-for="source in sources"
             :key="source.source_id"
+            :id="sourceRowId(source.source_id)"
             class="flex flex-wrap items-baseline gap-2 rounded-lg border bg-muted/20 p-3"
+            :class="{ 'ring-2 ring-primary': highlightedSourceId === source.source_id }"
             data-testid="determination-source-row"
           >
             <span class="font-mono text-xs break-all">{{ source.source_id }}</span>
@@ -197,6 +211,13 @@
               {{ $t('views.DeterminationView.source_status_' + source.status) }}
             </span>
             <span v-if="source.error" class="text-xs text-destructive-text">{{ source.error }}</span>
+            <span
+              v-if="referenceCountsBySource[source.source_id]"
+              class="ml-auto text-xs text-muted-foreground"
+              data-testid="determination-source-ref-count"
+            >
+              {{ $t('views.DeterminationView.source_ref_count', referenceCountsBySource[source.source_id]) }}
+            </span>
           </li>
         </ul>
       </section>
@@ -205,7 +226,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import ErrorAlert from '../shared/ErrorAlert.vue'
 import LoadingSpinner from '../shared/LoadingSpinner.vue'
 import DeterminationEvidenceRefs from './DeterminationEvidenceRefs.vue'
@@ -227,6 +248,38 @@ const assumptions = computed(() => props.proposal?.unresolved_assumptions ?? [])
 const unavailableEvidence = computed(() => props.proposal?.unavailable_evidence ?? [])
 const provenance = computed(() => props.proposal?.provenance ?? [])
 const sources = computed(() => props.proposal?.attempt.source_inventory ?? [])
+
+/**
+ * How many element-level evidence references cite each sampled source, so a
+ * source row cross-links back to the elements that depend on it.
+ */
+const referenceCountsBySource = computed<Record<string, number>>(() => {
+  const counts: Record<string, number> = {}
+  const referenced = [...observedFacts.value, ...derivedElements.value, ...assumptions.value].flatMap(
+    (element) => element.evidence_refs ?? [],
+  )
+  for (const reference of referenced) {
+    counts[reference.source_id] = (counts[reference.source_id] ?? 0) + 1
+  }
+  return counts
+})
+
+const highlightedSourceId = ref<string | null>(null)
+
+function sourceRowId(sourceId: string): string {
+  return `determination-source-${sourceId.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+}
+
+/** Cross-link an evidence reference to its sampled source record. */
+function focusSource(sourceId: string): void {
+  highlightedSourceId.value = sourceId
+  void nextTick(() => {
+    const row = document.getElementById(sourceRowId(sourceId))
+    if (row && typeof row.scrollIntoView === 'function') {
+      row.scrollIntoView({ block: 'center' })
+    }
+  })
+}
 
 function onRetry(): void {
   emit('retry')

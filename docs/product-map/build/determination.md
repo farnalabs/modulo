@@ -34,7 +34,7 @@ delivery-tasks: []
 depends-on:
   - feat-connectors
   - feat-core-evidence-store
-status: partial
+status: covered
 ---
 
 # Determination (`/determination`)
@@ -57,7 +57,7 @@ trigger, or writes to a connected tool.
 - [x] The backend refuses an approve while an unacknowledged low/unknown-confidence assumption remains (422), refuses an acknowledged id or corrected element that is not part of the proposal, revalidates corrections as a full `ProposalContract`, and pins `activation_status` to `not_activated` (`backend/src/modulo/determination/review.py`).
 - [x] The decision is recorded as one audit-chain event (`determination.proposal_review_decided`, resource type `determination_proposal`) carrying the decision, reason, acknowledged assumption ids, corrected/removed derived-element ids, `decided_at` and the actor; the route reuses the operator-scope `determination.scan` permission rather than adding a new key (`backend/src/modulo/api/routes/determination.py`).
 - [x] A recorded decision shows `review_state`, the deciding actor, `decided_at` and an explicit not-activated statement; generating a new draft clears the previous result because the proposal id changed (`frontend/src/components/determination/DeterminationReviewPanel.vue`, `frontend/src/composables/useDetermination.ts`).
-- [ ] Per-element evidence drill-down with cross-linking to the sampled source records (FAR-2472).
+- [x] Each evidence reference is a per-element drill-down: a toggle (with `aria-expanded` / `aria-controls`) reveals the matching sampled source record from the attempt source inventory (connector type, resource, record count, status and error) without leaving the element, cross-links to that source row with a "Locate source record" control that highlights and scrolls to it, and an unmatched `source_id` says so explicitly instead of rendering nothing; each source row in the inventory shows how many element-level evidence references cite it (`frontend/src/components/determination/DeterminationEvidenceRefs.vue`, `frontend/src/components/determination/DeterminationProposalPanel.vue`).
 
 ## Deferrals
 
