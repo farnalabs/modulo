@@ -489,6 +489,37 @@ describe('Determination provenance trail', () => {
     expect(trail.findAll('[data-testid="determination-provenance-row"]')).toHaveLength(1)
   })
 
+  it('tolerates a proposal that omits the optional element collections', () => {
+    const minimal = {
+      contract_version: 'alpha.determination-proposal.v1',
+      proposal_id: PROPOSAL_ID,
+      attempt: {
+        id: ATTEMPT_ID,
+        status: 'completed',
+        source_inventory: [
+          {
+            source_id: 'c-1:repos',
+            connector_type: 'github',
+            resource: 'repos',
+            sample_count: 3,
+            status: 'available',
+            error: null,
+          },
+        ],
+      },
+      review_state: 'needs_review',
+      activation_status: 'not_activated',
+      confidence: 'unknown',
+    } as DeterminationProposal
+    const wrapper = mountPanel({ proposal: minimal })
+
+    const trail = wrapper.find('[data-testid="determination-provenance-trail"]')
+    expect(trail.exists()).toBe(true)
+    expect(trail.findAll('[data-testid="determination-source-row"]')).toHaveLength(1)
+    // No element cites the sampled source, so no cross-link count is shown.
+    expect(trail.find('[data-testid="determination-source-ref-count"]').exists()).toBe(false)
+  })
+
   it('states that no decision has been recorded yet', () => {
     const wrapper = mountPanel()
 

@@ -254,7 +254,7 @@ const observedFacts = computed(() => props.proposal?.observed_facts ?? [])
 const derivedElements = computed(() => props.proposal?.derived_elements ?? [])
 const assumptions = computed(() => props.proposal?.unresolved_assumptions ?? [])
 const unavailableEvidence = computed(() => props.proposal?.unavailable_evidence ?? [])
-const sources = computed(() => props.proposal?.attempt.source_inventory ?? [])
+const sources = computed(() => props.proposal?.attempt.source_inventory)
 
 /**
  * Selection is held by element ID, never by array position: removing or

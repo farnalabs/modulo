@@ -136,9 +136,11 @@ function sourceFor(sourceId: string): DeterminationSourceInventoryItem | null {
 /**
  * The connector error in the drill-down is free text too, so it is subject to
  * the same credential withholding as every other connector-produced value.
+ * The template only renders this once it has established the source exists and
+ * carries a truthy error, so both accesses are non-null here.
  */
 function sourceErrorFor(sourceId: string): DisplayText {
-  return displayEvidenceText(sourceFor(sourceId)?.error ?? '')
+  return displayEvidenceText(sourceFor(sourceId)!.error!)
 }
 
 function detailId(referenceId: string): string {
