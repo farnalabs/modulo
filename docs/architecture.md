@@ -1137,6 +1137,109 @@ The eight contracts in `backend/.importlinter`, all `forbidden` type. Each has e
 | BDD | pytest-bdd | <5m | Real Postgres |
 | E2E | Playwright | <10m | Real Postgres + Frontend |
 
+## Graph Contract Direction and Boundaries
+
+**Authoritative path: Pydantic → FastAPI OpenAPI → generated TypeScript.**
+
+The pipeline graph contract has a single source of truth:
+
+1. **Pydantic models** (`backend/src/modulo/api/routes/pipelines.py`):
+   `PipelineGraphNode`, `PipelineGraphEdge`, `PipelineGraphUpdate`, `PipelineGraphResponse`
+   and their nested types (`GraphPosition`, `ConnectorBinding`, `FanOutConfig`, etc.)
+   are the *only* authoritative definitions. They carry field constraints, enums,
+   validators, and serialisation logic (e.g. `strip_unset_connector_binding_inputs`).
+
+2. **FastAPI OpenAPI** (auto-generated): The route handlers
+   `GET /api/v1/pipelines/{pipeline_id}/graph` (response_model=`PipelineGraphResponse`)
+   and `PUT /api/v1/pipelines/{pipeline_id}/graph` (request_body=`PipelineGraphUpdate`,
+   response_model=`PipelineGraphResponse`) cause FastAPI to emit the full graph
+   contract into `openapi.json`. No manual schema authoring is required or permitted.
+
+3. **Generated TypeScript** (`frontend/src/lib/api/schema.ts`): The pinned
+   generator `pnpm dlx openapi-typescript@7.13.0` consumes the OpenAPI document
+   and produces `components['schemas']` with exact field names, nullability,
+   enums, defaults, and nested `$ref` structure. This file is **committed** and
+   updated only by the pinned generator (the `schema-freshness` CI gate fails on
+   drift). Hand-edits are forbidden.
+
+**What is explicitly NOT part of this contract:**
+- A parallel JSON Schema file (`graph.schema.json` or similar). No second
+  validation artifact is added; the Pydantic → OpenAPI → TypeScript pipeline
+  is the complete contract.
+- A separate "graph-schema" workflow or CI step. The existing `schema-freshness`
+  and `vue-tsc` gates are sufficient.
+
+**Boundaries enforced by tests (FAR-2475):**
+- `backend/tests/architecture/test_graph_openapi_contract.py` asserts the
+  published OpenAPI components (required/optional/nullable fields, enums,
+  defaults, pattern vs enum for `edge_type`, additionalProperties behaviour,
+  write-vs-response differences) against **literal pinned expectations**. A
+  drift in the Pydantic model fails the test, not the implementation.
+- `backend/tests/unit/api/test_pipeline_graph_roundtrip.py` drives the REAL
+  REST write/read handlers (`replace_pipeline_graph_endpoint` /
+  `get_pipeline_graph_endpoint`) against an in-memory SQLite database,
+  asserting semantic field preservation from payload → response → persisted
+  JSON → edit snapshot. Includes connector binding write-vs-response parity,
+  env-var masking, and MCP/REST equivalence (both funnel through
+  `replace_pipeline_graph`).
+- `backend/tests/integration/api/test_pipeline_graph_contract.py` (Docker-only)
+  mirrors the unit assertions against real Postgres with native advisory locks
+  and RLS.
+- `frontend/src/types/pipeline-graph-projection.ts` + spec
+  (`frontend/src/__tests__/pipeline-graph-projection.spec.ts`) consume the
+  generated `components['schemas']` and map to smaller canvas/layout types,
+  keeping UI-only layout fields (`selected`, `dragging`, `width`, `height`,
+  `zIndex`, edge styling) **strictly separate** from the semantic projection.
+  The spec proves the adapter omits UI-only fields and rejects unknown wire
+  keys.
+
+**Write-vs-Response differences (intentional):**
+- `PipelineGraphUpdate` (request) and `PipelineGraphResponse` (response)
+  share identical `nodes`/`edges` `$ref`s, but the response adds
+  `validation_issues` and `schema_translation_report` arrays. The response
+  serializer strips unset connector binding inputs (`filters`, `data`) that the
+  write path persists as ABSENT, so a GET→edit→PUT round-trip is stable.
+- Sensitive env vars / context files / parameter overrides are masked on
+  every read (`mask_pipeline_graph_node` with `SENSITIVE_VALUE_MASK`) but
+  persisted as the real values. A round-tripping masked read does NOT
+  overwrite secrets (resolved by `merge_masked_graph_nodes` before write).
+
+**MCP/REST equivalence:**
+Both the REST `PUT /graph` and MCP `update_pipeline_graph` validate via
+`PipelineGraphUpdate`, serialise via `strip_unset_connector_binding_inputs`,
+and persist via `replace_pipeline_graph` (same service layer). The unit test
+`test_mcp_and_rest_persist_identical_graph` asserts persisted JSON equivalence
+for non-masked fields (and runs whenever the unit suite runs).
+
+**Frontend consumption:**
+The editor never uses the full wire types directly. Instead,
+`projectGraph` / `projectGraphNode` / `projectGraphEdge` in
+`frontend/src/types/pipeline-graph-projection.ts` project the generated
+types to smaller `CanvasNodeProjection` / `CanvasEdgeProjection` types.
+UI-only state (`selected`, `dragging`, `width`, `height`, `zIndex`,
+edge animation/style) lives in separate `CanvasNodeUiState` /
+`CanvasEdgeUiState` interfaces and is NEVER sourced from the API payload.
+The adapter is pure (constructs new objects), so extra wire keys are dropped.
+
+| Layer | Artifact | Purpose |
+|-------|----------|---------|
+| Pydantic | `PipelineGraphNode`, `PipelineGraphEdge`, ... | Authoritative definition |
+| OpenAPI | `components.schemas.PipelineGraphNode`, ... | Published contract |
+| TypeScript | `components['schemas']['PipelineGraphNode']` | Frontend type safety |
+| Adapter | `projectGraph*` | Canvas projection (semantic only) |
+| UI state | `CanvasNodeUiState` | Editor-owned layout only |
+
+**Adding a new graph field:**
+1. Add the field to the relevant Pydantic model with constraints.
+2. If it is a write-only or response-only field, document the difference
+   in the model docstring and the table above.
+3. Run the architecture test; it will fail until the pinned expectation
+   is updated (intentional drift detection).
+4. Regenerate `frontend/src/lib/api/schema.ts` via `pnpm dlx openapi-typescript@7.13.0`.
+5. If the field is UI-relevant, add it to `projectGraphNode`/`projectGraphEdge`.
+6. If the field is UI-only (layout, styling), add it to `CanvasNodeUiState`
+   instead — it does not belong in the wire contract.
+
 Coverage: `[tool.coverage.run]` in `backend/pyproject.toml` measures **branch** coverage
 (not just line coverage) over `src/modulo`, and `[tool.coverage.report]` sets
 `fail_under = 89`. There is no per-module threshold in that config; the modules named as
