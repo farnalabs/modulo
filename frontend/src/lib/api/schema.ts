@@ -8154,6 +8154,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/determination/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare Determination Proposals
+         * @description Compare a base proposal with a target proposal.
+         *
+         *     Each side carries its proposal contract plus the draft nodes and edges it
+         *     was generated with. The comparison is pure and deterministic
+         *     (``modulo.determination.comparison``): it reports added, removed and
+         *     changed nodes and edges with stable ids, names every changed property with
+         *     its base and target values, carries each side's provenance onto its items,
+         *     and reports only the approval/HITL and automation categories the draft
+         *     graph actually encodes.
+         *
+         *     Read-only: the handler takes no database session, persists the comparison
+         *     nowhere, activates nothing and writes to no connected tool. Both returned
+         *     side summaries carry ``activation_status`` ``not_activated``. Because the
+         *     request cannot change state it marks itself a no-op write, so ``audited()``
+         *     does not add a success event for a read-only comparison; a failed attempt
+         *     is still recorded.
+         */
+        post: operations["compare_determination_proposals_api_v1_determination_compare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/determination/review": {
         parameters: {
             query?: never;
@@ -12757,6 +12792,33 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * BehaviourChange
+         * @description A change to represented approval or automation behaviour.
+         *
+         *     ``base_value`` / ``target_value`` are the property values that establish the
+         *     category; ``None`` means the edge/node is not present on that side.
+         */
+        BehaviourChange: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "approval_gate_added" | "approval_gate_removed" | "manual_step_added" | "manual_step_removed" | "step_automated" | "step_deautomated";
+            /**
+             * Subject Kind
+             * @enum {string}
+             */
+            subject_kind: "node" | "edge";
+            /** Subject Id */
+            subject_id: string;
+            /** Property */
+            property: string;
+            /** Base Value */
+            base_value: string | boolean | null;
+            /** Target Value */
+            target_value: string | boolean | null;
+        };
         /** BillingOverviewResponse */
         BillingOverviewResponse: {
             /** Plan Id */
@@ -13625,6 +13687,44 @@ export interface components {
              * Format: uuid
              */
             run_id_b: string;
+        };
+        /**
+         * ComparisonEdge
+         * @description A draft pipeline edge on one side, mirroring the draft endpoint's shape.
+         */
+        ComparisonEdge: {
+            /** Source */
+            source: string;
+            /** Target */
+            target: string;
+            /**
+             * Edge Type
+             * @default normal
+             */
+            edge_type: string;
+            /**
+             * Hitl Review
+             * @default false
+             */
+            hitl_review: boolean;
+        };
+        /**
+         * ComparisonNode
+         * @description A draft pipeline node on one side, mirroring the draft endpoint's shape.
+         *
+         *     The draft response's ``required_capabilities`` is a ``ClassVar`` on
+         *     ``DraftNodeResponse`` and is therefore not on the wire, so it is neither
+         *     accepted nor compared here.
+         */
+        ComparisonNode: {
+            /** Id */
+            id: string;
+            /** Node Type */
+            node_type: string;
+            /** Label */
+            label: string;
+            /** Connector Type */
+            connector_type?: string | null;
         };
         /** CompleteSetupRequest */
         CompleteSetupRequest: {
@@ -14818,6 +14918,35 @@ export interface components {
             /** Summary */
             summary: string;
             proposal: components["schemas"]["ProposalContract"];
+        };
+        /**
+         * EdgeModification
+         * @description An edge present on both sides with at least one changed property.
+         */
+        EdgeModification: {
+            /** Id */
+            id: string;
+            base: components["schemas"]["ComparisonEdge"];
+            target: components["schemas"]["ComparisonEdge"];
+            /** Changes */
+            changes: components["schemas"]["PropertyChange"][];
+            base_provenance: components["schemas"]["ProvenanceBundle"];
+            target_provenance: components["schemas"]["ProvenanceBundle"];
+        };
+        /**
+         * EdgePresence
+         * @description An edge present on only one side.
+         */
+        EdgePresence: {
+            /** Id */
+            id: string;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "base" | "target";
+            edge: components["schemas"]["ComparisonEdge"];
+            provenance: components["schemas"]["ProvenanceBundle"];
         };
         /**
          * EditorGraphResponse
@@ -17872,6 +18001,20 @@ export interface components {
             /** Sort Order */
             sort_order?: number | null;
         };
+        /**
+         * NodeModification
+         * @description A node present on both sides with at least one changed property.
+         */
+        NodeModification: {
+            /** Id */
+            id: string;
+            base: components["schemas"]["ComparisonNode"];
+            target: components["schemas"]["ComparisonNode"];
+            /** Changes */
+            changes: components["schemas"]["PropertyChange"][];
+            base_provenance: components["schemas"]["ProvenanceBundle"];
+            target_provenance: components["schemas"]["ProvenanceBundle"];
+        };
         /** NodeOutputDiffLine */
         NodeOutputDiffLine: {
             /**
@@ -17943,6 +18086,21 @@ export interface components {
             stderr_artifact?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * NodePresence
+         * @description A node present on only one side.
+         */
+        NodePresence: {
+            /** Id */
+            id: string;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "base" | "target";
+            node: components["schemas"]["ComparisonNode"];
+            provenance: components["schemas"]["ProvenanceBundle"];
         };
         /** NodeRecoverRequest */
         NodeRecoverRequest: {
@@ -19932,6 +20090,65 @@ export interface components {
             optimized_from?: string | null;
         };
         /**
+         * PropertyChange
+         * @description One changed field, naming the property and both values.
+         */
+        PropertyChange: {
+            /** Property */
+            property: string;
+            /** Base Value */
+            base_value: string | boolean | null;
+            /** Target Value */
+            target_value: string | boolean | null;
+        };
+        /**
+         * ProposalComparison
+         * @description The deterministic, read-only result of comparing two proposals.
+         */
+        ProposalComparison: {
+            /**
+             * Contract Version
+             * @default alpha.determination-comparison.v1
+             * @constant
+             */
+            contract_version: "alpha.determination-comparison.v1";
+            base: components["schemas"]["ProposalSideSummary"];
+            target: components["schemas"]["ProposalSideSummary"];
+            /** Nodes Added */
+            nodes_added?: components["schemas"]["NodePresence"][];
+            /** Nodes Removed */
+            nodes_removed?: components["schemas"]["NodePresence"][];
+            /** Nodes Changed */
+            nodes_changed?: components["schemas"]["NodeModification"][];
+            /** Edges Added */
+            edges_added?: components["schemas"]["EdgePresence"][];
+            /** Edges Removed */
+            edges_removed?: components["schemas"]["EdgePresence"][];
+            /** Edges Changed */
+            edges_changed?: components["schemas"]["EdgeModification"][];
+            /** Behaviour Changes */
+            behaviour_changes?: components["schemas"]["BehaviourChange"][];
+        };
+        /**
+         * ProposalComparisonRequest
+         * @description The two sides of one comparison.
+         */
+        ProposalComparisonRequest: {
+            base: components["schemas"]["ProposalComparisonSide"];
+            target: components["schemas"]["ProposalComparisonSide"];
+        };
+        /**
+         * ProposalComparisonSide
+         * @description One side of a comparison: its proposal contract and its draft graph.
+         */
+        ProposalComparisonSide: {
+            proposal: components["schemas"]["ProposalContract"];
+            /** Nodes */
+            nodes?: components["schemas"]["ComparisonNode"][];
+            /** Edges */
+            edges?: components["schemas"]["ComparisonEdge"][];
+        };
+        /**
          * ProposalContract
          * @description The Alpha contract for an editable draft; it never activates a pipeline.
          */
@@ -20070,10 +20287,74 @@ export interface components {
             /** Removed Derived Element Ids */
             removed_derived_element_ids: string[];
         };
+        /**
+         * ProposalSideSummary
+         * @description One side's proposal-level identity and provenance.
+         */
+        ProposalSideSummary: {
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "base" | "target";
+            /**
+             * Proposal Id
+             * Format: uuid
+             */
+            proposal_id: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Review State
+             * @enum {string}
+             */
+            review_state: "draft" | "needs_review" | "approved" | "rejected";
+            /**
+             * Activation Status
+             * @constant
+             */
+            activation_status: "not_activated";
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low" | "unknown";
+            /** Uncertainty */
+            uncertainty?: string[];
+            /** Provenance */
+            provenance?: components["schemas"]["EvidenceReference"][];
+            /** Unavailable Evidence */
+            unavailable_evidence?: components["schemas"]["UnavailableEvidence"][];
+        };
         /** ProposeGuardrailConfigRequest */
         ProposeGuardrailConfigRequest: {
             /** Config Yaml */
             config_yaml: string;
+        };
+        /**
+         * ProvenanceBundle
+         * @description The provenance ONE side's proposal carries, copied onto its items.
+         *
+         *     The draft nodes and edges carry no evidence of their own, so this is the
+         *     side's provenance, not item-level attribution: the distinct provenance kinds
+         *     present on the contract's evidence references (first-appearance order), the
+         *     references themselves, and the contract's confidence and uncertainty.
+         */
+        ProvenanceBundle: {
+            /** Provenance Kinds */
+            provenance_kinds?: ("observed" | "derived" | "inferred" | "unavailable")[];
+            /** Evidence Refs */
+            evidence_refs?: components["schemas"]["EvidenceReference"][];
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low" | "unknown";
+            /** Uncertainty */
+            uncertainty?: string[];
         };
         /** PublishEvalProposalRequest */
         PublishEvalProposalRequest: {
@@ -41406,6 +41687,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    compare_determination_proposals_api_v1_determination_compare_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProposalComparisonRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalComparison"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
             };
         };
     };
