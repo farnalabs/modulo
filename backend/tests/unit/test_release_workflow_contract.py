@@ -1,6 +1,9 @@
 """Contract checks for the unified GitHub Release publication paths."""
 
+import hashlib
 import importlib.util
+import json
+import os
 import re
 import subprocess
 import sys
@@ -13,6 +16,9 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
 RC_VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "rc-validate.yml"
+STAPLE_RETRY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "macos-staple-retry.yml"
+MACOS_INSTALLER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "macos-installer.yml"
+STAPLE_HELPER = REPO_ROOT / "scripts" / "macos" / "staple-and-verify.sh"
 
 _MATRIX_START = "docker-upgrade-rollback:"
 _PEN_TEST_START = "pen-test:"
@@ -530,3 +536,470 @@ def test_rc_validation_evidence_upload_tolerates_a_missing_directory() -> None:
 
     assert step["with"]["if-no-files-found"] == "warn"
     assert step["with"]["path"] == "${{ runner.temp }}/compose-matrix-evidence"
+
+
+# ---------------------------------------------------------------------------
+# FAR-2480: retryable notarization stapling
+#
+# Apple CloudKit ticket delivery lags notarization, so the in-run staple retry
+# can exhaust without meaning the notarization is lost. Stapling must move to a
+# retryable, idempotent path, and the release must not fail because the ticket
+# has not propagated yet. These are the structural pins for that split.
+# ---------------------------------------------------------------------------
+
+
+def _staple_retry_workflow() -> dict[str, Any]:
+    return yaml.safe_load(STAPLE_RETRY_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def _workflow_triggers(workflow: dict[str, Any]) -> dict[Any, Any]:
+    # PyYAML resolves the unquoted `on` key to boolean True (YAML 1.1).
+    raw = workflow.get("on", workflow.get(True))
+    assert isinstance(raw, dict), "workflow must declare at least one trigger"
+    return raw
+
+
+def _python_heredoc(script: str, marker: str) -> str:
+    start = script.index("<<'" + marker + "'")
+    body = script[start:].split("\n", 1)[1]
+    return body[: body.index("\n" + marker)]
+
+
+def test_macos_staple_retry_workflow_exists_and_is_dispatch_and_scheduled() -> None:
+    assert STAPLE_RETRY_WORKFLOW.is_file(), "the FAR-2480 staple retry workflow must exist"
+    workflow = _staple_retry_workflow()
+    triggers = _workflow_triggers(workflow)
+
+    assert "workflow_dispatch" in triggers, "the retry must be dispatchable on demand"
+    assert "schedule" in triggers, "the retry must run on a schedule as the backstop"
+    schedule = triggers["schedule"]
+    assert isinstance(schedule, list)
+    assert schedule
+    assert any("cron" in entry for entry in schedule)
+
+    dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
+    for name in ("version", "architecture", "release_tag", "run_id", "force"):
+        assert name in dispatch_inputs, f"workflow_dispatch must declare the '{name}' input"
+    assert set(dispatch_inputs["architecture"]["options"]) == {"all", "arm64", "x86_64"}
+
+
+def test_macos_staple_retry_invokes_the_idempotent_helper() -> None:
+    workflow = _staple_retry_workflow()
+    run_scripts = [
+        step["run"]
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if isinstance(step.get("run"), str)
+    ]
+    combined = "\n".join(run_scripts)
+
+    assert "scripts/macos/staple-and-verify.sh" in combined, "the workflow must run the staple helper"
+    helper = STAPLE_HELPER.read_text(encoding="utf-8")
+    # Idempotency: the guard must run BEFORE the staple action. A guard that is
+    # removed or reordered lets a schedule re-staple an already-good DMG.
+    guard = helper.index("xcrun stapler validate")
+    action = helper.index("xcrun stapler staple")
+    assert guard < action, "the already-stapled guard must precede the staple action"
+    assert "record_result unchanged" in helper
+    assert "record_result stapled" in helper
+
+
+def test_macos_staple_helper_keeps_every_hard_gate() -> None:
+    helper = STAPLE_HELPER.read_text(encoding="utf-8")
+
+    # Every gate is fail-closed and none may be dropped.
+    assert "codesign --verify" in helper
+    assert "xcrun stapler staple" in helper
+    assert "xcrun stapler validate" in helper
+    assert "spctl --assess" in helper
+    assert "hdiutil verify" in helper
+    assert "set -euo pipefail" in helper
+
+
+def _step(workflow: dict[str, Any], job_id: str, step_name: str) -> dict[str, Any]:
+    for step in workflow["jobs"][job_id].get("steps", []):
+        if step.get("name") == step_name:
+            return step
+    raise AssertionError(f"job {job_id!r} has no step named {step_name!r}")
+
+
+def _release_upload_command(workflow: dict[str, Any], job_id: str, step_name: str) -> str:
+    """Return the full `gh release upload` invocation, continuations joined.
+
+    Scoped to the named step on purpose: `gh release download ... --clobber`
+    also appears in these workflows, and the completion marker has its own
+    `gh release upload`, so a whole-file `"--clobber" in text` check passes even
+    when `--clobber` is removed from the DMG upload.
+    """
+    script = _step(workflow, job_id, step_name)["run"]
+    lines = script[script.index("gh release upload") :].splitlines()
+    command: list[str] = []
+    for line in lines:
+        command.append(line.strip())
+        if not line.rstrip().endswith("\\"):
+            break
+    return " ".join(command)
+
+
+def test_macos_staple_retry_republishes_with_clobber() -> None:
+    workflow = _staple_retry_workflow()
+    upload = _release_upload_command(workflow, "publish-stapled", "Publish the stapled DMG(s) and refreshed manifest")
+
+    assert "gh release upload" in upload, "the retry must attach the stapled DMG to the release"
+    assert "--clobber" in upload.split(), "replacing the unstapled asset requires --clobber on the upload"
+    # The retry regenerates the checksum file and signed manifest in the same job
+    # as the clobber, so replacement never publishes stale hashes.
+    text = STAPLE_RETRY_WORKFLOW.read_text(encoding="utf-8")
+    assert "SHA256SUMS" in text
+    assert "RELEASE_MANIFEST.json" in text
+    assert "sha256sum --check SHA256SUMS" in text
+
+
+def test_macos_staple_retry_republish_is_consistency_driven() -> None:
+    workflow = _staple_retry_workflow()
+    publish = workflow["jobs"]["publish-stapled"]
+    condition = " ".join(str(publish["if"]).split())
+
+    assert "needs.resolve-target.outputs.release_tag != ''" in condition
+    # Regression pin: gating the publish job on the staple result is what left a
+    # partial upload permanently unrepaired - the next run's staple is a no-op
+    # `unchanged`, so nothing ever regenerated the stale metadata.
+    assert "needs.staple.outputs.changed" not in condition, (
+        "publication must be driven by metadata consistency, not by whether this run stapled"
+    )
+
+    detect = _step(workflow, "publish-stapled", "Detect whether the release metadata matches its artefacts")
+    script = detect["run"]
+    assert "needs_republish" in script
+    assert "SHA256SUMS" in script
+    assert "RELEASE_MANIFEST.json" in script
+    # The decision is made from the release's ACTUAL bytes, not from the staple log.
+    assert "sha256" in script
+    for step_name in (
+        "Regenerate SHA256SUMS and the signed release manifest",
+        "Publish the stapled DMG(s) and refreshed manifest",
+    ):
+        step = _step(workflow, "publish-stapled", step_name)
+        assert "needs_republish == 'true'" in str(step.get("if", "")), (
+            f"{step_name!r} must only run when the metadata disagrees with the artefacts"
+        )
+
+
+def test_macos_staple_retry_verifies_the_published_metadata() -> None:
+    workflow = _staple_retry_workflow()
+    verify = _step(workflow, "publish-stapled", "Verify the published release metadata")
+    script = verify["run"]
+
+    assert "needs_republish == 'true'" in str(verify.get("if", ""))
+    # Re-reads the metadata FROM the release - the local copies prove nothing
+    # about what was published.
+    assert "gh release download" in script
+    assert "SHA256SUMS" in script
+    assert "RELEASE_MANIFEST.json" in script
+    # ...and compares it against the published asset digests, failing on mismatch.
+    assert "releases/tags" in script
+    assert "verify_signature" in script
+    assert "raise SystemExit" in script
+
+
+def test_macos_staple_retry_records_and_honours_a_completion_marker() -> None:
+    workflow = _staple_retry_workflow()
+    resolve = _step(workflow, "resolve-target", "Resolve version, release tag and architectures")
+    resolve_script = resolve["run"]
+
+    # The marker is honoured in the LINUX resolve job, so a completed release
+    # never spawns a paid macOS runner on the 30-minute schedule.
+    assert workflow["jobs"]["resolve-target"]["runs-on"] == "ubuntu-latest"
+    assert "MACOS_STAPLED.json" in resolve_script
+    assert 'completed="true"' in resolve_script
+    assert "completed=%s" in resolve_script
+    completed_output = workflow["jobs"]["resolve-target"].get("outputs", {}).get("completed")
+    assert completed_output == "${{ steps.resolve.outputs.completed }}"
+
+    # Regression pin for the short-circuit. `architectures="` alone is vacuous:
+    # it also matches the initialiser at the top of the script, so it kept
+    # passing after the completion-path reset was deleted - which silently
+    # restored the paid-macos-job-every-30-minutes behaviour. Pin the reset
+    # INSIDE the completion branch, and pin the job guard that consumes it.
+    completion_branch = _completion_branch(resolve_script)
+    for reset in ('version=""', 'release_tag=""', 'architectures=""', 'run_id=""'):
+        assert reset in completion_branch, f"the completion branch must blank {reset}"
+    staple_condition = " ".join(str(workflow["jobs"]["staple"]["if"]).split())
+    assert "needs.resolve-target.outputs.completed != 'true'" in staple_condition, (
+        "the staple job must gate on the resolve job's completed output"
+    )
+    assert "needs.resolve-target.outputs.architectures != ''" in staple_condition
+
+    record = _step(workflow, "publish-stapled", "Record the verified staple state on the release")
+    assert "gh release upload" in record["run"]
+    assert "MACOS_STAPLED.json" in record["run"]
+    # Only a successful staple may claim completion - otherwise a still-
+    # propagating ticket would be recorded as finished - and the marker must
+    # never be written after a failed verification (an explicit `if:` replaces a
+    # step's implicit success() guard, so it is spelled out).
+    record_condition = " ".join(str(record["if"]).split())
+    assert "needs.staple.result == 'success'" in record_condition
+    assert "success()" in record_condition
+
+
+def _completion_branch(script: str) -> str:
+    """Return only the `marker_state == "complete"` arm of the resolve script."""
+    start = script.index('"$marker_state" == "complete"')
+    end = script.index("elif", start)
+    return script[start:end]
+
+
+def _write_release_dmgs(tmp_path: Path, version: str, arm64: bytes, x86_64: bytes) -> None:
+    root = tmp_path / "release-assets"
+    root.mkdir(exist_ok=True)
+    (root / f"Modulo-{version}-macos-arm64.dmg").write_bytes(arm64)
+    (root / f"Modulo-{version}-macos-x86_64.dmg").write_bytes(x86_64)
+
+
+def _record_marker(
+    tmp_path: Path,
+    version: str,
+    verified_arches: str,
+    prior: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Execute the record step's embedded Python the way the workflow does."""
+    workflow = _staple_retry_workflow()
+    record = _step(workflow, "publish-stapled", "Record the verified staple state on the release")
+    source = _python_heredoc(record["run"], "PY")
+    marker = tmp_path / "MACOS_STAPLED.json"
+    prior_path = tmp_path / "prior.json"
+    if prior is not None:
+        prior_path.write_text(json.dumps(prior), encoding="utf-8")
+    result = subprocess.run(  # noqa: S603 - fixed interpreter running repository-owned workflow text
+        [sys.executable, "-c", source, str(marker), str(prior_path)],
+        cwd=tmp_path,
+        env={**os.environ, "VERSION": version, "VERIFIED_ARCHES": verified_arches},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(marker.read_text(encoding="utf-8"))
+
+
+def test_macos_staple_marker_records_only_the_architectures_this_run_verified(tmp_path: Path) -> None:
+    version = "0.1.0"
+    arm_bytes, x86_bytes = b"arm64-bytes", b"x86_64-bytes"
+    _write_release_dmgs(tmp_path, version, arm_bytes, x86_bytes)
+
+    # A single-architecture dispatch stapled/verified arm64 only.
+    payload = _record_marker(tmp_path, version, "arm64", prior=None)
+
+    by_name = {artefact["name"]: artefact for artefact in payload["artifacts"]}
+    arm = by_name[f"Modulo-{version}-macos-arm64.dmg"]
+    x86 = by_name[f"Modulo-{version}-macos-x86_64.dmg"]
+    assert arm["staple_verified"] is True
+    assert x86["staple_verified"] is False, (
+        "a single-architecture run must never record the other DMG as staple-verified"
+    )
+    assert arm["sha256"] == hashlib.sha256(arm_bytes).hexdigest()
+    assert x86["sha256"] == hashlib.sha256(x86_bytes).hexdigest()
+
+
+def test_macos_staple_marker_carries_forward_a_prior_verification_only_for_unchanged_bytes(
+    tmp_path: Path,
+) -> None:
+    version = "0.1.0"
+    _write_release_dmgs(tmp_path, version, b"arm64-bytes", b"x86_64-bytes")
+    first = _record_marker(tmp_path, version, "arm64", prior=None)
+
+    # A later run that staples only x86_64 keeps arm64's verified claim: its
+    # bytes are unchanged, so the prior verification still applies.
+    second = _record_marker(tmp_path, version, "x86_64", prior=first)
+    by_name = {artefact["name"]: artefact for artefact in second["artifacts"]}
+    assert by_name[f"Modulo-{version}-macos-arm64.dmg"]["staple_verified"] is True
+    assert by_name[f"Modulo-{version}-macos-x86_64.dmg"]["staple_verified"] is True
+
+    # A prior claim about DIFFERENT bytes no longer applies to the rebuilt DMG.
+    _write_release_dmgs(tmp_path, version, b"rebuilt-arm64-bytes", b"x86_64-bytes")
+    third = _record_marker(tmp_path, version, "x86_64", prior=second)
+    by_name = {artefact["name"]: artefact for artefact in third["artifacts"]}
+    assert by_name[f"Modulo-{version}-macos-arm64.dmg"]["staple_verified"] is False
+
+
+def _resolve_marker_state(
+    tmp_path: Path,
+    version: str,
+    marker: dict[str, Any],
+    release: dict[str, Any],
+) -> str:
+    """Execute the resolve step's embedded marker check the way the workflow does."""
+    workflow = _staple_retry_workflow()
+    resolve = _step(workflow, "resolve-target", "Resolve version, release tag and architectures")
+    source = _python_heredoc(resolve["run"], "PY")
+    marker_path = tmp_path / "MACOS_STAPLED.json"
+    release_path = tmp_path / "release.json"
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    release_path.write_text(json.dumps(release), encoding="utf-8")
+    result = subprocess.run(  # noqa: S603 - fixed interpreter running repository-owned workflow text
+        [sys.executable, "-c", source, str(marker_path), str(release_path), version],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def test_macos_staple_short_circuit_requires_every_artefact_to_be_verified(tmp_path: Path) -> None:
+    version = "0.1.0"
+    arm_name = f"Modulo-{version}-macos-arm64.dmg"
+    x86_name = f"Modulo-{version}-macos-x86_64.dmg"
+    arm_bytes, x86_bytes = b"arm64-bytes", b"x86_64-bytes"
+    arm_sha = hashlib.sha256(arm_bytes).hexdigest()
+    x86_sha = hashlib.sha256(x86_bytes).hexdigest()
+    release = {
+        "assets": [
+            {"name": arm_name, "digest": f"sha256:{arm_sha}", "size": len(arm_bytes)},
+            {"name": x86_name, "digest": f"sha256:{x86_sha}", "size": len(x86_bytes)},
+        ]
+    }
+
+    def artefact(name: str, sha: str, size: int, verified: bool | None) -> dict[str, Any]:
+        entry: dict[str, Any] = {"name": name, "sha256": sha, "size": size}
+        if verified is not None:
+            entry["staple_verified"] = verified
+        return entry
+
+    both_verified = {
+        "version": version,
+        "artifacts": [
+            artefact(arm_name, arm_sha, len(arm_bytes), True),
+            artefact(x86_name, x86_sha, len(x86_bytes), True),
+        ],
+    }
+    assert _resolve_marker_state(tmp_path, version, both_verified, release) == "complete"
+
+    # Matching digests alone are not enough: an unverified artefact is still work.
+    partial = {
+        "version": version,
+        "artifacts": [
+            artefact(arm_name, arm_sha, len(arm_bytes), True),
+            artefact(x86_name, x86_sha, len(x86_bytes), False),
+        ],
+    }
+    state = _resolve_marker_state(tmp_path, version, partial, release)
+    assert state.startswith("stale:")
+    assert "was never staple-verified" in state
+    assert x86_name in state
+
+    # A legacy marker with no verification flag must never be trusted.
+    legacy = {
+        "version": version,
+        "artifacts": [
+            artefact(arm_name, arm_sha, len(arm_bytes), None),
+            artefact(x86_name, x86_sha, len(x86_bytes), None),
+        ],
+    }
+    assert _resolve_marker_state(tmp_path, version, legacy, release).startswith("stale:")
+
+    # Omitting an artefact outright is incomplete, not complete-by-omission.
+    incomplete = {
+        "version": version,
+        "artifacts": [artefact(arm_name, arm_sha, len(arm_bytes), True)],
+    }
+    state = _resolve_marker_state(tmp_path, version, incomplete, release)
+    assert state.startswith("stale:")
+    assert x86_name in state
+
+    # Verified but different live bytes still forces a re-staple.
+    rebuilt = {
+        "assets": [
+            {"name": arm_name, "digest": f"sha256:{arm_sha}", "size": len(arm_bytes)},
+            {"name": x86_name, "digest": f"sha256:{'0' * 64}", "size": len(x86_bytes)},
+        ]
+    }
+    state = _resolve_marker_state(tmp_path, version, both_verified, rebuilt)
+    assert state.startswith("stale:")
+    assert x86_name in state
+
+
+def test_release_unified_staple_dispatch_is_non_fatal() -> None:
+    workflow = yaml.safe_load(_release_workflow_text())
+    job = workflow["jobs"]["dispatch-staple-retry"]
+    step = next(s for s in job["steps"] if "gh workflow run macos-staple-retry.yml" in str(s.get("run", "")))
+    script = step["run"]
+
+    assert "for attempt in 1 2 3" in script, "the dispatch must retry"
+    assert "::warning::" in script, "a final dispatch failure must be reported, not silent"
+    assert script.rstrip().endswith("exit 0"), "a dispatch failure must not fail a published release"
+    # A failed post-publication dispatch must never be masked with a banned
+    # `continue-on-error` (structural check - the script comments name the ban).
+    assert not job.get("continue-on-error")
+    for job_step in job["steps"]:
+        assert not job_step.get("continue-on-error")
+
+
+def test_macos_staple_retry_python_heredocs_compile() -> None:
+    workflow = _staple_retry_workflow()
+    scripts = [
+        step["run"]
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if isinstance(step.get("run"), str) and "<<'PY'" in step["run"]
+    ]
+    assert scripts, "the staple retry workflow must embed its Python logic"
+    for script in scripts:
+        compile(_python_heredoc(script, "PY"), str(STAPLE_RETRY_WORKFLOW), "exec")
+
+
+def test_macos_staple_retry_manifest_heredoc_compiles_as_python() -> None:
+    workflow = _staple_retry_workflow()
+    scripts = [
+        step["run"]
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if isinstance(step.get("run"), str) and "build_release_manifest" in step["run"]
+    ]
+    assert scripts, "the republish job must regenerate the signed manifest"
+    for script in scripts:
+        compile(_python_heredoc(script, "PY"), str(STAPLE_RETRY_WORKFLOW), "exec")
+
+
+def test_release_unified_dispatches_the_staple_retry() -> None:
+    workflow = yaml.safe_load(_release_workflow_text())
+
+    dispatch_jobs = [
+        job_id
+        for job_id, job in workflow["jobs"].items()
+        if any("macos-staple-retry.yml" in str(step.get("run", "")) for step in job.get("steps", []))
+    ]
+    assert dispatch_jobs, "release-unified must consume the staple retry path"
+    dispatch_job = workflow["jobs"][dispatch_jobs[0]]
+    assert "publish-release" in dispatch_job["needs"]
+    assert "actions" in dispatch_job.get("permissions", {})
+    assert dispatch_job["permissions"]["actions"] == "write"
+    text = _release_workflow_text()
+    assert "gh workflow run macos-staple-retry.yml" in text
+
+
+def test_release_unified_keeps_macos_hard_gates_while_consume_retry() -> None:
+    workflow = yaml.safe_load(_release_workflow_text())
+
+    # The publication dependency on macos-installer is unchanged: a hard gate
+    # failure (codesign, Gatekeeper, hdiutil) still fails the release. Only
+    # stapling is retried out of band.
+    final_job = workflow["jobs"]["final-release-manifest"]
+    condition = " ".join(str(final_job["if"]).split())
+    assert "needs.macos-installer.result == 'success'" in condition
+    assert "macos-installer" in workflow["jobs"]["publish-release"]["needs"]
+
+    guard_names = [step.get("name") for step in workflow["jobs"]["publish-release"]["steps"]]
+    assert "Validate publication dependencies" in guard_names
+    guard_index = guard_names.index("Validate publication dependencies")
+    guard_script = workflow["jobs"]["publish-release"]["steps"][guard_index]["run"]
+    assert "macos-installer" in guard_script
+
+    # The hard gates themselves still live in macos-installer.yml.
+    installer = MACOS_INSTALLER_WORKFLOW.read_text(encoding="utf-8")
+    assert "app_codesign_verify codesign --verify" in installer
+    assert "mounted_app_spctl spctl --assess" in installer
+    assert "dmg_verify hdiutil verify" in installer
+    assert "dmg_staple_validate xcrun stapler validate" in installer
