@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -978,6 +979,136 @@ def test_release_unified_dispatches_the_staple_retry() -> None:
     assert dispatch_job["permissions"]["actions"] == "write"
     text = _release_workflow_text()
     assert "gh workflow run macos-staple-retry.yml" in text
+
+
+# ---------------------------------------------------------------------------
+# FAR-2483: the final manifest must survive downloading every large installer,
+# and publication must stay fail-closed when the manifest did not succeed.
+# ---------------------------------------------------------------------------
+
+
+def _release_workflow() -> dict[str, Any]:
+    return yaml.safe_load(_release_workflow_text())
+
+
+def _bash_executable() -> str:
+    """Return a bash that can execute the workflow's POSIX guard script.
+
+    Git for Windows ships bash, but the plain ``bash`` on PATH there is often
+    the WSL launcher; prefer Git's own shell when it exists, then fall back to
+    PATH (which is the only option on the Linux CI runner).
+    """
+    if sys.platform == "win32":
+        program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+        for candidate in (
+            Path(program_files) / "Git" / "bin" / "bash.exe",
+            Path(program_files) / "Git" / "usr" / "bin" / "bash.exe",
+        ):
+            if candidate.is_file():
+                return str(candidate)
+    found = shutil.which("bash")
+    if found is None:
+        pytest.skip("bash is required to execute the publication guard script")
+    return found
+
+
+def test_final_release_manifest_timeout_fits_the_large_macos_installers() -> None:
+    workflow = _release_workflow()
+    timeout = workflow["jobs"]["final-release-manifest"]["timeout-minutes"]
+
+    # The job downloads the linux bundle plus BOTH ~400 MB macOS DMGs (~1 GB
+    # total) before hashing and packaging them. Run 42606704332 had both
+    # installers built and smoke-tested but ran out of time mid-download of the
+    # x86_64 DMG at the old 15-minute cap, so the manifest was cancelled and
+    # publication refused. Keep a floor well above the observed download time.
+    assert isinstance(timeout, int)
+    assert timeout >= 30
+
+
+def test_final_release_manifest_hashes_each_artefact_without_loading_it_into_memory() -> None:
+    workflow = _release_workflow()
+    script = _step(workflow, "final-release-manifest", "Build final signed manifest after every platform artifact")[
+        "run"
+    ]
+
+    # Reading a ~400 MB DMG with read_bytes() holds the whole blob in memory;
+    # the manifest hashes them one at a time, streaming a single chunk.
+    assert "read_bytes()" not in script
+    assert "hashlib.file_digest" in script
+    # The embedded Python must still compile so a broken edit fails the suite.
+    assert "<<'PY'" in script
+    compile(_python_heredoc(script, "PY"), str(RELEASE_WORKFLOW), "exec")
+
+
+def test_publish_release_refuses_when_a_dependency_did_not_succeed(
+    tmp_path: Path,
+) -> None:
+    workflow = _release_workflow()
+    guard = _step(workflow, "publish-release", "Validate publication dependencies")["run"]
+    script_path = tmp_path / "guard.sh"
+    script_path.write_text(guard, encoding="utf-8", newline="\n")
+
+    success_env = {
+        "RELEASE_RESULT": "success",
+        "MANIFEST_RESULT": "success",
+        "ATTEST_RESULT": "success",
+        "MACOS_RESULT": "success",
+    }
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter running repository-owned workflow text
+        [_bash_executable(), str(script_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+        env={**os.environ, **success_env},
+    )
+    assert completed.returncode == 0
+    assert "All publication dependencies succeeded." in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("env_var", "job_name", "result"),
+    [
+        ("MANIFEST_RESULT", "final-release-manifest", "cancelled"),
+        ("MANIFEST_RESULT", "final-release-manifest", "failure"),
+        ("RELEASE_RESULT", "release", "failure"),
+        ("ATTEST_RESULT", "attest-artefacts", "skipped"),
+        ("MACOS_RESULT", "macos-installer", "cancelled"),
+    ],
+)
+def test_publish_release_blocks_publication_for_every_unsuccessful_dependency(
+    env_var: str,
+    job_name: str,
+    result: str,
+    tmp_path: Path,
+) -> None:
+    workflow = _release_workflow()
+    guard = _step(workflow, "publish-release", "Validate publication dependencies")["run"]
+    script_path = tmp_path / "guard.sh"
+    script_path.write_text(guard, encoding="utf-8", newline="\n")
+
+    env = {
+        **os.environ,
+        "RELEASE_RESULT": "success",
+        "MANIFEST_RESULT": "success",
+        "ATTEST_RESULT": "success",
+        "MACOS_RESULT": "success",
+        env_var: result,
+    }
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter running repository-owned workflow text
+        [_bash_executable(), str(script_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+        env=env,
+    )
+
+    assert completed.returncode == 1
+    # GitHub Actions reads the `::error::` annotation from stdout, so the guard's
+    # refusal is emitted there rather than on stderr.
+    assert f"Publication dependency '{job_name}' did not succeed (result: {result})" in completed.stdout
+    assert "refusing to publish" in completed.stdout
 
 
 def test_release_unified_keeps_macos_hard_gates_while_consume_retry() -> None:

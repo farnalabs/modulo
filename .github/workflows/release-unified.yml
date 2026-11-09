@@ -1684,7 +1684,15 @@ jobs:
       ((inputs.include_windows && needs.windows-installer.result == 'success') ||
        (!inputs.include_windows && needs.windows-installer.result == 'skipped'))
     runs-on: ubicloud-standard-2
-    timeout-minutes: 15
+    # Raised from 15 to 40 minutes (FAR-2483). This job downloads the linux
+    # bundle plus BOTH macOS DMG artefacts (~400 MB each) before hashing and
+    # packaging them. Run 42606704332 had both installers built and smoke-tested
+    # but hit the 15-minute cap while the third download (the ~400 MB x86_64 DMG)
+    # was still running, so the manifest was cancelled and publication refused.
+    # 40 minutes covers three large artefact downloads (~1 GB) with the same
+    # headroom the attest job now has at 30 minutes, plus this job's hashing and
+    # compose packaging.
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
@@ -1783,7 +1791,13 @@ jobs:
           # FAR-2345: the self-hosted compose stack is packaged on every release,
           # so it is always covered by the manifest.
           names.append(f"modulo-{version}-compose.tar.gz")
-          body = m.build_release_manifest(release=f"bundle-v{version}", platform="multi-platform", generated_at=os.environ.get("GITHUB_SHA", ""), components=components, artifacts=[{"name": n, "sha256": hashlib.sha256((root / n).read_bytes()).hexdigest(), "version": version} for n in names])
+          def digest(path: Path) -> str:
+              # Stream the hash instead of reading each ~400 MB DMG into memory:
+              # hashing every artefact one at a time keeps peak memory bounded to
+              # a single chunk regardless of how large the installers are.
+              with path.open("rb") as handle:
+                  return hashlib.file_digest(handle, "sha256").hexdigest()
+          body = m.build_release_manifest(release=f"bundle-v{version}", platform="multi-platform", generated_at=os.environ.get("GITHUB_SHA", ""), components=components, artifacts=[{"name": n, "sha256": digest(root / n), "version": version} for n in names])
           payload = json.dumps(body, indent=2, sort_keys=True).encode()
           signing_key = os.environ["MANIFEST_SIGNING_KEY"]
           if len(signing_key) != 64:
