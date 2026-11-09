@@ -54,13 +54,18 @@
       <div
         v-for="node in localNodes"
         :key="node.node_key"
-        class="absolute w-48 rounded-lg border bg-card p-3 shadow-sm"
+        class="absolute w-48 rounded-lg border bg-card p-3 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         :style="{ left: `${nodeLeft(node)}px`, top: `${nodeTop(node)}px` }"
-         :data-testid="`system-map-node-${node.node_key}`"
-         :data-selected="rendererModel.nodes.find((renderNode) => renderNode.nodeKey === node.node_key)?.selected ? 'true' : 'false'"
-         @click="selectedNodeKey = node.node_key"
-         @keydown.enter.self="selectedNodeKey = node.node_key"
-         @keydown.space.self.prevent="selectedNodeKey = node.node_key"
+        tabindex="0"
+        role="group"
+        :aria-label="node.display_name"
+        :aria-current="selectedNodeKey === node.node_key ? 'true' : undefined"
+        :data-testid="`system-map-node-${node.node_key}`"
+        :data-selected="rendererModel.nodes.find((renderNode) => renderNode.nodeKey === node.node_key)?.selected ? 'true' : 'false'"
+        @click="selectedNodeKey = node.node_key"
+        @focusin="selectedNodeKey = node.node_key"
+        @keydown.enter.self="selectedNodeKey = node.node_key"
+        @keydown.space.self.prevent="selectedNodeKey = node.node_key"
       >
         <div class="flex items-start justify-between gap-2">
           <div class="min-w-0 flex-1">
