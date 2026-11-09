@@ -538,7 +538,15 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert "bison" in workflow_text
     assert "flex" in workflow_text
     assert "Download and sha256-verify pinned PostgreSQL source" in workflow_text
-    assert 'echo "${PG_SOURCE_SHA256}  postgresql-${PG_VERSION}.tar.gz"' in workflow_text
+    pg_download_steps = yaml.safe_load(workflow_text)["jobs"]["bundle"]["steps"]
+    pg_download_script = pg_download_steps[
+        _step_names(pg_download_steps).index("Download and sha256-verify pinned PostgreSQL source")
+    ]["run"]
+    assert 'source "$GITHUB_WORKSPACE/.download-verified.sh"' in pg_download_script
+    assert "download_verified" in pg_download_script
+    assert '"${PG_SOURCE_SHA256}"' in pg_download_script
+    assert '"downloads/postgresql-${PG_VERSION}.tar.gz"' in pg_download_script
+    assert 'echo "${PG_SOURCE_SHA256}  postgresql-${PG_VERSION}.tar.gz"' not in workflow_text
     assert "Build and sha256-verify PostgreSQL from pinned upstream source" in workflow_text
     assert "../pg-src/configure" in workflow_text
     assert 'BUNDLE_PG_PREFIX="$PWD/build/${BUNDLE_ROOT}/pg"' in workflow_text
@@ -4291,6 +4299,7 @@ def test_release_builds_the_windows_payload_before_the_installer() -> None:
 # ---------------------------------------------------------------------------
 
 _REDIS_SOURCE_STEP_NAME = "Build and sha256-verify Redis from pinned upstream source"
+_DOWNLOAD_HELPER_STEP_NAME = "Define verified external download helper"
 
 
 def _bundle_workflow() -> dict[str, Any]:
@@ -4302,6 +4311,18 @@ def _bundle_step_run(name: str) -> str:
     run = steps[_step_names(steps).index(name)].get("run")
     assert isinstance(run, str), f"{name!r} must contain a shell run block"
     return run
+
+
+def _prepare_download_helper(root: Path, env: dict[str, str]) -> None:
+    """Materialise the workflow's verified-download helper where steps source it.
+
+    The real bundle job runs the helper-definition step before the download
+    steps; the rehearsal harness executes each step in isolation, so it must
+    reproduce that file itself.
+    """
+    result = _run_bash(_bundle_step_run(_DOWNLOAD_HELPER_STEP_NAME), cwd=root, env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (root / ".download-verified.sh").is_file()
 
 
 def _redis_source_tarball() -> bytes:
@@ -4377,7 +4398,12 @@ done
 exit 0
 """,
     )
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "GITHUB_WORKSPACE": str(root),
+    }
+    _prepare_download_helper(root, env)
     return env, root
 
 
@@ -4413,7 +4439,8 @@ def test_bundle_redis_step_fails_loudly_when_the_download_writes_no_file(tmp_pat
     result = _run_bash(_bundle_step_run(_REDIS_SOURCE_STEP_NAME), cwd=root, env=env)
 
     assert result.returncode != 0, "an empty download must fail the step"
-    assert "missing or empty" in result.stdout + result.stderr
+    assert "checksum verification failed" in result.stdout + result.stderr
+    assert not (root / "redis-src").exists(), "an empty download must never be extracted"
 
 
 def test_bundle_workflow_keeps_sha256sum_manifests_relative_to_the_download_dir() -> None:
